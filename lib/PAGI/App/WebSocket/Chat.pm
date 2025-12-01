@@ -219,6 +219,16 @@ __END__
 Multi-room WebSocket chat application. Supports joining/leaving rooms,
 setting nicknames, and listing users and rooms.
 
+=head1 OPTIONS
+
+=over 4
+
+=item * C<default_room> - Room to join on connect (default: 'lobby')
+
+=item * C<max_rooms> - Maximum number of rooms allowed (default: 100)
+
+=back
+
 =head1 MESSAGE PROTOCOL
 
 All messages are JSON objects with a C<type> field.

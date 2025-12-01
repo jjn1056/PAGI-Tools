@@ -93,4 +93,22 @@ URLMap routes requests to different apps based on URL path prefix.
 Longest prefix match wins. The mounted app sees an adjusted path
 with the prefix removed.
 
+=head1 OPTIONS
+
+=over 4
+
+=item * C<default> - App to use when no prefix matches
+
+=back
+
+=head1 METHODS
+
+=head2 mount($prefix, $app)
+
+Mount an app at the given path prefix.
+
+=head2 map(\%mapping)
+
+Mount multiple apps from a hashref of prefix => app pairs.
+
 =cut

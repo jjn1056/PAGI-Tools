@@ -14,10 +14,10 @@ PAGI::App::SSE::Stream - Server-Sent Events streaming
     use PAGI::App::SSE::Stream;
 
     my $app = PAGI::App::SSE::Stream->new(
-        generator => sub ($send_event) {
-            while (1) {
-                $send_event->({ data => time() });
-                sleep 1;
+        generator => async sub ($send_event, $scope) {
+            for my $i (1..10) {
+                await $send_event->({ data => time() });
+                await IO::Async::Loop->new->delay_future(after => 1);
             }
         },
     )->to_app;

@@ -87,4 +87,27 @@ __END__
 Returns JSON health status with optional custom checks.
 Returns 200 for healthy, 503 for unhealthy.
 
+=head1 OPTIONS
+
+=over 4
+
+=item * C<checks> - Hashref of name => coderef check functions
+
+=item * C<version> - Application version to include in response
+
+=back
+
+=head1 RESPONSE FORMAT
+
+    {
+        "status": "ok",
+        "timestamp": 1234567890,
+        "uptime": 3600,
+        "version": "1.0.0",
+        "checks": {
+            "database": { "status": "ok" },
+            "cache": { "status": "error", "message": "Connection refused" }
+        }
+    }
+
 =cut

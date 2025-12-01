@@ -176,4 +176,18 @@ When enabled, adds these headers:
 
 =back
 
+=head1 CLASS METHODS
+
+=head2 reset($key)
+
+Reset the token bucket for a specific key.
+
+=head2 reset_all()
+
+Reset all token buckets.
+
+=head2 info($key)
+
+Get bucket info (tokens, last_time) for a key.
+
 =cut

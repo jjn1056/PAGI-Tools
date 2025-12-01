@@ -62,4 +62,16 @@ __END__
 
 Performs HTTP redirects. The target can be a static URL or a callback.
 
+=head1 OPTIONS
+
+=over 4
+
+=item * C<to> - Target URL (string or coderef receiving $scope)
+
+=item * C<status> - HTTP status code (default: 302)
+
+=item * C<preserve_query> - Append query string to target (default: 1)
+
+=back
+
 =cut

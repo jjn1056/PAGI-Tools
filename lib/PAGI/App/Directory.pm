@@ -142,3 +142,32 @@ sub _format_size {
 }
 
 1;
+
+__END__
+
+=head1 DESCRIPTION
+
+Extends L<PAGI::App::File> to add directory listing capabilities.
+When a directory is requested and no index file is found, returns
+an HTML or JSON listing of directory contents.
+
+=head1 OPTIONS
+
+Inherits all options from L<PAGI::App::File>, plus:
+
+=over 4
+
+=item * C<show_hidden> - Show hidden files (starting with .) (default: 0)
+
+=back
+
+=head1 JSON FORMAT
+
+When Accept header contains C<application/json>, returns JSON:
+
+    [
+      { "name": "file.txt", "is_dir": 0, "size": 1234, "mtime": 1234567890 },
+      { "name": "subdir",   "is_dir": 1, "size": 0,    "mtime": 1234567890 }
+    ]
+
+=cut

@@ -139,6 +139,20 @@ sub to_app ($self) {
 
 __END__
 
+=head1 DESCRIPTION
+
+URL router with support for path parameters and wildcards. Routes
+requests based on HTTP method and path pattern. Returns 404 for
+unmatched paths and 405 for unmatched methods.
+
+=head1 OPTIONS
+
+=over 4
+
+=item * C<not_found> - Custom app to handle unmatched routes
+
+=back
+
 =head1 PATH PATTERNS
 
 =over 4

@@ -135,4 +135,16 @@ __END__
 Simple HTTP reverse proxy. For production use, consider a more robust
 implementation with connection pooling and async I/O.
 
+=head1 OPTIONS
+
+=over 4
+
+=item * C<backend> - Backend URL (default: 'http://localhost:8080')
+
+=item * C<timeout> - Connection timeout in seconds (default: 30)
+
+=item * C<headers> - Hashref of additional headers to add to requests
+
+=back
+
 =cut

@@ -84,4 +84,20 @@ Cascade tries apps in order until one returns a status code not in
 the catch list. By default, 404 and 405 are caught, causing the next
 app to be tried.
 
+=head1 OPTIONS
+
+=over 4
+
+=item * C<apps> - Arrayref of apps to try in order
+
+=item * C<catch> - Arrayref of status codes to catch (default: [404, 405])
+
+=back
+
+=head1 METHODS
+
+=head2 add($app)
+
+Add an app to the cascade.
+
 =cut

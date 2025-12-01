@@ -129,5 +129,17 @@ __END__
 =head1 DESCRIPTION
 
 Executes CGI scripts and converts their output to PAGI responses.
+Sets up the standard CGI environment variables and parses the
+CGI output (Status header, other headers, and body).
+
+=head1 OPTIONS
+
+=over 4
+
+=item * C<script> - Path to the CGI script to execute
+
+=item * C<timeout> - Execution timeout in seconds (default: 30)
+
+=back
 
 =cut

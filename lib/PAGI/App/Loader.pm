@@ -91,4 +91,26 @@ __END__
 Loads a PAGI app from a .pl file. Supports optional auto-reload
 for development.
 
+=head1 OPTIONS
+
+=over 4
+
+=item * C<file> - Path to the .pl file containing the PAGI app
+
+=item * C<reload> - Auto-reload when file changes (default: 0)
+
+=back
+
+=head1 APP FILE FORMAT
+
+The file should return a coderef:
+
+    # app.pl
+    use Future::AsyncAwait;
+
+    async sub ($scope, $receive, $send) {
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'Hello', more => 0 });
+    };
+
 =cut

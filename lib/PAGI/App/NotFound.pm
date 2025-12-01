@@ -57,4 +57,16 @@ __END__
 Returns a customizable 404 (or other status) response. Useful as a
 fallback in a Cascade.
 
+=head1 OPTIONS
+
+=over 4
+
+=item * C<body> - Response body (string or coderef, default: 'Not Found')
+
+=item * C<content_type> - Content-Type header (default: 'text/plain')
+
+=item * C<status> - HTTP status code (default: 404)
+
+=back
+
 =cut
