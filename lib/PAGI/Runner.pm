@@ -106,6 +106,11 @@ Bind port. Default: 5000
 
 Number of worker processes. Default: 1
 
+=item listener_backlog => $num
+
+Listener queue size. No default, if left blank then the
+server sets a default that is rational for itself.
+
 =item quiet => $bool
 
 Suppress startup messages. Default: 0
@@ -132,17 +137,18 @@ Path to access log file. Default: STDERR
 
 sub new ($class, %args) {
     return bless {
-        host       => $args{host}       // '127.0.0.1',
-        port       => $args{port}       // 5000,
-        workers    => $args{workers}    // 1,
-        quiet      => $args{quiet}      // 0,
-        loop       => $args{loop}       // undef,
-        ssl_cert   => $args{ssl_cert}   // undef,
-        ssl_key    => $args{ssl_key}    // undef,
-        access_log => $args{access_log} // undef,
-        app        => undef,
-        app_spec   => undef,
-        app_args   => {},
+        host              => $args{host}              // '127.0.0.1',
+        port              => $args{port}              // 5000,
+        workers           => $args{workers}           // 1,
+        quiet             => $args{quiet}             // 0,
+        loop              => $args{loop}              // undef,
+        ssl_cert          => $args{ssl_cert}          // undef,
+        ssl_key           => $args{ssl_key}           // undef,
+        access_log        => $args{access_log}        // undef,
+        listener_backlog  => $args{listener_backlog}  // undef,
+        app               => undef,
+        app_spec          => undef,
+        app_args          => {},
     }, $class;
 }
 
@@ -176,16 +182,17 @@ sub parse_options ($self, @args) {
     # Use pass_through to leave unknown options for the app
     GetOptionsFromArray(
         \@args,
-        'app|a=s'       => \$opts{app},
-        'host|h=s'      => \$opts{host},
-        'port|p=i'      => \$opts{port},
-        'workers|w=i'   => \$opts{workers},
-        'loop|l=s'      => \$opts{loop},
-        'ssl-cert=s'    => \$opts{ssl_cert},
-        'ssl-key=s'     => \$opts{ssl_key},
-        'access-log=s'  => \$opts{access_log},
-        'quiet|q'       => \$opts{quiet},
-        'help'          => \$help,
+        'app|a=s'               => \$opts{app},
+        'host|h=s'              => \$opts{host},
+        'port|p=i'              => \$opts{port},
+        'workers|w=i'           => \$opts{workers},
+        'listener_backlog|b=i'  => \$opts{listener_backlog},
+        'loop|l=s'              => \$opts{loop},
+        'ssl-cert=s'            => \$opts{ssl_cert},
+        'ssl-key=s'             => \$opts{ssl_key},
+        'access-log=s'          => \$opts{access_log},
+        'quiet|q'               => \$opts{quiet},
+        'help'                  => \$help,
     ) or die "Error parsing options\n";
 
     if ($help) {
@@ -194,13 +201,15 @@ sub parse_options ($self, @args) {
     }
 
     # Apply parsed options
-    $self->{host}       = $opts{host}       if defined $opts{host};
-    $self->{port}       = $opts{port}       if defined $opts{port};
-    $self->{workers}    = $opts{workers}    if defined $opts{workers};
-    $self->{loop}       = $opts{loop}       if defined $opts{loop};
-    $self->{ssl_cert}   = $opts{ssl_cert}   if defined $opts{ssl_cert};
-    $self->{ssl_key}    = $opts{ssl_key}    if defined $opts{ssl_key};
-    $self->{access_log} = $opts{access_log} if defined $opts{access_log};
+    $self->{host}             = $opts{host}                   if defined $opts{host};
+    $self->{port}             = $opts{port}                   if defined $opts{port};
+    $self->{workers}          = $opts{workers}                if defined $opts{workers};
+    $self->{loop}             = $opts{loop}                   if defined $opts{loop};
+    $self->{ssl_cert}         = $opts{ssl_cert}               if defined $opts{ssl_cert};
+    $self->{ssl_key}          = $opts{ssl_key}                if defined $opts{ssl_key};
+    $self->{access_log}       = $opts{access_log}             if defined $opts{access_log};
+    $self->{listener_backlog} = $opts{listener_backlog}       if defined $opts{listener_backlog};
+
     $self->{quiet}      = $opts{quiet}      if $opts{quiet};
 
     # Legacy --app flag takes precedence
@@ -288,7 +297,7 @@ sub prepare_server ($self) {
         port    => $self->{port},
         quiet   => $self->{quiet} ? 1 : 0,
         workers => $self->{workers} > 1 ? $self->{workers} : 0,
-    );
+     );
 
     # Add SSL config if provided
     if ($self->{ssl_cert} && $self->{ssl_key}) {
@@ -303,6 +312,11 @@ sub prepare_server ($self) {
         open my $log_fh, '>>', $self->{access_log}
             or die "Cannot open access log $self->{access_log}: $!\n";
         $server_opts{access_log} = $log_fh;
+    }
+
+    # Add listener_backlog is provided, otherwise let the server decide
+    if ($self->{listener_backlog}) {
+        $server_opts{listener_backlog} = $self->{listener_backlog};
     }
 
     return PAGI::Server->new(%server_opts);
@@ -339,7 +353,7 @@ sub run ($self, @args) {
 
     # Parse constructor args (key=value pairs)
     my %app_args = $self->_parse_app_args(@args);
-
+    
     # Load the app
     $self->load_app($self->{app_spec}, %app_args);
 
