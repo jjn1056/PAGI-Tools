@@ -8,3 +8,33 @@ Wraps a synchronous PSGI app so it can run inside a PAGI HTTP scope:
 This mirrors the compatibility guidance in `docs/specs/www.mkdn`.
 
 *Note*: This demo assumes the PSGI app returns a simple arrayref `[ $status, $headers, $body_chunks ]`.
+
+## Quick Start
+
+**1. Start the server:**
+
+```bash
+pagi-server --app examples/09-psgi-bridge/app.pl --port 5000
+```
+
+**2. Demo with curl:**
+
+```bash
+# GET request - processed by legacy PSGI app
+curl http://localhost:5000/
+# => Hello from PSGI!
+
+# POST request - body is passed through to PSGI
+curl -X POST http://localhost:5000/ -d "data=test"
+# => PSGI received: data=test
+
+# The PSGI app runs synchronously but is wrapped in PAGI async interface
+```
+
+## Use Case
+
+This bridge allows running existing PSGI applications (Catalyst, Dancer, Mojolicious::Lite, etc.) on a PAGI server without modification.
+
+## Spec References
+
+- PSGI compatibility guidance – `docs/specs/www.mkdn`
