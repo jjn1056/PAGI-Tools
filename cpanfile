@@ -22,6 +22,8 @@ requires 'IO::Socket::SSL', '2.074';
 requires 'URI::Escape', '5.09';
 requires 'Hash::MultiValue', '0.16';
 requires 'JSON::MaybeXS', '1.004003';
+requires 'Cookie::Baker', '0.11';
+requires 'Apache::LogFormat::Compiler', '0.36';
 
 # Testing
 on 'test' => sub {

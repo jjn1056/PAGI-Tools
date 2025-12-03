@@ -5,6 +5,7 @@ use warnings;
 use experimental 'signatures';
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Simple::CookieUtil;
 
 =head1 NAME
 
@@ -94,55 +95,11 @@ sub wrap ($self, $app) {
 }
 
 sub _parse_cookies ($self, $header) {
-    my %cookies;
-
-    for my $pair (split /\s*;\s*/, $header) {
-        my ($name, $value) = split /=/, $pair, 2;
-        next unless defined $name && $name ne '';
-
-        $name =~ s/^\s+//;
-        $name =~ s/\s+$//;
-        $value //= '';
-        $value =~ s/^\s+//;
-        $value =~ s/\s+$//;
-
-        # Remove surrounding quotes if present
-        $value =~ s/^"(.*)"$/$1/;
-
-        $cookies{$name} = $value;
-    }
-
-    return \%cookies;
+    return PAGI::Simple::CookieUtil::parse_cookie_header($header);
 }
 
 sub _format_set_cookie ($self, $name, $value, %opts) {
-    my $cookie = "$name=$value";
-
-    if (defined $opts{expires}) {
-        $cookie .= "; Expires=$opts{expires}";
-    }
-    if (defined $opts{max_age}) {
-        $cookie .= "; Max-Age=$opts{max_age}";
-    }
-    if (defined $opts{domain}) {
-        $cookie .= "; Domain=$opts{domain}";
-    }
-    if (defined $opts{path}) {
-        $cookie .= "; Path=$opts{path}";
-    } else {
-        $cookie .= "; Path=/";
-    }
-    if ($opts{secure}) {
-        $cookie .= "; Secure";
-    }
-    if ($opts{httponly}) {
-        $cookie .= "; HttpOnly";
-    }
-    if (defined $opts{samesite}) {
-        $cookie .= "; SameSite=$opts{samesite}";
-    }
-
-    return $cookie;
+    return PAGI::Simple::CookieUtil::format_set_cookie($name, $value, %opts);
 }
 
 sub _get_header ($self, $scope, $name) {
@@ -172,11 +129,7 @@ sub set ($self, $name, $value, %opts) {
 }
 
 sub delete ($self, $name, %opts) {
-    push @{$self->{cookies}}, $self->{formatter}->(
-        $name, '',
-        expires => 'Thu, 01 Jan 1970 00:00:00 GMT',
-        %opts
-    );
+    push @{$self->{cookies}}, PAGI::Simple::CookieUtil::format_removal_cookie($name, %opts);
 }
 
 package PAGI::Middleware::Cookie;

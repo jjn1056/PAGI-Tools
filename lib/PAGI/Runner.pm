@@ -111,6 +111,11 @@ Number of worker processes. Default: 1
 Listener queue size. No default, if left blank then the
 server sets a default that is rational for itself.
 
+=item timeout => $num
+
+Seconds before we timeout the request. If left blank will
+default to whatever is default for the server.
+
 =item quiet => $bool
 
 Suppress startup messages. Default: 0
@@ -145,6 +150,7 @@ sub new ($class, %args) {
         ssl_cert          => $args{ssl_cert}          // undef,
         ssl_key           => $args{ssl_key}           // undef,
         access_log        => $args{access_log}        // undef,
+        timeout           => $args{timeout}           // undef,
         listener_backlog  => $args{listener_backlog}  // undef,
         app               => undef,
         app_spec          => undef,
@@ -187,6 +193,7 @@ sub parse_options ($self, @args) {
         'port|p=i'              => \$opts{port},
         'workers|w=i'           => \$opts{workers},
         'listener_backlog|b=i'  => \$opts{listener_backlog},
+        'timeout=i'             => \$opts{timeout},
         'loop|l=s'              => \$opts{loop},
         'ssl-cert=s'            => \$opts{ssl_cert},
         'ssl-key=s'             => \$opts{ssl_key},
@@ -209,8 +216,8 @@ sub parse_options ($self, @args) {
     $self->{ssl_key}          = $opts{ssl_key}                if defined $opts{ssl_key};
     $self->{access_log}       = $opts{access_log}             if defined $opts{access_log};
     $self->{listener_backlog} = $opts{listener_backlog}       if defined $opts{listener_backlog};
-
-    $self->{quiet}      = $opts{quiet}      if $opts{quiet};
+    $self->{timeout}          = $opts{timeout}                if defined $opts{timeout};
+    $self->{quiet}            = $opts{quiet}                  if $opts{quiet};
 
     # Legacy --app flag takes precedence
     if (defined $opts{app}) {
@@ -317,6 +324,11 @@ sub prepare_server ($self) {
     # Add listener_backlog is provided, otherwise let the server decide
     if ($self->{listener_backlog}) {
         $server_opts{listener_backlog} = $self->{listener_backlog};
+    }
+
+    # Add timeout is provided, otherwise let the server decide
+    if ($self->{timeout}) {
+        $server_opts{timeout} = $self->{timeout};
     }
 
     return PAGI::Server->new(%server_opts);
