@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use File::Spec;
 use Digest::MD5 'md5_hex';
 use Fcntl ':mode';
+use PAGI::Util::AsyncFile;
 
 =head1 NAME
 
@@ -256,37 +257,81 @@ sub wrap ($self, $app) {
         }
 
         # Read and send file content
-        open my $fh, '<:raw', $file_path or do {
-            await $self->_send_error($send, 500, 'Cannot read file');
-            return;
-        };
-
-        if ($is_range) {
-            seek $fh, $start, 0;
-        }
-
-        my $remaining = $body_size;
         my $chunk_size = 64 * 1024;  # 64KB chunks
+        my $loop = $scope->{pagi}{loop};
 
-        while ($remaining > 0) {
-            my $to_read = $remaining > $chunk_size ? $chunk_size : $remaining;
-            my $buffer;
-            my $bytes_read = read($fh, $buffer, $to_read);
+        if ($loop && !$is_range) {
+            # Use non-blocking async file I/O for full file reads
+            my $bytes_sent = 0;
+            eval {
+                await PAGI::Util::AsyncFile->read_file_chunked(
+                    $loop, $file_path,
+                    async sub ($chunk) {
+                        $bytes_sent += length($chunk);
+                        my $more = $bytes_sent < $body_size ? 1 : 0;
+                        await $send->({
+                            type => 'http.response.body',
+                            body => $chunk,
+                            more => $more,
+                        });
+                    },
+                    chunk_size => $chunk_size
+                );
+            };
+            if ($@) {
+                await $self->_send_error($send, 500, 'Cannot read file');
+                return;
+            }
+        }
+        elsif ($loop && $is_range) {
+            # For range requests, read full file async and slice
+            eval {
+                my $full_content = await PAGI::Util::AsyncFile->read_file($loop, $file_path);
+                my $content = substr($full_content, $start, $body_size);
+                await $send->({
+                    type => 'http.response.body',
+                    body => $content,
+                    more => 0,
+                });
+            };
+            if ($@) {
+                await $self->_send_error($send, 500, 'Cannot read file');
+                return;
+            }
+        }
+        else {
+            # Fallback to blocking I/O if no loop available (e.g., in tests)
+            open my $fh, '<:raw', $file_path or do {
+                await $self->_send_error($send, 500, 'Cannot read file');
+                return;
+            };
 
-            if (!defined $bytes_read || $bytes_read == 0) {
-                last;
+            if ($is_range) {
+                seek $fh, $start, 0;
             }
 
-            $remaining -= $bytes_read;
+            my $remaining = $body_size;
 
-            await $send->({
-                type => 'http.response.body',
-                body => $buffer,
-                more => ($remaining > 0 ? 1 : 0),
-            });
+            while ($remaining > 0) {
+                my $to_read = $remaining > $chunk_size ? $chunk_size : $remaining;
+                my $buffer;
+                my $bytes_read = read($fh, $buffer, $to_read);
+
+                if (!defined $bytes_read || $bytes_read == 0) {
+                    last;
+                }
+
+                $remaining -= $bytes_read;
+
+                await $send->({
+                    type => 'http.response.body',
+                    body => $buffer,
+                    more => ($remaining > 0 ? 1 : 0),
+                });
+            }
+
+            close $fh;
         }
-
-        close $fh;
     };
 }
 

@@ -5,6 +5,7 @@ use warnings;
 use experimental 'signatures';
 use Future::AsyncAwait;
 use Digest::MD5 qw(md5_hex);
+use PAGI::Util::AsyncFile;
 
 =head1 NAME
 
@@ -133,13 +134,33 @@ sub to_app ($self) {
             }
 
             my $length = $end - $start + 1;
-            open my $fh, '<:raw', $file_path or do {
-                await $self->_send_error($send, 500, 'Internal Server Error');
-                return;
-            };
-            seek($fh, $start, 0);
-            read($fh, my $content, $length);
-            close $fh;
+            my $content = '';
+
+            if ($method ne 'HEAD') {
+                # Get event loop for async I/O
+                my $loop = $scope->{pagi}{loop};
+                if ($loop) {
+                    # Use non-blocking async file I/O - read full file and slice
+                    eval {
+                        my $full_content = await PAGI::Util::AsyncFile->read_file($loop, $file_path);
+                        $content = substr($full_content, $start, $length);
+                    };
+                    if ($@) {
+                        await $self->_send_error($send, 500, 'Internal Server Error');
+                        return;
+                    }
+                }
+                else {
+                    # Fallback to blocking I/O with seek for efficiency
+                    open my $fh, '<:raw', $file_path or do {
+                        await $self->_send_error($send, 500, 'Internal Server Error');
+                        return;
+                    };
+                    seek($fh, $start, 0);
+                    read($fh, $content, $length);
+                    close $fh;
+                }
+            }
 
             await $send->({
                 type => 'http.response.start',
@@ -153,24 +174,35 @@ sub to_app ($self) {
                 ],
             });
 
-            if ($method ne 'HEAD') {
-                await $send->({ type => 'http.response.body', body => $content, more => 0 });
-            } else {
-                await $send->({ type => 'http.response.body', body => '', more => 0 });
-            }
+            await $send->({ type => 'http.response.body', body => $content, more => 0 });
             return;
         }
 
         # Full file response
         my $content = '';
         if ($method ne 'HEAD') {
-            open my $fh, '<:raw', $file_path or do {
-                await $self->_send_error($send, 500, 'Internal Server Error');
-                return;
-            };
-            local $/;
-            $content = <$fh>;
-            close $fh;
+            # Get event loop for async I/O
+            my $loop = $scope->{pagi}{loop};
+            if ($loop) {
+                # Use non-blocking async file I/O
+                eval {
+                    $content = await PAGI::Util::AsyncFile->read_file($loop, $file_path);
+                };
+                if ($@) {
+                    await $self->_send_error($send, 500, 'Internal Server Error');
+                    return;
+                }
+            }
+            else {
+                # Fallback to blocking I/O if no loop available (e.g., in tests)
+                open my $fh, '<:raw', $file_path or do {
+                    await $self->_send_error($send, 500, 'Internal Server Error');
+                    return;
+                };
+                local $/;
+                $content = <$fh>;
+                close $fh;
+            }
         }
 
         await $send->({
