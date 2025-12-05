@@ -11,7 +11,6 @@ my @modules = qw(
     PAGI::Server::WebSocket
     PAGI::Server::SSE
     PAGI::Server::Lifespan
-    PAGI::Server::Scope
     PAGI::Server::Extensions::TLS
     PAGI::Server::Extensions::FullFlush
     PAGI::App::WrapPSGI

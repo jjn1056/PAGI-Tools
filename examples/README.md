@@ -20,3 +20,18 @@ Examples assume you understand the core spec (`docs/specs/main.mkdn`) plus the r
 9. `09-psgi-bridge` – wraps a PSGI app for PAGI use (via `PAGI::App::WrapPSGI`)
 
 Each example has its own `README.md` explaining how to run it and which spec sections to review.
+
+## PAGI::Simple Examples
+- `simple-01-hello` – basics for routing, text/json/html helpers
+- `simple-02-forms` – form handling plus JSON CRUD patterns
+- `simple-03-websocket` – WebSocket chat with pub/sub
+- `simple-04-sse` – server-sent events stream
+- `simple-05-streaming` – streaming responses and downloads
+- `simple-06-negotiation` – content negotiation helpers
+- `simple-07-uploads` – multipart upload handling
+- `simple-08-cookies` – cookie helpers
+- `simple-09-cors` – CORS middleware usage
+- `simple-10-logging` – request logging hooks
+- `simple-11-named-routes` – named route generation
+- `simple-12-mount` – mounting sub-applications
+- `simple-13-utf8` – UTF-8 round-trip demo for path/query/form input
