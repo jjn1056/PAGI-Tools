@@ -18,6 +18,9 @@ requires 'Protocol::WebSocket', '0.26';
 requires 'IO::Async::SSL', '0.25';
 requires 'IO::Socket::SSL', '2.074';
 
+# Templating
+requires 'Template::EmbeddedPerl', '0.001015';
+
 # Utilities
 requires 'URI::Escape', '5.09';
 requires 'Hash::MultiValue', '0.16';
