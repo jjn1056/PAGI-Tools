@@ -24,6 +24,7 @@ requires 'Template::EmbeddedPerl', '0.001015';
 # Utilities
 requires 'URI::Escape', '5.09';
 requires 'Hash::MultiValue', '0.16';
+requires 'Module::Runtime', '0.016';
 requires 'JSON::MaybeXS', '1.004003';
 requires 'Cookie::Baker', '0.11';
 requires 'Apache::LogFormat::Compiler', '0.36';
