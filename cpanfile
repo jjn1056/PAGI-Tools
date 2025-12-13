@@ -4,9 +4,13 @@
 requires 'perl', '5.032';
 
 # Core async framework
-requires 'IO::Async', '0.802';
+requires 'IO::Async', '0.802';  # Includes IO::Async::Function for worker pools
 requires 'Future', '0.50';
 requires 'Future::AsyncAwait', '0.66';
+
+# Worker pool support (run_blocking)
+# IO::Async::Function is part of IO::Async
+# B::Deparse is core Perl (for serializing coderefs)
 
 # HTTP parsing
 requires 'HTTP::Parser::XS', '0.17';
