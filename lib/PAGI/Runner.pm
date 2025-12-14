@@ -148,6 +148,11 @@ own listening socket, allowing the kernel to distribute connections. Reduces
 accept() contention and can improve p99 latency under high concurrency.
 Default: 0
 
+=item max_receive_queue => $count
+
+Maximum WebSocket receive queue size (message count). When exceeded, connection
+is closed with code 1008. DoS protection for slow consumers. Default: 1000
+
 =back
 
 =cut
@@ -166,6 +171,7 @@ sub new ($class, %args) {
         timeout           => $args{timeout}           // undef,
         listener_backlog  => $args{listener_backlog}  // undef,
         reuseport         => $args{reuseport}         // 0,
+        max_receive_queue => $args{max_receive_queue} // undef,
         app               => undef,
         app_spec          => undef,
         app_args          => {},
@@ -216,6 +222,7 @@ sub parse_options ($self, @args) {
         'access-log=s'          => \$opts{access_log},
         'no-access-log'         => \$opts{no_access_log},
         'reuseport'             => \$opts{reuseport},
+        'max-receive-queue=i'   => \$opts{max_receive_queue},
         'quiet|q'               => \$opts{quiet},
         'help'                  => \$help,
     ) or die "Error parsing options\n";
@@ -237,6 +244,7 @@ sub parse_options ($self, @args) {
     $self->{listener_backlog} = $opts{listener_backlog}       if defined $opts{listener_backlog};
     $self->{timeout}          = $opts{timeout}                if defined $opts{timeout};
     $self->{reuseport}        = $opts{reuseport}              if $opts{reuseport};
+    $self->{max_receive_queue} = $opts{max_receive_queue}    if defined $opts{max_receive_queue};
     $self->{quiet}            = $opts{quiet}                  if $opts{quiet};
 
     # Legacy --app flag takes precedence
@@ -360,6 +368,11 @@ sub prepare_server ($self) {
     # Add reuseport if enabled
     if ($self->{reuseport}) {
         $server_opts{reuseport} = 1;
+    }
+
+    # Add max_receive_queue if provided
+    if (defined $self->{max_receive_queue}) {
+        $server_opts{max_receive_queue} = $self->{max_receive_queue};
     }
 
     return PAGI::Server->new(%server_opts);
@@ -531,6 +544,7 @@ Options:
     --access-log FILE   Access log file (default: STDERR)
     --no-access-log     Disable access logging (improves throughput)
     --reuseport         SO_REUSEPORT mode (reduces accept contention)
+    --max-receive-queue NUM  Max WebSocket receive queue size (default: 1000)
     -q, --quiet         Suppress startup messages
     --help              Show this help
 
