@@ -141,6 +141,13 @@ Path to access log file. Default: STDERR
 Disable access logging entirely. Eliminates per-request I/O overhead,
 which can improve throughput by 5-15% depending on workload. Default: 0
 
+=item reuseport => $bool
+
+Enable SO_REUSEPORT mode for multi-worker servers. Each worker creates its
+own listening socket, allowing the kernel to distribute connections. Reduces
+accept() contention and can improve p99 latency under high concurrency.
+Default: 0
+
 =back
 
 =cut
@@ -158,6 +165,7 @@ sub new ($class, %args) {
         no_access_log     => $args{no_access_log}     // 0,
         timeout           => $args{timeout}           // undef,
         listener_backlog  => $args{listener_backlog}  // undef,
+        reuseport         => $args{reuseport}         // 0,
         app               => undef,
         app_spec          => undef,
         app_args          => {},
@@ -183,6 +191,7 @@ Supported options:
     --ssl-key       SSL key path
     --access-log    Access log path
     --no-access-log Disable access logging (for max performance)
+    --reuseport     Enable SO_REUSEPORT for multi-worker scaling
     -q, --quiet     Suppress output
     --help          Show help
 
@@ -206,6 +215,7 @@ sub parse_options ($self, @args) {
         'ssl-key=s'             => \$opts{ssl_key},
         'access-log=s'          => \$opts{access_log},
         'no-access-log'         => \$opts{no_access_log},
+        'reuseport'             => \$opts{reuseport},
         'quiet|q'               => \$opts{quiet},
         'help'                  => \$help,
     ) or die "Error parsing options\n";
@@ -226,6 +236,7 @@ sub parse_options ($self, @args) {
     $self->{no_access_log}    = $opts{no_access_log}          if $opts{no_access_log};
     $self->{listener_backlog} = $opts{listener_backlog}       if defined $opts{listener_backlog};
     $self->{timeout}          = $opts{timeout}                if defined $opts{timeout};
+    $self->{reuseport}        = $opts{reuseport}              if $opts{reuseport};
     $self->{quiet}            = $opts{quiet}                  if $opts{quiet};
 
     # Legacy --app flag takes precedence
@@ -344,6 +355,11 @@ sub prepare_server ($self) {
     # Add timeout is provided, otherwise let the server decide
     if ($self->{timeout}) {
         $server_opts{timeout} = $self->{timeout};
+    }
+
+    # Add reuseport if enabled
+    if ($self->{reuseport}) {
+        $server_opts{reuseport} = 1;
     }
 
     return PAGI::Server->new(%server_opts);
@@ -514,6 +530,7 @@ Options:
     --ssl-key FILE      SSL private key file
     --access-log FILE   Access log file (default: STDERR)
     --no-access-log     Disable access logging (improves throughput)
+    --reuseport         SO_REUSEPORT mode (reduces accept contention)
     -q, --quiet         Suppress startup messages
     --help              Show this help
 
