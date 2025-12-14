@@ -153,6 +153,11 @@ Default: 0
 Maximum WebSocket receive queue size (message count). When exceeded, connection
 is closed with code 1008. DoS protection for slow consumers. Default: 1000
 
+=item max_ws_frame_size => $bytes
+
+Maximum WebSocket frame payload size in bytes. When a client sends a frame
+larger than this limit, the connection is closed. Default: 65536 (64KB)
+
 =back
 
 =cut
@@ -172,6 +177,7 @@ sub new ($class, %args) {
         listener_backlog  => $args{listener_backlog}  // undef,
         reuseport         => $args{reuseport}         // 0,
         max_receive_queue => $args{max_receive_queue} // undef,
+        max_ws_frame_size => $args{max_ws_frame_size} // undef,
         app               => undef,
         app_spec          => undef,
         app_args          => {},
@@ -223,6 +229,7 @@ sub parse_options ($self, @args) {
         'no-access-log'         => \$opts{no_access_log},
         'reuseport'             => \$opts{reuseport},
         'max-receive-queue=i'   => \$opts{max_receive_queue},
+        'max-ws-frame-size=i'   => \$opts{max_ws_frame_size},
         'quiet|q'               => \$opts{quiet},
         'help'                  => \$help,
     ) or die "Error parsing options\n";
@@ -245,6 +252,7 @@ sub parse_options ($self, @args) {
     $self->{timeout}          = $opts{timeout}                if defined $opts{timeout};
     $self->{reuseport}        = $opts{reuseport}              if $opts{reuseport};
     $self->{max_receive_queue} = $opts{max_receive_queue}    if defined $opts{max_receive_queue};
+    $self->{max_ws_frame_size} = $opts{max_ws_frame_size}    if defined $opts{max_ws_frame_size};
     $self->{quiet}            = $opts{quiet}                  if $opts{quiet};
 
     # Legacy --app flag takes precedence
@@ -373,6 +381,11 @@ sub prepare_server ($self) {
     # Add max_receive_queue if provided
     if (defined $self->{max_receive_queue}) {
         $server_opts{max_receive_queue} = $self->{max_receive_queue};
+    }
+
+    # Add max_ws_frame_size if provided
+    if (defined $self->{max_ws_frame_size}) {
+        $server_opts{max_ws_frame_size} = $self->{max_ws_frame_size};
     }
 
     return PAGI::Server->new(%server_opts);
@@ -545,6 +558,7 @@ Options:
     --no-access-log     Disable access logging (improves throughput)
     --reuseport         SO_REUSEPORT mode (reduces accept contention)
     --max-receive-queue NUM  Max WebSocket receive queue size (default: 1000)
+    --max-ws-frame-size NUM  Max WebSocket frame size in bytes (default: 65536)
     -q, --quiet         Suppress startup messages
     --help              Show this help
 
