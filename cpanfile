@@ -33,6 +33,10 @@ requires 'JSON::MaybeXS', '1.004003';
 requires 'Cookie::Baker', '0.11';
 requires 'Apache::LogFormat::Compiler', '0.36';
 requires 'File::ShareDir::Dist', '0.07';
+requires 'Role::Tiny', '2.002004';
+
+# Optional: Valiant form integration (for PAGI::Simple::View::Role::Valiant)
+recommends 'Valiant', '0.001';  # Provides Valiant::HTML::Util::Form
 
 # Testing
 on 'test' => sub {
