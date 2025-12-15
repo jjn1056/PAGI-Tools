@@ -141,6 +141,11 @@ Path to access log file. Default: STDERR
 Disable access logging entirely. Eliminates per-request I/O overhead,
 which can improve throughput by 5-15% depending on workload. Default: 0
 
+=item log_level => $level
+
+Controls the verbosity of server log messages. Valid levels from least
+to most verbose: 'error', 'warn', 'info', 'debug'. Default: 'info'
+
 =item reuseport => $bool
 
 Enable SO_REUSEPORT mode for multi-worker servers. Each worker creates its
@@ -173,6 +178,7 @@ sub new ($class, %args) {
         ssl_key           => $args{ssl_key}           // undef,
         access_log        => $args{access_log}        // undef,
         no_access_log     => $args{no_access_log}     // 0,
+        log_level         => $args{log_level}         // undef,
         timeout           => $args{timeout}           // undef,
         listener_backlog  => $args{listener_backlog}  // undef,
         reuseport         => $args{reuseport}         // 0,
@@ -203,6 +209,7 @@ Supported options:
     --ssl-key       SSL key path
     --access-log    Access log path
     --no-access-log Disable access logging (for max performance)
+    --log-level     Log verbosity: debug, info, warn, error (default: info)
     --reuseport     Enable SO_REUSEPORT for multi-worker scaling
     -q, --quiet     Suppress output
     --help          Show help
@@ -227,6 +234,7 @@ sub parse_options ($self, @args) {
         'ssl-key=s'             => \$opts{ssl_key},
         'access-log=s'          => \$opts{access_log},
         'no-access-log'         => \$opts{no_access_log},
+        'log-level=s'           => \$opts{log_level},
         'reuseport'             => \$opts{reuseport},
         'max-receive-queue=i'   => \$opts{max_receive_queue},
         'max-ws-frame-size=i'   => \$opts{max_ws_frame_size},
@@ -248,6 +256,7 @@ sub parse_options ($self, @args) {
     $self->{ssl_key}          = $opts{ssl_key}                if defined $opts{ssl_key};
     $self->{access_log}       = $opts{access_log}             if defined $opts{access_log};
     $self->{no_access_log}    = $opts{no_access_log}          if $opts{no_access_log};
+    $self->{log_level}        = $opts{log_level}              if defined $opts{log_level};
     $self->{listener_backlog} = $opts{listener_backlog}       if defined $opts{listener_backlog};
     $self->{timeout}          = $opts{timeout}                if defined $opts{timeout};
     $self->{reuseport}        = $opts{reuseport}              if $opts{reuseport};
@@ -362,6 +371,11 @@ sub prepare_server ($self) {
         $server_opts{access_log} = $log_fh;
     }
     # else: let server use its default (STDERR)
+
+    # Add log_level if provided
+    if (defined $self->{log_level}) {
+        $server_opts{log_level} = $self->{log_level};
+    }
 
     # Add listener_backlog is provided, otherwise let the server decide
     if ($self->{listener_backlog}) {
