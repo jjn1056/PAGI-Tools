@@ -587,6 +587,7 @@ Options:
     --max-receive-queue NUM  Max WebSocket receive queue size (default: 1000)
     --max-ws-frame-size NUM  Max WebSocket frame size in bytes (default: 65536)
     --max-requests NUM  Requests per worker before restart (default: unlimited)
+    --log-level LEVEL   Log verbosity: debug, info, warn, error (default: info)
     -q, --quiet         Suppress startup messages
     --help              Show this help
 
