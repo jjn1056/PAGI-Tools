@@ -163,6 +163,10 @@ is closed with code 1008. DoS protection for slow consumers. Default: 1000
 Maximum WebSocket frame payload size in bytes. When a client sends a frame
 larger than this limit, the connection is closed. Default: 65536 (64KB)
 
+=item max_requests => $count
+
+Maximum requests per worker before restart. Default: 0 (unlimited)
+
 =back
 
 =cut
@@ -184,6 +188,7 @@ sub new ($class, %args) {
         reuseport         => $args{reuseport}         // 0,
         max_receive_queue => $args{max_receive_queue} // undef,
         max_ws_frame_size => $args{max_ws_frame_size} // undef,
+        max_requests      => $args{max_requests}      // undef,
         app               => undef,
         app_spec          => undef,
         app_args          => {},
@@ -211,6 +216,7 @@ Supported options:
     --no-access-log Disable access logging (for max performance)
     --log-level     Log verbosity: debug, info, warn, error (default: info)
     --reuseport     Enable SO_REUSEPORT for multi-worker scaling
+    --max-requests  Requests per worker before restart (default: unlimited)
     -q, --quiet     Suppress output
     --help          Show help
 
@@ -238,6 +244,7 @@ sub parse_options ($self, @args) {
         'reuseport'             => \$opts{reuseport},
         'max-receive-queue=i'   => \$opts{max_receive_queue},
         'max-ws-frame-size=i'   => \$opts{max_ws_frame_size},
+        'max-requests=i'        => \$opts{max_requests},
         'quiet|q'               => \$opts{quiet},
         'help'                  => \$help,
     ) or die "Error parsing options\n";
@@ -262,6 +269,7 @@ sub parse_options ($self, @args) {
     $self->{reuseport}        = $opts{reuseport}              if $opts{reuseport};
     $self->{max_receive_queue} = $opts{max_receive_queue}    if defined $opts{max_receive_queue};
     $self->{max_ws_frame_size} = $opts{max_ws_frame_size}    if defined $opts{max_ws_frame_size};
+    $self->{max_requests}      = $opts{max_requests}          if defined $opts{max_requests};
     $self->{quiet}            = $opts{quiet}                  if $opts{quiet};
 
     # Legacy --app flag takes precedence
@@ -400,6 +408,11 @@ sub prepare_server ($self) {
     # Add max_ws_frame_size if provided
     if (defined $self->{max_ws_frame_size}) {
         $server_opts{max_ws_frame_size} = $self->{max_ws_frame_size};
+    }
+
+    # Add max_requests if provided
+    if (defined $self->{max_requests}) {
+        $server_opts{max_requests} = $self->{max_requests};
     }
 
     return PAGI::Server->new(%server_opts);
@@ -573,6 +586,7 @@ Options:
     --reuseport         SO_REUSEPORT mode (reduces accept contention)
     --max-receive-queue NUM  Max WebSocket receive queue size (default: 1000)
     --max-ws-frame-size NUM  Max WebSocket frame size in bytes (default: 65536)
+    --max-requests NUM  Requests per worker before restart (default: unlimited)
     -q, --quiet         Suppress startup messages
     --help              Show this help
 
