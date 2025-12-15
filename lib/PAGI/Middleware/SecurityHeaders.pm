@@ -66,10 +66,15 @@ Permissions-Policy header for feature control.
 =cut
 
 sub _init ($self, $config) {
-    $self->{x_frame_options}            = $config->{x_frame_options} // 'SAMEORIGIN';
-    $self->{x_content_type_options}     = $config->{x_content_type_options} // 'nosniff';
-    $self->{x_xss_protection}           = $config->{x_xss_protection} // '1; mode=block';
-    $self->{referrer_policy}            = $config->{referrer_policy} // 'strict-origin-when-cross-origin';
+    # Use exists() to allow explicitly passing undef to disable a header
+    $self->{x_frame_options}            = exists $config->{x_frame_options}
+        ? $config->{x_frame_options} : 'SAMEORIGIN';
+    $self->{x_content_type_options}     = exists $config->{x_content_type_options}
+        ? $config->{x_content_type_options} : 'nosniff';
+    $self->{x_xss_protection}           = exists $config->{x_xss_protection}
+        ? $config->{x_xss_protection} : '1; mode=block';
+    $self->{referrer_policy}            = exists $config->{referrer_policy}
+        ? $config->{referrer_policy} : 'strict-origin-when-cross-origin';
     $self->{strict_transport_security}  = $config->{strict_transport_security};
     $self->{content_security_policy}    = $config->{content_security_policy};
     $self->{permissions_policy}         = $config->{permissions_policy};
