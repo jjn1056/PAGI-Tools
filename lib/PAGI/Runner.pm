@@ -167,6 +167,11 @@ larger than this limit, the connection is closed. Default: 65536 (64KB)
 
 Maximum requests per worker before restart. Default: 0 (unlimited)
 
+=item libs => \@paths
+
+Additional library paths to add to @INC before loading the app.
+Similar to C<perl -I>. Default: []
+
 =back
 
 =cut
@@ -189,6 +194,7 @@ sub new ($class, %args) {
         max_receive_queue => $args{max_receive_queue} // undef,
         max_ws_frame_size => $args{max_ws_frame_size} // undef,
         max_requests      => $args{max_requests}      // undef,
+        libs              => $args{libs}              // [],
         app               => undef,
         app_spec          => undef,
         app_args          => {},
@@ -205,6 +211,7 @@ and constructor args).
 
 Supported options:
 
+    -I, --lib       Add path to @INC (repeatable, like perl -I)
     -a, --app       App file path (legacy, for backward compatibility)
     -h, --host      Bind address
     -p, --port      Bind port
@@ -227,8 +234,10 @@ sub parse_options ($self, @args) {
     my $help;
 
     # Use pass_through to leave unknown options for the app
+    my @libs;
     GetOptionsFromArray(
         \@args,
+        'I|lib=s'               => \@libs,
         'app|a=s'               => \$opts{app},
         'host|h=s'              => \$opts{host},
         'port|p=i'              => \$opts{port},
@@ -272,6 +281,9 @@ sub parse_options ($self, @args) {
     $self->{max_requests}      = $opts{max_requests}          if defined $opts{max_requests};
     $self->{quiet}            = $opts{quiet}                  if $opts{quiet};
 
+    # Add library paths (can be specified multiple times)
+    push @{$self->{libs}}, @libs if @libs;
+
     # Legacy --app flag takes precedence
     if (defined $opts{app}) {
         $self->{app_spec} = $opts{app};
@@ -295,6 +307,11 @@ Returns the loaded app coderef and stores it in the runner.
 =cut
 
 sub load_app ($self, $app_spec = undef, %args) {
+    # Add library paths to @INC before loading
+    if (@{$self->{libs}}) {
+        unshift @INC, @{$self->{libs}};
+    }
+
     # Use provided spec, or fall back to one from parse_options, or default
     $app_spec //= $self->{app_spec};
 
@@ -513,8 +530,11 @@ sub _load_module ($self, $module, %args) {
         die "Module '$module' does not have new() and to_app() methods\n";
     }
 
-    # Instantiate and get app
-    my $instance = $module->new(%args);
+    # Get the module's actual file path for correct home directory detection
+    my $module_file = $INC{$file};
+
+    # Instantiate and get app (pass _caller_file for correct home dir)
+    my $instance = $module->new(%args, _caller_file => $module_file);
     my $app = $instance->to_app;
 
     unless (ref $app eq 'CODE') {
@@ -574,6 +594,7 @@ sub _show_help ($self) {
 Usage: pagi-server [options] [app] [key=value ...]
 
 Options:
+    -I, --lib PATH      Add PATH to @INC (repeatable, like perl -I)
     -a, --app FILE      Load app from file (legacy option)
     -h, --host HOST     Bind address (default: 127.0.0.1)
     -p, --port PORT     Bind port (default: 5000)
