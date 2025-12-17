@@ -172,6 +172,22 @@ Maximum requests per worker before restart. Default: 0 (unlimited)
 Additional library paths to add to @INC before loading the app.
 Similar to C<perl -I>. Default: []
 
+=item daemonize => $bool
+
+Fork to background and detach from terminal. Default: 0
+
+=item pid_file => $path
+
+Write process ID to this file. Useful for init scripts and process managers.
+
+=item user => $username
+
+Drop privileges to this user after binding to port. Requires starting as root.
+
+=item group => $groupname
+
+Drop privileges to this group after binding to port. Requires starting as root.
+
 =back
 
 =cut
@@ -194,6 +210,10 @@ sub new ($class, %args) {
         max_receive_queue => $args{max_receive_queue} // undef,
         max_ws_frame_size => $args{max_ws_frame_size} // undef,
         max_requests      => $args{max_requests}      // undef,
+        daemonize         => $args{daemonize}         // 0,
+        pid_file          => $args{pid_file}          // undef,
+        user              => $args{user}              // undef,
+        group             => $args{group}             // undef,
         libs              => $args{libs}              // [],
         app               => undef,
         app_spec          => undef,
@@ -254,6 +274,10 @@ sub parse_options ($self, @args) {
         'max-receive-queue=i'   => \$opts{max_receive_queue},
         'max-ws-frame-size=i'   => \$opts{max_ws_frame_size},
         'max-requests=i'        => \$opts{max_requests},
+        'daemonize|D'           => \$opts{daemonize},
+        'pid=s'                 => \$opts{pid_file},
+        'user=s'                => \$opts{user},
+        'group=s'               => \$opts{group},
         'quiet|q'               => \$opts{quiet},
         'help'                  => \$help,
     ) or die "Error parsing options\n";
@@ -279,6 +303,10 @@ sub parse_options ($self, @args) {
     $self->{max_receive_queue} = $opts{max_receive_queue}    if defined $opts{max_receive_queue};
     $self->{max_ws_frame_size} = $opts{max_ws_frame_size}    if defined $opts{max_ws_frame_size};
     $self->{max_requests}      = $opts{max_requests}          if defined $opts{max_requests};
+    $self->{daemonize}        = $opts{daemonize}              if $opts{daemonize};
+    $self->{pid_file}         = $opts{pid_file}               if defined $opts{pid_file};
+    $self->{user}             = $opts{user}                   if defined $opts{user};
+    $self->{group}            = $opts{group}                  if defined $opts{group};
     $self->{quiet}            = $opts{quiet}                  if $opts{quiet};
 
     # Add library paths (can be specified multiple times)
@@ -609,6 +637,10 @@ Options:
     --max-ws-frame-size NUM  Max WebSocket frame size in bytes (default: 65536)
     --max-requests NUM  Requests per worker before restart (default: unlimited)
     --log-level LEVEL   Log verbosity: debug, info, warn, error (default: info)
+    -D, --daemonize     Run as background daemon
+    --pid FILE          Write PID to file
+    --user USER         Run as specified user (after binding)
+    --group GROUP       Run as specified group (after binding)
     -q, --quiet         Suppress startup messages
     --help              Show this help
 
