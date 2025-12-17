@@ -536,6 +536,11 @@ sub run ($self, @args) {
         $self->_write_pid_file($self->{pid_file});
     }
 
+    # Drop privileges (after binding to privileged port, after writing PID)
+    if ($self->{user} || $self->{group}) {
+        $self->_drop_privileges;
+    }
+
     # Set up PID file cleanup on exit
     if ($self->{_pid_file_path}) {
         $loop->watch_signal(TERM => sub {
@@ -721,6 +726,43 @@ sub _write_pid_file ($self, $pid_file) {
 sub _remove_pid_file ($self) {
     return unless $self->{_pid_file_path};
     unlink($self->{_pid_file_path});
+}
+
+sub _drop_privileges ($self) {
+    my $user = $self->{user};
+    my $group = $self->{group};
+
+    return unless $user || $group;
+
+    # Must be root to change user/group
+    if ($> != 0) {
+        die "Must run as root to use --user/--group\n";
+    }
+
+    # Change group first (while still root)
+    if ($group) {
+        my $gid = getgrnam($group);
+        die "Unknown group: $group\n" unless defined $gid;
+
+        # Set both real and effective GID
+        $( = $) = $gid;
+        die "Cannot change to group $group: $!\n" if $) != $gid;
+    }
+
+    # Then change user
+    if ($user) {
+        my ($uid, $gid) = (getpwnam($user))[2, 3];
+        die "Unknown user: $user\n" unless defined $uid;
+
+        # If no group specified, use user's primary group
+        unless ($group) {
+            $( = $) = $gid;
+        }
+
+        # Set both real and effective UID
+        $< = $> = $uid;
+        die "Cannot change to user $user: $!\n" if $> != $uid;
+    }
 }
 
 1;

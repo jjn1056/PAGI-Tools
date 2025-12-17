@@ -293,4 +293,89 @@ subtest 'help flag sets show_help' => sub {
     ok($runner->{show_help}, 'show_help is set');
 };
 
+# Test 21: production CLI options parsing
+subtest 'production CLI options parsing' => sub {
+    my $runner = PAGI::Runner->new;
+    my @remaining = $runner->parse_options(
+        '-D',
+        '--pid', '/tmp/test.pid',
+        '--user', 'nobody',
+        '--group', 'nogroup',
+    );
+
+    is($runner->{daemonize}, 1, '--daemonize parsed');
+    is($runner->{pid_file}, '/tmp/test.pid', '--pid parsed');
+    is($runner->{user}, 'nobody', '--user parsed');
+    is($runner->{group}, 'nogroup', '--group parsed');
+};
+
+# Test 22: _drop_privileges validation
+subtest '_drop_privileges validation' => sub {
+    # Test 1: Returns early if neither user nor group specified
+    my $runner1 = PAGI::Runner->new(port => 0, quiet => 1);
+    ok(lives { $runner1->_drop_privileges }, '_drop_privileges returns early when no user/group');
+
+    # Test 2: Requires root for --user
+    my $runner2 = PAGI::Runner->new(
+        user => 'nobody',
+        port => 0,
+        quiet => 1,
+    );
+
+    if ($> == 0) {
+        # Running as root - test should validate user exists
+        my $runner3 = PAGI::Runner->new(
+            user => 'nonexistent_user_12345',
+            port => 0,
+            quiet => 1,
+        );
+        like(
+            dies { $runner3->_drop_privileges },
+            qr/Unknown user/,
+            'rejects unknown user (as root)'
+        );
+    } else {
+        # Not root - should require root
+        like(
+            dies { $runner2->_drop_privileges },
+            qr/Must run as root/,
+            'requires root for --user'
+        );
+    }
+
+    # Test 3: Requires root for --group
+    my $runner4 = PAGI::Runner->new(
+        group => 'nogroup',
+        port => 0,
+        quiet => 1,
+    );
+
+    if ($> == 0) {
+        # Running as root - test should validate group exists
+        my $runner5 = PAGI::Runner->new(
+            group => 'nonexistent_group_12345',
+            port => 0,
+            quiet => 1,
+        );
+        like(
+            dies { $runner5->_drop_privileges },
+            qr/Unknown group/,
+            'rejects unknown group (as root)'
+        );
+    } else {
+        # Not root - should require root
+        like(
+            dies { $runner4->_drop_privileges },
+            qr/Must run as root/,
+            'requires root for --group'
+        );
+    }
+};
+
+# Test 23: _drop_privileges method exists
+subtest '_drop_privileges method exists' => sub {
+    my $runner = PAGI::Runner->new;
+    ok($runner->can('_drop_privileges'), '_drop_privileges method exists');
+};
+
 done_testing;
