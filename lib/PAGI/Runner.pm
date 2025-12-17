@@ -6,6 +6,7 @@ use experimental 'signatures';
 use Getopt::Long qw(GetOptionsFromArray :config pass_through no_auto_abbrev);
 use Pod::Usage;
 use File::Spec;
+use POSIX qw(setsid);
 use IO::Async::Loop;
 
 use PAGI::Server;
@@ -525,6 +526,11 @@ sub run ($self, @args) {
         die "Error starting server: $error\n";
     }
 
+    # Daemonize after binding (so errors go to terminal)
+    if ($self->{daemonize}) {
+        $self->_daemonize;
+    }
+
     # Run the event loop
     $loop->run;
 }
@@ -656,6 +662,35 @@ Examples:
     pagi-server -w 4 PAGI::App::Proxy target=http://backend:3000
 
 HELP
+}
+
+sub _daemonize ($self) {
+    # First fork - parent exits, child continues
+    my $pid = fork();
+    die "Cannot fork: $!" unless defined $pid;
+    exit(0) if $pid;  # Parent exits
+
+    # Child becomes session leader
+    setsid() or die "Cannot create new session: $!";
+
+    # Second fork - prevent acquiring a controlling terminal
+    $pid = fork();
+    die "Cannot fork: $!" unless defined $pid;
+    exit(0) if $pid;  # First child exits
+
+    # Grandchild continues as daemon
+    # Change to root directory to avoid blocking unmounts
+    chdir('/') or die "Cannot chdir to /: $!";
+
+    # Clear umask
+    umask(0);
+
+    # Redirect standard file descriptors to /dev/null
+    open(STDIN, '<', '/dev/null') or die "Cannot redirect STDIN: $!";
+    open(STDOUT, '>', '/dev/null') or die "Cannot redirect STDOUT: $!";
+    open(STDERR, '>', '/dev/null') or die "Cannot redirect STDERR: $!";
+
+    return $$;  # Return daemon PID
 }
 
 1;
