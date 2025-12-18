@@ -211,6 +211,7 @@ sub new ($class, %args) {
         max_receive_queue => $args{max_receive_queue} // undef,
         max_ws_frame_size => $args{max_ws_frame_size} // undef,
         max_requests      => $args{max_requests}      // undef,
+        max_connections       => $args{max_connections}       // 0,
         daemonize         => $args{daemonize}         // 0,
         pid_file          => $args{pid_file}          // undef,
         user              => $args{user}              // undef,
@@ -275,6 +276,7 @@ sub parse_options ($self, @args) {
         'max-receive-queue=i'   => \$opts{max_receive_queue},
         'max-ws-frame-size=i'   => \$opts{max_ws_frame_size},
         'max-requests=i'        => \$opts{max_requests},
+        'max-connections=i'     => \$opts{max_connections},
         'daemonize|D'           => \$opts{daemonize},
         'pid=s'                 => \$opts{pid_file},
         'user=s'                => \$opts{user},
@@ -304,6 +306,7 @@ sub parse_options ($self, @args) {
     $self->{max_receive_queue} = $opts{max_receive_queue}    if defined $opts{max_receive_queue};
     $self->{max_ws_frame_size} = $opts{max_ws_frame_size}    if defined $opts{max_ws_frame_size};
     $self->{max_requests}      = $opts{max_requests}          if defined $opts{max_requests};
+    $self->{max_connections}      = $opts{max_connections}          if defined $opts{max_connections};
     $self->{daemonize}        = $opts{daemonize}              if $opts{daemonize};
     $self->{pid_file}         = $opts{pid_file}               if defined $opts{pid_file};
     $self->{user}             = $opts{user}                   if defined $opts{user};
@@ -459,6 +462,11 @@ sub prepare_server ($self) {
     # Add max_requests if provided
     if (defined $self->{max_requests}) {
         $server_opts{max_requests} = $self->{max_requests};
+    }
+
+    # Add max_connections if provided
+    if (defined $self->{max_connections}) {
+        $server_opts{max_connections} = $self->{max_connections};
     }
 
     return PAGI::Server->new(%server_opts);
@@ -671,6 +679,7 @@ Options:
     --max-receive-queue NUM  Max WebSocket receive queue size (default: 1000)
     --max-ws-frame-size NUM  Max WebSocket frame size in bytes (default: 65536)
     --max-requests NUM  Requests per worker before restart (default: unlimited)
+    --max-connections N   Max concurrent connections (0=auto, default)
     --log-level LEVEL   Log verbosity: debug, info, warn, error (default: info)
     -D, --daemonize     Run as background daemon
     --pid FILE          Write PID to file
