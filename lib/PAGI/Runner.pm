@@ -168,6 +168,11 @@ larger than this limit, the connection is closed. Default: 65536 (64KB)
 
 Maximum requests per worker before restart. Default: 0 (unlimited)
 
+=item max_connections => $count
+
+Maximum concurrent connections per worker. Default: 0 (auto-detect).
+See L<PAGI::Server/max_connections> for details.
+
 =item libs => \@paths
 
 Additional library paths to add to @INC before loading the app.
