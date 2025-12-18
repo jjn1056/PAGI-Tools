@@ -1,6 +1,6 @@
 use strict;
 use warnings;
-use FindBin;
+use File::Basename;
 use PAGI::App::File;
 
 # PAGI::App::File Example
@@ -21,8 +21,9 @@ use PAGI::App::File;
 #   http://localhost:5000/style.css  -> CSS
 #   http://localhost:5000/subdir/nested.txt -> nested file
 
+my $dir = dirname(__FILE__);
 my $app = PAGI::App::File->new(
-    root => "$FindBin::Bin/static",
+    root => "$dir/static",
 )->to_app;
 
 $app;
