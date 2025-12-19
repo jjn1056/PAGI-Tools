@@ -258,7 +258,7 @@ Supported options:
 
 sub parse_options ($self, @args) {
     my %opts;
-    my $help;
+    my ($help, $version);
 
     # Use pass_through to leave unknown options for the app
     my @libs;
@@ -288,7 +288,13 @@ sub parse_options ($self, @args) {
         'group=s'               => \$opts{group},
         'quiet|q'               => \$opts{quiet},
         'help'                  => \$help,
+        'version|v'             => \$version,
     ) or die "Error parsing options\n";
+
+    if ($version) {
+        $self->{show_version} = 1;
+        return @args;
+    }
 
     if ($help) {
         $self->{show_help} = 1;
@@ -489,6 +495,12 @@ and runs the event loop. This is the main entry point for CLI usage.
 sub run ($self, @args) {
     # Parse CLI options
     @args = $self->parse_options(@args);
+
+    # Handle --version
+    if ($self->{show_version}) {
+        $self->_show_version;
+        return;
+    }
 
     # Handle --help
     if ($self->{show_help}) {
@@ -691,6 +703,7 @@ Options:
     --user USER         Run as specified user (after binding)
     --group GROUP       Run as specified group (after binding)
     -q, --quiet         Suppress startup messages
+    -v, --version       Show version info
     --help              Show this help
 
 App can be:
@@ -705,6 +718,10 @@ Examples:
     pagi-server -w 4 PAGI::App::Proxy target=http://backend:3000
 
 HELP
+}
+
+sub _show_version ($self) {
+    print "pagi-server version $VERSION (PAGI::Server $PAGI::Server::VERSION)\n";
 }
 
 sub _daemonize ($self) {
