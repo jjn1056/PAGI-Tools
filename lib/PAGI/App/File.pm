@@ -5,8 +5,8 @@ use warnings;
 use experimental 'signatures';
 use Future::AsyncAwait;
 use Digest::MD5 qw(md5_hex);
-use IO::Async::Loop;
-use PAGI::Util::AsyncFile;
+use File::Spec;
+use Cwd ();  # For realpath
 
 =head1 NAME
 
@@ -23,7 +23,40 @@ PAGI::App::File - Serve static files
 =head1 DESCRIPTION
 
 PAGI::App::File serves static files from a configured root directory.
-Supports ETag caching, Range requests, and path traversal prevention.
+
+=head2 Features
+
+=over 4
+
+=item * Efficient streaming (no memory bloat for large files)
+
+=item * ETag caching with If-None-Match support (304 Not Modified)
+
+=item * Range requests (HTTP 206 Partial Content)
+
+=item * Automatic MIME type detection for common file types
+
+=item * Index file resolution (index.html, index.htm)
+
+=back
+
+=head2 Security
+
+This module implements multiple layers of path traversal protection:
+
+=over 4
+
+=item * Null byte injection blocking
+
+=item * Double-dot and triple-dot component blocking
+
+=item * Backslash normalization (Windows path separator)
+
+=item * Hidden file blocking (dotfiles like .htaccess, .env)
+
+=item * Symlink escape detection via realpath verification
+
+=back
 
 =cut
 
@@ -53,8 +86,12 @@ our %MIME_TYPES = (
 );
 
 sub new ($class, %args) {
+    my $root = $args{root} // '.';
+    # Resolve root to absolute path for security comparisons
+    my $abs_root = Cwd::realpath($root) // $root;
+
     my $self = bless {
-        root         => $args{root} // '.',
+        root         => $abs_root,
         default_type => $args{default_type} // 'application/octet-stream',
         index        => $args{index} // ['index.html', 'index.htm'],
     }, $class;
@@ -75,20 +112,39 @@ sub to_app ($self) {
 
         my $path = $scope->{path} // '/';
 
-        # Prevent path traversal
-        if ($path =~ /\.\./) {
-            await $self->_send_error($send, 403, 'Forbidden');
+        # Security: Block null byte injection
+        if ($path =~ /\0/) {
+            await $self->_send_error($send, 400, 'Bad Request');
             return;
         }
 
-        # Normalize path
+        # Security: Normalize backslashes to forward slashes
+        $path =~ s{\\}{/}g;
+
+        # Security: Split path and validate each component
+        # Use -1 limit to preserve trailing empty strings
+        my @components = split m{/}, $path, -1;
+        for my $component (@components) {
+            # Block components with 2+ dots (.. , ..., ....)
+            if ($component =~ /^\.{2,}$/) {
+                await $self->_send_error($send, 403, 'Forbidden');
+                return;
+            }
+            # Block hidden files (dotfiles) - components starting with .
+            if ($component =~ /^\./ && $component ne '') {
+                await $self->_send_error($send, 403, 'Forbidden');
+                return;
+            }
+        }
+
+        # Build file path using File::Spec for portability
         $path =~ s{^/+}{};
-        my $file_path = "$root/$path";
+        my $file_path = File::Spec->catfile($root, $path);
 
         # Check for index files if directory
         if (-d $file_path) {
             for my $index (@{$self->{index}}) {
-                my $index_path = "$file_path/$index";
+                my $index_path = File::Spec->catfile($file_path, $index);
                 if (-f $index_path) {
                     $file_path = $index_path;
                     last;
@@ -98,6 +154,13 @@ sub to_app ($self) {
 
         unless (-f $file_path && -r $file_path) {
             await $self->_send_error($send, 404, 'Not Found');
+            return;
+        }
+
+        # Security: Verify resolved path stays within root (prevents symlink escape)
+        my $real_path = Cwd::realpath($file_path);
+        unless ($real_path && index($real_path, $root) == 0) {
+            await $self->_send_error($send, 403, 'Forbidden');
             return;
         }
 
@@ -135,20 +198,6 @@ sub to_app ($self) {
             }
 
             my $length = $end - $start + 1;
-            my $content = '';
-
-            if ($method ne 'HEAD') {
-                # Use non-blocking async file I/O via IO::Async::Loop singleton
-                my $loop = IO::Async::Loop->new;
-                eval {
-                    my $full_content = await PAGI::Util::AsyncFile->read_file($loop, $file_path);
-                    $content = substr($full_content, $start, $length);
-                };
-                if ($@) {
-                    await $self->_send_error($send, 500, 'Internal Server Error');
-                    return;
-                }
-            }
 
             await $send->({
                 type => 'http.response.start',
@@ -162,24 +211,22 @@ sub to_app ($self) {
                 ],
             });
 
-            await $send->({ type => 'http.response.body', body => $content, more => 0 });
+            # Use file response with offset/length for efficient streaming
+            if ($method eq 'HEAD') {
+                await $send->({ type => 'http.response.body', body => '', more => 0 });
+            }
+            else {
+                await $send->({
+                    type   => 'http.response.body',
+                    file   => $file_path,
+                    offset => $start,
+                    length => $length,
+                });
+            }
             return;
         }
 
         # Full file response
-        my $content = '';
-        if ($method ne 'HEAD') {
-            # Use non-blocking async file I/O via IO::Async::Loop singleton
-            my $loop = IO::Async::Loop->new;
-            eval {
-                $content = await PAGI::Util::AsyncFile->read_file($loop, $file_path);
-            };
-            if ($@) {
-                await $self->_send_error($send, 500, 'Internal Server Error');
-                return;
-            }
-        }
-
         await $send->({
             type => 'http.response.start',
             status => 200,
@@ -190,7 +237,17 @@ sub to_app ($self) {
                 ['etag', $etag],
             ],
         });
-        await $send->({ type => 'http.response.body', body => $content, more => 0 });
+
+        # Use file response for efficient streaming (sendfile or worker pool)
+        if ($method eq 'HEAD') {
+            await $send->({ type => 'http.response.body', body => '', more => 0 });
+        }
+        else {
+            await $send->({
+                type => 'http.response.body',
+                file => $file_path,
+            });
+        }
     };
 }
 
