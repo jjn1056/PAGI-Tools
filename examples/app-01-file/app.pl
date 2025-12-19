@@ -1,6 +1,7 @@
 use strict;
 use warnings;
 use File::Basename;
+use File::Spec;
 use PAGI::App::File;
 
 # PAGI::App::File Example
@@ -23,7 +24,7 @@ use PAGI::App::File;
 
 my $dir = dirname(__FILE__);
 my $app = PAGI::App::File->new(
-    root => "$dir/static",
+    root => File::Spec->catdir($dir, 'static'),
 )->to_app;
 
 $app;

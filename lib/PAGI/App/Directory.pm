@@ -6,6 +6,7 @@ use experimental 'signatures';
 use Future::AsyncAwait;
 use parent 'PAGI::App::File';
 use JSON::PP ();
+use File::Spec;
 
 =head1 NAME
 
@@ -36,13 +37,13 @@ sub to_app ($self) {
 
         my $path = $scope->{path} // '/';
         $path =~ s{^/+}{};
-        my $dir_path = "$root/$path";
+        my $dir_path = File::Spec->catdir($root, $path);
 
         # If it's a directory without index file, show listing
         if (-d $dir_path) {
             my $has_index = 0;
             for my $index (@{$self->{index}}) {
-                if (-f "$dir_path/$index") {
+                if (-f File::Spec->catfile($dir_path, $index)) {
                     $has_index = 1;
                     last;
                 }
@@ -70,7 +71,7 @@ async sub _send_listing ($self, $send, $scope, $dir_path, $rel_path) {
         next if $entry eq '.';
         next if !$self->{show_hidden} && $entry =~ /^\./;
 
-        my $full_path = "$dir_path/$entry";
+        my $full_path = File::Spec->catfile($dir_path, $entry);
         my @stat = stat($full_path);
         push @entries, {
             name  => $entry,
