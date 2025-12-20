@@ -24,6 +24,7 @@ requires 'Sys::Sendfile', '0.11';
 # Utilities
 requires 'URI::Escape', '5.09';
 requires 'JSON::MaybeXS', '1.004003';
+requires 'Cookie::Baker', '0.11';
 
 # Testing
 on 'test' => sub {

@@ -5,7 +5,7 @@ use warnings;
 use experimental 'signatures';
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use PAGI::Simple::CookieUtil;
+use Cookie::Baker ();
 
 =head1 NAME
 
@@ -95,11 +95,22 @@ sub wrap ($self, $app) {
 }
 
 sub _parse_cookies ($self, $header) {
-    return PAGI::Simple::CookieUtil::parse_cookie_header($header);
+    return {} unless defined $header && length $header;
+    return Cookie::Baker::crush_cookie($header);
 }
 
 sub _format_set_cookie ($self, $name, $value, %opts) {
-    return PAGI::Simple::CookieUtil::format_set_cookie($name, $value, %opts);
+    my %cookie_opts = (
+        value => $value,
+        path  => $opts{path} // '/',
+    );
+    $cookie_opts{domain}    = $opts{domain}   if defined $opts{domain};
+    $cookie_opts{expires}   = $opts{expires}  if defined $opts{expires};
+    $cookie_opts{'max-age'} = $opts{max_age}  if defined $opts{max_age};
+    $cookie_opts{secure}    = $opts{secure}   if $opts{secure};
+    $cookie_opts{httponly}  = $opts{httponly} if $opts{httponly};
+    $cookie_opts{samesite}  = $opts{samesite} if defined $opts{samesite};
+    return Cookie::Baker::bake_cookie($name, \%cookie_opts);
 }
 
 sub _get_header ($self, $scope, $name) {
@@ -129,7 +140,13 @@ sub set ($self, $name, $value, %opts) {
 }
 
 sub delete ($self, $name, %opts) {
-    push @{$self->{cookies}}, PAGI::Simple::CookieUtil::format_removal_cookie($name, %opts);
+    my %cookie_opts = (
+        value   => '',
+        expires => 0,  # Epoch 0 = expired
+        path    => $opts{path} // '/',
+    );
+    $cookie_opts{domain} = $opts{domain} if defined $opts{domain};
+    push @{$self->{cookies}}, Cookie::Baker::bake_cookie($name, \%cookie_opts);
 }
 
 package PAGI::Middleware::Cookie;
