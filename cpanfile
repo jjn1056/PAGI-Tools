@@ -8,10 +8,6 @@ requires 'IO::Async', '0.802';  # Includes IO::Async::Function for worker pools
 requires 'Future', '0.50';
 requires 'Future::AsyncAwait', '0.66';
 
-# Worker pool support (run_blocking)
-# IO::Async::Function is part of IO::Async
-# B::Deparse is core Perl (for serializing coderefs)
-
 # HTTP parsing
 requires 'HTTP::Parser::XS', '0.17';
 
@@ -22,24 +18,12 @@ requires 'Protocol::WebSocket', '0.26';
 requires 'IO::Async::SSL', '0.25';
 requires 'IO::Socket::SSL', '2.074';
 
-# Templating
-requires 'Template::EmbeddedPerl', '0.001015';
-
 # Zero-copy file transfer (optional but recommended for performance)
 requires 'Sys::Sendfile', '0.11';
 
 # Utilities
 requires 'URI::Escape', '5.09';
-requires 'Hash::MultiValue', '0.16';
-requires 'Module::Runtime', '0.016';
 requires 'JSON::MaybeXS', '1.004003';
-requires 'Cookie::Baker', '0.11';
-requires 'Apache::LogFormat::Compiler', '0.36';
-requires 'File::ShareDir::Dist', '0.07';
-requires 'Role::Tiny', '2.002004';
-
-# Optional: Valiant form integration (for PAGI::Simple::View::Role::Valiant)
-recommends 'Valiant', '0.001';  # Provides Valiant::HTML::Util::Form
 
 # Testing
 on 'test' => sub {
