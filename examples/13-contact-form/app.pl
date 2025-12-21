@@ -9,6 +9,7 @@ use JSON::PP qw(encode_json);
 
 use lib 'lib';
 use PAGI::Request;
+use PAGI::App::File;
 
 # Configure upload limits
 PAGI::Request->configure(
@@ -18,6 +19,9 @@ PAGI::Request->configure(
 
 my $PUBLIC_DIR = File::Spec->catdir(dirname(__FILE__), 'public');
 my $UPLOAD_DIR = File::Spec->catdir(dirname(__FILE__), 'uploads');
+
+# Static file server for public directory
+my $static_app = PAGI::App::File->new(root => $PUBLIC_DIR)->to_app;
 
 # Allowed MIME types for attachments
 my %ALLOWED_TYPES = (
@@ -40,18 +44,13 @@ my $app = async sub {
     my $path = $req->path;
     my $method = $req->method;
 
-    # Route: GET / - serve form
-    if ($method eq 'GET' && $path eq '/') {
-        return await _serve_file($send, "$PUBLIC_DIR/index.html", 'text/html');
-    }
-
     # Route: POST /submit - handle form
     if ($method eq 'POST' && $path eq '/submit') {
         return await _handle_submit($req, $send);
     }
 
-    # 404
-    return await _send_error($send, 404, 'Not Found');
+    # All other requests: serve static files from public/
+    return await $static_app->($scope, $receive, $send);
 };
 
 async sub _handle_submit {
@@ -131,27 +130,6 @@ async sub _handle_submit {
     };
 
     return await _send_json($send, 200, $response);
-}
-
-async sub _serve_file {
-    my ($send, $path, $content_type) = @_;
-
-    return await _send_error($send, 404, 'Not Found') unless -f $path;
-
-    my $size = -s $path;
-    await $send->({
-        type    => 'http.response.start',
-        status  => 200,
-        headers => [
-            ['content-type', $content_type],
-            ['content-length', $size],
-        ],
-    });
-    # Use PAGI's file streaming - server handles efficient sendfile
-    await $send->({
-        type => 'http.response.body',
-        file => $path,
-    });
 }
 
 async sub _send_json {
