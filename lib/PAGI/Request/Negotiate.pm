@@ -268,7 +268,10 @@ sub accepts_type ($class, $accept_header, $type) {
         my ($pattern, $quality) = @$accepted;
         next if $quality == 0;
 
+        # Check both directions: type matches pattern OR pattern matches type
+        # This allows accepts('text/*') to return true if client accepts 'text/html'
         return 1 if $class->type_matches($type, $pattern);
+        return 1 if $class->type_matches($pattern, $type);
     }
 
     return 0;

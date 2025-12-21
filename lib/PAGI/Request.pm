@@ -240,16 +240,20 @@ sub is_multipart {
 }
 
 # Accept header check using Negotiate module
+# Combines multiple Accept headers per RFC 7230 Section 3.2.2
 sub accepts {
     my ($self, $mime_type) = @_;
-    my $accept = $self->header('accept');
+    my @accept_values = $self->header_all('accept');
+    my $accept = join(', ', @accept_values);
     return PAGI::Request::Negotiate->accepts_type($accept, $mime_type);
 }
 
 # Find best matching content type from supported list
+# Combines multiple Accept headers per RFC 7230 Section 3.2.2
 sub preferred_type {
     my ($self, @types) = @_;
-    my $accept = $self->header('accept');
+    my @accept_values = $self->header_all('accept');
+    my $accept = join(', ', @accept_values);
     return PAGI::Request::Negotiate->best_match(\@types, $accept);
 }
 

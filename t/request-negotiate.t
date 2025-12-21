@@ -245,6 +245,30 @@ subtest 'accepts_type with wildcard' => sub {
     ok($accepts, 'Accepts via wildcard');
 };
 
+# Test: accepts_type with wildcard in type parameter (bidirectional)
+subtest 'accepts_type with wildcard in type parameter' => sub {
+    # Client accepts text/html, check if they accept text/*
+    my $accepts = PAGI::Request::Negotiate->accepts_type(
+        'text/html, application/json',
+        'text/*'
+    );
+    ok($accepts, 'text/* matches when client accepts text/html');
+
+    # Check */* matches anything
+    my $accepts_all = PAGI::Request::Negotiate->accepts_type(
+        'text/html',
+        '*/*'
+    );
+    ok($accepts_all, '*/* matches any accepted type');
+
+    # Check non-matching wildcard
+    my $no_match = PAGI::Request::Negotiate->accepts_type(
+        'text/html',
+        'image/*'
+    );
+    ok(!$no_match, 'image/* does not match text/html');
+};
+
 # Test: accepts_type with quality=0
 subtest 'accepts_type with quality=0' => sub {
     my $accepts = PAGI::Request::Negotiate->accepts_type(
@@ -335,6 +359,24 @@ subtest 'PAGI::Request accepts with quality' => sub {
     ok $req->accepts('application/json'), 'accepts json';
     ok $req->accepts('json'), 'accepts json shortcut';
     ok !$req->accepts('text/xml'), 'does not accept xml';
+};
+
+# Test with multiple Accept headers (RFC 7230 Section 3.2.2)
+subtest 'PAGI::Request accepts with multiple headers' => sub {
+    my $scope = {
+        method => 'GET',
+        path => '/',
+        headers => [
+            ['accept', 'text/html'],
+            ['accept', 'application/json'],
+        ],
+    };
+    my $req = PAGI::Request->new($scope);
+
+    ok $req->accepts('text/html'), 'accepts first header value';
+    ok $req->accepts('application/json'), 'accepts second header value';
+    ok !$req->accepts('text/xml'), 'does not accept missing type';
+    is $req->preferred_type('json', 'html'), 'html', 'preferred_type works with multiple headers';
 };
 
 done_testing;
