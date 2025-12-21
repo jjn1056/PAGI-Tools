@@ -192,155 +192,114 @@ PAGI::Request::Upload - Uploaded file representation
 
 =head1 SYNOPSIS
 
-    use PAGI::Request::Upload;
+    my $upload = await $req->upload('avatar');
 
-    # From memory (small files)
-    my $upload = PAGI::Request::Upload->new(
-        field_name   => 'avatar',
-        filename     => 'photo.jpg',
-        content_type => 'image/jpeg',
-        data         => $image_data,
-    );
+    if ($upload && !$upload->is_empty) {
+        my $filename = $upload->filename;
+        my $size = $upload->size;
+        my $content = $upload->slurp;
 
-    # From temp file (large files)
-    my $upload = PAGI::Request::Upload->new(
-        field_name   => 'document',
-        filename     => 'report.pdf',
-        content_type => 'application/pdf',
-        temp_path    => '/tmp/upload_xyz123',
-        size         => 1048576,
-    );
-
-    # Metadata
-    say $upload->field_name;      # 'avatar'
-    say $upload->filename;         # 'photo.jpg'
-    say $upload->basename;         # 'photo.jpg' (strips paths)
-    say $upload->content_type;     # 'image/jpeg'
-    say $upload->size;             # 12345
-
-    # Predicates
-    say "empty" if $upload->is_empty;
-    say "in memory" if $upload->is_in_memory;
-    say "on disk" if $upload->is_on_disk;
-
-    # Content access
-    my $content = $upload->slurp;
-    my $fh = $upload->fh;
-
-    # Async persistence
-    await $upload->copy_to('/path/to/destination.jpg');  # keeps original
-    await $upload->move_to('/path/to/destination.jpg');  # removes original
-    await $upload->save_to('/path/to/destination.jpg');  # alias for move_to
+        await $upload->save_to('/path/to/save');
+    }
 
 =head1 DESCRIPTION
 
-PAGI::Request::Upload represents an uploaded file from a multipart/form-data
-request. It can store the content either in memory (for small files) or in
-a temporary file on disk (for large files).
-
-The temp file is automatically cleaned up when the object is destroyed unless
-it has been moved to a permanent location.
+PAGI::Request::Upload represents an uploaded file from a multipart form.
+Files may be stored in memory (small files) or spooled to a temporary
+file (large files).
 
 =head1 CONSTRUCTOR
 
 =head2 new
 
     my $upload = PAGI::Request::Upload->new(
-        field_name   => 'file',      # required - form field name
-        filename     => 'photo.jpg', # optional - original filename
-        content_type => 'image/jpeg',# optional - defaults to application/octet-stream
-        data         => $bytes,      # for in-memory storage
-        temp_path    => $path,       # for on-disk storage
-        size         => $size,       # optional - auto-calculated if not provided
+        field_name   => 'avatar',
+        filename     => 'photo.jpg',
+        content_type => 'image/jpeg',
+        data         => $bytes,        # OR
+        temp_path    => '/tmp/abc123', # for spooled files
+        size         => 12345,
     );
 
-Either C<data> or C<temp_path> should be provided, not both.
-
-=head1 ACCESSORS
+=head1 PROPERTIES
 
 =head2 field_name
 
-Returns the form field name.
+Form field name.
 
 =head2 filename
 
-Returns the original filename from the upload.
+Original filename from the upload.
 
 =head2 basename
 
-Returns just the filename portion, stripping any Windows or Unix path components.
-For example, C<C:\Users\John\photo.jpg> becomes C<photo.jpg>.
+Filename without path components (safe for filesystem use).
 
 =head2 content_type
 
-Returns the MIME type of the upload.
+MIME type of the uploaded file.
 
 =head2 size
 
-Returns the size in bytes.
+File size in bytes.
 
 =head2 temp_path
 
-Returns the path to the temporary file if stored on disk.
+Path to temporary file (if spooled to disk).
 
 =head1 PREDICATES
 
 =head2 is_empty
 
-Returns true if the upload has zero size.
+True if no data was uploaded.
 
 =head2 is_in_memory
 
-Returns true if the upload is stored in memory.
+True if file data is stored in memory.
 
 =head2 is_on_disk
 
-Returns true if the upload is stored in a temporary file.
+True if file data is spooled to a temp file.
 
-=head1 CONTENT ACCESS
+=head1 CONTENT METHODS
 
 =head2 slurp
 
-Returns the entire content as a string.
+    my $bytes = $upload->slurp;
+
+Read entire file content into memory.
 
 =head2 fh
 
-Returns a filehandle for reading the content.
+    my $fh = $upload->fh;
+
+Get a filehandle for reading the upload.
 
 =head1 ASYNC METHODS
 
 =head2 copy_to
 
-    await $upload->copy_to($destination_path);
+    await $upload->copy_to('/path/to/destination');
 
-Copies the upload to the specified path. The original upload remains accessible.
+Copy the uploaded file to a destination.
 
 =head2 move_to
 
-    await $upload->move_to($destination_path);
+    await $upload->move_to('/path/to/destination');
 
-Moves the upload to the specified path. The original temp file is removed.
+Move the uploaded file to a destination (more efficient for disk files).
 
 =head2 save_to
 
-Alias for C<move_to>.
+Alias for C<copy_to>.
 
-=head1 OTHER METHODS
+=head1 CLEANUP
 
-=head2 discard
+Temporary files are automatically deleted when the Upload object is
+destroyed. If you want to keep the file, use C<move_to> or C<copy_to>.
 
-    $upload->discard;
+=head1 SEE ALSO
 
-Manually discards the upload, cleaning up any temp files. Called automatically
-on object destruction.
-
-=head1 AUTHOR
-
-PAGI Contributors
-
-=head1 LICENSE
-
-This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself.
+L<PAGI::Request>
 
 =cut

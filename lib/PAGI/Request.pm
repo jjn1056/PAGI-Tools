@@ -419,14 +419,300 @@ PAGI::Request - Convenience wrapper for PAGI request scope
 =head1 SYNOPSIS
 
     use PAGI::Request;
+    use Future::AsyncAwait;
 
     async sub app {
         my ($scope, $receive, $send) = @_;
         my $req = PAGI::Request->new($scope, $receive);
 
-        my $method = $req->method;
-        my $path = $req->path;
+        # Basic properties
+        my $method = $req->method;        # GET, POST, etc.
+        my $path   = $req->path;          # /users/42
+        my $host   = $req->host;          # example.com
+
+        # Query parameters (Hash::MultiValue)
+        my $page = $req->query('page');
+        my @tags = $req->query_params->get_all('tags');
+
+        # Headers
         my $ct = $req->content_type;
+        my $auth = $req->header('authorization');
+
+        # Cookies
+        my $session = $req->cookie('session');
+
+        # Body parsing (async)
+        my $json = await $req->json;      # Parse JSON body
+        my $form = await $req->form;      # Parse form data
+
+        # File uploads (async)
+        my $avatar = await $req->upload('avatar');
+        if ($avatar && !$avatar->is_empty) {
+            await $avatar->save_to('/uploads/avatar.jpg');
+        }
+
+        # Auth helpers
+        my $token = $req->bearer_token;
+        my ($user, $pass) = $req->basic_auth;
+
+        # Per-request storage
+        $req->stash->{user} = $current_user;
     }
+
+=head1 DESCRIPTION
+
+PAGI::Request provides a friendly interface to PAGI request data. It wraps
+the raw C<$scope> hashref and C<$receive> callback with convenient methods
+for accessing headers, query parameters, cookies, request body, and file
+uploads.
+
+This is an optional convenience layer. Raw PAGI applications continue to
+work with C<$scope> and C<$receive> directly.
+
+=head1 CLASS METHODS
+
+=head2 configure
+
+    PAGI::Request->configure(
+        max_body_size   => 10 * 1024 * 1024,  # 10MB
+        spool_threshold => 64 * 1024,          # 64KB
+    );
+
+Set class-level defaults for body/upload handling.
+
+=head2 config
+
+    my $config = PAGI::Request->config;
+
+Returns the current configuration hashref.
+
+=head1 CONSTRUCTOR
+
+=head2 new
+
+    my $req = PAGI::Request->new($scope, $receive);
+
+Creates a new request object. C<$scope> is required. C<$receive> is optional
+but required for body/upload methods.
+
+=head1 PROPERTIES
+
+=head2 method
+
+HTTP method (GET, POST, PUT, etc.)
+
+=head2 path
+
+Request path, UTF-8 decoded.
+
+=head2 raw_path
+
+Request path as raw bytes (percent-encoded).
+
+=head2 query_string
+
+Raw query string (without leading ?).
+
+=head2 scheme
+
+C<http> or C<https>.
+
+=head2 host
+
+Host from the Host header.
+
+=head2 http_version
+
+HTTP version (1.0 or 1.1).
+
+=head2 client
+
+Arrayref of C<[host, port]> or undef.
+
+=head2 content_type
+
+Content-Type header value (without parameters).
+
+=head2 content_length
+
+Content-Length header value.
+
+=head2 raw
+
+Returns the raw scope hashref.
+
+=head1 HEADER METHODS
+
+=head2 header
+
+    my $value = $req->header('Content-Type');
+
+Get a single header value (case-insensitive). Returns the last value if
+the header appears multiple times.
+
+=head2 header_all
+
+    my @values = $req->header_all('Accept');
+
+Get all values for a header.
+
+=head2 headers
+
+    my $headers = $req->headers;  # Hash::MultiValue
+
+Get all headers as a L<Hash::MultiValue> object.
+
+=head1 QUERY PARAMETERS
+
+=head2 query_params
+
+    my $params = $req->query_params;  # Hash::MultiValue
+
+Get query parameters as L<Hash::MultiValue>.
+
+=head2 query
+
+    my $value = $req->query('page');
+
+Shortcut for C<< $req->query_params->get($name) >>.
+
+=head1 PATH PARAMETERS
+
+=head2 params
+
+    my $params = $req->params;  # hashref
+
+Get path parameters (set by router).
+
+=head2 param
+
+    my $id = $req->param('id');
+
+Get a single path parameter.
+
+=head2 set_params
+
+    $req->set_params({ id => 42 });
+
+Set path parameters (called by router).
+
+=head1 COOKIES
+
+=head2 cookies
+
+    my $cookies = $req->cookies;  # hashref
+
+Get all cookies.
+
+=head2 cookie
+
+    my $session = $req->cookie('session');
+
+Get a single cookie value.
+
+=head1 BODY METHODS (ASYNC)
+
+=head2 body
+
+    my $bytes = await $req->body;
+
+Read raw body bytes. Cached after first read.
+
+=head2 text
+
+    my $text = await $req->text;
+
+Read body as UTF-8 decoded text.
+
+=head2 json
+
+    my $data = await $req->json;
+
+Parse body as JSON. Dies on parse error.
+
+=head2 form
+
+    my $form = await $req->form;  # Hash::MultiValue
+
+Parse URL-encoded or multipart form data.
+
+=head1 UPLOAD METHODS (ASYNC)
+
+=head2 uploads
+
+    my $uploads = await $req->uploads;  # Hash::MultiValue
+
+Get all uploads as L<Hash::MultiValue> of L<PAGI::Request::Upload> objects.
+
+=head2 upload
+
+    my $file = await $req->upload('avatar');
+
+Get a single upload by field name.
+
+=head2 upload_all
+
+    my @files = await $req->upload_all('photos');
+
+Get all uploads for a field name.
+
+=head1 PREDICATES
+
+=head2 is_get, is_post, is_put, is_patch, is_delete, is_head, is_options
+
+    if ($req->is_post) { ... }
+
+Check HTTP method.
+
+=head2 is_json
+
+True if Content-Type is C<application/json>.
+
+=head2 is_form
+
+True if Content-Type is form-urlencoded or multipart.
+
+=head2 is_multipart
+
+True if Content-Type is C<multipart/form-data>.
+
+=head2 accepts
+
+    if ($req->accepts('text/html')) { ... }
+
+Check Accept header (supports wildcards).
+
+=head2 is_disconnected (async)
+
+    if (await $req->is_disconnected) { ... }
+
+Check if client has disconnected.
+
+=head1 AUTH HELPERS
+
+=head2 bearer_token
+
+    my $token = $req->bearer_token;
+
+Extract Bearer token from Authorization header.
+
+=head2 basic_auth
+
+    my ($user, $pass) = $req->basic_auth;
+
+Decode Basic auth credentials.
+
+=head1 STATE
+
+=head2 stash
+
+    $req->stash->{user} = $user;
+    my $user = $req->stash->{user};
+
+Per-request hashref for middleware to store data.
+
+=head1 SEE ALSO
+
+L<PAGI::Request::Upload>, L<Hash::MultiValue>
 
 =cut
