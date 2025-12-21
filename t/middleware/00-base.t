@@ -107,11 +107,10 @@ subtest 'Custom middleware subclass' => sub {
     package TestMiddleware::AddHeader {
         use parent 'PAGI::Middleware';
         use Future::AsyncAwait;
-        use experimental 'signatures';
 
         sub wrap {
             my ($self, $app) = @_;
-        
+
             my $header_name  = $self->{config}{name}  // 'x-test';
             my $header_value = $self->{config}{value} // 'added';
 
@@ -135,11 +134,10 @@ subtest 'Custom middleware subclass' => sub {
     package TestMiddleware::AddToScope {
         use parent 'PAGI::Middleware';
         use Future::AsyncAwait;
-        use experimental 'signatures';
 
         sub wrap {
             my ($self, $app) = @_;
-        
+
             my $key   = $self->{config}{key};
             my $value = $self->{config}{value};
 
@@ -233,12 +231,11 @@ subtest 'Middleware Builder' => sub {
         package TestMiddleware::Counter {
             use parent 'PAGI::Middleware';
             use Future::AsyncAwait;
-            use experimental 'signatures';
             our $call_order = [];
 
             sub wrap {
                 my ($self, $app) = @_;
-            
+
                 my $name = $self->{config}{name};
                 return async sub  {
         my ($scope, $receive, $send) = @_;
@@ -285,12 +282,11 @@ subtest 'Middleware Builder' => sub {
         package TestMiddleware::Marker {
             use parent 'PAGI::Middleware';
             use Future::AsyncAwait;
-            use experimental 'signatures';
             our $was_applied = 0;
 
             sub wrap {
                 my ($self, $app) = @_;
-            
+
                 return async sub  {
         my ($scope, $receive, $send) = @_;
                     $was_applied = 1;
