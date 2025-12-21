@@ -135,6 +135,53 @@ sub is_delete  { uc(shift->method // '') eq 'DELETE' }
 sub is_head    { uc(shift->method // '') eq 'HEAD' }
 sub is_options { uc(shift->method // '') eq 'OPTIONS' }
 
+# Content-type predicates
+sub is_json {
+    my $self = shift;
+    my $ct = $self->content_type;
+    return $ct eq 'application/json';
+}
+
+sub is_form {
+    my $self = shift;
+    my $ct = $self->content_type;
+    return $ct eq 'application/x-www-form-urlencoded'
+        || $ct =~ m{^multipart/form-data};
+}
+
+sub is_multipart {
+    my $self = shift;
+    my $ct = $self->content_type;
+    return $ct =~ m{^multipart/form-data};
+}
+
+# Accept header check (case-insensitive per RFC 7231)
+sub accepts {
+    my ($self, $mime_type) = @_;
+    my @accepts = $self->header_all('accept');
+    $mime_type = lc($mime_type);
+
+    for my $accept (@accepts) {
+        $accept = lc($accept);
+        # Handle wildcards
+        if ($accept eq '*/*' || $mime_type eq '*/*') {
+            return 1;
+        }
+        if ($accept =~ m{^([^/]+)/\*$}) {
+            my $type = $1;
+            return 1 if $mime_type =~ m{^\Q$type\E/};
+        }
+        if ($mime_type =~ m{^([^/]+)/\*$}) {
+            my $type = $1;
+            return 1 if $accept =~ m{^\Q$type\E/};
+        }
+        # Exact match
+        return 1 if $accept eq $mime_type;
+    }
+
+    return 0;
+}
+
 1;
 
 __END__
