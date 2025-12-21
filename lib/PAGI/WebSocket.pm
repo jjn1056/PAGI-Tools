@@ -6,6 +6,7 @@ use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
 use JSON::PP ();
+use Scalar::Util qw(blessed);
 
 our $VERSION = '0.01';
 
@@ -29,6 +30,9 @@ sub new {
         _close_code   => undef,
         _close_reason => undef,
         _on_close     => [],
+        _on_error     => [],
+        _on_message   => [],
+        _stash        => {},
     }, $class;
 }
 
@@ -42,6 +46,9 @@ sub http_version { shift->{scope}{http_version} // '1.1' }
 sub subprotocols { shift->{scope}{subprotocols} // [] }
 sub client       { shift->{scope}{client} }
 sub server       { shift->{scope}{server} }
+
+# Per-connection storage
+sub stash        { shift->{_stash} }
 
 # Single header lookup (case-insensitive, returns last value)
 sub header {
@@ -128,6 +135,55 @@ async sub _run_close_callbacks {
         if ($@) {
             warn "PAGI::WebSocket on_close callback error: $@";
         }
+    }
+}
+
+# Register callback to run on errors
+sub on_error {
+    my ($self, $callback) = @_;
+    push @{$self->{_on_error}}, $callback;
+    return $self;
+}
+
+# Register callback to run on message receive
+sub on_message {
+    my ($self, $callback) = @_;
+    push @{$self->{_on_message}}, $callback;
+    return $self;
+}
+
+# Generic event registration (Socket.IO style)
+sub on {
+    my ($self, $event, $callback) = @_;
+
+    if ($event eq 'message') {
+        return $self->on_message($callback);
+    }
+    elsif ($event eq 'close') {
+        return $self->on_close($callback);
+    }
+    elsif ($event eq 'error') {
+        return $self->on_error($callback);
+    }
+    else {
+        croak "Unknown event type: $event (expected message, close, or error)";
+    }
+}
+
+# Internal: trigger error callbacks
+sub _trigger_error {
+    my ($self, $error) = @_;
+
+    for my $cb (@{$self->{_on_error}}) {
+        eval { $cb->($error) };
+        if ($@) {
+            warn "PAGI::WebSocket on_error callback error: $@";
+        }
+    }
+
+    # If no error handlers registered, warn
+    if (!@{$self->{_on_error}}) {
+        warn "PAGI::WebSocket error: $error";
     }
 }
 
@@ -402,6 +458,32 @@ async sub each_json {
     return;
 }
 
+# Callback-based event loop (alternative to each_* iteration)
+async sub run {
+    my ($self) = @_;
+
+    while (my $event = await $self->receive) {
+        next unless $event->{type} eq 'websocket.receive';
+
+        my $data = $event->{text} // $event->{bytes};
+
+        for my $cb (@{$self->{_on_message}}) {
+            eval {
+                my $r = $cb->($data, $event);
+                # Await if callback returns a Future
+                if (blessed($r) && $r->isa('Future')) {
+                    await $r;
+                }
+            };
+            if ($@) {
+                $self->_trigger_error($@);
+            }
+        }
+    }
+
+    return;
+}
+
 # Timeout support
 
 sub set_loop {
@@ -551,6 +633,32 @@ PAGI::WebSocket - Convenience wrapper for PAGI WebSocket connections
         });
     }
 
+    # Callback-based style (alternative to iteration)
+    async sub callback_app {
+        my ($scope, $receive, $send) = @_;
+
+        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+        await $ws->accept;
+
+        $ws->stash->{user} = 'anonymous';
+
+        $ws->on(message => sub {
+            my ($data) = @_;
+            $ws->send_text("Echo: $data");
+        });
+
+        $ws->on(error => sub {
+            my ($error) = @_;
+            warn "WebSocket error: $error";
+        });
+
+        $ws->on(close => sub {
+            print "User disconnected\n";
+        });
+
+        await $ws->run;
+    }
+
 =head1 DESCRIPTION
 
 PAGI::WebSocket wraps the raw PAGI WebSocket protocol to provide a clean,
@@ -563,11 +671,15 @@ protocol boilerplate and provides:
 
 =item * Connection state tracking (is_connected, is_closed, close_code)
 
-=item * Cleanup callback registration (on_close)
+=item * Cleanup and error callback registration (on_close, on_error)
 
 =item * Safe send methods for broadcast scenarios (try_send_*, send_*_if_connected)
 
 =item * Message iteration helpers (each_text, each_json)
+
+=item * Callback-based event handling (on, run)
+
+=item * Per-connection storage (stash)
 
 =item * Timeout support for receives
 
@@ -622,6 +734,14 @@ Client and server address info.
     my $hmv = $ws->headers;            # Hash::MultiValue
 
 Case-insensitive header access.
+
+=head2 stash
+
+    $ws->stash->{user} = $user;
+    my $room = $ws->stash->{current_room};
+
+Per-connection storage hashref. Useful for storing user data
+without external variables.
 
 =head1 LIFECYCLE METHODS
 
@@ -731,7 +851,7 @@ Returns undef on timeout (connection remains open).
 Loops until disconnect, calling callback for each message.
 Exceptions in callback propagate to caller.
 
-=head1 CLEANUP
+=head1 EVENT CALLBACKS
 
 =head2 on_close
 
@@ -743,6 +863,45 @@ Exceptions in callback propagate to caller.
 Registers cleanup callback that runs on disconnect or close().
 Multiple callbacks run in registration order. Exceptions are
 caught and warned but don't prevent other callbacks.
+
+=head2 on_error
+
+    $ws->on_error(sub {
+        my ($error) = @_;
+        warn "WebSocket error: $error";
+    });
+
+Registers error callback. Called when exceptions occur in message
+handlers during C<run()>. If no error handlers are registered,
+errors are warned to STDERR.
+
+=head2 on_message, on
+
+    $ws->on_message(sub {
+        my ($data, $event) = @_;
+        # $data is text or bytes, $event is raw PAGI event
+    });
+
+    # Generic form (Socket.IO style)
+    $ws->on(message => sub { ... });
+    $ws->on(close => sub { ... });
+    $ws->on(error => sub { ... });
+
+Registers message callback for use with C<run()>. Multiple
+callbacks can be registered for each event type.
+
+=head2 run
+
+    # Register callbacks first
+    $ws->on(message => sub { my ($data) = @_; ... });
+    $ws->on(close => sub { ... });
+
+    # Enter event loop
+    await $ws->run;
+
+Callback-based event loop (alternative to C<each_*> iteration).
+Runs until disconnect, dispatching messages to registered callbacks.
+Errors in callbacks are caught and passed to error handlers.
 
 =head1 COMPLETE EXAMPLE
 
