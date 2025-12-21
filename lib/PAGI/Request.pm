@@ -140,6 +140,22 @@ sub is_delete  { uc(shift->method // '') eq 'DELETE' }
 sub is_head    { uc(shift->method // '') eq 'HEAD' }
 sub is_options { uc(shift->method // '') eq 'OPTIONS' }
 
+# Check if client has disconnected (async)
+async sub is_disconnected {
+    my $self = shift;
+
+    return 0 unless $self->{receive};
+
+    # Peek at receive - if we get disconnect, client is gone
+    my $message = await $self->{receive}->();
+
+    if ($message && $message->{type} eq 'http.disconnect') {
+        return 1;
+    }
+
+    return 0;
+}
+
 # Content-type predicates
 sub is_json {
     my $self = shift;

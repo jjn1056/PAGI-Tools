@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future::AsyncAwait;
 
 use lib 'lib';
 use PAGI::Request;
@@ -83,6 +84,26 @@ subtest 'accepts predicate' => sub {
     ok(!$req->accepts('text/plain'), 'does not accept text/plain');
     ok($req->accepts('text/*'), 'accepts text/* wildcard');
     ok($req->accepts('*/*'), 'accepts */* wildcard');
+};
+
+subtest 'is_disconnected' => sub {
+    my $scope = { type => 'http', method => 'GET', headers => [] };
+
+    # Test with client still connected
+    my $connected_receive = async sub {
+        return { type => 'http.request', body => '', more => 1 };
+    };
+    my $req1 = PAGI::Request->new($scope, $connected_receive);
+    my $disconnected1 = (async sub { await $req1->is_disconnected })->()->get;
+    ok(!$disconnected1, 'client connected');
+
+    # Test with disconnected client
+    my $disconnected_receive = async sub {
+        return { type => 'http.disconnect' };
+    };
+    my $req2 = PAGI::Request->new($scope, $disconnected_receive);
+    my $disconnected2 = (async sub { await $req2->is_disconnected })->()->get;
+    ok($disconnected2, 'client disconnected');
 };
 
 done_testing;
