@@ -8,6 +8,8 @@ use Cookie::Baker qw(crush_cookie);
 use MIME::Base64 qw(decode_base64);
 use Future::AsyncAwait;
 use JSON::PP qw(decode_json);
+use PAGI::Request::MultiPartHandler;
+use PAGI::Request::Upload;
 
 sub new {
     my ($class, $scope, $receive) = @_;
@@ -305,10 +307,67 @@ async sub form {
     return $self->{_form};
 }
 
-# Placeholder for multipart - will be implemented in next task
+# Parse multipart form (internal)
 async sub _parse_multipart_form {
     my ($self, %opts) = @_;
-    die "Multipart form parsing not yet implemented";
+
+    # Already parsed?
+    return $self->{_form} if $self->{_form} && $self->{_uploads};
+
+    # Extract boundary from content-type
+    my $ct = $self->header('content-type') // '';
+    my ($boundary) = $ct =~ /boundary=([^;\s]+)/;
+    $boundary =~ s/^["']|["']$//g if $boundary;  # Strip quotes
+
+    die "No boundary found in Content-Type" unless $boundary;
+
+    my $handler = PAGI::Request::MultiPartHandler->new(
+        boundary        => $boundary,
+        receive         => $self->{receive},
+        max_part_size   => $opts{max_part_size},
+        spool_threshold => $opts{spool_threshold},
+        max_files       => $opts{max_files},
+        max_fields      => $opts{max_fields},
+        temp_dir        => $opts{temp_dir},
+    );
+
+    my ($form, $uploads) = await $handler->parse;
+
+    $self->{_form} = $form;
+    $self->{_uploads} = $uploads;
+    $self->{_body_read} = 1;  # Body has been consumed
+
+    return $form;
+}
+
+# Get all uploads as Hash::MultiValue
+async sub uploads {
+    my ($self, %opts) = @_;
+
+    return $self->{_uploads} if $self->{_uploads};
+
+    if ($self->is_multipart) {
+        await $self->_parse_multipart_form(%opts);
+        return $self->{_uploads};
+    }
+
+    # Not multipart - return empty
+    $self->{_uploads} = Hash::MultiValue->new();
+    return $self->{_uploads};
+}
+
+# Get single upload by field name
+async sub upload {
+    my ($self, $name, %opts) = @_;
+    my $uploads = await $self->uploads(%opts);
+    return $uploads->get($name);
+}
+
+# Get all uploads for a field name
+async sub upload_all {
+    my ($self, $name, %opts) = @_;
+    my $uploads = await $self->uploads(%opts);
+    return $uploads->get_all($name);
 }
 
 1;
