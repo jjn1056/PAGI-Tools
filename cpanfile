@@ -25,6 +25,7 @@ recommends 'Sys::Sendfile', '0.11';
 requires 'URI::Escape', '5.09';
 requires 'Cookie::Baker', '0.11';
 requires 'Hash::MultiValue', '0.16';
+requires 'HTTP::MultiPartParser', '0.02';
 
 # Testing
 on 'test' => sub {
