@@ -112,4 +112,130 @@ subtest 'parse multiple files same field' => sub {
     is($files[1]->filename, 'b.txt', 'second file');
 };
 
+subtest 'spool large files to disk' => sub {
+    my $boundary = '----Large';
+    my $large_data = 'x' x (65 * 1024);  # 65KB, over 64KB threshold
+    my $body = build_multipart($boundary,
+        { name => 'large', filename => 'big.bin', content_type => 'application/octet-stream', data => $large_data },
+    );
+
+    my $receive = mock_receive($body);
+    my $handler = PAGI::Request::MultiPartHandler->new(
+        boundary => $boundary,
+        receive  => $receive,
+    );
+
+    my ($form, $uploads) = (async sub { await $handler->parse })->()->get;
+
+    my $upload = $uploads->get('large');
+    ok($upload->is_on_disk, 'large file is spooled to disk');
+    ok(-f $upload->temp_path, 'temp file exists');
+    is(length($upload->slurp), 65 * 1024, 'content length matches');
+};
+
+subtest 'enforce max_files limit' => sub {
+    my $boundary = '----MaxFiles';
+    # Build body with 3 files but limit to 2
+    my $body = build_multipart($boundary,
+        { name => 'f1', filename => '1.txt', data => 'a' },
+        { name => 'f2', filename => '2.txt', data => 'b' },
+        { name => 'f3', filename => '3.txt', data => 'c' },
+    );
+
+    my $receive = mock_receive($body);
+    my $handler = PAGI::Request::MultiPartHandler->new(
+        boundary  => $boundary,
+        receive   => $receive,
+        max_files => 2,
+    );
+
+    like(
+        dies { (async sub { await $handler->parse })->()->get },
+        qr/Too many files/,
+        'dies when exceeding max_files'
+    );
+};
+
+subtest 'enforce max_fields limit' => sub {
+    my $boundary = '----MaxFields';
+    my $body = build_multipart($boundary,
+        { name => 'f1', data => 'a' },
+        { name => 'f2', data => 'b' },
+        { name => 'f3', data => 'c' },
+    );
+
+    my $receive = mock_receive($body);
+    my $handler = PAGI::Request::MultiPartHandler->new(
+        boundary   => $boundary,
+        receive    => $receive,
+        max_fields => 2,
+    );
+
+    like(
+        dies { (async sub { await $handler->parse })->()->get },
+        qr/Too many fields/,
+        'dies when exceeding max_fields'
+    );
+};
+
+subtest 'enforce max_part_size limit' => sub {
+    my $boundary = '----MaxSize';
+    my $large_data = 'x' x (100 * 1024);  # 100KB
+    my $body = build_multipart($boundary,
+        { name => 'big', filename => 'big.bin', data => $large_data },
+    );
+
+    my $receive = mock_receive($body);
+    my $handler = PAGI::Request::MultiPartHandler->new(
+        boundary      => $boundary,
+        receive       => $receive,
+        max_part_size => 50 * 1024,  # 50KB limit
+    );
+
+    like(
+        dies { (async sub { await $handler->parse })->()->get },
+        qr/Part too large/,
+        'dies when exceeding max_part_size'
+    );
+};
+
+subtest 'chunked input streaming' => sub {
+    my $boundary = '----Chunked';
+    my $full_body = build_multipart($boundary,
+        { name => 'title', data => 'Hello' },
+        { name => 'doc', filename => 'test.txt', content_type => 'text/plain', data => 'file content here' },
+    );
+
+    # Split body into chunks
+    my @chunks;
+    my $chunk_size = 30;
+    for (my $i = 0; $i < length($full_body); $i += $chunk_size) {
+        push @chunks, substr($full_body, $i, $chunk_size);
+    }
+
+    my $index = 0;
+    my $receive = async sub {
+        if ($index >= @chunks) {
+            return { type => 'http.disconnect' };
+        }
+        my $chunk = $chunks[$index++];
+        return {
+            type => 'http.request',
+            body => $chunk,
+            more => $index < @chunks,
+        };
+    };
+
+    my $handler = PAGI::Request::MultiPartHandler->new(
+        boundary => $boundary,
+        receive  => $receive,
+    );
+
+    my ($form, $uploads) = (async sub { await $handler->parse })->()->get;
+
+    is($form->get('title'), 'Hello', 'form field from chunked input');
+    my $upload = $uploads->get('doc');
+    is($upload->slurp, 'file content here', 'file content from chunked input');
+};
+
 done_testing;
