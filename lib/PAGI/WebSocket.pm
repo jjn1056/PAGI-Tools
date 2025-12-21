@@ -327,6 +327,53 @@ async sub receive_json {
     return JSON::PP::decode_json($text);
 }
 
+# Iteration helpers
+
+async sub each_message {
+    my ($self, $callback) = @_;
+
+    while (my $event = await $self->receive) {
+        next unless $event->{type} eq 'websocket.receive';
+        await $callback->($event);
+    }
+
+    return;
+}
+
+async sub each_text {
+    my ($self, $callback) = @_;
+
+    while (my $text = await $self->receive_text) {
+        await $callback->($text);
+    }
+
+    return;
+}
+
+async sub each_bytes {
+    my ($self, $callback) = @_;
+
+    while (my $bytes = await $self->receive_bytes) {
+        await $callback->($bytes);
+    }
+
+    return;
+}
+
+async sub each_json {
+    my ($self, $callback) = @_;
+
+    while (1) {
+        my $text = await $self->receive_text;
+        last unless defined $text;
+
+        my $data = JSON::PP::decode_json($text);
+        await $callback->($data);
+    }
+
+    return;
+}
+
 1;
 
 __END__
