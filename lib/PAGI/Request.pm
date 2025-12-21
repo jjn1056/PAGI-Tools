@@ -11,6 +11,28 @@ use JSON::PP qw(decode_json);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 
+# Class-level configuration defaults
+our %CONFIG = (
+    max_body_size   => 10 * 1024 * 1024,   # 10MB
+    max_upload_size => 10 * 1024 * 1024,   # 10MB per file
+    max_files       => 20,
+    max_fields      => 1000,
+    spool_threshold => 64 * 1024,           # 64KB
+    temp_dir        => $ENV{TMPDIR} // '/tmp',
+);
+
+sub configure {
+    my ($class, %opts) = @_;
+    for my $key (keys %opts) {
+        $CONFIG{$key} = $opts{$key} if exists $CONFIG{$key};
+    }
+}
+
+sub config {
+    my $class = shift;
+    return \%CONFIG;
+}
+
 sub new {
     my ($class, $scope, $receive) = @_;
     return bless {
