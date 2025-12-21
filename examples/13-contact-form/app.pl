@@ -96,11 +96,15 @@ async sub _handle_submit {
             my $safe_name = time() . '-' . int(rand(10000)) . ".$ext";
             my $dest = "$UPLOAD_DIR/$safe_name";
 
-            eval {
+            my $save_ok = eval {
                 await $attachment->save_to($dest);
-                $saved_file = $safe_name;
+                1;
             };
-            push @errors, "Failed to save file: $@" if $@;
+            if ($save_ok) {
+                $saved_file = $safe_name;
+            } else {
+                push @errors, "Failed to save file: $@";
+            }
         }
     }
 
@@ -132,23 +136,21 @@ async sub _handle_submit {
 async sub _serve_file {
     my ($send, $path, $content_type) = @_;
 
-    open my $fh, '<:raw', $path or return await _send_error($send, 404, 'Not Found');
-    local $/;
-    my $content = <$fh>;
-    close $fh;
+    return await _send_error($send, 404, 'Not Found') unless -f $path;
 
+    my $size = -s $path;
     await $send->({
         type    => 'http.response.start',
         status  => 200,
         headers => [
             ['content-type', $content_type],
-            ['content-length', length($content)],
+            ['content-length', $size],
         ],
     });
+    # Use PAGI's file streaming - server handles efficient sendfile
     await $send->({
         type => 'http.response.body',
-        body => $content,
-        more => 0,
+        file => $path,
     });
 }
 

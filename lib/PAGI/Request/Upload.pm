@@ -6,8 +6,6 @@ use feature 'signatures';
 no warnings 'experimental::signatures';
 
 use Future::AsyncAwait;
-use IO::Async::Loop;
-use PAGI::Util::AsyncFile;
 use File::Basename qw(fileparse);
 use File::Copy qw(copy move);
 use File::Spec;
@@ -100,20 +98,21 @@ sub fh ($self) {
     croak("No content available");
 }
 
-# Async copy
+# Copy upload to destination (sync for reliability)
 async sub copy_to ($self, $destination) {
-    my $loop = IO::Async::Loop->new;
-
     # Ensure destination directory exists
     my ($name, $dir) = fileparse($destination);
-    if (!-d $dir) {
+    if ($dir && !-d $dir) {
         require File::Path;
         File::Path::make_path($dir);
     }
 
     if ($self->is_in_memory) {
         # Write data to destination
-        await PAGI::Util::AsyncFile->write_file($loop, $destination, $self->{data});
+        open my $fh, '>:raw', $destination
+            or croak("Cannot write to $destination: $!");
+        print $fh $self->{data};
+        close $fh;
         return;
     } elsif ($self->is_on_disk) {
         # Use File::Copy
@@ -125,24 +124,25 @@ async sub copy_to ($self, $destination) {
     croak("No content to copy");
 }
 
-# Async move
+# Move upload to destination (sync for reliability)
 async sub move_to ($self, $destination) {
-    my $loop = IO::Async::Loop->new;
-
     # Ensure destination directory exists
     my ($name, $dir) = fileparse($destination);
-    if (!-d $dir) {
+    if ($dir && !-d $dir) {
         require File::Path;
         File::Path::make_path($dir);
     }
 
     if ($self->is_in_memory) {
-        # Write and clear memory
-        await PAGI::Util::AsyncFile->write_file($loop, $destination, $self->{data});
+        # Write data to destination
+        open my $fh, '>:raw', $destination
+            or croak("Cannot write to $destination: $!");
+        print $fh $self->{data};
+        close $fh;
 
-        # Update to point to new location
+        # Mark as cleaned up so destructor doesn't touch the saved file
         delete $self->{data};
-        $self->{temp_path} = $destination;
+        $self->{_cleaned_up} = 1;
 
         return;
     } elsif ($self->is_on_disk) {
@@ -150,8 +150,9 @@ async sub move_to ($self, $destination) {
         move($self->{temp_path}, $destination)
             or croak("Cannot move to $destination: $!");
 
-        # Update path
-        $self->{temp_path} = $destination;
+        # Mark as cleaned up so destructor doesn't touch the saved file
+        delete $self->{temp_path};
+        $self->{_cleaned_up} = 1;
 
         return;
     }
