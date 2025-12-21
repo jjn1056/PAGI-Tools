@@ -1,6 +1,7 @@
 package PAGI::Request;
 use strict;
 use warnings;
+use Hash::MultiValue;
 
 sub new {
     my ($class, $scope, $receive) = @_;
@@ -53,6 +54,26 @@ sub header {
         }
     }
     return $value;
+}
+
+# All headers as Hash::MultiValue (cached, case-insensitive keys)
+sub headers {
+    my $self = shift;
+    return $self->{_headers} if $self->{_headers};
+
+    my @pairs;
+    for my $pair (@{$self->{scope}{headers} // []}) {
+        push @pairs, lc($pair->[0]), $pair->[1];
+    }
+
+    $self->{_headers} = Hash::MultiValue->new(@pairs);
+    return $self->{_headers};
+}
+
+# All values for a header
+sub header_all {
+    my ($self, $name) = @_;
+    return $self->headers->get_all(lc($name));
 }
 
 # Method predicates

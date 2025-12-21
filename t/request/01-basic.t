@@ -293,4 +293,35 @@ subtest 'defaults and fallbacks' => sub {
     is($minimal_req->http_version, '1.1', 'minimal request: http_version defaults');
 };
 
+subtest 'headers as Hash::MultiValue' => sub {
+    my $scope = {
+        type    => 'http',
+        method  => 'GET',
+        headers => [
+            ['Accept', 'text/html'],
+            ['Accept', 'application/json'],
+            ['Content-Type', 'text/plain'],
+            ['X-Custom', 'value1'],
+        ],
+    };
+
+    my $req = PAGI::Request->new($scope);
+
+    # headers returns Hash::MultiValue
+    my $headers = $req->headers;
+    isa_ok $headers, 'Hash::MultiValue';
+
+    # Single value access (last value - keys are normalized to lowercase)
+    is($headers->get('accept'), 'application/json', 'get returns last value');
+    is($headers->get('content-type'), 'text/plain', 'access other headers');
+
+    # Multi-value access
+    my @accepts = $headers->get_all('accept');
+    is(\@accepts, ['text/html', 'application/json'], 'get_all returns all values');
+
+    # header_all method
+    my @accepts2 = $req->header_all('accept');
+    is(\@accepts2, ['text/html', 'application/json'], 'header_all works');
+};
+
 done_testing;
