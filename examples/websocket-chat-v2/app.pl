@@ -16,7 +16,6 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use JSON::PP qw(encode_json decode_json);
-use lib 'lib';
 use PAGI::WebSocket;
 
 # Shared state
@@ -26,24 +25,7 @@ my $next_id = 1;
 my $app = async sub {
     my ($scope, $receive, $send) = @_;
 
-    # Handle lifespan
-    if ($scope->{type} eq 'lifespan') {
-        while (1) {
-            my $event = await $receive->();
-            if ($event->{type} eq 'lifespan.startup') {
-                print "Chat server starting...\n";
-                await $send->({ type => 'lifespan.startup.complete' });
-            }
-            elsif ($event->{type} eq 'lifespan.shutdown') {
-                print "Chat server shutting down...\n";
-                await $send->({ type => 'lifespan.shutdown.complete' });
-                last;
-            }
-        }
-        return;
-    }
-
-    die "Expected websocket" if $scope->{type} ne 'websocket';
+    return if $scope->{type} ne 'websocket';
 
     # Create WebSocket wrapper
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
