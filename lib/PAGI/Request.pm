@@ -2,12 +2,12 @@ package PAGI::Request;
 use strict;
 use warnings;
 use Hash::MultiValue;
-use URI::Escape qw(uri_unescape);
-use Encode qw(decode_utf8);
+use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Cookie::Baker qw(crush_cookie);
 use MIME::Base64 qw(decode_base64);
 use Future::AsyncAwait;
 use JSON::PP qw(decode_json);
+use Carp qw(croak);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 
@@ -51,6 +51,24 @@ sub scheme       { shift->{scope}{scheme} // 'http' }
 sub http_version { shift->{scope}{http_version} // '1.1' }
 sub client       { shift->{scope}{client} }
 sub raw          { shift->{scope} }
+
+# Internal: URL decode a string (handles + as space)
+sub _url_decode {
+    my ($str) = @_;
+    return '' unless defined $str;
+    $str =~ s/\+/ /g;
+    $str =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
+    return $str;
+}
+
+# Internal: Decode UTF-8 with replacement or croak in strict mode
+sub _decode_utf8 {
+    my ($str, $strict) = @_;
+    return '' unless defined $str;
+    my $flag = $strict ? FB_CROAK : FB_DEFAULT;
+    $flag |= LEAVE_SRC;
+    return decode('UTF-8', $str, $flag);
+}
 
 # Host from headers
 sub host {
@@ -107,34 +125,56 @@ sub header_all {
 }
 
 # Query params as Hash::MultiValue (cached)
+# Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
 sub query_params {
-    my $self = shift;
-    return $self->{_query_params} if $self->{_query_params};
+    my ($self, %opts) = @_;
+    my $strict = delete $opts{strict} // 0;
+    my $raw    = delete $opts{raw}    // 0;
+    croak("Unknown options to query_params: " . join(', ', keys %opts)) if %opts;
+
+    my $cache_key = $raw ? '_query_params_raw' : ($strict ? '_query_params_strict' : '_query_params');
+    return $self->{$cache_key} if $self->{$cache_key};
 
     my $qs = $self->query_string;
     my @pairs;
 
-    for my $part (split /&/, $qs) {
+    for my $part (split /[&;]/, $qs) {
         next unless length $part;
         my ($key, $val) = split /=/, $part, 2;
         $key //= '';
         $val //= '';
 
-        # Decode percent-encoding and UTF-8
-        $key = decode_utf8(uri_unescape($key));
-        $val = decode_utf8(uri_unescape($val));
+        # URL decode (handles + as space)
+        my $key_decoded = _url_decode($key);
+        my $val_decoded = _url_decode($val);
 
-        push @pairs, $key, $val;
+        # UTF-8 decode unless raw mode
+        my $key_final = $raw ? $key_decoded : _decode_utf8($key_decoded, $strict);
+        my $val_final = $raw ? $val_decoded : _decode_utf8($val_decoded, $strict);
+
+        push @pairs, $key_final, $val_final;
     }
 
-    $self->{_query_params} = Hash::MultiValue->new(@pairs);
-    return $self->{_query_params};
+    $self->{$cache_key} = Hash::MultiValue->new(@pairs);
+    return $self->{$cache_key};
+}
+
+# Raw query params (no UTF-8 decoding)
+sub raw_query_params {
+    my $self = shift;
+    return $self->query_params(raw => 1);
 }
 
 # Shortcut for single query param
 sub query {
+    my ($self, $name, %opts) = @_;
+    return $self->query_params(%opts)->get($name);
+}
+
+# Raw single query param
+sub raw_query {
     my ($self, $name) = @_;
-    return $self->query_params->get($name);
+    return $self->query($name, raw => 1);
 }
 
 # All cookies as hashref (cached)
@@ -297,10 +337,14 @@ async sub body {
 }
 
 # Read body as decoded UTF-8 text (async)
+# Options: strict => 1 (croak on invalid UTF-8)
 async sub text {
-    my $self = shift;
+    my ($self, %opts) = @_;
+    my $strict = delete $opts{strict} // 0;
+    croak("Unknown options to text: " . join(', ', keys %opts)) if %opts;
+
     my $body = await $self->body;
-    return decode_utf8($body);
+    return _decode_utf8($body, $strict);
 }
 
 # Parse body as JSON (async, dies on error)
@@ -311,38 +355,61 @@ async sub json {
 }
 
 # Parse URL-encoded form body (async, returns Hash::MultiValue)
+# Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
 async sub form {
     my ($self, %opts) = @_;
+    my $strict = delete $opts{strict} // 0;
+    my $raw    = delete $opts{raw}    // 0;
+
+    # Extract multipart options before checking for unknown opts
+    my %multipart_opts;
+    for my $key (qw(max_part_size spool_threshold max_files max_fields temp_dir)) {
+        $multipart_opts{$key} = delete $opts{$key} if exists $opts{$key};
+    }
+    croak("Unknown options to form: " . join(', ', keys %opts)) if %opts;
+
+    my $cache_key = $raw ? '_form_raw' : ($strict ? '_form_strict' : '_form');
 
     # Return cached if available
-    return $self->{_form} if $self->{_form};
+    return $self->{$cache_key} if $self->{$cache_key};
 
     # For multipart, delegate to uploads handling
     if ($self->is_multipart) {
-        return await $self->_parse_multipart_form(%opts);
+        # Multipart always parses to default cache, then copy
+        my $form = await $self->_parse_multipart_form(%multipart_opts);
+        $self->{$cache_key} = $form;
+        return $form;
     }
 
     # URL-encoded form
     my $body = await $self->body;
     my @pairs;
 
-    for my $part (split /&/, $body) {
+    for my $part (split /[&;]/, $body) {
         next unless length $part;
         my ($key, $val) = split /=/, $part, 2;
         $key //= '';
         $val //= '';
 
-        # Decode + as space, then percent-decoding
-        $key =~ s/\+/ /g;
-        $val =~ s/\+/ /g;
-        $key = decode_utf8(uri_unescape($key));
-        $val = decode_utf8(uri_unescape($val));
+        # URL decode (handles + as space)
+        my $key_decoded = _url_decode($key);
+        my $val_decoded = _url_decode($val);
 
-        push @pairs, $key, $val;
+        # UTF-8 decode unless raw mode
+        my $key_final = $raw ? $key_decoded : _decode_utf8($key_decoded, $strict);
+        my $val_final = $raw ? $val_decoded : _decode_utf8($val_decoded, $strict);
+
+        push @pairs, $key_final, $val_final;
     }
 
-    $self->{_form} = Hash::MultiValue->new(@pairs);
-    return $self->{_form};
+    $self->{$cache_key} = Hash::MultiValue->new(@pairs);
+    return $self->{$cache_key};
+}
+
+# Raw form params (no UTF-8 decoding)
+async sub raw_form {
+    my ($self, %opts) = @_;
+    return await $self->form(%opts, raw => 1);
 }
 
 # Parse multipart form (internal)
