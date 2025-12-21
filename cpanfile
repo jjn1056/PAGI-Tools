@@ -23,7 +23,6 @@ requires 'Sys::Sendfile', '0.11';
 
 # Utilities
 requires 'URI::Escape', '5.09';
-requires 'JSON::MaybeXS', '1.004003';
 requires 'Cookie::Baker', '0.11';
 
 # Testing
@@ -32,6 +31,7 @@ on 'test' => sub {
     requires 'Test::Future::IO::Impl', '0.14';
     requires 'Net::Async::HTTP', '0.49';
     requires 'Net::Async::WebSocket::Client', '0.14';
+    requires 'URI', '1.60';
 };
 
 # Development
