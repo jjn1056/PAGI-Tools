@@ -131,7 +131,13 @@ async sub _run_close_callbacks {
     my $reason = $self->close_reason;
 
     for my $cb (@{$self->{_on_close}}) {
-        eval { await $cb->($code, $reason) };
+        eval {
+            my $r = $cb->($code, $reason);
+            # Only await if callback returns a Future
+            if (blessed($r) && $r->isa('Future')) {
+                await $r;
+            }
+        };
         if ($@) {
             warn "PAGI::WebSocket on_close callback error: $@";
         }
