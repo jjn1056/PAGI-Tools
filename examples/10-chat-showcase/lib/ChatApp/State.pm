@@ -3,7 +3,6 @@ package ChatApp::State;
 use v5.32;
 use strict;
 use warnings;
-use experimental 'signatures';
 
 use Exporter 'import';
 use Time::HiRes qw(time);
@@ -38,7 +37,9 @@ use constant PRESENCE_GRACE_PERIOD => 30;  # seconds before broadcasting "user l
 use constant SESSION_EXPIRY => 86400;       # 24 hours
 
 # Set the event loop reference (called from WebSocket handler)
-sub set_event_loop ($loop) {
+sub set_event_loop {
+    my ($loop) = @_;
+
     $event_loop = $loop;
 }
 
@@ -54,7 +55,9 @@ sub generate_id {
     return sprintf("%s-%s", time(), int(rand(100000)));
 }
 
-sub sanitize_username ($name) {
+sub sanitize_username {
+    my ($name) = @_;
+
     $name =~ s/[^\w]/_/g;
     $name = substr($name, 0, 20);
     $name = 'User' . int(rand(1000)) if length($name) < 2;
@@ -68,7 +71,9 @@ sub sanitize_username ($name) {
     return $name;
 }
 
-sub sanitize_room_name ($name) {
+sub sanitize_room_name {
+    my ($name) = @_;
+
     $name =~ s/[^\w-]/_/g;
     $name = lc(substr($name, 0, 30));
     $name = 'room' . int(rand(1000)) if length($name) < 2;
@@ -76,7 +81,9 @@ sub sanitize_room_name ($name) {
 }
 
 # Session management (replaces user management)
-sub get_session ($session_id) {
+sub get_session {
+    my ($session_id) = @_;
+
     my $session = $sessions{$session_id};
     return unless $session;
 
@@ -91,14 +98,18 @@ sub get_session ($session_id) {
     return $session;
 }
 
-sub get_session_by_name ($name) {
+sub get_session_by_name {
+    my ($name) = @_;
+
     for my $session (values %sessions) {
         return $session if $session->{name} eq $name && $session->{connected};
     }
     return;
 }
 
-sub create_session ($session_id, $name, $send_cb) {
+sub create_session {
+    my ($session_id, $name, $send_cb) = @_;
+
     # Check if session already exists (resume case)
     if (my $existing = $sessions{$session_id}) {
         # This is a resume - update the send callback
@@ -138,19 +149,25 @@ sub create_session ($session_id, $name, $send_cb) {
     return $sessions{$session_id};
 }
 
-sub update_session ($session_id, $updates) {
+sub update_session {
+    my ($session_id, $updates) = @_;
+
     return unless $sessions{$session_id};
     $sessions{$session_id}{$_} = $updates->{$_} for keys %$updates;
     $sessions{$session_id}{last_seen} = time();
     return $sessions{$session_id};
 }
 
-sub is_session_connected ($session_id) {
+sub is_session_connected {
+    my ($session_id) = @_;
+
     my $session = $sessions{$session_id};
     return $session && $session->{connected};
 }
 
-sub set_session_connected ($session_id, $send_cb) {
+sub set_session_connected {
+    my ($session_id, $send_cb) = @_;
+
     my $session = $sessions{$session_id} or return;
 
     # Cancel any pending disconnect timer
@@ -164,7 +181,10 @@ sub set_session_connected ($session_id, $send_cb) {
     return $session;
 }
 
-sub set_session_disconnected ($session_id, $broadcast_callback = undef) {
+sub set_session_disconnected {
+    my ($session_id, $broadcast_callback) = @_;
+    $broadcast_callback //= undef;
+
     my $session = $sessions{$session_id} or return;
 
     $session->{connected} = 0;
@@ -191,7 +211,9 @@ sub set_session_disconnected ($session_id, $broadcast_callback = undef) {
     return $session;
 }
 
-sub cancel_disconnect_timer ($session_id) {
+sub cancel_disconnect_timer {
+    my ($session_id) = @_;
+
     my $session = $sessions{$session_id} or return;
 
     if ($session->{disconnect_timer}) {
@@ -201,7 +223,9 @@ sub cancel_disconnect_timer ($session_id) {
     }
 }
 
-sub _finalize_disconnect ($session_id, $broadcast_callback) {
+sub _finalize_disconnect {
+    my ($session_id, $broadcast_callback) = @_;
+
     my $session = $sessions{$session_id};
     return unless $session;
     return if $session->{connected};  # User reconnected, don't finalize
@@ -232,7 +256,9 @@ sub _finalize_disconnect ($session_id, $broadcast_callback) {
     });
 }
 
-sub _expire_session ($session_id) {
+sub _expire_session {
+    my ($session_id) = @_;
+
     my $session = delete $sessions{$session_id};
     return unless $session;
 
@@ -242,7 +268,9 @@ sub _expire_session ($session_id) {
     }
 }
 
-sub remove_session ($session_id) {
+sub remove_session {
+    my ($session_id) = @_;
+
     my $session = delete $sessions{$session_id};
     return unless $session;
 
@@ -261,11 +289,16 @@ sub remove_session ($session_id) {
 }
 
 # Room management
-sub get_room ($name) {
+sub get_room {
+    my ($name) = @_;
+
     return $rooms{$name};
 }
 
-sub add_room ($name, $created_by = 'system') {
+sub add_room {
+    my ($name, $created_by) = @_;
+    $created_by //= 'system';
+
     return $rooms{$name} if exists $rooms{$name};
 
     $rooms{$name} = {
@@ -284,7 +317,9 @@ sub add_room ($name, $created_by = 'system') {
     return $rooms{$name};
 }
 
-sub remove_room ($name) {
+sub remove_room {
+    my ($name) = @_;
+
     return if $name eq 'general';
     my $room = delete $rooms{$name};
     return unless $room;
@@ -297,7 +332,9 @@ sub get_all_rooms {
     return \%rooms;
 }
 
-sub add_user_to_room ($session_id, $room_name) {
+sub add_user_to_room {
+    my ($session_id, $room_name) = @_;
+
     my $session = $sessions{$session_id} or return;
     my $room = $rooms{$room_name} //= add_room($room_name, $session->{name});
 
@@ -312,11 +349,17 @@ sub add_user_to_room ($session_id, $room_name) {
     return $room;
 }
 
-sub remove_user_from_room ($session_id, $room_name, $silent = 0) {
+sub remove_user_from_room {
+    my ($session_id, $room_name, $silent) = @_;
+    $silent //= 0;
+
     return _remove_session_from_room($session_id, $room_name, $silent);
 }
 
-sub _remove_session_from_room ($session_id, $room_name, $silent = 0) {
+sub _remove_session_from_room {
+    my ($session_id, $room_name, $silent) = @_;
+    $silent //= 0;
+
     my $session = $sessions{$session_id};
     my $room = $rooms{$room_name};
     return unless $room;
@@ -337,7 +380,9 @@ sub _remove_session_from_room ($session_id, $room_name, $silent = 0) {
     return $room;
 }
 
-sub get_room_users ($room_name) {
+sub get_room_users {
+    my ($room_name) = @_;
+
     my $room = $rooms{$room_name} or return [];
     return [
         map {
@@ -353,7 +398,10 @@ sub get_room_users ($room_name) {
 }
 
 # Message management
-sub add_message ($room_name, $from, $text, $type = 'message') {
+sub add_message {
+    my ($room_name, $from, $text, $type) = @_;
+    $type //= 'message';
+
     my $room = $rooms{$room_name} or return;
 
     my $msg = {
@@ -373,20 +421,29 @@ sub add_message ($room_name, $from, $text, $type = 'message') {
     return $msg;
 }
 
-sub get_room_messages ($room_name, $limit = 50) {
+sub get_room_messages {
+    my ($room_name, $limit) = @_;
+    $limit //= 50;
+
     my $room = $rooms{$room_name} or return [];
     my @msgs = @{$room->{messages}};
     return [ @msgs > $limit ? @msgs[-$limit..-1] : @msgs ];
 }
 
-sub get_messages_since ($room_name, $since_id, $limit = 100) {
+sub get_messages_since {
+    my ($room_name, $since_id, $limit) = @_;
+    $limit //= 100;
+
     my $room = $rooms{$room_name} or return [];
     my @msgs = grep { $_->{id} > $since_id } @{$room->{messages}};
     return [ @msgs > $limit ? @msgs[-$limit..-1] : @msgs ];
 }
 
 # SSE subscriber management
-sub add_sse_subscriber ($id, $send_cb, $last_event_id = 0) {
+sub add_sse_subscriber {
+    my ($id, $send_cb, $last_event_id) = @_;
+    $last_event_id //= 0;
+
     $sse_subscribers{$id} = {
         send_cb       => $send_cb,
         last_event_id => $last_event_id,
@@ -394,7 +451,9 @@ sub add_sse_subscriber ($id, $send_cb, $last_event_id = 0) {
     return $sse_subscribers{$id};
 }
 
-sub remove_sse_subscriber ($id) {
+sub remove_sse_subscriber {
+    my ($id) = @_;
+
     return delete $sse_subscribers{$id};
 }
 
@@ -403,7 +462,9 @@ sub get_sse_subscribers {
 }
 
 # System events for SSE
-sub add_system_event ($event_type, $data) {
+sub add_system_event {
+    my ($event_type, $data) = @_;
+
     my $event = {
         id   => ++$event_counter,
         type => $event_type,
@@ -420,7 +481,10 @@ sub add_system_event ($event_type, $data) {
     return $event;
 }
 
-sub get_recent_system_events ($since_id = 0) {
+sub get_recent_system_events {
+    my ($since_id) = @_;
+    $since_id //= 0;
+
     return [ grep { $_->{id} > $since_id } @system_events ];
 }
 

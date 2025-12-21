@@ -1,7 +1,6 @@
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use experimental 'signatures';
 use lib 'lib';
 use PAGI::App::WrapPSGI;
 

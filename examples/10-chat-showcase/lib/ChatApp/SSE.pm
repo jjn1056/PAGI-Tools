@@ -3,7 +3,6 @@ package ChatApp::SSE;
 use v5.32;
 use strict;
 use warnings;
-use experimental 'signatures';
 
 use Future::AsyncAwait;
 use JSON::PP;
@@ -19,7 +18,8 @@ use ChatApp::State qw(
 my $JSON = JSON::PP->new->utf8->canonical;
 
 sub handler {
-    return async sub ($scope, $receive, $send) {
+    return async sub  {
+        my ($scope, $receive, $send) = @_;
         # Extract Last-Event-ID from headers if provided
         my $last_event_id = 0;
         for my $header (@{$scope->{headers} // []}) {
@@ -96,7 +96,9 @@ sub handler {
 }
 
 # Synchronous version for timer callback (returns Future, doesn't await)
-sub _send_stats_sync ($send) {
+sub _send_stats_sync {
+    my ($send) = @_;
+
     my $stats = get_stats();
 
     $send->({
@@ -107,7 +109,9 @@ sub _send_stats_sync ($send) {
 }
 
 # Background broadcaster - call this when system events occur
-sub broadcast_event ($event) {
+sub broadcast_event {
+    my ($event) = @_;
+
     my $subscribers = get_sse_subscribers();
 
     for my $sub_id (keys %$subscribers) {
@@ -130,7 +134,9 @@ sub broadcast_event ($event) {
     }
 }
 
-async sub _send_sse_event ($send, $event) {
+async sub _send_sse_event {
+    my ($send, $event) = @_;
+
     my $event_type = $event->{type};
     my $data = $JSON->encode($event->{data});
     my $id = $event->{id};
@@ -143,7 +149,9 @@ async sub _send_sse_event ($send, $event) {
     });
 }
 
-async sub _send_stats ($send) {
+async sub _send_stats {
+    my ($send) = @_;
+
     my $stats = get_stats();
 
     await $send->({

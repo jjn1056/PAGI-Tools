@@ -3,7 +3,6 @@ package ChatApp::HTTP;
 use v5.32;
 use strict;
 use warnings;
-use experimental 'signatures';
 
 use Future::AsyncAwait;
 use JSON::PP;
@@ -36,7 +35,8 @@ my %MIME_TYPES = (
 );
 
 sub handler {
-    return async sub ($scope, $receive, $send) {
+    return async sub  {
+        my ($scope, $receive, $send) = @_;
         my $path = $scope->{path} // '/';
         my $method = $scope->{method} // 'GET';
 
@@ -50,7 +50,9 @@ sub handler {
     };
 }
 
-async sub _handle_api ($scope, $receive, $send, $path, $method) {
+async sub _handle_api {
+    my ($scope, $receive, $send, $path, $method) = @_;
+
     my ($status, $data);
 
     if ($path eq '/api/rooms' && $method eq 'GET') {
@@ -118,7 +120,9 @@ async sub _handle_api ($scope, $receive, $send, $path, $method) {
     });
 }
 
-async sub _serve_static ($scope, $receive, $send, $path) {
+async sub _serve_static {
+    my ($scope, $receive, $send, $path) = @_;
+
     # Default to index.html
     $path = '/index.html' if $path eq '/';
 
@@ -164,7 +168,9 @@ async sub _serve_static ($scope, $receive, $send, $path) {
     });
 }
 
-async sub _send_404 ($send) {
+async sub _send_404 {
+    my ($send) = @_;
+
     my $body = '{"error":"Not found"}';
     await $send->({
         type    => 'http.response.start',
@@ -181,7 +187,9 @@ async sub _send_404 ($send) {
     });
 }
 
-async sub _send_500 ($send) {
+async sub _send_500 {
+    my ($send) = @_;
+
     my $body = '{"error":"Internal server error"}';
     await $send->({
         type    => 'http.response.start',

@@ -17,7 +17,6 @@
 use v5.32;
 use strict;
 use warnings;
-use experimental 'signatures';
 
 use Future::AsyncAwait;
 use File::Basename qw(dirname);
@@ -34,8 +33,11 @@ my $ws_handler   = ChatApp::WebSocket::handler();
 my $sse_handler  = ChatApp::SSE::handler();
 
 # Simple request logging middleware
-sub with_logging ($app) {
-    return async sub ($scope, $receive, $send) {
+sub with_logging {
+    my ($app) = @_;
+
+    return async sub  {
+        my ($scope, $receive, $send) = @_;
         my $start = time();
         my $type = $scope->{type};
         my $path = $scope->{path} // '-';
@@ -43,7 +45,8 @@ sub with_logging ($app) {
 
         # Wrap send to capture response status
         my $status = '-';
-        my $wrapped_send = async sub ($event) {
+        my $wrapped_send = async sub  {
+        my ($event) = @_;
             if ($event->{type} =~ /\.start$/ && defined $event->{status}) {
                 $status = $event->{status};
             }
@@ -92,7 +95,9 @@ my $app = with_logging(async sub ($scope, $receive, $send) {
     die "Unsupported scope type: $type";
 });
 
-async sub _handle_lifespan ($scope, $receive, $send) {
+async sub _handle_lifespan {
+    my ($scope, $receive, $send) = @_;
+
     while (1) {
         my $event = await $receive->();
 

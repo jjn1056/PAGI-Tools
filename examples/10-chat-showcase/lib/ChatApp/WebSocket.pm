@@ -3,7 +3,6 @@ package ChatApp::WebSocket;
 use v5.32;
 use strict;
 use warnings;
-use experimental 'signatures';
 
 use Future::AsyncAwait;
 use JSON::PP;
@@ -25,7 +24,8 @@ use ChatApp::State qw(
 my $JSON = JSON::PP->new->utf8->allow_nonref;
 
 sub handler {
-    return async sub ($scope, $receive, $send) {
+    return async sub  {
+        my ($scope, $receive, $send) = @_;
         # Wait for connection event
         my $event = await $receive->();
         return unless $event->{type} eq 'websocket.connect';
@@ -110,7 +110,8 @@ sub handler {
         $ping_timer->start;
 
         # Create broadcast callback for disconnect handling
-        my $broadcast_leave = sub ($room_name, $username) {
+        my $broadcast_leave = sub  {
+        my ($room_name, $username) = @_;
             my $room_users = get_room_users($room_name);
             for my $other (@$room_users) {
                 my $other_session = get_session($other->{id});
@@ -160,7 +161,9 @@ sub _generate_session_id {
     return Digest::SHA::sha256_hex(time() . $$ . rand());
 }
 
-async sub _handle_message ($session_id, $text, $send) {
+async sub _handle_message {
+    my ($session_id, $text, $send) = @_;
+
     my $session = get_session($session_id);
     return unless $session;
 
@@ -207,7 +210,9 @@ async sub _handle_message ($session_id, $text, $send) {
     }
 }
 
-async sub _handle_chat_message ($session_id, $msg, $send) {
+async sub _handle_chat_message {
+    my ($session_id, $msg, $send) = @_;
+
     my $session = get_session($session_id) or return;
     my $room_name = $msg->{room} // 'general';
     my $text = $msg->{text} // '';
@@ -256,7 +261,9 @@ async sub _handle_chat_message ($session_id, $msg, $send) {
     });
 }
 
-async sub _handle_command ($session_id, $cmd, $args, $room_name, $send) {
+async sub _handle_command {
+    my ($session_id, $cmd, $args, $room_name, $send) = @_;
+
     my $session = get_session($session_id) or return;
     $args //= '';
 
@@ -314,7 +321,9 @@ async sub _handle_command ($session_id, $cmd, $args, $room_name, $send) {
     }
 }
 
-async sub _join_room ($session_id, $room_name, $send) {
+async sub _join_room {
+    my ($session_id, $room_name, $send) = @_;
+
     my $session = get_session($session_id) or return;
     $room_name = sanitize_room_name($room_name);
 
@@ -346,7 +355,9 @@ async sub _join_room ($session_id, $room_name, $send) {
     }, $session_id);
 }
 
-async sub _leave_room ($session_id, $room_name, $send) {
+async sub _leave_room {
+    my ($session_id, $room_name, $send) = @_;
+
     my $session = get_session($session_id) or return;
 
     # Can't leave general
@@ -383,7 +394,9 @@ async sub _leave_room ($session_id, $room_name, $send) {
     });
 }
 
-async sub _handle_typing ($session_id, $msg) {
+async sub _handle_typing {
+    my ($session_id, $msg) = @_;
+
     my $session = get_session($session_id) or return;
     my $room_name = $msg->{room} // 'general';
     my $typing = $msg->{typing} ? 1 : 0;
@@ -398,7 +411,9 @@ async sub _handle_typing ($session_id, $msg) {
     }, $session_id);
 }
 
-async sub _handle_private_message ($session_id, $msg, $send) {
+async sub _handle_private_message {
+    my ($session_id, $msg, $send) = @_;
+
     my $session = get_session($session_id) or return;
     my $to_name = $msg->{to} // '';
     my $text = $msg->{text} // '';
@@ -436,7 +451,9 @@ async sub _handle_private_message ($session_id, $msg, $send) {
     });
 }
 
-async sub _handle_nick_change ($session_id, $msg, $send) {
+async sub _handle_nick_change {
+    my ($session_id, $msg, $send) = @_;
+
     my $session = get_session($session_id) or return;
     my $new_name = sanitize_username($msg->{name} // '');
 
@@ -466,7 +483,9 @@ async sub _handle_nick_change ($session_id, $msg, $send) {
     }
 }
 
-async sub _send_room_list ($session_id, $send) {
+async sub _send_room_list {
+    my ($session_id, $send) = @_;
+
     my $rooms = get_all_rooms();
     await _send_json($send, {
         type  => 'room_list',
@@ -483,7 +502,9 @@ async sub _send_room_list ($session_id, $send) {
     });
 }
 
-async sub _send_user_list ($session_id, $room_name, $send) {
+async sub _send_user_list {
+    my ($session_id, $room_name, $send) = @_;
+
     my $users = get_room_users($room_name);
     await _send_json($send, {
         type  => 'user_list',
@@ -492,7 +513,9 @@ async sub _send_user_list ($session_id, $room_name, $send) {
     });
 }
 
-async sub _send_history ($session_id, $room_name, $send) {
+async sub _send_history {
+    my ($session_id, $room_name, $send) = @_;
+
     my $messages = get_room_messages($room_name, 100);
     await _send_json($send, {
         type     => 'history',
@@ -501,7 +524,10 @@ async sub _send_history ($session_id, $room_name, $send) {
     });
 }
 
-async sub _broadcast_to_room ($room_name, $data, $exclude_id = undef) {
+async sub _broadcast_to_room {
+    my ($room_name, $data, $exclude_id) = @_;
+    $exclude_id //= undef;
+
     my $room_users = get_room_users($room_name);
 
     for my $room_user (@$room_users) {
@@ -516,14 +542,18 @@ async sub _broadcast_to_room ($room_name, $data, $exclude_id = undef) {
     }
 }
 
-async sub _send_json ($send, $data) {
+async sub _send_json {
+    my ($send, $data) = @_;
+
     await $send->({
         type => 'websocket.send',
         text => $JSON->encode($data),
     });
 }
 
-sub _send_json_sync ($send, $data) {
+sub _send_json_sync {
+    my ($send, $data) = @_;
+
     $send->({
         type => 'websocket.send',
         text => $JSON->encode($data),
