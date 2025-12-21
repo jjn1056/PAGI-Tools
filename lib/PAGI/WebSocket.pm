@@ -513,16 +513,65 @@ PAGI::WebSocket - Convenience wrapper for PAGI WebSocket connections
     use PAGI::WebSocket;
     use Future::AsyncAwait;
 
+    # Simple echo server
     async sub app {
         my ($scope, $receive, $send) = @_;
 
         my $ws = PAGI::WebSocket->new($scope, $receive, $send);
         await $ws->accept;
 
-        while (my $msg = await $ws->receive_text) {
-            await $ws->send_text("Echo: $msg");
-        }
+        await $ws->each_text(async sub {
+            my ($text) = @_;
+            await $ws->send_text("Echo: $text");
+        });
     }
+
+    # JSON API with cleanup
+    async sub json_app {
+        my ($scope, $receive, $send) = @_;
+
+        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+        await $ws->accept(subprotocol => 'json');
+
+        my $user_id = generate_id();
+
+        # Cleanup runs on any disconnect
+        $ws->on_close(async sub {
+            my ($code, $reason) = @_;
+            await remove_user($user_id);
+            log_disconnect($user_id, $code);
+        });
+
+        await $ws->each_json(async sub {
+            my ($data) = @_;
+
+            if ($data->{type} eq 'ping') {
+                await $ws->send_json({ type => 'pong' });
+            }
+        });
+    }
+
+=head1 DESCRIPTION
+
+PAGI::WebSocket wraps the raw PAGI WebSocket protocol to provide a clean,
+high-level API inspired by Starlette's WebSocket class. It eliminates
+protocol boilerplate and provides:
+
+=over 4
+
+=item * Typed send/receive methods (text, bytes, JSON)
+
+=item * Connection state tracking (is_connected, is_closed, close_code)
+
+=item * Cleanup callback registration (on_close)
+
+=item * Safe send methods for broadcast scenarios (try_send_*, send_*_if_connected)
+
+=item * Message iteration helpers (each_text, each_json)
+
+=item * Timeout support for receives
+
+=back
 
 =head1 CONSTRUCTOR
 
@@ -530,38 +579,216 @@ PAGI::WebSocket - Convenience wrapper for PAGI WebSocket connections
 
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
 
-Creates a new WebSocket wrapper. All parameters are required:
+Creates a new WebSocket wrapper. Requires:
 
 =over 4
 
-=item * C<$scope> - PAGI scope hashref with type 'websocket'
+=item * C<$scope> - PAGI scope hashref with C<type => 'websocket'>
 
-=item * C<$receive> - Async coderef for receiving messages from client
+=item * C<$receive> - Async coderef returning Futures for events
 
-=item * C<$send> - Async coderef for sending messages to client
-
-=back
-
-Throws an exception if parameters are missing or if scope type is not 'websocket'.
-
-=head1 DESCRIPTION
-
-PAGI::WebSocket provides a clean, high-level API for WebSocket handling,
-inspired by Starlette's WebSocket class. It wraps the raw PAGI protocol
-and provides:
-
-=over 4
-
-=item * Typed send/receive methods (text, bytes, JSON)
-
-=item * Connection state tracking
-
-=item * Cleanup callback registration
-
-=item * Safe send methods for broadcast scenarios
-
-=item * Message iteration helpers
+=item * C<$send> - Async coderef for sending events
 
 =back
+
+Dies if scope type is not 'websocket'.
+
+=head1 SCOPE ACCESSORS
+
+=head2 scope, path, raw_path, query_string, scheme, http_version
+
+    my $path = $ws->path;              # /chat/room1
+    my $qs = $ws->query_string;        # token=abc
+    my $scheme = $ws->scheme;          # ws or wss
+
+Standard PAGI scope properties with sensible defaults.
+
+=head2 subprotocols
+
+    my $protos = $ws->subprotocols;    # ['chat', 'json']
+
+Returns arrayref of requested subprotocols.
+
+=head2 client, server
+
+    my $client = $ws->client;          # ['192.168.1.1', 54321]
+
+Client and server address info.
+
+=head2 header, headers, header_all
+
+    my $origin = $ws->header('origin');
+    my $all_cookies = $ws->header_all('cookie');
+    my $hmv = $ws->headers;            # Hash::MultiValue
+
+Case-insensitive header access.
+
+=head1 LIFECYCLE METHODS
+
+=head2 accept
+
+    await $ws->accept;
+    await $ws->accept(subprotocol => 'chat');
+    await $ws->accept(headers => [['x-custom', 'value']]);
+
+Accepts the WebSocket connection. Optionally specify a subprotocol
+to use and additional response headers.
+
+=head2 close
+
+    await $ws->close;
+    await $ws->close(1000, 'Normal closure');
+    await $ws->close(4000, 'Custom reason');
+
+Closes the connection. Default code is 1000 (normal closure).
+Idempotent - calling multiple times only sends close once.
+
+=head1 STATE ACCESSORS
+
+=head2 is_connected, is_closed, state
+
+    if ($ws->is_connected) { ... }
+    if ($ws->is_closed) { ... }
+    my $state = $ws->state;            # 'connecting', 'connected', 'closed'
+
+=head2 close_code, close_reason
+
+    my $code = $ws->close_code;        # 1000, 1001, etc.
+    my $reason = $ws->close_reason;    # 'Normal closure'
+
+Available after connection closes. Defaults: code=1005, reason=''.
+
+=head1 SEND METHODS
+
+=head2 send_text, send_bytes, send_json
+
+    await $ws->send_text("Hello!");
+    await $ws->send_bytes("\x00\x01\x02");
+    await $ws->send_json({ action => 'greet', name => 'Alice' });
+
+Send a message. Dies if connection is closed.
+
+=head2 try_send_text, try_send_bytes, try_send_json
+
+    my $sent = await $ws->try_send_json($data);
+    if (!$sent) {
+        # Client disconnected
+        cleanup_user($id);
+    }
+
+Returns true if sent, false if failed or closed. Does not throw.
+Useful for broadcasting to multiple clients.
+
+=head2 send_text_if_connected, send_bytes_if_connected, send_json_if_connected
+
+    await $ws->send_json_if_connected($data);
+
+Silent no-op if connection is closed. Useful for fire-and-forget.
+
+=head1 RECEIVE METHODS
+
+=head2 receive
+
+    my $event = await $ws->receive;
+
+Returns raw PAGI event hashref, or undef on disconnect.
+
+=head2 receive_text, receive_bytes
+
+    my $text = await $ws->receive_text;
+    my $bytes = await $ws->receive_bytes;
+
+Waits for specific frame type, skipping others. Returns undef on disconnect.
+
+=head2 receive_json
+
+    my $data = await $ws->receive_json;
+
+Receives text frame and decodes as JSON. Dies on invalid JSON.
+
+=head2 receive_with_timeout, receive_text_with_timeout, etc.
+
+    my $event = await $ws->receive_with_timeout(30);  # 30 seconds
+
+Returns undef on timeout (connection remains open).
+
+=head1 ITERATION HELPERS
+
+=head2 each_message, each_text, each_bytes, each_json
+
+    await $ws->each_text(async sub {
+        my ($text) = @_;
+        await $ws->send_text("Got: $text");
+    });
+
+    await $ws->each_json(async sub {
+        my ($data) = @_;
+        if ($data->{type} eq 'ping') {
+            await $ws->send_json({ type => 'pong' });
+        }
+    });
+
+Loops until disconnect, calling callback for each message.
+Exceptions in callback propagate to caller.
+
+=head1 CLEANUP
+
+=head2 on_close
+
+    $ws->on_close(async sub {
+        my ($code, $reason) = @_;
+        await cleanup_resources();
+    });
+
+Registers cleanup callback that runs on disconnect or close().
+Multiple callbacks run in registration order. Exceptions are
+caught and warned but don't prevent other callbacks.
+
+=head1 COMPLETE EXAMPLE
+
+    use PAGI::WebSocket;
+    use Future::AsyncAwait;
+
+    my %connections;
+
+    async sub chat_app {
+        my ($scope, $receive, $send) = @_;
+
+        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+        await $ws->accept;
+
+        my $user_id = generate_id();
+        $connections{$user_id} = $ws;
+
+        $ws->on_close(async sub {
+            delete $connections{$user_id};
+            await broadcast({ type => 'leave', user => $user_id });
+        });
+
+        await broadcast({ type => 'join', user => $user_id });
+
+        await $ws->each_json(async sub {
+            my ($data) = @_;
+            $data->{from} = $user_id;
+            await broadcast($data);
+        });
+    }
+
+    async sub broadcast {
+        my ($data) = @_;
+        for my $ws (values %connections) {
+            await $ws->try_send_json($data);
+        }
+    }
+
+=head1 SEE ALSO
+
+L<PAGI::Request> - Similar convenience wrapper for HTTP requests
+
+L<PAGI::Server> - PAGI protocol server
+
+=head1 AUTHOR
+
+PAGI Contributors
 
 =cut
