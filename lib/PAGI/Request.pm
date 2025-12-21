@@ -6,6 +6,8 @@ use URI::Escape qw(uri_unescape);
 use Encode qw(decode_utf8);
 use Cookie::Baker qw(crush_cookie);
 use MIME::Base64 qw(decode_base64);
+use Future::AsyncAwait;
+use JSON::PP qw(decode_json);
 
 sub new {
     my ($class, $scope, $receive) = @_;
@@ -227,6 +229,45 @@ sub stash {
     my $self = shift;
     $self->{_stash} //= {};
     return $self->{_stash};
+}
+
+# Read raw body bytes (async, cached)
+async sub body {
+    my $self = shift;
+
+    # Return cached body if already read
+    return $self->{_body} if $self->{_body_read};
+
+    my $receive = $self->{receive};
+    die "No receive callback provided" unless $receive;
+
+    my $body = '';
+    while (1) {
+        my $message = await $receive->();
+        last unless $message && $message->{type};
+        last if $message->{type} eq 'http.disconnect';
+
+        $body .= $message->{body} // '';
+        last unless $message->{more};
+    }
+
+    $self->{_body} = $body;
+    $self->{_body_read} = 1;
+    return $body;
+}
+
+# Read body as decoded UTF-8 text (async)
+async sub text {
+    my $self = shift;
+    my $body = await $self->body;
+    return decode_utf8($body);
+}
+
+# Parse body as JSON (async, dies on error)
+async sub json {
+    my $self = shift;
+    my $body = await $self->body;
+    return decode_json($body);
 }
 
 1;
