@@ -861,14 +861,22 @@ Exceptions in callback propagate to caller.
 
 =head2 on_close
 
+    # Simple sync callback
+    $ws->on_close(sub {
+        my ($code, $reason) = @_;
+        print "Disconnected: $code\n";
+    });
+
+    # Async callback for cleanup that needs await
     $ws->on_close(async sub {
         my ($code, $reason) = @_;
         await cleanup_resources();
     });
 
 Registers cleanup callback that runs on disconnect or close().
-Multiple callbacks run in registration order. Exceptions are
-caught and warned but don't prevent other callbacks.
+Callbacks can be regular subs or async subs - async results are
+automatically awaited. Multiple callbacks run in registration order.
+Exceptions are caught and warned but don't prevent other callbacks.
 
 =head2 on_error
 

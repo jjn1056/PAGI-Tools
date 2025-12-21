@@ -146,4 +146,35 @@ subtest 'on_close exception does not prevent other callbacks' => sub {
     ok($second_ran, 'second callback ran despite first dying');
 };
 
+subtest 'on_close works with sync callbacks' => sub {
+    my @events = (
+        { type => 'websocket.connect' },
+        { type => 'websocket.disconnect', code => 1000, reason => 'Normal' },
+    );
+    my $idx = 0;
+    my $receive = sub { Future->done($events[$idx++]) };
+    my $send = sub { Future->done };
+
+    my $scope = { type => 'websocket', headers => [] };
+    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+    $ws->accept->get;
+
+    my ($sync_code, $sync_reason);
+    my $async_ran = 0;
+
+    # Mix of sync and async callbacks
+    $ws->on_close(sub {
+        my ($code, $reason) = @_;
+        $sync_code = $code;
+        $sync_reason = $reason;
+    });
+    $ws->on_close(async sub { $async_ran = 1 });
+
+    $ws->receive->get;
+
+    is($sync_code, 1000, 'sync callback received code');
+    is($sync_reason, 'Normal', 'sync callback received reason');
+    ok($async_ran, 'async callback also ran');
+};
+
 done_testing;
