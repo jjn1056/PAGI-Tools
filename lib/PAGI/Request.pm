@@ -205,6 +205,30 @@ sub basic_auth {
     return (undef, undef);
 }
 
+# Path params (set by router)
+sub params {
+    my $self = shift;
+    return $self->{_path_params} // $self->{scope}{path_params} // {};
+}
+
+sub param {
+    my ($self, $name) = @_;
+    return $self->params->{$name};
+}
+
+# Called by router to set matched params
+sub set_params {
+    my ($self, $params) = @_;
+    $self->{_path_params} = $params;
+}
+
+# Per-request storage for middleware/handlers
+sub stash {
+    my $self = shift;
+    $self->{_stash} //= {};
+    return $self->{_stash};
+}
+
 1;
 
 __END__
