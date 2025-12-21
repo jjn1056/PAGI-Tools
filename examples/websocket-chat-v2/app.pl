@@ -25,7 +25,7 @@ my $next_id = 1;
 my $app = async sub {
     my ($scope, $receive, $send) = @_;
 
-    return if $scope->{type} ne 'websocket';
+    die if $scope->{type} ne 'websocket';
 
     # Create WebSocket wrapper
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);

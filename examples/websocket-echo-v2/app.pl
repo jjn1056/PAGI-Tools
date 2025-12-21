@@ -16,7 +16,7 @@ use PAGI::WebSocket;
 my $app = async sub {
     my ($scope, $receive, $send) = @_;
 
-    return if $scope->{type} ne 'websocket';
+    die if $scope->{type} ne 'websocket';
 
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     await $ws->accept;
