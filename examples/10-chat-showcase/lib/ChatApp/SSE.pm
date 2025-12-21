@@ -1,6 +1,5 @@
 package ChatApp::SSE;
 
-use v5.32;
 use strict;
 use warnings;
 
