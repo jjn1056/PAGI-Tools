@@ -17,6 +17,11 @@ our $MAX_FIELDS       = 1000;
 sub new {
     my ($class, %args) = @_;
 
+    die "boundary parameter is required"
+        unless defined $args{boundary} && length $args{boundary};
+    die "receive parameter is required"
+        unless defined $args{receive};
+
     return bless {
         boundary        => $args{boundary},
         receive         => $args{receive},
@@ -33,8 +38,16 @@ async sub parse {
 
     my @form_pairs;
     my @upload_pairs;
+    my @temp_files;  # Track for cleanup on error
     my $file_count = 0;
     my $field_count = 0;
+
+    # Cleanup handler for error cases
+    my $cleanup = sub {
+        for my $path (@temp_files) {
+            unlink $path if $path && -f $path;
+        }
+    };
 
     # Current part state
     my $current_headers;
@@ -93,70 +106,80 @@ async sub parse {
         $current_size = 0;
     };
 
-    my $parser = HTTP::MultiPartParser->new(
-        boundary => $self->{boundary},
+    # Wrap parsing in eval for cleanup on error
+    eval {
+        my $parser = HTTP::MultiPartParser->new(
+            boundary => $self->{boundary},
 
-        on_header => sub {
-            my ($headers) = @_;
-            $finish_part->();  # Finish previous part if any
+            on_header => sub {
+                my ($headers) = @_;
+                $finish_part->();  # Finish previous part if any
 
-            # Parse headers into hash - $headers is an arrayref of header lines
-            $current_headers = {};
-            for my $line (@$headers) {
-                if ($line =~ /^([^:]+):\s*(.*)$/) {
-                    $current_headers->{lc($1)} = $2;
+                # Parse headers into hash - $headers is an arrayref of header lines
+                $current_headers = {};
+                for my $line (@$headers) {
+                    if ($line =~ /^([^:]+):\s*(.*)$/) {
+                        $current_headers->{lc($1)} = $2;
+                    }
                 }
+            },
+
+            on_body => sub {
+                my ($chunk) = @_;
+                $current_size += length($chunk);
+
+                die "Part too large (max $self->{max_part_size} bytes)"
+                    if $current_size > $self->{max_part_size};
+
+                # Check if we need to spool to disk
+                if (!$current_fh && $current_size > $self->{spool_threshold}) {
+                    # Spool to temp file
+                    ($current_fh, $current_temp_path) = tempfile(
+                        DIR    => $self->{temp_dir},
+                        UNLINK => 0,
+                    );
+                    push @temp_files, $current_temp_path;  # Track for cleanup
+                    binmode($current_fh);
+                    print $current_fh $current_data
+                        or die "Failed to write to temp file: $!";
+                    $current_data = '';
+                }
+
+                if ($current_fh) {
+                    print $current_fh $chunk
+                        or die "Failed to write to temp file: $!";
+                } else {
+                    $current_data .= $chunk;
+                }
+            },
+
+            on_error => sub {
+                my ($error) = @_;
+                die "Multipart parse error: $error";
+            },
+        );
+
+        # Feed chunks from receive
+        my $receive = $self->{receive};
+        while (1) {
+            my $message = await $receive->();
+            last unless $message && $message->{type};
+            last if $message->{type} eq 'http.disconnect';
+
+            if (defined $message->{body} && length $message->{body}) {
+                $parser->parse($message->{body});
             }
-        },
 
-        on_body => sub {
-            my ($chunk) = @_;
-            $current_size += length($chunk);
-
-            die "Part too large (max $self->{max_part_size} bytes)"
-                if $current_size > $self->{max_part_size};
-
-            # Check if we need to spool to disk
-            if (!$current_fh && $current_size > $self->{spool_threshold}) {
-                # Spool to temp file
-                ($current_fh, $current_temp_path) = tempfile(
-                    DIR    => $self->{temp_dir},
-                    UNLINK => 0,
-                );
-                binmode($current_fh);
-                print $current_fh $current_data;
-                $current_data = '';
-            }
-
-            if ($current_fh) {
-                print $current_fh $chunk;
-            } else {
-                $current_data .= $chunk;
-            }
-        },
-
-        on_error => sub {
-            my ($error) = @_;
-            die "Multipart parse error: $error";
-        },
-    );
-
-    # Feed chunks from receive
-    my $receive = $self->{receive};
-    while (1) {
-        my $message = await $receive->();
-        last unless $message && $message->{type};
-        last if $message->{type} eq 'http.disconnect';
-
-        if (defined $message->{body} && length $message->{body}) {
-            $parser->parse($message->{body});
+            last unless $message->{more};
         }
 
-        last unless $message->{more};
+        $parser->finish;
+        $finish_part->();  # Handle last part
+    };
+    if (my $err = $@) {
+        $cleanup->();
+        die $err;
     }
-
-    $parser->finish;
-    $finish_part->();  # Handle last part
 
     return (
         Hash::MultiValue->new(@form_pairs),
