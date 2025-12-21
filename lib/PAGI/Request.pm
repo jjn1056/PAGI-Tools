@@ -270,6 +270,47 @@ async sub json {
     return decode_json($body);
 }
 
+# Parse URL-encoded form body (async, returns Hash::MultiValue)
+async sub form {
+    my ($self, %opts) = @_;
+
+    # Return cached if available
+    return $self->{_form} if $self->{_form};
+
+    # For multipart, delegate to uploads handling
+    if ($self->is_multipart) {
+        return await $self->_parse_multipart_form(%opts);
+    }
+
+    # URL-encoded form
+    my $body = await $self->body;
+    my @pairs;
+
+    for my $part (split /&/, $body) {
+        next unless length $part;
+        my ($key, $val) = split /=/, $part, 2;
+        $key //= '';
+        $val //= '';
+
+        # Decode + as space, then percent-decoding
+        $key =~ s/\+/ /g;
+        $val =~ s/\+/ /g;
+        $key = decode_utf8(uri_unescape($key));
+        $val = decode_utf8(uri_unescape($val));
+
+        push @pairs, $key, $val;
+    }
+
+    $self->{_form} = Hash::MultiValue->new(@pairs);
+    return $self->{_form};
+}
+
+# Placeholder for multipart - will be implemented in next task
+async sub _parse_multipart_form {
+    my ($self, %opts) = @_;
+    die "Multipart form parsing not yet implemented";
+}
+
 1;
 
 __END__
