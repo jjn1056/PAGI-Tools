@@ -10,6 +10,7 @@ use JSON::PP qw(decode_json);
 use Carp qw(croak);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
+use PAGI::Request::Negotiate;
 
 # Class-level configuration defaults
 our %CONFIG = (
@@ -238,31 +239,18 @@ sub is_multipart {
     return $ct =~ m{^multipart/form-data};
 }
 
-# Accept header check (case-insensitive per RFC 7231)
+# Accept header check using Negotiate module
 sub accepts {
     my ($self, $mime_type) = @_;
-    my @accepts = $self->header_all('accept');
-    $mime_type = lc($mime_type);
+    my $accept = $self->header('accept');
+    return PAGI::Request::Negotiate->accepts_type($accept, $mime_type);
+}
 
-    for my $accept (@accepts) {
-        $accept = lc($accept);
-        # Handle wildcards
-        if ($accept eq '*/*' || $mime_type eq '*/*') {
-            return 1;
-        }
-        if ($accept =~ m{^([^/]+)/\*$}) {
-            my $type = $1;
-            return 1 if $mime_type =~ m{^\Q$type\E/};
-        }
-        if ($mime_type =~ m{^([^/]+)/\*$}) {
-            my $type = $1;
-            return 1 if $accept =~ m{^\Q$type\E/};
-        }
-        # Exact match
-        return 1 if $accept eq $mime_type;
-    }
-
-    return 0;
+# Find best matching content type from supported list
+sub preferred_type {
+    my ($self, @types) = @_;
+    my $accept = $self->header('accept');
+    return PAGI::Request::Negotiate->best_match(\@types, $accept);
 }
 
 # Extract Bearer token from Authorization header
@@ -746,8 +734,18 @@ True if Content-Type is C<multipart/form-data>.
 =head2 accepts
 
     if ($req->accepts('text/html')) { ... }
+    if ($req->accepts('json')) { ... }
 
-Check Accept header (supports wildcards).
+Check Accept header (supports wildcards and shortcuts). Returns true if the
+client accepts the given MIME type.
+
+=head2 preferred_type
+
+    my $type = $req->preferred_type('json', 'html', 'xml');
+
+Returns the best matching content type from the provided list based on the
+client's Accept header and quality values. Returns undef if none are acceptable.
+Supports shortcuts (json, html, xml, etc).
 
 =head2 is_disconnected (async)
 

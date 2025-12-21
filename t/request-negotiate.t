@@ -3,6 +3,7 @@ use warnings;
 use Test2::V0;
 
 use PAGI::Request::Negotiate;
+use PAGI::Request;
 
 # Test: parse_accept with quality values
 subtest 'parse_accept with quality values' => sub {
@@ -306,6 +307,34 @@ subtest 'parse_accept handles q values out of range' => sub {
 
     my @types2 = PAGI::Request::Negotiate->parse_accept('text/html;q=-0.1');
     is($types2[0][1], 0, 'q < 0 clamped to 0');
+};
+
+# Test integration with PAGI::Request
+subtest 'PAGI::Request preferred_type' => sub {
+    my $scope = {
+        method => 'GET',
+        path => '/',
+        headers => [['accept', 'text/html, application/json;q=0.9']],
+    };
+    my $req = PAGI::Request->new($scope);
+
+    is $req->preferred_type('json', 'html'), 'html', 'prefers html';
+    is $req->preferred_type('json'), 'json', 'accepts json';
+    is $req->preferred_type('xml'), undef, 'xml not acceptable';
+};
+
+subtest 'PAGI::Request accepts with quality' => sub {
+    my $scope = {
+        method => 'GET',
+        path => '/',
+        headers => [['accept', 'text/html, application/json;q=0.9']],
+    };
+    my $req = PAGI::Request->new($scope);
+
+    ok $req->accepts('text/html'), 'accepts text/html';
+    ok $req->accepts('application/json'), 'accepts json';
+    ok $req->accepts('json'), 'accepts json shortcut';
+    ok !$req->accepts('text/xml'), 'does not accept xml';
 };
 
 done_testing;
