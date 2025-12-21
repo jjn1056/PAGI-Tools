@@ -14,7 +14,7 @@ sub new {
 # Basic properties from scope
 sub method       { shift->{scope}{method} }
 sub path         { shift->{scope}{path} }
-sub raw_path     { shift->{scope}{raw_path} // shift->{scope}{path} }
+sub raw_path     { my $s = shift; $s->{scope}{raw_path} // $s->{scope}{path} }
 sub query_string { shift->{scope}{query_string} // '' }
 sub scheme       { shift->{scope}{scheme} // 'http' }
 sub http_version { shift->{scope}{http_version} // '1.1' }

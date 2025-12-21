@@ -228,9 +228,7 @@ subtest 'optional receive parameter in constructor' => sub {
 };
 
 subtest 'defaults and fallbacks' => sub {
-    # Note: raw_path fallback is broken in PAGI::Request.pm line 17
-    # The implementation uses shift twice which doesn't work
-    # Testing only when raw_path is explicitly provided
+    # Test raw_path with explicit value
     my $scope_with_raw = {
         type => 'http',
         method => 'GET',
@@ -240,6 +238,16 @@ subtest 'defaults and fallbacks' => sub {
     };
     my $req_with_raw = PAGI::Request->new($scope_with_raw);
     is($req_with_raw->raw_path, '/raw/path', 'raw_path returns value when provided');
+
+    # Test raw_path fallback to path
+    my $scope_no_raw = {
+        type => 'http',
+        method => 'GET',
+        path => '/fallback/path',
+        headers => [],
+    };
+    my $req_no_raw = PAGI::Request->new($scope_no_raw);
+    is($req_no_raw->raw_path, '/fallback/path', 'raw_path falls back to path when missing');
 
     # Test query_string defaults to empty string
     my $scope_no_qs = {
