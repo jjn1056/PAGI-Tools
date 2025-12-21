@@ -4,6 +4,7 @@ use warnings;
 use Hash::MultiValue;
 use URI::Escape qw(uri_unescape);
 use Encode qw(decode_utf8);
+use Cookie::Baker qw(crush_cookie);
 
 sub new {
     my ($class, $scope, $receive) = @_;
@@ -107,6 +108,22 @@ sub query_params {
 sub query {
     my ($self, $name) = @_;
     return $self->query_params->get($name);
+}
+
+# All cookies as hashref (cached)
+sub cookies {
+    my $self = shift;
+    return $self->{_cookies} if exists $self->{_cookies};
+
+    my $cookie_header = $self->header('cookie') // '';
+    $self->{_cookies} = crush_cookie($cookie_header);
+    return $self->{_cookies};
+}
+
+# Single cookie value
+sub cookie {
+    my ($self, $name) = @_;
+    return $self->cookies->{$name};
 }
 
 # Method predicates
