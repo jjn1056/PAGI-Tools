@@ -263,6 +263,69 @@ async sub send_json_if_connected {
     return;
 }
 
+# Receive methods
+
+async sub receive {
+    my ($self) = @_;
+
+    return undef if $self->is_closed;
+
+    while (1) {
+        my $event = await $self->{receive}->();
+
+        if (!$event || $event->{type} eq 'websocket.disconnect') {
+            my $code = $event->{code} // 1005;
+            my $reason = $event->{reason} // '';
+            $self->_set_closed($code, $reason);
+            return undef;
+        }
+
+        # Skip connect events - they're handled by accept()
+        next if $event->{type} eq 'websocket.connect';
+
+        return $event;
+    }
+}
+
+async sub receive_text {
+    my ($self) = @_;
+
+    while (1) {
+        my $event = await $self->receive;
+        return undef unless $event;
+
+        # Skip non-receive events and binary frames
+        next unless $event->{type} eq 'websocket.receive';
+        next unless exists $event->{text};
+
+        return $event->{text};
+    }
+}
+
+async sub receive_bytes {
+    my ($self) = @_;
+
+    while (1) {
+        my $event = await $self->receive;
+        return undef unless $event;
+
+        # Skip non-receive events and text frames
+        next unless $event->{type} eq 'websocket.receive';
+        next unless exists $event->{bytes};
+
+        return $event->{bytes};
+    }
+}
+
+async sub receive_json {
+    my ($self) = @_;
+
+    my $text = await $self->receive_text;
+    return undef unless defined $text;
+
+    return JSON::PP::decode_json($text);
+}
+
 1;
 
 __END__
