@@ -186,6 +186,83 @@ async sub send_json {
     return $self;
 }
 
+# Safe send methods - return bool instead of throwing
+
+async sub try_send_text {
+    my ($self, $text) = @_;
+    return 0 if $self->is_closed;
+
+    eval {
+        await $self->{send}->({
+            type => 'websocket.send',
+            text => $text,
+        });
+    };
+    if ($@) {
+        $self->_set_closed(1006, 'Connection lost');
+        return 0;
+    }
+    return 1;
+}
+
+async sub try_send_bytes {
+    my ($self, $bytes) = @_;
+    return 0 if $self->is_closed;
+
+    eval {
+        await $self->{send}->({
+            type  => 'websocket.send',
+            bytes => $bytes,
+        });
+    };
+    if ($@) {
+        $self->_set_closed(1006, 'Connection lost');
+        return 0;
+    }
+    return 1;
+}
+
+async sub try_send_json {
+    my ($self, $data) = @_;
+    return 0 if $self->is_closed;
+
+    my $json = JSON::PP::encode_json($data);
+    eval {
+        await $self->{send}->({
+            type => 'websocket.send',
+            text => $json,
+        });
+    };
+    if ($@) {
+        $self->_set_closed(1006, 'Connection lost');
+        return 0;
+    }
+    return 1;
+}
+
+# Silent send methods - no-op when closed
+
+async sub send_text_if_connected {
+    my ($self, $text) = @_;
+    return unless $self->is_connected;
+    await $self->try_send_text($text);
+    return;
+}
+
+async sub send_bytes_if_connected {
+    my ($self, $bytes) = @_;
+    return unless $self->is_connected;
+    await $self->try_send_bytes($bytes);
+    return;
+}
+
+async sub send_json_if_connected {
+    my ($self, $data) = @_;
+    return unless $self->is_connected;
+    await $self->try_send_json($data);
+    return;
+}
+
 1;
 
 __END__
