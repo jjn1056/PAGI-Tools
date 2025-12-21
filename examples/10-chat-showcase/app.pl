@@ -14,7 +14,6 @@
 #
 # Then open http://localhost:5000 in your browser
 
-use v5.32;
 use strict;
 use warnings;
 
@@ -69,7 +68,8 @@ sub with_logging {
 }
 
 # Main application
-my $app = with_logging(async sub ($scope, $receive, $send) {
+my $app = with_logging(async sub {
+    my ($scope, $receive, $send) = @_;
     my $type = $scope->{type} // '';
     my $path = $scope->{path} // '/';
 
