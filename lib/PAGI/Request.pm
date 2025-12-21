@@ -5,6 +5,7 @@ use Hash::MultiValue;
 use URI::Escape qw(uri_unescape);
 use Encode qw(decode_utf8);
 use Cookie::Baker qw(crush_cookie);
+use MIME::Base64 qw(decode_base64);
 
 sub new {
     my ($class, $scope, $receive) = @_;
@@ -180,6 +181,28 @@ sub accepts {
     }
 
     return 0;
+}
+
+# Extract Bearer token from Authorization header
+sub bearer_token {
+    my $self = shift;
+    my $auth = $self->header('authorization') // '';
+    if ($auth =~ /^Bearer\s+(.+)$/i) {
+        return $1;
+    }
+    return undef;
+}
+
+# Extract Basic auth credentials
+sub basic_auth {
+    my $self = shift;
+    my $auth = $self->header('authorization') // '';
+    if ($auth =~ /^Basic\s+(.+)$/i) {
+        my $decoded = decode_base64($1);
+        my ($user, $pass) = split /:/, $decoded, 2;
+        return ($user, $pass);
+    }
+    return (undef, undef);
 }
 
 1;
