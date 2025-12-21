@@ -6,8 +6,10 @@ use feature 'signatures';
 no warnings 'experimental::signatures';
 
 use Future::AsyncAwait;
+use IO::Async::Loop;
+use PAGI::Util::AsyncFile;
 use File::Basename qw(fileparse);
-use File::Copy qw(copy move);
+use File::Copy qw(move);
 use File::Spec;
 use Carp qw(croak);
 
@@ -98,7 +100,7 @@ sub fh ($self) {
     croak("No content available");
 }
 
-# Copy upload to destination (sync for reliability)
+# Copy upload to destination using async I/O
 async sub copy_to ($self, $destination) {
     # Ensure destination directory exists
     my ($name, $dir) = fileparse($destination);
@@ -107,24 +109,24 @@ async sub copy_to ($self, $destination) {
         File::Path::make_path($dir);
     }
 
+    # Get the singleton event loop
+    my $loop = IO::Async::Loop->new;
+
     if ($self->is_in_memory) {
-        # Write data to destination
-        open my $fh, '>:raw', $destination
-            or croak("Cannot write to $destination: $!");
-        print $fh $self->{data};
-        close $fh;
+        # Write data to destination using async I/O
+        await PAGI::Util::AsyncFile->write_file($loop, $destination, $self->{data});
         return;
     } elsif ($self->is_on_disk) {
-        # Use File::Copy
-        copy($self->{temp_path}, $destination)
-            or croak("Cannot copy to $destination: $!");
+        # Read from temp file and write to destination
+        my $data = await PAGI::Util::AsyncFile->read_file($loop, $self->{temp_path});
+        await PAGI::Util::AsyncFile->write_file($loop, $destination, $data);
         return;
     }
 
     croak("No content to copy");
 }
 
-# Move upload to destination (sync for reliability)
+# Move upload to destination using async I/O
 async sub move_to ($self, $destination) {
     # Ensure destination directory exists
     my ($name, $dir) = fileparse($destination);
@@ -133,12 +135,12 @@ async sub move_to ($self, $destination) {
         File::Path::make_path($dir);
     }
 
+    # Get the singleton event loop
+    my $loop = IO::Async::Loop->new;
+
     if ($self->is_in_memory) {
-        # Write data to destination
-        open my $fh, '>:raw', $destination
-            or croak("Cannot write to $destination: $!");
-        print $fh $self->{data};
-        close $fh;
+        # Write data to destination using async I/O
+        await PAGI::Util::AsyncFile->write_file($loop, $destination, $self->{data});
 
         # Mark as cleaned up so destructor doesn't touch the saved file
         delete $self->{data};
@@ -146,7 +148,7 @@ async sub move_to ($self, $destination) {
 
         return;
     } elsif ($self->is_on_disk) {
-        # Use File::Copy::move
+        # Use File::Copy::move (typically a rename, very fast)
         move($self->{temp_path}, $destination)
             or croak("Cannot move to $destination: $!");
 

@@ -3,6 +3,8 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Hash::MultiValue;
+use Future::AsyncAwait;
+use Future;
 
 our $VERSION = '0.01';
 
@@ -100,6 +102,43 @@ sub _set_closed {
     $self->{_state} = 'closed';
     $self->{_close_code} = $code // 1005;
     $self->{_close_reason} = $reason // '';
+}
+
+# Accept the WebSocket connection
+async sub accept {
+    my ($self, %opts) = @_;
+
+    my $event = {
+        type => 'websocket.accept',
+    };
+    $event->{subprotocol} = $opts{subprotocol} if exists $opts{subprotocol};
+    $event->{headers} = $opts{headers} if exists $opts{headers};
+
+    await $self->{send}->($event);
+    $self->_set_state('connected');
+
+    return $self;
+}
+
+# Close the WebSocket connection
+async sub close {
+    my ($self, $code, $reason) = @_;
+
+    # Idempotent - don't send close twice
+    return if $self->is_closed;
+
+    $code //= 1000;
+    $reason //= '';
+
+    await $self->{send}->({
+        type   => 'websocket.close',
+        code   => $code,
+        reason => $reason,
+    });
+
+    $self->_set_closed($code, $reason);
+
+    return $self;
 }
 
 1;
