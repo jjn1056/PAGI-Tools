@@ -1,0 +1,230 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+
+use Future::AsyncAwait;
+use File::Basename qw(dirname);
+use File::Spec;
+use JSON::PP qw(encode_json);
+
+use lib 'lib';
+use PAGI::Request;
+
+# Configure upload limits
+PAGI::Request->configure(
+    max_upload_size => 5 * 1024 * 1024,  # 5MB
+    spool_threshold => 64 * 1024,
+);
+
+my $PUBLIC_DIR = File::Spec->catdir(dirname(__FILE__), 'public');
+my $UPLOAD_DIR = File::Spec->catdir(dirname(__FILE__), 'uploads');
+
+# Allowed MIME types for attachments
+my %ALLOWED_TYPES = (
+    'application/pdf' => 'pdf',
+    'image/jpeg'      => 'jpg',
+    'image/png'       => 'png',
+    'image/gif'       => 'gif',
+    'text/plain'      => 'txt',
+);
+
+my $app = async sub {
+    my ($scope, $receive, $send) = @_;
+
+    return await _handle_lifespan($scope, $receive, $send)
+        if $scope->{type} eq 'lifespan';
+
+    die "Unsupported: $scope->{type}" unless $scope->{type} eq 'http';
+
+    my $req = PAGI::Request->new($scope, $receive);
+    my $path = $req->path;
+    my $method = $req->method;
+
+    # Route: GET / - serve form
+    if ($method eq 'GET' && $path eq '/') {
+        return await _serve_file($send, "$PUBLIC_DIR/index.html", 'text/html');
+    }
+
+    # Route: POST /submit - handle form
+    if ($method eq 'POST' && $path eq '/submit') {
+        return await _handle_submit($req, $send);
+    }
+
+    # 404
+    return await _send_error($send, 404, 'Not Found');
+};
+
+async sub _handle_submit {
+    my ($req, $send) = @_;
+
+    my $form = await $req->form;
+    my @errors;
+
+    # Validate required fields
+    my $name = $form->get('name') // '';
+    my $email = $form->get('email') // '';
+    my $message = $form->get('message') // '';
+    my $subject = $form->get('subject') // 'general';
+    my $subscribe = $form->get('subscribe') // '';
+
+    push @errors, 'Name is required' unless length $name;
+    push @errors, 'Email is required' unless length $email;
+    push @errors, 'Invalid email format' unless $email =~ /@/;
+    push @errors, 'Message is required' unless length $message;
+
+    # Handle file upload
+    my $attachment = await $req->upload('attachment');
+    my $saved_file;
+
+    if ($attachment && !$attachment->is_empty) {
+        my $ct = $attachment->content_type;
+        my $size = $attachment->size;
+
+        # Validate type
+        unless (exists $ALLOWED_TYPES{$ct}) {
+            push @errors, "File type not allowed: $ct";
+        }
+
+        # Validate size (already enforced by Request, but double-check)
+        if ($size > 5 * 1024 * 1024) {
+            push @errors, "File too large (max 5MB)";
+        }
+
+        # Save file if valid
+        unless (@errors) {
+            my $ext = $ALLOWED_TYPES{$ct} // 'bin';
+            my $safe_name = time() . '-' . int(rand(10000)) . ".$ext";
+            my $dest = "$UPLOAD_DIR/$safe_name";
+
+            eval {
+                await $attachment->save_to($dest);
+                $saved_file = $safe_name;
+            };
+            push @errors, "Failed to save file: $@" if $@;
+        }
+    }
+
+    # Return errors if any
+    if (@errors) {
+        return await _send_json($send, 400, {
+            success => 0,
+            errors  => \@errors,
+        });
+    }
+
+    # Success response
+    my $response = {
+        success => 1,
+        message => 'Thank you for your message!',
+        data    => {
+            name      => $name,
+            email     => $email,
+            subject   => $subject,
+            message   => substr($message, 0, 100) . (length($message) > 100 ? '...' : ''),
+            subscribe => ($subscribe eq 'yes' ? 1 : 0),
+            attachment => $saved_file,
+        },
+    };
+
+    return await _send_json($send, 200, $response);
+}
+
+async sub _serve_file {
+    my ($send, $path, $content_type) = @_;
+
+    open my $fh, '<:raw', $path or return await _send_error($send, 404, 'Not Found');
+    local $/;
+    my $content = <$fh>;
+    close $fh;
+
+    await $send->({
+        type    => 'http.response.start',
+        status  => 200,
+        headers => [
+            ['content-type', $content_type],
+            ['content-length', length($content)],
+        ],
+    });
+    await $send->({
+        type => 'http.response.body',
+        body => $content,
+        more => 0,
+    });
+}
+
+async sub _send_json {
+    my ($send, $status, $data) = @_;
+
+    my $body = encode_json($data);
+
+    await $send->({
+        type    => 'http.response.start',
+        status  => $status,
+        headers => [
+            ['content-type', 'application/json'],
+            ['content-length', length($body)],
+        ],
+    });
+    await $send->({
+        type => 'http.response.body',
+        body => $body,
+        more => 0,
+    });
+}
+
+async sub _send_error {
+    my ($send, $status, $message) = @_;
+    return await _send_json($send, $status, { error => $message });
+}
+
+async sub _handle_lifespan {
+    my ($scope, $receive, $send) = @_;
+
+    while (1) {
+        my $event = await $receive->();
+        if ($event->{type} eq 'lifespan.startup') {
+            # Ensure upload directory exists
+            mkdir $UPLOAD_DIR unless -d $UPLOAD_DIR;
+            print STDERR "[lifespan] Contact form app started\n";
+            print STDERR "[lifespan] Upload directory: $UPLOAD_DIR\n";
+            await $send->({ type => 'lifespan.startup.complete' });
+        }
+        elsif ($event->{type} eq 'lifespan.shutdown') {
+            print STDERR "[lifespan] Shutting down\n";
+            await $send->({ type => 'lifespan.shutdown.complete' });
+            last;
+        }
+    }
+}
+
+$app;
+
+__END__
+
+=head1 NAME
+
+Contact Form Example - PAGI::Request Demo
+
+=head1 SYNOPSIS
+
+    pagi-server examples/13-contact-form/app.pl --port 5000
+
+Then visit http://localhost:5000/
+
+=head1 DESCRIPTION
+
+Demonstrates PAGI::Request features:
+
+=over
+
+=item * Form parsing with validation
+
+=item * File upload handling
+
+=item * Content-type validation
+
+=item * JSON responses
+
+=back
+
+=cut
