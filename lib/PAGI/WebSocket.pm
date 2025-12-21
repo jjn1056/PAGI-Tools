@@ -105,6 +105,32 @@ sub _set_closed {
     $self->{_close_reason} = $reason // '';
 }
 
+# Register callback to run on disconnect/close
+sub on_close {
+    my ($self, $callback) = @_;
+    push @{$self->{_on_close}}, $callback;
+    return $self;
+}
+
+# Internal: run all on_close callbacks exactly once
+async sub _run_close_callbacks {
+    my ($self) = @_;
+
+    # Only run once
+    return if $self->{_close_callbacks_ran};
+    $self->{_close_callbacks_ran} = 1;
+
+    my $code = $self->close_code;
+    my $reason = $self->close_reason;
+
+    for my $cb (@{$self->{_on_close}}) {
+        eval { await $cb->($code, $reason) };
+        if ($@) {
+            warn "PAGI::WebSocket on_close callback error: $@";
+        }
+    }
+}
+
 # Accept the WebSocket connection
 async sub accept {
     my ($self, %opts) = @_;
@@ -138,6 +164,7 @@ async sub close {
     });
 
     $self->_set_closed($code, $reason);
+    await $self->_run_close_callbacks;
 
     return $self;
 }
@@ -278,6 +305,7 @@ async sub receive {
             my $code = $event->{code} // 1005;
             my $reason = $event->{reason} // '';
             $self->_set_closed($code, $reason);
+            await $self->_run_close_callbacks;
             return undef;
         }
 
