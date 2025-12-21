@@ -240,10 +240,16 @@ that resolves to the number of bytes written.
 This is efficient for large uploads as it doesn't load the entire body into
 memory.
 
+B<Note:> Cannot be used with the C<decode> option as that would corrupt binary
+data. Use C<stream_to()> with a custom handler if you need decoded chunks
+written to a file.
+
 =cut
 
 async sub stream_to_file ($self, $path) {
     croak("path is required") unless defined $path;
+    croak("stream_to_file() cannot be used with decode option - use stream_to() instead")
+        if $self->{decode};
 
     my $loop = $self->{loop} // IO::Async::Loop->new;
     my $bytes_written = 0;

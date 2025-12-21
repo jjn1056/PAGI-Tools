@@ -219,4 +219,19 @@ subtest 'bytes_read tracking' => sub {
     is $stream->bytes_read, 10, 'ten after second chunk';
 };
 
+subtest 'stream_to_file rejects decode option' => sub {
+    my $receive = mock_receive(
+        { type => 'http.request', body => 'test', more => 0 },
+    );
+
+    my $stream = PAGI::Request::BodyStream->new(
+        receive => $receive,
+        decode => 'UTF-8',
+    );
+
+    like dies { $stream->stream_to_file('/tmp/test.bin')->get },
+        qr/cannot be used with decode/,
+        'stream_to_file throws with decode option';
+};
+
 done_testing;
