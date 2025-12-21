@@ -402,6 +402,104 @@ async sub each_json {
     return;
 }
 
+# Timeout support
+
+sub set_loop {
+    my ($self, $loop) = @_;
+    $self->{_loop} = $loop;
+    return $self;
+}
+
+sub loop {
+    my ($self) = @_;
+    return $self->{_loop} if $self->{_loop};
+
+    # Try to get default loop
+    require IO::Async::Loop;
+    $self->{_loop} = IO::Async::Loop->new;
+    return $self->{_loop};
+}
+
+async sub receive_with_timeout {
+    my ($self, $timeout) = @_;
+
+    return undef if $self->is_closed;
+
+    my $loop = $self->loop;
+    my $start_time = time;
+
+    while (1) {
+        my $elapsed = time - $start_time;
+        my $remaining = $timeout - $elapsed;
+
+        if ($remaining <= 0) {
+            return undef;
+        }
+
+        my $receive_f = $self->{receive}->();
+        my $timeout_f = $loop->delay_future(after => $remaining);
+        my $winner = await Future->wait_any($receive_f, $timeout_f);
+
+        if ($timeout_f->is_ready && !$receive_f->is_ready) {
+            # Timeout won - cancel receive and return undef
+            $receive_f->cancel;
+            return undef;
+        }
+
+        # Shouldn't happen, but safety check
+        if ($receive_f->is_cancelled) {
+            return undef;
+        }
+
+        # Message received
+        my $event = $receive_f->get;
+
+        if (!defined($event) || $event->{type} eq 'websocket.disconnect') {
+            my $code = $event->{code} // 1005;
+            my $reason = $event->{reason} // '';
+            $self->_set_closed($code, $reason);
+            await $self->_run_close_callbacks;
+            return undef;
+        }
+
+        # Skip connect events - they're handled by accept()
+        next if $event->{type} eq 'websocket.connect';
+
+        return $event;
+    }
+}
+
+async sub receive_text_with_timeout {
+    my ($self, $timeout) = @_;
+
+    my $event = await $self->receive_with_timeout($timeout);
+    return undef unless $event;
+    return undef unless $event->{type} eq 'websocket.receive';
+    return undef unless exists $event->{text};
+
+    return $event->{text};
+}
+
+async sub receive_bytes_with_timeout {
+    my ($self, $timeout) = @_;
+
+    my $event = await $self->receive_with_timeout($timeout);
+    return undef unless $event;
+    return undef unless $event->{type} eq 'websocket.receive';
+    return undef unless exists $event->{bytes};
+
+    return $event->{bytes};
+}
+
+async sub receive_json_with_timeout {
+    my ($self, $timeout) = @_;
+
+    my $text = await $self->receive_text_with_timeout($timeout);
+    return undef unless defined $text;
+
+    return JSON::PP::decode_json($text);
+}
+
 1;
 
 __END__
