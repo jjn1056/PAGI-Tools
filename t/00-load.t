@@ -14,6 +14,8 @@ my @modules = qw(
     PAGI::Server::Extensions::TLS
     PAGI::Server::Extensions::FullFlush
     PAGI::App::WrapPSGI
+    PAGI::Request::Negotiate
+    PAGI::Request::Upload
 );
 
 for my $module (@modules) {
