@@ -2,6 +2,8 @@ package PAGI::Request;
 use strict;
 use warnings;
 use Hash::MultiValue;
+use URI::Escape qw(uri_unescape);
+use Encode qw(decode_utf8);
 
 sub new {
     my ($class, $scope, $receive) = @_;
@@ -74,6 +76,37 @@ sub headers {
 sub header_all {
     my ($self, $name) = @_;
     return $self->headers->get_all(lc($name));
+}
+
+# Query params as Hash::MultiValue (cached)
+sub query_params {
+    my $self = shift;
+    return $self->{_query_params} if $self->{_query_params};
+
+    my $qs = $self->query_string;
+    my @pairs;
+
+    for my $part (split /&/, $qs) {
+        next unless length $part;
+        my ($key, $val) = split /=/, $part, 2;
+        $key //= '';
+        $val //= '';
+
+        # Decode percent-encoding and UTF-8
+        $key = decode_utf8(uri_unescape($key));
+        $val = decode_utf8(uri_unescape($val));
+
+        push @pairs, $key, $val;
+    }
+
+    $self->{_query_params} = Hash::MultiValue->new(@pairs);
+    return $self->{_query_params};
+}
+
+# Shortcut for single query param
+sub query {
+    my ($self, $name) = @_;
+    return $self->query_params->get($name);
 }
 
 # Method predicates
