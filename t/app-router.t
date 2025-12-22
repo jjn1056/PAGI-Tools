@@ -265,4 +265,28 @@ subtest 'sse route basic' => sub {
     is $sent->[1]{body}, 'sse_events', 'sse handler called';
 };
 
+subtest 'websocket route with params' => sub {
+    my @calls;
+    my $router = PAGI::App::Router->new;
+    $router->websocket('/ws/chat/:room' => make_handler('ws_chat', \@calls));
+    my $app = $router->to_app;
+
+    my ($send, $sent) = mock_send();
+    $app->({ type => 'websocket', path => '/ws/chat/general' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 200, 'websocket with param matched';
+    is $calls[0]{scope}{'pagi.router'}{params}{room}, 'general', 'captured :room param';
+};
+
+subtest 'sse route with params' => sub {
+    my @calls;
+    my $router = PAGI::App::Router->new;
+    $router->sse('/events/:channel' => make_handler('sse_channel', \@calls));
+    my $app = $router->to_app;
+
+    my ($send, $sent) = mock_send();
+    $app->({ type => 'sse', path => '/events/notifications' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 200, 'sse with param matched';
+    is $calls[0]{scope}{'pagi.router'}{params}{channel}, 'notifications', 'captured :channel param';
+};
+
 done_testing;
