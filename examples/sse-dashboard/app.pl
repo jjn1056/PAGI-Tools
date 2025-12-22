@@ -21,6 +21,7 @@ use File::Spec;
 
 use lib 'lib';
 use PAGI::SSE;
+use PAGI::App::File;
 
 # Shared state
 my %subscribers;
@@ -70,68 +71,15 @@ sub stop_metrics_broadcaster {
     $metrics_timer = undef;
 }
 
-# Static file serving
+# Static file serving via PAGI::App::File
 my $public_dir = File::Spec->catdir(dirname(__FILE__), 'public');
-
-my %mime_types = (
-    html => 'text/html; charset=utf-8',
-    css  => 'text/css; charset=utf-8',
-    js   => 'application/javascript; charset=utf-8',
-);
-
-async sub serve_static {
-    my ($scope, $send, $path) = @_;
-
-    $path = '/index.html' if $path eq '/';
-    $path =~ s/\.\.//g;
-
-    my $file_path = File::Spec->catfile($public_dir, $path);
-
-    unless (-f $file_path && -r $file_path) {
-        await $send->({ type => 'http.response.start', status => 404, headers => [] });
-        await $send->({ type => 'http.response.body', body => 'Not Found' });
-        return;
-    }
-
-    my ($ext) = $file_path =~ /\.(\w+)$/;
-    my $content_type = $mime_types{lc($ext // '')} // 'text/plain';
-
-    open my $fh, '<:raw', $file_path or die;
-    local $/;
-    my $content = <$fh>;
-    close $fh;
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => 200,
-        headers => [
-            ['content-type', $content_type],
-            ['content-length', length($content)],
-        ],
-    });
-    await $send->({ type => 'http.response.body', body => $content });
-}
+my $static_app = PAGI::App::File->new(root => $public_dir)->to_app;
 
 # Main app
 my $app = async sub {
     my ($scope, $receive, $send) = @_;
     my $type = $scope->{type} // '';
     my $path = $scope->{path} // '/';
-
-    # Handle lifespan
-    if ($type eq 'lifespan') {
-        while (1) {
-            my $event = await $receive->();
-            if ($event->{type} eq 'lifespan.startup') {
-                await $send->({ type => 'lifespan.startup.complete' });
-            }
-            elsif ($event->{type} eq 'lifespan.shutdown') {
-                await $send->({ type => 'lifespan.shutdown.complete' });
-                last;
-            }
-        }
-        return;
-    }
 
     # SSE endpoint
     if ($type eq 'sse' && $path eq '/events') {
@@ -179,7 +127,7 @@ my $app = async sub {
 
     # HTTP - serve static files
     if ($type eq 'http') {
-        await serve_static($scope, $send, $path);
+        await $static_app->($scope, $receive, $send);
         return;
     }
 
