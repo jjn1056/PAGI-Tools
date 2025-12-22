@@ -18,6 +18,18 @@ sub websocket_class { 'PAGI::WebSocket' }
 # Encoding: 'text', 'bytes', or 'json'
 sub encoding { 'text' }
 
+sub to_app ($class) {
+    my $ws_class = $class->websocket_class;
+    load($ws_class);
+
+    return async sub ($scope, $receive, $send) {
+        my $endpoint = $class->new;
+        my $ws = $ws_class->new($scope, $receive, $send);
+
+        await $endpoint->handle($ws);
+    };
+}
+
 sub new ($class, %args) {
     return bless \%args, $class;
 }
