@@ -82,3 +82,138 @@ sub to_app ($class) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+PAGI::Endpoint::HTTP - Class-based HTTP endpoint handler
+
+=head1 SYNOPSIS
+
+    package MyApp::UserAPI;
+    use parent 'PAGI::Endpoint::HTTP';
+    use Future::AsyncAwait;
+
+    async sub get ($self, $req, $res) {
+        my $users = get_all_users();
+        await $res->json($users);
+    }
+
+    async sub post ($self, $req, $res) {
+        my $data = await $req->json;
+        my $user = create_user($data);
+        await $res->status(201)->json($user);
+    }
+
+    async sub delete ($self, $req, $res) {
+        my $id = $req->param('id');
+        delete_user($id);
+        await $res->status(204)->empty;
+    }
+
+    # Use with PAGI server
+    my $app = MyApp::UserAPI->to_app;
+
+=head1 DESCRIPTION
+
+PAGI::Endpoint::HTTP provides a Starlette-inspired class-based approach
+to handling HTTP requests. Define methods named after HTTP verbs (get,
+post, put, patch, delete, head, options) and the endpoint automatically
+dispatches to them.
+
+=head2 Features
+
+=over 4
+
+=item * Automatic method dispatch based on HTTP verb
+
+=item * 405 Method Not Allowed for undefined methods
+
+=item * OPTIONS handling with Allow header
+
+=item * HEAD falls back to GET if not defined
+
+=item * Factory methods for framework customization
+
+=back
+
+=head1 HTTP METHODS
+
+Define any of these async methods to handle requests:
+
+    async sub get ($self, $req, $res) { ... }
+    async sub post ($self, $req, $res) { ... }
+    async sub put ($self, $req, $res) { ... }
+    async sub patch ($self, $req, $res) { ... }
+    async sub delete ($self, $req, $res) { ... }
+    async sub head ($self, $req, $res) { ... }
+    async sub options ($self, $req, $res) { ... }
+
+Each receives:
+
+=over 4
+
+=item C<$self> - The endpoint instance
+
+=item C<$req> - A L<PAGI::Request> object (or custom request class)
+
+=item C<$res> - A L<PAGI::Response> object (or custom response class)
+
+=back
+
+=head1 CLASS METHODS
+
+=head2 to_app
+
+    my $app = MyEndpoint->to_app;
+
+Returns a PAGI-compatible async coderef that can be used directly
+with PAGI::Server or composed with middleware.
+
+=head2 request_class
+
+    sub request_class { 'PAGI::Request' }
+
+Override to use a custom request class.
+
+=head2 response_class
+
+    sub response_class { 'PAGI::Response' }
+
+Override to use a custom response class.
+
+=head1 INSTANCE METHODS
+
+=head2 dispatch
+
+    await $endpoint->dispatch($req, $res);
+
+Dispatches the request to the appropriate HTTP method handler.
+Called automatically by C<to_app>.
+
+=head2 allowed_methods
+
+    my @methods = $endpoint->allowed_methods;
+
+Returns list of HTTP methods this endpoint handles.
+
+=head1 FRAMEWORK INTEGRATION
+
+Framework designers can subclass and customize:
+
+    package MyFramework::Endpoint;
+    use parent 'PAGI::Endpoint::HTTP';
+
+    sub request_class { 'MyFramework::Request' }
+    sub response_class { 'MyFramework::Response' }
+
+    # Add framework-specific helpers
+    sub db ($self) { $self->{db} //= connect_db() }
+
+=head1 SEE ALSO
+
+L<PAGI::Endpoint::WebSocket>, L<PAGI::Endpoint::SSE>,
+L<PAGI::Request>, L<PAGI::Response>
+
+=cut
