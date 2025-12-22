@@ -119,4 +119,29 @@ async sub empty ($self) {
     await $self->send(undef);
 }
 
+sub cookie ($self, $name, $value, %opts) {
+    my @parts = ("$name=$value");
+
+    push @parts, "Max-Age=$opts{max_age}" if defined $opts{max_age};
+    push @parts, "Expires=$opts{expires}" if defined $opts{expires};
+    push @parts, "Path=$opts{path}" if defined $opts{path};
+    push @parts, "Domain=$opts{domain}" if defined $opts{domain};
+    push @parts, "Secure" if $opts{secure};
+    push @parts, "HttpOnly" if $opts{httponly};
+    push @parts, "SameSite=$opts{samesite}" if defined $opts{samesite};
+
+    my $cookie_str = join('; ', @parts);
+    push @{$self->{_headers}}, ['set-cookie', $cookie_str];
+
+    return $self;
+}
+
+sub delete_cookie ($self, $name, %opts) {
+    return $self->cookie($name, '',
+        max_age => 0,
+        path    => $opts{path},
+        domain  => $opts{domain},
+    );
+}
+
 1;

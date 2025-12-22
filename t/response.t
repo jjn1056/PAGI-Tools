@@ -242,4 +242,75 @@ subtest 'empty with custom status' => sub {
     is $sent[0]->{status}, 201, 'custom status preserved';
 };
 
+subtest 'cookie method basic' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    my $ret = $res->cookie('session' => 'abc123');
+    is $ret, $res, 'cookie returns self for chaining';
+
+    $res->text("ok")->get;
+
+    my @cookies = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]->{headers}};
+    is scalar(@cookies), 1, 'one set-cookie header';
+    like $cookies[0][1], qr/session=abc123/, 'cookie name=value';
+};
+
+subtest 'cookie with options' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->cookie('token' => 'xyz',
+        max_age  => 3600,
+        path     => '/',
+        domain   => 'example.com',
+        secure   => 1,
+        httponly => 1,
+        samesite => 'Strict',
+    );
+    $res->text("ok")->get;
+
+    my @cookies = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]->{headers}};
+    my $cookie = $cookies[0][1];
+
+    like $cookie, qr/token=xyz/, 'name=value';
+    like $cookie, qr/Max-Age=3600/i, 'max-age';
+    like $cookie, qr/Path=\//i, 'path';
+    like $cookie, qr/Domain=example\.com/i, 'domain';
+    like $cookie, qr/Secure/i, 'secure';
+    like $cookie, qr/HttpOnly/i, 'httponly';
+    like $cookie, qr/SameSite=Strict/i, 'samesite';
+};
+
+subtest 'delete_cookie' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    my $ret = $res->delete_cookie('session');
+    is $ret, $res, 'delete_cookie returns self';
+
+    $res->text("ok")->get;
+
+    my @cookies = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]->{headers}};
+    my $cookie = $cookies[0][1];
+
+    like $cookie, qr/session=/, 'cookie name';
+    like $cookie, qr/Max-Age=0/i, 'max-age is 0';
+};
+
+subtest 'multiple cookies' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->cookie('a' => '1')->cookie('b' => '2');
+    $res->text("ok")->get;
+
+    my @cookies = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]->{headers}};
+    is scalar(@cookies), 2, 'two set-cookie headers';
+};
+
 done_testing;
