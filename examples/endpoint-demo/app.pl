@@ -116,45 +116,23 @@ package MessageEvents {
 }
 
 #---------------------------------------------------------
-# Main Router
+# Main Router - Unified routing for all protocols
 #---------------------------------------------------------
-my $static = PAGI::App::File->new(
+my $router = PAGI::App::Router->new;
+
+# HTTP routes
+$router->get('/api/messages' => MessageAPI->to_app);
+$router->post('/api/messages' => MessageAPI->to_app);
+
+# WebSocket route
+$router->websocket('/ws/echo' => EchoWS->to_app);
+
+# SSE route
+$router->sse('/events' => MessageEvents->to_app);
+
+# Static files as fallback for everything else
+$router->mount('/' => PAGI::App::File->new(
     root => File::Spec->catdir(dirname(__FILE__), 'public')
-)->to_app;
+)->to_app);
 
-my $message_api = MessageAPI->to_app;
-my $echo_ws = EchoWS->to_app;
-my $events_sse = MessageEvents->to_app;
-
-# HTTP router with API route and static file fallback
-my $http_router = PAGI::App::Router->new(not_found => $static);
-$http_router->get('/api/messages' => $message_api);
-$http_router->post('/api/messages' => $message_api);
-
-my $http_app = $http_router->to_app;
-
-# Main app dispatches by scope type
-my $app = async sub {
-    my ($scope, $receive, $send) = @_;
-    my $type = $scope->{type} // 'http';
-    my $path = $scope->{path} // '/';
-
-    # Ignore lifespan events (startup/shutdown)
-    return if $type eq 'lifespan';
-
-    if ($type eq 'http') {
-        return await $http_app->($scope, $receive, $send);
-    }
-
-    if ($type eq 'websocket' && $path eq '/ws/echo') {
-        return await $echo_ws->($scope, $receive, $send);
-    }
-
-    if ($type eq 'sse' && $path eq '/events') {
-        return await $events_sse->($scope, $receive, $send);
-    }
-
-    die "Unknown route: $type $path";
-};
-
-$app;
+$router->to_app;
