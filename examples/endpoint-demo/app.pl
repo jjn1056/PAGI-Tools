@@ -14,6 +14,7 @@ use File::Spec;
 
 use lib 'lib';
 use PAGI::App::File;
+use PAGI::App::Router;
 
 #---------------------------------------------------------
 # HTTP Endpoint - REST API for messages
@@ -125,32 +126,31 @@ my $message_api = MessageAPI->to_app;
 my $echo_ws = EchoWS->to_app;
 my $events_sse = MessageEvents->to_app;
 
+# HTTP router with API route and static file fallback
+my $http_router = PAGI::App::Router->new(not_found => $static);
+$http_router->get('/api/messages' => $message_api);
+$http_router->post('/api/messages' => $message_api);
+
+my $http_app = $http_router->to_app;
+
+# Main app dispatches by scope type
 my $app = async sub {
     my ($scope, $receive, $send) = @_;
     my $type = $scope->{type} // 'http';
-    my $path = $scope->{path} // '/';
 
-    # API routes
-    if ($type eq 'http' && $path eq '/api/messages') {
-        return await $message_api->($scope, $receive, $send);
+    if ($type eq 'http') {
+        return await $http_app->($scope, $receive, $send);
     }
 
-    # WebSocket
-    if ($type eq 'websocket' && $path eq '/ws/echo') {
+    if ($type eq 'websocket' && $scope->{path} eq '/ws/echo') {
         return await $echo_ws->($scope, $receive, $send);
     }
 
-    # SSE
-    if ($type eq 'sse' && $path eq '/events') {
+    if ($type eq 'sse' && $scope->{path} eq '/events') {
         return await $events_sse->($scope, $receive, $send);
     }
 
-    # Static files
-    if ($type eq 'http') {
-        return await $static->($scope, $receive, $send);
-    }
-
-    die "Unknown route: $type $path";
+    die "Unknown route: $type $scope->{path}";
 };
 
 $app;
