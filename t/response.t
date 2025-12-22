@@ -401,7 +401,9 @@ subtest 'send_file basic' => sub {
     $res->send_file($filename)->get;
 
     is $sent[0]->{status}, 200, 'status 200';
-    is $sent[1]->{body}, 'Hello File Content', 'file content sent';
+    is $sent[1]->{file}, $filename, 'file path sent via PAGI protocol';
+    ok !exists $sent[1]->{offset}, 'no offset for full file';
+    ok !exists $sent[1]->{length}, 'no length for full file';
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     ok exists $headers{'content-type'}, 'has content-type';
@@ -445,6 +447,84 @@ subtest 'send_file not found' => sub {
 
     like dies { $res->send_file('/nonexistent/file.txt')->get },
         qr/not found|no such file/i, 'dies for missing file';
+};
+
+subtest 'send_file with offset' => sub {
+    my ($fh, $filename) = tempfile(UNLINK => 1);
+    print $fh "0123456789ABCDEF";  # 16 bytes
+    close $fh;
+
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->send_file($filename, offset => 5)->get;
+
+    is $sent[1]->{file}, $filename, 'file path sent';
+    is $sent[1]->{offset}, 5, 'offset included';
+    ok !exists $sent[1]->{length}, 'length omitted (reads to end)';
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'content-length'}, 11, 'content-length is file_size - offset';
+};
+
+subtest 'send_file with offset and length' => sub {
+    my ($fh, $filename) = tempfile(UNLINK => 1);
+    print $fh "0123456789ABCDEF";  # 16 bytes
+    close $fh;
+
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->send_file($filename, offset => 5, length => 5)->get;
+
+    is $sent[1]->{file}, $filename, 'file path sent';
+    is $sent[1]->{offset}, 5, 'offset included';
+    is $sent[1]->{length}, 5, 'length included';
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'content-length'}, 5, 'content-length matches length option';
+};
+
+subtest 'send_file offset validation' => sub {
+    my ($fh, $filename) = tempfile(UNLINK => 1);
+    print $fh "small";  # 5 bytes
+    close $fh;
+
+    my $send = sub { Future->done };
+
+    # Negative offset
+    my $res1 = PAGI::Response->new($send);
+    like dies { $res1->send_file($filename, offset => -1)->get },
+        qr/non-negative/, 'negative offset rejected';
+
+    # Offset beyond file
+    my $res2 = PAGI::Response->new($send);
+    like dies { $res2->send_file($filename, offset => 100)->get },
+        qr/exceeds file size/, 'offset beyond file rejected';
+
+    # Negative length
+    my $res3 = PAGI::Response->new($send);
+    like dies { $res3->send_file($filename, length => -1)->get },
+        qr/non-negative/, 'negative length rejected';
+};
+
+subtest 'send_file length clamped to remaining' => sub {
+    my ($fh, $filename) = tempfile(UNLINK => 1);
+    print $fh "0123456789";  # 10 bytes
+    close $fh;
+
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    # Request more bytes than available
+    $res->send_file($filename, offset => 5, length => 100)->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'content-length'}, 5, 'length clamped to available bytes';
+    ok !exists $sent[1]->{length}, 'no length in protocol when clamped to remaining';
 };
 
 subtest 'cors basic' => sub {

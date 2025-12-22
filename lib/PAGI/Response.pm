@@ -265,15 +265,61 @@ with C<write($chunk)>, C<close()>, and C<bytes_written()> methods.
         inline   => 1,
     );
 
-Send a file as the response. Options:
+    # Partial file (for range requests)
+    await $res->send_file('/path/to/video.mp4',
+        offset => 1024,       # Start from byte 1024
+        length => 65536,      # Send 64KB
+    );
+
+Send a file as the response. This method uses the PAGI protocol's C<file>
+key, enabling efficient server-side streaming via C<sendfile()> or similar
+zero-copy mechanisms. The file is B<not> read into memory.
+
+B<Options:>
 
 =over 4
 
-=item * filename - Set Content-Disposition attachment filename
+=item * C<filename> - Set Content-Disposition attachment filename
 
-=item * inline - Use Content-Disposition: inline instead of attachment
+=item * C<inline> - Use Content-Disposition: inline instead of attachment
+
+=item * C<offset> - Start position in bytes (default: 0). For range requests.
+
+=item * C<length> - Number of bytes to send. Defaults to file size minus offset.
 
 =back
+
+B<Range Request Example:>
+
+    # Manual range request handling
+    async sub handle_video ($req, $send) {
+        my $res = PAGI::Response->new($send);
+        my $path = '/videos/movie.mp4';
+        my $size = -s $path;
+
+        my $range = $req->header('Range');
+        if ($range && $range =~ /bytes=(\d+)-(\d*)/) {
+            my $start = $1;
+            my $end = $2 || ($size - 1);
+            my $length = $end - $start + 1;
+
+            return await $res->status(206)
+                ->header('Content-Range' => "bytes $start-$end/$size")
+                ->header('Accept-Ranges' => 'bytes')
+                ->send_file($path, offset => $start, length => $length);
+        }
+
+        return await $res->header('Accept-Ranges' => 'bytes')
+                         ->send_file($path);
+    }
+
+B<Note:> For production file serving with full features (ETag caching,
+automatic range request handling, conditional GETs, directory indexes),
+use L<PAGI::App::File> instead:
+
+    use PAGI::App::File;
+    my $files = PAGI::App::File->new(root => '/var/www/static');
+    my $app = $files->to_app;
 
 =head1 EXAMPLES
 
@@ -826,11 +872,27 @@ sub _mime_type ($path) {
 
 async sub send_file ($self, $path, %opts) {
     croak("File not found: $path") unless -f $path;
+    croak("Cannot read file: $path") unless -r $path;
 
-    # Read file
-    open my $fh, '<:raw', $path or croak("Cannot open $path: $!");
-    my $content = do { local $/; <$fh> };
-    close $fh;
+    # Get file size
+    my $file_size = -s $path;
+
+    # Handle offset and length for range requests
+    my $offset = $opts{offset} // 0;
+    my $length = $opts{length};
+
+    # Validate offset
+    croak("offset must be non-negative") if $offset < 0;
+    croak("offset exceeds file size") if $offset > $file_size;
+
+    # Calculate actual length to send
+    my $max_length = $file_size - $offset;
+    if (defined $length) {
+        croak("length must be non-negative") if $length < 0;
+        $length = $max_length if $length > $max_length;
+    } else {
+        $length = $max_length;
+    }
 
     # Set content-type if not already set
     my $has_ct = grep { lc($_->[0]) eq 'content-type' } @{$self->{_headers}};
@@ -838,19 +900,43 @@ async sub send_file ($self, $path, %opts) {
         $self->content_type(_mime_type($path));
     }
 
-    # Set content-length
-    $self->header('content-length', length($content));
+    # Set content-length based on actual bytes to send
+    $self->header('content-length', $length);
 
     # Set content-disposition
     my $disposition;
     if ($opts{inline}) {
         $disposition = 'inline';
     } elsif ($opts{filename}) {
-        $disposition = "attachment; filename=\"$opts{filename}\"";
+        # Sanitize filename for header
+        my $safe_filename = $opts{filename};
+        $safe_filename =~ s/["\r\n]//g;
+        $disposition = "attachment; filename=\"$safe_filename\"";
     }
     $self->header('content-disposition', $disposition) if $disposition;
 
-    await $self->send($content);
+    croak("Response already sent") if $self->{_sent};
+    $self->{_sent} = 1;
+
+    # Send response start
+    await $self->{send}->({
+        type    => 'http.response.start',
+        status  => $self->{_status},
+        headers => $self->{_headers},
+    });
+
+    # Use PAGI file protocol for efficient server-side streaming
+    # Server will use sendfile() or similar zero-copy mechanism
+    my $body_event = {
+        type => 'http.response.body',
+        file => $path,
+    };
+
+    # Add offset/length only if not reading from start or not full file
+    $body_event->{offset} = $offset if $offset > 0;
+    $body_event->{length} = $length if $length < $max_length;
+
+    await $self->{send}->($body_event);
 }
 
 1;
