@@ -186,6 +186,73 @@ async sub send_event {
     return $self;
 }
 
+# Safe send - returns bool instead of throwing
+async sub try_send {
+    my ($self, $data) = @_;
+    return 0 if $self->is_closed;
+
+    eval {
+        await $self->start unless $self->is_started;
+        await $self->{send}->({
+            type => 'sse.send',
+            data => $data,
+        });
+    };
+    if ($@) {
+        $self->_set_closed;
+        return 0;
+    }
+    return 1;
+}
+
+async sub try_send_json {
+    my ($self, $data) = @_;
+    return 0 if $self->is_closed;
+
+    eval {
+        await $self->start unless $self->is_started;
+        my $json = JSON::PP::encode_json($data);
+        await $self->{send}->({
+            type => 'sse.send',
+            data => $json,
+        });
+    };
+    if ($@) {
+        $self->_set_closed;
+        return 0;
+    }
+    return 1;
+}
+
+async sub try_send_event {
+    my ($self, %opts) = @_;
+    return 0 if $self->is_closed;
+
+    eval {
+        await $self->start unless $self->is_started;
+
+        my $data = $opts{data} // '';
+        if (ref $data) {
+            $data = JSON::PP::encode_json($data);
+        }
+
+        my $event = {
+            type => 'sse.send',
+            data => $data,
+        };
+        $event->{event} = $opts{event} if defined $opts{event};
+        $event->{id}    = "$opts{id}"  if defined $opts{id};
+        $event->{retry} = int($opts{retry}) if defined $opts{retry};
+
+        await $self->{send}->($event);
+    };
+    if ($@) {
+        $self->_set_closed;
+        return 0;
+    }
+    return 1;
+}
+
 1;
 
 __END__
