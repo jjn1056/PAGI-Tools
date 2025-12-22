@@ -101,8 +101,8 @@ async sub html ($self, $body) {
 
 async sub json ($self, $data) {
     $self->content_type('application/json; charset=utf-8');
-    my $body = JSON::MaybeXS->new(utf8 => 0, canonical => 1)->encode($data);
-    await $self->send_utf8($body);
+    my $body = JSON::MaybeXS->new(utf8 => 1, canonical => 1)->encode($data);
+    await $self->send($body);
 }
 
 1;

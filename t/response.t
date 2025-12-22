@@ -175,4 +175,18 @@ subtest 'json with status' => sub {
     is $sent[0]->{status}, 201, 'custom status preserved';
 };
 
+subtest 'json with unicode' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->json({ message => 'café', count => 42 })->get;
+
+    # Verify JSON is decodable and unicode is preserved
+    # Body is UTF-8 bytes, so decode with utf8 => 1
+    my $decoded = JSON::MaybeXS->new(utf8 => 1)->decode($sent[1]->{body});
+    is $decoded->{message}, 'café', 'unicode character preserved';
+    is $decoded->{count}, 42, 'number preserved';
+};
+
 done_testing;
