@@ -19,4 +19,33 @@ sub new ($class, %args) {
     return bless \%args, $class;
 }
 
+# HTTP methods we support
+our @HTTP_METHODS = qw(get post put patch delete head options);
+
+sub allowed_methods ($self) {
+    my @allowed;
+    for my $method (@HTTP_METHODS) {
+        push @allowed, uc($method) if $self->can($method);
+    }
+    return @allowed;
+}
+
+async sub dispatch ($self, $req, $res) {
+    my $http_method = lc($req->method // 'GET');
+
+    # HEAD falls back to GET if not explicitly defined
+    if ($http_method eq 'head' && !$self->can('head') && $self->can('get')) {
+        $http_method = 'get';
+    }
+
+    # Check if we have a handler for this method
+    if ($self->can($http_method)) {
+        return await $self->$http_method($req, $res);
+    }
+
+    # 405 Method Not Allowed
+    my @allowed = $self->allowed_methods;
+    await $res->text("405 Method Not Allowed", status => 405);
+}
+
 1;
