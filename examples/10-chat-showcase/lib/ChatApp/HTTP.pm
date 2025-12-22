@@ -231,6 +231,7 @@ ChatApp::HTTP - HTTP request handler for the chat application
 =head1 DESCRIPTION
 
 Handles HTTP requests including static file serving and API endpoints.
+Uses L<PAGI::App::Router> for declarative API routing with parameter capture.
 
 =head2 API Endpoints
 
@@ -242,7 +243,8 @@ Returns list of all rooms with user counts.
 
 =item GET /api/room/:name/history
 
-Returns message history for a room.
+Returns message history for a room. The C<:name> parameter is captured
+by the router and available in C<< $scope->{'pagi.router'}{params}{name} >>.
 
 =item GET /api/room/:name/users
 
@@ -253,5 +255,9 @@ Returns list of users in a room.
 Returns server statistics.
 
 =back
+
+=head1 SEE ALSO
+
+L<PAGI::App::Router>
 
 =cut
