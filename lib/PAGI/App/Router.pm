@@ -6,7 +6,7 @@ use Future::AsyncAwait;
 
 =head1 NAME
 
-PAGI::App::Router - URL routing with path parameters
+PAGI::App::Router - URL routing with path parameters and mounting
 
 =head1 SYNOPSIS
 
@@ -18,15 +18,34 @@ PAGI::App::Router - URL routing with path parameters
     $router->delete('/users/:id' => $delete_user);
     my $app = $router->to_app;
 
+    # Nested routers with mount
+    my $api = PAGI::App::Router->new;
+    $api->get('/users' => $list_users);
+    $api->get('/users/:id' => $get_user);
+    $api->post('/users' => $create_user);
+
+    my $main = PAGI::App::Router->new;
+    $main->get('/' => $home);
+    $main->mount('/api' => $api->to_app);
+    # Routes: /, /api/users, /api/users/:id
+
 =cut
 
 sub new {
     my ($class, %args) = @_;
 
     return bless {
-        routes => [],
+        routes    => [],
+        mounts    => [],
         not_found => $args{not_found},
     }, $class;
+}
+
+sub mount {
+    my ($self, $prefix, $app) = @_;
+    $prefix =~ s{/$}{};  # strip trailing slash
+    push @{$self->{mounts}}, { prefix => $prefix, app => $app };
+    return $self;
 }
 
 sub get {
@@ -88,12 +107,28 @@ sub to_app {
     my ($self) = @_;
 
     my @routes = @{$self->{routes}};
+    my @mounts = @{$self->{mounts}};
     my $not_found = $self->{not_found};
 
     return async sub  {
         my ($scope, $receive, $send) = @_;
         my $method = uc($scope->{method} // '');
         my $path = $scope->{path} // '/';
+
+        # Check mounts first (longest prefix first for proper matching)
+        for my $m (sort { length($b->{prefix}) <=> length($a->{prefix}) } @mounts) {
+            my $prefix = $m->{prefix};
+            if ($path eq $prefix || $path =~ m{^\Q$prefix\E(/.*)$}) {
+                my $sub_path = $1 // '/';
+                my $new_scope = {
+                    %$scope,
+                    path      => $sub_path,
+                    root_path => ($scope->{root_path} // '') . $prefix,
+                };
+                await $m->{app}->($new_scope, $receive, $send);
+                return;
+            }
+        }
 
         # HEAD should match GET routes
         my $match_method = $method eq 'HEAD' ? 'GET' : $method;
@@ -163,9 +198,9 @@ __END__
 
 =head1 DESCRIPTION
 
-URL router with support for path parameters and wildcards. Routes
-requests based on HTTP method and path pattern. Returns 404 for
-unmatched paths and 405 for unmatched methods.
+URL router with support for path parameters, wildcards, and sub-router
+mounting. Routes requests based on HTTP method and path pattern. Returns
+404 for unmatched paths and 405 for unmatched methods.
 
 =head1 OPTIONS
 
@@ -174,6 +209,71 @@ unmatched paths and 405 for unmatched methods.
 =item * C<not_found> - Custom app to handle unmatched routes
 
 =back
+
+=head1 METHODS
+
+=head2 Route Methods
+
+    $router->get($path => $app);
+    $router->post($path => $app);
+    $router->put($path => $app);
+    $router->patch($path => $app);
+    $router->delete($path => $app);
+    $router->head($path => $app);
+    $router->options($path => $app);
+
+Register a route for the given HTTP method. Returns C<$self> for chaining.
+
+=head2 mount
+
+    $router->mount('/api' => $api_app);
+    $router->mount('/admin' => $admin_router->to_app);
+
+Mount a PAGI app under a path prefix. The mounted app receives requests
+with the prefix stripped from the path and added to C<root_path>.
+
+When a request for C</api/users/42> hits a router with C</api> mounted:
+
+=over 4
+
+=item * The mounted app sees C<< $scope->{path} >> as C</users/42>
+
+=item * C<< $scope->{root_path} >> becomes C</api> (or appends to existing)
+
+=back
+
+Mounts are checked before regular routes. Longer prefixes match first,
+so C</api/v2> takes priority over C</api>.
+
+B<Example: Organizing a large application>
+
+    # API routes
+    my $api = PAGI::App::Router->new;
+    $api->get('/users' => $list_users);
+    $api->get('/users/:id' => $get_user);
+    $api->post('/users' => $create_user);
+
+    # Admin routes
+    my $admin = PAGI::App::Router->new;
+    $admin->get('/dashboard' => $dashboard);
+    $admin->get('/settings' => $settings);
+
+    # Main router
+    my $main = PAGI::App::Router->new;
+    $main->get('/' => $home);
+    $main->mount('/api' => $api->to_app);
+    $main->mount('/admin' => $admin->to_app);
+
+    # Resulting routes:
+    # GET /           -> $home
+    # GET /api/users  -> $list_users (path=/users, root_path=/api)
+    # GET /admin/dashboard -> $dashboard (path=/dashboard, root_path=/admin)
+
+=head2 to_app
+
+    my $app = $router->to_app;
+
+Returns a PAGI application coderef that dispatches requests.
 
 =head1 PATH PATTERNS
 
@@ -191,5 +291,7 @@ The matched route adds C<pagi.router> to scope:
 
     $scope->{'pagi.router'}{params}  # Captured parameters
     $scope->{'pagi.router'}{route}   # Matched route pattern
+
+For mounted apps, C<root_path> is updated to include the mount prefix.
 
 =cut

@@ -1,0 +1,242 @@
+use strict;
+use warnings;
+use v5.32;
+use feature 'signatures';
+no warnings 'experimental::signatures';
+
+use Test2::V0;
+use Future::AsyncAwait;
+
+use PAGI::App::Router;
+
+# Helper to capture response
+sub mock_send {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    return ($send, \@sent);
+}
+
+# Helper to create a simple app that records it was called
+sub make_handler ($name, $capture = undef) {
+    return async sub ($scope, $receive, $send) {
+        push @$capture, { name => $name, scope => $scope } if $capture;
+        await $send->({
+            type => 'http.response.start',
+            status => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+        await $send->({
+            type => 'http.response.body',
+            body => $name,
+            more => 0,
+        });
+    };
+}
+
+subtest 'basic routing' => sub {
+    my @calls;
+    my $router = PAGI::App::Router->new;
+    $router->get('/users' => make_handler('list_users', \@calls));
+    $router->get('/users/:id' => make_handler('get_user', \@calls));
+    $router->post('/users' => make_handler('create_user', \@calls));
+
+    my $app = $router->to_app;
+
+    # GET /users
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/users' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 200, 'GET /users - status 200';
+    is $sent->[1]{body}, 'list_users', 'GET /users - correct handler';
+
+    # GET /users/42
+    @calls = ();
+    ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/users/42' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 200, 'GET /users/42 - status 200';
+    is $sent->[1]{body}, 'get_user', 'GET /users/42 - correct handler';
+    is $calls[0]{scope}{'pagi.router'}{params}{id}, '42', 'captured :id param';
+
+    # POST /users
+    ($send, $sent) = mock_send();
+    $app->({ method => 'POST', path => '/users' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 200, 'POST /users - status 200';
+    is $sent->[1]{body}, 'create_user', 'POST /users - correct handler';
+};
+
+subtest '404 not found' => sub {
+    my $router = PAGI::App::Router->new;
+    $router->get('/home' => make_handler('home'));
+    my $app = $router->to_app;
+
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/nonexistent' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 404, 'unmatched path returns 404';
+};
+
+subtest '405 method not allowed' => sub {
+    my $router = PAGI::App::Router->new;
+    $router->get('/resource' => make_handler('get_resource'));
+    $router->post('/resource' => make_handler('create_resource'));
+    my $app = $router->to_app;
+
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'DELETE', path => '/resource' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 405, 'wrong method returns 405';
+
+    my %headers = map { $_->[0] => $_->[1] } @{$sent->[0]{headers}};
+    like $headers{allow}, qr/GET/, 'Allow header includes GET';
+    like $headers{allow}, qr/POST/, 'Allow header includes POST';
+};
+
+subtest 'wildcard parameter' => sub {
+    my @calls;
+    my $router = PAGI::App::Router->new;
+    $router->get('/files/*path' => make_handler('serve_file', \@calls));
+    my $app = $router->to_app;
+
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/files/docs/readme.txt' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 200, 'wildcard matched';
+    is $calls[0]{scope}{'pagi.router'}{params}{path}, 'docs/readme.txt', 'wildcard captured rest of path';
+};
+
+subtest 'mount basic' => sub {
+    my @calls;
+
+    # API sub-router
+    my $api = PAGI::App::Router->new;
+    $api->get('/users' => make_handler('api_users', \@calls));
+    $api->get('/users/:id' => make_handler('api_user', \@calls));
+
+    # Main router
+    my $main = PAGI::App::Router->new;
+    $main->get('/' => make_handler('home', \@calls));
+    $main->mount('/api' => $api->to_app);
+
+    my $app = $main->to_app;
+
+    # GET / - regular route
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'home', 'root path works';
+
+    # GET /api/users - mounted route
+    @calls = ();
+    ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/api/users' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'api_users', 'mounted /api/users works';
+    is $calls[0]{scope}{path}, '/users', 'mounted app sees stripped path';
+    is $calls[0]{scope}{root_path}, '/api', 'mounted app has root_path set';
+
+    # GET /api/users/42 - mounted route with params
+    @calls = ();
+    ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/api/users/42' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'api_user', 'mounted /api/users/:id works';
+    is $calls[0]{scope}{path}, '/users/42', 'path stripped correctly';
+    is $calls[0]{scope}{'pagi.router'}{params}{id}, '42', 'params captured in mounted router';
+};
+
+subtest 'mount exact prefix match' => sub {
+    my @calls;
+
+    my $api = PAGI::App::Router->new;
+    $api->get('/' => make_handler('api_root', \@calls));
+
+    my $main = PAGI::App::Router->new;
+    $main->mount('/api' => $api->to_app);
+
+    my $app = $main->to_app;
+
+    # GET /api (exact prefix, no trailing path)
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/api' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'api_root', '/api matches mounted root';
+    is $calls[0]{scope}{path}, '/', 'path becomes /';
+};
+
+subtest 'mount longer prefix priority' => sub {
+    my @calls;
+
+    my $api_v1 = PAGI::App::Router->new;
+    $api_v1->get('/info' => make_handler('v1_info', \@calls));
+
+    my $api_v2 = PAGI::App::Router->new;
+    $api_v2->get('/info' => make_handler('v2_info', \@calls));
+
+    my $main = PAGI::App::Router->new;
+    $main->mount('/api' => $api_v1->to_app);
+    $main->mount('/api/v2' => $api_v2->to_app);  # Longer prefix
+
+    my $app = $main->to_app;
+
+    # GET /api/v2/info should match /api/v2 mount, not /api
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/api/v2/info' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'v2_info', 'longer prefix /api/v2 matches first';
+
+    # GET /api/info should match /api mount
+    @calls = ();
+    ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/api/info' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'v1_info', '/api matches when /api/v2 does not';
+};
+
+subtest 'mount preserves existing root_path' => sub {
+    my @calls;
+
+    my $inner = PAGI::App::Router->new;
+    $inner->get('/data' => make_handler('inner_data', \@calls));
+
+    my $main = PAGI::App::Router->new;
+    $main->mount('/nested' => $inner->to_app);
+
+    my $app = $main->to_app;
+
+    # Simulate already having a root_path (e.g., from outer mount)
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/nested/data', root_path => '/outer' }, sub { Future->done }, $send)->get;
+    is $calls[0]{scope}{root_path}, '/outer/nested', 'root_path is appended, not replaced';
+};
+
+subtest 'mount 404 falls through' => sub {
+    my $api = PAGI::App::Router->new;
+    $api->get('/users' => make_handler('users'));
+
+    my $main = PAGI::App::Router->new;
+    $main->mount('/api' => $api->to_app);
+
+    my $app = $main->to_app;
+
+    # /other doesn't match /api mount, so falls to main router's 404
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/other' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 404, 'unmatched path outside mount returns 404';
+};
+
+subtest 'mount with any PAGI app' => sub {
+    # Mount can take any PAGI app, not just routers
+    my $static_app = async sub ($scope, $receive, $send) {
+        await $send->({
+            type => 'http.response.start',
+            status => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+        await $send->({
+            type => 'http.response.body',
+            body => "Static: $scope->{path}",
+            more => 0,
+        });
+    };
+
+    my $main = PAGI::App::Router->new;
+    $main->mount('/static' => $static_app);
+
+    my $app = $main->to_app;
+
+    my ($send, $sent) = mock_send();
+    $app->({ method => 'GET', path => '/static/css/style.css' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'Static: /css/style.css', 'any PAGI app can be mounted';
+};
+
+done_testing;
