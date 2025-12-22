@@ -127,4 +127,52 @@ subtest 'cannot send twice' => sub {
     like dies { $res->send("second")->get }, qr/already sent/i, 'dies on second send';
 };
 
+subtest 'text method' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->text("Hello World")->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'content-type'}, 'text/plain; charset=utf-8', 'content-type set';
+    is $sent[0]->{status}, 200, 'default status 200';
+};
+
+subtest 'html method' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->html("<h1>Hello</h1>")->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'content-type'}, 'text/html; charset=utf-8', 'content-type set';
+};
+
+subtest 'json method' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->json({ message => 'Hello', count => 42 })->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'content-type'}, 'application/json; charset=utf-8', 'content-type set';
+
+    # Body should be valid JSON
+    like $sent[1]->{body}, qr/"message"/, 'contains message key';
+    like $sent[1]->{body}, qr/"count"/, 'contains count key';
+};
+
+subtest 'json with status' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->status(201)->json({ created => 1 })->get;
+
+    is $sent[0]->{status}, 201, 'custom status preserved';
+};
+
 done_testing;

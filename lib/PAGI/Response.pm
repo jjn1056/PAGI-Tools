@@ -9,6 +9,7 @@ no warnings 'experimental::signatures';
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Encode qw(encode FB_CROAK);
+use JSON::MaybeXS ();
 
 our $VERSION = '0.01';
 
@@ -86,6 +87,22 @@ async sub send_utf8 ($self, $body, %opts) {
     my $encoded = encode($charset, $body // '', FB_CROAK);
 
     await $self->send($encoded);
+}
+
+async sub text ($self, $body) {
+    $self->content_type('text/plain; charset=utf-8');
+    await $self->send_utf8($body);
+}
+
+async sub html ($self, $body) {
+    $self->content_type('text/html; charset=utf-8');
+    await $self->send_utf8($body);
+}
+
+async sub json ($self, $data) {
+    $self->content_type('application/json; charset=utf-8');
+    my $body = JSON::MaybeXS->new(utf8 => 0, canonical => 1)->encode($data);
+    await $self->send_utf8($body);
 }
 
 1;
