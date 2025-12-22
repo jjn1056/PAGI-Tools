@@ -61,3 +61,96 @@ sub to_app ($class) {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+PAGI::Endpoint::SSE - Class-based Server-Sent Events endpoint handler
+
+=head1 SYNOPSIS
+
+    package MyApp::Notifications;
+    use parent 'PAGI::Endpoint::SSE';
+    use Future::AsyncAwait;
+
+    sub keepalive_interval { 30 }
+
+    async sub on_connect ($self, $sse) {
+        my $user_id = $sse->stash->{user_id};
+
+        # Send welcome event
+        await $sse->send_event(
+            event => 'connected',
+            data  => { user_id => $user_id },
+        );
+
+        # Handle reconnection
+        if (my $last_id = $sse->last_event_id) {
+            await send_missed_events($sse, $last_id);
+        }
+
+        # Subscribe to notifications
+        subscribe($user_id, sub ($event) {
+            $sse->try_send_json($event);
+        });
+    }
+
+    sub on_disconnect ($self, $sse) {
+        unsubscribe($sse->stash->{user_id});
+    }
+
+    # Use with PAGI server
+    my $app = MyApp::Notifications->to_app;
+
+=head1 DESCRIPTION
+
+PAGI::Endpoint::SSE provides a class-based approach to handling
+Server-Sent Events connections with lifecycle hooks.
+
+=head1 LIFECYCLE METHODS
+
+=head2 on_connect
+
+    async sub on_connect ($self, $sse) {
+        await $sse->send_event(data => 'Hello!');
+    }
+
+Called when a client connects. The SSE stream is automatically
+started before this is called. Use this to send initial events
+and set up subscriptions.
+
+=head2 on_disconnect
+
+    sub on_disconnect ($self, $sse) {
+        # Cleanup subscriptions
+    }
+
+Called when connection closes. This is synchronous (not async).
+
+=head1 CLASS METHODS
+
+=head2 keepalive_interval
+
+    sub keepalive_interval { 30 }
+
+Seconds between keepalive pings. Set to 0 to disable (default).
+Keepalives prevent proxy timeouts on idle connections.
+
+=head2 sse_class
+
+    sub sse_class { 'PAGI::SSE' }
+
+Override to use a custom SSE wrapper.
+
+=head2 to_app
+
+    my $app = MyEndpoint->to_app;
+
+Returns a PAGI-compatible async coderef.
+
+=head1 SEE ALSO
+
+L<PAGI::SSE>, L<PAGI::Endpoint::HTTP>, L<PAGI::Endpoint::WebSocket>
+
+=cut
