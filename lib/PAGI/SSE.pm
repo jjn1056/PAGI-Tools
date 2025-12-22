@@ -387,6 +387,47 @@ async sub run {
     return;
 }
 
+# Iterate over items and send events
+async sub each {
+    my ($self, $source, $callback) = @_;
+
+    await $self->start unless $self->is_started;
+
+    my $index = 0;
+
+    # Handle arrayref
+    if (ref $source eq 'ARRAY') {
+        for my $item (@$source) {
+            last if $self->is_closed;
+
+            my $result = await $callback->($item, $index++);
+
+            # If callback returns a hashref, treat as event spec
+            if (ref $result eq 'HASH') {
+                await $self->send_event(%$result);
+            }
+        }
+    }
+    # Handle coderef iterator
+    elsif (ref $source eq 'CODE') {
+        while (!$self->is_closed) {
+            my $item = $source->();
+            last unless defined $item;
+
+            my $result = await $callback->($item, $index++);
+
+            if (ref $result eq 'HASH') {
+                await $self->send_event(%$result);
+            }
+        }
+    }
+    else {
+        croak "each() requires arrayref or coderef, got " . ref($source);
+    }
+
+    return $self;
+}
+
 1;
 
 __END__
