@@ -253,6 +253,73 @@ async sub try_send_event {
     return 1;
 }
 
+# Register close callback
+sub on_close {
+    my ($self, $callback) = @_;
+    push @{$self->{_on_close}}, $callback;
+    return $self;
+}
+
+# Register error callback
+sub on_error {
+    my ($self, $callback) = @_;
+    push @{$self->{_on_error}}, $callback;
+    return $self;
+}
+
+# Internal: run all on_close callbacks
+async sub _run_close_callbacks {
+    my ($self) = @_;
+
+    # Only run once
+    return if $self->{_close_callbacks_ran};
+    $self->{_close_callbacks_ran} = 1;
+
+    for my $cb (@{$self->{_on_close}}) {
+        eval {
+            my $r = $cb->($self);
+            if (blessed($r) && $r->isa('Future')) {
+                await $r;
+            }
+        };
+        if ($@) {
+            warn "PAGI::SSE on_close callback error: $@";
+        }
+    }
+}
+
+# Close the connection
+sub close {
+    my ($self) = @_;
+
+    return $self if $self->is_closed;
+
+    $self->_set_closed;
+    $self->_run_close_callbacks->get;
+
+    return $self;
+}
+
+# Wait for disconnect
+async sub run {
+    my ($self) = @_;
+
+    await $self->start unless $self->is_started;
+
+    while (!$self->is_closed) {
+        my $event = await $self->{receive}->();
+        my $type = $event->{type} // '';
+
+        if ($type eq 'sse.disconnect') {
+            $self->_set_closed;
+            await $self->_run_close_callbacks;
+            last;
+        }
+    }
+
+    return;
+}
+
 1;
 
 __END__
