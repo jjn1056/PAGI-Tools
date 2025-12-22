@@ -26,6 +26,8 @@ sub new ($class, $send = undef) {
 }
 
 sub status ($self, $code) {
+    croak("Status must be a number between 100-599")
+        unless defined $code && $code =~ /^\d+$/ && $code >= 100 && $code <= 599;
     $self->{_status} = $code;
     return $self;
 }

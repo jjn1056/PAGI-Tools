@@ -53,4 +53,37 @@ subtest 'chaining multiple methods' => sub {
     is $ret, $res, 'chaining works';
 };
 
+subtest 'status sets internal state' => sub {
+    my $send = sub { Future->done };
+    my $res = PAGI::Response->new($send);
+    $res->status(404);
+    is $res->{_status}, 404, 'status code set correctly';
+};
+
+subtest 'header adds to headers array' => sub {
+    my $send = sub { Future->done };
+    my $res = PAGI::Response->new($send);
+    $res->header('X-Custom' => 'value1');
+    $res->header('X-Other' => 'value2');
+    is scalar(@{$res->{_headers}}), 2, 'two headers added';
+};
+
+subtest 'content_type replaces existing' => sub {
+    my $send = sub { Future->done };
+    my $res = PAGI::Response->new($send);
+    $res->header('Content-Type' => 'text/html');
+    $res->content_type('text/plain');
+    my @ct = grep { lc($_->[0]) eq 'content-type' } @{$res->{_headers}};
+    is scalar(@ct), 1, 'only one content-type header';
+    is $ct[0][1], 'text/plain', 'content-type replaced';
+};
+
+subtest 'status rejects invalid codes' => sub {
+    my $send = sub { Future->done };
+    my $res = PAGI::Response->new($send);
+    like dies { $res->status("not a number") }, qr/number/i, 'rejects non-number';
+    like dies { $res->status(99) }, qr/100-599/i, 'rejects < 100';
+    like dies { $res->status(600) }, qr/100-599/i, 'rejects > 599';
+};
+
 done_testing;
