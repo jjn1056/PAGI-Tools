@@ -56,4 +56,117 @@ subtest 'GET with path' => sub {
     is $res->text, 'Path: /users/123', 'path passed to app';
 };
 
+subtest 'POST with JSON body' => sub {
+    my $json_app = async sub {
+        my ($scope, $receive, $send) = @_;
+
+        # Read request body
+        my $event = await $receive->();
+        my $body = $event->{body};
+
+        require JSON::MaybeXS;
+        my $data = JSON::MaybeXS::decode_json($body);
+
+        await $send->({
+            type    => 'http.response.start',
+            status  => 201,
+            headers => [['content-type', 'application/json']],
+        });
+
+        await $send->({
+            type => 'http.response.body',
+            body => JSON::MaybeXS::encode_json({ id => 1, name => $data->{name} }),
+            more => 0,
+        });
+    };
+
+    my $client = PAGI::Test::Client->new(app => $json_app);
+    my $res = $client->post('/users', json => { name => 'John' });
+
+    is $res->status, 201, 'status 201';
+    is $res->json->{id}, 1, 'got id';
+    is $res->json->{name}, 'John', 'got name back';
+};
+
+subtest 'POST with form data' => sub {
+    my $form_app = async sub {
+        my ($scope, $receive, $send) = @_;
+
+        my $event = await $receive->();
+        my $body = $event->{body};
+
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+
+        await $send->({
+            type => 'http.response.body',
+            body => "Form: $body",
+            more => 0,
+        });
+    };
+
+    my $client = PAGI::Test::Client->new(app => $form_app);
+    my $res = $client->post('/login', form => { user => 'admin', pass => 'secret' });
+
+    like $res->text, qr/user=admin/, 'form has user';
+    like $res->text, qr/pass=secret/, 'form has pass';
+};
+
+subtest 'PUT and PATCH methods' => sub {
+    my $method_app = async sub {
+        my ($scope, $receive, $send) = @_;
+
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+
+        await $send->({
+            type => 'http.response.body',
+            body => "Method: $scope->{method}",
+            more => 0,
+        });
+    };
+
+    my $client = PAGI::Test::Client->new(app => $method_app);
+
+    is $client->put('/resource')->text, 'Method: PUT', 'PUT works';
+    is $client->patch('/resource')->text, 'Method: PATCH', 'PATCH works';
+    is $client->options('/resource')->text, 'Method: OPTIONS', 'OPTIONS works';
+};
+
+subtest 'query parameter encoding' => sub {
+    my $query_app = async sub {
+        my ($scope, $receive, $send) = @_;
+
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+
+        await $send->({
+            type => 'http.response.body',
+            body => "Query: $scope->{query_string}",
+            more => 0,
+        });
+    };
+
+    my $client = PAGI::Test::Client->new(app => $query_app);
+
+    # Test special characters are encoded
+    my $res = $client->get('/test', query => { 'key with spaces' => 'value&with=special' });
+    like $res->text, qr/key%20with%20spaces/, 'key is URL encoded';
+    like $res->text, qr/value%26with%3Dspecial/, 'value is URL encoded';
+
+    # Test query params merge with path query
+    $res = $client->get('/test?existing=param', query => { foo => 'bar' });
+    like $res->text, qr/existing=param/, 'path query preserved';
+    like $res->text, qr/foo=bar/, 'option query added';
+};
+
 done_testing;

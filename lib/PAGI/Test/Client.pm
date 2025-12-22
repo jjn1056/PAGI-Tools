@@ -23,14 +23,45 @@ sub new {
     }, $class;
 }
 
-sub get    { shift->_request('GET', @_) }
-sub head   { shift->_request('HEAD', @_) }
-sub delete { shift->_request('DELETE', @_) }
+sub get     { shift->_request('GET', @_) }
+sub head    { shift->_request('HEAD', @_) }
+sub delete  { shift->_request('DELETE', @_) }
+sub post    { shift->_request('POST', @_) }
+sub put     { shift->_request('PUT', @_) }
+sub patch   { shift->_request('PATCH', @_) }
+sub options { shift->_request('OPTIONS', @_) }
 
 sub _request {
     my ($self, $method, $path, %opts) = @_;
 
     $path //= '/';
+
+    # Handle json option
+    if (exists $opts{json}) {
+        require JSON::MaybeXS;
+        $opts{body} = JSON::MaybeXS::encode_json($opts{json});
+        $opts{headers} //= {};
+        $opts{headers}{'Content-Type'} //= 'application/json';
+        $opts{headers}{'Content-Length'} = length($opts{body});
+    }
+    # Handle form option
+    elsif (exists $opts{form}) {
+        my @pairs;
+        for my $k (sort keys %{$opts{form}}) {
+            my $key = _url_encode($k);
+            my $val = _url_encode($opts{form}{$k} // '');
+            push @pairs, "$key=$val";
+        }
+        $opts{body} = join('&', @pairs);
+        $opts{headers} //= {};
+        $opts{headers}{'Content-Type'} //= 'application/x-www-form-urlencoded';
+        $opts{headers}{'Content-Length'} = length($opts{body});
+    }
+    # Add Content-Length for raw body if not already set
+    elsif (defined $opts{body}) {
+        $opts{headers} //= {};
+        $opts{headers}{'Content-Length'} //= length($opts{body});
+    }
 
     # Build scope
     my $scope = $self->_build_scope($method, $path, \%opts);
@@ -73,9 +104,12 @@ sub _build_scope {
     if ($opts->{query}) {
         my @pairs;
         for my $k (sort keys %{$opts->{query}}) {
-            push @pairs, "$k=" . ($opts->{query}{$k} // '');
+            my $key = _url_encode($k);
+            my $val = _url_encode($opts->{query}{$k} // '');
+            push @pairs, "$key=$val";
         }
-        $query_string = join('&', @pairs);
+        my $new_params = join('&', @pairs);
+        $query_string = $query_string ? "$query_string&$new_params" : $new_params;
     }
 
     # Build headers
@@ -150,6 +184,12 @@ sub _build_response {
         headers => \@headers,
         body    => $body,
     );
+}
+
+sub _url_encode {
+    my ($str) = @_;
+    $str =~ s/([^A-Za-z0-9_\-.])/sprintf("%%%02X", ord($1))/eg;
+    return $str;
 }
 
 1;
