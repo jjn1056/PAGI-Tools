@@ -28,11 +28,25 @@ sub allowed_methods ($self) {
     for my $method (@HTTP_METHODS) {
         push @allowed, uc($method) if $self->can($method);
     }
-    return @allowed;
+    # HEAD is allowed if GET is defined
+    push @allowed, 'HEAD' if $self->can('get') && !$self->can('head');
+    # OPTIONS is always allowed
+    push @allowed, 'OPTIONS' unless grep { $_ eq 'OPTIONS' } @allowed;
+    return sort @allowed;
 }
 
 async sub dispatch ($self, $req, $res) {
     my $http_method = lc($req->method // 'GET');
+
+    # OPTIONS - return allowed methods
+    if ($http_method eq 'options') {
+        if ($self->can('options')) {
+            return await $self->options($req, $res);
+        }
+        my $allow = join(', ', $self->allowed_methods);
+        await $res->header('Allow', $allow)->empty;
+        return;
+    }
 
     # HEAD falls back to GET if not explicitly defined
     if ($http_method eq 'head' && !$self->can('head') && $self->can('get')) {
@@ -45,8 +59,10 @@ async sub dispatch ($self, $req, $res) {
     }
 
     # 405 Method Not Allowed
-    my @allowed = $self->allowed_methods;
-    await $res->text("405 Method Not Allowed", status => 405);
+    my $allow = join(', ', $self->allowed_methods);
+    await $res->header('Allow', $allow)
+              ->status(405)
+              ->text("405 Method Not Allowed");
 }
 
 sub to_app ($class) {

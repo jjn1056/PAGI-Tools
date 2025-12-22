@@ -23,8 +23,20 @@ package MockResponse {
     use feature 'signatures';
     no warnings 'experimental::signatures';
     use Future::AsyncAwait;
-    sub new ($class) { bless { sent => undef }, $class }
-    async sub text ($self, $body, %opts) { $self->{sent} = $body; return $self }
+    sub new ($class) { bless { sent => undef, status => 200, headers => [] }, $class }
+    sub status ($self, $s = undef) {
+        $self->{status} = $s if defined $s;
+        return $self;
+    }
+    sub header ($self, $name, $value) {
+        push @{$self->{headers}}, [$name, $value];
+        return $self;
+    }
+    async sub text ($self, $body, %opts) {
+        $self->{sent} = $body;
+        $self->{status} = $opts{status} if $opts{status};
+        return $self;
+    }
     sub sent ($self) { $self->{sent} }
 }
 
