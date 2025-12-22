@@ -105,4 +105,18 @@ async sub json ($self, $data) {
     await $self->send($body);
 }
 
+async sub redirect ($self, $url, $status = 302) {
+    $self->{_status} = $status;
+    $self->header('location', $url);
+    await $self->send('');
+}
+
+async sub empty ($self) {
+    # Use 204 if status hasn't been explicitly set to something other than 200
+    if ($self->{_status} == 200) {
+        $self->{_status} = 204;
+    }
+    await $self->send(undef);
+}
+
 1;

@@ -189,4 +189,57 @@ subtest 'json with unicode' => sub {
     is $decoded->{count}, 42, 'number preserved';
 };
 
+subtest 'redirect method default 302' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->redirect('/login')->get;
+
+    is $sent[0]->{status}, 302, 'default status 302';
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'location'}, '/login', 'location header set';
+};
+
+subtest 'redirect with custom status' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->redirect('/permanent', 301)->get;
+
+    is $sent[0]->{status}, 301, 'custom status 301';
+};
+
+subtest 'redirect 303 See Other' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->redirect('/result', 303)->get;
+
+    is $sent[0]->{status}, 303, 'status 303';
+};
+
+subtest 'empty method' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->empty()->get;
+
+    is $sent[0]->{status}, 204, 'default status 204';
+    is $sent[1]->{body}, undef, 'no body';
+};
+
+subtest 'empty with custom status' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->status(201)->empty()->get;
+
+    is $sent[0]->{status}, 201, 'custom status preserved';
+};
+
 done_testing;
