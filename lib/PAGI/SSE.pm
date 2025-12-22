@@ -70,6 +70,25 @@ sub _set_closed {
     $self->{_state} = 'closed';
 }
 
+# Start the SSE stream
+async sub start {
+    my ($self, %opts) = @_;
+
+    # Idempotent - don't start twice
+    return $self if $self->is_started || $self->is_closed;
+
+    my $event = {
+        type   => 'sse.start',
+        status => $opts{status} // 200,
+    };
+    $event->{headers} = $opts{headers} if exists $opts{headers};
+
+    await $self->{send}->($event);
+    $self->_set_state('started');
+
+    return $self;
+}
+
 # Single header lookup (case-insensitive, returns last value)
 sub header {
     my ($self, $name) = @_;
