@@ -250,6 +250,49 @@ sub websocket {
     return $ws;
 }
 
+sub sse {
+    my ($self, $path, $callback) = @_;
+
+    require PAGI::Test::SSE;
+
+    $path //= '/';
+
+    # Parse query string from path
+    my $query_string = '';
+    if ($path =~ s/\?(.*)$//) {
+        $query_string = $1;
+    }
+
+    my $scope = {
+        type         => 'sse',
+        pagi         => { version => '0.1', spec_version => '0.1' },
+        http_version => '1.1',
+        scheme       => 'http',
+        path         => $path,
+        query_string => $query_string,
+        root_path    => '',
+        headers      => [
+            ['host', 'testserver'],
+            ['accept', 'text/event-stream'],
+        ],
+        client => ['127.0.0.1', 12345],
+        server => ['testserver', 80],
+    };
+
+    my $sse = PAGI::Test::SSE->new(app => $self->{app}, scope => $scope);
+    $sse->_start;
+
+    if ($callback) {
+        eval { $callback->($sse) };
+        my $err = $@;
+        $sse->close unless $sse->is_closed;
+        die $err if $err;
+        return;
+    }
+
+    return $sse;
+}
+
 sub _url_encode {
     my ($str) = @_;
     $str =~ s/([^A-Za-z0-9_\-.])/sprintf("%%%02X", ord($1))/eg;
