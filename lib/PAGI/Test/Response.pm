@@ -48,6 +48,18 @@ sub is_success  { my $s = shift->status; $s >= 200 && $s < 300 }
 sub is_redirect { my $s = shift->status; $s >= 300 && $s < 400 }
 sub is_error    { my $s = shift->status; $s >= 400 }
 
+# Parse body as JSON
+sub json {
+    my ($self) = @_;
+    require JSON::MaybeXS;
+    return JSON::MaybeXS::decode_json($self->{body});
+}
+
+# Convenience header shortcuts
+sub content_type   { shift->header('content-type') }
+sub content_length { shift->header('content-length') }
+sub location       { shift->header('location') }
+
 1;
 
 __END__
