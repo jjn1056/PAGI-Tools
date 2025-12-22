@@ -234,4 +234,42 @@ subtest 'stream_to_file rejects decode option' => sub {
         'stream_to_file throws with decode option';
 };
 
+subtest 'PAGI::Request body_stream' => sub {
+    use PAGI::Request;
+
+    my $chunks = [
+        { type => 'http.request', body => 'Hello', more => 1 },
+        { type => 'http.request', body => ' World', more => 0 },
+    ];
+    my $i = 0;
+    my $receive = sub { Future->done($chunks->[$i++]) };
+
+    my $scope = { method => 'POST', path => '/', headers => [] };
+    my $req = PAGI::Request->new($scope, $receive);
+
+    my $stream = $req->body_stream;
+    isa_ok $stream, 'PAGI::Request::BodyStream';
+
+    my $chunk1 = $stream->next_chunk->get;
+    is $chunk1, 'Hello', 'first chunk via Request';
+};
+
+subtest 'body_stream mutual exclusivity' => sub {
+    use PAGI::Request;
+
+    # Streaming then buffered should fail
+    my $scope1 = { method => 'POST', path => '/', headers => [] };
+    my $receive1 = sub { Future->done({ type => 'http.request', body => 'test', more => 0 }) };
+    my $req1 = PAGI::Request->new($scope1, $receive1);
+    $req1->body_stream;
+    like dies { $req1->body->get }, qr/streaming/, 'body after stream fails';
+
+    # Buffered then streaming should fail
+    my $scope2 = { method => 'POST', path => '/', headers => [] };
+    my $receive2 = sub { Future->done({ type => 'http.request', body => 'x', more => 0 }) };
+    my $req2 = PAGI::Request->new($scope2, $receive2);
+    $req2->body->get;
+    like dies { $req2->body_stream }, qr/consumed|read/, 'stream after body fails';
+};
+
 done_testing;

@@ -11,6 +11,7 @@ use Carp qw(croak);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::Request::Negotiate;
+use PAGI::Request::BodyStream;
 
 # Class-level configuration defaults
 our %CONFIG = (
@@ -303,9 +304,41 @@ sub stash {
     return $self->{_stash};
 }
 
+# Body streaming - mutually exclusive with buffered body methods
+sub body_stream {
+    my ($self, %opts) = @_;
+
+    croak "Body already consumed; streaming not available" if $self->{_body_read};
+    croak "Body streaming already started" if $self->{_body_stream_created};
+
+    $self->{_body_stream_created} = 1;
+
+    my $max_bytes = $opts{max_bytes};
+    my $limit_name = defined $max_bytes ? 'max_bytes' : undef;
+    if (!defined $max_bytes) {
+        my $cl = $self->content_length;
+        if (defined $cl) {
+            $max_bytes = $cl;
+            $limit_name = 'content-length';
+        }
+    }
+
+    return PAGI::Request::BodyStream->new(
+        receive    => $self->{receive},
+        max_bytes  => $max_bytes,
+        limit_name => $limit_name,
+        loop       => $opts{loop},
+        decode     => $opts{decode},
+        strict     => $opts{strict},
+    );
+}
+
 # Read raw body bytes (async, cached)
 async sub body {
     my $self = shift;
+
+    croak "Body streaming already started; buffered helpers unavailable"
+        if $self->{_body_stream_created};
 
     # Return cached body if already read
     return $self->{_body} if $self->{_body_read};
@@ -510,6 +543,10 @@ PAGI::Request - Convenience wrapper for PAGI request scope
             await $avatar->save_to('/uploads/avatar.jpg');
         }
 
+        # Streaming large bodies
+        my $stream = $req->body_stream(max_bytes => 100 * 1024 * 1024);
+        await $stream->stream_to_file('/uploads/large.bin');
+
         # Auth helpers
         my $token = $req->bearer_token;
         my ($user, $pass) = $req->basic_auth;
@@ -671,11 +708,53 @@ Get a single cookie value.
 
 =head1 BODY METHODS (ASYNC)
 
+=head2 body_stream
+
+    my $stream = $req->body_stream;
+    my $stream = $req->body_stream(
+        max_bytes => 10 * 1024 * 1024,  # 10MB limit
+        decode    => 'UTF-8',            # Decode to UTF-8
+        strict    => 1,                  # Strict UTF-8 decoding
+        loop      => $loop,              # IO::Async::Loop instance
+    );
+
+Returns a L<PAGI::Request::BodyStream> for streaming body consumption. This is
+useful for processing large request bodies incrementally without loading them
+entirely into memory.
+
+B<Options:>
+
+=over 4
+
+=item * C<max_bytes> - Maximum body size. Defaults to Content-Length header if present.
+
+=item * C<decode> - Encoding to decode chunks to (typically 'UTF-8').
+
+=item * C<strict> - If true, throw on invalid UTF-8. Default: false (use replacement chars).
+
+=item * C<loop> - IO::Async::Loop instance for async file operations.
+
+=back
+
+B<Important:> Body streaming is mutually exclusive with buffered body methods
+(C<body>, C<text>, C<json>, C<form>). Once you start streaming, you cannot use
+those methods, and vice versa.
+
+Example:
+
+    # Stream large upload to file
+    my $stream = $req->body_stream(max_bytes => 100 * 1024 * 1024);
+    await $stream->stream_to_file('/uploads/data.bin');
+
+See L<PAGI::Request::BodyStream> for full documentation.
+
 =head2 body
 
     my $bytes = await $req->body;
 
 Read raw body bytes. Cached after first read.
+
+B<Important:> Cannot be used after C<body_stream()> has been called.
 
 =head2 text
 
@@ -782,6 +861,6 @@ Per-request hashref for middleware to store data.
 
 =head1 SEE ALSO
 
-L<PAGI::Request::Upload>, L<Hash::MultiValue>
+L<PAGI::Request::Upload>, L<PAGI::Request::BodyStream>, L<Hash::MultiValue>
 
 =cut
