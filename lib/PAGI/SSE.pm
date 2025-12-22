@@ -122,6 +122,12 @@ sub header_all {
     return $self->headers->get_all(lc($name));
 }
 
+# Get Last-Event-ID header from client (for reconnection)
+sub last_event_id {
+    my ($self) = @_;
+    return $self->header('last-event-id');
+}
+
 # Send data-only event
 async sub send {
     my ($self, $data) = @_;
