@@ -120,14 +120,20 @@ sub _compile_path {
 sub to_app {
     my ($self) = @_;
 
-    my @routes = @{$self->{routes}};
-    my @mounts = @{$self->{mounts}};
-    my $not_found = $self->{not_found};
+    my @routes           = @{$self->{routes}};
+    my @websocket_routes = @{$self->{websocket_routes}};
+    my @sse_routes       = @{$self->{sse_routes}};
+    my @mounts           = @{$self->{mounts}};
+    my $not_found        = $self->{not_found};
 
-    return async sub  {
+    return async sub {
         my ($scope, $receive, $send) = @_;
+        my $type   = $scope->{type} // 'http';
         my $method = uc($scope->{method} // '');
-        my $path = $scope->{path} // '/';
+        my $path   = $scope->{path} // '/';
+
+        # Ignore lifespan events
+        return if $type eq 'lifespan';
 
         # Check mounts first (longest prefix first for proper matching)
         for my $m (sort { length($b->{prefix}) <=> length($a->{prefix}) } @mounts) {
@@ -144,6 +150,75 @@ sub to_app {
             }
         }
 
+        # WebSocket routes (path-only matching)
+        if ($type eq 'websocket') {
+            for my $route (@websocket_routes) {
+                if ($path =~ $route->{regex}) {
+                    my @captures = ($path =~ $route->{regex});
+                    my %params;
+                    for my $i (0 .. $#{$route->{names}}) {
+                        $params{$route->{names}[$i]} = $captures[$i];
+                    }
+                    my $new_scope = {
+                        %$scope,
+                        'pagi.router' => {
+                            params => \%params,
+                            route  => $route->{path},
+                        },
+                    };
+                    await $route->{app}->($new_scope, $receive, $send);
+                    return;
+                }
+            }
+            # No websocket route matched - 404
+            if ($not_found) {
+                await $not_found->($scope, $receive, $send);
+            } else {
+                await $send->({
+                    type => 'http.response.start',
+                    status => 404,
+                    headers => [['content-type', 'text/plain']],
+                });
+                await $send->({ type => 'http.response.body', body => 'Not Found', more => 0 });
+            }
+            return;
+        }
+
+        # SSE routes (path-only matching)
+        if ($type eq 'sse') {
+            for my $route (@sse_routes) {
+                if ($path =~ $route->{regex}) {
+                    my @captures = ($path =~ $route->{regex});
+                    my %params;
+                    for my $i (0 .. $#{$route->{names}}) {
+                        $params{$route->{names}[$i]} = $captures[$i];
+                    }
+                    my $new_scope = {
+                        %$scope,
+                        'pagi.router' => {
+                            params => \%params,
+                            route  => $route->{path},
+                        },
+                    };
+                    await $route->{app}->($new_scope, $receive, $send);
+                    return;
+                }
+            }
+            # No SSE route matched - 404
+            if ($not_found) {
+                await $not_found->($scope, $receive, $send);
+            } else {
+                await $send->({
+                    type => 'http.response.start',
+                    status => 404,
+                    headers => [['content-type', 'text/plain']],
+                });
+                await $send->({ type => 'http.response.body', body => 'Not Found', more => 0 });
+            }
+            return;
+        }
+
+        # HTTP routes (method + path matching) - existing logic
         # HEAD should match GET routes
         my $match_method = $method eq 'HEAD' ? 'GET' : $method;
 
