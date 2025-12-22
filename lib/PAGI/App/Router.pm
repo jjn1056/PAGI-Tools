@@ -6,28 +6,29 @@ use Future::AsyncAwait;
 
 =head1 NAME
 
-PAGI::App::Router - URL routing with path parameters and mounting
+PAGI::App::Router - Unified routing for HTTP, WebSocket, and SSE
 
 =head1 SYNOPSIS
 
     use PAGI::App::Router;
 
     my $router = PAGI::App::Router->new;
+
+    # HTTP routes (method + path)
     $router->get('/users/:id' => $get_user);
     $router->post('/users' => $create_user);
     $router->delete('/users/:id' => $delete_user);
-    my $app = $router->to_app;
 
-    # Nested routers with mount
-    my $api = PAGI::App::Router->new;
-    $api->get('/users' => $list_users);
-    $api->get('/users/:id' => $get_user);
-    $api->post('/users' => $create_user);
+    # WebSocket routes (path only)
+    $router->websocket('/ws/chat/:room' => $chat_handler);
 
-    my $main = PAGI::App::Router->new;
-    $main->get('/' => $home);
-    $main->mount('/api' => $api->to_app);
-    # Routes: /, /api/users, /api/users/:id
+    # SSE routes (path only)
+    $router->sse('/events/:channel' => $events_handler);
+
+    # Static files as fallback
+    $router->mount('/' => $static_files);
+
+    my $app = $router->to_app;  # Handles all scope types
 
 =cut
 
@@ -299,21 +300,22 @@ __END__
 
 =head1 DESCRIPTION
 
-URL router with support for path parameters, wildcards, and sub-router
-mounting. Routes requests based on HTTP method and path pattern. Returns
-404 for unmatched paths and 405 for unmatched methods.
+Unified router supporting HTTP, WebSocket, and SSE in a single declarative
+interface. Routes requests based on scope type first, then path pattern.
+HTTP routes additionally match on method. Returns 404 for unmatched paths
+and 405 for unmatched HTTP methods. Lifespan events are automatically ignored.
 
 =head1 OPTIONS
 
 =over 4
 
-=item * C<not_found> - Custom app to handle unmatched routes
+=item * C<not_found> - Custom app to handle unmatched routes (all scope types)
 
 =back
 
 =head1 METHODS
 
-=head2 Route Methods
+=head2 HTTP Route Methods
 
     $router->get($path => $app);
     $router->post($path => $app);
@@ -324,6 +326,21 @@ mounting. Routes requests based on HTTP method and path pattern. Returns
     $router->options($path => $app);
 
 Register a route for the given HTTP method. Returns C<$self> for chaining.
+
+=head2 websocket
+
+    $router->websocket('/ws/chat/:room' => $chat_handler);
+
+Register a WebSocket route. Matches requests where C<< $scope->{type} >>
+is C<'websocket'>. Path parameters work the same as HTTP routes.
+
+=head2 sse
+
+    $router->sse('/events/:channel' => $events_handler);
+
+Register an SSE (Server-Sent Events) route. Matches requests where
+C<< $scope->{type} >> is C<'sse'>. Path parameters work the same as
+HTTP routes.
 
 =head2 mount
 
