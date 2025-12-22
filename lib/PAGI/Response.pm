@@ -116,6 +116,79 @@ httponly, samesite.
 
 Delete a cookie by setting it with Max-Age=0.
 
+=head2 cors
+
+    # Allow all origins (simplest case)
+    $res->cors->json({ data => 'value' });
+
+    # Allow specific origin
+    $res->cors(origin => 'https://example.com')->json($data);
+
+    # Full configuration
+    $res->cors(
+        origin      => 'https://example.com',
+        methods     => [qw(GET POST PUT DELETE)],
+        headers     => [qw(Content-Type Authorization)],
+        expose      => [qw(X-Request-Id X-RateLimit-Remaining)],
+        credentials => 1,
+        max_age     => 86400,
+        preflight   => 0,
+    )->json($data);
+
+Add CORS (Cross-Origin Resource Sharing) headers to the response.
+Returns C<$self> for chaining.
+
+B<Options:>
+
+=over 4
+
+=item * C<origin> - Allowed origin. Default: C<'*'> (all origins).
+Can be a specific origin like C<'https://example.com'> or C<'*'> for any.
+
+=item * C<methods> - Arrayref of allowed HTTP methods for preflight.
+Default: C<[qw(GET POST PUT DELETE PATCH OPTIONS)]>.
+
+=item * C<headers> - Arrayref of allowed request headers for preflight.
+Default: C<[qw(Content-Type Authorization X-Requested-With)]>.
+
+=item * C<expose> - Arrayref of response headers to expose to the client.
+By default, only simple headers (Cache-Control, Content-Language, etc.)
+are accessible. Use this to expose custom headers.
+
+=item * C<credentials> - Boolean. If true, sets
+C<Access-Control-Allow-Credentials: true>, allowing cookies and
+Authorization headers. Default: C<0>.
+
+=item * C<max_age> - How long (in seconds) browsers should cache preflight
+results. Default: C<86400> (24 hours).
+
+=item * C<preflight> - Boolean. If true, includes preflight response headers
+(Allow-Methods, Allow-Headers, Max-Age). Set this when handling OPTIONS
+requests. Default: C<0>.
+
+=item * C<request_origin> - The Origin header value from the request.
+Required when C<credentials> is true and C<origin> is C<'*'>, because
+the CORS spec forbids using C<'*'> with credentials. Pass the actual
+request origin to echo it back.
+
+=back
+
+B<Important CORS Notes:>
+
+=over 4
+
+=item * When C<credentials> is true, you cannot use C<origin => '*'>.
+Either specify an exact origin, or pass C<request_origin> with the
+client's actual Origin header.
+
+=item * The C<Vary: Origin> header is always set to ensure proper caching
+when origin-specific responses are used.
+
+=item * For preflight (OPTIONS) requests, set C<preflight => 1> and
+typically respond with C<< $res->status(204)->empty() >>.
+
+=back
+
 =head1 FINISHER METHODS
 
 These methods return Futures and send the response.
@@ -354,6 +427,83 @@ Send a file as the response. Options:
                          ->json({ data => 'expensive computation result' });
     }
 
+=head2 CORS API Endpoint
+
+    # Simple CORS - allow all origins
+    async sub handle_api ($scope, $receive, $send) {
+        my $res = PAGI::Response->new($send);
+
+        return await $res->cors->json({ status => 'ok' });
+    }
+
+    # CORS with credentials (e.g., cookies, auth headers)
+    async sub handle_api_with_auth ($scope, $receive, $send) {
+        my $req = PAGI::Request->new($scope, $receive);
+        my $res = PAGI::Response->new($send);
+
+        # Get the Origin header from request
+        my $origin = $req->header('Origin');
+
+        return await $res->cors(
+            origin         => 'https://myapp.com',  # Or use request_origin
+            credentials    => 1,
+            expose         => [qw(X-Request-Id)],
+        )->json({ user => 'authenticated' });
+    }
+
+=head2 CORS Preflight Handler
+
+    # Handle OPTIONS preflight requests
+    async sub app ($scope, $receive, $send) {
+        my $req = PAGI::Request->new($scope, $receive);
+        my $res = PAGI::Response->new($send);
+
+        # Handle preflight
+        if ($req->method eq 'OPTIONS') {
+            return await $res->cors(
+                origin      => 'https://myapp.com',
+                methods     => [qw(GET POST PUT DELETE)],
+                headers     => [qw(Content-Type Authorization X-Custom-Header)],
+                credentials => 1,
+                max_age     => 86400,
+                preflight   => 1,  # Include preflight headers
+            )->status(204)->empty();
+        }
+
+        # Handle actual request
+        return await $res->cors(
+            origin      => 'https://myapp.com',
+            credentials => 1,
+        )->json({ data => 'response' });
+    }
+
+=head2 Dynamic CORS Origin
+
+    # Allow multiple origins dynamically
+    my %ALLOWED_ORIGINS = map { $_ => 1 } qw(
+        https://app1.example.com
+        https://app2.example.com
+        https://localhost:3000
+    );
+
+    async sub handle_api ($scope, $receive, $send) {
+        my $req = PAGI::Request->new($scope, $receive);
+        my $res = PAGI::Response->new($send);
+
+        my $request_origin = $req->header('Origin') // '';
+
+        # Check if origin is allowed
+        if ($ALLOWED_ORIGINS{$request_origin}) {
+            return await $res->cors(
+                origin      => $request_origin,  # Echo back the allowed origin
+                credentials => 1,
+            )->json({ data => 'allowed' });
+        }
+
+        # Origin not allowed - respond without CORS headers
+        return await $res->status(403)->json({ error => 'Origin not allowed' });
+    }
+
 =head1 WRITER OBJECT
 
 The C<stream()> method passes a writer object to its callback with these methods:
@@ -524,6 +674,46 @@ sub delete_cookie ($self, $name, %opts) {
         path    => $opts{path},
         domain  => $opts{domain},
     );
+}
+
+sub cors ($self, %opts) {
+    my $origin      = $opts{origin} // '*';
+    my $credentials = $opts{credentials} // 0;
+    my $methods     = $opts{methods} // [qw(GET POST PUT DELETE PATCH OPTIONS)];
+    my $headers     = $opts{headers} // [qw(Content-Type Authorization X-Requested-With)];
+    my $expose      = $opts{expose} // [];
+    my $max_age     = $opts{max_age} // 86400;
+    my $preflight   = $opts{preflight} // 0;
+
+    # Determine the origin to send back
+    my $allow_origin;
+    if ($origin eq '*' && $credentials) {
+        # With credentials, can't use wildcard - use request_origin if provided
+        $allow_origin = $opts{request_origin} // '*';
+    } else {
+        $allow_origin = $origin;
+    }
+
+    # Core CORS headers (always set)
+    $self->header('Access-Control-Allow-Origin', $allow_origin);
+    $self->header('Vary', 'Origin');
+
+    if ($credentials) {
+        $self->header('Access-Control-Allow-Credentials', 'true');
+    }
+
+    if (@$expose) {
+        $self->header('Access-Control-Expose-Headers', join(', ', @$expose));
+    }
+
+    # Preflight headers (for OPTIONS responses or when explicitly requested)
+    if ($preflight) {
+        $self->header('Access-Control-Allow-Methods', join(', ', @$methods));
+        $self->header('Access-Control-Allow-Headers', join(', ', @$headers));
+        $self->header('Access-Control-Max-Age', $max_age);
+    }
+
+    return $self;
 }
 
 # Writer class for streaming

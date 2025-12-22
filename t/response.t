@@ -447,4 +447,100 @@ subtest 'send_file not found' => sub {
         qr/not found|no such file/i, 'dies for missing file';
 };
 
+subtest 'cors basic' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    my $ret = $res->cors;
+    is $ret, $res, 'cors returns self';
+
+    $res->json({ data => 'test' })->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'access-control-allow-origin'}, '*', 'default origin is *';
+    is $headers{'vary'}, 'Origin', 'Vary header set';
+    ok !exists $headers{'access-control-allow-credentials'}, 'no credentials by default';
+};
+
+subtest 'cors with specific origin' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->cors(origin => 'https://example.com')->json({})->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'access-control-allow-origin'}, 'https://example.com', 'specific origin';
+};
+
+subtest 'cors with credentials' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->cors(
+        origin      => 'https://example.com',
+        credentials => 1,
+    )->json({})->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'access-control-allow-origin'}, 'https://example.com', 'origin set';
+    is $headers{'access-control-allow-credentials'}, 'true', 'credentials header';
+};
+
+subtest 'cors with expose headers' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->cors(
+        expose => [qw(X-Request-Id X-RateLimit)],
+    )->json({})->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    like $headers{'access-control-expose-headers'}, qr/X-Request-Id/, 'expose header 1';
+    like $headers{'access-control-expose-headers'}, qr/X-RateLimit/, 'expose header 2';
+};
+
+subtest 'cors preflight' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->cors(
+        origin    => 'https://example.com',
+        methods   => [qw(GET POST PUT)],
+        headers   => [qw(Content-Type X-Custom)],
+        max_age   => 3600,
+        preflight => 1,
+    )->status(204)->empty->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'access-control-allow-origin'}, 'https://example.com', 'origin';
+    like $headers{'access-control-allow-methods'}, qr/GET/, 'methods includes GET';
+    like $headers{'access-control-allow-methods'}, qr/POST/, 'methods includes POST';
+    like $headers{'access-control-allow-methods'}, qr/PUT/, 'methods includes PUT';
+    like $headers{'access-control-allow-headers'}, qr/Content-Type/, 'headers includes Content-Type';
+    like $headers{'access-control-allow-headers'}, qr/X-Custom/, 'headers includes X-Custom';
+    is $headers{'access-control-max-age'}, '3600', 'max-age';
+};
+
+subtest 'cors credentials with wildcard uses request_origin' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    # When credentials is true and origin is *, we must provide request_origin
+    $res->cors(
+        origin         => '*',
+        credentials    => 1,
+        request_origin => 'https://client.example.com',
+    )->json({})->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $headers{'access-control-allow-origin'}, 'https://client.example.com', 'echoes request origin';
+    is $headers{'access-control-allow-credentials'}, 'true', 'credentials set';
+};
+
 done_testing;
