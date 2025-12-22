@@ -5,6 +5,7 @@ use feature 'signatures';
 no warnings 'experimental::signatures';
 use Test2::V0;
 use Future;
+use Future::AsyncAwait;
 
 use PAGI::Response;
 
@@ -311,6 +312,43 @@ subtest 'multiple cookies' => sub {
 
     my @cookies = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]->{headers}};
     is scalar(@cookies), 2, 'two set-cookie headers';
+};
+
+subtest 'stream method' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->content_type('text/plain');
+    $res->stream(async sub ($writer) {
+        await $writer->write("chunk1");
+        await $writer->write("chunk2");
+        await $writer->close();
+    })->get;
+
+    is scalar(@sent), 4, 'start + 2 chunks + close';
+    is $sent[0]->{type}, 'http.response.start', 'first is start';
+    is $sent[1]->{body}, 'chunk1', 'first chunk';
+    is $sent[1]->{more}, 1, 'more=1 for chunk';
+    is $sent[2]->{body}, 'chunk2', 'second chunk';
+    is $sent[2]->{more}, 1, 'more=1 for chunk';
+    is $sent[3]->{more}, 0, 'more=0 for close';
+};
+
+subtest 'stream writer bytes_written' => sub {
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    my $bytes;
+    $res->stream(async sub ($writer) {
+        await $writer->write("12345");
+        await $writer->write("67890");
+        $bytes = $writer->bytes_written;
+        await $writer->close();
+    })->get;
+
+    is $bytes, 10, 'bytes_written tracks total';
 };
 
 done_testing;

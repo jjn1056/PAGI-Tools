@@ -144,4 +144,68 @@ sub delete_cookie ($self, $name, %opts) {
     );
 }
 
+# Writer class for streaming
+package PAGI::Response::Writer {
+    use strict;
+    use warnings;
+    use v5.32;
+    use feature 'signatures';
+    no warnings 'experimental::signatures';
+    use Future::AsyncAwait;
+    use Carp qw(croak);
+
+    sub new ($class, $send) {
+        return bless {
+            send => $send,
+            bytes_written => 0,
+            closed => 0,
+        }, $class;
+    }
+
+    async sub write ($self, $chunk) {
+        croak("Writer already closed") if $self->{closed};
+        $self->{bytes_written} += length($chunk // '');
+        await $self->{send}->({
+            type => 'http.response.body',
+            body => $chunk,
+            more => 1,
+        });
+    }
+
+    async sub close ($self) {
+        return if $self->{closed};
+        $self->{closed} = 1;
+        await $self->{send}->({
+            type => 'http.response.body',
+            body => '',
+            more => 0,
+        });
+    }
+
+    sub bytes_written ($self) {
+        return $self->{bytes_written};
+    }
+}
+
+package PAGI::Response;
+
+async sub stream ($self, $callback) {
+    croak("Response already sent") if $self->{_sent};
+    $self->{_sent} = 1;
+
+    # Send start
+    await $self->{send}->({
+        type    => 'http.response.start',
+        status  => $self->{_status},
+        headers => $self->{_headers},
+    });
+
+    # Create writer and call callback
+    my $writer = PAGI::Response::Writer->new($self->{send});
+    await $callback->($writer);
+
+    # Ensure closed
+    await $writer->close() unless $writer->{closed};
+}
+
 1;
