@@ -159,7 +159,7 @@ sub _build_scope {
         push @headers, ['cookie', $cookie];
     }
 
-    return {
+    my $scope = {
         type         => 'http',
         pagi         => { version => '0.1', spec_version => '0.1' },
         http_version => '1.1',
@@ -172,6 +172,11 @@ sub _build_scope {
         client       => ['127.0.0.1', 12345],
         server       => ['testserver', 80],
     };
+
+    # Add state if lifespan is enabled
+    $scope->{state} = $self->{state} if $self->{state};
+
+    return $scope;
 }
 
 sub _build_response {
@@ -236,6 +241,8 @@ sub websocket {
         subprotocols => [],
     };
 
+    $scope->{state} = $self->{state} if $self->{state};
+
     my $ws = PAGI::Test::WebSocket->new(app => $self->{app}, scope => $scope);
     $ws->_start;
 
@@ -279,6 +286,8 @@ sub sse {
         server => ['testserver', 80],
     };
 
+    $scope->{state} = $self->{state} if $self->{state};
+
     my $sse = PAGI::Test::SSE->new(app => $self->{app}, scope => $scope);
     $sse->_start;
 
@@ -291,6 +300,85 @@ sub sse {
     }
 
     return $sse;
+}
+
+sub start {
+    my ($self) = @_;
+    return $self if $self->{started};
+    return $self unless $self->{lifespan};
+
+    $self->{state} = {};
+
+    my $scope = {
+        type  => 'lifespan',
+        pagi  => { version => '0.1', spec_version => '0.1' },
+        state => $self->{state},
+    };
+
+    my $phase = 'startup';
+    my $pending_future;
+
+    my $receive = async sub {
+        if ($phase eq 'startup') {
+            $phase = 'running';
+            return { type => 'lifespan.startup' };
+        }
+        # Wait for shutdown
+        $pending_future = Future->new;
+        return await $pending_future;
+    };
+
+    my $startup_complete = 0;
+    my $send = async sub {
+        my ($event) = @_;
+        if ($event->{type} eq 'lifespan.startup.complete') {
+            $startup_complete = 1;
+        }
+        elsif ($event->{type} eq 'lifespan.shutdown.complete') {
+            # Done
+        }
+    };
+
+    $self->{lifespan_pending} = \$pending_future;
+    $self->{lifespan_future} = $self->{app}->($scope, $receive, $send);
+
+    # Pump until startup complete
+    my $deadline = time + 5;
+    while (!$startup_complete && time < $deadline) {
+        # Just yield - the async code runs synchronously in our setup
+    }
+
+    $self->{started} = 1;
+    return $self;
+}
+
+sub stop {
+    my ($self) = @_;
+    return $self unless $self->{started};
+    return $self unless $self->{lifespan};
+
+    # Resolve the pending future with shutdown event
+    if ($self->{lifespan_pending} && ${$self->{lifespan_pending}}) {
+        ${$self->{lifespan_pending}}->done({ type => 'lifespan.shutdown' });
+    }
+
+    $self->{started} = 0;
+    return $self;
+}
+
+sub state { shift->{state} // {} }
+
+sub run {
+    my ($class, $app, $callback) = @_;
+
+    my $client = $class->new(app => $app, lifespan => 1);
+    $client->start;
+
+    eval { $callback->($client) };
+    my $err = $@;
+
+    $client->stop;
+    die $err if $err;
 }
 
 sub _url_encode {
