@@ -46,6 +46,30 @@ sub server       { shift->{scope}{server} }
 # Per-connection storage
 sub stash        { shift->{_stash} }
 
+# State accessors
+sub state { shift->{_state} }
+
+sub is_started {
+    my $self = shift;
+    return $self->{_state} eq 'started';
+}
+
+sub is_closed {
+    my $self = shift;
+    return $self->{_state} eq 'closed';
+}
+
+# Internal state setters
+sub _set_state {
+    my ($self, $state) = @_;
+    $self->{_state} = $state;
+}
+
+sub _set_closed {
+    my ($self) = @_;
+    $self->{_state} = 'closed';
+}
+
 # Single header lookup (case-insensitive, returns last value)
 sub header {
     my ($self, $name) = @_;
