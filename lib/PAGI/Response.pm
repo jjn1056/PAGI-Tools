@@ -8,7 +8,7 @@ no warnings 'experimental::signatures';
 
 use Future::AsyncAwait;
 use Carp qw(croak);
-use Encode qw(encode);
+use Encode qw(encode FB_CROAK);
 
 our $VERSION = '0.01';
 
@@ -83,7 +83,7 @@ async sub send_utf8 ($self, $body, %opts) {
     }
 
     # Encode body
-    my $encoded = encode($charset, $body // '');
+    my $encoded = encode($charset, $body // '', FB_CROAK);
 
     await $self->send($encoded);
 }

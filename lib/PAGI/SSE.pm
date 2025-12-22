@@ -441,23 +441,63 @@ PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections
     use PAGI::SSE;
     use Future::AsyncAwait;
 
-    # Simple event stream
+    # Simple notification stream
     async sub app {
         my ($scope, $receive, $send) = @_;
 
         my $sse = PAGI::SSE->new($scope, $receive, $send);
-        await $sse->start;
 
-        # Send events
-        await $sse->send_event("Hello, SSE!");
-        await $sse->send_event("Named event", event => 'custom');
-        await $sse->send_json({ temperature => 72 });
+        # Enable keepalive for proxy compatibility
+        $sse->keepalive(25);
+
+        # Cleanup on disconnect
+        $sse->on_close(sub {
+            remove_subscriber($sse->stash->{sub_id});
+        });
+
+        # Handle reconnection
+        if (my $last_id = $sse->last_event_id) {
+            my @missed = get_events_since($last_id);
+            for my $event (@missed) {
+                await $sse->send_event(%$event);
+            }
+        }
+
+        # Subscribe to updates
+        $sse->stash->{sub_id} = add_subscriber(sub {
+            my ($event) = @_;
+            $sse->try_send_json($event);
+        });
+
+        # Wait for disconnect
+        await $sse->run;
     }
 
 =head1 DESCRIPTION
 
 PAGI::SSE wraps the raw PAGI SSE protocol to provide a clean,
-high-level API for Server-Sent Events connections.
+high-level API inspired by Starlette. It eliminates protocol
+boilerplate and provides:
+
+=over 4
+
+=item * Multiple send methods (send, send_json, send_event)
+
+=item * Connection state tracking (is_started, is_closed)
+
+=item * Cleanup callback registration (on_close)
+
+=item * Safe send methods for broadcast scenarios (try_send_*)
+
+=item * Reconnection support (last_event_id)
+
+=item * Keepalive timer for proxy compatibility
+
+=item * Iteration helper (each)
+
+=item * Per-connection storage (stash)
+
+=back
 
 =head1 CONSTRUCTOR
 
@@ -485,31 +525,185 @@ Dies if scope type is not 'sse'.
 
     my $path = $sse->path;              # /events
     my $qs = $sse->query_string;        # token=abc
-    my $scheme = $sse->scheme;          # http or https
-
-Standard PAGI scope properties with sensible defaults.
-
-=head2 client, server
-
-    my $client = $sse->client;          # ['192.168.1.1', 54321]
-
-Client and server address info.
 
 =head2 header, headers, header_all
 
-    my $last_id = $sse->header('last-event-id');
-    my $all_cookies = $sse->header_all('cookie');
-    my $hmv = $sse->headers;            # Hash::MultiValue
+    my $auth = $sse->header('authorization');
+    my @cookies = $sse->header_all('cookie');
 
-Case-insensitive header access.
+=head2 last_event_id
+
+    my $id = $sse->last_event_id;       # From Last-Event-ID header
+
+Returns the Last-Event-ID header sent by reconnecting clients.
+Use this to replay missed events.
 
 =head2 stash
 
     $sse->stash->{user} = $user;
-    my $session = $sse->stash->{session};
 
-Per-connection storage hashref. Useful for storing user data
-without external variables.
+Per-connection storage hashref.
+
+=head1 LIFECYCLE METHODS
+
+=head2 start
+
+    await $sse->start;
+    await $sse->start(status => 200, headers => [...]);
+
+Starts the SSE stream. Called automatically on first send.
+Idempotent - only sends sse.start once.
+
+=head2 close
+
+    $sse->close;
+
+Marks connection as closed and runs on_close callbacks.
+
+=head2 run
+
+    await $sse->run;
+
+Waits for client disconnect. Use this at the end of your
+handler to keep the connection open.
+
+=head1 STATE ACCESSORS
+
+=head2 is_started, is_closed, state
+
+    if ($sse->is_started) { ... }
+    if ($sse->is_closed) { ... }
+    my $state = $sse->state;    # 'pending', 'started', 'closed'
+
+=head1 SEND METHODS
+
+=head2 send
+
+    await $sse->send("Hello world");
+
+Sends a data-only event.
+
+=head2 send_json
+
+    await $sse->send_json({ type => 'update', data => $payload });
+
+JSON-encodes data before sending.
+
+=head2 send_event
+
+    await $sse->send_event(
+        data  => $data,              # Required (auto JSON-encodes refs)
+        event => 'notification',     # Optional event type
+        id    => 'msg-123',          # Optional event ID
+        retry => 5000,               # Optional reconnect hint (ms)
+    );
+
+Sends a full SSE event with all fields.
+
+=head2 try_send, try_send_json, try_send_event
+
+    my $ok = await $sse->try_send_json($data);
+    if (!$ok) {
+        # Client disconnected
+    }
+
+Returns true on success, false on failure. Does not throw.
+Useful for broadcasting to multiple clients.
+
+=head1 KEEPALIVE
+
+=head2 keepalive
+
+    $sse->keepalive(30);              # Ping every 30 seconds
+    $sse->keepalive(30, ':ping');     # Custom comment text
+    $sse->keepalive(0);               # Disable
+
+Sends periodic comment pings to prevent proxy timeouts.
+Requires an event loop (auto-created if needed).
+
+=head1 ITERATION
+
+=head2 each
+
+    # Simple iteration
+    await $sse->each(\@items, async sub {
+        my ($item) = @_;
+        await $sse->send_json($item);
+    });
+
+    # With transformer - return event spec
+    await $sse->each(\@items, async sub {
+        my ($item, $index) = @_;
+        return {
+            data  => $item,
+            event => 'item',
+            id    => $index,
+        };
+    });
+
+    # Coderef iterator
+    await $sse->each($iterator_sub, async sub { ... });
+
+Iterates over items, calling callback for each.
+If callback returns a hashref, sends it as an event.
+
+=head1 EVENT CALLBACKS
+
+=head2 on_close
+
+    $sse->on_close(sub {
+        my ($sse) = @_;
+        cleanup_resources();
+    });
+
+Registers cleanup callback. Runs on disconnect or close().
+Multiple callbacks run in registration order.
+
+=head2 on_error
+
+    $sse->on_error(sub {
+        my ($sse, $error) = @_;
+        warn "SSE error: $error";
+    });
+
+Registers error callback.
+
+=head1 EXAMPLE: LIVE DASHBOARD
+
+    async sub dashboard_sse {
+        my ($scope, $receive, $send) = @_;
+
+        my $sse = PAGI::SSE->new($scope, $receive, $send);
+
+        $sse->keepalive(25);
+
+        # Send initial state
+        await $sse->send_event(
+            event => 'connected',
+            data  => { time => time() },
+        );
+
+        # Subscribe to metrics
+        my $sub_id = subscribe_metrics(sub {
+            my ($metrics) = @_;
+            $sse->try_send_event(
+                event => 'metrics',
+                data  => $metrics,
+            );
+        });
+
+        $sse->on_close(sub {
+            unsubscribe_metrics($sub_id);
+        });
+
+        await $sse->run;
+    }
+
+=head1 SEE ALSO
+
+L<PAGI::WebSocket> - Similar wrapper for WebSocket connections
+
+L<PAGI::Server> - PAGI protocol server
 
 =head1 AUTHOR
 
