@@ -2,9 +2,6 @@ package PAGI::Endpoint::SSE;
 
 use strict;
 use warnings;
-use v5.32;
-use feature 'signatures';
-no warnings 'experimental::signatures';
 
 use Future::AsyncAwait;
 use Carp qw(croak);
@@ -18,11 +15,14 @@ sub sse_class { 'PAGI::SSE' }
 # Keepalive interval in seconds (0 = disabled)
 sub keepalive_interval { 0 }
 
-sub new ($class, %args) {
+sub new {
+    my ($class, %args) = @_;
     return bless \%args, $class;
 }
 
-async sub handle ($self, $sse) {
+async sub handle {
+    my ($self, $sse) = @_;
+
     # Configure keepalive if specified
     my $keepalive = $self->keepalive_interval;
     if ($keepalive > 0) {
@@ -48,11 +48,13 @@ async sub handle ($self, $sse) {
     await $sse->run;
 }
 
-sub to_app ($class) {
+sub to_app {
+    my ($class) = @_;
     my $sse_class = $class->sse_class;
     load($sse_class);
 
-    return async sub ($scope, $receive, $send) {
+    return async sub {
+        my ($scope, $receive, $send) = @_;
         my $endpoint = $class->new;
         my $sse = $sse_class->new($scope, $receive, $send);
 
@@ -76,7 +78,8 @@ PAGI::Endpoint::SSE - Class-based Server-Sent Events endpoint handler
 
     sub keepalive_interval { 30 }
 
-    async sub on_connect ($self, $sse) {
+    async sub on_connect {
+        my ($self, $sse) = @_;
         my $user_id = $sse->stash->{user_id};
 
         # Send welcome event
@@ -91,12 +94,14 @@ PAGI::Endpoint::SSE - Class-based Server-Sent Events endpoint handler
         }
 
         # Subscribe to notifications
-        subscribe($user_id, sub ($event) {
+        subscribe($user_id, sub {
+            my ($event) = @_;
             $sse->try_send_json($event);
         });
     }
 
-    sub on_disconnect ($self, $sse) {
+    sub on_disconnect {
+        my ($self, $sse) = @_;
         unsubscribe($sse->stash->{user_id});
     }
 
@@ -112,7 +117,8 @@ Server-Sent Events connections with lifecycle hooks.
 
 =head2 on_connect
 
-    async sub on_connect ($self, $sse) {
+    async sub on_connect {
+        my ($self, $sse) = @_;
         await $sse->send_event(data => 'Hello!');
     }
 
@@ -122,7 +128,8 @@ and set up subscriptions.
 
 =head2 on_disconnect
 
-    sub on_disconnect ($self, $sse) {
+    sub on_disconnect {
+        my ($self, $sse) = @_;
         # Cleanup subscriptions
     }
 

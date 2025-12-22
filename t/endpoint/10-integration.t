@@ -13,53 +13,50 @@ use PAGI::Endpoint::SSE;
 # A realistic multi-protocol endpoint setup
 package MyApp::UserAPI {
     use parent 'PAGI::Endpoint::HTTP';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
-    async sub get ($self, $req, $res) {
+    async sub get {
+        my ($self, $req, $res) = @_;
         await $res->json({ users => ['alice', 'bob'] });
     }
 
-    async sub post ($self, $req, $res) {
+    async sub post {
+        my ($self, $req, $res) = @_;
         await $res->status(201)->json({ created => 1 });
     }
 
-    async sub delete ($self, $req, $res) {
+    async sub delete {
+        my ($self, $req, $res) = @_;
         await $res->status(204)->empty;
     }
 }
 
 package MyApp::ChatWS {
     use parent 'PAGI::Endpoint::WebSocket';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
     sub encoding { 'json' }
 
-    async sub on_connect ($self, $ws) {
+    async sub on_connect {
+        my ($self, $ws) = @_;
         await $ws->accept;
         await $ws->send_json({ type => 'welcome' });
     }
 
-    async sub on_receive ($self, $ws, $data) {
+    async sub on_receive {
+        my ($self, $ws, $data) = @_;
         await $ws->send_json({ type => 'echo', data => $data });
     }
 }
 
 package MyApp::EventsSSE {
     use parent 'PAGI::Endpoint::SSE';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
     sub keepalive_interval { 30 }
 
-    async sub on_connect ($self, $sse) {
+    async sub on_connect {
+        my ($self, $sse) = @_;
         await $sse->send_event(
             event => 'connected',
             data  => { server_time => time() },

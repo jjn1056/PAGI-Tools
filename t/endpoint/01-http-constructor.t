@@ -1,9 +1,6 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
-use v5.32;
-use feature 'signatures';
-no warnings 'experimental::signatures';
 use Test2::V0;
 use Future::AsyncAwait;
 use Future;
@@ -17,7 +14,8 @@ subtest 'can create endpoint subclass' => sub {
         use parent 'PAGI::Endpoint::HTTP';
         use Future::AsyncAwait;
 
-        async sub get ($self, $req, $res) {
+        async sub get {
+            my ($self, $req, $res) = @_;
             await $res->text("Hello");
         }
     }

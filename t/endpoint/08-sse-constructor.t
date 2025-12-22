@@ -12,16 +12,15 @@ subtest 'can create SSE endpoint subclass' => sub {
 
     package NotificationEndpoint {
         use parent 'PAGI::Endpoint::SSE';
-        use v5.32;
-        use feature 'signatures';
-        no warnings 'experimental::signatures';
         use Future::AsyncAwait;
 
-        async sub on_connect ($self, $sse) {
+        async sub on_connect {
+            my ($self, $sse) = @_;
             await $sse->send_event(event => 'welcome', data => { time => time() });
         }
 
-        sub on_disconnect ($self, $sse) {
+        sub on_disconnect {
+            my ($self, $sse) = @_;
             # cleanup subscriber
         }
     }

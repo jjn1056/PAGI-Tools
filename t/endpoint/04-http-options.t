@@ -9,26 +9,33 @@ use lib 'lib';
 use PAGI::Endpoint::HTTP;
 
 package MockResponse {
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
-    sub new ($class) { bless { status => 200, headers => [] }, $class }
-    sub status ($self, $s = undef) {
+    sub new {
+        my ($class) = @_;
+        bless { status => 200, headers => [] }, $class;
+    }
+    sub status {
+        my ($self, $s) = @_;
         $self->{status} = $s if defined $s;
         return $self;
     }
-    sub header ($self, $name, $value) {
+    sub header {
+        my ($self, $name, $value) = @_;
         push @{$self->{headers}}, [$name, $value];
         return $self;
     }
-    async sub empty ($self) { return $self }
-    async sub text ($self, $body, %opts) {
+    async sub empty {
+        my ($self) = @_;
+        return $self;
+    }
+    async sub text {
+        my ($self, $body, %opts) = @_;
         $self->{status} = $opts{status} if $opts{status};
         return $self;
     }
-    sub get_header ($self, $name) {
+    sub get_header {
+        my ($self, $name) = @_;
         for (@{$self->{headers}}) {
             return $_->[1] if lc($_->[0]) eq lc($name);
         }
@@ -37,23 +44,32 @@ package MockResponse {
 }
 
 package MockRequest {
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
-    sub new ($class, $method) { bless { method => $method }, $class }
-    sub method ($self) { $self->{method} }
+    sub new {
+        my ($class, $method) = @_;
+        bless { method => $method }, $class;
+    }
+    sub method {
+        my ($self) = @_;
+        $self->{method};
+    }
 }
 
 package CRUDEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
-    async sub get ($self, $req, $res) { await $res->empty }
-    async sub post ($self, $req, $res) { await $res->empty }
-    async sub delete ($self, $req, $res) { await $res->empty }
+    async sub get {
+        my ($self, $req, $res) = @_;
+        await $res->empty;
+    }
+    async sub post {
+        my ($self, $req, $res) = @_;
+        await $res->empty;
+    }
+    async sub delete {
+        my ($self, $req, $res) = @_;
+        await $res->empty;
+    }
 }
 
 subtest 'OPTIONS returns allowed methods' => sub {

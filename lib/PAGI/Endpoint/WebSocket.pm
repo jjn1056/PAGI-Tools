@@ -2,9 +2,6 @@ package PAGI::Endpoint::WebSocket;
 
 use strict;
 use warnings;
-use v5.32;
-use feature 'signatures';
-no warnings 'experimental::signatures';
 
 use Future::AsyncAwait;
 use Carp qw(croak);
@@ -18,11 +15,13 @@ sub websocket_class { 'PAGI::WebSocket' }
 # Encoding: 'text', 'bytes', or 'json'
 sub encoding { 'text' }
 
-sub to_app ($class) {
+sub to_app {
+    my ($class) = @_;
     my $ws_class = $class->websocket_class;
     load($ws_class);
 
-    return async sub ($scope, $receive, $send) {
+    return async sub {
+        my ($scope, $receive, $send) = @_;
         my $endpoint = $class->new;
         my $ws = $ws_class->new($scope, $receive, $send);
 
@@ -30,11 +29,14 @@ sub to_app ($class) {
     };
 }
 
-sub new ($class, %args) {
+sub new {
+    my ($class, %args) = @_;
     return bless \%args, $class;
 }
 
-async sub handle ($self, $ws) {
+async sub handle {
+    my ($self, $ws) = @_;
+
     # Call on_connect if defined
     if ($self->can('on_connect')) {
         await $self->on_connect($ws);
@@ -45,7 +47,8 @@ async sub handle ($self, $ws) {
 
     # Register disconnect callback
     if ($self->can('on_disconnect')) {
-        $ws->on_close(sub ($code, $reason = undef) {
+        $ws->on_close(sub {
+            my ($code, $reason) = @_;
             $self->on_disconnect($ws, $code, $reason);
         });
     }
@@ -55,16 +58,19 @@ async sub handle ($self, $ws) {
         my $encoding = $self->encoding;
 
         if ($encoding eq 'json') {
-            await $ws->each_json(async sub ($data) {
+            await $ws->each_json(async sub {
+                my ($data) = @_;
                 await $self->on_receive($ws, $data);
             });
         } elsif ($encoding eq 'bytes') {
-            await $ws->each_bytes(async sub ($data) {
+            await $ws->each_bytes(async sub {
+                my ($data) = @_;
                 await $self->on_receive($ws, $data);
             });
         } else {
             # Default: text
-            await $ws->each_text(async sub ($data) {
+            await $ws->each_text(async sub {
+                my ($data) = @_;
                 await $self->on_receive($ws, $data);
             });
         }
@@ -90,17 +96,20 @@ PAGI::Endpoint::WebSocket - Class-based WebSocket endpoint handler
 
     sub encoding { 'json' }  # or 'text', 'bytes'
 
-    async sub on_connect ($self, $ws) {
+    async sub on_connect {
+        my ($self, $ws) = @_;
         await $ws->accept;
         await $ws->send_json({ type => 'welcome' });
     }
 
-    async sub on_receive ($self, $ws, $data) {
+    async sub on_receive {
+        my ($self, $ws, $data) = @_;
         # $data is already decoded based on encoding()
         await $ws->send_json({ type => 'echo', message => $data });
     }
 
-    sub on_disconnect ($self, $ws, $code) {
+    sub on_disconnect {
+        my ($self, $ws, $code) = @_;
         cleanup_user($ws->stash->{user_id});
     }
 
@@ -116,7 +125,8 @@ approach to handling WebSocket connections with lifecycle hooks.
 
 =head2 on_connect
 
-    async sub on_connect ($self, $ws) {
+    async sub on_connect {
+        my ($self, $ws) = @_;
         await $ws->accept;
     }
 
@@ -125,7 +135,8 @@ to accept the connection. If not defined, connection is auto-accepted.
 
 =head2 on_receive
 
-    async sub on_receive ($self, $ws, $data) {
+    async sub on_receive {
+        my ($self, $ws, $data) = @_;
         await $ws->send_text("Got: $data");
     }
 
@@ -134,7 +145,8 @@ the C<encoding()> setting.
 
 =head2 on_disconnect
 
-    sub on_disconnect ($self, $ws, $code, $reason) {
+    sub on_disconnect {
+        my ($self, $ws, $code, $reason) = @_;
         # Cleanup
     }
 

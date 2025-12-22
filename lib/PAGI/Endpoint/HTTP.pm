@@ -2,9 +2,6 @@ package PAGI::Endpoint::HTTP;
 
 use strict;
 use warnings;
-use v5.32;
-use feature 'signatures';
-no warnings 'experimental::signatures';
 
 use Future::AsyncAwait;
 use Carp qw(croak);
@@ -16,14 +13,16 @@ our $VERSION = '0.01';
 sub request_class  { 'PAGI::Request' }
 sub response_class { 'PAGI::Response' }
 
-sub new ($class, %args) {
+sub new {
+    my ($class, %args) = @_;
     return bless \%args, $class;
 }
 
 # HTTP methods we support
 our @HTTP_METHODS = qw(get post put patch delete head options);
 
-sub allowed_methods ($self) {
+sub allowed_methods {
+    my ($self) = @_;
     my @allowed;
     for my $method (@HTTP_METHODS) {
         push @allowed, uc($method) if $self->can($method);
@@ -35,7 +34,8 @@ sub allowed_methods ($self) {
     return sort @allowed;
 }
 
-async sub dispatch ($self, $req, $res) {
+async sub dispatch {
+    my ($self, $req, $res) = @_;
     my $http_method = lc($req->method // 'GET');
 
     # OPTIONS - return allowed methods
@@ -65,14 +65,16 @@ async sub dispatch ($self, $req, $res) {
               ->text("405 Method Not Allowed");
 }
 
-sub to_app ($class) {
+sub to_app {
+    my ($class) = @_;
     # Load the request/response classes
     my $req_class = $class->request_class;
     my $res_class = $class->response_class;
     load($req_class);
     load($res_class);
 
-    return async sub ($scope, $receive, $send) {
+    return async sub {
+        my ($scope, $receive, $send) = @_;
         my $endpoint = $class->new;
         my $req = $req_class->new($scope, $receive);
         my $res = $res_class->new($send);
@@ -95,18 +97,21 @@ PAGI::Endpoint::HTTP - Class-based HTTP endpoint handler
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
 
-    async sub get ($self, $req, $res) {
+    async sub get {
+        my ($self, $req, $res) = @_;
         my $users = get_all_users();
         await $res->json($users);
     }
 
-    async sub post ($self, $req, $res) {
+    async sub post {
+        my ($self, $req, $res) = @_;
         my $data = await $req->json;
         my $user = create_user($data);
         await $res->status(201)->json($user);
     }
 
-    async sub delete ($self, $req, $res) {
+    async sub delete {
+        my ($self, $req, $res) = @_;
         my $id = $req->param('id');
         delete_user($id);
         await $res->status(204)->empty;
@@ -142,13 +147,13 @@ dispatches to them.
 
 Define any of these async methods to handle requests:
 
-    async sub get ($self, $req, $res) { ... }
-    async sub post ($self, $req, $res) { ... }
-    async sub put ($self, $req, $res) { ... }
-    async sub patch ($self, $req, $res) { ... }
-    async sub delete ($self, $req, $res) { ... }
-    async sub head ($self, $req, $res) { ... }
-    async sub options ($self, $req, $res) { ... }
+    async sub get { my ($self, $req, $res) = @_; ... }
+    async sub post { my ($self, $req, $res) = @_; ... }
+    async sub put { my ($self, $req, $res) = @_; ... }
+    async sub patch { my ($self, $req, $res) = @_; ... }
+    async sub delete { my ($self, $req, $res) = @_; ... }
+    async sub head { my ($self, $req, $res) = @_; ... }
+    async sub options { my ($self, $req, $res) = @_; ... }
 
 Each receives:
 
@@ -209,7 +214,10 @@ Framework designers can subclass and customize:
     sub response_class { 'MyFramework::Response' }
 
     # Add framework-specific helpers
-    sub db ($self) { $self->{db} //= connect_db() }
+    sub db {
+        my ($self) = @_;
+        $self->{db} //= connect_db();
+    }
 
 =head1 SEE ALSO
 

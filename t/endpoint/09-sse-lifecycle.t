@@ -10,50 +10,69 @@ use PAGI::Endpoint::SSE;
 
 # Mock SSE
 package MockSSE {
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
-    sub new ($class) {
+    sub new {
+        my ($class) = @_;
         bless {
             sent => [],
             started => 0,
             keepalive => 0,
             closed => 0,
-        }, $class
+        }, $class;
     }
-    async sub start ($self) { $self->{started} = 1; return $self }
-    sub keepalive ($self, $interval) { $self->{keepalive} = $interval; return $self }
-    sub on_close ($self, $cb) { $self->{on_close_cb} = $cb; return $self }
-    async sub send_event ($self, %opts) { push @{$self->{sent}}, \%opts }
-    async sub run ($self) {
+    async sub start {
+        my ($self) = @_;
+        $self->{started} = 1;
+        return $self;
+    }
+    sub keepalive {
+        my ($self, $interval) = @_;
+        $self->{keepalive} = $interval;
+        return $self;
+    }
+    sub on_close {
+        my ($self, $cb) = @_;
+        $self->{on_close_cb} = $cb;
+        return $self;
+    }
+    async sub send_event {
+        my ($self, %opts) = @_;
+        push @{$self->{sent}}, \%opts;
+    }
+    async sub run {
+        my ($self) = @_;
         # Simulate disconnect
         if ($self->{on_close_cb}) {
             $self->{on_close_cb}->();
         }
     }
-    sub sent ($self) { $self->{sent} }
-    sub last_event_id ($self) { undef }
+    sub sent {
+        my ($self) = @_;
+        $self->{sent};
+    }
+    sub last_event_id {
+        my ($self) = @_;
+        undef;
+    }
 }
 
 package MetricsEndpoint {
     use parent 'PAGI::Endpoint::SSE';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
     sub keepalive_interval { 25 }
 
     our @log;
 
-    async sub on_connect ($self, $sse) {
+    async sub on_connect {
+        my ($self, $sse) = @_;
         push @log, 'connect';
         await $sse->send_event(event => 'connected', data => { ok => 1 });
     }
 
-    sub on_disconnect ($self, $sse) {
+    sub on_disconnect {
+        my ($self, $sse) = @_;
         push @log, 'disconnect';
     }
 }

@@ -10,12 +10,10 @@ use PAGI::Endpoint::WebSocket;
 
 package SimpleWSEndpoint {
     use parent 'PAGI::Endpoint::WebSocket';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
-    async sub on_connect ($self, $ws) {
+    async sub on_connect {
+        my ($self, $ws) = @_;
         await $ws->accept;
         await $ws->send_text("Welcome!");
     }

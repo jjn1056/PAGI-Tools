@@ -10,48 +10,56 @@ use PAGI::Endpoint::HTTP;
 
 # Mock request that returns method
 package MockRequest {
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
-    sub new ($class, $method) { bless { method => $method }, $class }
-    sub method ($self) { $self->{method} }
+    sub new {
+        my ($class, $method) = @_;
+        bless { method => $method }, $class;
+    }
+    sub method {
+        my ($self) = @_;
+        $self->{method};
+    }
 }
 
 # Mock response that captures what was sent
 package MockResponse {
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
-    sub new ($class) { bless { sent => undef, status => 200, headers => [] }, $class }
-    sub status ($self, $s = undef) {
+    sub new {
+        my ($class) = @_;
+        bless { sent => undef, status => 200, headers => [] }, $class;
+    }
+    sub status {
+        my ($self, $s) = @_;
         $self->{status} = $s if defined $s;
         return $self;
     }
-    sub header ($self, $name, $value) {
+    sub header {
+        my ($self, $name, $value) = @_;
         push @{$self->{headers}}, [$name, $value];
         return $self;
     }
-    async sub text ($self, $body, %opts) {
+    async sub text {
+        my ($self, $body, %opts) = @_;
         $self->{sent} = $body;
         $self->{status} = $opts{status} if $opts{status};
         return $self;
     }
-    sub sent ($self) { $self->{sent} }
+    sub sent {
+        my ($self) = @_;
+        $self->{sent};
+    }
 }
 
 package TestEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
-    async sub get ($self, $req, $res) {
+    async sub get {
+        my ($self, $req, $res) = @_;
         await $res->text("GET response");
     }
 
-    async sub post ($self, $req, $res) {
+    async sub post {
+        my ($self, $req, $res) = @_;
         await $res->text("POST response");
     }
 }

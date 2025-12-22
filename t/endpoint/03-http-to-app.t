@@ -10,12 +10,10 @@ use PAGI::Endpoint::HTTP;
 
 package HelloEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
-    async sub get ($self, $req, $res) {
+    async sub get {
+        my ($self, $req, $res) = @_;
         my $name = $req->query('name') // 'World';
         await $res->text("Hello, $name");
     }

@@ -12,20 +12,20 @@ subtest 'can create websocket endpoint subclass' => sub {
 
     package ChatEndpoint {
         use parent 'PAGI::Endpoint::WebSocket';
-        use v5.32;
-        use feature 'signatures';
-        no warnings 'experimental::signatures';
         use Future::AsyncAwait;
 
-        async sub on_connect ($self, $ws) {
+        async sub on_connect {
+            my ($self, $ws) = @_;
             await $ws->accept;
         }
 
-        async sub on_receive ($self, $ws, $data) {
+        async sub on_receive {
+            my ($self, $ws, $data) = @_;
             await $ws->send_text("echo: $data");
         }
 
-        sub on_disconnect ($self, $ws, $code) {
+        sub on_disconnect {
+            my ($self, $ws, $code) = @_;
             # cleanup
         }
     }

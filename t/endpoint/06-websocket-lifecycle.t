@@ -11,27 +11,44 @@ use PAGI::Endpoint::WebSocket;
 
 # Mock WebSocket
 package MockWebSocket {
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
-    sub new ($class, $events) {
+    sub new {
+        my ($class, $events) = @_;
         bless {
             events => $events,
             idx => 0,
             sent => [],
             accepted => 0,
             closed => 0,
-        }, $class
+        }, $class;
     }
-    async sub accept ($self) { $self->{accepted} = 1 }
-    sub is_accepted ($self) { $self->{accepted} }
-    async sub send_text ($self, $data) { push @{$self->{sent}}, { type => 'text', data => $data } }
-    async sub send_json ($self, $data) { push @{$self->{sent}}, { type => 'json', data => $data } }
-    sub sent ($self) { $self->{sent} }
-    sub on_close ($self, $cb) { $self->{on_close_cb} = $cb }
-    async sub each_text ($self, $cb) {
+    async sub accept {
+        my ($self) = @_;
+        $self->{accepted} = 1;
+    }
+    sub is_accepted {
+        my ($self) = @_;
+        $self->{accepted};
+    }
+    async sub send_text {
+        my ($self, $data) = @_;
+        push @{$self->{sent}}, { type => 'text', data => $data };
+    }
+    async sub send_json {
+        my ($self, $data) = @_;
+        push @{$self->{sent}}, { type => 'json', data => $data };
+    }
+    sub sent {
+        my ($self) = @_;
+        $self->{sent};
+    }
+    sub on_close {
+        my ($self, $cb) = @_;
+        $self->{on_close_cb} = $cb;
+    }
+    async sub each_text {
+        my ($self, $cb) = @_;
         for my $event (@{$self->{events}}) {
             await $cb->($event);
         }
@@ -40,7 +57,8 @@ package MockWebSocket {
             $self->{on_close_cb}->(1000, 'normal');
         }
     }
-    async sub each_json ($self, $cb) {
+    async sub each_json {
+        my ($self, $cb) = @_;
         for my $event (@{$self->{events}}) {
             await $cb->(JSON::PP::decode_json($event));
         }
@@ -49,7 +67,8 @@ package MockWebSocket {
             $self->{on_close_cb}->(1000, 'normal');
         }
     }
-    async sub each_bytes ($self, $cb) {
+    async sub each_bytes {
+        my ($self, $cb) = @_;
         for my $event (@{$self->{events}}) {
             await $cb->($event);
         }
@@ -58,7 +77,8 @@ package MockWebSocket {
             $self->{on_close_cb}->(1000, 'normal');
         }
     }
-    async sub run ($self) {
+    async sub run {
+        my ($self) = @_;
         # Simulate disconnect
         if ($self->{on_close_cb}) {
             $self->{on_close_cb}->(1000, 'normal');
@@ -68,24 +88,24 @@ package MockWebSocket {
 
 package EchoEndpoint {
     use parent 'PAGI::Endpoint::WebSocket';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
     our @log;
 
-    async sub on_connect ($self, $ws) {
+    async sub on_connect {
+        my ($self, $ws) = @_;
         push @log, 'connect';
         await $ws->accept;
     }
 
-    async sub on_receive ($self, $ws, $data) {
+    async sub on_receive {
+        my ($self, $ws, $data) = @_;
         push @log, "receive:$data";
         await $ws->send_text("echo:$data");
     }
 
-    sub on_disconnect ($self, $ws, $code, $reason) {
+    sub on_disconnect {
+        my ($self, $ws, $code, $reason) = @_;
         push @log, "disconnect:$code";
     }
 }

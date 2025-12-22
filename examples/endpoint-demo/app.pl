@@ -20,9 +20,6 @@ use PAGI::App::File;
 #---------------------------------------------------------
 package MessageAPI {
     use parent 'PAGI::Endpoint::HTTP';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
     my @messages = (
@@ -31,11 +28,13 @@ package MessageAPI {
     );
     my $next_id = 3;
 
-    async sub get ($self, $req, $res) {
+    async sub get {
+        my ($self, $req, $res) = @_;
         await $res->json(\@messages);
     }
 
-    async sub post ($self, $req, $res) {
+    async sub post {
+        my ($self, $req, $res) = @_;
         my $data = await $req->json;
         my $message = { id => $next_id++, text => $data->{text} };
         push @messages, $message;
@@ -52,19 +51,18 @@ package MessageAPI {
 #---------------------------------------------------------
 package EchoWS {
     use parent 'PAGI::Endpoint::WebSocket';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
     sub encoding { 'json' }
 
-    async sub on_connect ($self, $ws) {
+    async sub on_connect {
+        my ($self, $ws) = @_;
         await $ws->accept;
         await $ws->send_json({ type => 'connected', message => 'Welcome!' });
     }
 
-    async sub on_receive ($self, $ws, $data) {
+    async sub on_receive {
+        my ($self, $ws, $data) = @_;
         await $ws->send_json({
             type => 'echo',
             original => $data,
@@ -72,7 +70,8 @@ package EchoWS {
         });
     }
 
-    sub on_disconnect ($self, $ws, $code) {
+    sub on_disconnect {
+        my ($self, $ws, $code) = @_;
         print STDERR "WebSocket client disconnected: $code\n";
     }
 }
@@ -82,9 +81,6 @@ package EchoWS {
 #---------------------------------------------------------
 package MessageEvents {
     use parent 'PAGI::Endpoint::SSE';
-    use v5.32;
-    use feature 'signatures';
-    no warnings 'experimental::signatures';
     use Future::AsyncAwait;
 
     sub keepalive_interval { 25 }
@@ -92,13 +88,15 @@ package MessageEvents {
     my %subscribers;
     my $sub_id = 0;
 
-    sub broadcast ($message) {
+    sub broadcast {
+        my ($message) = @_;
         for my $sse (values %subscribers) {
             $sse->try_send_json($message);
         }
     }
 
-    async sub on_connect ($self, $sse) {
+    async sub on_connect {
+        my ($self, $sse) = @_;
         my $id = ++$sub_id;
         $subscribers{$id} = $sse;
         $sse->stash->{sub_id} = $id;
@@ -109,7 +107,8 @@ package MessageEvents {
         );
     }
 
-    sub on_disconnect ($self, $sse) {
+    sub on_disconnect {
+        my ($self, $sse) = @_;
         delete $subscribers{$sse->stash->{sub_id}};
         print STDERR "SSE client disconnected\n";
     }
@@ -126,7 +125,8 @@ my $message_api = MessageAPI->to_app;
 my $echo_ws = EchoWS->to_app;
 my $events_sse = MessageEvents->to_app;
 
-my $app = async sub ($scope, $receive, $send) {
+my $app = async sub {
+    my ($scope, $receive, $send) = @_;
     my $type = $scope->{type} // 'http';
     my $path = $scope->{path} // '/';
 
