@@ -1,8 +1,5 @@
 use strict;
 use warnings;
-use v5.32;
-use feature 'signatures';
-no warnings 'experimental::signatures';
 
 use Test2::V0;
 use Future::AsyncAwait;
@@ -12,13 +9,15 @@ use PAGI::App::Router;
 # Helper to capture response
 sub mock_send {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     return ($send, \@sent);
 }
 
 # Helper to create a simple app that records it was called
-sub make_handler ($name, $capture = undef) {
-    return async sub ($scope, $receive, $send) {
+sub make_handler {
+    my ($name, $capture) = @_;
+    return async sub {
+        my ($scope, $receive, $send) = @_;
         push @$capture, { name => $name, scope => $scope } if $capture;
         await $send->({
             type => 'http.response.start',
@@ -216,7 +215,8 @@ subtest 'mount 404 falls through' => sub {
 
 subtest 'mount with any PAGI app' => sub {
     # Mount can take any PAGI app, not just routers
-    my $static_app = async sub ($scope, $receive, $send) {
+    my $static_app = async sub {
+        my ($scope, $receive, $send) = @_;
         await $send->({
             type => 'http.response.start',
             status => 200,
