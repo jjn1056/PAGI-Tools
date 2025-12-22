@@ -289,4 +289,51 @@ subtest 'sse route with params' => sub {
     is $calls[0]{scope}{'pagi.router'}{params}{channel}, 'notifications', 'captured :channel param';
 };
 
+subtest 'mixed protocol routing' => sub {
+    my @calls;
+    my $router = PAGI::App::Router->new;
+
+    # HTTP routes
+    $router->get('/api/messages' => make_handler('http_get', \@calls));
+    $router->post('/api/messages' => make_handler('http_post', \@calls));
+
+    # WebSocket route
+    $router->websocket('/ws/echo' => make_handler('ws_echo', \@calls));
+
+    # SSE route
+    $router->sse('/events' => make_handler('sse_events', \@calls));
+
+    my $app = $router->to_app;
+
+    # Test HTTP GET
+    my ($send, $sent) = mock_send();
+    $app->({ type => 'http', method => 'GET', path => '/api/messages' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'http_get', 'HTTP GET works';
+
+    # Test HTTP POST
+    ($send, $sent) = mock_send();
+    $app->({ type => 'http', method => 'POST', path => '/api/messages' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'http_post', 'HTTP POST works';
+
+    # Test WebSocket
+    ($send, $sent) = mock_send();
+    $app->({ type => 'websocket', path => '/ws/echo' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'ws_echo', 'WebSocket works';
+
+    # Test SSE
+    ($send, $sent) = mock_send();
+    $app->({ type => 'sse', path => '/events' }, sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'sse_events', 'SSE works';
+
+    # Test 404 for unmatched websocket path
+    ($send, $sent) = mock_send();
+    $app->({ type => 'websocket', path => '/ws/unknown' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 404, 'unmatched websocket returns 404';
+
+    # Test lifespan is ignored
+    ($send, $sent) = mock_send();
+    $app->({ type => 'lifespan', path => '/' }, sub { Future->done }, $send)->get;
+    is scalar(@$sent), 0, 'lifespan events are ignored';
+};
+
 done_testing;
