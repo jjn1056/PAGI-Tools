@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use JSON::PP;
 use File::Spec;
 use File::Basename qw(dirname);
+use PAGI::App::Router;
 
 use ChatApp::State qw(
     get_all_rooms get_room get_room_messages get_room_users get_stats
@@ -33,30 +34,12 @@ my %MIME_TYPES = (
     woff2=> 'font/woff2',
 );
 
-sub handler {
-    return async sub  {
+# API Handlers
+sub _rooms_handler {
+    return async sub {
         my ($scope, $receive, $send) = @_;
-        my $path = $scope->{path} // '/';
-        my $method = $scope->{method} // 'GET';
-
-        # Route API requests
-        if ($path =~ m{^/api/}) {
-            return await _handle_api($scope, $receive, $send, $path, $method);
-        }
-
-        # Serve static files
-        return await _serve_static($scope, $receive, $send, $path);
-    };
-}
-
-async sub _handle_api {
-    my ($scope, $receive, $send, $path, $method) = @_;
-
-    my ($status, $data);
-
-    if ($path eq '/api/rooms' && $method eq 'GET') {
         my $rooms = get_all_rooms();
-        $data = [
+        my $data = [
             map {
                 {
                     name       => $_->{name},
@@ -67,41 +50,49 @@ async sub _handle_api {
             sort { $a->{name} cmp $b->{name} }
             values %$rooms
         ];
-        $status = 200;
-    }
-    elsif ($path =~ m{^/api/room/([^/]+)/history$} && $method eq 'GET') {
-        my $room_name = $1;
-        my $room = get_room($room_name);
-        if ($room) {
-            $data = get_room_messages($room_name, 100);
-            $status = 200;
-        } else {
-            $data = { error => 'Room not found' };
-            $status = 404;
-        }
-    }
-    elsif ($path =~ m{^/api/room/([^/]+)/users$} && $method eq 'GET') {
-        my $room_name = $1;
-        my $room = get_room($room_name);
-        if ($room) {
-            $data = get_room_users($room_name);
-            $status = 200;
-        } else {
-            $data = { error => 'Room not found' };
-            $status = 404;
-        }
-    }
-    elsif ($path eq '/api/stats' && $method eq 'GET') {
-        $data = get_stats();
-        $status = 200;
-    }
-    else {
-        $data = { error => 'Not found' };
-        $status = 404;
-    }
+        await _send_json($send, 200, $data);
+    };
+}
 
+sub _room_history_handler {
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $room_name = $scope->{'pagi.router'}{params}{name};
+        my $room = get_room($room_name);
+        if ($room) {
+            my $data = get_room_messages($room_name, 100);
+            await _send_json($send, 200, $data);
+        } else {
+            await _send_json($send, 404, { error => 'Room not found' });
+        }
+    };
+}
+
+sub _room_users_handler {
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $room_name = $scope->{'pagi.router'}{params}{name};
+        my $room = get_room($room_name);
+        if ($room) {
+            my $data = get_room_users($room_name);
+            await _send_json($send, 200, $data);
+        } else {
+            await _send_json($send, 404, { error => 'Room not found' });
+        }
+    };
+}
+
+sub _stats_handler {
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $data = get_stats();
+        await _send_json($send, 200, $data);
+    };
+}
+
+async sub _send_json {
+    my ($send, $status, $data) = @_;
     my $body = $JSON->encode($data);
-
     await $send->({
         type    => 'http.response.start',
         status  => $status,
@@ -111,12 +102,36 @@ async sub _handle_api {
             ['cache-control', 'no-cache'],
         ],
     });
-
     await $send->({
         type => 'http.response.body',
         body => $body,
         more => 0,
     });
+}
+
+sub handler {
+    my $router = PAGI::App::Router->new;
+
+    # API routes
+    $router->get('/api/rooms' => _rooms_handler());
+    $router->get('/api/room/:name/history' => _room_history_handler());
+    $router->get('/api/room/:name/users' => _room_users_handler());
+    $router->get('/api/stats' => _stats_handler());
+
+    my $api_app = $router->to_app;
+
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $path = $scope->{path} // '/';
+
+        # Route API requests through router
+        if ($path =~ m{^/api/}) {
+            return await $api_app->($scope, $receive, $send);
+        }
+
+        # Serve static files
+        return await _serve_static($scope, $receive, $send, $path);
+    };
 }
 
 async sub _serve_static {
