@@ -139,7 +139,8 @@ sub keepalive {
         interval => $interval,
         on_tick  => sub {
             return unless $weak_self && !$weak_self->is_closed;
-            $weak_self->try_send($comment);
+            # Send as SSE comment (not data) to avoid triggering onmessage
+            $weak_self->try_send_comment($comment);
         },
     );
 
@@ -282,6 +283,40 @@ async sub try_send_json {
         await $self->{send}->({
             type => 'sse.send',
             data => $json,
+        });
+    };
+    if ($@) {
+        $self->_set_closed;
+        return 0;
+    }
+    return 1;
+}
+
+# Send SSE comment (doesn't trigger onmessage in browser)
+async sub send_comment {
+    my ($self, $comment) = @_;
+
+    croak "Cannot send on closed SSE connection" if $self->is_closed;
+
+    await $self->start unless $self->is_started;
+
+    await $self->{send}->({
+        type    => 'sse.comment',
+        comment => $comment,
+    });
+
+    return $self;
+}
+
+async sub try_send_comment {
+    my ($self, $comment) = @_;
+    return 0 if $self->is_closed;
+
+    eval {
+        await $self->start unless $self->is_started;
+        await $self->{send}->({
+            type    => 'sse.comment',
+            comment => $comment,
         });
     };
     if ($@) {

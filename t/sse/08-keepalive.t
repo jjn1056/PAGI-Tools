@@ -27,8 +27,8 @@ subtest 'keepalive sends periodic comments' => sub {
     # Stop keepalive
     $sse->keepalive(0);
 
-    # Should have sent at least 2 keepalive comments
-    my @keepalives = grep { ($_->{data} // '') =~ /^:/ } @sent;
+    # Should have sent at least 2 keepalive comments (sse.comment events)
+    my @keepalives = grep { ($_->{type} // '') eq 'sse.comment' } @sent;
     ok(@keepalives >= 2, 'at least 2 keepalive pings sent');
 };
 
@@ -47,7 +47,9 @@ subtest 'keepalive with custom comment' => sub {
 
     $sse->keepalive(0);
 
-    my @pings = grep { ($_->{data} // '') eq ':ping' } @sent;
+    my @pings = grep {
+        ($_->{type} // '') eq 'sse.comment' && ($_->{comment} // '') eq ':ping'
+    } @sent;
     ok(@pings >= 1, 'custom keepalive comment sent');
 };
 
