@@ -226,4 +226,59 @@ async sub error ($self, $status, $message, $extra = undef) {
     await $self->json($body);
 }
 
+# Simple MIME type mapping
+my %MIME_TYPES = (
+    '.html' => 'text/html',
+    '.htm'  => 'text/html',
+    '.txt'  => 'text/plain',
+    '.css'  => 'text/css',
+    '.js'   => 'application/javascript',
+    '.json' => 'application/json',
+    '.xml'  => 'application/xml',
+    '.pdf'  => 'application/pdf',
+    '.zip'  => 'application/zip',
+    '.png'  => 'image/png',
+    '.jpg'  => 'image/jpeg',
+    '.jpeg' => 'image/jpeg',
+    '.gif'  => 'image/gif',
+    '.svg'  => 'image/svg+xml',
+    '.ico'  => 'image/x-icon',
+    '.woff' => 'font/woff',
+    '.woff2'=> 'font/woff2',
+);
+
+sub _mime_type ($path) {
+    my ($ext) = $path =~ /(\.[^.]+)$/;
+    return $MIME_TYPES{lc($ext // '')} // 'application/octet-stream';
+}
+
+async sub send_file ($self, $path, %opts) {
+    croak("File not found: $path") unless -f $path;
+
+    # Read file
+    open my $fh, '<:raw', $path or croak("Cannot open $path: $!");
+    my $content = do { local $/; <$fh> };
+    close $fh;
+
+    # Set content-type if not already set
+    my $has_ct = grep { lc($_->[0]) eq 'content-type' } @{$self->{_headers}};
+    unless ($has_ct) {
+        $self->content_type(_mime_type($path));
+    }
+
+    # Set content-length
+    $self->header('content-length', length($content));
+
+    # Set content-disposition
+    my $disposition;
+    if ($opts{inline}) {
+        $disposition = 'inline';
+    } elsif ($opts{filename}) {
+        $disposition = "attachment; filename=\"$opts{filename}\"";
+    }
+    $self->header('content-disposition', $disposition) if $disposition;
+
+    await $self->send($content);
+}
+
 1;

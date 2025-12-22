@@ -386,4 +386,65 @@ subtest 'error with extra data' => sub {
     is $body->{errors}[0]{field}, 'email', 'field in error';
 };
 
+use File::Temp qw(tempfile);
+
+subtest 'send_file basic' => sub {
+    # Create temp file
+    my ($fh, $filename) = tempfile(UNLINK => 1);
+    print $fh "Hello File Content";
+    close $fh;
+
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->send_file($filename)->get;
+
+    is $sent[0]->{status}, 200, 'status 200';
+    is $sent[1]->{body}, 'Hello File Content', 'file content sent';
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    ok exists $headers{'content-type'}, 'has content-type';
+    is $headers{'content-length'}, 18, 'content-length set';
+};
+
+subtest 'send_file with filename option' => sub {
+    my ($fh, $filename) = tempfile(UNLINK => 1);
+    print $fh "data";
+    close $fh;
+
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->send_file($filename, filename => 'download.txt')->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    like $headers{'content-disposition'}, qr/attachment/, 'attachment disposition';
+    like $headers{'content-disposition'}, qr/download\.txt/, 'filename in disposition';
+};
+
+subtest 'send_file inline' => sub {
+    my ($fh, $filename) = tempfile(UNLINK => 1, SUFFIX => '.txt');
+    print $fh "inline data";
+    close $fh;
+
+    my @sent;
+    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $res = PAGI::Response->new($send);
+
+    $res->send_file($filename, inline => 1)->get;
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    like $headers{'content-disposition'}, qr/inline/, 'inline disposition';
+};
+
+subtest 'send_file not found' => sub {
+    my $send = sub { Future->done };
+    my $res = PAGI::Response->new($send);
+
+    like dies { $res->send_file('/nonexistent/file.txt')->get },
+        qr/not found|no such file/i, 'dies for missing file';
+};
+
 done_testing;
