@@ -137,20 +137,24 @@ my $http_app = $http_router->to_app;
 my $app = async sub {
     my ($scope, $receive, $send) = @_;
     my $type = $scope->{type} // 'http';
+    my $path = $scope->{path} // '/';
+
+    # Ignore lifespan events (startup/shutdown)
+    return if $type eq 'lifespan';
 
     if ($type eq 'http') {
         return await $http_app->($scope, $receive, $send);
     }
 
-    if ($type eq 'websocket' && $scope->{path} eq '/ws/echo') {
+    if ($type eq 'websocket' && $path eq '/ws/echo') {
         return await $echo_ws->($scope, $receive, $send);
     }
 
-    if ($type eq 'sse' && $scope->{path} eq '/events') {
+    if ($type eq 'sse' && $path eq '/events') {
         return await $events_sse->($scope, $receive, $send);
     }
 
-    die "Unknown route: $type $scope->{path}";
+    die "Unknown route: $type $path";
 };
 
 $app;
