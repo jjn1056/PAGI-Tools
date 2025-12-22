@@ -209,6 +209,47 @@ sub _build_response {
     );
 }
 
+sub websocket {
+    my ($self, $path, $callback) = @_;
+
+    require PAGI::Test::WebSocket;
+
+    $path //= '/';
+
+    # Parse query string from path
+    my $query_string = '';
+    if ($path =~ s/\?(.*)$//) {
+        $query_string = $1;
+    }
+
+    my $scope = {
+        type         => 'websocket',
+        pagi         => { version => '0.1', spec_version => '0.1' },
+        http_version => '1.1',
+        scheme       => 'ws',
+        path         => $path,
+        query_string => $query_string,
+        root_path    => '',
+        headers      => [['host', 'testserver']],
+        client       => ['127.0.0.1', 12345],
+        server       => ['testserver', 80],
+        subprotocols => [],
+    };
+
+    my $ws = PAGI::Test::WebSocket->new(app => $self->{app}, scope => $scope);
+    $ws->_start;
+
+    if ($callback) {
+        eval { $callback->($ws) };
+        my $err = $@;
+        $ws->close unless $ws->is_closed;
+        die $err if $err;
+        return;
+    }
+
+    return $ws;
+}
+
 sub _url_encode {
     my ($str) = @_;
     $str =~ s/([^A-Za-z0-9_\-.])/sprintf("%%%02X", ord($1))/eg;
