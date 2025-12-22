@@ -239,4 +239,17 @@ subtest 'mount with any PAGI app' => sub {
     is $sent->[1]{body}, 'Static: /css/style.css', 'any PAGI app can be mounted';
 };
 
+subtest 'websocket route basic' => sub {
+    my @calls;
+    my $router = PAGI::App::Router->new;
+    $router->websocket('/ws/echo' => make_handler('ws_echo', \@calls));
+    my $app = $router->to_app;
+
+    # WebSocket request to /ws/echo
+    my ($send, $sent) = mock_send();
+    $app->({ type => 'websocket', path => '/ws/echo' }, sub { Future->done }, $send)->get;
+    is $sent->[0]{status}, 200, 'websocket route matched';
+    is $sent->[1]{body}, 'ws_echo', 'websocket handler called';
+};
+
 done_testing;

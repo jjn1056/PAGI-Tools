@@ -35,9 +35,11 @@ sub new {
     my ($class, %args) = @_;
 
     return bless {
-        routes    => [],
-        mounts    => [],
-        not_found => $args{not_found},
+        routes           => [],
+        websocket_routes => [],
+        sse_routes       => [],
+        mounts           => [],
+        not_found        => $args{not_found},
     }, $class;
 }
 
@@ -69,6 +71,18 @@ sub head {
 sub options {
     my ($self, $path, $app) = @_;
  $self->route('OPTIONS', $path, $app) }
+
+sub websocket {
+    my ($self, $path, $app) = @_;
+    my ($regex, @names) = $self->_compile_path($path);
+    push @{$self->{websocket_routes}}, {
+        path  => $path,
+        regex => $regex,
+        names => \@names,
+        app   => $app,
+    };
+    return $self;
+}
 
 sub route {
     my ($self, $method, $path, $app) = @_;
