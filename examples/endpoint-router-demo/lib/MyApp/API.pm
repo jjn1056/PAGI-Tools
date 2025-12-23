@@ -9,21 +9,6 @@ my @USERS = (
     { id => 2, name => 'Bob', email => 'bob@example.com' },
 );
 
-# Note: Subrouters mounted via mount() don't receive lifespan events.
-# Use lazy initialization or access parent state via $req->stash if needed.
-
-sub _ensure_state {
-    my ($self) = @_;
-    return if $self->state->{_initialized};
-
-    $self->state->{api_version} = 'v1';
-    $self->state->{config} = {
-        app_name => 'Endpoint Router Demo',
-        version  => '1.0.0',
-    };
-    $self->state->{_initialized} = 1;
-}
-
 sub routes {
     my ($self, $r) = @_;
 
@@ -36,15 +21,13 @@ sub routes {
 async sub get_info {
     my ($self, $req, $res) = @_;
 
-    # Lazy initialize state (subrouters don't get on_startup)
-    $self->_ensure_state;
-
-    my $config = $self->state->{config};
+    # Access app state via $req->state (injected by PAGI::Lifespan)
+    my $config = $req->state->{config};
 
     await $res->json({
         app     => $config->{app_name},
         version => $config->{version},
-        api     => $self->state->{api_version},
+        api     => 'v1',
     });
 }
 

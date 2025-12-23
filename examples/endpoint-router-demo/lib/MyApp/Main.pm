@@ -9,29 +9,6 @@ use PAGI::App::File;
 use File::Spec;
 use File::Basename qw(dirname);
 
-async sub on_startup {
-    my ($self) = @_;
-    warn "MyApp starting up...\n";
-
-    # Worker-local state (NOT shared across workers)
-    $self->state->{config} = {
-        app_name => 'Endpoint Router Demo',
-        version  => '1.0.0',
-    };
-
-    $self->state->{metrics} = {
-        requests  => 0,
-        ws_active => 0,
-    };
-
-    warn "MyApp ready!\n";
-}
-
-async sub on_shutdown {
-    my ($self) = @_;
-    warn "MyApp shutting down...\n";
-}
-
 sub routes {
     my ($self, $r) = @_;
 
