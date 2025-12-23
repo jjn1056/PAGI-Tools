@@ -55,6 +55,10 @@ sub to_app {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
+
+        my $type = $scope->{type} // '';
+        croak "Expected sse scope, got '$type'" unless $type eq 'sse';
+
         my $endpoint = $class->new;
         my $sse = $sse_class->new($scope, $receive, $send);
 
@@ -155,6 +159,96 @@ Override to use a custom SSE wrapper.
     my $app = MyEndpoint->to_app;
 
 Returns a PAGI-compatible async coderef.
+
+=head1 RECIPES
+
+=head2 Multi-Process Broadcasting with Redis
+
+The simple in-memory subscriber pattern only works with a single process:
+
+    my %subscribers;  # Lost when worker dies, not shared between workers
+
+For multi-process deployments (e.g., C<pagi-server --workers 4>), use Redis
+pub/sub as a message bus between workers. Each worker keeps its own local
+subscriber hash with real connection objects, and Redis broadcasts messages
+between workers.
+
+    package MyApp::Events;
+    use parent 'PAGI::Endpoint::SSE';
+    use Future::AsyncAwait;
+    use JSON::MaybeXS qw(encode_json decode_json);
+
+    my %subscribers;  # Local to this process
+    my $redis;        # Redis connection
+
+    # Call this once at server startup (e.g., in lifespan handler)
+    sub setup_redis {
+        my ($redis_url) = @_;
+        $redis = Redis::Async->new(server => $redis_url);
+
+        # Subscribe to channel - forward to local connections
+        $redis->subscribe('events', sub {
+            my ($message) = @_;
+            my $data = decode_json($message);
+            _local_broadcast($data);
+        });
+    }
+
+    # Broadcast to local process connections only
+    sub _local_broadcast {
+        my ($message) = @_;
+        for my $sse (values %subscribers) {
+            $sse->try_send_json($message);
+        }
+    }
+
+    # Public API: publish to Redis (all workers receive it)
+    sub broadcast {
+        my ($message) = @_;
+        $redis->publish('events', encode_json($message));
+    }
+
+    # Track local connections
+    my $sub_id = 0;
+
+    async sub on_connect {
+        my ($self, $sse) = @_;
+        my $id = ++$sub_id;
+        $subscribers{$id} = $sse;
+        $sse->stash->{sub_id} = $id;
+
+        await $sse->send_event(
+            event => 'connected',
+            data  => { subscriber_id => $id },
+        );
+    }
+
+    sub on_disconnect {
+        my ($self, $sse) = @_;
+        delete $subscribers{$sse->stash->{sub_id}};
+    }
+
+Now when any worker calls C<broadcast()>, the message goes to Redis, and
+every worker (including itself) receives it and forwards to their local
+SSE connections.
+
+Setup Redis in your lifespan handler:
+
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+
+        if ($scope->{type} eq 'lifespan') {
+            my $event = await $receive->();
+            if ($event->{type} eq 'lifespan.startup') {
+                MyApp::Events::setup_redis('redis://localhost:6379');
+                await $send->({ type => 'lifespan.startup.complete' });
+            }
+            # ... shutdown handling
+            return;
+        }
+
+        # ... route to SSE endpoint
+    };
 
 =head1 SEE ALSO
 
