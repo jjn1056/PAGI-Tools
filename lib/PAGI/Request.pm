@@ -288,7 +288,11 @@ sub params {
 
 sub param {
     my ($self, $name) = @_;
-    return $self->params->{$name};
+    # Check route params first, then query params
+    if (exists $self->params->{$name}) {
+        return $self->params->{$name};
+    }
+    return $self->query($name);
 }
 
 # Called by router to set matched params
@@ -297,11 +301,35 @@ sub set_params {
     $self->{_path_params} = $params;
 }
 
+# Alias for compatibility with router
+sub set_route_params {
+    my ($self, $params) = @_;
+    $self->set_params($params);
+}
+
 # Per-request storage for middleware/handlers
 sub stash {
     my $self = shift;
     $self->{_stash} //= {};
     return $self->{_stash};
+}
+
+sub set_stash {
+    my ($self, $stash) = @_;
+    $self->{_stash} = $stash // {};
+    return $self;
+}
+
+# Request-scoped data (for middleware to pass data to handlers)
+sub set {
+    my ($self, $key, $value) = @_;
+    $self->{_data}{$key} = $value;
+    return $self;
+}
+
+sub get {
+    my ($self, $key) = @_;
+    return $self->{_data}{$key};
 }
 
 # Body streaming - mutually exclusive with buffered body methods
@@ -684,13 +712,20 @@ Get path parameters (set by router).
 
     my $id = $req->param('id');
 
-Get a single path parameter.
+Returns a route parameter by name. Falls back to query parameters
+if no route parameter matches.
 
 =head2 set_params
 
     $req->set_params({ id => 42 });
 
 Set path parameters (called by router).
+
+=head2 set_route_params
+
+    $req->set_route_params({ id => 42, action => 'edit' });
+
+Alias for C<set_params>. Sets route parameters.
 
 =head1 COOKIES
 
@@ -854,10 +889,31 @@ Decode Basic auth credentials.
 
 =head2 stash
 
+    my $db = $req->stash->{db};
     $req->stash->{user} = $user;
-    my $user = $req->stash->{user};
 
-Per-request hashref for middleware to store data.
+Returns the shared stash hashref. This is typically injected by
+C<PAGI::Endpoint::Router> and contains data from C<on_startup>
+(database connections, config, etc).
+
+=head2 set_stash
+
+    $req->set_stash({ db => $dbh, config => $config });
+
+Replaces the entire stash. Called internally by router.
+
+=head2 set
+
+    $req->set('user', $authenticated_user);
+
+Sets request-scoped data. Useful for middleware to pass data
+to downstream handlers.
+
+=head2 get
+
+    my $user = $req->get('user');
+
+Gets request-scoped data set by middleware.
 
 =head1 SEE ALSO
 
