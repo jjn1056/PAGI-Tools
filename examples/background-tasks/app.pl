@@ -113,6 +113,50 @@ sub quick_sync_task {
 
 my $router = PAGI::App::Router->new;
 
+# Index page
+$router->get('/' => async sub {
+    my ($scope, $receive, $send) = @_;
+    my $res = PAGI::Response->new($send);
+
+    await $res->html(<<'HTML');
+<!DOCTYPE html>
+<html>
+<head><title>Background Tasks Demo</title></head>
+<body>
+<h1>Background Tasks Demo</h1>
+<p>Watch the server console for background task output.</p>
+
+<h2>Endpoints</h2>
+<ul>
+  <li><a href="/async">/async</a> - Fire-and-forget async I/O (non-blocking)</li>
+  <li><a href="/blocking">/blocking</a> - CPU work in subprocess (IO::Async::Function)</li>
+  <li><a href="/bad">/bad</a> - Example of what NOT to do</li>
+</ul>
+
+<h2>POST /signup</h2>
+<form id="signup">
+  <input type="email" name="email" placeholder="email@example.com" required>
+  <button type="submit">Sign Up</button>
+</form>
+<pre id="result"></pre>
+
+<script>
+document.getElementById('signup').onsubmit = async (e) => {
+  e.preventDefault();
+  const email = e.target.email.value;
+  const res = await fetch('/signup', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({email})
+  });
+  document.getElementById('result').textContent = await res.text();
+};
+</script>
+</body>
+</html>
+HTML
+});
+
 # GOOD: Fire-and-forget async I/O
 $router->get('/async' => async sub {
     my ($scope, $receive, $send) = @_;
