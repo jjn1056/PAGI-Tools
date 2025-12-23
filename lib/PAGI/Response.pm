@@ -603,34 +603,55 @@ when C<strict> mode would be enabled) will cause the Future to fail.
 
 =head2 Background Tasks
 
-Run tasks after the response is sent without blocking the client.
-Use the C<loop> method to access the event loop:
+Run tasks after the response is sent. There are three patterns depending
+on what kind of work you're doing:
 
-    async sub handler {
-        my ($scope, $receive, $send) = @_;
-        my $res = PAGI::Response->new($send);
+=head3 Pattern 1: Fire-and-Forget Async I/O (Non-Blocking)
 
-        # Response goes out immediately
-        await $res->json({ status => 'queued' });
+For async operations (HTTP calls, database queries using async drivers),
+just call them without C<await>. They return Futures that run concurrently:
 
-        # These run AFTER the response, client doesn't wait
-        $res->loop->later(sub {
-            send_email($user);      # Sync task
-        });
+    await $res->json({ status => 'queued' });
 
-        # Async tasks - just call without await
-        log_to_analytics($event);   # Returns Future, runs in background
-    }
+    # These run in the background - non-blocking
+    send_async_email($user);      # Returns Future, don't await
+    log_to_analytics($event);     # Returns Future, don't await
 
-The C<loop> method returns the current L<IO::Async::Loop>, which provides:
+=head3 Pattern 2: Blocking/CPU Work (IO::Async::Function)
 
-=over 4
+For blocking operations (sync libraries, CPU-intensive work), use
+L<IO::Async::Function> to run in a subprocess:
 
-=item * C<< $loop->later(sub { ... }) >> - Run after current code yields
+    use IO::Async::Function;
 
-=item * C<< $loop->delay_future(after => $secs) >> - Delayed execution
+    my $worker = IO::Async::Function->new(
+        code => sub {
+            my ($data) = @_;
+            # This runs in a CHILD PROCESS - can block safely
+            sleep 5;  # Won't block event loop
+            return process($data);
+        },
+    );
+    $res->loop->add($worker);
 
-=back
+    await $res->json({ status => 'processing' });
+
+    # Fire-and-forget in subprocess
+    $worker->call(args => [$data]);
+
+=head3 Pattern 3: Quick Sync Work (loop->later)
+
+For very fast sync operations (logging, incrementing counters):
+
+    await $res->json({ status => 'ok' });
+
+    $res->loop->later(sub {
+        log_request();  # Must be FAST (<10ms)
+    });
+
+B<WARNING:> Any blocking code in C<loop-E<gt>later> blocks the entire
+event loop. No other requests can be processed. Use IO::Async::Function
+for anything that might take time.
 
 See also: C<examples/background-tasks/app.pl>
 
