@@ -95,4 +95,48 @@ subtest 'HTTP route with method handler' => sub {
     })->()->get;
 };
 
+subtest 'WebSocket route with method handler' => sub {
+    {
+        package TestApp::WS;
+        use parent 'PAGI::Endpoint::Router';
+        use Future::AsyncAwait;
+
+        sub routes {
+            my ($self, $r) = @_;
+            $r->websocket('/ws/echo/:room' => 'echo_handler');
+        }
+
+        async sub echo_handler {
+            my ($self, $ws) = @_;
+
+            # Check we got a PAGI::WebSocket
+            die "Expected PAGI::WebSocket" unless $ws->isa('PAGI::WebSocket');
+
+            # Check route params work
+            my $room = $ws->param('room');
+            die "Expected room param" unless $room eq 'test-room';
+
+            await $ws->accept;
+        }
+    }
+
+    my $app = TestApp::WS->to_app;
+
+    (async sub {
+        my @sent;
+        my $send = sub { push @sent, $_[0]; Future->done };
+        my $receive = sub { Future->done({ type => 'websocket.disconnect' }) };
+
+        my $scope = {
+            type    => 'websocket',
+            path    => '/ws/echo/test-room',
+            headers => [],
+        };
+
+        await $app->($scope, $receive, $send);
+
+        is($sent[0]{type}, 'websocket.accept', 'WebSocket was accepted');
+    })->()->get;
+};
+
 done_testing;
