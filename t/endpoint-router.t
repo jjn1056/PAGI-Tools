@@ -12,8 +12,6 @@ subtest 'basic class structure' => sub {
     ok(PAGI::Endpoint::Router->can('to_app'), 'has to_app');
     ok(PAGI::Endpoint::Router->can('state'), 'has state');
     ok(PAGI::Endpoint::Router->can('routes'), 'has routes');
-    ok(PAGI::Endpoint::Router->can('on_startup'), 'has on_startup');
-    ok(PAGI::Endpoint::Router->can('on_shutdown'), 'has on_shutdown');
 };
 
 subtest 'state is a hashref' => sub {
@@ -181,81 +179,44 @@ subtest 'SSE route with method handler' => sub {
     })->()->get;
 };
 
-subtest 'lifespan startup and shutdown with state' => sub {
+subtest 'state accessible in handlers' => sub {
     {
-        package TestApp::Lifespan;
+        package TestApp::State;
         use parent 'PAGI::Endpoint::Router';
         use Future::AsyncAwait;
 
-        our $startup_called = 0;
-        our $shutdown_called = 0;
         our $state_value;
-
-        async sub on_startup {
-            my ($self) = @_;
-            $startup_called = 1;
-            $self->state->{db} = 'connected';
-        }
-
-        async sub on_shutdown {
-            my ($self) = @_;
-            $shutdown_called = 1;
-        }
+        our $req_state_value;
 
         sub routes {
             my ($self, $r) = @_;
+            # Pre-populate state (normally done via PAGI::Lifespan startup)
+            $self->state->{db} = 'connected';
             $r->get('/test' => 'test_handler');
         }
 
         async sub test_handler {
             my ($self, $req, $res) = @_;
-            # Access state via $self, not via $req->stash
+            # Access state via $self->state
             $state_value = $self->state->{db};
+            # Also accessible via $req->state
+            $req_state_value = $req->state->{db};
             await $res->text('ok');
         }
     }
 
-    my $app = TestApp::Lifespan->to_app;
+    my $app = TestApp::State->to_app;
 
-    # Test startup
     (async sub {
-        my @lifespan_sent;
-        my $lifespan_send = sub { push @lifespan_sent, $_[0]; Future->done };
+        my @sent;
+        my $send = sub { push @sent, $_[0]; Future->done };
+        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
 
-        my $msg_index = 0;
-        my @lifespan_messages = (
-            { type => 'lifespan.startup' },
-            { type => 'lifespan.shutdown' },
-        );
-        my $lifespan_receive = sub {
-            my $msg = $lifespan_messages[$msg_index++];
-            Future->done($msg);
-        };
+        await $app->({ type => 'http', method => 'GET', path => '/test', headers => [] },
+                     $receive, $send);
 
-        my $lifespan_scope = { type => 'lifespan' };
-
-        await $app->($lifespan_scope, $lifespan_receive, $lifespan_send);
-
-        ok($TestApp::Lifespan::startup_called, 'on_startup was called');
-        ok($TestApp::Lifespan::shutdown_called, 'on_shutdown was called');
-        is($lifespan_sent[0]{type}, 'lifespan.startup.complete', 'startup complete sent');
-        is($lifespan_sent[1]{type}, 'lifespan.shutdown.complete', 'shutdown complete sent');
-
-        # Test that state is available to handlers via $self
-        my @http_sent;
-        my $http_send = sub { push @http_sent, $_[0]; Future->done };
-        my $http_receive = sub { Future->done({ type => 'http.request', body => '' }) };
-
-        my $http_scope = {
-            type    => 'http',
-            method  => 'GET',
-            path    => '/test',
-            headers => [],
-        };
-
-        await $app->($http_scope, $http_receive, $http_send);
-
-        is($TestApp::Lifespan::state_value, 'connected', 'state from on_startup available in handler via $self');
+        is($TestApp::State::state_value, 'connected', 'state accessible via $self->state');
+        is($TestApp::State::req_state_value, 'connected', 'state accessible via $req->state');
     })->()->get;
 };
 

@@ -29,17 +29,6 @@ sub routes {
     # Default: no routes
 }
 
-# Override in subclass for startup logic
-async sub on_startup {
-    my ($self) = @_;
-    # Default: no-op
-}
-
-# Override in subclass for shutdown logic
-async sub on_shutdown {
-    my ($self) = @_;
-    # Default: no-op
-}
 
 sub to_app {
     my ($class) = @_;
@@ -55,47 +44,17 @@ sub to_app {
     $instance->_build_routes($internal_router);
 
     my $app = $internal_router->to_app;
+    my $state = $instance->{_state};
 
     return async sub {
         my ($scope, $receive, $send) = @_;
 
-        my $type = $scope->{type} // '';
-
-        # Handle lifespan events
-        if ($type eq 'lifespan') {
-            await $instance->_handle_lifespan($scope, $receive, $send);
-            return;
-        }
+        # Inject instance state into scope (allows $req->state to work)
+        $scope->{'pagi.state'} //= $state;
 
         # Dispatch to internal router
         await $app->($scope, $receive, $send);
     };
-}
-
-async sub _handle_lifespan {
-    my ($self, $scope, $receive, $send) = @_;
-
-    while (1) {
-        my $msg = await $receive->();
-        my $type = $msg->{type} // '';
-
-        if ($type eq 'lifespan.startup') {
-            eval { await $self->on_startup };
-            if ($@) {
-                await $send->({
-                    type    => 'lifespan.startup.failed',
-                    message => "$@",
-                });
-                return;
-            }
-            await $send->({ type => 'lifespan.startup.complete' });
-        }
-        elsif ($type eq 'lifespan.shutdown') {
-            eval { await $self->on_shutdown };
-            await $send->({ type => 'lifespan.shutdown.complete' });
-            return;
-        }
-    }
 }
 
 sub _build_routes {
@@ -329,7 +288,7 @@ __END__
 
 =head1 NAME
 
-PAGI::Endpoint::Router - Class-based router with lifespan and wrapped handlers
+PAGI::Endpoint::Router - Class-based router with wrapped handlers
 
 =head1 SYNOPSIS
 
@@ -337,20 +296,12 @@ PAGI::Endpoint::Router - Class-based router with lifespan and wrapped handlers
     use parent 'PAGI::Endpoint::Router';
     use Future::AsyncAwait;
 
-    # Worker-local state (NOT shared across workers)
-    async sub on_startup {
-        my ($self) = @_;
-        $self->state->{db} = DBI->connect(...);
-        $self->state->{cache} = MyApp::Cache->new;
-    }
-
-    async sub on_shutdown {
-        my ($self) = @_;
-        $self->state->{db}->disconnect;
-    }
-
     sub routes {
         my ($self, $r) = @_;
+
+        # Initialize state (or use PAGI::Lifespan wrapper for startup/shutdown)
+        $self->state->{db} = DBI->connect(...);
+        $self->state->{cache} = MyApp::Cache->new;
 
         # HTTP routes with middleware
         $r->get('/users' => ['require_auth'] => 'list_users');
@@ -396,7 +347,17 @@ PAGI::Endpoint::Router - Class-based router with lifespan and wrapped handlers
         });
     }
 
-    my $app = MyApp->to_app;
+    # Wrap with PAGI::Lifespan for startup/shutdown hooks
+    use PAGI::Lifespan;
+    my $app = PAGI::Lifespan->new(
+        startup => async sub ($state) {
+            $state->{db} = DBI->connect(...);
+        },
+        shutdown => async sub ($state) {
+            $state->{db}->disconnect;
+        },
+        app => MyApp->to_app,
+    )->to_app;
 
 =head1 DESCRIPTION
 
@@ -404,9 +365,6 @@ PAGI::Endpoint::Router provides a Starlette/Rails-style class-based approach
 to building PAGI applications. It combines:
 
 =over 4
-
-=item * B<Lifespan management> - C<on_startup>/C<on_shutdown> hooks for
-database connections, initialization, cleanup
 
 =item * B<Method-based handlers> - Define handlers as class methods
 
@@ -416,7 +374,14 @@ for HTTP, C<PAGI::WebSocket> for WebSocket, C<PAGI::SSE> for SSE
 =item * B<Middleware as methods> - Define middleware that can set stash values
 visible to all downstream handlers
 
+=item * B<Worker-local state> - C<$self-E<gt>state> hashref for storing resources
+like database connections, accessible via C<$req-E<gt>state>
+
 =back
+
+For lifecycle management (startup/shutdown hooks), wrap your router with
+C<PAGI::Lifespan>. This separation allows routers to be freely composable
+without lifecycle conflicts.
 
 =head1 STATE VS STASH
 
@@ -518,30 +483,11 @@ persists for the worker lifetime.
 
     $self->state->{db} = $connection;
 
-Returns the worker-local state hashref. Set resources here in
-C<on_startup>. Access via C<$self-E<gt>state> in handlers.
+Returns the worker-local state hashref. Initialize resources in the
+C<routes> method or via C<PAGI::Lifespan> wrapper. Access via
+C<$self-E<gt>state> in handlers or C<$req-E<gt>state> in wrapped objects.
 
 B<Note:> This is NOT shared across workers. See L</STATE VS STASH>.
-
-=head2 on_startup
-
-    async sub on_startup {
-        my ($self) = @_;
-        $self->state->{db} = DBI->connect(...);
-    }
-
-Called once when the application starts. Override to initialize
-database connections, caches, etc.
-
-=head2 on_shutdown
-
-    async sub on_shutdown {
-        my ($self) = @_;
-        $self->state->{db}->disconnect;
-    }
-
-Called once when the application shuts down. Override to close
-connections and cleanup resources.
 
 =head2 routes
 
