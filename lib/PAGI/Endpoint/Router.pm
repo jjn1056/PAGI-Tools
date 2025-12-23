@@ -363,7 +363,7 @@ __END__
 
 =head1 NAME
 
-PAGI::Endpoint::Router - Class-based router with lifespan support
+PAGI::Endpoint::Router - Class-based router with lifespan and wrapped handlers
 
 =head1 SYNOPSIS
 
@@ -371,6 +371,7 @@ PAGI::Endpoint::Router - Class-based router with lifespan support
     use parent 'PAGI::Endpoint::Router';
     use Future::AsyncAwait;
 
+    # Lifespan hooks
     async sub on_startup {
         my ($self) = @_;
         $self->stash->{db} = DBI->connect(...);
@@ -381,46 +382,135 @@ PAGI::Endpoint::Router - Class-based router with lifespan support
         $self->stash->{db}->disconnect;
     }
 
+    # Route definitions
     sub routes {
         my ($self, $r) = @_;
+
+        # HTTP routes - handler receives ($self, $req, $res)
         $r->get('/users' => 'list_users');
         $r->get('/users/:id' => 'get_user');
+        $r->post('/users' => 'create_user');
+
+        # With middleware
+        $r->delete('/users/:id' => ['require_admin'] => 'delete_user');
+
+        # WebSocket - handler receives ($self, $ws)
+        $r->websocket('/ws/chat/:room' => 'chat_handler');
+
+        # SSE - handler receives ($self, $sse)
+        $r->sse('/events/:channel' => 'events_handler');
+
+        # Mount sub-routers
+        $r->mount('/admin' => MyApp::Admin->to_app);
     }
 
+    # HTTP handlers receive wrapped objects
     async sub list_users {
         my ($self, $req, $res) = @_;
-        await $res->json({ users => [] });
+        my $db = $req->stash->{db};
+        my $users = $db->selectall_arrayref(...);
+        await $res->json($users);
     }
 
-    # Use it
+    async sub get_user {
+        my ($self, $req, $res) = @_;
+        my $id = $req->param('id');  # Route parameter
+        await $res->json({ id => $id });
+    }
+
+    # Middleware as methods
+    async sub require_admin {
+        my ($self, $req, $res, $next) = @_;
+        if ($req->get('user')->{role} eq 'admin') {
+            await $next->();
+        } else {
+            await $res->status(403)->json({ error => 'Forbidden' });
+        }
+    }
+
+    # WebSocket handlers receive PAGI::WebSocket
+    async sub chat_handler {
+        my ($self, $ws) = @_;
+        my $room = $ws->param('room');
+
+        await $ws->accept;
+        $ws->start_heartbeat(25);  # Keepalive
+
+        await $ws->each_json(async sub {
+            my ($data) = @_;
+            await $ws->send_json({ echo => $data });
+        });
+    }
+
+    # SSE handlers receive PAGI::SSE
+    async sub events_handler {
+        my ($self, $sse) = @_;
+        await $sse->every(1, async sub {
+            await $sse->send_event('tick', { ts => time });
+        });
+    }
+
+    # Create app
     my $app = MyApp::API->to_app;
 
 =head1 DESCRIPTION
 
-PAGI::Endpoint::Router provides a class-based approach to routing with
-integrated lifespan management. It combines the power of PAGI::App::Router
-with lifecycle hooks and method-based handlers.
+PAGI::Endpoint::Router provides a Rails/Django-style class-based approach
+to building PAGI applications. It combines:
+
+=over 4
+
+=item * B<Lifespan management> - C<on_startup>/C<on_shutdown> hooks for
+database connections, initialization, cleanup
+
+=item * B<Method-based handlers> - Define handlers as class methods instead
+of anonymous subs
+
+=item * B<Wrapped objects> - Handlers receive C<PAGI::Request>/C<PAGI::Response>
+for HTTP, C<PAGI::WebSocket> for WebSocket, C<PAGI::SSE> for SSE
+
+=item * B<Middleware as methods> - Define middleware as class methods with
+C<$next> parameter
+
+=item * B<Shared stash> - C<$self-E<gt>stash> from startup available to all
+handlers via C<$req-E<gt>stash>, C<$ws-E<gt>stash>, etc.
+
+=back
+
+=head1 HANDLER SIGNATURES
+
+Handlers receive different wrapped objects based on route type:
+
+    # HTTP routes: get, post, put, patch, delete, head, options
+    async sub handler ($self, $req, $res) { }
+    # $req = PAGI::Request, $res = PAGI::Response
+
+    # WebSocket routes
+    async sub handler ($self, $ws) { }
+    # $ws = PAGI::WebSocket
+
+    # SSE routes
+    async sub handler ($self, $sse) { }
+    # $sse = PAGI::SSE
+
+    # Middleware
+    async sub middleware ($self, $req, $res, $next) { }
 
 =head1 METHODS
 
-=head2 new
+=head2 to_app
 
-    my $router = PAGI::Endpoint::Router->new;
+    my $app = MyRouter->to_app;
 
-Creates a new router instance.
+Returns a PAGI application coderef. Creates a single instance that
+persists for the application lifetime (for stash sharing).
 
 =head2 stash
 
     $self->stash->{db} = $connection;
 
 Returns the router's stash hashref. Values set here in C<on_startup>
-are available to all handlers via C<$req->stash>, C<$ws->stash>, etc.
-
-=head2 to_app
-
-    my $app = MyRouter->to_app;
-
-Returns a PAGI application coderef.
+are available to all handlers via C<$req-E<gt>stash>, C<$ws-E<gt>stash>, etc.
 
 =head2 on_startup
 
@@ -429,8 +519,8 @@ Returns a PAGI application coderef.
         # Initialize resources
     }
 
-Called once when the application starts. Override to initialize
-database connections, caches, etc.
+Called once when the application starts (on first lifespan.startup event).
+Override to initialize database connections, caches, etc.
 
 =head2 on_shutdown
 
@@ -439,7 +529,8 @@ database connections, caches, etc.
         # Cleanup resources
     }
 
-Called once when the application shuts down.
+Called once when the application shuts down. Override to close
+connections and cleanup resources.
 
 =head2 routes
 
@@ -448,6 +539,43 @@ Called once when the application shuts down.
         $r->get('/path' => 'handler_method');
     }
 
-Override to define routes.
+Override to define routes. The C<$r> parameter is a route builder with
+methods for HTTP, WebSocket, and SSE routes.
+
+=head1 ROUTE BUILDER METHODS
+
+The C<$r> object passed to C<routes()> supports:
+
+=head2 HTTP Methods
+
+    $r->get($path => 'handler');
+    $r->get($path => ['middleware'] => 'handler');
+
+    $r->post($path => ...);
+    $r->put($path => ...);
+    $r->patch($path => ...);
+    $r->delete($path => ...);
+    $r->head($path => ...);
+    $r->options($path => ...);
+
+=head2 WebSocket
+
+    $r->websocket($path => 'handler');
+
+=head2 SSE
+
+    $r->sse($path => 'handler');
+
+=head2 Mount
+
+    $r->mount($prefix => $app);
+
+Mount another PAGI app at a prefix.
+
+=head1 SEE ALSO
+
+L<PAGI::App::Router>, L<PAGI::Request>, L<PAGI::Response>,
+L<PAGI::WebSocket>, L<PAGI::SSE>, L<PAGI::Endpoint::HTTP>,
+L<PAGI::Endpoint::WebSocket>, L<PAGI::Endpoint::SSE>
 
 =cut
