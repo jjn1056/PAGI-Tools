@@ -588,6 +588,60 @@ async sub receive_json_with_timeout {
     return JSON::PP::decode_json($text);
 }
 
+# Heartbeat/keepalive support
+sub start_heartbeat {
+    my ($self, $interval) = @_;
+
+    return $self if !$interval || $interval <= 0;
+
+    require IO::Async::Timer::Periodic;
+
+    my $loop = $self->loop;
+
+    my $timer = IO::Async::Timer::Periodic->new(
+        interval => $interval,
+        on_tick  => sub {
+            return unless $self->is_connected;
+            eval {
+                $self->{send}->({
+                    type => 'websocket.send',
+                    text => JSON::PP::encode_json({
+                        type => 'ping',
+                        ts   => time(),
+                    }),
+                });
+            };
+        },
+    );
+
+    $loop->add($timer);
+    $timer->start;
+
+    # Store for cleanup
+    $self->{_heartbeat_timer} = $timer;
+    $self->{_heartbeat_loop} = $loop;
+
+    # Auto-stop on close
+    $self->on_close(sub {
+        $self->stop_heartbeat;
+    });
+
+    return $self;
+}
+
+sub stop_heartbeat {
+    my ($self) = @_;
+
+    if (my $timer = delete $self->{_heartbeat_timer}) {
+        $timer->stop if $timer->is_running;
+        if (my $loop = delete $self->{_heartbeat_loop}) {
+            eval { $loop->remove($timer) };
+        }
+    }
+
+    return $self;
+}
+
 1;
 
 __END__
@@ -916,6 +970,38 @@ callbacks can be registered for each event type.
 Callback-based event loop (alternative to C<each_*> iteration).
 Runs until disconnect, dispatching messages to registered callbacks.
 Errors in callbacks are caught and passed to error handlers.
+
+=head1 HEARTBEAT / KEEPALIVE
+
+=head2 start_heartbeat
+
+    $ws->start_heartbeat(25);  # Ping every 25 seconds
+
+Starts sending periodic JSON ping messages to keep the connection alive.
+Useful for preventing proxy/NAT timeout on idle connections.
+
+The ping message format is:
+
+    { "type": "ping", "ts": <unix_timestamp> }
+
+Common intervals:
+
+=over 4
+
+=item C<25> - Safe for most proxies (30s timeout common)
+
+=item C<55> - Safe for aggressive proxies (60s timeout)
+
+=back
+
+Automatically stops when connection closes. Returns C<$self> for chaining.
+
+=head2 stop_heartbeat
+
+    $ws->stop_heartbeat;
+
+Manually stops the heartbeat timer. Called automatically on connection close.
+Returns C<$self> for chaining.
 
 =head1 COMPLETE EXAMPLE
 
