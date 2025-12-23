@@ -105,8 +105,146 @@ async sub _handle_lifespan {
 
 sub _build_routes {
     my ($self, $r) = @_;
-    # Placeholder - will be implemented in next tasks
-    $self->routes($r);
+
+    # Create a wrapper router that intercepts route registration
+    my $wrapper = PAGI::Endpoint::Router::RouteBuilder->new($self, $r);
+    $self->routes($wrapper);
+}
+
+# Internal route builder that wraps handlers
+package PAGI::Endpoint::Router::RouteBuilder;
+
+use strict;
+use warnings;
+use Future::AsyncAwait;
+use Scalar::Util qw(blessed);
+
+sub new {
+    my ($class, $endpoint, $router) = @_;
+    return bless {
+        endpoint => $endpoint,
+        router   => $router,
+    }, $class;
+}
+
+# HTTP methods
+sub get     { shift->_add_http_route('GET', @_) }
+sub post    { shift->_add_http_route('POST', @_) }
+sub put     { shift->_add_http_route('PUT', @_) }
+sub patch   { shift->_add_http_route('PATCH', @_) }
+sub delete  { shift->_add_http_route('DELETE', @_) }
+sub head    { shift->_add_http_route('HEAD', @_) }
+sub options { shift->_add_http_route('OPTIONS', @_) }
+
+sub _add_http_route {
+    my ($self, $method, $path, @rest) = @_;
+
+    my ($middleware, $handler) = $self->_parse_route_args(@rest);
+
+    # Wrap middleware
+    my @wrapped_mw = map { $self->_wrap_middleware($_) } @$middleware;
+
+    # Wrap handler
+    my $wrapped = $self->_wrap_http_handler($handler);
+
+    # Register with internal router using the appropriate HTTP method
+    my $router_method = lc($method);
+    $self->{router}->$router_method($path, @wrapped_mw ? (\@wrapped_mw, $wrapped) : $wrapped);
+
+    return $self;
+}
+
+sub _parse_route_args {
+    my ($self, @args) = @_;
+
+    if (@args == 2 && ref($args[0]) eq 'ARRAY') {
+        return ($args[0], $args[1]);
+    }
+    elsif (@args == 1) {
+        return ([], $args[0]);
+    }
+    else {
+        die "Invalid route arguments";
+    }
+}
+
+sub _wrap_http_handler {
+    my ($self, $handler) = @_;
+
+    my $endpoint = $self->{endpoint};
+
+    # If handler is a string, it's a method name
+    if (!ref($handler)) {
+        my $method_name = $handler;
+        my $method = $endpoint->can($method_name)
+            or die "No such method: $method_name in " . ref($endpoint);
+
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+
+            require PAGI::Request;
+            require PAGI::Response;
+
+            my $req = PAGI::Request->new($scope, $receive);
+            my $res = PAGI::Response->new($send, $scope);
+
+            # Inject stash
+            $req->set_stash($scope->{'pagi.stash'} // {});
+
+            await $endpoint->$method($req, $res);
+        };
+    }
+
+    # Already a coderef - wrap it
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+
+        require PAGI::Request;
+        require PAGI::Response;
+
+        my $req = PAGI::Request->new($scope, $receive);
+        my $res = PAGI::Response->new($send, $scope);
+
+        $req->set_stash($scope->{'pagi.stash'} // {});
+
+        await $handler->($req, $res);
+    };
+}
+
+sub _wrap_middleware {
+    my ($self, $mw) = @_;
+
+    my $endpoint = $self->{endpoint};
+
+    # String = method name
+    if (!ref($mw)) {
+        my $method = $endpoint->can($mw)
+            or die "No such middleware method: $mw";
+
+        return async sub {
+            my ($scope, $receive, $send, $next) = @_;
+
+            require PAGI::Request;
+            require PAGI::Response;
+
+            my $req = PAGI::Request->new($scope, $receive);
+            my $res = PAGI::Response->new($send, $scope);
+
+            $req->set_stash($scope->{'pagi.stash'} // {});
+
+            await $endpoint->$method($req, $res, $next);
+        };
+    }
+
+    # Already a coderef or object - pass through
+    return $mw;
+}
+
+# Pass through mount to internal router
+sub mount {
+    my ($self, @args) = @_;
+    $self->{router}->mount(@args);
+    return $self;
 }
 
 1;
