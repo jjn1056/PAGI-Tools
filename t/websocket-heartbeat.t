@@ -47,4 +47,26 @@ subtest 'stop_heartbeat method exists' => sub {
     ok($ws->can('stop_heartbeat'), 'stop_heartbeat method exists');
 };
 
+subtest 'param method for route parameters' => sub {
+    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+
+    # Initially no params
+    is($ws->param('id'), undef, 'param returns undef when not set');
+
+    # Set route params (as router would do)
+    $ws->set_route_params({ id => '42', name => 'test' });
+
+    is($ws->param('id'), '42', 'param returns route parameter');
+    is($ws->param('name'), 'test', 'param returns another route parameter');
+    is($ws->param('missing'), undef, 'param returns undef for missing');
+};
+
+subtest 'params method returns all route parameters' => sub {
+    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+    $ws->set_route_params({ foo => 'bar', baz => 'qux' });
+
+    my $params = $ws->params;
+    is($params, { foo => 'bar', baz => 'qux' }, 'params returns all route params');
+};
+
 done_testing;

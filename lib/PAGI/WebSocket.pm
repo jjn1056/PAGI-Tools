@@ -50,6 +50,23 @@ sub server       { shift->{scope}{server} }
 # Per-connection storage
 sub stash        { shift->{_stash} }
 
+# Route parameter accessors (set by router)
+sub set_route_params {
+    my ($self, $params) = @_;
+    $self->{_route_params} = $params // {};
+    return $self;
+}
+
+sub params {
+    my ($self) = @_;
+    return $self->{_route_params} // {};
+}
+
+sub param {
+    my ($self, $name) = @_;
+    return $self->{_route_params}{$name};
+}
+
 # Single header lookup (case-insensitive, returns last value)
 sub header {
     my ($self, $name) = @_;
@@ -805,6 +822,25 @@ Case-insensitive header access.
 
 Per-connection storage hashref. Useful for storing user data
 without external variables.
+
+=head2 param
+
+    my $id = $ws->param('id');
+
+Returns a single route parameter by name. These are set by the router
+when matching path patterns like C</chat/:room>.
+
+=head2 params
+
+    my $params = $ws->params;  # { room => 'general', id => '42' }
+
+Returns hashref of all route parameters.
+
+=head2 set_route_params
+
+    $ws->set_route_params({ room => 'general' });
+
+Sets route parameters. Called internally by PAGI::Endpoint::Router.
 
 =head1 LIFECYCLE METHODS
 
