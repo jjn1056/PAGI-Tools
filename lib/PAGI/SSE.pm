@@ -48,6 +48,12 @@ sub stash {
     return $self->{scope}{'pagi.stash'} //= {};
 }
 
+# Application state (injected by PAGI::Lifespan, read-only)
+sub state {
+    my $self = shift;
+    return $self->{scope}{'pagi.state'} // {};
+}
+
 # Route parameter accessors (read from scope)
 sub params {
     my ($self) = @_;
@@ -60,8 +66,8 @@ sub param {
     return $params->{$name};
 }
 
-# State accessors
-sub state { shift->{_state} }
+# Connection state accessors
+sub connection_state { shift->{_state} }
 
 sub is_started {
     my $self = shift;
@@ -621,7 +627,7 @@ scope and is shared across all middleware, handlers, and subrouters
 processing the same request.
 
 B<Note:> For worker-level state (database connections, config), use
-C<< $self->state >> in C<PAGI::Endpoint::Router> subclasses.
+C<< $sse->state >> to access application state injected by PAGI::Lifespan.
 
 =head2 param
 
@@ -635,6 +641,15 @@ C<< $scope->{'pagi.router'}{params} >>.
     my $params = $sse->params;
 
 Returns hashref of all route parameters from scope.
+
+=head2 state
+
+    my $state = $sse->state;
+    my $db = $sse->state->{db};
+
+Returns the application state hashref injected by PAGI::Lifespan.
+This contains worker-level shared state like database connections
+and configuration. Returns empty hashref if no state was injected.
 
 =head1 LIFECYCLE METHODS
 
@@ -659,13 +674,13 @@ Marks connection as closed and runs on_close callbacks.
 Waits for client disconnect. Use this at the end of your
 handler to keep the connection open.
 
-=head1 STATE ACCESSORS
+=head1 CONNECTION STATE ACCESSORS
 
-=head2 is_started, is_closed, state
+=head2 is_started, is_closed, connection_state
 
     if ($sse->is_started) { ... }
     if ($sse->is_closed) { ... }
-    my $state = $sse->state;    # 'pending', 'started', 'closed'
+    my $state = $sse->connection_state;    # 'pending', 'started', 'closed'
 
 =head1 SEND METHODS
 
