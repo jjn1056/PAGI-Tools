@@ -430,7 +430,7 @@ use L<PAGI::App::File> instead:
         my $res = PAGI::Response->new($send);
         my $file_id = $req->param('id');
 
-        my $file = get_file($file_id);
+        my $file = get_file($file_id); # Be sure to clean $file
         unless ($file && -f $file->{path}) {
             return await $res->error(404, 'File not found');
         }
@@ -599,6 +599,41 @@ when C<strict> mode would be enabled) will cause the Future to fail.
         warn "Failed to send response: $e";
     }
 
+=head1 RECIPES
+
+=head2 Background Tasks
+
+Run tasks after the response is sent without blocking the client.
+Use the C<loop> method to access the event loop:
+
+    async sub handler {
+        my ($scope, $receive, $send) = @_;
+        my $res = PAGI::Response->new($send);
+
+        # Response goes out immediately
+        await $res->json({ status => 'queued' });
+
+        # These run AFTER the response, client doesn't wait
+        $res->loop->later(sub {
+            send_email($user);      # Sync task
+        });
+
+        # Async tasks - just call without await
+        log_to_analytics($event);   # Returns Future, runs in background
+    }
+
+The C<loop> method returns the current L<IO::Async::Loop>, which provides:
+
+=over 4
+
+=item * C<< $loop->later(sub { ... }) >> - Run after current code yields
+
+=item * C<< $loop->delay_future(after => $secs) >> - Delayed execution
+
+=back
+
+See also: C<examples/background-tasks/app.pl>
+
 =head1 SEE ALSO
 
 L<PAGI>, L<PAGI::Request>, L<PAGI::Server>
@@ -622,6 +657,11 @@ sub new ($class, $send = undef, $scope = undef) {
     }, $class;
 
     return $self;
+}
+
+sub loop ($self) {
+    require IO::Async::Loop;
+    return IO::Async::Loop->new;
 }
 
 sub status ($self, $code) {

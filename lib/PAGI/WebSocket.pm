@@ -32,7 +32,6 @@ sub new {
         _on_close     => [],
         _on_error     => [],
         _on_message   => [],
-        _stash        => {},
     }, $class;
 }
 
@@ -47,8 +46,11 @@ sub subprotocols { shift->{scope}{subprotocols} // [] }
 sub client       { shift->{scope}{client} }
 sub server       { shift->{scope}{server} }
 
-# Per-connection storage
-sub stash        { shift->{_stash} }
+# Per-connection storage (lives in scope, flows through subrouters)
+sub stash {
+    my $self = shift;
+    return $self->{scope}{'pagi.stash'} //= {};
+}
 
 # Route parameter accessors (read from scope)
 sub params {

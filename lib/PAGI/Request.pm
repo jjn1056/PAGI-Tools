@@ -54,6 +54,11 @@ sub http_version { shift->{scope}{http_version} // '1.1' }
 sub client       { shift->{scope}{client} }
 sub raw          { shift->{scope} }
 
+sub loop {
+    require IO::Async::Loop;
+    return IO::Async::Loop->new;
+}
+
 # Internal: URL decode a string (handles + as space)
 sub _url_decode {
     my ($str) = @_;
@@ -298,28 +303,10 @@ sub param {
 }
 
 # Per-request storage for middleware/handlers
+# Lives in scope so it flows through to subrouters and middleware
 sub stash {
     my $self = shift;
-    $self->{_stash} //= {};
-    return $self->{_stash};
-}
-
-sub set_stash {
-    my ($self, $stash) = @_;
-    $self->{_stash} = $stash // {};
-    return $self;
-}
-
-# Request-scoped data (for middleware to pass data to handlers)
-sub set {
-    my ($self, $key, $value) = @_;
-    $self->{_data}{$key} = $value;
-    return $self;
-}
-
-sub get {
-    my ($self, $key) = @_;
-    return $self->{_data}{$key};
+    return $self->{scope}{'pagi.stash'} //= {};
 }
 
 # Body streaming - mutually exclusive with buffered body methods
@@ -864,35 +851,41 @@ Extract Bearer token from Authorization header.
 
 Decode Basic auth credentials.
 
-=head1 STATE
+=head1 STASH
 
 =head2 stash
 
-    my $db = $req->stash->{db};
-    $req->stash->{user} = $user;
+    $req->stash->{user} = $current_user;
+    my $user = $req->stash->{user};
 
-Returns the shared stash hashref. This is typically injected by
-C<PAGI::Endpoint::Router> and contains data from C<on_startup>
-(database connections, config, etc).
+Returns the per-request stash hashref. The stash lives in the request
+scope (C<< $scope->{'pagi.stash'} >>) and is shared across ALL middleware,
+handlers, and subrouters processing the same request.
 
-=head2 set_stash
+This enables middleware to pass data downstream:
 
-    $req->set_stash({ db => $dbh, config => $config });
+    # In auth middleware
+    async sub require_auth {
+        my ($self, $req, $res, $next) = @_;
+        $req->stash->{user} = verify_token($req->bearer_token);
+        await $next->();
+    }
 
-Replaces the entire stash. Called internally by router.
+    # In handler (same request) - sees the user
+    async sub get_profile {
+        my ($self, $req, $res) = @_;
+        my $user = $req->stash->{user};  # Set by middleware
+        await $res->json($user);
+    }
 
-=head2 set
+    # In subrouter handler - also sees the user
+    async sub api_handler {
+        my ($self, $req, $res) = @_;
+        my $user = $req->stash->{user};  # Still available!
+    }
 
-    $req->set('user', $authenticated_user);
-
-Sets request-scoped data. Useful for middleware to pass data
-to downstream handlers.
-
-=head2 get
-
-    my $user = $req->get('user');
-
-Gets request-scoped data set by middleware.
+B<Note:> For worker-level state (database connections, config), use
+C<< $self->state >> in C<PAGI::Endpoint::Router> subclasses.
 
 =head1 SEE ALSO
 

@@ -29,7 +29,6 @@ sub new {
         _state    => 'pending',  # pending -> started -> closed
         _on_close => [],
         _on_error => [],
-        _stash    => {},
     }, $class;
 }
 
@@ -43,16 +42,10 @@ sub http_version { shift->{scope}{http_version} // '1.1' }
 sub client       { shift->{scope}{client} }
 sub server       { shift->{scope}{server} }
 
-# Per-connection storage
+# Per-connection storage (lives in scope, flows through subrouters)
 sub stash {
     my ($self) = @_;
-    return $self->{_stash} //= {};
-}
-
-sub set_stash {
-    my ($self, $stash) = @_;
-    $self->{_stash} = $stash // {};
-    return $self;
+    return $self->{scope}{'pagi.stash'} //= {};
 }
 
 # Route parameter accessors (read from scope)
@@ -491,26 +484,20 @@ async sub every {
     my $loop = $self->loop;
     my $running = 1;
 
-    # Set up disconnect detection
+    # Set up disconnect detection via on_close callback
+    # SSE is one-way (server→client), so we don't need to call receive()
+    # The connection close is detected by the server and triggers on_close
     $self->on_close(sub {
         $running = 0;
     });
 
+    await $self->start unless $self->is_started;
+
     while ($running && !$self->is_closed) {
         await $callback->();
 
-        # Wait for interval or disconnect
-        my $timer_f = $loop->delay_future(after => $interval);
-        my $recv_f = $self->{receive}->();
-
-        my $winner = await Future->wait_any($timer_f, $recv_f);
-
-        if ($recv_f->is_ready) {
-            my $msg = $recv_f->get;
-            if (!$msg || $msg->{type} eq 'sse.disconnect') {
-                $running = 0;
-            }
-        }
+        # Wait for the interval (disconnect detected via on_close callback)
+        await $loop->delay_future(after => $interval);
     }
 }
 
@@ -626,16 +613,15 @@ Use this to replay missed events.
 
 =head2 stash
 
-    my $db = $sse->stash->{db};
+    $sse->stash->{client_id} = $id;
+    my $user = $sse->stash->{user};
 
-Returns the shared stash hashref. This is typically set via C<set_stash>
-by the router with data from C<on_startup>.
+Returns the per-request stash hashref. The stash lives in the request
+scope and is shared across all middleware, handlers, and subrouters
+processing the same request.
 
-=head2 set_stash
-
-    $sse->set_stash({ db => $connection });
-
-Replaces the entire stash. Called internally by router.
+B<Note:> For worker-level state (database connections, config), use
+C<< $self->state >> in C<PAGI::Endpoint::Router> subclasses.
 
 =head2 param
 
