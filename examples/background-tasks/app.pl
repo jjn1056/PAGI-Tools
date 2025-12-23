@@ -5,15 +5,14 @@
 # Demonstrates different patterns for running work after sending a response.
 #
 # IMPORTANT: Understand the difference between:
-#   1. Async I/O (non-blocking) - Use fire-and-forget Futures
+#   1. Async I/O (non-blocking) - Use fire-and-forget Futures with ->retain
 #   2. Blocking/CPU work - Use IO::Async::Function (runs in subprocess)
 #
 # Run: pagi-server examples/background-tasks/app.pl --port 5000
 #
 # Test:
 #   curl http://localhost:5000/async      # Fire-and-forget async I/O
-#   curl http://localhost:5000/blocking   # CPU-bound work in subprocess
-#   curl http://localhost:5000/bad        # DON'T DO THIS - blocks event loop
+#   curl http://localhost:5000/blocking   # CPU work in subprocess
 #
 #   curl -X POST http://localhost:5000/signup -d '{"email":"test@example.com"}'
 #
@@ -32,6 +31,9 @@ use PAGI::Request;
 # For network calls, database queries, file I/O that use
 # async libraries. These yield control back to the event
 # loop while waiting, so they don't block other requests.
+#
+# IMPORTANT: Call ->retain() on fire-and-forget Futures
+# to prevent "lost future" warnings.
 #---------------------------------------------------------
 
 # Simulated async email API (would use async HTTP client in practice)
@@ -54,6 +56,14 @@ async sub log_to_analytics {
     warn "[async] Analytics logged!\n";
 }
 
+# Helper to fire-and-forget an async sub properly
+sub fire_and_forget {
+    my ($future) = @_;
+    # retain() prevents the Future from being garbage collected
+    # and suppresses the "lost future" warning
+    $future->retain();
+}
+
 #---------------------------------------------------------
 # PATTERN 2: Blocking/CPU-Bound Work
 #
@@ -71,13 +81,13 @@ sub get_cpu_worker {
     $cpu_worker = IO::Async::Function->new(
         code => sub {
             my ($task_name, $duration) = @_;
-            warn "[subprocess] Starting CPU task: $task_name\n";
+            warn "[subprocess $$] Starting CPU task: $task_name\n";
 
             # This sleep (or any blocking work) runs in a CHILD PROCESS
             # so it doesn't block the main event loop
             sleep $duration;
 
-            warn "[subprocess] Completed: $task_name\n";
+            warn "[subprocess $$] Completed: $task_name\n";
             return "Result of $task_name";
         },
     );
@@ -91,7 +101,7 @@ sub run_blocking_task {
     my ($task_name, $duration) = @_;
     get_cpu_worker()->call(
         args => [$task_name, $duration],
-        on_result => sub {
+        on_return => sub {
             my ($result) = @_;
             warn "[main] Subprocess returned: $result\n";
         },
@@ -140,7 +150,6 @@ $router->get('/' => async sub {
 <ul>
   <li><a href="/async">/async</a> - Fire-and-forget async I/O (non-blocking)</li>
   <li><a href="/blocking">/blocking</a> - CPU work in subprocess (IO::Async::Function)</li>
-  <li><a href="/bad">/bad</a> - Example of what NOT to do</li>
 </ul>
 
 <h2>POST /signup</h2>
@@ -178,10 +187,9 @@ $router->get('/async' => async sub {
         message => 'Response sent! Async tasks running in background.',
     });
 
-    # These return Futures - we just don't await them
-    # They run concurrently, yielding to the event loop as needed
-    send_welcome_email('user@example.com');
-    log_to_analytics('page_view', { path => '/' });
+    # Fire-and-forget: must call ->retain() to avoid "lost future" warning
+    fire_and_forget(send_welcome_email('user@example.com'));
+    fire_and_forget(log_to_analytics('page_view', { path => '/' }));
 
     # Quick sync work - runs after this handler yields
     $res->loop->later(sub {
@@ -205,29 +213,6 @@ $router->get('/blocking' => async sub {
     run_blocking_task("image_processing", 2);
 });
 
-# BAD: Don't do this! Demonstrates what NOT to do.
-$router->get('/bad' => async sub {
-    my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($send);
-
-    await $res->json({
-        status => 'ok',
-        message => 'Response sent, but server is now blocked for 2 seconds!',
-    });
-
-    # !!! BAD !!! - This blocks the ENTIRE event loop!
-    # No other requests can be processed during this sleep.
-    #
-    # $res->loop->later(sub {
-    #     sleep 2;  # BLOCKS EVERYTHING
-    # });
-    #
-    # Instead, use IO::Async::Function (see /blocking endpoint)
-
-    warn "[WARNING] The /bad endpoint exists to show what NOT to do.\n";
-    warn "[WARNING] See the source code for explanation.\n";
-});
-
 # Real-world example: User signup with background tasks
 $router->post('/signup' => async sub {
     my ($scope, $receive, $send) = @_;
@@ -244,16 +229,15 @@ $router->post('/signup' => async sub {
     });
 
     # Fire-and-forget async tasks (non-blocking)
-    send_welcome_email($email);
-    log_to_analytics('signup', { email => $email });
+    fire_and_forget(send_welcome_email($email));
+    fire_and_forget(log_to_analytics('signup', { email => $email }));
 
     # Quick sync logging
     $res->loop->later(sub {
         quick_sync_task("New signup: $email");
     });
 
-    # If you had CPU-intensive work (password hashing already done,
-    # but maybe generating a PDF welcome packet):
+    # For CPU-intensive work (e.g., generating PDF):
     # run_blocking_task("generate_welcome_pdf", 5);
 });
 
@@ -275,7 +259,7 @@ $router->mount('/ws' => async sub {
         $ws->try_send_text("Got: $text");
 
         # For async I/O processing:
-        log_to_analytics('ws_message', { text => $text });
+        fire_and_forget(log_to_analytics('ws_message', { text => $text }));
 
         # For CPU-intensive processing (e.g., NLP, image analysis):
         # run_blocking_task("analyze_message", 1);

@@ -609,13 +609,14 @@ on what kind of work you're doing:
 =head3 Pattern 1: Fire-and-Forget Async I/O (Non-Blocking)
 
 For async operations (HTTP calls, database queries using async drivers),
-just call them without C<await>. They return Futures that run concurrently:
+call them without C<await> and use C<< ->retain() >> to prevent the
+"lost future" warning:
 
     await $res->json({ status => 'queued' });
 
-    # These run in the background - non-blocking
-    send_async_email($user);      # Returns Future, don't await
-    log_to_analytics($event);     # Returns Future, don't await
+    # Fire-and-forget: retain() prevents GC warning
+    send_async_email($user)->retain();
+    log_to_analytics($event)->retain();
 
 =head3 Pattern 2: Blocking/CPU Work (IO::Async::Function)
 
@@ -639,7 +640,7 @@ L<IO::Async::Function> to run in a subprocess:
     # Fire-and-forget in subprocess (must use callbacks)
     $worker->call(
         args => [$data],
-        on_result => sub { warn "Done: @_\n" },
+        on_return => sub { warn "Done: @_\n" },
         on_error  => sub { warn "Error: @_\n" },
     );
 
