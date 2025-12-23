@@ -1,0 +1,72 @@
+use strict;
+use warnings;
+use Test2::V0;
+use Future::AsyncAwait;
+
+use PAGI::SSE;
+
+my $scope = {
+    type    => 'sse',
+    path    => '/events',
+    headers => [],
+};
+
+my @sent;
+my $send = sub {
+    my ($msg) = @_;
+    push @sent, $msg;
+    return Future->done;
+};
+
+my $disconnected = 0;
+my $receive = sub {
+    if ($disconnected) {
+        return Future->done({ type => 'sse.disconnect' });
+    }
+    # Return a future that never resolves (simulates waiting)
+    return Future->new;
+};
+
+subtest 'stash accessor' => sub {
+    my $sse = PAGI::SSE->new($scope, $receive, $send);
+
+    is($sse->stash, {}, 'stash returns empty hashref by default');
+
+    $sse->stash->{counter} = 0;
+    is($sse->stash->{counter}, 0, 'stash values persist');
+};
+
+subtest 'set_stash replaces stash' => sub {
+    my $sse = PAGI::SSE->new($scope, $receive, $send);
+
+    $sse->set_stash({ metrics => { requests => 100 } });
+    is($sse->stash->{metrics}{requests}, 100, 'set_stash works');
+};
+
+subtest 'param and params read from scope' => sub {
+    my $scope_with_params = {
+        type    => 'sse',
+        path    => '/events',
+        headers => [],
+        'pagi.router' => { params => { channel => 'news', format => 'json' } },
+    };
+    my $sse = PAGI::SSE->new($scope_with_params, $receive, $send);
+
+    is($sse->param('channel'), 'news', 'param returns route param from scope');
+    is($sse->param('format'), 'json', 'param returns another param');
+    is($sse->param('missing'), undef, 'param returns undef for missing');
+    is($sse->params, { channel => 'news', format => 'json' }, 'params returns all');
+};
+
+subtest 'param returns undef when no route params in scope' => sub {
+    my $sse = PAGI::SSE->new($scope, $receive, $send);
+    is($sse->param('anything'), undef, 'param returns undef when no params');
+    is($sse->params, {}, 'params returns empty hash when no params');
+};
+
+subtest 'every method exists' => sub {
+    my $sse = PAGI::SSE->new($scope, $receive, $send);
+    ok($sse->can('every'), 'every method exists');
+};
+
+done_testing;

@@ -44,7 +44,28 @@ sub client       { shift->{scope}{client} }
 sub server       { shift->{scope}{server} }
 
 # Per-connection storage
-sub stash        { shift->{_stash} }
+sub stash {
+    my ($self) = @_;
+    return $self->{_stash} //= {};
+}
+
+sub set_stash {
+    my ($self, $stash) = @_;
+    $self->{_stash} = $stash // {};
+    return $self;
+}
+
+# Route parameter accessors (read from scope)
+sub params {
+    my ($self) = @_;
+    return $self->{scope}{'pagi.router'}{params} // {};
+}
+
+sub param {
+    my ($self, $name) = @_;
+    my $params = $self->{scope}{'pagi.router'}{params} // {};
+    return $params->{$name};
+}
 
 # State accessors
 sub state { shift->{_state} }
@@ -463,6 +484,36 @@ async sub each {
     return $self;
 }
 
+# Periodic event sending
+async sub every {
+    my ($self, $interval, $callback) = @_;
+
+    my $loop = $self->loop;
+    my $running = 1;
+
+    # Set up disconnect detection
+    $self->on_close(sub {
+        $running = 0;
+    });
+
+    while ($running && !$self->is_closed) {
+        await $callback->();
+
+        # Wait for interval or disconnect
+        my $timer_f = $loop->delay_future(after => $interval);
+        my $recv_f = $self->{receive}->();
+
+        my $winner = await Future->wait_any($timer_f, $recv_f);
+
+        if ($recv_f->is_ready) {
+            my $msg = $recv_f->get;
+            if (!$msg || $msg->{type} eq 'sse.disconnect') {
+                $running = 0;
+            }
+        }
+    }
+}
+
 1;
 
 __END__
@@ -575,9 +626,29 @@ Use this to replay missed events.
 
 =head2 stash
 
-    $sse->stash->{user} = $user;
+    my $db = $sse->stash->{db};
 
-Per-connection storage hashref.
+Returns the shared stash hashref. This is typically set via C<set_stash>
+by the router with data from C<on_startup>.
+
+=head2 set_stash
+
+    $sse->set_stash({ db => $connection });
+
+Replaces the entire stash. Called internally by router.
+
+=head2 param
+
+    my $channel = $sse->param('channel');
+
+Returns a route parameter by name. Route parameters are read from
+C<< $scope->{'pagi.router'}{params} >>.
+
+=head2 params
+
+    my $params = $sse->params;
+
+Returns hashref of all route parameters from scope.
 
 =head1 LIFECYCLE METHODS
 
@@ -681,6 +752,18 @@ Requires an event loop (auto-created if needed).
 
 Iterates over items, calling callback for each.
 If callback returns a hashref, sends it as an event.
+
+=head2 every
+
+    await $sse->every(1, async sub {
+        await $sse->send_event(
+            event => 'tick',
+            data  => { ts => time },
+        );
+    });
+
+Calls the callback every C<$interval> seconds until client disconnects.
+Useful for periodic updates.
 
 =head1 EVENT CALLBACKS
 
