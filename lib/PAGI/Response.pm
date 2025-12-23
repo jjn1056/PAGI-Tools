@@ -637,12 +637,11 @@ L<IO::Async::Function> to run in a subprocess:
 
     await $res->json({ status => 'processing' });
 
-    # Fire-and-forget in subprocess (must use callbacks)
-    $worker->call(
-        args => [$data],
-        on_return => sub { warn "Done: @_\n" },
-        on_error  => sub { warn "Error: @_\n" },
-    );
+    # Fire-and-forget in subprocess
+    my $f = $worker->call(args => [$data]);
+    $f->on_done(sub { warn "Done: @_\n" });
+    $f->on_fail(sub { warn "Error: @_\n" });
+    $f->retain();
 
 =head3 Pattern 3: Quick Sync Work (loop->later)
 
