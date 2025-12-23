@@ -598,12 +598,15 @@ sub start_heartbeat {
 
     my $loop = $self->loop;
 
+    my $weak_self = $self;
+    Scalar::Util::weaken($weak_self);
+
     my $timer = IO::Async::Timer::Periodic->new(
         interval => $interval,
         on_tick  => sub {
-            return unless $self->is_connected;
+            return unless $weak_self && $weak_self->is_connected;
             eval {
-                $self->{send}->({
+                $weak_self->{send}->({
                     type => 'websocket.send',
                     text => JSON::PP::encode_json({
                         type => 'ping',
