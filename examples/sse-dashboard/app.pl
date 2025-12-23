@@ -19,7 +19,6 @@ use IO::Async::Timer::Periodic;
 use File::Basename qw(dirname);
 use File::Spec;
 
-use lib 'lib';
 use PAGI::SSE;
 use PAGI::App::File;
 

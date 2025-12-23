@@ -49,12 +49,19 @@ subtest 'set and get for request-scoped data' => sub {
     is($req->get('missing'), undef, 'get returns undef for missing');
 };
 
-subtest 'param returns route parameters' => sub {
-    my $req = PAGI::Request->new($scope, $receive);
+subtest 'param returns route parameters from scope' => sub {
+    my $scope_with_route_params = {
+        type         => 'http',
+        method       => 'GET',
+        path         => '/test',
+        query_string => '',
+        headers      => [],
+        'pagi.router' => { params => { id => '123', action => 'edit' } },
+    };
 
-    $req->set_route_params({ id => '123', action => 'edit' });
+    my $req = PAGI::Request->new($scope_with_route_params, $receive);
 
-    is($req->param('id'), '123', 'param returns route param');
+    is($req->param('id'), '123', 'param returns route param from scope');
     is($req->param('action'), 'edit', 'param returns another param');
     is($req->param('missing'), undef, 'param returns undef for missing');
 };
@@ -70,11 +77,11 @@ subtest 'param falls back to query params' => sub {
 
     my $req = PAGI::Request->new($scope_with_query, $receive);
 
-    # No route params set, should fall back to query
+    # No route params in scope, should fall back to query
     is($req->param('foo'), 'bar', 'param falls back to query param');
 
-    # With route params, route param takes precedence
-    $req->set_route_params({ foo => 'route_value' });
+    # With route params in scope, route param takes precedence
+    $scope_with_query->{'pagi.router'}{params} = { foo => 'route_value' };
     is($req->param('foo'), 'route_value', 'route param takes precedence');
     is($req->param('baz'), 'qux', 'other query params still accessible');
 };

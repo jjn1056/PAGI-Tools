@@ -48,13 +48,13 @@ subtest 'stop_heartbeat method exists' => sub {
 };
 
 subtest 'param method for route parameters' => sub {
-    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-
-    # Initially no params
-    is($ws->param('id'), undef, 'param returns undef when not set');
-
-    # Set route params (as router would do)
-    $ws->set_route_params({ id => '42', name => 'test' });
+    my $scope_with_params = {
+        type    => 'websocket',
+        path    => '/test',
+        headers => [],
+        'pagi.router' => { params => { id => '42', name => 'test' } },
+    };
+    my $ws = PAGI::WebSocket->new($scope_with_params, $receive, $send);
 
     is($ws->param('id'), '42', 'param returns route parameter');
     is($ws->param('name'), 'test', 'param returns another route parameter');
@@ -62,11 +62,22 @@ subtest 'param method for route parameters' => sub {
 };
 
 subtest 'params method returns all route parameters' => sub {
-    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-    $ws->set_route_params({ foo => 'bar', baz => 'qux' });
+    my $scope_with_params = {
+        type    => 'websocket',
+        path    => '/test',
+        headers => [],
+        'pagi.router' => { params => { foo => 'bar', baz => 'qux' } },
+    };
+    my $ws = PAGI::WebSocket->new($scope_with_params, $receive, $send);
 
     my $params = $ws->params;
     is($params, { foo => 'bar', baz => 'qux' }, 'params returns all route params');
+};
+
+subtest 'param returns undef when no route params in scope' => sub {
+    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+    is($ws->param('anything'), undef, 'param returns undef when no params');
+    is($ws->params, {}, 'params returns empty hash when no params');
 };
 
 done_testing;

@@ -1,7 +1,6 @@
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use lib 'lib';
 use PAGI::App::WrapPSGI;
 
 my $psgi_app = sub {

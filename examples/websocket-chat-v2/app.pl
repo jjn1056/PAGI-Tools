@@ -1,197 +1,190 @@
 #!/usr/bin/env perl
+
 #
-# Multi-room WebSocket Chat using PAGI::WebSocket
+# Multi-User Chat using PAGI::WebSocket
 #
-# This example shows a complete chat application with:
-# - Room join/leave
-# - Nicknames
-# - Broadcast messaging
-# - Proper cleanup on disconnect
+# This is a port of examples/10-chat-showcase using PAGI::WebSocket to
+# demonstrate how the wrapper simplifies WebSocket handling.
 #
-# Compare with lib/PAGI/App/WebSocket/Chat.pm for the raw protocol version.
+# The HTTP, SSE, and State modules are identical to the original.
+# Only the WebSocket handler is rewritten to use PAGI::WebSocket.
 #
-# Run: pagi-server --app examples/websocket-chat-v2/app.pl --port 5000
+# Run with:
+#   pagi-server --app examples/websocket-chat-v2/app.pl --port 5000
 #
+# Then open http://localhost:5000 in your browser
+#
+
 use strict;
 use warnings;
+
 use Future::AsyncAwait;
-use JSON::PP qw(encode_json decode_json);
-use PAGI::WebSocket;
+use File::Basename qw(dirname);
+use lib dirname(__FILE__) . '/lib';
 
-# Shared state
-my %rooms;      # room => { users => { id => { ws => $ws, name => $name } } }
-my $next_id = 1;
+use ChatApp::State qw(get_stats);
+use ChatApp::HTTP;
+use ChatApp::WebSocket;
+use ChatApp::SSE;
 
-my $app = async sub {
-    my ($scope, $receive, $send) = @_;
+# Pre-instantiate handlers
+my $http_handler = ChatApp::HTTP::handler();
+my $ws_handler   = ChatApp::WebSocket::handler();
+my $sse_handler  = ChatApp::SSE::handler();
 
-    die if $scope->{type} ne 'websocket';
+# Simple request logging middleware
+sub with_logging {
+    my ($app) = @_;
 
-    # Create WebSocket wrapper
-    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-    await $ws->accept;
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $start = time();
+        my $type = $scope->{type};
+        my $path = $scope->{path} // '-';
+        my $method = $scope->{method} // '-';
 
-    # User setup
-    my $user_id = $next_id++;
-    my $username = "user_$user_id";
-    my @my_rooms;
-
-    # Register cleanup - runs on ANY disconnect
-    $ws->on_close(async sub {
-        my ($code, $reason) = @_;
-        print "User $username disconnected ($code)\n";
-
-        for my $room (@my_rooms) {
-            leave_room($user_id, $room);
-            await broadcast_to_room($room, {
-                type     => 'user_left',
-                room     => $room,
-                user_id  => $user_id,
-                username => $username,
-            });
-        }
-    });
-
-    # Join default room
-    join_room($user_id, $ws, $username, 'lobby');
-    push @my_rooms, 'lobby';
-
-    # Send welcome
-    await $ws->send_json({
-        type     => 'welcome',
-        user_id  => $user_id,
-        username => $username,
-        room     => 'lobby',
-    });
-
-    print "User $username joined lobby\n";
-
-    # Message loop
-    await $ws->each_json(async sub {
-        my ($data) = @_;
-        my $cmd = $data->{type} // 'message';
-
-        if ($cmd eq 'message') {
-            my $msg = $data->{message} // '';
-            my $target = $data->{room};
-            my @targets = $target ? ($target) : @my_rooms;
-
-            for my $room (@targets) {
-                next unless grep { $_ eq $room } @my_rooms;
-                await broadcast_to_room($room, {
-                    type      => 'message',
-                    room      => $room,
-                    user_id   => $user_id,
-                    username  => $username,
-                    message   => $msg,
-                    timestamp => time(),
-                }, $user_id);
+        # Wrap send to capture response status
+        my $status = '-';
+        my $wrapped_send = async sub {
+            my ($event) = @_;
+            if ($event->{type} =~ /\.start$/ && defined $event->{status}) {
+                $status = $event->{status};
             }
-        }
-        elsif ($cmd eq 'join') {
-            my $room = $data->{room} // 'lobby';
+            await $send->($event);
+        };
 
-            join_room($user_id, $ws, $username, $room);
-            push @my_rooms, $room unless grep { $_ eq $room } @my_rooms;
+        eval {
+            await $app->($scope, $receive, $wrapped_send);
+        };
+        my $error = $@;
 
-            await $ws->send_json({ type => 'joined', room => $room });
+        my $duration = sprintf("%.3f", time() - $start);
 
-            await broadcast_to_room($room, {
-                type     => 'user_joined',
-                room     => $room,
-                user_id  => $user_id,
-                username => $username,
-            }, $user_id);
-        }
-        elsif ($cmd eq 'leave') {
-            my $room = $data->{room};
-            return unless $room && grep { $_ eq $room } @my_rooms;
+        # Format: [TYPE] METHOD PATH STATUS DURATION
+        my $client = $scope->{client} ? "$scope->{client}[0]" : '-';
+        say STDERR "[$type] $method $path $status ${duration}s ($client)";
 
-            leave_room($user_id, $room);
-            @my_rooms = grep { $_ ne $room } @my_rooms;
-
-            await $ws->send_json({ type => 'left', room => $room });
-
-            await broadcast_to_room($room, {
-                type     => 'user_left',
-                room     => $room,
-                user_id  => $user_id,
-                username => $username,
-            });
-        }
-        elsif ($cmd eq 'nick') {
-            my $new_name = $data->{username} // $username;
-            $new_name =~ s/[^\w\-]//g;
-            $new_name = substr($new_name, 0, 20);
-
-            for my $room (@my_rooms) {
-                $rooms{$room}{users}{$user_id}{name} = $new_name
-                    if $rooms{$room}{users}{$user_id};
-            }
-            $username = $new_name;
-
-            await $ws->send_json({ type => 'nick', username => $username });
-        }
-        elsif ($cmd eq 'list') {
-            my $room = $data->{room};
-            return unless $room && $rooms{$room};
-
-            my @users = map { $_->{name} } values %{$rooms{$room}{users}};
-            await $ws->send_json({ type => 'users', room => $room, users => \@users });
-        }
-        elsif ($cmd eq 'rooms') {
-            my @room_list = map {
-                { name => $_, count => scalar keys %{$rooms{$_}{users}} }
-            } keys %rooms;
-            await $ws->send_json({ type => 'rooms', rooms => \@room_list });
-        }
-    });
-};
-
-#
-# Helper functions
-#
-
-sub join_room {
-    my ($user_id, $ws, $username, $room) = @_;
-
-    $rooms{$room} //= { users => {} };
-    $rooms{$room}{users}{$user_id} = {
-        ws   => $ws,
-        name => $username,
+        die $error if $error;
     };
 }
 
-sub leave_room {
-    my ($user_id, $room) = @_;
+# Main application
+my $app = with_logging(async sub {
+    my ($scope, $receive, $send) = @_;
+    my $type = $scope->{type} // '';
+    my $path = $scope->{path} // '/';
 
-    return unless $rooms{$room};
-    delete $rooms{$room}{users}{$user_id};
-    delete $rooms{$room} if !keys %{$rooms{$room}{users}};
-}
-
-async sub broadcast_to_room {
-    my ($room, $data, $exclude_id) = @_;
-
-    return unless $rooms{$room};
-    my $users = $rooms{$room}{users};
-
-    for my $id (keys %$users) {
-        next if defined $exclude_id && $id eq $exclude_id;
-
-        my $ws = $users->{$id}{ws};
-
-        # Safe send - returns false if client disconnected
-        my $sent = await $ws->try_send_json($data);
-
-        if (!$sent) {
-            # Client gone, clean up
-            delete $users->{$id};
-        }
+    # Handle lifespan events
+    if ($type eq 'lifespan') {
+        return await _handle_lifespan($scope, $receive, $send);
     }
 
-    # Clean empty room
-    delete $rooms{$room} if !keys %{$rooms{$room}{users}};
+    # Route based on protocol and path
+    if ($type eq 'websocket' && $path eq '/ws/chat') {
+        return await $ws_handler->($scope, $receive, $send);
+    }
+
+    if ($type eq 'sse' && $path eq '/events') {
+        return await $sse_handler->($scope, $receive, $send);
+    }
+
+    if ($type eq 'http') {
+        return await $http_handler->($scope, $receive, $send);
+    }
+
+    # Unsupported protocol
+    die "Unsupported scope type: $type";
+});
+
+async sub _handle_lifespan {
+    my ($scope, $receive, $send) = @_;
+
+    while (1) {
+        my $event = await $receive->();
+
+        if ($event->{type} eq 'lifespan.startup') {
+            say STDERR "[lifespan] Application starting up...";
+
+            # Initialize state (default rooms are created on module load)
+            my $stats = get_stats();
+            say STDERR "[lifespan] Initialized with $stats->{rooms_count} default rooms";
+
+            await $send->({ type => 'lifespan.startup.complete' });
+        }
+        elsif ($event->{type} eq 'lifespan.shutdown') {
+            say STDERR "[lifespan] Application shutting down...";
+
+            my $stats = get_stats();
+            say STDERR "[lifespan] Final stats: $stats->{users_online} users, $stats->{messages_total} messages";
+
+            await $send->({ type => 'lifespan.shutdown.complete' });
+            last;
+        }
+    }
 }
 
 $app;
+
+__END__
+
+=head1 NAME
+
+Multi-User Chat using PAGI::WebSocket
+
+=head1 SYNOPSIS
+
+    pagi-server --app examples/websocket-chat-v2/app.pl --port 5000
+
+=head1 DESCRIPTION
+
+This is a port of the C<examples/10-chat-showcase> application that
+demonstrates how L<PAGI::WebSocket> simplifies WebSocket handling.
+
+The HTTP, SSE, and State modules are identical to the original.
+Only the WebSocket handler is rewritten to use PAGI::WebSocket.
+
+Compare C<lib/ChatApp/WebSocket.pm> with the original at
+C<examples/10-chat-showcase/lib/ChatApp/WebSocket.pm> to see the
+improvements.
+
+=head2 Key Differences
+
+=over
+
+=item * WebSocket handler uses C<< PAGI::WebSocket->new >> wrapper
+
+=item * Connection accepted with C<< $ws->accept >> instead of raw protocol
+
+=item * Cleanup registered with C<< $ws->on_close >> callback
+
+=item * Message loop uses C<< $ws->each_json >> for cleaner iteration
+
+=item * Sending uses C<< $ws->send_json >> instead of raw JSON encoding
+
+=back
+
+=head1 ENDPOINTS
+
+Same as the original:
+
+=over
+
+=item GET / - Chat frontend
+
+=item GET /api/rooms - List rooms
+
+=item GET /api/room/:name/history - Room message history
+
+=item GET /api/stats - Server statistics
+
+=item WS /ws/chat - WebSocket chat endpoint
+
+=item SSE /events - Server-Sent Events stream
+
+=back
+
+=head1 SEE ALSO
+
+L<PAGI::WebSocket>, L<examples/10-chat-showcase>
+
+=cut

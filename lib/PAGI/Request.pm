@@ -280,32 +280,21 @@ sub basic_auth {
     return (undef, undef);
 }
 
-# Path params (set by router)
+# Path params (read from scope)
 sub params {
     my $self = shift;
-    return $self->{_path_params} // $self->{scope}{path_params} // {};
+    return $self->{scope}{'pagi.router'}{params} // {};
 }
 
 sub param {
     my ($self, $name) = @_;
-    # Check route params first, then query params
-    if (exists $self->params->{$name}) {
-        return $self->params->{$name};
+    # Check scope route params first
+    my $route_params = $self->{scope}{'pagi.router'}{params} // {};
+    if (exists $route_params->{$name}) {
+        return $route_params->{$name};
     }
+    # Fall back to query params
     return $self->query($name);
-}
-
-# Called by router to set matched params
-sub set_params {
-    my ($self, $params) = @_;
-    $self->{_path_params} = $params;
-}
-
-# Alias for compatibility with router
-sub set_route_params {
-    my ($self, $params) = @_;
-    $self->set_params($params);
-    return $self;
 }
 
 # Per-request storage for middleware/handlers
@@ -713,20 +702,9 @@ Get path parameters (set by router).
 
     my $id = $req->param('id');
 
-Returns a route parameter by name. Falls back to query parameters
+Returns a route parameter by name. Route parameters are read from
+C<< $scope->{'pagi.router'}{params} >>. Falls back to query parameters
 if no route parameter matches.
-
-=head2 set_params
-
-    $req->set_params({ id => 42 });
-
-Set path parameters (called by router).
-
-=head2 set_route_params
-
-    $req->set_route_params({ id => 42, action => 'edit' });
-
-Alias for C<set_params>. Sets route parameters.
 
 =head1 COOKIES
 

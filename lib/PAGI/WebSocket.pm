@@ -50,21 +50,16 @@ sub server       { shift->{scope}{server} }
 # Per-connection storage
 sub stash        { shift->{_stash} }
 
-# Route parameter accessors (set by router)
-sub set_route_params {
-    my ($self, $params) = @_;
-    $self->{_route_params} = $params // {};
-    return $self;
-}
-
+# Route parameter accessors (read from scope)
 sub params {
     my ($self) = @_;
-    return $self->{_route_params} // {};
+    return $self->{scope}{'pagi.router'}{params} // {};
 }
 
 sub param {
     my ($self, $name) = @_;
-    return $self->{_route_params}{$name};
+    my $params = $self->{scope}{'pagi.router'}{params} // {};
+    return $params->{$name};
 }
 
 # Single header lookup (case-insensitive, returns last value)
@@ -827,20 +822,15 @@ without external variables.
 
     my $id = $ws->param('id');
 
-Returns a single route parameter by name. These are set by the router
-when matching path patterns like C</chat/:room>.
+Returns a route parameter by name. Route parameters are set by the router
+in C<< $scope->{'pagi.router'}{params} >> when matching path patterns
+like C</chat/:room>.
 
 =head2 params
 
     my $params = $ws->params;  # { room => 'general', id => '42' }
 
-Returns hashref of all route parameters.
-
-=head2 set_route_params
-
-    $ws->set_route_params({ room => 'general' });
-
-Sets route parameters. Called internally by PAGI::Endpoint::Router.
+Returns hashref of all route parameters from scope.
 
 =head1 LIFECYCLE METHODS
 

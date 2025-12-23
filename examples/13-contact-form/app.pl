@@ -6,7 +6,6 @@ use Future::AsyncAwait;
 use File::Basename qw(dirname);
 use File::Spec;
 
-use lib 'lib';
 use PAGI::Request;
 use PAGI::Response;
 use PAGI::App::File;

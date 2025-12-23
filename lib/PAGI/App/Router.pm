@@ -3,6 +3,8 @@ package PAGI::App::Router;
 use strict;
 use warnings;
 use Future::AsyncAwait;
+use Scalar::Util qw(blessed);
+use Carp qw(croak);
 
 =head1 NAME
 
@@ -19,11 +21,18 @@ PAGI::App::Router - Unified routing for HTTP, WebSocket, and SSE
     $router->post('/users' => $create_user);
     $router->delete('/users/:id' => $delete_user);
 
+    # Routes with middleware
+    $router->get('/admin' => [$auth_mw, $log_mw] => $admin_handler);
+    $router->post('/api/data' => [$rate_limit] => $data_handler);
+
     # WebSocket routes (path only)
     $router->websocket('/ws/chat/:room' => $chat_handler);
 
     # SSE routes (path only)
     $router->sse('/events/:channel' => $events_handler);
+
+    # Mount with middleware (applies to all sub-routes)
+    $router->mount('/api' => [$auth_mw] => $api_router->to_app);
 
     # Static files as fallback
     $router->mount('/' => $static_files);
@@ -45,68 +54,61 @@ sub new {
 }
 
 sub mount {
-    my ($self, $prefix, $app) = @_;
+    my ($self, $prefix, @rest) = @_;
     $prefix =~ s{/$}{};  # strip trailing slash
-    push @{$self->{mounts}}, { prefix => $prefix, app => $app };
+    my ($middleware, $app) = $self->_parse_route_args(@rest);
+    push @{$self->{mounts}}, { prefix => $prefix, app => $app, middleware => $middleware };
     return $self;
 }
 
-sub get {
-    my ($self, $path, $app) = @_;
- $self->route('GET', $path, $app) }
-sub post {
-    my ($self, $path, $app) = @_;
- $self->route('POST', $path, $app) }
-sub put {
-    my ($self, $path, $app) = @_;
- $self->route('PUT', $path, $app) }
-sub patch {
-    my ($self, $path, $app) = @_;
- $self->route('PATCH', $path, $app) }
-sub delete {
-    my ($self, $path, $app) = @_;
- $self->route('DELETE', $path, $app) }
-sub head {
-    my ($self, $path, $app) = @_;
- $self->route('HEAD', $path, $app) }
-sub options {
-    my ($self, $path, $app) = @_;
- $self->route('OPTIONS', $path, $app) }
+sub get     { my ($self, $path, @rest) = @_; $self->route('GET', $path, @rest) }
+sub post    { my ($self, $path, @rest) = @_; $self->route('POST', $path, @rest) }
+sub put     { my ($self, $path, @rest) = @_; $self->route('PUT', $path, @rest) }
+sub patch   { my ($self, $path, @rest) = @_; $self->route('PATCH', $path, @rest) }
+sub delete  { my ($self, $path, @rest) = @_; $self->route('DELETE', $path, @rest) }
+sub head    { my ($self, $path, @rest) = @_; $self->route('HEAD', $path, @rest) }
+sub options { my ($self, $path, @rest) = @_; $self->route('OPTIONS', $path, @rest) }
 
 sub websocket {
-    my ($self, $path, $app) = @_;
+    my ($self, $path, @rest) = @_;
+    my ($middleware, $app) = $self->_parse_route_args(@rest);
     my ($regex, @names) = $self->_compile_path($path);
     push @{$self->{websocket_routes}}, {
-        path  => $path,
-        regex => $regex,
-        names => \@names,
-        app   => $app,
+        path       => $path,
+        regex      => $regex,
+        names      => \@names,
+        app        => $app,
+        middleware => $middleware,
     };
     return $self;
 }
 
 sub sse {
-    my ($self, $path, $app) = @_;
+    my ($self, $path, @rest) = @_;
+    my ($middleware, $app) = $self->_parse_route_args(@rest);
     my ($regex, @names) = $self->_compile_path($path);
     push @{$self->{sse_routes}}, {
-        path  => $path,
-        regex => $regex,
-        names => \@names,
-        app   => $app,
+        path       => $path,
+        regex      => $regex,
+        names      => \@names,
+        app        => $app,
+        middleware => $middleware,
     };
     return $self;
 }
 
 sub route {
-    my ($self, $method, $path, $app) = @_;
+    my ($self, $method, $path, @rest) = @_;
 
+    my ($middleware, $app) = $self->_parse_route_args(@rest);
     my ($regex, @names) = $self->_compile_path($path);
     push @{$self->{routes}}, {
-        method => uc($method),
-        path   => $path,
-        regex  => $regex,
-        names  => \@names,
-        app    => $app,
+        method     => uc($method),
+        path       => $path,
+        regex      => $regex,
+        names      => \@names,
+        app        => $app,
+        middleware => $middleware,
     };
     return $self;
 }
@@ -130,6 +132,74 @@ sub _compile_path {
     return (qr{^$regex$}, @names);
 }
 
+sub _parse_route_args {
+    my ($self, @args) = @_;
+
+    if (@args == 2 && ref($args[0]) eq 'ARRAY') {
+        # (\@middleware, $app)
+        my ($middleware, $app) = @args;
+        $self->_validate_middleware($middleware);
+        return ($middleware, $app);
+    }
+    elsif (@args == 1) {
+        # ($app) - no middleware
+        return ([], $args[0]);
+    }
+    else {
+        croak 'Invalid route arguments: expected ($app) or (\@middleware => $app)';
+    }
+}
+
+sub _validate_middleware {
+    my ($self, $middleware) = @_;
+
+    for my $mw (@$middleware) {
+        if (ref($mw) eq 'CODE') {
+            # Coderef is valid
+            next;
+        }
+        elsif (blessed($mw) && $mw->can('call')) {
+            # PAGI::Middleware instance with call() method
+            next;
+        }
+        else {
+            my $type = ref($mw) || 'scalar';
+            croak "Invalid middleware: expected coderef or object with ->call method, got $type";
+        }
+    }
+}
+
+sub _build_middleware_chain {
+    my ($self, $middlewares, $app) = @_;
+
+    return $app unless $middlewares && @$middlewares;
+
+    my $chain = $app;
+
+    for my $mw (reverse @$middlewares) {
+        my $next = $chain;
+
+        if (ref($mw) eq 'CODE') {
+            # Coderef with $next signature
+            $chain = async sub {
+                my ($scope, $receive, $send) = @_;
+                await $mw->($scope, $receive, $send, async sub {
+                    await $next->($scope, $receive, $send);
+                });
+            };
+        }
+        else {
+            # PAGI::Middleware instance - use existing call()
+            $chain = async sub {
+                my ($scope, $receive, $send) = @_;
+                await $mw->call($scope, $receive, $send, $next);
+            };
+        }
+    }
+
+    return $chain;
+}
+
 sub to_app {
     my ($self) = @_;
 
@@ -138,6 +208,14 @@ sub to_app {
     my @sse_routes       = @{$self->{sse_routes}};
     my @mounts           = @{$self->{mounts}};
     my $not_found        = $self->{not_found};
+
+    # Pre-build middleware chains for efficiency
+    for my $route (@routes, @websocket_routes, @sse_routes) {
+        $route->{_handler} = $self->_build_middleware_chain($route->{middleware}, $route->{app});
+    }
+    for my $m (@mounts) {
+        $m->{_handler} = $self->_build_middleware_chain($m->{middleware}, $m->{app});
+    }
 
     return async sub {
         my ($scope, $receive, $send) = @_;
@@ -158,7 +236,7 @@ sub to_app {
                     path      => $sub_path,
                     root_path => ($scope->{root_path} // '') . $prefix,
                 };
-                await $m->{app}->($new_scope, $receive, $send);
+                await $m->{_handler}->($new_scope, $receive, $send);
                 return;
             }
         }
@@ -179,7 +257,7 @@ sub to_app {
                             route  => $route->{path},
                         },
                     };
-                    await $route->{app}->($new_scope, $receive, $send);
+                    await $route->{_handler}->($new_scope, $receive, $send);
                     return;
                 }
             }
@@ -213,7 +291,7 @@ sub to_app {
                             route  => $route->{path},
                         },
                     };
-                    await $route->{app}->($new_scope, $receive, $send);
+                    await $route->{_handler}->($new_scope, $receive, $send);
                     return;
                 }
             }
@@ -257,7 +335,7 @@ sub to_app {
                         },
                     };
 
-                    await $route->{app}->($new_scope, $receive, $send);
+                    await $route->{_handler}->($new_scope, $receive, $send);
                     return;
                 }
 
@@ -392,6 +470,81 @@ B<Example: Organizing a large application>
     my $app = $router->to_app;
 
 Returns a PAGI application coderef that dispatches requests.
+
+=head1 ROUTE-LEVEL MIDDLEWARE
+
+All route methods accept an optional middleware arrayref before the app:
+
+    $router->get('/path' => \@middleware => $app);
+    $router->post('/path' => \@middleware => $app);
+    $router->mount('/prefix' => \@middleware => $sub_app);
+    $router->websocket('/ws' => \@middleware => $handler);
+    $router->sse('/events' => \@middleware => $handler);
+
+=head2 Middleware Types
+
+=over 4
+
+=item * B<PAGI::Middleware instance>
+
+Any object with a C<call($scope, $receive, $send, $app)> method:
+
+    use PAGI::Middleware::RateLimit;
+
+    my $rate_limit = PAGI::Middleware::RateLimit->new(limit => 100);
+    $router->get('/api/data' => [$rate_limit] => $handler);
+
+=item * B<Coderef with $next signature>
+
+    my $timing = async sub ($scope, $receive, $send, $next) {
+        my $start = time;
+        await $next->();  # Call next middleware or app
+        warn sprintf "Request took %.3fs", time - $start;
+    };
+    $router->get('/api/data' => [$timing] => $handler);
+
+=back
+
+=head2 Execution Order
+
+Middleware executes in array order for requests, reverse order for responses
+(onion model):
+
+    $router->get('/' => [$mw1, $mw2, $mw3] => $app);
+
+    # Request flow:  mw1 -> mw2 -> mw3 -> app
+    # Response flow: mw1 <- mw2 <- mw3 <- app
+
+=head2 Short-Circuiting
+
+Middleware can skip calling C<$next> to short-circuit the chain:
+
+    my $auth = async sub ($scope, $receive, $send, $next) {
+        unless ($scope->{user}) {
+            await $send->({
+                type    => 'http.response.start',
+                status  => 401,
+                headers => [['content-type', 'text/plain']],
+            });
+            await $send->({
+                type => 'http.response.body',
+                body => 'Unauthorized',
+            });
+            return;  # Don't call $next
+        }
+        await $next->();
+    };
+
+=head2 Stacking with Mount
+
+Mount middleware runs before any sub-router middleware:
+
+    my $api = PAGI::App::Router->new;
+    $api->get('/users' => [$rate_limit] => $list_users);
+
+    $router->mount('/api' => [$auth] => $api->to_app);
+
+    # Request to /api/users runs: $auth -> $rate_limit -> $list_users
 
 =head1 PATH PATTERNS
 

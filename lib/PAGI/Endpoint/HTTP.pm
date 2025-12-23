@@ -75,6 +75,10 @@ sub to_app {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
+
+        my $type = $scope->{type} // 'http';
+        croak "Expected http scope, got '$type'" unless $type eq 'http';
+
         my $endpoint = $class->new;
         my $req = $req_class->new($scope, $receive);
         my $res = $res_class->new($send);

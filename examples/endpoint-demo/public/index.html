@@ -95,7 +95,13 @@
         // WebSocket
         const ws = new WebSocket(`ws://${location.host}/ws/echo`);
         ws.onopen = () => log('ws-log', 'Connected');
-        ws.onmessage = e => log('ws-log', `Received: ${e.data}`);
+        ws.onmessage = e => {
+            const data = JSON.parse(e.data);
+            // Don't log server pings (keepalive)
+            if (data.type !== 'ping') {
+                log('ws-log', `Received: ${e.data}`);
+            }
+        };
         ws.onclose = () => log('ws-log', 'Disconnected');
 
         function sendWS() {
