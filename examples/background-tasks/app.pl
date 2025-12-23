@@ -86,10 +86,20 @@ sub get_cpu_worker {
     return $cpu_worker;
 }
 
-# Run blocking work in subprocess - returns a Future
+# Run blocking work in subprocess (fire-and-forget)
 sub run_blocking_task {
     my ($task_name, $duration) = @_;
-    return get_cpu_worker()->call(args => [$task_name, $duration]);
+    get_cpu_worker()->call(
+        args => [$task_name, $duration],
+        on_result => sub {
+            my ($result) = @_;
+            warn "[main] Subprocess returned: $result\n";
+        },
+        on_error => sub {
+            my ($error) = @_;
+            warn "[main] Subprocess error: $error\n";
+        },
+    );
 }
 
 #---------------------------------------------------------
