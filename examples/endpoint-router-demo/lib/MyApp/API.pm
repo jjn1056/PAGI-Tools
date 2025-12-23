@@ -9,10 +9,19 @@ my @USERS = (
     { id => 2, name => 'Bob', email => 'bob@example.com' },
 );
 
-async sub on_startup {
+# Note: Subrouters mounted via mount() don't receive lifespan events.
+# Use lazy initialization or access parent state via $req->stash if needed.
+
+sub _ensure_state {
     my ($self) = @_;
-    warn "API subrouter starting...\n";
-    $self->stash->{api_version} = 'v1';
+    return if $self->state->{_initialized};
+
+    $self->state->{api_version} = 'v1';
+    $self->state->{config} = {
+        app_name => 'Endpoint Router Demo',
+        version  => '1.0.0',
+    };
+    $self->state->{_initialized} = 1;
 }
 
 sub routes {
@@ -27,10 +36,15 @@ sub routes {
 async sub get_info {
     my ($self, $req, $res) = @_;
 
+    # Lazy initialize state (subrouters don't get on_startup)
+    $self->_ensure_state;
+
+    my $config = $self->state->{config};
+
     await $res->json({
-        app     => $req->stash->{config}{app_name},
-        version => $req->stash->{config}{version},
-        api     => $req->stash->{api_version},
+        app     => $config->{app_name},
+        version => $config->{version},
+        api     => $self->state->{api_version},
     });
 }
 

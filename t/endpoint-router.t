@@ -10,18 +10,18 @@ ok($loaded, 'PAGI::Endpoint::Router loads') or diag $@;
 subtest 'basic class structure' => sub {
     ok(PAGI::Endpoint::Router->can('new'), 'has new');
     ok(PAGI::Endpoint::Router->can('to_app'), 'has to_app');
-    ok(PAGI::Endpoint::Router->can('stash'), 'has stash');
+    ok(PAGI::Endpoint::Router->can('state'), 'has state');
     ok(PAGI::Endpoint::Router->can('routes'), 'has routes');
     ok(PAGI::Endpoint::Router->can('on_startup'), 'has on_startup');
     ok(PAGI::Endpoint::Router->can('on_shutdown'), 'has on_shutdown');
 };
 
-subtest 'stash is a hashref' => sub {
+subtest 'state is a hashref' => sub {
     my $router = PAGI::Endpoint::Router->new;
-    is(ref($router->stash), 'HASH', 'stash is hashref');
+    is(ref($router->state), 'HASH', 'state is hashref');
 
-    $router->stash->{test} = 'value';
-    is($router->stash->{test}, 'value', 'stash persists values');
+    $router->state->{test} = 'value';
+    is($router->state->{test}, 'value', 'state persists values');
 };
 
 subtest 'to_app returns coderef' => sub {
@@ -181,7 +181,7 @@ subtest 'SSE route with method handler' => sub {
     })->()->get;
 };
 
-subtest 'lifespan startup and shutdown' => sub {
+subtest 'lifespan startup and shutdown with state' => sub {
     {
         package TestApp::Lifespan;
         use parent 'PAGI::Endpoint::Router';
@@ -189,12 +189,12 @@ subtest 'lifespan startup and shutdown' => sub {
 
         our $startup_called = 0;
         our $shutdown_called = 0;
-        our $stash_value;
+        our $state_value;
 
         async sub on_startup {
             my ($self) = @_;
             $startup_called = 1;
-            $self->stash->{db} = 'connected';
+            $self->state->{db} = 'connected';
         }
 
         async sub on_shutdown {
@@ -209,7 +209,8 @@ subtest 'lifespan startup and shutdown' => sub {
 
         async sub test_handler {
             my ($self, $req, $res) = @_;
-            $stash_value = $req->stash->{db};
+            # Access state via $self, not via $req->stash
+            $state_value = $self->state->{db};
             await $res->text('ok');
         }
     }
@@ -240,7 +241,7 @@ subtest 'lifespan startup and shutdown' => sub {
         is($lifespan_sent[0]{type}, 'lifespan.startup.complete', 'startup complete sent');
         is($lifespan_sent[1]{type}, 'lifespan.shutdown.complete', 'shutdown complete sent');
 
-        # Test that stash is available to handlers
+        # Test that state is available to handlers via $self
         my @http_sent;
         my $http_send = sub { push @http_sent, $_[0]; Future->done };
         my $http_receive = sub { Future->done({ type => 'http.request', body => '' }) };
@@ -254,7 +255,7 @@ subtest 'lifespan startup and shutdown' => sub {
 
         await $app->($http_scope, $http_receive, $http_send);
 
-        is($TestApp::Lifespan::stash_value, 'connected', 'stash from on_startup available in handler');
+        is($TestApp::Lifespan::state_value, 'connected', 'state from on_startup available in handler via $self');
     })->()->get;
 };
 
@@ -280,7 +281,7 @@ subtest 'middleware as method names' => sub {
 
             my $token = $req->header('authorization');
             if ($token && $token eq 'Bearer valid') {
-                $req->set('user', { id => 1 });
+                $req->stash->{user} = { id => 1 };
                 await $next->();
             } else {
                 await $res->status(401)->json({ error => 'Unauthorized' });
@@ -300,7 +301,7 @@ subtest 'middleware as method names' => sub {
 
         async sub protected_handler {
             my ($self, $req, $res) = @_;
-            my $user = $req->get('user');
+            my $user = $req->stash->{user};
             await $res->json({ user_id => $user->{id} });
         }
     }
@@ -372,6 +373,47 @@ subtest 'middleware as method names' => sub {
         ok($TestApp::Middleware::log_called, 'log middleware was called');
         ok($TestApp::Middleware::auth_called, 'auth middleware was called');
         is($sent[0]{status}, 200, 'handler was reached');
+    })->()->get;
+};
+
+subtest 'stash flows through middleware to handler' => sub {
+    {
+        package TestApp::StashFlow;
+        use parent 'PAGI::Endpoint::Router';
+        use Future::AsyncAwait;
+
+        our $handler_saw_user;
+
+        sub routes {
+            my ($self, $r) = @_;
+            $r->get('/test' => ['set_user'] => 'check_user');
+        }
+
+        async sub set_user {
+            my ($self, $req, $res, $next) = @_;
+            $req->stash->{user} = 'alice';
+            await $next->();
+        }
+
+        async sub check_user {
+            my ($self, $req, $res) = @_;
+            $handler_saw_user = $req->stash->{user};
+            await $res->text('ok');
+        }
+    }
+
+    my $app = TestApp::StashFlow->to_app;
+
+    (async sub {
+        my @sent;
+        await $app->(
+            { type => 'http', method => 'GET', path => '/test', headers => [] },
+            sub { Future->done({ type => 'http.request', body => '' }) },
+            sub { push @sent, $_[0]; Future->done }
+        );
+
+        is($TestApp::StashFlow::handler_saw_user, 'alice',
+           'handler sees stash set by middleware');
     })->()->get;
 };
 

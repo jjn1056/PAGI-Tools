@@ -13,13 +13,14 @@ our $VERSION = '0.01';
 sub new {
     my ($class, %args) = @_;
     return bless {
-        _stash => {},
+        _state => {},
     }, $class;
 }
 
-sub stash {
+# Worker-local state (NOT shared across workers)
+sub state {
     my ($self) = @_;
-    return $self->{_stash};
+    return $self->{_state};
 }
 
 # Override in subclass to define routes
@@ -65,12 +66,6 @@ sub to_app {
             await $instance->_handle_lifespan($scope, $receive, $send);
             return;
         }
-
-        # Merge stash into scope for handlers
-        $scope->{'pagi.stash'} = {
-            %{$scope->{'pagi.stash'} // {}},
-            %{$instance->stash},
-        };
 
         # Dispatch to internal router
         await $app->($scope, $receive, $send);
@@ -188,9 +183,6 @@ sub _wrap_http_handler {
             my $req = PAGI::Request->new($scope, $receive);
             my $res = PAGI::Response->new($send, $scope);
 
-            # Inject stash
-            $req->set_stash($scope->{'pagi.stash'} // {});
-
             await $endpoint->$method($req, $res);
         };
     }
@@ -204,8 +196,6 @@ sub _wrap_http_handler {
 
         my $req = PAGI::Request->new($scope, $receive);
         my $res = PAGI::Response->new($send, $scope);
-
-        $req->set_stash($scope->{'pagi.stash'} // {});
 
         await $handler->($req, $res);
     };
@@ -240,12 +230,6 @@ sub _wrap_websocket_handler {
 
             my $ws = PAGI::WebSocket->new($scope, $receive, $send);
 
-            # Inject router stash into WS stash
-            my $router_stash = $scope->{'pagi.stash'} // {};
-            for my $key (keys %$router_stash) {
-                $ws->stash->{$key} = $router_stash->{$key};
-            }
-
             await $endpoint->$method($ws);
         };
     }
@@ -256,11 +240,6 @@ sub _wrap_websocket_handler {
         require PAGI::WebSocket;
 
         my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-
-        my $router_stash = $scope->{'pagi.stash'} // {};
-        for my $key (keys %$router_stash) {
-            $ws->stash->{$key} = $router_stash->{$key};
-        }
 
         await $handler->($ws);
     };
@@ -295,12 +274,6 @@ sub _wrap_sse_handler {
 
             my $sse = PAGI::SSE->new($scope, $receive, $send);
 
-            # Inject router stash
-            my $router_stash = $scope->{'pagi.stash'} // {};
-            for my $key (keys %$router_stash) {
-                $sse->stash->{$key} = $router_stash->{$key};
-            }
-
             await $endpoint->$method($sse);
         };
     }
@@ -311,11 +284,6 @@ sub _wrap_sse_handler {
         require PAGI::SSE;
 
         my $sse = PAGI::SSE->new($scope, $receive, $send);
-
-        my $router_stash = $scope->{'pagi.stash'} // {};
-        for my $key (keys %$router_stash) {
-            $sse->stash->{$key} = $router_stash->{$key};
-        }
 
         await $handler->($sse);
     };
@@ -339,8 +307,6 @@ sub _wrap_middleware {
 
             my $req = PAGI::Request->new($scope, $receive);
             my $res = PAGI::Response->new($send, $scope);
-
-            $req->set_stash($scope->{'pagi.stash'} // {});
 
             await $endpoint->$method($req, $res, $next);
         };
@@ -367,95 +333,74 @@ PAGI::Endpoint::Router - Class-based router with lifespan and wrapped handlers
 
 =head1 SYNOPSIS
 
-    package MyApp::API;
+    package MyApp;
     use parent 'PAGI::Endpoint::Router';
     use Future::AsyncAwait;
 
-    # Lifespan hooks
+    # Worker-local state (NOT shared across workers)
     async sub on_startup {
         my ($self) = @_;
-        $self->stash->{db} = DBI->connect(...);
+        $self->state->{db} = DBI->connect(...);
+        $self->state->{cache} = MyApp::Cache->new;
     }
 
     async sub on_shutdown {
         my ($self) = @_;
-        $self->stash->{db}->disconnect;
+        $self->state->{db}->disconnect;
     }
 
-    # Route definitions
     sub routes {
         my ($self, $r) = @_;
 
-        # HTTP routes - handler receives ($self, $req, $res)
-        $r->get('/users' => 'list_users');
+        # HTTP routes with middleware
+        $r->get('/users' => ['require_auth'] => 'list_users');
         $r->get('/users/:id' => 'get_user');
-        $r->post('/users' => 'create_user');
 
-        # With middleware
-        $r->delete('/users/:id' => ['require_admin'] => 'delete_user');
-
-        # WebSocket - handler receives ($self, $ws)
+        # WebSocket and SSE
         $r->websocket('/ws/chat/:room' => 'chat_handler');
-
-        # SSE - handler receives ($self, $sse)
-        $r->sse('/events/:channel' => 'events_handler');
+        $r->sse('/events' => 'events_handler');
 
         # Mount sub-routers
-        $r->mount('/admin' => MyApp::Admin->to_app);
+        $r->mount('/api' => MyApp::API->to_app);
     }
 
-    # HTTP handlers receive wrapped objects
+    # Middleware sets stash - visible to ALL downstream handlers
+    async sub require_auth {
+        my ($self, $req, $res, $next) = @_;
+        my $user = verify_token($req->bearer_token);
+        $req->stash->{user} = $user;  # Flows to handler and subrouters!
+        await $next->();
+    }
+
     async sub list_users {
         my ($self, $req, $res) = @_;
-        my $db = $req->stash->{db};
-        my $users = $db->selectall_arrayref(...);
+        my $db = $self->state->{db};           # Worker state via $self
+        my $user = $req->stash->{user};        # Set by middleware
+        my $users = $db->get_users;
         await $res->json($users);
     }
 
     async sub get_user {
         my ($self, $req, $res) = @_;
-        my $id = $req->param('id');  # Route parameter
+        my $id = $req->param('id');            # Route parameter
         await $res->json({ id => $id });
     }
 
-    # Middleware as methods
-    async sub require_admin {
-        my ($self, $req, $res, $next) = @_;
-        if ($req->get('user')->{role} eq 'admin') {
-            await $next->();
-        } else {
-            await $res->status(403)->json({ error => 'Forbidden' });
-        }
-    }
-
-    # WebSocket handlers receive PAGI::WebSocket
     async sub chat_handler {
         my ($self, $ws) = @_;
-        my $room = $ws->param('room');
-
         await $ws->accept;
-        $ws->start_heartbeat(25);  # Keepalive
-
+        $ws->start_heartbeat(25);
         await $ws->each_json(async sub {
             my ($data) = @_;
             await $ws->send_json({ echo => $data });
         });
     }
 
-    # SSE handlers receive PAGI::SSE
-    async sub events_handler {
-        my ($self, $sse) = @_;
-        await $sse->every(1, async sub {
-            await $sse->send_event('tick', { ts => time });
-        });
-    }
-
-    # Create app
-    my $app = MyApp::API->to_app;
+    my $app = MyApp->to_app;
 
 =head1 DESCRIPTION
 
-PAGI::Endpoint::Router provides a Rails/Django-style class-based approach
+PAGI::Endpoint::Router provides a Starlette/Rails-style class-based approach
 to building PAGI applications. It combines:
 
 =over 4
@@ -463,19 +408,83 @@ to building PAGI applications. It combines:
 =item * B<Lifespan management> - C<on_startup>/C<on_shutdown> hooks for
 database connections, initialization, cleanup
 
-=item * B<Method-based handlers> - Define handlers as class methods instead
-of anonymous subs
+=item * B<Method-based handlers> - Define handlers as class methods
 
 =item * B<Wrapped objects> - Handlers receive C<PAGI::Request>/C<PAGI::Response>
 for HTTP, C<PAGI::WebSocket> for WebSocket, C<PAGI::SSE> for SSE
 
-=item * B<Middleware as methods> - Define middleware as class methods with
-C<$next> parameter
-
-=item * B<Shared stash> - C<$self-E<gt>stash> from startup available to all
-handlers via C<$req-E<gt>stash>, C<$ws-E<gt>stash>, etc.
+=item * B<Middleware as methods> - Define middleware that can set stash values
+visible to all downstream handlers
 
 =back
+
+=head1 STATE VS STASH
+
+PAGI::Endpoint::Router provides two separate storage mechanisms with
+different scopes and lifetimes.
+
+=head2 state - Worker-Local Instance State
+
+    $self->state->{db} = $connection;
+
+The C<state> hashref is attached to the router instance. Use it for
+resources initialized in C<on_startup> like database connections,
+cache clients, or configuration.
+
+B<IMPORTANT: Worker Isolation>
+
+In a multi-worker or clustered deployment, each worker process has its
+own isolated copy of C<state>:
+
+    Master Process
+      fork() --> Worker 1 (own $self->state)
+             --> Worker 2 (own $self->state)
+             --> Worker 3 (own $self->state)
+
+Changes to C<state> in one worker do NOT affect other workers. For
+truly shared application state (counters, sessions, feature flags),
+use external storage:
+
+=over 4
+
+=item * B<Redis> - Fast in-memory shared state
+
+=item * B<Database> - Persistent shared state
+
+=item * B<Memcached> - Distributed caching
+
+=back
+
+=head2 stash - Per-Request Shared Scratch Space
+
+    $req->stash->{user} = $current_user;
+
+The C<stash> lives in the request scope and is shared across ALL
+handlers, middleware, and subrouters processing the same request.
+
+    Middleware A
+        sets $req->stash->{user}
+            Middleware B
+                reads $req->stash->{user}
+                    Subrouter Handler
+                        reads $req->stash->{user}  <-- Still visible!
+
+This enables middleware to pass data downstream:
+
+    # Auth middleware
+    async sub require_auth {
+        my ($self, $req, $res, $next) = @_;
+        my $user = verify_token($req->header('Authorization'));
+        $req->stash->{user} = $user;  # Available to ALL downstream
+        await $next->();
+    }
+
+    # Handler in subrouter - sees stash from parent middleware
+    async sub get_profile {
+        my ($self, $req, $res) = @_;
+        my $user = $req->stash->{user};  # Set by middleware above
+        await $res->json($user);
+    }
 
 =head1 HANDLER SIGNATURES
 
@@ -503,30 +512,32 @@ Handlers receive different wrapped objects based on route type:
     my $app = MyRouter->to_app;
 
 Returns a PAGI application coderef. Creates a single instance that
-persists for the application lifetime (for stash sharing).
+persists for the worker lifetime.
 
-=head2 stash
+=head2 state
 
-    $self->stash->{db} = $connection;
+    $self->state->{db} = $connection;
 
-Returns the router's stash hashref. Values set here in C<on_startup>
-are available to all handlers via C<$req-E<gt>stash>, C<$ws-E<gt>stash>, etc.
+Returns the worker-local state hashref. Set resources here in
+C<on_startup>. Access via C<$self-E<gt>state> in handlers.
+
+B<Note:> This is NOT shared across workers. See L</STATE VS STASH>.
 
 =head2 on_startup
 
     async sub on_startup {
         my ($self) = @_;
-        # Initialize resources
+        $self->state->{db} = DBI->connect(...);
     }
 
-Called once when the application starts (on first lifespan.startup event).
-Override to initialize database connections, caches, etc.
+Called once when the application starts. Override to initialize
+database connections, caches, etc.
 
 =head2 on_shutdown
 
     async sub on_shutdown {
         my ($self) = @_;
-        # Cleanup resources
+        $self->state->{db}->disconnect;
     }
 
 Called once when the application shuts down. Override to close
@@ -539,18 +550,14 @@ connections and cleanup resources.
         $r->get('/path' => 'handler_method');
     }
 
-Override to define routes. The C<$r> parameter is a route builder with
-methods for HTTP, WebSocket, and SSE routes.
+Override to define routes. The C<$r> parameter is a route builder.
 
 =head1 ROUTE BUILDER METHODS
-
-The C<$r> object passed to C<routes()> supports:
 
 =head2 HTTP Methods
 
     $r->get($path => 'handler');
     $r->get($path => ['middleware'] => 'handler');
-
     $r->post($path => ...);
     $r->put($path => ...);
     $r->patch($path => ...);
@@ -558,24 +565,23 @@ The C<$r> object passed to C<routes()> supports:
     $r->head($path => ...);
     $r->options($path => ...);
 
-=head2 WebSocket
+=head2 websocket
 
     $r->websocket($path => 'handler');
 
-=head2 SSE
+=head2 sse
 
     $r->sse($path => 'handler');
 
-=head2 Mount
+=head2 mount
 
-    $r->mount($prefix => $app);
+    $r->mount($prefix => $other_app);
 
-Mount another PAGI app at a prefix.
+Mount another PAGI app at a prefix. Stash flows through to mounted apps.
 
 =head1 SEE ALSO
 
 L<PAGI::App::Router>, L<PAGI::Request>, L<PAGI::Response>,
-L<PAGI::WebSocket>, L<PAGI::SSE>, L<PAGI::Endpoint::HTTP>,
-L<PAGI::Endpoint::WebSocket>, L<PAGI::Endpoint::SSE>
+L<PAGI::WebSocket>, L<PAGI::SSE>
 
 =cut

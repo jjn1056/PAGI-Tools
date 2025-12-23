@@ -217,16 +217,9 @@ sub to_app {
         $m->{_handler} = $self->_build_middleware_chain($m->{middleware}, $m->{app});
     }
 
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-        my $type   = $scope->{type} // 'http';
-        my $method = uc($scope->{method} // '');
-        my $path   = $scope->{path} // '/';
-
-        # Ignore lifespan events
-        return if $type eq 'lifespan';
-
-        # Check mounts first (longest prefix first for proper matching)
+    # Helper to check mounts
+    my $check_mounts = async sub {
+        my ($scope, $receive, $send, $path) = @_;
         for my $m (sort { length($b->{prefix}) <=> length($a->{prefix}) } @mounts) {
             my $prefix = $m->{prefix};
             if ($path eq $prefix || $path =~ m{^\Q$prefix\E(/.*)$}) {
@@ -237,11 +230,22 @@ sub to_app {
                     root_path => ($scope->{root_path} // '') . $prefix,
                 };
                 await $m->{_handler}->($new_scope, $receive, $send);
-                return;
+                return 1;  # Matched
             }
         }
+        return 0;  # No match
+    };
 
-        # WebSocket routes (path-only matching)
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $type   = $scope->{type} // 'http';
+        my $method = uc($scope->{method} // '');
+        my $path   = $scope->{path} // '/';
+
+        # Ignore lifespan events
+        return if $type eq 'lifespan';
+
+        # WebSocket routes (path-only matching) - check before mounts
         if ($type eq 'websocket') {
             for my $route (@websocket_routes) {
                 if ($path =~ $route->{regex}) {
@@ -261,7 +265,11 @@ sub to_app {
                     return;
                 }
             }
-            # No websocket route matched - 404
+            # No websocket route matched - try mounts as fallback
+            if (await $check_mounts->($scope, $receive, $send, $path)) {
+                return;
+            }
+            # No mount matched either - 404
             if ($not_found) {
                 await $not_found->($scope, $receive, $send);
             } else {
@@ -275,7 +283,7 @@ sub to_app {
             return;
         }
 
-        # SSE routes (path-only matching)
+        # SSE routes (path-only matching) - check before mounts
         if ($type eq 'sse') {
             for my $route (@sse_routes) {
                 if ($path =~ $route->{regex}) {
@@ -295,7 +303,11 @@ sub to_app {
                     return;
                 }
             }
-            # No SSE route matched - 404
+            # No SSE route matched - try mounts as fallback
+            if (await $check_mounts->($scope, $receive, $send, $path)) {
+                return;
+            }
+            # No mount matched either - 404
             if ($not_found) {
                 await $not_found->($scope, $receive, $send);
             } else {
@@ -309,7 +321,7 @@ sub to_app {
             return;
         }
 
-        # HTTP routes (method + path matching) - existing logic
+        # HTTP routes (method + path matching) - check routes first
         # HEAD should match GET routes
         my $match_method = $method eq 'HEAD' ? 'GET' : $method;
 
@@ -358,7 +370,12 @@ sub to_app {
             return;
         }
 
-        # No match - 404
+        # No HTTP route matched - try mounts as fallback
+        if (await $check_mounts->($scope, $receive, $send, $path)) {
+            return;
+        }
+
+        # No mount matched either - 404
         if ($not_found) {
             await $not_found->($scope, $receive, $send);
         } else {

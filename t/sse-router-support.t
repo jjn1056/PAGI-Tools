@@ -5,12 +5,6 @@ use Future::AsyncAwait;
 
 use PAGI::SSE;
 
-my $scope = {
-    type    => 'sse',
-    path    => '/events',
-    headers => [],
-};
-
 my @sent;
 my $send = sub {
     my ($msg) = @_;
@@ -28,6 +22,11 @@ my $receive = sub {
 };
 
 subtest 'stash accessor' => sub {
+    my $scope = {
+        type    => 'sse',
+        path    => '/events',
+        headers => [],
+    };
     my $sse = PAGI::SSE->new($scope, $receive, $send);
 
     is($sse->stash, {}, 'stash returns empty hashref by default');
@@ -36,11 +35,17 @@ subtest 'stash accessor' => sub {
     is($sse->stash->{counter}, 0, 'stash values persist');
 };
 
-subtest 'set_stash replaces stash' => sub {
+subtest 'stash lives in scope' => sub {
+    my $scope = {
+        type    => 'sse',
+        path    => '/events',
+        headers => [],
+    };
     my $sse = PAGI::SSE->new($scope, $receive, $send);
 
-    $sse->set_stash({ metrics => { requests => 100 } });
-    is($sse->stash->{metrics}{requests}, 100, 'set_stash works');
+    $sse->stash->{metrics} = { requests => 100 };
+    is($sse->stash->{metrics}{requests}, 100, 'stash persists values');
+    is($scope->{'pagi.stash'}{metrics}{requests}, 100, 'stash lives in scope');
 };
 
 subtest 'param and params read from scope' => sub {
@@ -59,12 +64,22 @@ subtest 'param and params read from scope' => sub {
 };
 
 subtest 'param returns undef when no route params in scope' => sub {
+    my $scope = {
+        type    => 'sse',
+        path    => '/events',
+        headers => [],
+    };
     my $sse = PAGI::SSE->new($scope, $receive, $send);
     is($sse->param('anything'), undef, 'param returns undef when no params');
     is($sse->params, {}, 'params returns empty hash when no params');
 };
 
 subtest 'every method exists' => sub {
+    my $scope = {
+        type    => 'sse',
+        path    => '/events',
+        headers => [],
+    };
     my $sse = PAGI::SSE->new($scope, $receive, $send);
     ok($sse->can('every'), 'every method exists');
 };

@@ -5,17 +5,17 @@ use Future::AsyncAwait;
 
 use PAGI::Request;
 
-my $scope = {
-    type         => 'http',
-    method       => 'GET',
-    path         => '/test',
-    query_string => '',
-    headers      => [],
-};
-
 my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
 
 subtest 'stash accessor' => sub {
+    my $scope = {
+        type         => 'http',
+        method       => 'GET',
+        path         => '/test',
+        query_string => '',
+        headers      => [],
+    };
+
     my $req = PAGI::Request->new($scope, $receive);
 
     # Default stash is empty hashref
@@ -26,27 +26,44 @@ subtest 'stash accessor' => sub {
     is($req->stash->{user}{id}, 1, 'stash values persist');
 };
 
-subtest 'set_stash replaces entire stash' => sub {
+subtest 'stash lives in scope' => sub {
+    my $scope = {
+        type         => 'http',
+        method       => 'GET',
+        path         => '/test',
+        query_string => '',
+        headers      => [],
+    };
+
     my $req = PAGI::Request->new($scope, $receive);
 
-    $req->set_stash({ db => 'connection', config => { debug => 1 } });
-    is($req->stash->{db}, 'connection', 'set_stash sets values');
+    $req->stash->{db} = 'connection';
+    $req->stash->{config} = { debug => 1 };
+
+    is($req->stash->{db}, 'connection', 'stash sets values');
     is($req->stash->{config}{debug}, 1, 'nested values work');
+    is($scope->{'pagi.stash'}{db}, 'connection', 'stash lives in scope');
 };
 
-subtest 'set and get for request-scoped data' => sub {
-    my $req = PAGI::Request->new($scope, $receive);
+subtest 'stash shared via scope enables middleware data sharing' => sub {
+    my $scope = {
+        type         => 'http',
+        method       => 'GET',
+        path         => '/test',
+        query_string => '',
+        headers      => [],
+    };
 
-    # Set a value
-    $req->set('user', { id => 42, role => 'admin' });
+    # Simulate middleware setting a value
+    my $req1 = PAGI::Request->new($scope, $receive);
+    $req1->stash->{user} = { id => 42, role => 'admin' };
 
-    # Get it back
-    my $user = $req->get('user');
-    is($user->{id}, 42, 'get returns set value');
-    is($user->{role}, 'admin', 'get returns full structure');
+    # Simulate handler reading middleware-set value (same scope)
+    my $req2 = PAGI::Request->new($scope, $receive);
+    my $user = $req2->stash->{user};
 
-    # Get missing key
-    is($req->get('missing'), undef, 'get returns undef for missing');
+    is($user->{id}, 42, 'handler sees middleware-set value');
+    is($user->{role}, 'admin', 'full structure accessible');
 };
 
 subtest 'param returns route parameters from scope' => sub {
