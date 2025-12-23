@@ -1,0 +1,55 @@
+Revision history for PAGI
+
+## [Unreleased]
+
+### Changed
+
+- **BREAKING**: Renamed `$router->stash` to `$router->state` in PAGI::Endpoint::Router
+- **BREAKING**: `$req->stash`, `$ws->stash`, `$sse->stash` now live in scope
+  (`$scope->{'pagi.stash'}`) and are shared across all middleware, handlers,
+  and subrouters processing the same request
+- **BREAKING**: Removed `$req->set_stash()`, `$req->set()`, `$req->get()` methods
+  - Just use `$req->stash->{key}` for all request-scoped data sharing
+- **BREAKING**: Removed `$sse->set_stash()` method
+- Removed automatic copying of router state into request stash
+
+### Migration Guide
+
+**Router state:**
+```perl
+# Before
+$self->stash->{db} = DBI->connect(...);
+
+# After
+$self->state->{db} = DBI->connect(...);
+```
+
+**Accessing state in handlers:**
+```perl
+# Before (state was copied to request stash)
+my $db = $req->stash->{db};
+
+# After (access via $self)
+my $db = $self->state->{db};
+```
+
+**Middleware data sharing:**
+```perl
+# Before
+$req->set('user', $user);
+my $user = $req->get('user');
+
+# After (just use stash)
+$req->stash->{user} = $user;
+my $user = $req->stash->{user};
+```
+
+### Important Notes
+
+**Worker Isolation:** `$self->state` is per-worker. In multi-worker deployments,
+each worker has isolated state. For shared state across workers or cluster nodes,
+use external storage (Redis, database, etc.).
+
+**Stash Flows Downstream:** `$req->stash` is shared across all middleware, handlers,
+and subrouters for the same request. Middleware can set values that downstream
+handlers will see.
