@@ -309,6 +309,12 @@ sub stash {
     return $self->{scope}{'pagi.stash'} //= {};
 }
 
+# Application state (injected by PAGI::Lifespan, read-only)
+sub state {
+    my $self = shift;
+    return $self->{scope}{'pagi.state'} // {};
+}
+
 # Body streaming - mutually exclusive with buffered body methods
 sub body_stream {
     my ($self, %opts) = @_;
