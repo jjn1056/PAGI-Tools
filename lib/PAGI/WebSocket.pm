@@ -52,6 +52,12 @@ sub stash {
     return $self->{scope}{'pagi.stash'} //= {};
 }
 
+# Application state (injected by PAGI::Lifespan, read-only)
+sub state {
+    my $self = shift;
+    return $self->{scope}{'pagi.state'} // {};
+}
+
 # Route parameter accessors (read from scope)
 sub params {
     my ($self) = @_;
@@ -98,7 +104,7 @@ sub header_all {
 }
 
 # State accessors
-sub state { shift->{_state} }
+sub connection_state { shift->{_state} }
 
 sub is_connected {
     my $self = shift;
@@ -820,6 +826,17 @@ Case-insensitive header access.
 Per-connection storage hashref. Useful for storing user data
 without external variables.
 
+=head2 state
+
+    my $db = $ws->state->{db};
+    my $config = $ws->state->{config};
+
+Application state hashref injected by PAGI::Lifespan. Read-only access
+to shared application state. Returns empty hashref if not set.
+
+Note: This is separate from C<stash> (per-connection data) and
+C<connection_state> (internal WebSocket state).
+
 =head2 param
 
     my $id = $ws->param('id');
@@ -856,11 +873,11 @@ Idempotent - calling multiple times only sends close once.
 
 =head1 STATE ACCESSORS
 
-=head2 is_connected, is_closed, state
+=head2 is_connected, is_closed, connection_state
 
     if ($ws->is_connected) { ... }
     if ($ws->is_closed) { ... }
-    my $state = $ws->state;            # 'connecting', 'connected', 'closed'
+    my $state = $ws->connection_state; # 'connecting', 'connected', 'closed'
 
 =head2 close_code, close_reason
 
