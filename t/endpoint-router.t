@@ -139,4 +139,46 @@ subtest 'WebSocket route with method handler' => sub {
     })->()->get;
 };
 
+subtest 'SSE route with method handler' => sub {
+    {
+        package TestApp::SSE;
+        use parent 'PAGI::Endpoint::Router';
+        use Future::AsyncAwait;
+
+        sub routes {
+            my ($self, $r) = @_;
+            $r->sse('/events/:channel' => 'events_handler');
+        }
+
+        async sub events_handler {
+            my ($self, $sse) = @_;
+
+            die "Expected PAGI::SSE" unless $sse->isa('PAGI::SSE');
+
+            my $channel = $sse->param('channel');
+            die "Expected channel param" unless $channel eq 'news';
+
+            await $sse->send_event(event => 'connected', data => { channel => $channel });
+        }
+    }
+
+    my $app = TestApp::SSE->to_app;
+
+    (async sub {
+        my @sent;
+        my $send = sub { push @sent, $_[0]; Future->done };
+        my $receive = sub { Future->done({ type => 'sse.disconnect' }) };
+
+        my $scope = {
+            type    => 'sse',
+            path    => '/events/news',
+            headers => [],
+        };
+
+        await $app->($scope, $receive, $send);
+
+        ok(scalar @sent > 0, 'SSE sent events');
+    })->()->get;
+};
+
 done_testing;

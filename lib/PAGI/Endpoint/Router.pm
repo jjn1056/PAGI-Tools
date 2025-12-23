@@ -266,6 +266,61 @@ sub _wrap_websocket_handler {
     };
 }
 
+sub sse {
+    my ($self, $path, @rest) = @_;
+
+    my ($middleware, $handler) = $self->_parse_route_args(@rest);
+    my @wrapped_mw = map { $self->_wrap_middleware($_) } @$middleware;
+    my $wrapped = $self->_wrap_sse_handler($handler);
+
+    $self->{router}->sse($path, @wrapped_mw ? (\@wrapped_mw, $wrapped) : $wrapped);
+
+    return $self;
+}
+
+sub _wrap_sse_handler {
+    my ($self, $handler) = @_;
+
+    my $endpoint = $self->{endpoint};
+
+    if (!ref($handler)) {
+        my $method_name = $handler;
+        my $method = $endpoint->can($method_name)
+            or die "No such method: $method_name";
+
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+
+            require PAGI::SSE;
+
+            my $sse = PAGI::SSE->new($scope, $receive, $send);
+
+            # Inject router stash
+            my $router_stash = $scope->{'pagi.stash'} // {};
+            for my $key (keys %$router_stash) {
+                $sse->stash->{$key} = $router_stash->{$key};
+            }
+
+            await $endpoint->$method($sse);
+        };
+    }
+
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+
+        require PAGI::SSE;
+
+        my $sse = PAGI::SSE->new($scope, $receive, $send);
+
+        my $router_stash = $scope->{'pagi.stash'} // {};
+        for my $key (keys %$router_stash) {
+            $sse->stash->{$key} = $router_stash->{$key};
+        }
+
+        await $handler->($sse);
+    };
+}
+
 sub _wrap_middleware {
     my ($self, $mw) = @_;
 
