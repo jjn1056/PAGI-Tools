@@ -70,9 +70,11 @@ Attempting to call a finisher method twice will throw an error.
 =head2 new
 
     my $res = PAGI::Response->new($send);
+    my $res = PAGI::Response->new($send, $scope);
 
 Creates a new response builder. The C<$send> parameter must be a coderef
-(the PAGI send callback).
+(the PAGI send callback). The optional C<$scope> parameter is the PAGI
+scope hashref, needed for route parameter access.
 
 =head1 CHAINABLE METHODS
 
@@ -115,6 +117,22 @@ httponly, samesite.
     $res->delete_cookie('session');
 
 Delete a cookie by setting it with Max-Age=0.
+
+=head2 param
+
+    my $id = $res->param('id');
+
+Returns a route parameter by name. Route parameters are read from
+C<< $scope->{'pagi.router'}{params} >>. Returns C<undef> if the parameter
+is not found or if no scope was provided to the constructor.
+
+=head2 params
+
+    my $params = $res->params;
+
+Returns hashref of all route parameters from scope. Returns an empty
+hashref if no route parameters exist or if no scope was provided to
+the constructor.
 
 =head2 cors
 
@@ -410,7 +428,7 @@ use L<PAGI::App::File> instead:
 
     async sub handle_download ($req, $send) {
         my $res = PAGI::Response->new($send);
-        my $file_id = $req->path_param('id');
+        my $file_id = $req->param('id');
 
         my $file = get_file($file_id);
         unless ($file && -f $file->{path}) {
@@ -591,12 +609,13 @@ PAGI Contributors
 
 =cut
 
-sub new ($class, $send = undef) {
+sub new ($class, $send = undef, $scope = undef) {
     croak("send is required") unless $send;
     croak("send must be a coderef") unless ref($send) eq 'CODE';
 
     my $self = bless {
         send    => $send,
+        scope   => $scope,
         _status => 200,
         _headers => [],
         _sent   => 0,
@@ -622,6 +641,18 @@ sub content_type ($self, $type) {
     $self->{_headers} = [grep { lc($_->[0]) ne 'content-type' } @{$self->{_headers}}];
     push @{$self->{_headers}}, ['content-type', $type];
     return $self;
+}
+
+# Route parameters - read from scope (set by router)
+sub params ($self) {
+    return {} unless $self->{scope};
+    return $self->{scope}{'pagi.router'}{params} // {};
+}
+
+sub param ($self, $name) {
+    return undef unless $self->{scope};
+    my $params = $self->{scope}{'pagi.router'}{params} // {};
+    return $params->{$name};
 }
 
 async sub send ($self, $body = undef) {
