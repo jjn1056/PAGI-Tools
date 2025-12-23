@@ -59,4 +59,24 @@ subtest 'param returns route parameters' => sub {
     is($req->param('missing'), undef, 'param returns undef for missing');
 };
 
+subtest 'param falls back to query params' => sub {
+    my $scope_with_query = {
+        type         => 'http',
+        method       => 'GET',
+        path         => '/test',
+        query_string => 'foo=bar&baz=qux',
+        headers      => [],
+    };
+
+    my $req = PAGI::Request->new($scope_with_query, $receive);
+
+    # No route params set, should fall back to query
+    is($req->param('foo'), 'bar', 'param falls back to query param');
+
+    # With route params, route param takes precedence
+    $req->set_route_params({ foo => 'route_value' });
+    is($req->param('foo'), 'route_value', 'route param takes precedence');
+    is($req->param('baz'), 'qux', 'other query params still accessible');
+};
+
 done_testing;

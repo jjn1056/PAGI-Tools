@@ -305,6 +305,7 @@ sub set_params {
 sub set_route_params {
     my ($self, $params) = @_;
     $self->set_params($params);
+    return $self;
 }
 
 # Per-request storage for middleware/handlers
