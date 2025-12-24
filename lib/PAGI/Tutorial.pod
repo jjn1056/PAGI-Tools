@@ -739,6 +739,9 @@ Let's build a complete HTTP request handler that reads the request body and echo
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       # Read the entire request body
+      # NOTE: This loop does NOT block the event loop! The 'await' keyword
+      # yields control while waiting for data, allowing other requests to
+      # be processed. The loop only runs when there's actually data.
       my $body = '';
       while (1) {
           my $event = await $receive->();
@@ -815,6 +818,8 @@ WebSocket enables bidirectional real-time communication. Here's a simple echo se
       });
 
       # Echo loop: receive messages and send them back
+      # NOTE: This loop does NOT block! The 'await' yields to the event
+      # loop while waiting, allowing other connections to be processed.
       while (1) {
           my $event = await $receive->();
 
@@ -1062,6 +1067,8 @@ The lifespan protocol allows your application to initialize resources on startup
 
       # Handle lifespan events
       if ($scope->{type} eq 'lifespan') {
+          # NOTE: This loop does NOT block! The 'await' yields to the
+          # event loop while waiting for the next lifespan event.
           while (1) {
               my $event = await $receive->();
 
@@ -1270,6 +1277,7 @@ Response bodies must be encoded to bytes:
       $value = decode_utf8(uri_decode($value // '')) if defined $value;
 
       # 3. Request body is raw bytes
+      # NOTE: This loop does NOT block - await yields to event loop
       my $body_bytes = '';
       while (1) {
           my $event = await $receive->();
@@ -2147,6 +2155,8 @@ A simple echo server that receives text messages and sends them back:
       await $ws->accept;
 
       # Receive messages in a loop
+      # NOTE: This loop does NOT block! The 'await' yields to the event
+      # loop while waiting, allowing other connections to be processed.
       while (1) {
           my $message = await $ws->receive;
 
@@ -2288,7 +2298,7 @@ Process each message with a callback:
 
       await $ws->accept;
 
-      # Your message handling code...
+      # Your message handling code (await yields, doesn't block)
       while (1) {
           my $msg = await $ws->receive;
           last unless defined $msg;
