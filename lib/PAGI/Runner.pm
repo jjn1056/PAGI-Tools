@@ -96,7 +96,11 @@ Creates a new runner instance. Options:
 
 =item host => $host
 
-Bind address. Default: '127.0.0.1'
+Bind address. Default: C<'127.0.0.1'> (localhost only)
+
+The default is secure - it only accepts local connections. For headless
+servers or deployments requiring remote access, use C<'0.0.0.0'> to bind
+to all IPv4 interfaces. See L<PAGI::Server> for detailed documentation
 
 =item port => $port
 
