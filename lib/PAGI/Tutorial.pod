@@ -257,24 +257,28 @@ When you use C<await>, you're telling the event loop "I'm waiting for something,
 These operations yield control to the event loop:
 
   use Future::AsyncAwait;
+  use IO::Async::Loop;
   use IO::Async::Timer::Countdown;
   use Net::Async::HTTP;
 
   async sub good_app {
       my ($scope, $receive, $send) = @_;
 
+      # IO::Async::Loop->new returns the singleton loop instance
+      my $loop = IO::Async::Loop->new;
+
       # Good: Async timer (doesn't block)
       my $timer = IO::Async::Timer::Countdown->new(
           delay => 5,
           on_expire => sub { },
       );
-      $scope->{loop}->add($timer);
+      $loop->add($timer);
       $timer->start;
       await $timer->future;
 
       # Good: Async HTTP client (doesn't block)
       my $http = Net::Async::HTTP->new;
-      $scope->{loop}->add($http);
+      $loop->add($http);
       my $response = await $http->GET('https://api.example.com/data');
 
       # Good: Async database query (using a hypothetical async DB driver)
@@ -379,7 +383,10 @@ Prefer async alternatives when available:
 
 Offload blocking operations to a subprocess via L<IO::Async::Function>:
 
+  use IO::Async::Loop;
   use IO::Async::Function;
+
+  my $loop = IO::Async::Loop->new;  # Returns singleton
 
   my $worker = IO::Async::Function->new(
       code => sub {
@@ -388,7 +395,7 @@ Offload blocking operations to a subprocess via L<IO::Async::Function>:
           return bcrypt_hash($password);
       },
   );
-  $scope->{loop}->add($worker);  # Forks the worker process here
+  $loop->add($worker);  # Forks the worker process here
 
   # Call the blocking operation asynchronously
   my $hashed = await $worker->call(args => [$password]);
@@ -508,14 +515,17 @@ This will NOT work correctly across workers:
 Use a shared backend for state:
 
   use Future::AsyncAwait;
+  use IO::Async::Loop;
   use Net::Async::Redis;
 
   async sub app {
       my ($scope, $receive, $send) = @_;
 
+      my $loop = IO::Async::Loop->new;
+
       # Connect to Redis (shared across all workers)
       my $redis = Net::Async::Redis->new;
-      $scope->{loop}->add($redis);
+      $loop->add($redis);
       await $redis->connect(host => 'localhost', port => 6379);
 
       # Increment counter in Redis
@@ -865,6 +875,7 @@ Server-Sent Events allow the server to push updates to clients over HTTP. Here's
   use strict;
   use warnings;
   use Future::AsyncAwait;
+  use IO::Async::Loop;
   use IO::Async::Timer::Periodic;
 
   async sub app {
@@ -872,6 +883,8 @@ Server-Sent Events allow the server to push updates to clients over HTTP. Here's
 
       # Only handle SSE connections
       return unless $scope->{type} eq 'sse';
+
+      my $loop = IO::Async::Loop->new;
 
       # Start the SSE response
       await $send->({
@@ -900,12 +913,12 @@ Server-Sent Events allow the server to push updates to clients over HTTP. Here's
       );
 
       # Add timer to the event loop
-      $scope->{loop}->add($timer);
+      $loop->add($timer);
       $timer->start;
 
       # Keep the connection open indefinitely
       # (In practice, you'd detect client disconnect)
-      await $scope->{loop}->loop_forever;
+      await $loop->loop_forever;
   }
 
   \&app;
@@ -958,12 +971,15 @@ You can stream HTTP response bodies by sending multiple C<http.response.body> ev
   use strict;
   use warnings;
   use Future::AsyncAwait;
-  use IO::Async::Timer::Periodic;
+  use IO::Async::Loop;
+  use IO::Async::Timer::Countdown;
 
   async sub app {
       my ($scope, $receive, $send) = @_;
 
       return unless $scope->{type} eq 'http';
+
+      my $loop = IO::Async::Loop->new;
 
       # Start response with chunked encoding
       await $send->({
@@ -988,7 +1004,7 @@ You can stream HTTP response bodies by sending multiple C<http.response.body> ev
               delay => 1,
               on_expire => sub { },
           );
-          $scope->{loop}->add($timer);
+          $loop->add($timer);
           $timer->start;
           await $timer->future;
       }
@@ -1617,14 +1633,16 @@ For large responses or real-time data, use C<stream()>:
   use strict;
   use warnings;
   use Future::AsyncAwait;
-  use PAGI::Response;
+  use IO::Async::Loop;
   use IO::Async::Timer::Countdown;
+  use PAGI::Response;
 
   async sub app {
       my ($scope, $receive, $send) = @_;
 
       return unless $scope->{type} eq 'http';
 
+      my $loop = IO::Async::Loop->new;
       my $res = PAGI::Response->new($send);
 
       # Stream response chunks
@@ -1639,7 +1657,7 @@ For large responses or real-time data, use C<stream()>:
                   delay => 1,
                   on_expire => sub { },
               );
-              $scope->{loop}->add($timer);
+              $loop->add($timer);
               $timer->start;
               await $timer->future;
           }
@@ -4562,10 +4580,18 @@ Test PAGI apps directly without a running server:
 
 The C<$scope> hashref contains connection metadata:
 
+=head3 Accessing the Event Loop
+
+The event loop is B<not> part of C<$scope>. To access it, use the L<IO::Async::Loop> singleton:
+
+  use IO::Async::Loop;
+  my $loop = IO::Async::Loop->new;  # Returns cached singleton
+
+This works because L<IO::Async::Loop> caches the loop instance - calling C<< ->new >> always returns the same loop that the server created at startup.
+
 =head3 Common Fields (All Types)
 
   $scope->{type}         # 'http', 'websocket', 'sse', 'lifespan'
-  $scope->{loop}         # IO::Async::Loop instance
 
 =head3 HTTP Scope
 
@@ -4600,7 +4626,6 @@ The C<$scope> hashref contains connection metadata:
 =head3 Lifespan Scope
 
   $scope->{type}         # 'lifespan'
-  $scope->{loop}         # IO::Async::Loop instance
 
 =head2 8.2 Event Reference
 
