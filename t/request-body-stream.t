@@ -1,8 +1,5 @@
 use strict;
 use warnings;
-use v5.32;
-use feature 'signatures';
-no warnings 'experimental::signatures';
 use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
@@ -134,7 +131,8 @@ subtest 'stream_to custom sink' => sub {
     my $stream = PAGI::Request::BodyStream->new(receive => $receive);
 
     my $collected = '';
-    my $bytes = $stream->stream_to(sub ($chunk) {
+    my $bytes = $stream->stream_to(sub {
+        my ($chunk) = @_;
         $collected .= $chunk;
     })->get;
 

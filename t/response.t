@@ -1,8 +1,5 @@
 use strict;
 use warnings;
-use v5.32;
-use feature 'signatures';
-no warnings 'experimental::signatures';
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
@@ -91,7 +88,7 @@ subtest 'status rejects invalid codes' => sub {
 
 subtest 'send_raw method' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->status(200)->header('x-test' => 'value');
@@ -107,7 +104,7 @@ subtest 'send_raw method' => sub {
 
 subtest 'send method encodes UTF-8' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->send("café")->get;
@@ -139,7 +136,7 @@ subtest 'is_sent method' => sub {
 
 subtest 'text method' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->text("Hello World")->get;
@@ -151,7 +148,7 @@ subtest 'text method' => sub {
 
 subtest 'html method' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->html("<h1>Hello</h1>")->get;
@@ -162,7 +159,7 @@ subtest 'html method' => sub {
 
 subtest 'json method' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->json({ message => 'Hello', count => 42 })->get;
@@ -177,7 +174,7 @@ subtest 'json method' => sub {
 
 subtest 'json with status' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->status(201)->json({ created => 1 })->get;
@@ -187,7 +184,7 @@ subtest 'json with status' => sub {
 
 subtest 'json with unicode' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->json({ message => 'café', count => 42 })->get;
@@ -201,7 +198,7 @@ subtest 'json with unicode' => sub {
 
 subtest 'redirect method default 302' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->redirect('/login')->get;
@@ -213,7 +210,7 @@ subtest 'redirect method default 302' => sub {
 
 subtest 'redirect with custom status' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->redirect('/permanent', 301)->get;
@@ -223,7 +220,7 @@ subtest 'redirect with custom status' => sub {
 
 subtest 'redirect 303 See Other' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->redirect('/result', 303)->get;
@@ -233,7 +230,7 @@ subtest 'redirect 303 See Other' => sub {
 
 subtest 'empty method' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->empty()->get;
@@ -244,7 +241,7 @@ subtest 'empty method' => sub {
 
 subtest 'empty with custom status' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->status(201)->empty()->get;
@@ -254,7 +251,7 @@ subtest 'empty with custom status' => sub {
 
 subtest 'cookie method basic' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     my $ret = $res->cookie('session' => 'abc123');
@@ -269,7 +266,7 @@ subtest 'cookie method basic' => sub {
 
 subtest 'cookie with options' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->cookie('token' => 'xyz',
@@ -296,7 +293,7 @@ subtest 'cookie with options' => sub {
 
 subtest 'delete_cookie' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     my $ret = $res->delete_cookie('session');
@@ -313,7 +310,7 @@ subtest 'delete_cookie' => sub {
 
 subtest 'multiple cookies' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->cookie('a' => '1')->cookie('b' => '2');
@@ -325,11 +322,12 @@ subtest 'multiple cookies' => sub {
 
 subtest 'stream method' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->content_type('text/plain');
-    $res->stream(async sub ($writer) {
+    $res->stream(async sub {
+        my ($writer) = @_;
         await $writer->write("chunk1");
         await $writer->write("chunk2");
         await $writer->close();
@@ -346,11 +344,12 @@ subtest 'stream method' => sub {
 
 subtest 'stream writer bytes_written' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     my $bytes;
-    $res->stream(async sub ($writer) {
+    $res->stream(async sub {
+        my ($writer) = @_;
         await $writer->write("12345");
         await $writer->write("67890");
         $bytes = $writer->bytes_written;
@@ -362,7 +361,7 @@ subtest 'stream writer bytes_written' => sub {
 
 subtest 'json error response pattern' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->status(400)->json({ error => "Bad Request" })->get;
@@ -384,7 +383,7 @@ subtest 'send_file basic' => sub {
     close $fh;
 
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->send_file($filename)->get;
@@ -405,7 +404,7 @@ subtest 'send_file with filename option' => sub {
     close $fh;
 
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->send_file($filename, filename => 'download.txt')->get;
@@ -421,7 +420,7 @@ subtest 'send_file inline' => sub {
     close $fh;
 
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->send_file($filename, inline => 1)->get;
@@ -444,7 +443,7 @@ subtest 'send_file with offset' => sub {
     close $fh;
 
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->send_file($filename, offset => 5)->get;
@@ -463,7 +462,7 @@ subtest 'send_file with offset and length' => sub {
     close $fh;
 
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->send_file($filename, offset => 5, length => 5)->get;
@@ -505,7 +504,7 @@ subtest 'send_file length clamped to remaining' => sub {
     close $fh;
 
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     # Request more bytes than available
@@ -518,7 +517,7 @@ subtest 'send_file length clamped to remaining' => sub {
 
 subtest 'cors basic' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     my $ret = $res->cors;
@@ -534,7 +533,7 @@ subtest 'cors basic' => sub {
 
 subtest 'cors with specific origin' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->cors(origin => 'https://example.com')->json({})->get;
@@ -545,7 +544,7 @@ subtest 'cors with specific origin' => sub {
 
 subtest 'cors with credentials' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->cors(
@@ -560,7 +559,7 @@ subtest 'cors with credentials' => sub {
 
 subtest 'cors with expose headers' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->cors(
@@ -574,7 +573,7 @@ subtest 'cors with expose headers' => sub {
 
 subtest 'cors preflight' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     $res->cors(
@@ -597,7 +596,7 @@ subtest 'cors preflight' => sub {
 
 subtest 'cors credentials with wildcard uses request_origin' => sub {
     my @sent;
-    my $send = sub ($msg) { push @sent, $msg; Future->done };
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
     my $res = PAGI::Response->new($send);
 
     # When credentials is true and origin is *, we must provide request_origin
