@@ -23,7 +23,7 @@ sub make_scope {
 }
 
 # Helper to run async tests
-sub run_async :prototype(&) {
+sub run_async (&) {
     my ($code) = @_;
     $loop->await($code->());
 }

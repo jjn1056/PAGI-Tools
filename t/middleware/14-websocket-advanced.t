@@ -10,7 +10,7 @@ use PAGI::Middleware::WebSocket::RateLimit;
 
 my $loop = IO::Async::Loop->new;
 
-sub run_async :prototype(&) {
+sub run_async (&) {
     my ($code) = @_;
     $loop->await($code->());
 }
