@@ -27,7 +27,3 @@ Additional example apps are bundled in `lib/PAGI/App/`:
 - `app-01-file` - static file serving with PAGI::App::File
 
 Each example has its own `README.md` explaining how to run it and which spec sections to review.
-
-## PAGI::Simple Examples
-
-For higher-level Express/Sinatra-style examples, see the [PAGI-Simple](https://github.com/jjn1056/PAGI-Simple) distribution.
