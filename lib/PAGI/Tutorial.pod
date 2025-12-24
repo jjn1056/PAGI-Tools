@@ -654,7 +654,6 @@ For lifespan events (C<type =E<gt> 'lifespan'>):
 
   {
       type => 'lifespan',
-      loop => $loop,
   }
 
 =head3 $receive - Receiving Client Events
