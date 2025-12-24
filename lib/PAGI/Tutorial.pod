@@ -431,12 +431,12 @@ L<PAGI::Server> supports two deployment modes: single-process and multi-worker.
 
   Scenario                           | Single Process | Worker Mode
   -----------------------------------|----------------|-------------
-  Pure async app (no blocking)       | ✓              | ✓
-  App uses some blocking operations  | ✗              | ✓
-  High CPU usage per request         | ✗              | ✓
-  WebSocket/SSE with shared state    | ✓              | Needs PubSub
-  Development/testing                | ✓              | Optional
-  Production (multi-core server)     | Optional       | ✓
+  Pure async app (no blocking)       | Yes            | Yes
+  App uses some blocking operations  | No             | Yes
+  High CPU usage per request         | No             | Yes
+  WebSocket/SSE with shared state    | Yes            | Needs PubSub
+  Development/testing                | Yes            | Optional
+  Production (multi-core server)     | Optional       | Yes
 
 =head3 Running with Workers
 
