@@ -128,6 +128,15 @@ subtest 'cannot send twice' => sub {
     like dies { $res->send_raw("second")->get }, qr/already sent/i, 'dies on second send';
 };
 
+subtest 'is_sent method' => sub {
+    my $send = sub { Future->done };
+    my $res = PAGI::Response->new($send);
+
+    ok !$res->is_sent, 'is_sent false before sending';
+    $res->send_raw("test")->get;
+    ok $res->is_sent, 'is_sent true after sending';
+};
+
 subtest 'text method' => sub {
     my @sent;
     my $send = sub ($msg) { push @sent, $msg; Future->done };

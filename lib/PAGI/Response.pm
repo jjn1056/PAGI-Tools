@@ -148,6 +148,17 @@ This allows handlers to read values set by middleware:
 
 See L<PAGI::Request/stash> for detailed documentation on how stash works.
 
+=head2 is_sent
+
+    if ($res->is_sent) {
+        warn "Response already sent, cannot send error";
+        return;
+    }
+
+Returns true if the response has already been finalized (sent to the client).
+Useful in error handlers or middleware that need to check whether they can
+still send a response.
+
 =head2 cors
 
     # Allow all origins (simplest case)
@@ -750,6 +761,11 @@ sub stash {
     my ($self) = @_;
     return {} unless $self->{scope};
     return $self->{scope}{'pagi.stash'} //= {};
+}
+
+sub is_sent {
+    my ($self) = @_;
+    return $self->{_sent} ? 1 : 0;
 }
 
 async sub send_raw {
