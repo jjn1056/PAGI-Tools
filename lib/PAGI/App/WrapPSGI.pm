@@ -3,7 +3,6 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 
-our $VERSION = '0.001';
 
 =head1 NAME
 
@@ -47,12 +46,6 @@ sub to_app {
         my ($scope, $receive, $send) = @_;
         die "Unsupported scope type: $scope->{type}" if $scope->{type} ne 'http';
 
-        # TODO: Implement in Step 9
-        # 1. Build PSGI %env from $scope
-        # 2. Collect body from $receive into psgi.input
-        # 3. Call $psgi_app->(\%env)
-        # 4. Convert response to http.response.* events
-
         my $env = $self->_build_env($scope);
 
         # Collect request body
@@ -84,7 +77,6 @@ sub to_app {
 sub _build_env {
     my ($self, $scope) = @_;
 
-    # TODO: Implement in Step 9
     my %env = (
         REQUEST_METHOD  => $scope->{method},
         SCRIPT_NAME     => $scope->{root_path},

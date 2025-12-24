@@ -8,7 +8,6 @@ use Carp qw(croak);
 use Encode qw(encode FB_CROAK);
 use JSON::MaybeXS ();
 
-our $VERSION = '0.01';
 
 =head1 NAME
 

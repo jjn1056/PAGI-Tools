@@ -9,7 +9,6 @@ use Module::Load qw(load);
 use Scalar::Util qw(weaken);
 use JSON::MaybeXS ();
 
-our $VERSION = '0.01';
 
 # Factory class method - override in subclass for customization
 sub websocket_class { 'PAGI::WebSocket' }

@@ -7,7 +7,6 @@ use Carp qw(croak);
 
 use PAGI::Test::Response;
 
-our $VERSION = '0.01';
 
 sub new {
     my ($class, %args) = @_;

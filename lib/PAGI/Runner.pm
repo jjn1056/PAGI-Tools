@@ -8,9 +8,9 @@ use File::Spec;
 use POSIX qw(setsid);
 use IO::Async::Loop;
 
+use PAGI;
 use PAGI::Server;
 
-our $VERSION = '0.001';
 
 =head1 NAME
 
@@ -287,6 +287,7 @@ sub parse_options {
         'reuseport'             => \$opts{reuseport},
         'max-receive-queue=i'   => \$opts{max_receive_queue},
         'max-ws-frame-size=i'   => \$opts{max_ws_frame_size},
+        'sync-file-threshold=i' => \$opts{sync_file_threshold},
         'max-requests=i'        => \$opts{max_requests},
         'max-connections=i'     => \$opts{max_connections},
         'daemonize|D'           => \$opts{daemonize},
@@ -745,6 +746,7 @@ Options:
     --reuseport         SO_REUSEPORT mode (reduces accept contention)
     --max-receive-queue NUM  Max WebSocket receive queue size (default: 1000)
     --max-ws-frame-size NUM  Max WebSocket frame size in bytes (default: 65536)
+    --sync-file-threshold NUM  Sync file read threshold in bytes (0=always async, default: 65536)
     --max-requests NUM  Requests per worker before restart (default: unlimited)
     --max-connections N   Max concurrent connections (0=auto, default)
     --log-level LEVEL   Log verbosity: debug, info, warn, error (default: info)
@@ -773,7 +775,7 @@ HELP
 sub _show_version {
     my ($self) = @_;
 
-    print "pagi-server version $VERSION (PAGI::Server $PAGI::Server::VERSION)\n";
+    print "pagi-server (PAGI $PAGI::VERSION, PAGI::Server $PAGI::Server::VERSION)\n";
 }
 
 sub _daemonize {

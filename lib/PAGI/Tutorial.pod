@@ -1194,14 +1194,22 @@ PAGI follows specific rules for UTF-8 encoding/decoding:
 
 =head3 Request Paths
 
-  $scope->{path}       # Decoded UTF-8 string (use this for display/matching)
+  $scope->{path}       # UTF-8 decoded string (use this for display/matching)
   $scope->{raw_path}   # Raw bytes (preserves original encoding)
+
+PAGI uses Mojolicious-style path decoding: percent-encoded bytes are first
+URL-decoded, then UTF-8 decoded. If UTF-8 decoding fails (invalid byte
+sequences), the original URL-decoded bytes are preserved as-is.
 
 Example:
 
   # URL: /users/%E4%B8%AD%E6%96%87
   $scope->{path} = '/users/中文'                    # (decoded)
   $scope->{raw_path} = '/users/%E4%B8%AD%E6%96%87'  # (raw bytes)
+
+  # Invalid UTF-8: /users/%FF%FE
+  $scope->{path} = '/users/\xFF\xFE'                # (falls back to bytes)
+  $scope->{raw_path} = '/users/%FF%FE'              # (raw bytes)
 
 =head3 Query Strings
 

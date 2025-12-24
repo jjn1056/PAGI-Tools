@@ -5,7 +5,6 @@ use warnings;
 use Future::AsyncAwait;
 use Carp qw(croak);
 
-our $VERSION = '0.01';
 
 sub new {
     my ($class, %args) = @_;

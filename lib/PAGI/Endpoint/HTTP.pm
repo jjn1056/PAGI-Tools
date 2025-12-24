@@ -7,7 +7,6 @@ use Future::AsyncAwait;
 use Carp qw(croak);
 use Module::Load qw(load);
 
-our $VERSION = '0.01';
 
 # Factory class methods - override in subclass for customization
 sub request_class  { 'PAGI::Request' }

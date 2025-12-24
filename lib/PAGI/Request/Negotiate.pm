@@ -2,7 +2,6 @@ package PAGI::Request::Negotiate;
 use strict;
 use warnings;
 
-our $VERSION = '0.01';
 
 =head1 NAME
 

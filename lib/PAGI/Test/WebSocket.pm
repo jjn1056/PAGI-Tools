@@ -6,7 +6,6 @@ use Future::AsyncAwait;
 use Future;
 use Carp qw(croak);
 
-our $VERSION = '0.01';
 
 sub new {
     my ($class, %args) = @_;

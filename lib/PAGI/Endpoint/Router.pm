@@ -8,7 +8,6 @@ use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use Module::Load qw(load);
 
-our $VERSION = '0.01';
 
 sub new {
     my ($class, %args) = @_;

@@ -10,7 +10,6 @@ use File::Copy qw(move);
 use File::Spec;
 use Carp qw(croak);
 
-our $VERSION = '0.01';
 
 # Constructor
 sub new {

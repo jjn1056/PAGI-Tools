@@ -8,7 +8,6 @@ use Future;
 use JSON::MaybeXS ();
 use Scalar::Util qw(blessed);
 
-our $VERSION = '0.01';
 
 sub new {
     my ($class, $scope, $receive, $send) = @_;

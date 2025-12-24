@@ -9,7 +9,6 @@ use PAGI::Util::AsyncFile;
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Carp qw(croak);
 
-our $VERSION = '0.01';
 
 =head1 NAME
 
