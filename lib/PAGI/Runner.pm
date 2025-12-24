@@ -429,9 +429,13 @@ sub prepare_server {
             die <<"END_TLS_ERROR";
 --ssl-cert/--ssl-key require TLS modules which are not installed.
 
-To enable HTTPS support, install:
+To enable HTTPS/TLS support, install:
 
     cpanm IO::Async::SSL IO::Socket::SSL
+
+Or on Debian/Ubuntu:
+
+    apt-get install libio-socket-ssl-perl
 
 END_TLS_ERROR
         }
