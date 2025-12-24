@@ -418,6 +418,24 @@ sub prepare_server {
     if ($self->{ssl_cert} || $self->{ssl_key}) {
         die "--ssl-cert and --ssl-key must be specified together\n"
             unless $self->{ssl_cert} && $self->{ssl_key};
+
+        # Check TLS modules are installed
+        my $tls_available = eval {
+            require IO::Async::SSL;
+            require IO::Socket::SSL;
+            1;
+        };
+        unless ($tls_available) {
+            die <<"END_TLS_ERROR";
+--ssl-cert/--ssl-key require TLS modules which are not installed.
+
+To enable HTTPS support, install:
+
+    cpanm IO::Async::SSL IO::Socket::SSL
+
+END_TLS_ERROR
+        }
+
         die "SSL cert not found: $self->{ssl_cert}\n" unless -f $self->{ssl_cert};
         die "SSL key not found: $self->{ssl_key}\n" unless -f $self->{ssl_key};
     }
