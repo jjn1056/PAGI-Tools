@@ -1303,6 +1303,8 @@ L<PAGI::Request> and L<PAGI::Response> handle UTF-8 encoding/decoding automatica
   async sub app {
       my ($scope, $receive, $send) = @_;
 
+      die "Expected http scope" unless $scope->{type} eq 'http';
+
       my $req = PAGI::Request->new($scope, $receive);
       my $res = PAGI::Response->new($send);
 
@@ -1315,12 +1317,8 @@ L<PAGI::Request> and L<PAGI::Response> handle UTF-8 encoding/decoding automatica
       # Body is automatically decoded (if content-type indicates UTF-8)
       my $body = await $req->body;
 
-      # Response automatically encodes
-      $res->status(200);
-      $res->content_type('text/plain');
-      $res->body("Hello, $name!");  # Automatically encoded to bytes
-
-      await $res->finalize;
+      # Response automatically encodes to UTF-8 bytes
+      await $res->text("Hello, $name!");
   }
 
   \&app;
