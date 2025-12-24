@@ -377,21 +377,23 @@ Prefer async alternatives when available:
 
 =item 2. B<Use IO::Async::Function>
 
-Offload blocking operations to a worker process:
+Offload blocking operations to a subprocess via L<IO::Async::Function>:
 
   use IO::Async::Function;
 
   my $worker = IO::Async::Function->new(
       code => sub {
           my ($password) = @_;
-          # This runs in a separate process
+          # This runs in a separate process (fork)
           return bcrypt_hash($password);
       },
   );
-  $scope->{loop}->add($worker);
+  $scope->{loop}->add($worker);  # Forks the worker process here
 
   # Call the blocking operation asynchronously
   my $hashed = await $worker->call(args => [$password]);
+
+B<Note:> IO::Async::Function uses C<fork()> to create worker processes. If you're already running the server in worker mode (C<--workers 4>), each server worker may fork additional Function workers. Be mindful of total process count - too many forks leads to memory pressure and context-switching overhead. For high-volume blocking work, consider a dedicated job queue (Redis, RabbitMQ) instead.
 
 =item 3. B<Use Worker Mode>
 
@@ -4164,6 +4166,8 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
   });
 
   $router->to_app;
+
+B<Warning:> IO::Async::Function forks child processes. If running with C<--workers N>, each server worker forks its own Function workers. With 4 server workers and 2 Function workers each, you have 12 processes. For high-volume CPU work, consider a dedicated job queue instead.
 
 See C<examples/background-tasks/> for complete working examples.
 
