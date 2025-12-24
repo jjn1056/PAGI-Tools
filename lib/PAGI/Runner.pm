@@ -176,6 +176,11 @@ Maximum requests per worker before restart. Default: 0 (unlimited)
 Maximum concurrent connections per worker. Default: 0 (auto-detect).
 See L<PAGI::Server/max_connections> for details.
 
+=item max_body_size => $bytes
+
+Maximum request body size in bytes. Default: 10,000,000 (10MB).
+Set to 0 for unlimited. See L<PAGI::Server/max_body_size> for details.
+
 =item libs => \@paths
 
 Additional library paths to add to @INC before loading the app.
@@ -290,6 +295,7 @@ sub parse_options {
         'sync-file-threshold=i' => \$opts{sync_file_threshold},
         'max-requests=i'        => \$opts{max_requests},
         'max-connections=i'     => \$opts{max_connections},
+        'max-body-size=i'       => \$opts{max_body_size},
         'daemonize|D'           => \$opts{daemonize},
         'pid=s'                 => \$opts{pid_file},
         'user=s'                => \$opts{user},
@@ -325,7 +331,9 @@ sub parse_options {
     $self->{max_receive_queue} = $opts{max_receive_queue}    if defined $opts{max_receive_queue};
     $self->{max_ws_frame_size} = $opts{max_ws_frame_size}    if defined $opts{max_ws_frame_size};
     $self->{max_requests}      = $opts{max_requests}          if defined $opts{max_requests};
-    $self->{max_connections}      = $opts{max_connections}          if defined $opts{max_connections};
+    $self->{max_connections}   = $opts{max_connections}       if defined $opts{max_connections};
+    $self->{max_body_size}     = $opts{max_body_size}         if defined $opts{max_body_size};
+    $self->{sync_file_threshold} = $opts{sync_file_threshold} if defined $opts{sync_file_threshold};
     $self->{daemonize}        = $opts{daemonize}              if $opts{daemonize};
     $self->{pid_file}         = $opts{pid_file}               if defined $opts{pid_file};
     $self->{user}             = $opts{user}                   if defined $opts{user};
@@ -513,6 +521,16 @@ END_TLS_ERROR
     # Add max_connections if provided
     if (defined $self->{max_connections}) {
         $server_opts{max_connections} = $self->{max_connections};
+    }
+
+    # Add max_body_size if provided
+    if (defined $self->{max_body_size}) {
+        $server_opts{max_body_size} = $self->{max_body_size};
+    }
+
+    # Add sync_file_threshold if provided
+    if (defined $self->{sync_file_threshold}) {
+        $server_opts{sync_file_threshold} = $self->{sync_file_threshold};
     }
 
     return PAGI::Server->new(%server_opts);
@@ -749,6 +767,7 @@ Options:
     --sync-file-threshold NUM  Sync file read threshold in bytes (0=always async, default: 65536)
     --max-requests NUM  Requests per worker before restart (default: unlimited)
     --max-connections N   Max concurrent connections (0=auto, default)
+    --max-body-size NUM   Max request body size in bytes (0=unlimited, default: 10MB)
     --log-level LEVEL   Log verbosity: debug, info, warn, error (default: info)
     -D, --daemonize     Run as background daemon
     --pid FILE          Write PID to file
