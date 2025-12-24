@@ -34,7 +34,6 @@ PAGI::Response - Fluent response builder for PAGI applications
     await $res->html("<h1>Hello</h1>");
     await $res->json({ data => 'value' });
     await $res->redirect('/login');
-    await $res->error(400, "Bad Request");
 
     # Streaming large responses
     await $res->stream(async sub ($writer) {
@@ -257,15 +256,6 @@ Send a redirect response. Default status is 302.
 
 Send an empty response with status 204 No Content (or custom status if set).
 
-=head2 error
-
-    await $res->error(400, "Bad Request");
-    await $res->error(422, "Validation Failed", {
-        errors => [{ field => 'email', message => 'Invalid' }]
-    });
-
-Send a JSON error response with status and error message.
-
 =head2 send
 
     await $res->send($bytes);
@@ -399,9 +389,8 @@ use L<PAGI::App::File> instead:
         push @errors, 'Message required' unless $message;
 
         if (@errors) {
-            return await $res->error(422, 'Validation failed', {
-                errors => \@errors
-            });
+            return await $res->status(422)
+                             ->json({ error => 'Validation failed', errors => \@errors });
         }
 
         # Process valid form...
@@ -417,7 +406,7 @@ use L<PAGI::App::File> instead:
         my $user = authenticate($data->{email}, $data->{password});
 
         unless ($user) {
-            return await $res->error(401, 'Invalid credentials');
+            return await $res->status(401)->json({ error => 'Invalid credentials' });
         }
 
         my $session_id = create_session($user);
@@ -447,7 +436,7 @@ use L<PAGI::App::File> instead:
 
         my $file = get_file($file_id); # Be sure to clean $file
         unless ($file && -f $file->{path}) {
-            return await $res->error(404, 'File not found');
+            return await $res->status(404)->json({ error => 'File not found' });
         }
 
         return await $res->send_file($file->{path},
@@ -973,25 +962,6 @@ async sub stream {
 
     # Ensure closed
     await $writer->close() unless $writer->{closed};
-}
-
-async sub error {
-    my ($self, $status, $message, $extra) = @_;
-    $self->{_status} = $status;
-
-    my $body = {
-        status => $status,
-        error  => $message,
-    };
-
-    # Merge extra data if provided
-    if ($extra && ref($extra) eq 'HASH') {
-        for my $key (keys %$extra) {
-            $body->{$key} = $extra->{$key};
-        }
-    }
-
-    await $self->json($body);
 }
 
 # Simple MIME type mapping

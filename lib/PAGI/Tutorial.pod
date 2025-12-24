@@ -1613,11 +1613,12 @@ B<Note:> C<redirect()> sends the response immediately but does NOT stop Perl exe
 
       # Simple error
       if ($path eq '/gone') {
-          await $res->error(404, 'Not Found');
+          await $res->status(404)->json({ error => 'Not Found' });
       }
       # Error with extra data
       elsif ($path eq '/invalid') {
-          await $res->error(422, 'Validation Failed', {
+          await $res->status(422)->json({
+              error => 'Validation Failed',
               errors => [
                   { field => 'email', message => 'Invalid format' },
                   { field => 'age', message => 'Must be >= 18' },
@@ -1626,7 +1627,7 @@ B<Note:> C<redirect()> sends the response immediately but does NOT stop Perl exe
       }
       # Internal server error
       elsif ($path eq '/error') {
-          await $res->error(500);  # Message defaults to "Internal Server Error"
+          await $res->status(500)->json({ error => 'Internal Server Error' });
       }
       else {
           await $res->text('OK');
@@ -1635,15 +1636,8 @@ B<Note:> C<redirect()> sends the response immediately but does NOT stop Perl exe
 
   \&app;
 
-The C<error()> method sends a JSON response with this structure:
-
-  {
-      "error": {
-          "code": 404,
-          "message": "Not Found",
-          ... extra fields if provided ...
-      }
-  }
+The pattern C<< $res->status(N)->json({...}) >> gives you full control over
+the error response structure, which is especially useful for APIs.
 
 =head3 Streaming Responses
 
@@ -2052,7 +2046,7 @@ L<PAGI::Request> handles multipart file uploads:
               size => $size,
           });
       } else {
-          await $res->error(400, 'No file uploaded');
+          await $res->status(400)->json({ error => 'No file uploaded' });
       }
   }
 
