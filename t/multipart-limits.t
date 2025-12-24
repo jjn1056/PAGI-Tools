@@ -60,7 +60,7 @@ subtest 'form field within max_part_size limit' => sub {
     is($form->get('field1'), 'x' x 100, 'form field parsed successfully');
 };
 
-subtest 'form field exceeds max_part_size' => sub {
+subtest 'form field exceeds max_field_size' => sub {
     my $boundary = 'test-boundary-123';
     my $body = build_multipart($boundary, {
         name => 'field1',
@@ -68,19 +68,19 @@ subtest 'form field exceeds max_part_size' => sub {
     });
 
     my $handler = PAGI::Request::MultiPartHandler->new(
-        boundary      => $boundary,
-        receive       => mock_receive($body),
-        max_part_size => 100,  # Only allow 100 bytes for form fields
+        boundary       => $boundary,
+        receive        => mock_receive($body),
+        max_field_size => 100,  # Only allow 100 bytes for form fields
     );
 
     like(
         dies { $handler->parse->get },
         qr/Form field too large/,
-        'form field rejected when exceeding max_part_size'
+        'form field rejected when exceeding max_field_size'
     );
 };
 
-subtest 'file upload within max_upload_size limit' => sub {
+subtest 'file upload within max_file_size limit' => sub {
     my $boundary = 'test-boundary-123';
     my $body = build_multipart($boundary, {
         name         => 'file1',
@@ -90,9 +90,9 @@ subtest 'file upload within max_upload_size limit' => sub {
     });
 
     my $handler = PAGI::Request::MultiPartHandler->new(
-        boundary        => $boundary,
-        receive         => mock_receive($body),
-        max_upload_size => 1000,  # Allow 1000 bytes for uploads
+        boundary      => $boundary,
+        receive       => mock_receive($body),
+        max_file_size => 1000,  # Allow 1000 bytes for uploads
     );
 
     my ($form, $uploads) = $handler->parse->get;
@@ -101,7 +101,7 @@ subtest 'file upload within max_upload_size limit' => sub {
     is($upload->filename, 'test.txt', 'filename correct');
 };
 
-subtest 'file upload exceeds max_upload_size' => sub {
+subtest 'file upload exceeds max_file_size' => sub {
     my $boundary = 'test-boundary-123';
     my $body = build_multipart($boundary, {
         name         => 'file1',
@@ -111,15 +111,15 @@ subtest 'file upload exceeds max_upload_size' => sub {
     });
 
     my $handler = PAGI::Request::MultiPartHandler->new(
-        boundary        => $boundary,
-        receive         => mock_receive($body),
-        max_upload_size => 100,  # Only allow 100 bytes for uploads
+        boundary      => $boundary,
+        receive       => mock_receive($body),
+        max_file_size => 100,  # Only allow 100 bytes for uploads
     );
 
     like(
         dies { $handler->parse->get },
         qr/File upload too large/,
-        'file upload rejected when exceeding max_upload_size'
+        'file upload rejected when exceeding max_file_size'
     );
 };
 
@@ -141,10 +141,10 @@ subtest 'different limits for fields vs uploads' => sub {
     );
 
     my $handler = PAGI::Request::MultiPartHandler->new(
-        boundary        => $boundary,
-        receive         => mock_receive($body),
-        max_part_size   => 100,   # 100 bytes for form fields
-        max_upload_size => 1000,  # 1000 bytes for file uploads
+        boundary       => $boundary,
+        receive        => mock_receive($body),
+        max_field_size => 100,   # 100 bytes for form fields
+        max_file_size  => 1000,  # 1000 bytes for file uploads
     );
 
     my ($form, $uploads) = $handler->parse->get;
@@ -153,10 +153,10 @@ subtest 'different limits for fields vs uploads' => sub {
     is($uploads->get('file1')->size, 500, 'file size correct');
 };
 
-subtest 'file upload uses upload limit not part limit' => sub {
+subtest 'file upload uses file limit not field limit' => sub {
     my $boundary = 'test-boundary-123';
-    # File of 500 bytes should pass with max_upload_size=1000
-    # even though max_part_size=100
+    # File of 500 bytes should pass with max_file_size=1000
+    # even though max_field_size=100
     my $body = build_multipart($boundary, {
         name         => 'file1',
         filename     => 'big.bin',
@@ -165,14 +165,14 @@ subtest 'file upload uses upload limit not part limit' => sub {
     });
 
     my $handler = PAGI::Request::MultiPartHandler->new(
-        boundary        => $boundary,
-        receive         => mock_receive($body),
-        max_part_size   => 100,   # Would fail if applied to files
-        max_upload_size => 1000,  # Should use this for files
+        boundary       => $boundary,
+        receive        => mock_receive($body),
+        max_field_size => 100,   # Would fail if applied to files
+        max_file_size  => 1000,  # Should use this for files
     );
 
     my ($form, $uploads) = $handler->parse->get;
-    ok($uploads->get('file1'), 'large file accepted using max_upload_size');
+    ok($uploads->get('file1'), 'large file accepted using max_file_size');
 };
 
 done_testing;

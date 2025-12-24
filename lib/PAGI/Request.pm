@@ -16,8 +16,8 @@ use PAGI::Request::BodyStream;
 # Class-level configuration defaults
 our %CONFIG = (
     max_body_size     => 10 * 1024 * 1024,   # 10MB total request body
-    max_part_size     => 1 * 1024 * 1024,    # 1MB per form field (non-file)
-    max_upload_size   => 10 * 1024 * 1024,   # 10MB per file upload
+    max_field_size    => 1 * 1024 * 1024,    # 1MB per form field (non-file)
+    max_file_size     => 10 * 1024 * 1024,   # 10MB per file upload
     max_files         => 20,
     max_fields        => 1000,
     path_param_strict => 0,                  # Die if path_params not in scope
@@ -415,7 +415,7 @@ async sub form {
 
     # Extract multipart options before checking for unknown opts
     my %multipart_opts;
-    for my $key (qw(max_part_size max_upload_size spool_threshold max_files max_fields temp_dir)) {
+    for my $key (qw(max_field_size max_file_size spool_threshold max_files max_fields temp_dir)) {
         $multipart_opts{$key} = delete $opts{$key} if exists $opts{$key};
     }
     croak("Unknown options to form: " . join(', ', keys %opts)) if %opts;
@@ -481,8 +481,8 @@ async sub _parse_multipart_form {
     my $handler = PAGI::Request::MultiPartHandler->new(
         boundary        => $boundary,
         receive         => $self->{receive},
-        max_part_size   => $opts{max_part_size},
-        max_upload_size => $opts{max_upload_size},
+        max_field_size  => $opts{max_field_size},
+        max_file_size   => $opts{max_file_size},
         spool_threshold => $opts{spool_threshold},
         max_files       => $opts{max_files},
         max_fields      => $opts{max_fields},
@@ -599,8 +599,8 @@ work with C<$scope> and C<$receive> directly.
 
     PAGI::Request->configure(
         max_body_size     => 10 * 1024 * 1024,  # 10MB total body
-        max_part_size     => 1 * 1024 * 1024,   # 1MB per form field
-        max_upload_size   => 10 * 1024 * 1024,  # 10MB per file upload
+        max_field_size    => 1 * 1024 * 1024,   # 1MB per form field
+        max_file_size     => 10 * 1024 * 1024,  # 10MB per file upload
         spool_threshold   => 64 * 1024,         # 64KB
         path_param_strict => 0,                 # Die if path_params not in scope
     );
@@ -613,12 +613,12 @@ Set class-level defaults for body/upload handling and path parameters.
 
 Maximum total request body size. Enforced by the server.
 
-=item max_part_size
+=item max_field_size
 
 Maximum size for non-file form fields in multipart requests. Default: 1MB.
 Protects against oversized text submissions.
 
-=item max_upload_size
+=item max_file_size
 
 Maximum size for file uploads in multipart requests. Default: 10MB.
 Applies to parts with a filename in Content-Disposition.

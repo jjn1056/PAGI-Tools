@@ -12,7 +12,7 @@ use PAGI::App::File;
 
 # Configure upload limits
 PAGI::Request->configure(
-    max_upload_size => 5 * 1024 * 1024,  # 5MB
+    max_file_size   => 5 * 1024 * 1024,  # 5MB per file upload
     spool_threshold => 64 * 1024,
 );
 

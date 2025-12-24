@@ -9,8 +9,8 @@ use PAGI::Request::Upload;
 use File::Temp qw(tempfile);
 
 # Default limits
-our $MAX_PART_SIZE    = 1 * 1024 * 1024;    # 1MB per form field (non-file parts)
-our $MAX_UPLOAD_SIZE  = 10 * 1024 * 1024;   # 10MB per file upload
+our $MAX_FIELD_SIZE   = 1 * 1024 * 1024;    # 1MB per form field (non-file parts)
+our $MAX_FILE_SIZE    = 10 * 1024 * 1024;   # 10MB per file upload
 our $SPOOL_THRESHOLD  = 64 * 1024;          # 64KB before spooling to disk
 our $MAX_FILES        = 20;
 our $MAX_FIELDS       = 1000;
@@ -26,8 +26,8 @@ sub new {
     return bless {
         boundary        => $args{boundary},
         receive         => $args{receive},
-        max_part_size   => $args{max_part_size}   // $MAX_PART_SIZE,
-        max_upload_size => $args{max_upload_size} // $MAX_UPLOAD_SIZE,
+        max_field_size  => $args{max_field_size}  // $MAX_FIELD_SIZE,
+        max_file_size   => $args{max_file_size}   // $MAX_FILE_SIZE,
         spool_threshold => $args{spool_threshold} // $SPOOL_THRESHOLD,
         max_files       => $args{max_files}       // $MAX_FILES,
         max_fields      => $args{max_fields}      // $MAX_FIELDS,
@@ -138,8 +138,8 @@ async sub parse {
 
                 # Use different size limits for files vs form fields
                 my $max_size = $current_is_file
-                    ? $self->{max_upload_size}
-                    : $self->{max_part_size};
+                    ? $self->{max_file_size}
+                    : $self->{max_field_size};
                 my $part_type = $current_is_file ? 'File upload' : 'Form field';
                 die "$part_type too large (max $max_size bytes)"
                     if $current_size > $max_size;
@@ -231,8 +231,8 @@ PAGI::Request::MultiPartHandler - Async multipart/form-data parser
     my $handler = PAGI::Request::MultiPartHandler->new(
         boundary        => $boundary,
         receive         => $receive,
-        max_part_size   => 1 * 1024 * 1024,   # 1MB for form fields
-        max_upload_size => 10 * 1024 * 1024,  # 10MB for file uploads
+        max_field_size  => 1 * 1024 * 1024,   # 1MB for form fields
+        max_file_size   => 10 * 1024 * 1024,  # 10MB for file uploads
     );
 
     my ($form, $uploads) = await $handler->parse;
@@ -240,19 +240,19 @@ PAGI::Request::MultiPartHandler - Async multipart/form-data parser
 =head1 DESCRIPTION
 
 Parses multipart/form-data requests asynchronously. Applies separate size
-limits to form fields (C<max_part_size>) and file uploads (C<max_upload_size>).
+limits to form fields (C<max_field_size>) and file uploads (C<max_file_size>).
 
 =head1 OPTIONS
 
 =over 4
 
-=item max_part_size => $bytes
+=item max_field_size => $bytes
 
 Maximum size for non-file form fields. Default: 1MB.
 
 Protects against oversized text field submissions.
 
-=item max_upload_size => $bytes
+=item max_file_size => $bytes
 
 Maximum size for file uploads. Default: 10MB.
 

@@ -22,7 +22,7 @@ Visit http://localhost:5000/
 
 ```perl
 PAGI::Request->configure(
-    max_upload_size => 5 * 1024 * 1024,  # 5MB
+    max_file_size   => 5 * 1024 * 1024,  # 5MB per file upload
     spool_threshold => 64 * 1024,         # Spool to disk above 64KB
 );
 ```

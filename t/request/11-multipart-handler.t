@@ -178,24 +178,24 @@ subtest 'enforce max_fields limit' => sub {
     );
 };
 
-subtest 'enforce max_part_size limit' => sub {
+subtest 'enforce max_field_size limit' => sub {
     my $boundary = '----MaxSize';
-    my $large_data = 'x' x (100 * 1024);  # 100KB
+    my $large_data = 'x' x (100 * 1024);  # 100KB form field (no filename = not a file)
     my $body = build_multipart($boundary,
-        { name => 'big', filename => 'big.bin', data => $large_data },
+        { name => 'big_field', data => $large_data },
     );
 
     my $receive = mock_receive($body);
     my $handler = PAGI::Request::MultiPartHandler->new(
-        boundary      => $boundary,
-        receive       => $receive,
-        max_part_size => 50 * 1024,  # 50KB limit
+        boundary       => $boundary,
+        receive        => $receive,
+        max_field_size => 50 * 1024,  # 50KB limit for form fields
     );
 
     like(
         dies { (async sub { await $handler->parse })->()->get },
-        qr/Part too large/,
-        'dies when exceeding max_part_size'
+        qr/Form field too large/,
+        'dies when exceeding max_field_size'
     );
 };
 
