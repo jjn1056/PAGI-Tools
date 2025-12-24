@@ -278,7 +278,9 @@ async sub ws_echo {
 
     # Access metrics via $ws->state (populated by Lifespan startup)
     my $metrics = $ws->state->{metrics};
+    $metrics->{requests}++;      # Count the WebSocket upgrade request
     $metrics->{ws_active}++;
+    $metrics->{ws_messages} //= 0;
 
     $ws->on_close(sub {
         $metrics->{ws_active}--;
@@ -288,6 +290,7 @@ async sub ws_echo {
 
     await $ws->each_json(async sub {
         my ($data) = @_;
+        $metrics->{ws_messages}++;  # Count each message received
         await $ws->send_json({ type => 'echo', data => $data });
     });
 }
