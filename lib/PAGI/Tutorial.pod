@@ -1565,6 +1565,8 @@ Chainable methods:
 
   \&app;
 
+B<Note:> C<redirect()> sends the response immediately but does NOT stop Perl execution. Code after it still runs. Use C<return> after redirect if you have more code below, or use control flow (if/elsif) as shown above.
+
 =head3 Errors
 
   use strict;
