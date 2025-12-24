@@ -369,7 +369,7 @@ Prefer async alternatives when available:
 
 =item * L<Net::Async::Redis> instead of synchronous Redis clients
 
-=item * L<Mojo::Pg> (with Mojo::IOLoop) for PostgreSQL
+=item * L<Database::Async> for async database access (PostgreSQL, MySQL, SQLite)
 
 =item * L<IO::Async::Timer::Countdown> instead of C<sleep()>
 
