@@ -1176,29 +1176,22 @@ Example:
 
 =head3 Query Strings
 
-Query strings are raw bytes. You must decode them yourself:
+Query strings are raw bytes. Use L<URI> to parse them properly:
 
   use strict;
   use warnings;
   use Future::AsyncAwait;
-  use URI::Encode qw(uri_decode);
-  use Encode qw(decode_utf8);
+  use URI;
+  use Encode qw(encode_utf8);
 
   async sub app {
       my ($scope, $receive, $send) = @_;
 
       die "Expected http scope" unless $scope->{type} eq 'http';
 
-      # Parse query string manually
-      my $query = $scope->{query_string} // '';
-      my %params;
-
-      for my $pair (split /&/, $query) {
-          my ($key, $value) = split /=/, $pair, 2;
-          $key = decode_utf8(uri_decode($key // ''));
-          $value = decode_utf8(uri_decode($value // ''));
-          $params{$key} = $value;
-      }
+      # Use URI to parse query string (handles decoding automatically)
+      my $uri = URI->new('?' . ($scope->{query_string} // ''));
+      my %params = $uri->query_form;
 
       my $name = $params{name} // 'World';
 
@@ -1210,7 +1203,7 @@ Query strings are raw bytes. You must decode them yourself:
 
       await $send->({
           type => 'http.response.body',
-          body => "Hello, $name!",  # WRONG: Should encode to bytes
+          body => encode_utf8("Hello, $name!"),
       });
   }
 
