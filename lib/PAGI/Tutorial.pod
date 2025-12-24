@@ -465,8 +465,9 @@ This creates:
 
 The number of workers should typically match your CPU core count:
 
-  # Auto-detect CPU cores and create that many workers
-  pagi-server hello.pl --port 5000 --workers auto
+  # Check your CPU core count and set workers accordingly
+  # On Linux: nproc   On macOS: sysctl -n hw.ncpu
+  pagi-server hello.pl --port 5000 --workers 4
 
 =head3 Worker Isolation
 
