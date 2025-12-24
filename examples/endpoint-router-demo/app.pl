@@ -13,26 +13,21 @@ my $router = MyApp::Main->new;
 PAGI::Lifespan->wrap(
     $router->to_app,
     startup => async sub {
-        my ($state) = @_;
         warn "MyApp starting up...\n";
 
-        $state->{config} = {
+        # Populate router state directly (like Starlette's app.state)
+        $router->state->{config} = {
             app_name => 'Endpoint Router Demo',
             version  => '1.0.0',
         };
-
-        $state->{metrics} = {
+        $router->state->{metrics} = {
             requests  => 0,
             ws_active => 0,
         };
 
-        # Sync with router instance for $self->state access
-        %{$router->state} = %$state;
-
         warn "MyApp ready!\n";
     },
     shutdown => async sub {
-        my ($state) = @_;
         warn "MyApp shutting down...\n";
     },
 );
