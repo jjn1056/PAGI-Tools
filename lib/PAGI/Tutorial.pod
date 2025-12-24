@@ -178,6 +178,8 @@ Try accessing it from a browser by visiting C<http://localhost:5000/>.
 
 =head3 Inspecting the Scope
 
+The C<$scope> hash contains metadata about the current connection - similar to PSGI's C<$env> hash. It tells you everything about the request before you read the body: the HTTP method, path, headers, query string, client address, and more. Unlike PSGI where everything is in one flat hash, PAGI separates the metadata (C<$scope>) from the body (read via C<$receive>).
+
 Let's modify the app to show what's in C<$scope>:
 
   use strict;
@@ -187,6 +189,8 @@ Let's modify the app to show what's in C<$scope>:
 
   async sub app {
       my ($scope, $receive, $send) = @_;
+
+      return unless $scope->{type} eq 'http';
 
       my $body = Dumper($scope);
 
