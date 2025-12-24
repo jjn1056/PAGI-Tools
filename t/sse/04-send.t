@@ -4,7 +4,7 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use Future;
-use JSON::PP;
+use JSON::MaybeXS;
 
 use lib 'lib';
 use PAGI::SSE;
@@ -33,7 +33,7 @@ subtest 'send_json encodes as JSON' => sub {
 
     $sse->send_json({ message => "hello", count => 42 })->get;
 
-    my $decoded = JSON::PP::decode_json($sent[1]{data});
+    my $decoded = JSON::MaybeXS::decode_json($sent[1]{data});
     is($decoded->{message}, 'hello', 'JSON message field');
     is($decoded->{count}, 42, 'JSON count field');
 };
@@ -57,7 +57,7 @@ subtest 'send_event with all fields' => sub {
     is($sent[1]{id}, 'msg-123', 'event id');
     is($sent[1]{retry}, 5000, 'retry value');
 
-    my $decoded = JSON::PP::decode_json($sent[1]{data});
+    my $decoded = JSON::MaybeXS::decode_json($sent[1]{data});
     is($decoded->{type}, 'notification', 'data was JSON encoded');
 };
 

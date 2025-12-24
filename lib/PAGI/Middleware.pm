@@ -16,7 +16,7 @@ PAGI::Middleware - Base class for PAGI middleware
 
     sub wrap {
         my ($self, $app) = @_;
-    
+
         return async sub  {
         my ($scope, $receive, $send) = @_;
             # Modify scope for inner app
@@ -218,7 +218,7 @@ application and can:
 
     sub wrap {
         my ($self, $app) = @_;
-    
+
         return async sub  {
         my ($scope, $receive, $send) = @_;
             my $start = time();

@@ -22,7 +22,7 @@ PAGI::Middleware::Cookie - Cookie parsing middleware
     # In your app:
     async sub app {
         my ($scope, $receive, $send) = @_;
-    
+
         my $cookies = $scope->{'pagi.cookies'};
         my $session_id = $cookies->{session_id};
     }

@@ -6,7 +6,7 @@ use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Cookie::Baker qw(crush_cookie);
 use MIME::Base64 qw(decode_base64);
 use Future::AsyncAwait;
-use JSON::PP qw(decode_json);
+use JSON::MaybeXS qw(decode_json);
 use Carp qw(croak);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;

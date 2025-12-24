@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 =head1 NAME
 
@@ -106,7 +106,7 @@ sub wrap {
 async sub _send_live {
     my ($self, $send) = @_;
 
-    my $body = JSON::PP::encode_json({ status => 'ok' });
+    my $body = JSON::MaybeXS::encode_json({ status => 'ok' });
 
     await $send->({
         type    => 'http.response.start',
@@ -134,7 +134,7 @@ async sub _send_ready {
     };
     $response->{checks} = $results if $self->{include_details};
 
-    my $body = JSON::PP::encode_json($response);
+    my $body = JSON::MaybeXS::encode_json($response);
     my $status = $healthy ? 200 : 503;
 
     await $send->({
@@ -164,7 +164,7 @@ async sub _send_health {
     };
     $response->{checks} = $results if $self->{include_details} && keys %{$self->{checks}};
 
-    my $body = JSON::PP::encode_json($response);
+    my $body = JSON::MaybeXS::encode_json($response);
     my $status = $healthy ? 200 : 503;
 
     await $send->({

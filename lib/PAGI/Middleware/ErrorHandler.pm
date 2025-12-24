@@ -151,8 +151,8 @@ sub _generate_error_body {
     }
 
     if ($content_type eq 'application/json') {
-        require JSON::PP;
-        my $body = JSON::PP::encode_json({
+        require JSON::MaybeXS;
+        my $body = JSON::MaybeXS::encode_json({
             error  => $display_error,
             status => $status,
             ($self->{development} ? (stack => $error_text) : ()),

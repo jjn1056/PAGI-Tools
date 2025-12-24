@@ -21,6 +21,12 @@ requires 'IO::Socket::SSL', '2.074';
 # Zero-copy file transfer (optional but recommended for performance)
 recommends 'Sys::Sendfile', '0.11';
 
+# JSON handling
+requires 'JSON::MaybeXS', '1.004003';
+
+# Fast JSON (optional but recommended for performance)
+recommends 'Cpanel::JSON::XS', '4.19';
+
 # Utilities
 requires 'URI::Escape', '5.09';
 requires 'Cookie::Baker', '0.11';
@@ -43,4 +49,6 @@ on 'develop' => sub {
     requires 'Dist::Zilla::Plugin::MetaResources';
     requires 'Dist::Zilla::Plugin::MetaNoIndex';
     requires 'Dist::Zilla::Plugin::Prereqs::FromCPANfile';
+    requires 'Dist::Zilla::Plugin::Run';
+    requires 'Markdown::Pod', '0.007';
 };

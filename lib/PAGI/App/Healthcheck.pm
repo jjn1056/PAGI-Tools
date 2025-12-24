@@ -3,7 +3,7 @@ package PAGI::App::Healthcheck;
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 =head1 NAME
 
@@ -66,7 +66,7 @@ sub to_app {
         $response->{version} = $version if defined $version;
         $response->{checks} = \%results if %results;
 
-        my $body = JSON::PP::encode_json($response);
+        my $body = JSON::MaybeXS::encode_json($response);
         my $status = $all_ok ? 200 : 503;
 
         await $send->({

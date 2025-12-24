@@ -24,7 +24,7 @@ PAGI::Middleware::Session - Session management middleware
     # In your app:
     async sub app {
         my ($scope, $receive, $send) = @_;
-    
+
         my $session = $scope->{'pagi.session'};
         $session->{user_id} = 123;
         $session->{logged_in} = 1;

@@ -138,7 +138,7 @@ subtest 'PAGI::WebSocket JSON echo app' => sub {
         $client->close;
     };
 
-    use JSON::PP;
+    use JSON::MaybeXS;
     my $response = decode_json($received[0]);
     is($response->{msg}, 'test', 'original data preserved');
     is($response->{echoed}, 1, 'echoed flag added');

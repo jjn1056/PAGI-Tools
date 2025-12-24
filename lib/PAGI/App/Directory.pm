@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use parent 'PAGI::App::File';
-use JSON::PP ();
+use JSON::MaybeXS ();
 use File::Spec;
 
 =head1 NAME
@@ -94,7 +94,7 @@ async sub _send_listing {
     # Check Accept header for JSON
     my $accept = $self->_get_header($scope, 'accept') // '';
     if ($accept =~ m{application/json}) {
-        my $json = JSON::PP::encode_json(\@entries);
+        my $json = JSON::MaybeXS::encode_json(\@entries);
         await $send->({
             type => 'http.response.start',
             status => 200,

@@ -7,7 +7,7 @@ use Future::AsyncAwait;
 use Carp qw(croak);
 use Module::Load qw(load);
 use Scalar::Util qw(weaken);
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 our $VERSION = '0.01';
 
@@ -89,7 +89,7 @@ async sub handle {
                 eval {
                     $weak_send->({
                         type => 'websocket.send',
-                        text => JSON::PP::encode_json({ type => 'ping', ts => time() }),
+                        text => JSON::MaybeXS::encode_json({ type => 'ping', ts => time() }),
                     });
                 };
             },
@@ -269,7 +269,7 @@ B<Example - Text encoding:>
     async sub on_receive {
         my ($self, $ws, $text) = @_;
         # $text is a plain string, decode JSON yourself if needed
-        my $data = JSON::PP::decode_json($text);
+        my $data = JSON::MaybeXS::decode_json($text);
         await $ws->send_text("Echo: $text");
     }
 

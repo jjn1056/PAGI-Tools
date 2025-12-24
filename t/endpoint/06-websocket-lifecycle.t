@@ -4,7 +4,7 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use Future;
-use JSON::PP;
+use JSON::MaybeXS;
 
 use lib 'lib';
 use PAGI::Endpoint::WebSocket;
@@ -60,7 +60,7 @@ package MockWebSocket {
     async sub each_json {
         my ($self, $cb) = @_;
         for my $event (@{$self->{events}}) {
-            await $cb->(JSON::PP::decode_json($event));
+            await $cb->(JSON::MaybeXS::decode_json($event));
         }
         # After processing all messages, simulate disconnect
         if ($self->{on_close_cb}) {

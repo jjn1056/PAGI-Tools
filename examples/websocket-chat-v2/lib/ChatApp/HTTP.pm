@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Future::AsyncAwait;
-use JSON::PP;
+use JSON::MaybeXS;
 use File::Spec;
 use File::Basename qw(dirname);
 
@@ -12,7 +12,7 @@ use ChatApp::State qw(
     get_all_rooms get_room get_room_messages get_room_users get_stats
 );
 
-my $JSON = JSON::PP->new->utf8->canonical;
+my $JSON = JSON::MaybeXS->new->utf8->canonical;
 
 # Get the public directory path
 my $PUBLIC_DIR = File::Spec->catdir(dirname(__FILE__), '..', '..', 'public');

@@ -27,7 +27,7 @@ PAGI::Middleware::Auth::Basic - HTTP Basic Authentication middleware
     # In your app:
     async sub app {
         my ($scope, $receive, $send) = @_;
-    
+
         my $auth = $scope->{'pagi.auth'};
         my $username = $auth->{username};
     }

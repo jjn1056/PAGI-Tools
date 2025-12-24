@@ -5,7 +5,7 @@ use Carp qw(croak);
 use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
-use JSON::PP ();
+use JSON::MaybeXS ();
 use Scalar::Util qw(blessed);
 
 our $VERSION = '0.01';
@@ -285,7 +285,7 @@ async sub send_json {
 
     croak "Cannot send on closed WebSocket" if $self->is_closed;
 
-    my $json = JSON::PP::encode_json($data);
+    my $json = JSON::MaybeXS::encode_json($data);
 
     await $self->{send}->({
         type => 'websocket.send',
@@ -335,7 +335,7 @@ async sub try_send_json {
     my ($self, $data) = @_;
     return 0 if $self->is_closed;
 
-    my $json = JSON::PP::encode_json($data);
+    my $json = JSON::MaybeXS::encode_json($data);
     eval {
         await $self->{send}->({
             type => 'websocket.send',
@@ -434,7 +434,7 @@ async sub receive_json {
     my $text = await $self->receive_text;
     return undef unless defined $text;
 
-    return JSON::PP::decode_json($text);
+    return JSON::MaybeXS::decode_json($text);
 }
 
 # Iteration helpers
@@ -477,7 +477,7 @@ async sub each_json {
         my $text = await $self->receive_text;
         last unless defined $text;
 
-        my $data = JSON::PP::decode_json($text);
+        my $data = JSON::MaybeXS::decode_json($text);
         await $callback->($data);
     }
 
@@ -605,7 +605,7 @@ async sub receive_json_with_timeout {
     my $text = await $self->receive_text_with_timeout($timeout);
     return undef unless defined $text;
 
-    return JSON::PP::decode_json($text);
+    return JSON::MaybeXS::decode_json($text);
 }
 
 # Heartbeat/keepalive support
@@ -628,7 +628,7 @@ sub start_heartbeat {
             eval {
                 $weak_self->{send}->({
                     type => 'websocket.send',
-                    text => JSON::PP::encode_json({
+                    text => JSON::MaybeXS::encode_json({
                         type => 'ping',
                         ts   => time(),
                     }),

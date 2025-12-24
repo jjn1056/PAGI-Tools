@@ -165,7 +165,7 @@ subtest 'App::WebSocket::Chat' => sub {
         is $sent[0]{type}, 'websocket.accept', 'accepts connection';
         is $sent[1]{type}, 'websocket.send', 'sends welcome';
 
-        my $welcome = eval { JSON::PP::decode_json($sent[1]{text}) };
+        my $welcome = eval { JSON::MaybeXS::decode_json($sent[1]{text}) };
         is $welcome->{type}, 'welcome', 'welcome message type';
         ok exists $welcome->{user_id}, 'has user_id';
         ok exists $welcome->{username}, 'has username';
@@ -195,7 +195,7 @@ subtest 'App::WebSocket::Chat' => sub {
         my $nick_response;
         for my $s (@sent) {
             next unless $s->{type} eq 'websocket.send';
-            my $data = eval { JSON::PP::decode_json($s->{text}) };
+            my $data = eval { JSON::MaybeXS::decode_json($s->{text}) };
             if ($data && $data->{type} eq 'nick') {
                 $nick_response = $data;
                 last;
@@ -229,7 +229,7 @@ subtest 'App::WebSocket::Chat' => sub {
         my $rooms_response;
         for my $s (@sent) {
             next unless $s->{type} eq 'websocket.send';
-            my $data = eval { JSON::PP::decode_json($s->{text}) };
+            my $data = eval { JSON::MaybeXS::decode_json($s->{text}) };
             if ($data && $data->{type} eq 'rooms') {
                 $rooms_response = $data;
                 last;

@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 =head1 NAME
 
@@ -22,7 +22,7 @@ PAGI::Middleware::JSONBody - JSON request body parsing middleware
     # In your app:
     async sub app {
         my ($scope, $receive, $send) = @_;
-    
+
         my $json_data = $scope->{pagi.parsed_body};
         # $json_data is a hashref/arrayref from JSON
     }
@@ -106,7 +106,7 @@ sub wrap {
         # Parse JSON
         my $parsed;
         eval {
-            $parsed = JSON::PP::decode_json($body);
+            $parsed = JSON::MaybeXS::decode_json($body);
         };
         if ($@) {
             await $self->_send_error($send, 400, 'Invalid JSON: ' . $@);
@@ -160,7 +160,7 @@ sub _get_header {
 async sub _send_error {
     my ($self, $send, $status, $message) = @_;
 
-    my $body = JSON::PP::encode_json({ error => $message });
+    my $body = JSON::MaybeXS::encode_json({ error => $message });
 
     await $send->({
         type    => 'http.response.start',

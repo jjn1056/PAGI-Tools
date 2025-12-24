@@ -4,7 +4,7 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use Future;
-use JSON::PP;
+use JSON::MaybeXS;
 
 use lib 'lib';
 use PAGI::WebSocket;

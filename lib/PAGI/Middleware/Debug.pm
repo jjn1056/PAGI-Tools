@@ -5,7 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Time::HiRes qw(time);
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 =head1 NAME
 

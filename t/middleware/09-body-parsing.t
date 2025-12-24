@@ -4,7 +4,7 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
-use JSON::PP;
+use JSON::MaybeXS;
 
 use PAGI::Middleware::JSONBody;
 use PAGI::Middleware::FormBody;

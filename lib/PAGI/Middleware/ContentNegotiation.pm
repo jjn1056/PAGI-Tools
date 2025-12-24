@@ -23,7 +23,7 @@ PAGI::Middleware::ContentNegotiation - HTTP content negotiation middleware
     # In your app:
     async sub app {
         my ($scope, $receive, $send) = @_;
-    
+
         my $preferred = $scope->{'pagi.preferred_content_type'};
         if ($preferred eq 'application/json') {
             # Return JSON

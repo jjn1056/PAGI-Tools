@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Future::AsyncAwait;
-use JSON::PP;
+use JSON::MaybeXS;
 use URI::Escape qw(uri_unescape);
 use IO::Async::Loop;
 use IO::Async::Timer::Periodic;
@@ -20,7 +20,7 @@ use ChatApp::State qw(
     sanitize_username sanitize_room_name set_event_loop
 );
 
-my $JSON = JSON::PP->new->utf8->allow_nonref;
+my $JSON = JSON::MaybeXS->new->utf8->allow_nonref;
 
 sub handler {
     return async sub  {

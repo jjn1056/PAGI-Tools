@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Future::AsyncAwait;
-use JSON::PP;
+use JSON::MaybeXS;
 use IO::Async::Loop;
 use IO::Async::Timer::Periodic;
 use Scalar::Util qw(weaken);
@@ -14,7 +14,7 @@ use ChatApp::State qw(
     get_recent_system_events get_stats generate_id
 );
 
-my $JSON = JSON::PP->new->utf8->canonical;
+my $JSON = JSON::MaybeXS->new->utf8->canonical;
 
 sub handler {
     return async sub  {

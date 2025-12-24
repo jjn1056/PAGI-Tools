@@ -5,7 +5,7 @@ use Carp qw(croak);
 use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
-use JSON::PP ();
+use JSON::MaybeXS ();
 use Scalar::Util qw(blessed);
 
 our $VERSION = '0.01';
@@ -235,7 +235,7 @@ async sub send_json {
 
     await $self->start unless $self->is_started;
 
-    my $json = JSON::PP::encode_json($data);
+    my $json = JSON::MaybeXS::encode_json($data);
 
     await $self->{send}->({
         type => 'sse.send',
@@ -257,7 +257,7 @@ async sub send_event {
     # Auto-encode hashref/arrayref data as JSON
     my $data = $opts{data};
     if (ref $data) {
-        $data = JSON::PP::encode_json($data);
+        $data = JSON::MaybeXS::encode_json($data);
     }
 
     my $event = {
@@ -299,7 +299,7 @@ async sub try_send_json {
 
     eval {
         await $self->start unless $self->is_started;
-        my $json = JSON::PP::encode_json($data);
+        my $json = JSON::MaybeXS::encode_json($data);
         await $self->{send}->({
             type => 'sse.send',
             data => $json,
@@ -355,7 +355,7 @@ async sub try_send_event {
 
         my $data = $opts{data} // '';
         if (ref $data) {
-            $data = JSON::PP::encode_json($data);
+            $data = JSON::MaybeXS::encode_json($data);
         }
 
         my $event = {

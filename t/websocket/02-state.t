@@ -12,7 +12,7 @@ subtest 'initial state is connecting' => sub {
 
     ok(!$ws->is_connected, 'not connected initially');
     ok(!$ws->is_closed, 'not closed initially');
-    is($ws->state, 'connecting', 'state is connecting');
+    is($ws->connection_state, 'connecting', 'connection_state is connecting');
     is($ws->close_code, undef, 'close_code is undef');
     is($ws->close_reason, undef, 'close_reason is undef');
 };
@@ -25,13 +25,13 @@ subtest 'state transitions' => sub {
     $ws->_set_state('connected');
     ok($ws->is_connected, 'is_connected after transition');
     ok(!$ws->is_closed, 'not closed after connect');
-    is($ws->state, 'connected', 'state is connected');
+    is($ws->connection_state, 'connected', 'connection_state is connected');
 
     # Simulate close
     $ws->_set_closed(1000, 'Normal closure');
     ok(!$ws->is_connected, 'not connected after close');
     ok($ws->is_closed, 'is_closed after close');
-    is($ws->state, 'closed', 'state is closed');
+    is($ws->connection_state, 'closed', 'connection_state is closed');
     is($ws->close_code, 1000, 'close_code is set');
     is($ws->close_reason, 'Normal closure', 'close_reason is set');
 };

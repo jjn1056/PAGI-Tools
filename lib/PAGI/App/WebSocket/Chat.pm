@@ -3,7 +3,7 @@ package PAGI::App::WebSocket::Chat;
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 =head1 NAME
 
@@ -66,7 +66,7 @@ sub to_app {
                 my $event = await $receive->();
 
                 if ($event->{type} eq 'websocket.receive') {
-                    my $data = eval { JSON::PP::decode_json($event->{text} // '{}') } // {};
+                    my $data = eval { JSON::MaybeXS::decode_json($event->{text} // '{}') } // {};
                     my $cmd = $data->{type} // 'message';
 
                     if ($cmd eq 'message') {
@@ -163,7 +163,7 @@ sub to_app {
 sub _encode {
     my ($data) = @_;
 
-    return JSON::PP::encode_json($data);
+    return JSON::MaybeXS::encode_json($data);
 }
 
 sub _join_room {

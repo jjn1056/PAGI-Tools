@@ -21,7 +21,7 @@ PAGI::Middleware::FormBody - Form request body parsing middleware
     # In your app:
     async sub app {
         my ($scope, $receive, $send) = @_;
-    
+
         my $form_data = $scope->{pagi.parsed_body};
         # $form_data is a hashref like { name => 'value', ... }
     }

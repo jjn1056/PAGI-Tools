@@ -5,7 +5,7 @@ use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use MIME::Base64 qw(encode_base64);
-use JSON::PP;
+use JSON::MaybeXS;
 use Digest::SHA qw(hmac_sha256);
 
 use PAGI::Middleware::Cookie;

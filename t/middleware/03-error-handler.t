@@ -165,8 +165,8 @@ subtest 'ErrorHandler supports JSON content type' => sub {
     }
     is $ct, 'application/json', 'content-type is JSON';
 
-    require JSON::PP;
-    my $data = JSON::PP::decode_json($sent[1]{body});
+    require JSON::MaybeXS;
+    my $data = JSON::MaybeXS::decode_json($sent[1]{body});
     is $data->{status}, 500, 'JSON contains status';
     like $data->{error}, qr/JSON error/, 'JSON contains error';
     ok exists $data->{stack}, 'JSON contains stack in dev mode';

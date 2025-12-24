@@ -16,6 +16,7 @@ pm_to_blib
 # Dist::Zilla
 PAGI-Server-*/
 .build/
+_build_gen/
 
 # Editor files
 *~

@@ -6,7 +6,7 @@ use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use File::Temp qw(tempfile);
-use JSON::PP ();
+use JSON::MaybeXS ();
 
 use lib 'lib';
 
@@ -45,7 +45,7 @@ subtest 'App::Healthcheck' => sub {
         ok((grep { $_->[0] eq 'content-type' && $_->[1] =~ /application\/json/ } @{$sent[0]{headers}}),
             'returns JSON');
 
-        my $body = JSON::PP::decode_json($sent[1]{body});
+        my $body = JSON::MaybeXS::decode_json($sent[1]{body});
         is $body->{status}, 'ok', 'status is ok';
         ok exists $body->{timestamp}, 'has timestamp';
         ok exists $body->{uptime}, 'has uptime';
@@ -64,7 +64,7 @@ subtest 'App::Healthcheck' => sub {
             );
         });
 
-        my $body = JSON::PP::decode_json($sent[1]{body});
+        my $body = JSON::MaybeXS::decode_json($sent[1]{body});
         is $body->{version}, '1.0.0', 'version included';
     };
 
@@ -86,7 +86,7 @@ subtest 'App::Healthcheck' => sub {
             );
         });
 
-        my $body = JSON::PP::decode_json($sent[1]{body});
+        my $body = JSON::MaybeXS::decode_json($sent[1]{body});
         is $body->{checks}{database}{status}, 'ok', 'database check ok';
         is $body->{checks}{cache}{status}, 'ok', 'cache check ok';
     };
@@ -109,7 +109,7 @@ subtest 'App::Healthcheck' => sub {
         });
 
         is $sent[0]{status}, 503, 'returns 503';
-        my $body = JSON::PP::decode_json($sent[1]{body});
+        my $body = JSON::MaybeXS::decode_json($sent[1]{body});
         is $body->{status}, 'error', 'overall status is error';
         is $body->{checks}{database}{status}, 'error', 'database check failed';
     };
@@ -132,7 +132,7 @@ subtest 'App::Healthcheck' => sub {
         });
 
         is $sent[0]{status}, 503, 'returns 503';
-        my $body = JSON::PP::decode_json($sent[1]{body});
+        my $body = JSON::MaybeXS::decode_json($sent[1]{body});
         like $body->{checks}{broken}{message}, qr/Connection failed/, 'error message captured';
     };
 };

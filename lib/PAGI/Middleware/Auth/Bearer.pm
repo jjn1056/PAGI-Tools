@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use JSON::PP ();
+use JSON::MaybeXS ();
 use MIME::Base64 qw(decode_base64url);
 use Digest::SHA qw(hmac_sha256);
 
@@ -26,7 +26,7 @@ PAGI::Middleware::Auth::Bearer - Bearer token authentication middleware
     # In your app:
     async sub app {
         my ($scope, $receive, $send) = @_;
-    
+
         my $auth = $scope->{'pagi.auth'};
         my $user_id = $auth->{claims}{sub};
     }
@@ -177,7 +177,7 @@ sub _validate_jwt {
     # Decode and parse header
     my $header_json = eval { decode_base64url($header_b64) };
     return unless $header_json;
-    my $header = eval { JSON::PP::decode_json($header_json) };
+    my $header = eval { JSON::MaybeXS::decode_json($header_json) };
     return unless $header;
 
     # Check algorithm
@@ -201,7 +201,7 @@ sub _validate_jwt {
     # Decode payload
     my $payload_json = eval { decode_base64url($payload_b64) };
     return unless $payload_json;
-    my $claims = eval { JSON::PP::decode_json($payload_json) };
+    my $claims = eval { JSON::MaybeXS::decode_json($payload_json) };
     return unless $claims;
 
     # Check expiration

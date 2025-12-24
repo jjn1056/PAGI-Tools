@@ -25,7 +25,12 @@ Revision history for PAGI
   - Reads app state from scope (injected by PAGI::Lifespan)
   - Separate from `stash` (per-request data)
 - `connection_state` accessor on PAGI::WebSocket, PAGI::SSE
-  - Renamed from `state` to avoid collision with new app state accessor
+  - Per-connection data storage (previously called `state`)
+  - Renamed to avoid collision with new app-level `state` accessor
+  - Use for connection-specific data like user info, subscriptions, etc.
+- Standardized on `JSON::MaybeXS` for all JSON handling
+  - Automatically uses fastest available backend (Cpanel::JSON::XS recommended)
+  - Install `Cpanel::JSON::XS` for best performance
 
 ### Migration Guide
 
@@ -56,6 +61,17 @@ my $user = $req->get('user');
 # After (just use stash)
 $req->stash->{user} = $user;
 my $user = $req->stash->{user};
+```
+
+**WebSocket/SSE connection state:**
+```perl
+# Before
+$ws->state->{user_id} = $user_id;
+my $user_id = $ws->state->{user_id};
+
+# After
+$ws->connection_state->{user_id} = $user_id;
+my $user_id = $ws->connection_state->{user_id};
 ```
 
 ### Important Notes

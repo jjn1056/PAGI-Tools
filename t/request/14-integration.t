@@ -5,7 +5,7 @@ use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use Net::Async::HTTP;
-use JSON::PP;
+use JSON::MaybeXS;
 
 use lib 'lib';
 use PAGI::Server;
@@ -49,7 +49,7 @@ subtest 'full request/response cycle with PAGI::Request' => sub {
             $response->{body} = $json;
         }
 
-        my $body = JSON::PP::encode_json($response);
+        my $body = JSON::MaybeXS::encode_json($response);
 
         await $send->({
             type    => 'http.response.start',
@@ -78,7 +78,7 @@ subtest 'full request/response cycle with PAGI::Request' => sub {
     # Test GET with query params
     my $res1 = $http->GET("http://127.0.0.1:$port/test?foo=bar")->get;
     is($res1->code, 200);
-    my $data1 = JSON::PP::decode_json($res1->content);
+    my $data1 = JSON::MaybeXS::decode_json($res1->content);
     is($data1->{method}, 'GET');
     is($data1->{path}, '/test');
     is($data1->{query}, 'bar');
@@ -91,7 +91,7 @@ subtest 'full request/response cycle with PAGI::Request' => sub {
     );
     my $res2 = $http->do_request(request => $req2)->get;
     is($res2->code, 200);
-    my $data2 = JSON::PP::decode_json($res2->content);
+    my $data2 = JSON::MaybeXS::decode_json($res2->content);
     is($data2->{is_json}, 1);
     is($data2->{body}, { name => 'John', age => 30 });
 

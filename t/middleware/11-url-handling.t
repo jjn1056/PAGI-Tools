@@ -4,7 +4,7 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
-use JSON::PP;
+use JSON::MaybeXS;
 
 use PAGI::Middleware::Rewrite;
 use PAGI::Middleware::HTTPSRedirect;
@@ -297,7 +297,7 @@ subtest 'Healthcheck - returns health status' => sub {
         my ($e) = @_; push @events, $e }) };
 
     is $events[0]{status}, 200, 'health check returns 200';
-    my $body = JSON::PP::decode_json($events[1]{body});
+    my $body = JSON::MaybeXS::decode_json($events[1]{body});
     is $body->{status}, 'ok', 'status is ok';
 };
 
@@ -345,7 +345,7 @@ subtest 'Healthcheck - runs custom checks' => sub {
         my ($e) = @_; push @events, $e }) };
 
     is $events[0]{status}, 503, 'returns 503 when check fails';
-    my $body = JSON::PP::decode_json($events[1]{body});
+    my $body = JSON::MaybeXS::decode_json($events[1]{body});
     is $body->{status}, 'error', 'status is error';
     is $body->{checks}{always_ok}{status}, 'ok', 'passing check reported';
     is $body->{checks}{always_fail}{status}, 'error', 'failing check reported';
