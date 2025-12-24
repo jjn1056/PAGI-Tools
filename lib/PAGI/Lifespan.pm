@@ -101,15 +101,16 @@ PAGI::Lifespan - Wrap a PAGI app with lifecycle management
     my $router = PAGI::App::Router->new;
     $router->get('/' => sub { ... });
 
+    # Wrap app with lifecycle management
     my $app = PAGI::Lifespan->wrap(
         $router->to_app,
         startup => async sub {
-            my ($state) = @_;
-            $state->{db} = DBI->connect(...);
+            # Populate router state directly (like Starlette's app.state)
+            $router->state->{db} = DBI->connect(...);
+            $router->state->{config} = { app_name => 'MyApp' };
         },
         shutdown => async sub {
-            my ($state) = @_;
-            $state->{db}->disconnect;
+            $router->state->{db}->disconnect;
         },
     );
 
@@ -121,8 +122,9 @@ injects application state into the scope for all requests.
 
 =head2 State Flow
 
-During startup, the C<startup> callback receives a state hashref.
-Populate it with database connections, caches, configuration, etc.
+During startup, populate the router's state directly with database
+connections, caches, configuration, etc. This is similar to how
+Starlette uses C<app.state>.
 
 For every request, this state is injected into the scope as
 C<$scope-E<gt>{'pagi.state'}>. This makes it accessible via:
