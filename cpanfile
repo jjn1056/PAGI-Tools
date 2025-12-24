@@ -14,9 +14,11 @@ requires 'HTTP::Parser::XS', '0.17';
 # WebSocket support
 requires 'Protocol::WebSocket', '0.26';
 
-# TLS support
-requires 'IO::Async::SSL', '0.25';
-requires 'IO::Socket::SSL', '2.074';
+# TLS support (optional - only needed for HTTPS)
+recommends 'IO::Async::SSL', '0.25';
+recommends 'IO::Socket::SSL', '2.074';
+# To enable TLS/HTTPS support, install with:
+#   cpanm IO::Async::SSL IO::Socket::SSL
 
 # Zero-copy file transfer (optional but recommended for performance)
 recommends 'Sys::Sendfile', '0.11';
