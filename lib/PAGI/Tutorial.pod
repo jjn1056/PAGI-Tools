@@ -116,6 +116,9 @@ Let's create a simple "Hello, World!" application. Create a file called C<hello.
   async sub app {
       my ($scope, $receive, $send) = @_;
 
+      # Only handle HTTP requests (server also sends lifespan events)
+      return unless $scope->{type} eq 'http';
+
       # Send the response status and headers
       await $send->({
           type => 'http.response.start',
@@ -151,9 +154,11 @@ Let's break down what's happening:
 
 =back
 
-=item 3. C<await $send-E<gt>({...})> - Sends events asynchronously, waiting for each to complete
+=item 3. C<return unless $scope-E<gt>{type} eq 'http'> - The server calls your app for different event types (HTTP requests, WebSocket, lifespan). This check ensures we only handle HTTP requests.
 
-=item 4. C<\&app> - Returns a reference to the application subroutine
+=item 4. C<await $send-E<gt>({...})> - Sends events asynchronously, waiting for each to complete
+
+=item 5. C<\&app> - Returns a reference to the application subroutine
 
 =back
 
