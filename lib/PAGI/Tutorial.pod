@@ -36,6 +36,35 @@ Unlike traditional synchronous web frameworks, PAGI allows your application to h
 
 Traditional synchronous web frameworks handle one request at a time per process. When your application waits for a database query, an external API call, or file I/O, the entire process is blocked and can't handle other requests.
 
+B<The Traditional Solution: Forking Servers>
+
+Perl web applications have traditionally used pre-forking servers like L<Starman> to achieve concurrency. Starman spawns multiple worker processes, each handling one request at a time. This approach works well and has served the Perl community for years:
+
+  Approach        | Forking (Starman)           | Async (PAGI)
+  ----------------|-----------------------------|--------------------------
+  Concurrency     | Multiple processes          | Single process, event loop
+  Memory          | Each worker copies app      | Shared memory, lower usage
+  Connections     | Limited by worker count     | Thousands per process
+  WebSocket/SSE   | Impractical (ties up worker)| Natural fit
+  Blocking I/O    | Fine (isolated per worker)  | Must use async libraries
+  CPU-bound work  | Fine (isolated per worker)  | Blocks event loop (use workers)
+  Debugging       | Simpler (sequential code)   | Trickier (async flow)
+  Existing code   | Works as-is                 | May need async adapters
+
+B<When to use which:>
+
+=over 4
+
+=item * B<Starman/forking> - CPU-heavy work, existing sync codebases, simple request/response apps, blocking database drivers
+
+=item * B<PAGI/async> - WebSockets, SSE, long-polling, high connection counts, I/O-bound apps, real-time features
+
+=back
+
+Many applications benefit from both: use PAGI for real-time endpoints (WebSocket, SSE) and forking for traditional request/response. PAGI also supports worker mode (C<--workers N>) which combines both approaches.
+
+B<The Async Advantage>
+
 Asynchronous programming allows your application to handle multiple requests concurrently in a single process. When one request is waiting for I/O, the event loop can switch to another request, dramatically improving resource utilization and response times.
 
 This is especially important for:
