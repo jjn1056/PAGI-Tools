@@ -1,5 +1,7 @@
 =encoding UTF-8
 
+ttt ♥♥♥
+
 =head1 NAME
 
 PAGI::Tutorial - A comprehensive guide to building async web applications with PAGI
@@ -1200,8 +1202,8 @@ PAGI follows specific rules for UTF-8 encoding/decoding:
 Example:
 
   # URL: /users/%E4%B8%AD%E6%96%87
-  # $scope->{path} = '/users/中文'      (decoded)
-  # $scope->{raw_path} = '/users/%E4%B8%AD%E6%96%87' (raw bytes)
+  $scope->{path} = '/users/中文'                    # (decoded)
+  $scope->{raw_path} = '/users/%E4%B8%AD%E6%96%87'  # (raw bytes)
 
 =head3 Query Strings
 
