@@ -1066,51 +1066,39 @@ The lifespan protocol allows your application to initialize resources on startup
   async sub app {
       my ($scope, $receive, $send) = @_;
 
-      # Handle lifespan events
+      # Handle lifespan events (startup then shutdown - a fixed sequence)
       if ($scope->{type} eq 'lifespan') {
-          # NOTE: This loop does NOT block! The 'await' yields to the
-          # event loop while waiting for the next lifespan event.
-          while (1) {
-              my $event = await $receive->();
+          # Wait for startup event
+          my $event = await $receive->();
 
-              if ($event->{type} eq 'lifespan.startup') {
-                  # Initialize resources
-                  eval {
-                      $db = MyDB->connect('dbi:Pg:dbname=myapp');
-                      $cache = Cache::Memcached->new(servers => ['localhost:11211']);
-                      warn "Application started successfully\n";
-
-                      # Signal successful startup
-                      await $send->({ type => 'lifespan.startup.complete' });
-                  };
-                  if ($@) {
-                      # Signal startup failure
-                      await $send->({
-                          type => 'lifespan.startup.failed',
-                          message => $@,
-                      });
-                  }
-              }
-              elsif ($event->{type} eq 'lifespan.shutdown') {
-                  # Clean up resources
-                  eval {
-                      $db->disconnect if $db;
-                      $cache->disconnect_all if $cache;
-                      warn "Application shut down successfully\n";
-
-                      # Signal successful shutdown
-                      await $send->({ type => 'lifespan.shutdown.complete' });
-                  };
-                  if ($@) {
-                      # Signal shutdown failure
-                      await $send->({
-                          type => 'lifespan.shutdown.failed',
-                          message => $@,
-                      });
-                  }
-                  last;  # Exit after shutdown
+          if ($event->{type} eq 'lifespan.startup') {
+              eval {
+                  $db = MyDB->connect('dbi:Pg:dbname=myapp');
+                  $cache = Cache::Memcached->new(servers => ['localhost:11211']);
+                  warn "Application started successfully\n";
+                  await $send->({ type => 'lifespan.startup.complete' });
+              };
+              if ($@) {
+                  await $send->({ type => 'lifespan.startup.failed', message => $@ });
+                  return;
               }
           }
+
+          # Wait for shutdown event
+          $event = await $receive->();
+
+          if ($event->{type} eq 'lifespan.shutdown') {
+              eval {
+                  $db->disconnect if $db;
+                  $cache->disconnect_all if $cache;
+                  warn "Application shut down successfully\n";
+                  await $send->({ type => 'lifespan.shutdown.complete' });
+              };
+              if ($@) {
+                  await $send->({ type => 'lifespan.shutdown.failed', message => $@ });
+              }
+          }
+
           return;
       }
 
