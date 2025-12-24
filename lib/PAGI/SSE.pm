@@ -488,23 +488,56 @@ async sub every {
     my ($self, $interval, $callback) = @_;
 
     my $loop = $self->loop;
-    my $running = 1;
-
-    # Set up disconnect detection via on_close callback
-    # SSE is one-way (server→client), so we don't need to call receive()
-    # The connection close is detected by the server and triggers on_close
-    $self->on_close(sub {
-        $running = 0;
-    });
 
     await $self->start unless $self->is_started;
 
-    while ($running && !$self->is_closed) {
-        await $callback->();
+    # Start background disconnect monitor
+    $self->_start_disconnect_monitor unless $self->{_disconnect_monitor_started};
 
-        # Wait for the interval (disconnect detected via on_close callback)
+    while (!$self->is_closed) {
+        # Try to send - if it fails, connection is closed
+        my $ok = eval { await $callback->(); 1 };
+        unless ($ok) {
+            $self->_set_closed;
+            await $self->_run_close_callbacks;
+            last;
+        }
+
         await $loop->delay_future(after => $interval);
     }
+}
+
+# Start a background task to monitor for disconnect events
+sub _start_disconnect_monitor {
+    my ($self) = @_;
+    return if $self->{_disconnect_monitor_started};
+    $self->{_disconnect_monitor_started} = 1;
+
+    my $receive = $self->{receive};
+    my $weak_self = $self;
+    require Scalar::Util;
+    Scalar::Util::weaken($weak_self);
+
+    # This runs in the background and waits for disconnect
+    my $monitor = (async sub {
+        while ($weak_self && !$weak_self->is_closed) {
+            my $event = eval { await $receive->() };
+            last unless $event;
+
+            my $type = $event->{type} // '';
+            if ($type eq 'sse.disconnect') {
+                if ($weak_self) {
+                    $weak_self->_set_closed;
+                    await $weak_self->_run_close_callbacks;
+                }
+                last;
+            }
+        }
+    })->();
+
+    # Keep the future alive but don't block on it
+    $monitor->on_fail(sub { }); # Ignore errors
+    $self->{_disconnect_monitor} = $monitor;
 }
 
 1;
