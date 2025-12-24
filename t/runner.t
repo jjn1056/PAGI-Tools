@@ -127,7 +127,10 @@ subtest 'load app from file' => sub {
 
     ok(ref $app eq 'CODE', 'loaded app is coderef');
     is($runner->{app}, $app, 'app stored in runner');
-    is($runner->{app_spec}, File::Spec->rel2abs($app_path), 'app_spec stored (absolute)');
+    # Normalize paths for cross-platform comparison (/ vs \)
+    my $expected = File::Spec->canonpath(File::Spec->rel2abs($app_path));
+    my $got = File::Spec->canonpath($runner->{app_spec});
+    is($got, $expected, 'app_spec stored (absolute)');
 };
 
 # Test 10: Load app from module
@@ -310,6 +313,11 @@ subtest 'production CLI options parsing' => sub {
 
 # Test 22: _drop_privileges validation
 subtest '_drop_privileges validation' => sub {
+    # Skip on Windows - getpwnam/getgrnam not available
+    if ($^O eq 'MSWin32') {
+        skip_all 'User/group privilege tests not supported on Windows';
+    }
+
     # Test 1: Returns early if neither user nor group specified
     my $runner1 = PAGI::Runner->new(port => 0, quiet => 1);
     ok(lives { $runner1->_drop_privileges }, '_drop_privileges returns early when no user/group');
