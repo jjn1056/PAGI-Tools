@@ -75,7 +75,7 @@ To use PAGI, you'll need:
 
 =over 4
 
-=item * Perl 5.16 or later
+=item * Perl 5.16 or later (released May 2012) - required by L<Future::AsyncAwait>
 
 =item * L<Future::AsyncAwait> - Provides async/await syntax
 
