@@ -1079,32 +1079,29 @@ Key points:
 
 =head2 2.7 Lifespan Protocol (Application Lifecycle)
 
-The lifespan protocol allows your application to initialize resources on startup and clean them up on shutdown.
+The lifespan protocol allows your application to initialize resources on startup and clean them up on shutdown. The key feature is C<$scope-E<gt>{state}> - a hash that persists across all requests within a worker process.
 
 B<Important:> In worker mode (C<--workers N>), each worker runs lifespan independently after forking. This means each worker initializes its own database connections, cache handles, etc. This is actually good - most database connections can't be shared across forks anyway.
-
-Use package-level variables (C<my $db;> outside the sub) to share resources between lifespan and request handlers within the same process. You cannot pass data via C<$scope> because each request gets a separate scope hash.
 
   use strict;
   use warnings;
   use Future::AsyncAwait;
-
-  # Shared state (initialized at startup)
-  my $db;
-  my $cache;
 
   async sub app {
       my ($scope, $receive, $send) = @_;
 
       # Handle lifespan events (startup then shutdown - a fixed sequence)
       if ($scope->{type} eq 'lifespan') {
+          my $state = $scope->{state};  # Shared with all requests in this worker
+
           # Wait for startup event
           my $event = await $receive->();
 
           if ($event->{type} eq 'lifespan.startup') {
               eval {
-                  $db = MyDB->connect('dbi:Pg:dbname=myapp');
-                  $cache = Cache::Memcached->new(servers => ['localhost:11211']);
+                  # Store resources in $state - available to all requests
+                  $state->{db} = MyDB->connect('dbi:Pg:dbname=myapp');
+                  $state->{cache} = Cache::Memcached->new(servers => ['localhost:11211']);
                   warn "Application started successfully\n";
                   await $send->({ type => 'lifespan.startup.complete' });
               };
@@ -1119,8 +1116,8 @@ Use package-level variables (C<my $db;> outside the sub) to share resources betw
 
           if ($event->{type} eq 'lifespan.shutdown') {
               eval {
-                  $db->disconnect if $db;
-                  $cache->disconnect_all if $cache;
+                  $state->{db}->disconnect if $state->{db};
+                  $state->{cache}->disconnect_all if $state->{cache};
                   warn "Application shut down successfully\n";
                   await $send->({ type => 'lifespan.shutdown.complete' });
               };
@@ -1134,7 +1131,9 @@ Use package-level variables (C<my $db;> outside the sub) to share resources betw
 
       # Handle HTTP requests
       if ($scope->{type} eq 'http') {
-          # Use the initialized resources
+          my $state = $scope->{state};  # Same hash from lifespan!
+          my $db = $state->{db};
+
           my $data = $db->selectrow_hashref('SELECT * FROM users LIMIT 1');
 
           await $send->({
