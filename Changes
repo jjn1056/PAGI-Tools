@@ -1,5 +1,12 @@
 # This file documents the revision history for Perl extension PAGI
 
+0.001009 - 2025-12-26
+  - Added configurable sendfile timeout via sendfile_timeout parameter
+  - Reduced large file test sizes from 128-256KB to 65KB for improved CI reliability
+  - Set sendfile timeout to 120s in file response tests for CI environments
+  - Added threshold boundary tests for sync/async file response paths
+  - Improved FreeBSD compatibility for sendfile operations in constrained environments
+
 0.001008 - 2025-12-25
   - Fixed 32-bit Perl compatibility in WebSocket test (pack 'Q' → 'NN')
   - Fixed sendfile on non-blocking sockets for FreeBSD/BSD systems
