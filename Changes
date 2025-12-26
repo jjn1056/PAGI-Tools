@@ -1,11 +1,17 @@
 # This file documents the revision history for Perl extension PAGI
 
 0.001009 - 2025-12-26
-  - Added configurable sendfile timeout via sendfile_timeout parameter
-  - Reduced large file test sizes from 128-256KB to 65KB for improved CI reliability
-  - Set sendfile timeout to 120s in file response tests for CI environments
-  - Added threshold boundary tests for sync/async file response paths
-  - Improved FreeBSD compatibility for sendfile operations in constrained environments
+  - BREAKING: PAGI::Response constructor now takes ($scope, $send) instead of ($send, $scope)
+    for consistency with Request, SSE, and WebSocket APIs
+  - Added request_timeout for stalled requests, ws_idle_timeout and sse_idle_timeout
+    for idle connection cleanup (all disabled by default for performance)
+  - Test::Client: multi-value headers/query/form support, fixed arrayref headers with form/json
+  - Scope-based caching for Request, Response, SSE, WebSocket objects
+  - Replace retain() with adopt_future() for proper async error handling
+  - Added on_error callback to heartbeat and rate limit middleware
+  - Restructured Tutorial, added Cookbook for advanced patterns
+  - Added configurable sendfile_timeout for FreeBSD CI reliability
+  - A bunch of other minor test case fixes to fix stuff reported on CPAN Testers
 
 0.001008 - 2025-12-25
   - Fixed 32-bit Perl compatibility in WebSocket test (pack 'Q' → 'NN')
