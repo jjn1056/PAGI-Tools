@@ -4131,7 +4131,9 @@ Web requests should respond quickly. Long-running work should be done in the bac
 
 =head3 Pattern 1: Fire-and-Forget Async I/O
 
-For non-blocking operations (async HTTP calls, async database queries), use C<< ->retain() >> to prevent "lost future" warnings:
+For non-blocking operations (async HTTP calls, async database queries),
+use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
+"lost future" warnings:
 
   use strict;
   use warnings;
@@ -4156,11 +4158,22 @@ For non-blocking operations (async HTTP calls, async database queries), use C<< 
       # Respond immediately
       await $res->status(201)->json({ status => 'created' });
 
-      # Fire-and-forget: retain() prevents GC and warnings
-      send_welcome_email('user@example.com')->retain();
+      # Fire-and-forget with error handling
+      # IMPORTANT: Always add on_fail() before retain() to avoid silent failures
+      send_welcome_email('user@example.com')
+          ->on_fail(sub { warn "Email send failed: @_" })
+          ->retain();
   });
 
   $router->to_app;
+
+B<Warning:> Using C<< ->retain() >> alone silently swallows errors. Always
+add C<< ->on_fail() >> to log or handle failures.
+
+B<Note:> If you're writing middleware or server extensions that inherit from
+L<IO::Async::Notifier>, prefer C<< $self->adopt_future($f) >> instead of
+C<< ->retain() >>. The C<adopt_future> method properly tracks futures and
+propagates errors to the notifier's error handling.
 
 =head3 Pattern 2: CPU-Bound Work in Subprocess
 

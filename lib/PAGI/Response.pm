@@ -626,14 +626,26 @@ on what kind of work you're doing:
 =head3 Pattern 1: Fire-and-Forget Async I/O (Non-Blocking)
 
 For async operations (HTTP calls, database queries using async drivers),
-call them without C<await> and use C<< ->retain() >> to prevent the
-"lost future" warning:
+call them without C<await>, add C<< ->on_fail() >> for error handling,
+then C<< ->retain() >> to prevent the "lost future" warning:
 
     await $res->json({ status => 'queued' });
 
-    # Fire-and-forget: retain() prevents GC warning
-    send_async_email($user)->retain();
-    log_to_analytics($event)->retain();
+    # Fire-and-forget with error handling
+    # IMPORTANT: Always add on_fail() before retain() to avoid silent failures
+    send_async_email($user)
+        ->on_fail(sub { warn "Email failed: @_" })
+        ->retain();
+    log_to_analytics($event)
+        ->on_fail(sub { warn "Analytics failed: @_" })
+        ->retain();
+
+B<Warning:> Using C<< ->retain() >> alone silently swallows errors.
+
+B<Note:> If you're writing middleware or server extensions that inherit from
+L<IO::Async::Notifier>, prefer C<< $self->adopt_future($f) >> instead of
+C<< ->retain() >>. The C<adopt_future> method properly tracks futures and
+propagates errors to the notifier's error handling.
 
 =head3 Pattern 2: Blocking/CPU Work (IO::Async::Function)
 
