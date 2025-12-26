@@ -1343,7 +1343,7 @@ L<PAGI::Request> and L<PAGI::Response> handle UTF-8 encoding/decoding automatica
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Path is already decoded
       my $path = $req->path;
@@ -1429,7 +1429,7 @@ L<PAGI::Response> provides a fluent interface for building HTTP responses. Inste
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       # Create a response builder
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Use it to send responses
       await $res->text('Hello, World!');
@@ -1453,7 +1453,7 @@ L<PAGI::Response> provides methods for common response types:
 
       die "Expected http scope" unless $scope->{type} eq 'http';
 
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
       my $path = $scope->{path};
 
       # Plain text
@@ -1507,7 +1507,7 @@ Use chainable methods to set status and headers before sending:
 
       die "Expected http scope" unless $scope->{type} eq 'http';
 
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Fluent chaining: set status and headers, then send
       await $res->status(201)
@@ -1545,7 +1545,7 @@ Chainable methods:
 
       die "Expected http scope" unless $scope->{type} eq 'http';
 
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Set a simple cookie
       $res->cookie('session_id', 'abc123');
@@ -1580,7 +1580,7 @@ Chainable methods:
 
       die "Expected http scope" unless $scope->{type} eq 'http';
 
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
       my $path = $scope->{path};
 
       # Temporary redirect (302 Found - default)
@@ -1616,7 +1616,7 @@ B<Note:> C<redirect()> sends the response immediately but does NOT stop Perl exe
 
       die "Expected http scope" unless $scope->{type} eq 'http';
 
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
       my $path = $scope->{path};
 
       # Simple error
@@ -1664,7 +1664,7 @@ For large responses or real-time data, use C<stream()>:
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $loop = IO::Async::Loop->new;
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Stream response chunks
       await $res->stream(async sub {
@@ -1718,7 +1718,7 @@ Send files efficiently without loading them into memory:
 
       die "Expected http scope" unless $scope->{type} eq 'http';
 
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Send file with auto-detected MIME type
       await $res->send_file('/path/to/document.pdf');
@@ -1757,7 +1757,7 @@ L<PAGI::Request> parses HTTP requests and provides convenient accessors for head
 
       # Create request and response objects
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       await $res->text("You requested: " . $req->path);
   }
@@ -1780,7 +1780,7 @@ The C<new()> method takes both C<$scope> and C<$receive> from your PAGI app.
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       my $info = join "\n", (
           "Method: " . $req->method,
@@ -1832,7 +1832,7 @@ Available methods:
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Get single header (case-insensitive)
       my $user_agent = $req->header('user-agent') // 'Unknown';
@@ -1870,7 +1870,7 @@ Query parameters are automatically decoded from URL encoding and UTF-8:
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Get single parameter
       my $page = $req->query('page') // '1';
@@ -1910,7 +1910,7 @@ Test it:
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Get single cookie
       my $session_id = $req->cookie('session_id') // 'none';
@@ -1942,7 +1942,7 @@ L<PAGI::Request> provides async methods for parsing different body types:
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Read entire body as raw bytes
       if ($req->path eq '/raw') {
@@ -2027,7 +2027,7 @@ L<PAGI::Request> handles multipart file uploads:
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       return await $res->text('Send POST to /upload')
           unless $req->method eq 'POST' && $req->path eq '/upload';
@@ -2107,7 +2107,7 @@ The stash is a per-request storage area for sharing data between middleware and 
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Store data in stash (e.g., from authentication middleware)
       $req->stash->{user} = { id => 123, name => 'Alice' };
@@ -2594,7 +2594,7 @@ L<PAGI::App::Router> provides a lightweight functional approach to routing. You 
   # Add routes
   $router->get('/' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
       await $res->text('Welcome!');
   });
 
@@ -2620,7 +2620,7 @@ L<PAGI::App::Router> provides methods for all standard HTTP verbs:
   # GET /users
   $router->get('/users' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
       await $res->json([
           { id => 1, name => 'Alice' },
           { id => 2, name => 'Bob' },
@@ -2631,7 +2631,7 @@ L<PAGI::App::Router> provides methods for all standard HTTP verbs:
   $router->post('/users' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       my $data = await $req->json;
       # ... create user ...
@@ -2690,7 +2690,7 @@ Use C<:param> syntax for named parameters in routes:
   $router->get('/users/:id' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Access path parameter via $req->path_param()
       my $id = $req->path_param('id');
@@ -2702,7 +2702,7 @@ Use C<:param> syntax for named parameters in routes:
   $router->get('/posts/:post_id/comments/:comment_id' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       my $post_id = $req->path_param('post_id');
       my $comment_id = $req->path_param('comment_id');
@@ -2734,7 +2734,7 @@ Use C<*name> syntax to capture multiple path segments:
   $router->get('/files/*path' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Access wildcard via $req->path_param()
       my $path = $req->path_param('path');
@@ -2857,7 +2857,7 @@ Apply middleware to specific routes by passing an arrayref:
       }
 
       unless ($token eq 'Bearer secret123') {
-          my $res = PAGI::Response->new($send);
+          my $res = PAGI::Response->new($send, $scope);
           await $res->status(401)->json({ error => 'Unauthorized' });
           return;  # Don't call $next->()
       }
@@ -2869,7 +2869,7 @@ Apply middleware to specific routes by passing an arrayref:
   # Apply middleware to specific routes
   $router->get('/admin' => [$auth_mw] => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
       await $res->text('Admin panel');
   });
 
@@ -2904,7 +2904,7 @@ Use C<mount()> to attach sub-applications or routers at a prefix:
   my $api_router = PAGI::App::Router->new;
   $api_router->get('/users' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
       await $res->json([{ id => 1, name => 'Alice' }]);
   });
 
@@ -3886,7 +3886,7 @@ L<PAGI::App::File> serves static files with security, caching, and streaming.
   $router->get('/api/hello' => async sub {
       my ($scope, $receive, $send) = @_;
       require PAGI::Response;
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
       await $res->json({ message => 'Hello!' });
   });
 
@@ -4153,7 +4153,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
 
   $router->post('/signup' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Respond immediately
       await $res->status(201)->json({ status => 'created' });
@@ -4205,7 +4205,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
 
   $router->post('/generate-pdf' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Option A: Wait for result (blocks this request only)
       my $result = await $pdf_worker->call(args => ['report']);
@@ -4239,7 +4239,7 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       if ($req->method eq 'POST') {
           my $form = await $req->form;
@@ -4274,7 +4274,7 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       if ($req->method eq 'POST') {
           my $uploads = await $req->uploads;
@@ -4331,7 +4331,7 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/login' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Set session data
       $req->session->{user_id} = 123;
@@ -4343,7 +4343,7 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/profile' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Read session data
       my $username = $req->session->{username} // 'Guest';
@@ -4354,7 +4354,7 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/logout' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # Clear session
       $req->session({});
@@ -4388,7 +4388,7 @@ Use L<PAGI::Middleware::Session> for session management:
 
   $router->get('/' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
       await $res->text('Protected content');
   });
 
@@ -4418,7 +4418,7 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/api/me' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send);
+      my $res = PAGI::Response->new($send, $scope);
 
       # User data from validated token
       my $user = $req->stash->{user};

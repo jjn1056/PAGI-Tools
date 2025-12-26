@@ -34,26 +34,6 @@ subtest 'param returns undef when no route params' => sub {
     is($res->path_params, {}, 'params returns empty hash');
 };
 
-subtest 'param returns undef when no scope provided' => sub {
-    my $res = PAGI::Response->new($send);
-    is($res->path_param('anything'), undef, 'param returns undef when no scope');
-    is($res->path_params, {}, 'params returns empty hash when no scope');
-};
-
-subtest 'backward compatibility - constructor works without scope' => sub {
-    my $res = PAGI::Response->new($send);
-    isa_ok $res, 'PAGI::Response';
-
-    # Should still be able to use all other methods
-    @sent = ();
-    $res->status(200)->header('X-Test' => 'value');
-    $res->text("Hello")->get;
-
-    is scalar(@sent), 2, 'response sent successfully';
-    is $sent[0]->{status}, 200, 'status set';
-    is $sent[1]->{body}, encode('UTF-8', 'Hello'), 'body sent';
-};
-
 subtest 'params with complex route params' => sub {
     my $scope_complex = {
         type => 'http',
@@ -149,11 +129,6 @@ subtest 'stash survives scope shallow copy' => sub {
     # They share the same stash reference
     $res2->stash->{role} = 'admin';
     is($res1->stash->{role}, 'admin', 'stash modifications visible across copies');
-};
-
-subtest 'stash returns empty hash when no scope' => sub {
-    my $res = PAGI::Response->new($send);
-    is($res->stash, {}, 'stash returns empty hash when no scope');
 };
 
 done_testing;

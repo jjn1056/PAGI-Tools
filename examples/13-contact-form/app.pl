@@ -106,7 +106,7 @@ async sub _handle_submit {
         }
     }
 
-    my $res = PAGI::Response->new($send);
+    my $res = PAGI::Response->new($send, $req->raw);
 
     # Return errors if any
     if (@errors) {
