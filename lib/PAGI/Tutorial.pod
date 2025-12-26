@@ -682,6 +682,15 @@ For WebSocket, you receive messages and disconnect events:
       bytes => "\x00\x01\x02",    # For binary messages
   }
 
+B<Why separate C<text> and C<bytes> keys?> The WebSocket protocol itself
+distinguishes text frames (must be valid UTF-8) from binary frames (arbitrary
+bytes) at the wire level. Having separate keys provides three benefits: (1) you
+can use both on the same connection - e.g., text for JSON commands, binary for
+audio streams; (2) type safety - you know exactly what you received without
+ambiguity; (3) you can't accidentally mishandle encoding. If you don't care
+about the distinction: C<my $data = $event-E<gt>{text} // $event-E<gt>{bytes}>.
+The L<PAGI::WebSocket> helper class abstracts this for most use cases.
+
   # Connection closed
   {
       type => 'websocket.disconnect',
