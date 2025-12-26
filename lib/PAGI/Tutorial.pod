@@ -1351,7 +1351,7 @@ L<PAGI::Request> and L<PAGI::Response> handle UTF-8 encoding/decoding automatica
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send, $scope);
+      my $res = PAGI::Response->new($scope, $send);
 
       # Path is already decoded
       my $path = $req->path;
@@ -1787,7 +1787,7 @@ L<PAGI::Response> provides a fluent interface for building HTTP responses. Inste
       die "Expected http scope" unless $scope->{type} eq 'http';
 
       # Create a response builder
-      my $res = PAGI::Response->new($send, $scope);
+      my $res = PAGI::Response->new($scope, $send);
 
       # Use it to send responses
       await $res->text('Hello, World!');
@@ -1799,7 +1799,7 @@ L<PAGI::Response> provides a fluent interface for building HTTP responses. Inste
 
 L<PAGI::Response> provides methods for common response types:
 
-  my $res = PAGI::Response->new($send, $scope);
+  my $res = PAGI::Response->new($scope, $send);
 
   # Plain text
   await $res->text('Hello, World!');
@@ -1871,7 +1871,7 @@ L<PAGI::Request> parses HTTP requests and provides convenient accessors for head
 =head3 Creating a Request
 
   my $req = PAGI::Request->new($scope, $receive);
-  my $res = PAGI::Response->new($send, $scope);
+  my $res = PAGI::Response->new($scope, $send);
 
   await $res->text("You requested: " . $req->path);
 
@@ -1986,13 +1986,13 @@ L<PAGI::App::Router> provides lightweight functional routing:
   # HTTP routes
   $router->get('/' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($send, $scope);
+      my $res = PAGI::Response->new($scope, $send);
       await $res->text('Home');
   });
 
   $router->post('/users' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($send, $scope);
+      my $res = PAGI::Response->new($scope, $send);
       await $res->status(201)->json({ created => 1 });
   });
 
@@ -2000,7 +2000,7 @@ L<PAGI::App::Router> provides lightweight functional routing:
   $router->get('/users/:id' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($send, $scope);
+      my $res = PAGI::Response->new($scope, $send);
       my $id = $req->path_param('id');
       await $res->json({ id => $id });
   });

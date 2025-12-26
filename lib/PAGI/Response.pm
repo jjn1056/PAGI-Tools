@@ -20,7 +20,7 @@ PAGI::Response - Fluent response builder for PAGI applications
 
     # Basic usage in a raw PAGI app
     async sub app ($scope, $receive, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
 
         # Fluent chaining - set status, headers, then send
         await $res->status(200)
@@ -64,7 +64,7 @@ Attempting to call a finisher method twice will throw an error.
 
 =head2 new
 
-    my $res = PAGI::Response->new($send, $scope);
+    my $res = PAGI::Response->new($scope, $send);
 
 Creates a new response builder.
 
@@ -344,7 +344,7 @@ B<Range Request Example:>
 
     # Manual range request handling
     async sub handle_video ($req, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
         my $path = '/videos/movie.mp4';
         my $size = -s $path;
 
@@ -385,7 +385,7 @@ use L<PAGI::App::File> instead:
             if $scope->{type} eq 'lifespan';
 
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
 
         if ($req->method eq 'GET' && $req->path eq '/') {
             return await $res->html('<h1>Welcome</h1>');
@@ -405,7 +405,7 @@ use L<PAGI::App::File> instead:
 =head2 Form Validation with Error Response
 
     async sub handle_contact ($req, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
         my $form = await $req->form;
 
         my @errors;
@@ -428,7 +428,7 @@ use L<PAGI::App::File> instead:
 =head2 Authentication with Cookies
 
     async sub handle_login ($req, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
         my $data = await $req->json;
 
         my $user = authenticate($data->{email}, $data->{password});
@@ -450,7 +450,7 @@ use L<PAGI::App::File> instead:
     }
 
     async sub handle_logout ($req, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
 
         return await $res->delete_cookie('session', path => '/')
                          ->json({ logged_out => 1 });
@@ -459,7 +459,7 @@ use L<PAGI::App::File> instead:
 =head2 File Download
 
     async sub handle_download ($req, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
         my $file_id = $req->path_param('id');
 
         my $file = get_file($file_id); # Be sure to clean $file
@@ -475,7 +475,7 @@ use L<PAGI::App::File> instead:
 =head2 Streaming Large Data
 
     async sub handle_export ($req, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
 
         await $res->content_type('text/csv')
                   ->header('Content-Disposition' => 'attachment; filename="export.csv"')
@@ -494,7 +494,7 @@ use L<PAGI::App::File> instead:
 =head2 Server-Sent Events Style Streaming
 
     async sub handle_events ($req, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
 
         await $res->content_type('text/event-stream')
                   ->header('Cache-Control' => 'no-cache')
@@ -509,7 +509,7 @@ use L<PAGI::App::File> instead:
 =head2 Conditional Responses
 
     async sub handle_resource ($req, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
         my $etag = '"abc123"';
 
         # Check If-None-Match for caching
@@ -527,7 +527,7 @@ use L<PAGI::App::File> instead:
 
     # Simple CORS - allow all origins
     async sub handle_api ($scope, $receive, $send) {
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
 
         return await $res->cors->json({ status => 'ok' });
     }
@@ -535,7 +535,7 @@ use L<PAGI::App::File> instead:
     # CORS with credentials (e.g., cookies, auth headers)
     async sub handle_api_with_auth ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
 
         # Get the Origin header from request
         my $origin = $req->header('Origin');
@@ -552,7 +552,7 @@ use L<PAGI::App::File> instead:
     # Handle OPTIONS preflight requests
     async sub app ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
 
         # Handle preflight
         if ($req->method eq 'OPTIONS') {
@@ -584,7 +584,7 @@ use L<PAGI::App::File> instead:
 
     async sub handle_api ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($send, $scope);
+        my $res = PAGI::Response->new($scope, $send);
 
         my $request_origin = $req->header('Origin') // '';
 
@@ -714,10 +714,10 @@ PAGI Contributors
 =cut
 
 sub new {
-    my ($class, $send, $scope) = @_;
+    my ($class, $scope, $send) = @_;
+    croak("scope is required") unless $scope && ref($scope) eq 'HASH';
     croak("send is required") unless $send;
     croak("send must be a coderef") unless ref($send) eq 'CODE';
-    croak("scope is required") unless $scope && ref($scope) eq 'HASH';
 
     my $self = bless {
         send    => $send,

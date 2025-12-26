@@ -137,7 +137,7 @@ my $router = PAGI::App::Router->new;
 # Index page
 $router->get('/' => async sub {
     my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($send, $scope);
+    my $res = PAGI::Response->new($scope, $send);
 
     await $res->html(<<'HTML');
 <!DOCTYPE html>
@@ -180,7 +180,7 @@ HTML
 # GOOD: Fire-and-forget async I/O
 $router->get('/async' => async sub {
     my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($send, $scope);
+    my $res = PAGI::Response->new($scope, $send);
 
     # Response goes out immediately
     await $res->json({
@@ -201,7 +201,7 @@ $router->get('/async' => async sub {
 # GOOD: CPU-bound work in subprocess
 $router->get('/blocking' => async sub {
     my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($send, $scope);
+    my $res = PAGI::Response->new($scope, $send);
 
     # Response goes out immediately
     await $res->json({
@@ -218,7 +218,7 @@ $router->get('/blocking' => async sub {
 $router->post('/signup' => async sub {
     my ($scope, $receive, $send) = @_;
     my $req = PAGI::Request->new($scope, $receive);
-    my $res = PAGI::Response->new($send, $scope);
+    my $res = PAGI::Response->new($scope, $send);
 
     my $data = await $req->json;
     my $email = $data->{email} // 'unknown@example.com';
