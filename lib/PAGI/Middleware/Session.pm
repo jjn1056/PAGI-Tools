@@ -35,6 +35,11 @@ PAGI::Middleware::Session - Session management middleware
 PAGI::Middleware::Session provides server-side session management with
 cookie-based session IDs. Sessions are stored in memory by default.
 
+B<Warning:> The default in-memory store is suitable for development and
+single-process deployments only. Sessions are not shared between workers
+and are lost on restart. For production multi-worker deployments, provide
+a C<store> object backed by Redis, a database, or another shared storage.
+
 =head1 CONFIGURATION
 
 =over 4
@@ -55,9 +60,11 @@ Options for the session cookie.
 
 Session expiration time in seconds.
 
-=item * store (default: in-memory)
+=item * store (default: in-memory hash)
 
-Session store object. Must implement get($id), set($id, $data), delete($id).
+Session store object for production use. Must implement C<get($id)>,
+C<set($id, $data)>, C<delete($id)>. See warning above about the default
+in-memory store.
 
 =back
 
