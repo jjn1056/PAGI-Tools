@@ -211,9 +211,8 @@ sub _lint_response_start {
 sub _lint_response_body {
     my ($self, $event) = @_;
 
-    unless (defined $event->{more}) {
-        $self->_warn("http.response.body should have 'more' key");
-    }
+    # 'more' key is optional - defaults to 0 (false) per PAGI spec
+    # No validation needed here
 }
 
 sub _warn {

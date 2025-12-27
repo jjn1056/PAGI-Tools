@@ -205,6 +205,52 @@ You should see:
 
 Try accessing it from a browser by visiting C<http://localhost:5000/>.
 
+=head3 Environment Modes
+
+pagi-server supports environment modes that control middleware behavior:
+
+=over 4
+
+=item B<development> (default when running interactively)
+
+Auto-enables L<PAGI::Middleware::Lint> with strict mode, which catches PAGI
+specification violations early and provides helpful error messages.
+
+=item B<production> (default when running non-interactively)
+
+No middleware is auto-enabled, and access logging is disabled for maximum
+performance. This is the default when running under systemd, docker, cron,
+or any non-TTY environment. Use C<--access-log FILE> to enable logging.
+
+=item B<none>
+
+Explicit opt-out of all auto-middleware, regardless of TTY detection.
+
+=back
+
+Mode is determined by (in order of precedence):
+
+  1. -E / --env command line flag
+  2. PAGI_ENV environment variable
+  3. Auto-detection: TTY = development, no TTY = production
+
+Examples:
+
+  # Auto-detect mode (TTY = development)
+  pagi-server hello.pl
+
+  # Explicit production mode
+  pagi-server -E production hello.pl
+
+  # Via environment variable
+  PAGI_ENV=production pagi-server hello.pl
+
+  # Disable auto-middleware even in development
+  pagi-server --no-default-middleware hello.pl
+
+The development mode Lint middleware helps catch common mistakes like forgetting
+to C<await> your C<$send> calls or returning without sending a response.
+
 =head3 Inspecting the Scope
 
 The C<$scope> hash contains metadata about the current connection - similar to PSGI's C<$env> hash. It tells you everything about the request before you read the body: the HTTP method, path, headers, query string, client address, and more. Unlike PSGI where everything is in one flat hash, PAGI separates the metadata (C<$scope>) from the body (read via C<$receive>).

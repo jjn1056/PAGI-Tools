@@ -1142,6 +1142,84 @@ See C<examples/background-tasks/> for complete working examples.
 
 See C<examples/10-forms-and-uploads/> for complete examples.
 
+=head1 COMMAND-LINE RECIPES
+
+=head2 Environment Modes
+
+pagi-server auto-detects development vs production mode based on whether
+you're running in an interactive terminal:
+
+  # Development mode (TTY detected) - Lint middleware + access logging
+  pagi-server app.pl
+
+  # Production mode (no TTY, e.g., systemd/docker) - no middleware, no logging
+  # This happens automatically when running as a daemon
+
+  # Explicit mode selection
+  pagi-server -E production app.pl
+  pagi-server -E development app.pl
+  pagi-server -E none app.pl  # Disable all auto-middleware
+
+  # Via environment variable
+  PAGI_ENV=production pagi-server app.pl
+
+  # Enable logging in production (writes to file)
+  pagi-server -E production --access-log /var/log/pagi.log app.pl
+
+  # Disable auto-middleware even in development
+  pagi-server --no-default-middleware app.pl
+
+=head2 Inline Apps with -e
+
+Like C<perl -e>, you can run inline PAGI apps. This is useful for quick
+tests or one-liners:
+
+  # Quick static file server
+  pagi-server -MPAGI::App::Directory \
+      -e 'PAGI::App::Directory->new(root => "/var/www")->to_app'
+
+  # Serve a single file
+  pagi-server -MPAGI::App::File \
+      -e 'PAGI::App::File->new(root => ".")->to_app'
+
+  # Quick redirect
+  pagi-server -MPAGI::App::Redirect \
+      -e 'PAGI::App::Redirect->new(location => "https://example.com")->to_app'
+
+=head2 Loading Modules with -M
+
+The C<-M> flag loads modules before C<-e> code runs, like C<perl -M>:
+
+  # Load multiple modules
+  pagi-server -MPAGI::App::File -MPAGI::Middleware::Builder \
+      -e 'use PAGI::Middleware::Builder; builder { enable "GZip"; PAGI::App::File->new(root => ".")->to_app }'
+
+  # Cuddled form (no space after -M)
+  pagi-server -MPAGI::App::File -e 'PAGI::App::File->new(root => ".")->to_app'
+
+=head2 Common pagi-server Patterns
+
+  # Development with verbose logging
+  pagi-server --log-level debug app.pl
+
+  # Production multi-worker deployment
+  pagi-server -E production --host 0.0.0.0 -p 80 --workers 4 app.pl
+
+  # With custom library paths
+  pagi-server -I ./lib -I ./local/lib app.pl
+
+  # HTTPS with TLS
+  pagi-server --ssl-cert cert.pem --ssl-key key.pem -p 443 app.pl
+
+  # Daemonized with PID file
+  pagi-server -D --pid /var/run/pagi.pid app.pl
+
+  # Maximum performance (no access logging)
+  pagi-server --no-access-log --workers 8 -E production app.pl
+
+  # Using EV event loop for better performance
+  pagi-server --loop EV app.pl
+
 =head1 DEPLOYMENT
 
 =head2 TLS/HTTPS
