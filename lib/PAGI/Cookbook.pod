@@ -1373,9 +1373,12 @@ Enable mod_xsendfile and whitelist your file directory:
 =head3 Filehandle Support
 
 The middleware also works with filehandle responses, but only if the
-filehandle object has a C<path()> method:
+filehandle object has a C<path()> method. L<IO::File::WithPath> from CPAN
+is an easy drop-in for this:
 
-  # This works - blessed fh with path method
+  use IO::File::WithPath;
+
+  # This works - IO::File::WithPath provides the path method
   my $fh = IO::File::WithPath->new('/path/to/file.bin', 'r');
   await $send->({ type => 'http.response.body', fh => $fh });
 
@@ -1383,9 +1386,8 @@ filehandle object has a C<path()> method:
   open my $plain_fh, '<', '/path/to/file.bin';
   await $send->({ type => 'http.response.body', fh => $plain_fh });
 
-For plain filehandles, either use C<file =E<gt> $path> directly, or add a
-C<path> method to your filehandle class. See L<PAGI::Middleware::XSendfile>
-for details.
+For plain filehandles, either use C<file =E<gt> $path> directly, or use
+L<IO::File::WithPath>. See L<PAGI::Middleware::XSendfile> for details.
 
 =head1 TESTING
 
