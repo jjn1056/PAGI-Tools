@@ -1384,6 +1384,177 @@ Key points:
 
 =back
 
+=head2 2.9 Async Patterns and Pitfalls
+
+Understanding PAGI's async model is crucial to avoiding subtle bugs. This section covers common patterns and the most important pitfall to avoid.
+
+=head3 The Completion Contract
+
+B<Your app's returned Future signals "I'm done."> When your async sub returns (its Future resolves), the server considers the response complete and may:
+
+=over 4
+
+=item * Close the connection
+
+=item * Write access logs
+
+=item * Handle the next request (keep-alive)
+
+=back
+
+This means you B<must await all C<$send> calls> before your app returns.
+
+=head3 The Most Common Mistake
+
+This pattern looks reasonable but is B<broken>:
+
+  # WRONG - DO NOT DO THIS
+  async sub app {
+      my ($scope, $receive, $send) = @_;
+
+      my $loop = IO::Async::Loop->new;
+
+      # Schedule work for later...
+      $loop->delay_future(after => 1)->then(sub {
+          $send->({
+              type    => 'http.response.start',
+              status  => 200,
+              headers => [['content-type', 'text/plain']],
+          });
+          $send->({
+              type => 'http.response.body',
+              body => 'Hello after 1 second',
+          });
+      })->retain;  # Keep the future alive
+
+      return;  # App returns immediately!
+  }
+
+B<What goes wrong:>
+
+=over 4
+
+=item 1. App returns immediately (Future resolves)
+
+=item 2. Server thinks response is done (but nothing was sent!)
+
+=item 3. The C<delay_future> callback runs 1 second later
+
+=item 4. By then, the connection may be closed or reused
+
+=item 5. Result: empty response, corrupted response, or race condition
+
+=back
+
+B<Why C<-E<gt>retain> doesn't help:> The C<retain> method keeps the Future in memory, but the server doesn't know about it. The server only waits for your app's main Future - retained futures are invisible to it.
+
+=head3 The Correct Pattern
+
+Always await all response-affecting work:
+
+  # CORRECT - await the delay
+  async sub app {
+      my ($scope, $receive, $send) = @_;
+
+      my $loop = IO::Async::Loop->new;
+
+      # Wait for the delay
+      await $loop->delay_future(after => 1);
+
+      # Now send response (still within the app's Future)
+      await $send->({
+          type    => 'http.response.start',
+          status  => 200,
+          headers => [['content-type', 'text/plain']],
+      });
+
+      await $send->({
+          type => 'http.response.body',
+          body => 'Hello after 1 second',
+      });
+  }
+
+=head3 When C<-E<gt>retain> IS Appropriate
+
+Use C<retain> only for truly independent background work that doesn't affect the current response:
+
+  async sub app {
+      my ($scope, $receive, $send) = @_;
+
+      my $loop = IO::Async::Loop->new;
+
+      # Send response first
+      await $send->({
+          type    => 'http.response.start',
+          status  => 200,
+          headers => [['content-type', 'text/plain']],
+      });
+
+      await $send->({
+          type => 'http.response.body',
+          body => 'Request received!',
+      });
+
+      # NOW it's safe to do background work
+      # Response is already sent, this is truly independent
+      $loop->delay_future(after => 60)->then(sub {
+          log_analytics($scope);  # Fire and forget
+      })->retain;
+  }
+
+=head3 Detecting This Problem
+
+B<PAGI::Test::Client> will die with a clear error:
+
+  App returned without sending response. Did you forget to 'await' your $send calls?
+
+B<PAGI::Middleware::Lint> will warn (or die in strict mode):
+
+  HTTP app completed without sending http.response.start. This usually means
+  you forgot to 'await' your $send calls, or used ->retain for response-affecting work.
+
+B<Enable Lint during development:>
+
+  use PAGI::Middleware::Builder;
+
+  my $app = builder {
+      enable 'Lint', strict => 1;  # Die on violations
+      $my_app;
+  };
+
+=head3 The Future Tree Mental Model
+
+Think of your app's Futures as a tree:
+
+  App Future (root)
+  ├── await $send->({ response.start })
+  ├── await $some_async_operation()
+  │   └── await $send->({ response.body })
+  └── (app returns when tree is complete)
+
+Everything in the tree is awaited. The server waits for the root Future.
+
+When you use C<-E<gt>retain>, you're creating a detached Future outside the tree:
+
+  App Future (root)          Detached (invisible to server!)
+  └── (returns immediately)   └── delay_future->then($send)
+
+The server only sees the tree. Detached futures are orphaned.
+
+=head3 Summary
+
+=over 4
+
+=item * B<Always await> C<$send> calls and any async work that affects the response
+
+=item * B<Never use C<-E<gt>retain>> for response-affecting work
+
+=item * B<Use Lint middleware> to catch mistakes early
+
+=item * C<-E<gt>retain> is only safe B<after> the response is completely sent
+
+=back
+
 =head1 NEXT STEPS
 
 In Part 3, we'll cover:

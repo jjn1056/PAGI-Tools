@@ -124,6 +124,14 @@ sub _request {
         );
     }
 
+    # Check for incomplete response (common async mistake)
+    my $has_response_start = grep { $_->{type} eq 'http.response.start' } @events;
+    unless ($has_response_start) {
+        die "App returned without sending response. "
+          . "Did you forget to 'await' your \$send calls? "
+          . "See PAGI::Tutorial section on async patterns.\n";
+    }
+
     # Parse response from captured events
     return $self->_build_response(\@events);
 }

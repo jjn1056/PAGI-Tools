@@ -152,4 +152,56 @@ subtest 'exception after response started' => sub {
     like $res->exception, qr/Oops, died mid-response/, 'exception captured';
 };
 
+# =============================================================================
+# Test: App returns without sending response (common async mistake)
+# =============================================================================
+
+subtest 'app returns without sending response dies' => sub {
+    my $empty_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        # Forgot to send anything!
+        return;
+    };
+
+    my $client = PAGI::Test::Client->new(app => $empty_app);
+
+    my $died = 0;
+    my $error;
+    eval {
+        $client->get('/');
+    };
+    if ($@) {
+        $died = 1;
+        $error = $@;
+    }
+
+    ok $died, 'request died when no response sent';
+    like $error, qr/App returned without sending response/, 'error message is helpful';
+    like $error, qr/await/, 'error mentions await';
+};
+
+subtest 'app with only response.start (no body) still works' => sub {
+    # Edge case: response.start sent but no body - this should work
+    # (some responses like 204 No Content don't need a body)
+    my $start_only_app = async sub {
+        my ($scope, $receive, $send) = @_;
+
+        await $send->({
+            type    => 'http.response.start',
+            status  => 204,
+            headers => [],
+        });
+
+        await $send->({
+            type => 'http.response.body',
+            body => '',
+        });
+    };
+
+    my $client = PAGI::Test::Client->new(app => $start_only_app);
+    my $res = $client->get('/');
+
+    is $res->status, 204, 'status is 204';
+};
+
 done_testing;
