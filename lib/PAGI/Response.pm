@@ -323,8 +323,9 @@ with C<write($chunk)>, C<close()>, and C<bytes_written()> methods.
     );
 
 Send a file as the response. This method uses the PAGI protocol's C<file>
-key, enabling efficient server-side streaming via C<sendfile()> or similar
-zero-copy mechanisms. The file is B<not> read into memory.
+key for efficient server-side streaming. The file is B<not> read into memory.
+For production, use L<PAGI::Middleware::XSendfile> to delegate file serving
+to your reverse proxy.
 
 B<Options:>
 
@@ -1096,7 +1097,6 @@ async sub send_file {
     });
 
     # Use PAGI file protocol for efficient server-side streaming
-    # Server will use sendfile() or similar zero-copy mechanism
     my $body_event = {
         type => 'http.response.body',
         file => $path,

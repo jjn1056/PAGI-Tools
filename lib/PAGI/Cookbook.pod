@@ -1164,6 +1164,148 @@ Then access via C<https://localhost:3443> (browser will warn about self-signed c
 
 See C<examples/11-tls-https/> for more TLS configuration options.
 
+=head2 Serving Large Files with X-Sendfile
+
+For production deployments behind a reverse proxy (Nginx, Apache), use
+L<PAGI::Middleware::XSendfile> to delegate file serving to the proxy.
+This frees your application worker immediately while the proxy handles
+the file transfer using optimized kernel sendfile.
+
+=head3 Why X-Sendfile?
+
+Direct file serving from your application ties up a worker process for
+the entire transfer. With slow clients or large files, this limits your
+concurrency. X-Sendfile lets your app send a header telling the proxy
+to serve the file:
+
+  # Your app sends:
+  X-Accel-Redirect: /protected/files/large.bin
+  Content-Type: application/octet-stream
+
+  # Nginx intercepts and serves the file directly
+
+Benefits:
+
+=over 4
+
+=item * Worker freed immediately after sending headers
+
+=item * Proxy uses kernel sendfile (zero-copy, efficient)
+
+=item * Proxy handles Range requests, caching, connection management
+
+=item * Slow clients don't block your app
+
+=back
+
+=head3 Nginx Configuration
+
+Configure an internal location for protected files:
+
+  # nginx.conf
+  location /protected/ {
+      internal;                       # Only accessible via X-Accel-Redirect
+      alias /var/www/files/;          # Actual file location
+  }
+
+=head3 Application Setup
+
+  use strict;
+  use warnings;
+  use Future::AsyncAwait;
+  use PAGI::Middleware::Builder;
+  use PAGI::App::File;
+
+  my $app = builder {
+      enable 'XSendfile',
+          type    => 'X-Accel-Redirect',
+          mapping => { '/var/www/files/' => '/protected/' };
+
+      PAGI::App::File->new(
+          root          => '/var/www/files',
+          handle_ranges => 0,  # Let nginx handle Range requests
+      )->to_app;
+  };
+
+B<Note:> Setting C<handle_ranges =E<gt> 0> is important. It tells your app
+to ignore Range headers and always send full files. The reverse proxy will
+handle Range requests more efficiently using its native sendfile.
+
+=head3 Custom Download Handler
+
+For more control (authentication, logging, custom headers):
+
+  use PAGI::App::Router;
+  use PAGI::Request;
+  use PAGI::Response;
+
+  my $router = PAGI::App::Router->new;
+
+  $router->get('/download/:filename' => async sub {
+      my ($scope, $receive, $send) = @_;
+      my $req = PAGI::Request->new($scope, $receive);
+      my $res = PAGI::Response->new($scope, $send);
+
+      my $filename = $req->path_param('filename');
+      my $filepath = "/var/www/files/$filename";
+
+      # Validate file exists and user has access
+      return await $res->status(404)->text('Not found')
+          unless -f $filepath;
+
+      # Send file response (XSendfile middleware will intercept)
+      await $send->({
+          type    => 'http.response.start',
+          status  => 200,
+          headers => [
+              ['content-type', 'application/octet-stream'],
+              ['content-disposition', qq{attachment; filename="$filename"}],
+          ],
+      });
+      await $send->({
+          type => 'http.response.body',
+          file => $filepath,
+      });
+  });
+
+  my $app = builder {
+      enable 'XSendfile',
+          type    => 'X-Accel-Redirect',
+          mapping => { '/var/www/files/' => '/protected/' };
+      $router->to_app;
+  };
+
+=head3 Apache Configuration (mod_xsendfile)
+
+Enable mod_xsendfile and whitelist your file directory:
+
+  # Apache config
+  XSendFile On
+  XSendFilePath /var/www/files
+
+  # Application
+  my $app = builder {
+      enable 'XSendfile', type => 'X-Sendfile';
+      $my_app;
+  };
+
+=head3 Filehandle Support
+
+The middleware also works with filehandle responses, but only if the
+filehandle object has a C<path()> method:
+
+  # This works - blessed fh with path method
+  my $fh = IO::File::WithPath->new('/path/to/file.bin', 'r');
+  await $send->({ type => 'http.response.body', fh => $fh });
+
+  # This does NOT trigger X-Sendfile (no path method)
+  open my $plain_fh, '<', '/path/to/file.bin';
+  await $send->({ type => 'http.response.body', fh => $plain_fh });
+
+For plain filehandles, either use C<file =E<gt> $path> directly, or add a
+C<path> method to your filehandle class. See L<PAGI::Middleware::XSendfile>
+for details.
+
 =head1 TESTING
 
 Test PAGI apps directly without a running server:
@@ -1250,6 +1392,8 @@ Test PAGI apps directly without a running server:
 =item * L<PAGI::Middleware::Session> - Session management
 
 =item * L<PAGI::App::WebSocket::Chat> - Multi-room chat application
+
+=item * L<PAGI::Middleware::XSendfile> - Delegate file serving to reverse proxy
 
 =back
 
