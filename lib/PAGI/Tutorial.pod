@@ -574,7 +574,7 @@ Use a shared backend for state:
 
   \&app;
 
-For WebSocket applications that need to broadcast messages across workers, use L<PAGI::Middleware::PubSub> with a Redis backend.
+For WebSocket applications that need to broadcast messages across workers, use an external message broker like Redis pub/sub.
 
 =head1 PART 2: UNDERSTANDING RAW PAGI
 
