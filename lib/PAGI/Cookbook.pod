@@ -1391,76 +1391,52 @@ L<IO::File::WithPath>. See L<PAGI::Middleware::XSendfile> for details.
 
 =head1 TESTING
 
-Test PAGI apps directly without a running server:
+Use L<PAGI::Test::Client> to test apps directly without a running server:
 
   use strict;
   use warnings;
   use Test2::V0;
-  use Future::AsyncAwait;
+  use PAGI::Test::Client;
 
   # Load your app
   my $app = require './app.pl';
+  my $client = PAGI::Test::Client->new(app => $app);
 
-  # Test helper to create scope and capture response
-  async sub test_request {
-      my (%opts) = @_;
-
-      my $scope = {
-          type         => 'http',
-          method       => $opts{method} // 'GET',
-          path         => $opts{path} // '/',
-          query_string => $opts{query} // '',
-          headers      => $opts{headers} // [],
-      };
-
-      my @body_parts = defined $opts{body} ? ($opts{body}) : ();
-      my $body_sent = 0;
-
-      my $receive = async sub {
-          if (@body_parts) {
-              return {
-                  type => 'http.request',
-                  body => shift @body_parts,
-                  more => scalar(@body_parts) > 0,
-              };
-          }
-          return { type => 'http.disconnect' };
-      };
-
-      my %response = (status => undef, headers => [], body => '');
-      my $send = async sub {
-          my ($event) = @_;
-          if ($event->{type} eq 'http.response.start') {
-              $response{status} = $event->{status};
-              $response{headers} = $event->{headers};
-          }
-          elsif ($event->{type} eq 'http.response.body') {
-              $response{body} .= $event->{body} // '';
-          }
-      };
-
-      await $app->($scope, $receive, $send);
-      return \%response;
-  }
-
-  # Tests
-  subtest 'GET /' => async sub {
-      my $res = await test_request(path => '/');
-      is $res->{status}, 200, 'status is 200';
-      like $res->{body}, qr/Hello/, 'body contains Hello';
+  subtest 'GET /' => sub {
+      my $res = $client->get('/');
+      is $res->status, 200, 'status is 200';
+      like $res->text, qr/Hello/, 'body contains Hello';
   };
 
-  subtest 'POST /api/users' => async sub {
-      my $res = await test_request(
-          method => 'POST',
-          path => '/api/users',
-          headers => [['content-type', 'application/json']],
-          body => '{"name":"Alice"}',
+  subtest 'POST /api/users' => sub {
+      my $res = $client->post('/api/users',
+          json => { name => 'Alice' },
       );
-      is $res->{status}, 201, 'status is 201';
+      is $res->status, 201, 'status is 201';
+      is $res->json->{id}, 1, 'returns user id';
+  };
+
+  subtest 'form submission' => sub {
+      my $res = $client->post('/login',
+          form => { user => 'admin', pass => 'secret' },
+      );
+      is $res->status, 302, 'redirects after login';
+
+      # Session cookies persist across requests
+      my $dashboard = $client->get('/dashboard');
+      is $dashboard->status, 200, 'authenticated access';
+  };
+
+  subtest 'custom headers' => sub {
+      my $res = $client->get('/api/data',
+          headers => { Authorization => 'Bearer token123' },
+      );
+      is $res->status, 200;
   };
 
   done_testing;
+
+See L<PAGI::Test::Client> for the full API including WebSocket and SSE testing.
 
 =head1 SEE ALSO
 
@@ -1477,6 +1453,8 @@ Test PAGI apps directly without a running server:
 =item * L<PAGI::App::WebSocket::Chat> - Multi-room chat application
 
 =item * L<PAGI::Middleware::XSendfile> - Delegate file serving to reverse proxy
+
+=item * L<PAGI::Test::Client> - Test apps without a running server
 
 =back
 
