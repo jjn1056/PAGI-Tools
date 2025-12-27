@@ -1545,6 +1545,9 @@ Use C<retain> only for truly independent background work that doesn't affect the
       # Response is already sent, this is truly independent
       $loop->delay_future(after => 60)->then(sub {
           log_analytics($scope);  # Fire and forget
+      })->on_fail(sub {
+          my ($error) = @_;
+          warn "Analytics failed: $error";
       })->retain;
   }
 
