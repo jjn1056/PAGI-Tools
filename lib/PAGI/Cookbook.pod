@@ -890,6 +890,9 @@ For real-time features with multiple WebSocket clients:
 
       await $ws->accept;
 
+      # Keep connection alive through proxies/NAT (sends JSON ping every 25s)
+      $ws->start_heartbeat(25);
+
       # Join room
       $rooms{$room}{$client_id} = $ws;
 
