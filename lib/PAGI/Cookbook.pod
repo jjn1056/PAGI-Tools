@@ -875,39 +875,44 @@ For real-time features with multiple WebSocket clients:
   use Future::AsyncAwait;
   use PAGI::App::Router;
   use PAGI::WebSocket;
-  use PAGI::Server::PubSub;
 
-  my $pubsub = PAGI::Server::PubSub->new;
+  # Simple in-memory room tracking
+  my %rooms;  # room => { client_id => $ws }
+  my $next_id = 1;
+
   my $router = PAGI::App::Router->new;
 
   $router->websocket('/chat/:room' => async sub {
       my ($scope, $receive, $send) = @_;
       my $ws = PAGI::WebSocket->new($scope, $receive, $send);
       my $room = $scope->{'pagi.params'}{room};
+      my $client_id = $next_id++;
 
       await $ws->accept;
 
-      # Subscribe to room
-      my $sub = $pubsub->subscribe($room, sub {
-          my ($message) = @_;
-          $ws->try_send_text($message);
-      });
+      # Join room
+      $rooms{$room}{$client_id} = $ws;
 
-      # Broadcast received messages
+      # Broadcast received messages to all clients in room
       await $ws->each_text(sub {
           my ($text) = @_;
-          $pubsub->publish($room, $text);
+          for my $id (keys %{$rooms{$room}}) {
+              next if $id == $client_id;  # Don't echo back to sender
+              $rooms{$room}{$id}->try_send_text($text);
+          }
       });
 
-      # Unsubscribe on disconnect
-      $pubsub->unsubscribe($room, $sub);
+      # Leave room on disconnect
+      delete $rooms{$room}{$client_id};
+      delete $rooms{$room} unless keys %{$rooms{$room}};
   });
 
   $router->to_app;
 
-B<Important:> L<PAGI::Server::PubSub> is in-memory only and works within a single process. For multi-worker or multi-server deployments, use Redis pub/sub or a message broker.
+B<Important:> This in-memory approach works within a single process. For
+multi-worker or multi-server deployments, use Redis pub/sub or a message broker.
 
-See C<examples/websocket-chat/> for a complete chat application example.
+See L<PAGI::App::WebSocket::Chat> for a full-featured chat application.
 
 =head2 SSE Dashboard
 
@@ -1244,7 +1249,7 @@ Test PAGI apps directly without a running server:
 
 =item * L<PAGI::Middleware::Session> - Session management
 
-=item * L<PAGI::Server::PubSub> - In-memory pub/sub
+=item * L<PAGI::App::WebSocket::Chat> - Multi-room chat application
 
 =back
 
