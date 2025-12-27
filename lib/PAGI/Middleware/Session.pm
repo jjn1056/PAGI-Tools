@@ -68,6 +68,52 @@ in-memory store.
 
 =back
 
+=head1 CUSTOM STORES
+
+For production multi-worker deployments, implement a store class with three
+methods. Here's a Redis example:
+
+    package MyApp::Session::Redis;
+    use Redis;
+    use JSON::MaybeXS qw(encode_json decode_json);
+
+    sub new {
+        my ($class, %opts) = @_;
+        return bless {
+            redis  => Redis->new(server => $opts{server} // '127.0.0.1:6379'),
+            prefix => $opts{prefix} // 'session:',
+            expire => $opts{expire} // 3600,
+        }, $class;
+    }
+
+    sub get {
+        my ($self, $id) = @_;
+        my $data = $self->{redis}->get($self->{prefix} . $id);
+        return $data ? decode_json($data) : undef;
+    }
+
+    sub set {
+        my ($self, $id, $session) = @_;
+        my $key = $self->{prefix} . $id;
+        $self->{redis}->setex($key, $self->{expire}, encode_json($session));
+    }
+
+    sub delete {
+        my ($self, $id) = @_;
+        $self->{redis}->del($self->{prefix} . $id);
+    }
+
+    1;
+
+Then use it:
+
+    enable 'Session',
+        secret => $ENV{SESSION_SECRET},
+        store  => MyApp::Session::Redis->new(
+            server => 'redis.example.com:6379',
+            expire => 7200,
+        );
+
 =cut
 
 my %sessions;  # In-memory session store
