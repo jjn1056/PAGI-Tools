@@ -274,7 +274,7 @@ async sub ws_echo {
     my ($self, $ws) = @_;
 
     await $ws->accept;
-    $ws->start_heartbeat(25);
+    await $ws->keepalive(25);
 
     # Access metrics via $ws->state (populated by Lifespan startup)
     my $metrics = $ws->state->{metrics};
@@ -328,15 +328,19 @@ async sub sse_metrics {
         );
     }
 
-    await $sse->every(2, async sub {
-        $metrics->{sse_seq}++;
+    # Enable keepalive to prevent proxy timeouts
+    await $sse->keepalive(15);
 
-        await $sse->send_event(
-            event => 'metrics',
-            data  => $metrics,
-            id    => $metrics->{sse_seq},  # Browser tracks this for reconnection
-        );
-    });
+    # For periodic updates, use your event loop directly:
+    # my $loop = IO::Async::Loop->new;
+    # while (!$sse->is_closed) {
+    #     $metrics->{sse_seq}++;
+    #     await $sse->send_event(event => 'metrics', data => $metrics, id => $metrics->{sse_seq});
+    #     await $loop->delay_future(after => 2);
+    # }
+
+    # Or use pub/sub to push updates when data changes
+    await $sse->run;  # Wait for disconnect
 }
 
 1;

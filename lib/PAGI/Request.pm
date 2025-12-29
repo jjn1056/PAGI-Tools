@@ -55,11 +55,6 @@ sub http_version { shift->{scope}{http_version} // '1.1' }
 sub client       { shift->{scope}{client} }
 sub raw          { shift->{scope} }
 
-sub loop {
-    require IO::Async::Loop;
-    return IO::Async::Loop->new;
-}
-
 # Internal: URL decode a string (handles + as space)
 sub _url_decode {
     my ($str) = @_;
@@ -564,10 +559,10 @@ PAGI::Request - Convenience wrapper for PAGI request scope
         my $json = await $req->json;      # Parse JSON body
         my $form = await $req->form;      # Parse form data
 
-        # File uploads (async)
+        # File uploads
         my $avatar = await $req->upload('avatar');
         if ($avatar && !$avatar->is_empty) {
-            await $avatar->save_to('/uploads/avatar.jpg');
+            $avatar->move_to('/uploads/avatar.jpg');  # blocking I/O
         }
 
         # Streaming large bodies

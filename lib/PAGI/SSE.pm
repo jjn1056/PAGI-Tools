@@ -100,15 +100,6 @@ sub _set_state {
 sub _set_closed {
     my ($self) = @_;
     $self->{_state} = 'closed';
-
-    # Stop keepalive timer if running
-    if ($self->{_keepalive_timer}) {
-        $self->{_keepalive_timer}->stop;
-        if ($self->{_loop}) {
-            $self->{_loop}->remove($self->{_keepalive_timer});
-        }
-        delete $self->{_keepalive_timer};
-    }
 }
 
 # Start the SSE stream
@@ -130,55 +121,16 @@ async sub start {
     return $self;
 }
 
-# Set or get the event loop
-sub set_loop {
-    my ($self, $loop) = @_;
-    $self->{_loop} = $loop;
-    return $self;
-}
-
-sub loop {
-    my ($self) = @_;
-    return $self->{_loop} if $self->{_loop};
-
-    require IO::Async::Loop;
-    $self->{_loop} = IO::Async::Loop->new;
-    return $self->{_loop};
-}
-
-# Enable/disable keepalive timer
-sub keepalive {
+# Enable keepalive - sends sse.keepalive event to server
+# Server handles the timer; this is loop-agnostic
+async sub keepalive {
     my ($self, $interval, $comment) = @_;
-    $comment //= ':keepalive';
 
-    # Stop existing timer if any
-    if ($self->{_keepalive_timer}) {
-        $self->{_keepalive_timer}->stop;
-        $self->loop->remove($self->{_keepalive_timer});
-        delete $self->{_keepalive_timer};
-    }
-
-    # If interval is 0 or undef, just disable
-    return $self unless $interval && $interval > 0;
-
-    require IO::Async::Timer::Periodic;
-    require Scalar::Util;
-
-    my $weak_self = $self;
-    Scalar::Util::weaken($weak_self);
-
-    my $timer = IO::Async::Timer::Periodic->new(
-        interval => $interval,
-        on_tick  => sub {
-            return unless $weak_self && !$weak_self->is_closed;
-            # Send as SSE comment (not data) to avoid triggering onmessage
-            $weak_self->try_send_comment($comment);
-        },
-    );
-
-    $self->loop->add($timer);
-    $timer->start;
-    $self->{_keepalive_timer} = $timer;
+    await $self->{send}->({
+        type     => 'sse.keepalive',
+        interval => $interval // 0,
+        comment  => $comment // '',
+    });
 
     return $self;
 }
@@ -495,63 +447,6 @@ async sub each {
     return $self;
 }
 
-# Periodic event sending
-async sub every {
-    my ($self, $interval, $callback) = @_;
-
-    my $loop = $self->loop;
-
-    await $self->start unless $self->is_started;
-
-    # Start background disconnect monitor
-    $self->_start_disconnect_monitor unless $self->{_disconnect_monitor_started};
-
-    while (!$self->is_closed) {
-        # Try to send - if it fails, connection is closed
-        my $ok = eval { await $callback->(); 1 };
-        unless ($ok) {
-            $self->_set_closed;
-            await $self->_run_close_callbacks;
-            last;
-        }
-
-        await $loop->delay_future(after => $interval);
-    }
-}
-
-# Start a background task to monitor for disconnect events
-sub _start_disconnect_monitor {
-    my ($self) = @_;
-    return if $self->{_disconnect_monitor_started};
-    $self->{_disconnect_monitor_started} = 1;
-
-    my $receive = $self->{receive};
-    my $weak_self = $self;
-    require Scalar::Util;
-    Scalar::Util::weaken($weak_self);
-
-    # This runs in the background and waits for disconnect
-    my $monitor = (async sub {
-        while ($weak_self && !$weak_self->is_closed) {
-            my $event = eval { await $receive->() };
-            last unless $event;
-
-            my $type = $event->{type} // '';
-            if ($type eq 'sse.disconnect') {
-                if ($weak_self) {
-                    $weak_self->_set_closed;
-                    await $weak_self->_run_close_callbacks;
-                }
-                last;
-            }
-        }
-    })->();
-
-    # Keep the future alive but don't block on it
-    $monitor->on_fail(sub { }); # Ignore errors
-    $self->{_disconnect_monitor} = $monitor;
-}
-
 1;
 
 __END__
@@ -572,7 +467,7 @@ PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections
         my $sse = PAGI::SSE->new($scope, $receive, $send);
 
         # Enable keepalive for proxy compatibility
-        $sse->keepalive(25);
+        await $sse->keepalive(25);
 
         # Cleanup on disconnect
         $sse->on_close(sub {
@@ -772,12 +667,13 @@ Useful for broadcasting to multiple clients.
 
 =head2 keepalive
 
-    $sse->keepalive(30);              # Ping every 30 seconds
-    $sse->keepalive(30, ':ping');     # Custom comment text
-    $sse->keepalive(0);               # Disable
+    await $sse->keepalive(30);              # Ping every 30 seconds
+    await $sse->keepalive(30, 'ping');      # Custom comment text
+    await $sse->keepalive(0);               # Disable
 
-Sends periodic comment pings to prevent proxy timeouts.
-Requires an event loop (auto-created if needed).
+Sends an C<sse.keepalive> event to the server, which then handles sending
+periodic SSE comments to keep the connection alive and prevent proxy timeouts.
+The server manages the timer internally - this method is loop-agnostic.
 
 =head1 ITERATION
 
@@ -804,18 +700,6 @@ Requires an event loop (auto-created if needed).
 
 Iterates over items, calling callback for each.
 If callback returns a hashref, sends it as an event.
-
-=head2 every
-
-    await $sse->every(1, async sub {
-        await $sse->send_event(
-            event => 'tick',
-            data  => { ts => time },
-        );
-    });
-
-Calls the callback every C<$interval> seconds until client disconnects.
-Useful for periodic updates.
 
 =head1 EVENT CALLBACKS
 
@@ -845,7 +729,7 @@ Registers error callback.
 
         my $sse = PAGI::SSE->new($scope, $receive, $send);
 
-        $sse->keepalive(25);
+        await $sse->keepalive(25);
 
         # Send initial state
         await $sse->send_event(

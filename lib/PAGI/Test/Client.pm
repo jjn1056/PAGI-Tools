@@ -163,7 +163,7 @@ sub _build_scope {
 
     my $scope = {
         type         => 'http',
-        pagi         => { version => '0.1', spec_version => '0.1' },
+        pagi         => { version => '0.2', spec_version => '0.2' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -272,7 +272,7 @@ sub websocket {
 
     my $scope = {
         type         => 'websocket',
-        pagi         => { version => '0.1', spec_version => '0.1' },
+        pagi         => { version => '0.2', spec_version => '0.2' },
         http_version => '1.1',
         scheme       => 'ws',
         path         => $path,
@@ -359,7 +359,7 @@ sub sse {
 
     my $scope = {
         type         => 'sse',
-        pagi         => { version => '0.1', spec_version => '0.1' },
+        pagi         => { version => '0.2', spec_version => '0.2' },
         http_version => '1.1',
         scheme       => 'http',
         path         => $path,
@@ -395,7 +395,7 @@ sub start {
 
     my $scope = {
         type  => 'lifespan',
-        pagi  => { version => '0.1', spec_version => '0.1' },
+        pagi  => { version => '0.2', spec_version => '0.2' },
         state => $self->{state},
     };
 

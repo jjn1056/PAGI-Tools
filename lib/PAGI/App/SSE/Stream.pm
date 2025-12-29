@@ -16,7 +16,7 @@ PAGI::App::SSE::Stream - Server-Sent Events streaming
         generator => async sub ($send_event, $scope) {
             for my $i (1..10) {
                 await $send_event->({ data => time() });
-                await IO::Async::Loop->new->delay_future(after => 1);
+                # Add delay between events (implementation depends on your event loop)
             }
         },
     )->to_app;
