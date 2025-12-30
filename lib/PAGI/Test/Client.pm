@@ -274,6 +274,7 @@ sub websocket {
         type         => 'websocket',
         pagi         => { version => '0.2', spec_version => '0.2' },
         http_version => '1.1',
+        method       => 'GET',  # WebSocket upgrades are always GET
         scheme       => 'ws',
         path         => $path,
         query_string => $query_string,
@@ -357,10 +358,15 @@ sub sse {
         push @headers, ['cookie', $cookie];
     }
 
+    # SSE supports all HTTP methods (GET is default, but POST/PUT work with
+    # modern libraries like fetch-event-source used by htmx4, datastar, etc.)
+    my $method = uc($opts{method} // 'GET');
+
     my $scope = {
         type         => 'sse',
         pagi         => { version => '0.2', spec_version => '0.2' },
         http_version => '1.1',
+        method       => $method,
         scheme       => 'http',
         path         => $path,
         query_string => $query_string,
