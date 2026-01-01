@@ -274,7 +274,6 @@ sub websocket {
         type         => 'websocket',
         pagi         => { version => '0.2', spec_version => '0.2' },
         http_version => '1.1',
-        method       => 'GET',  # WebSocket upgrades are always GET
         scheme       => 'ws',
         path         => $path,
         query_string => $query_string,
