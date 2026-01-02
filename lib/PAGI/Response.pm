@@ -93,20 +93,54 @@ These methods return C<$self> for fluent chaining.
 =head2 status
 
     $res->status(404);
+    my $code = $res->status;
 
 Set the HTTP status code (100-599).
+
+=head2 status_try
+
+    $res->status_try(404);
+
+Set the HTTP status code only if it has not already been set.
 
 =head2 header
 
     $res->header('X-Custom' => 'value');
+    my $value = $res->header('X-Custom');
 
 Add a response header. Can be called multiple times to add multiple headers.
+If called with only a name, returns the last value for that header or C<undef>.
+
+=head2 headers
+
+    my $headers = $res->headers;
+
+Returns the full header arrayref C<[ name, value ]> in order.
+
+=head2 header_all
+
+    my @values = $res->header_all('Set-Cookie');
+
+Returns all values for the given header name (case-insensitive).
+
+=head2 header_try
+
+    $res->header_try('X-Custom' => 'value');
+
+Add a response header only if that header name has not already been set.
 
 =head2 content_type
 
     $res->content_type('text/html; charset=utf-8');
+    my $type = $res->content_type;
 
 Set the Content-Type header, replacing any existing one.
+
+=head2 content_type_try
+
+    $res->content_type_try('text/html; charset=utf-8');
+
+Set the Content-Type header only if it has not already been set.
 
 =head2 cookie
 
@@ -172,6 +206,27 @@ See L<PAGI::Request/stash> for detailed documentation on how stash works.
 Returns true if the response has already been finalized (sent to the client).
 Useful in error handlers or middleware that need to check whether they can
 still send a response.
+
+=head2 has_status
+
+    if ($res->has_status) { ... }
+
+Returns true if a status code has been explicitly set via C<status> or
+C<status_try>.
+
+=head2 has_header
+
+    if ($res->has_header('content-type')) { ... }
+
+Returns true if the given header name has been set via C<header> or
+C<header_try>. Header names are case-insensitive.
+
+=head2 has_content_type
+
+    if ($res->has_content_type) { ... }
+
+Returns true if Content-Type has been explicitly set via C<content_type>,
+C<content_type_try>, or C<header>/C<header_try> with a Content-Type name.
 
 =head2 cors
 
@@ -660,10 +715,14 @@ sub new {
     croak("send must be a coderef") unless ref($send) eq 'CODE';
 
     my $self = bless {
-        send    => $send,
-        scope   => $scope,
-        _status => 200,
-        _headers => [],
+        send              => $send,
+        scope             => $scope,
+        _status             => 200,
+        _headers            => [],
+        _status_set         => 0,
+        _content_type_set   => 0,
+        _content_type_value => undef,
+        _header_set         => {},
     }, $class;
 
     return $self;
@@ -671,24 +730,96 @@ sub new {
 
 sub status {
     my ($self, $code) = @_;
+    return $self->{_status} if @_ == 1;
     croak("Status must be a number between 100-599")
-        unless defined $code && $code =~ /^\d+$/ && $code >= 100 && $code <= 599;
+        unless $code =~ /^\d+$/ && $code >= 100 && $code <= 599;
     $self->{_status} = $code;
+    $self->{_status_set} = 1;
     return $self;
+}
+
+sub status_try {
+    my ($self, $code) = @_;
+    return $self if $self->{_status_set};
+    return $self->status($code);
 }
 
 sub header {
     my ($self, $name, $value) = @_;
+    croak("Header name is required") unless defined $name;
+    if (@_ == 2) {
+        my $key = lc($name);
+        for (my $i = $#{$self->{_headers}}; $i >= 0; $i--) {
+            my $pair = $self->{_headers}[$i];
+            return $pair->[1] if lc($pair->[0]) eq $key;
+        }
+        return undef;
+    }
     push @{$self->{_headers}}, [$name, $value];
+    my $key = lc($name // '');
+    $self->{_header_set}{$key} = 1 if length $key;
+    if ($key eq 'content-type') {
+        $self->{_content_type_set} = 1;
+        $self->{_content_type_value} = $value;
+    }
     return $self;
+}
+
+sub headers {
+    my ($self) = @_;
+    return $self->{_headers};
+}
+
+sub header_all {
+    my ($self, $name) = @_;
+    croak("Header name is required") unless defined $name;
+    my $key = lc($name);
+    my @values;
+    for my $pair (@{$self->{_headers}}) {
+        push @values, $pair->[1] if lc($pair->[0]) eq $key;
+    }
+    return @values;
+}
+
+sub header_try {
+    my ($self, $name, $value) = @_;
+    return $self if $self->has_header($name);
+    return $self->header($name, $value);
 }
 
 sub content_type {
     my ($self, $type) = @_;
+    return $self->{_content_type_value} if @_ == 1;
     # Remove existing content-type headers
     $self->{_headers} = [grep { lc($_->[0]) ne 'content-type' } @{$self->{_headers}}];
     push @{$self->{_headers}}, ['content-type', $type];
+    $self->{_header_set}{'content-type'} = 1;
+    $self->{_content_type_set} = 1;
+    $self->{_content_type_value} = $type;
     return $self;
+}
+
+sub content_type_try {
+    my ($self, $type) = @_;
+    return $self if $self->{_content_type_set};
+    return $self->content_type($type);
+}
+
+sub has_status {
+    my ($self) = @_;
+    return $self->{_status_set} ? 1 : 0;
+}
+
+sub has_header {
+    my ($self, $name) = @_;
+    my $key = lc($name // '');
+    return 0 unless length $key;
+    return $self->{_header_set}{$key} ? 1 : 0;
+}
+
+sub has_content_type {
+    my ($self) = @_;
+    return $self->{_content_type_set} ? 1 : 0;
 }
 
 # Path parameters - captured from URL path by router
@@ -1043,4 +1174,3 @@ async sub send_file {
 }
 
 1;
-
