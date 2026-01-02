@@ -7,7 +7,6 @@
   - Configurable write_high_watermark (64KB) and write_low_watermark (16KB)
     matching Python asyncio defaults for optimal memory/throughput balance
   - SSE disconnect reasons (client_closed, timeout, write_error, shutdown)
-  - Backpressure test app in examples/backpressure-test/ for benchmarking
 
   [Bug Fixes]
   - Fix Lint middleware to preserve original app errors instead of masking them
@@ -31,7 +30,6 @@
   - Replace Markdown::Pod with App::sdview for spec POD generation
     - Fixes =item - to =item * (proper POD bullet points)
     - Converts module names to L<> links for metacpan
-  - Exclude development files from dist (TODO_*, docs/design/, etc.)
 
 0.001011 - 2025-12-28
   - Switch license from Perl_5 to Artistic_2_0 (cleaner language, OSI recommended)
