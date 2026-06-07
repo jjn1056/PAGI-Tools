@@ -14,7 +14,8 @@ pm_to_blib
 *.tar.gz
 
 # Dist::Zilla
-PAGI-Server-*/
+PAGI-Tools-*/
+PAGI-Tools-*.tar.gz
 .build/
 _build_gen/
 
