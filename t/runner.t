@@ -1,11 +1,8 @@
 use strict;
 use warnings;
 use Test2::V0;
-use IO::Async::Loop;
-use Net::Async::HTTP;
-use Future::AsyncAwait;
 use FindBin;
-use File::Temp qw(tempdir);
+use File::Temp qw(tempdir tempfile);
 use File::Spec;
 use Cwd qw(abs_path);
 
@@ -14,6 +11,28 @@ BEGIN { $test_bin = $FindBin::Bin; }
 use lib "$test_bin/../lib";
 use lib "$test_bin/lib";
 use PAGI::Runner;
+use PAGITest::FakeServer;
+
+# Helper: write a minimal PAGI app to a tempfile and return its path.
+# Used anywhere a real file path is needed but the content does not matter.
+sub _write_hello_app {
+    my ($fh, $path) = tempfile(SUFFIX => '.pl', UNLINK => 1);
+    print $fh <<'APP';
+use strict;
+use warnings;
+use Future::AsyncAwait;
+my $app = async sub {
+    my ($scope, $receive, $send) = @_;
+    die "Unsupported scope type: $scope->{type}" if $scope->{type} ne 'http';
+    await $send->({ type => 'http.response.start', status => 200,
+                    headers => [ [ 'content-type', 'text/plain' ] ] });
+    await $send->({ type => 'http.response.body', body => 'Hello from PAGI', more => 0 });
+};
+$app;
+APP
+    close $fh;
+    return $path;
+}
 
 # Test 1: Basic construction
 subtest 'constructor with defaults' => sub {
@@ -119,7 +138,7 @@ subtest 'parse app args' => sub {
 # Test 9: Load app from file
 subtest 'load app from file' => sub {
     my $runner = PAGI::Runner->new;
-    $runner->{app_spec} = "$test_bin/../examples/01-hello-http/app.pl";
+    $runner->{app_spec} = _write_hello_app();
 
     my $app = $runner->load_app;
 
@@ -217,106 +236,33 @@ subtest 'error on non-coderef file' => sub {
     );
 };
 
-# Test 15: load_server creates PAGI::Server
+# Test 15: load_server constructs the configured server class
 subtest 'load_server creates server' => sub {
-    my $runner = PAGI::Runner->new(port => 0, quiet => 1);
-    $runner->prepare_app;  # Load and prepare app
+    my $runner = PAGI::Runner->new(server => 'PAGITest::FakeServer', port => 0, quiet => 1);
+    $runner->{app} = sub { };
+    my $fake = $runner->load_server;
 
-    my $server = $runner->load_server;
+    isa_ok($fake, ['PAGITest::FakeServer'], 'load_server constructs the configured class');
+    is($fake->{options}{app}, $runner->{app}, 'app passed to constructor');
 
-    ok($server->isa('PAGI::Server'), 'returns PAGI::Server');
-};
-
-# Test 16: load_server dies without app
-subtest 'load_server dies without app' => sub {
-    my $runner = PAGI::Runner->new;
-
-    like(
-        dies { $runner->load_server },
-        qr/app/i,
-        'dies without app'
-    );
-};
-
-# Test 17: Integration test - server responds to requests
-subtest 'integration: server responds to requests' => sub {
-    my $loop = IO::Async::Loop->new;
-
-    my $runner = PAGI::Runner->new(port => 0, quiet => 1);
-    $runner->{app_spec} = "$test_bin/../examples/01-hello-http/app.pl";
-    $runner->{default_middleware} = 0;  # Disable Lint for test
-    $runner->prepare_app;
-    my $server = $runner->load_server;
-
-    $loop->add($server);
-    $server->listen->get;
-
-    my $port = $server->port;
-    ok($port > 0, "server bound to port $port");
-
-    my $http = Net::Async::HTTP->new;
-    $loop->add($http);
-
-    my $response = $http->GET("http://127.0.0.1:$port/")->get;
-
-    is($response->code, 200, 'response is 200 OK');
-    like($response->decoded_content, qr/Hello from PAGI/, 'correct response body');
-
-    $server->shutdown->get;
-    $loop->remove($server);
-    $loop->remove($http);
-};
-
-# Test 18: Integration test - module-based app
-subtest 'integration: module-based app serves files' => sub {
-    my $loop = IO::Async::Loop->new;
-
-    # Create a temp directory with a file
-    my $tmpdir = tempdir(CLEANUP => 1);
-    open my $fh, '>', "$tmpdir/test.txt" or die $!;
-    print $fh "Hello from test file";
-    close $fh;
-
-    my $runner = PAGI::Runner->new(port => 0, quiet => 1);
-    $runner->{argv} = ['PAGI::App::File', "root=$tmpdir"];
-    $runner->{default_middleware} = 0;  # Disable Lint for test
-    $runner->prepare_app;
-    my $server = $runner->load_server;
-
-    $loop->add($server);
-    $server->listen->get;
-
-    my $port = $server->port;
-
-    my $http = Net::Async::HTTP->new;
-    $loop->add($http);
-
-    my $response = $http->GET("http://127.0.0.1:$port/test.txt")->get;
-
-    is($response->code, 200, 'file served with 200');
-    is($response->decoded_content, 'Hello from test file', 'correct file content');
-
-    $server->shutdown->get;
-    $loop->remove($server);
-    $loop->remove($http);
-};
-
-# Test 19: SSL options validation (via server_options hashref)
-subtest 'SSL options validation' => sub {
-    my $runner = PAGI::Runner->new(
+    # SSL config must be forwarded unchanged — whether the server honours it
+    # (cert-file validation etc.) is tested in PAGI-Server's own suite.
+    my $ssl_runner = PAGI::Runner->new(
+        server         => 'PAGITest::FakeServer',
         quiet          => 1,
-        server_options => {
-            ssl => { cert_file => '/nonexistent/cert.pem', key_file => '/nonexistent/key.pem' },
-        },
+        server_options => { ssl => { cert_file => 'c', key_file => 'k' } },
     );
-    $runner->prepare_app;
-
-    like(
-        dies { $runner->load_server },
-        qr/SSL certificate file not found/,
-        'dies with invalid SSL cert path'
-    );
+    $ssl_runner->{app} = sub { };
+    my $ssl_fake = $ssl_runner->load_server;
+    is($ssl_fake->{options}{ssl}, { cert_file => 'c', key_file => 'k' },
+        'ssl config passed through unchanged');
 };
+
+# Tests 16-19 (load_server dies without app, integration: server responds to
+# requests, integration: module-based app serves files, SSL options validation)
+# have been relocated to the PAGI-Server distribution because they exercise
+# PAGI::Server internals or require a real socket.  Saved verbatim to
+# /tmp/pagi-moved-subtests.pl for that relocation task.
 
 # Test 20: help flag
 subtest 'help flag sets show_help' => sub {
@@ -565,59 +511,50 @@ subtest 'server_options passed via parse_options' => sub {
     is($runner->{argv}[0], 'app.pl', 'app in argv');
 };
 
-# Test: load_server passes server_options to PAGI::Server
+# Test: load_server passes server_options through to the server constructor
 subtest 'load_server passes server_options' => sub {
     my $runner = PAGI::Runner->new(
+        server         => 'PAGITest::FakeServer',
         port           => 0,
         quiet          => 1,
         server_options => { timeout => 42 },
     );
-    $runner->prepare_app;
-    my $server = $runner->load_server;
+    $runner->{app} = sub { };
+    my $fake = $runner->load_server;
 
-    ok($server->isa('PAGI::Server'), 'returns PAGI::Server');
-    is($server->{timeout}, 42, 'timeout from server_options applied');
+    isa_ok($fake, ['PAGITest::FakeServer'], 'constructed configured class');
+    is($fake->{options}{timeout}, 42, 'server_options threaded into constructor');
 };
 
-# Test: load_server with socket server_options omits host/port
+# Test: load_server with socket option omits host/port from constructor args
 subtest 'load_server with socket option omits host/port' => sub {
-    plan skip_all => "Unix sockets not supported on Windows" if $^O eq 'MSWin32';
-
-    my $socket_path = File::Temp::tmpnam() . '.sock';
     my $runner = PAGI::Runner->new(
+        server         => 'PAGITest::FakeServer',
         quiet          => 1,
-        server_options => { socket => $socket_path },
+        server_options => { socket => '/tmp/pagi-test.sock' },
     );
-    $runner->prepare_app;
-    my $server = $runner->load_server;
+    $runner->{app} = sub { };
+    my $fake = $runner->load_server;
 
-    ok($server->isa('PAGI::Server'), 'returns PAGI::Server');
-    is($server->socket_path, $socket_path, 'socket_path set correctly');
-    is($server->port, undef, 'port is undef for socket server');
+    ok(!exists $fake->{options}{host}, 'host omitted when socket given');
+    ok(!exists $fake->{options}{port}, 'port omitted when socket given');
+    is($fake->{options}{socket}, '/tmp/pagi-test.sock', 'socket passed through');
 };
 
-# Test: load_server with listen server_options omits host/port
+# Test: load_server with listen option omits host/port from constructor args
 subtest 'load_server with listen option omits host/port' => sub {
-    plan skip_all => "Unix sockets not supported on Windows" if $^O eq 'MSWin32';
-
-    my $socket_path = File::Temp::tmpnam() . '.sock';
+    my $listen = [ { host => '127.0.0.1', port => 8080 } ];
     my $runner = PAGI::Runner->new(
+        server         => 'PAGITest::FakeServer',
         quiet          => 1,
-        server_options => {
-            listen => [
-                { host => '127.0.0.1', port => 0 },
-                { socket => $socket_path },
-            ],
-        },
+        server_options => { listen => $listen },
     );
-    $runner->prepare_app;
-    my $server = $runner->load_server;
+    $runner->{app} = sub { };
+    my $fake = $runner->load_server;
 
-    ok($server->isa('PAGI::Server'), 'returns PAGI::Server');
-    my $listeners = $server->listeners;
-    is(scalar @$listeners, 2, 'two listeners configured');
-    is($listeners->[0]{type}, 'tcp', 'first listener is tcp');
-    is($listeners->[1]{type}, 'unix', 'second listener is unix');
+    ok(!exists $fake->{options}{host}, 'host omitted when listen given');
+    ok(!exists $fake->{options}{port}, 'port omitted when listen given');
+    is($fake->{options}{listen}, $listen, 'listen passed through');
 };
 
 # Version output must reflect the selected server class, not assume

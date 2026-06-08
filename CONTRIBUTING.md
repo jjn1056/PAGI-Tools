@@ -31,10 +31,19 @@ When in doubt, match what you see in the surrounding code.
 
 ## Running Tests
 
+The test suite is self-contained — no external servers or cross-repository
+paths are needed. Just:
+
 ```bash
-prove -l t/                      # Quick test run during development
-RELEASE_TESTING=1 prove -l t/    # Full test suite - run before submitting PR
+prove -lr t/                     # Run the full suite
+prove -l t/runner.t              # Run a single file
 ```
+
+No extra `PERL5LIB` or environment variables are required. The suite is
+fully self-contained: every Runner↔server assertion runs against the
+bundled `PAGITest::FakeServer` fixture in `t/lib/`. There is no dependency
+on `PAGI::Server` at test time — real-server integration tests live in the
+`PAGI-Server` distribution.
 
 ## AI-Assisted Contributions
 

@@ -2,23 +2,40 @@ use strict;
 use warnings;
 use Test2::V0;
 
-# Core modules that must always load
+# Public entry points that must always load
 my @core_modules = qw(
-    PAGI::Server
-    PAGI::Server::Connection
-    PAGI::Server::Protocol::HTTP1
+    PAGI::Tools
+    PAGI::Runner
+    PAGI::Middleware
+    PAGI::Middleware::Builder
+    PAGI::App::Router
+    PAGI::App::File
     PAGI::App::WrapPSGI
-    PAGI::Request::Negotiate
+    PAGI::Endpoint::HTTP
+    PAGI::Endpoint::Router
+    PAGI::Endpoint::SSE
+    PAGI::Endpoint::WebSocket
+    PAGI::Request
     PAGI::Request::Upload
+    PAGI::Request::Negotiate
+    PAGI::Response
+    PAGI::Context
+    PAGI::Session
+    PAGI::Stash
+    PAGI::WebSocket
+    PAGI::SSE
+    PAGI::Lifespan
+    PAGI::Utils
+    PAGI::Test::Client
+    PAGI::Test::Response
 );
 
-# Test core modules
 for my $module (@core_modules) {
     my $file = $module;
     $file =~ s{::}{/}g;
     $file .= '.pm';
     my $loaded = eval { require $file; 1 };
-    ok($loaded, "load $module") or diag $@;
+    ok($loaded, "$module loads") or diag($@);
 }
 
 done_testing;

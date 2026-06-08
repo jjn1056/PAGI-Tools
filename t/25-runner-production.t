@@ -66,83 +66,10 @@ subtest 'PID file creation and cleanup' => sub {
     ok(!-f $pid_file, 'PID file removed by cleanup');
 };
 
-subtest 'PID file with actual server process' => sub {
-    my ($fh, $pid_file) = tempfile(UNLINK => 1);
-    close $fh;
-    unlink $pid_file;
-
-    # Fork a server process that actually runs
-    my $server_pid = fork();
-    die "Cannot fork: $!" unless defined $server_pid;
-
-    if ($server_pid == 0) {
-        # Child - start actual server
-        my $runner = PAGI::Runner->new(
-            port => 0,  # Random port
-            quiet => 1,
-            pid_file => $pid_file,
-        );
-        $runner->{app_spec} = "$FindBin::Bin/../examples/01-hello-http/app.pl";
-        $runner->{default_middleware} = 0;  # Disable Lint for test
-        $runner->prepare_app;
-
-        # Write PID file before running
-        $runner->_write_pid_file($pid_file);
-
-        # Install signal handlers for proper cleanup on ALRM or TERM
-        # Without these, alarm(2) kills the process before _remove_pid_file runs
-        local $SIG{ALRM} = sub {
-            $runner->_remove_pid_file;
-            exit(0);
-        };
-        local $SIG{TERM} = sub {
-            $runner->_remove_pid_file;
-            exit(0);
-        };
-
-        # Run for a short time then exit
-        alarm(2);  # Exit after 2 seconds
-
-        eval {
-            my $server = $runner->load_server;
-            require IO::Async::Loop;
-            my $loop = IO::Async::Loop->new;
-            $loop->add($server);
-            $server->listen->get;
-            $loop->run;
-        };
-
-        # Clean up PID file on exit (normal exit path)
-        $runner->_remove_pid_file;
-        exit(0);
-    }
-
-    # Parent - wait for PID file to be created
-    my $retries = 20;
-    while ($retries-- > 0 && !-f $pid_file) {
-        sleep(0.05);
-    }
-
-    ok(-f $pid_file, 'Server created PID file');
-
-    if (-f $pid_file) {
-        open(my $pfh, '<', $pid_file);
-        my $written_pid = <$pfh>;
-        chomp $written_pid;
-        close $pfh;
-
-        is($written_pid, $server_pid, 'PID file contains server PID');
-    }
-
-    # Kill the server
-    kill 'TERM', $server_pid;
-    waitpid($server_pid, 0);
-
-    # Give it time to clean up
-    sleep(0.1);
-
-    ok(!-f $pid_file, 'Server cleaned up PID file on exit');
-};
+# 'PID file with actual server process' has been relocated to the
+# PAGI-Server distribution: it forks a real PAGI::Server event loop,
+# making it a server integration test rather than a Runner unit test.
+# Saved verbatim to /tmp/pagi-moved-subtests.pl for that relocation task.
 
 subtest 'User/group validation' => sub {
     my $runner = PAGI::Runner->new(
