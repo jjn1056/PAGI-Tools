@@ -23,9 +23,6 @@ application author needs on top of a PAGI-compliant server:
 
 =over 4
 
-=item * L<PAGI::Runner> - application loader and server runner (C<-s CLASS>
-swappable servers per L<PAGI::Spec::Server>)
-
 =item * L<PAGI::Middleware> and the C<PAGI::Middleware::*> suite
 
 =item * C<PAGI::App::*> - ready-made apps (static files, routers, proxies,
@@ -48,7 +45,9 @@ protocol specification lives in the C<PAGI> distribution.
 
 =head1 SEE ALSO
 
-L<PAGI::Tutorial>, L<PAGI::Cookbook>, L<PAGI::Spec>
+L<PAGI::Tutorial>, L<PAGI::Cookbook>, L<PAGI::Spec>,
+L<PAGI::Server::Runner> - runs PAGI applications from the command line
+(ships with the PAGI-Server distribution)
 
 =head1 AUTHOR
 

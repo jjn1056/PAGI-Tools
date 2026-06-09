@@ -1,11 +1,13 @@
 # Revision history for PAGI-Tools
 
 0.002000
-  - The PAGI application toolkit (PAGI::Runner, PAGI::Middleware::*,
-    PAGI::App::*, PAGI::Endpoint::*, PAGI::Request/Response/Context,
-    PAGI::Test::*) split out of the PAGI distribution into its own
-    distribution. Git history preserved from the original repository
+  - The PAGI application toolkit (PAGI::Middleware::*, PAGI::App::*,
+    PAGI::Endpoint::*, PAGI::Request/Response/Context, PAGI::Test::*)
+    split out of the PAGI distribution into its own distribution. Git
+    history preserved from the original repository
     (https://github.com/jjn1056/pagi).
   - New PAGI::Tools module anchors the distribution.
+  - The application runner ships in the PAGI-Server distribution as
+    PAGI::Server::Runner (the launcher lives with the server it launches).
   - For changes prior to 0.002000, see the Changes file of the PAGI
     distribution (versions up to 0.001023).
