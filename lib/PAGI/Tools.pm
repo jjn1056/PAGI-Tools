@@ -45,7 +45,9 @@ protocol specification lives in the C<PAGI> distribution.
 
 =head1 SEE ALSO
 
-L<PAGI::Tutorial>, L<PAGI::Cookbook>, L<PAGI::Spec>,
+L<PAGI::Tutorial> (the protocol tutorial, in the C<PAGI> distribution),
+L<PAGI::Tools::Tutorial> (this distribution's helpers guide),
+L<PAGI::Cookbook>, L<PAGI::Spec>,
 L<PAGI::Server::Runner> - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
 

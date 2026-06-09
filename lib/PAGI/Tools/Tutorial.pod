@@ -1,0 +1,746 @@
+=encoding UTF-8
+
+=head1 NAME
+
+PAGI::Tools::Tutorial - Optional convenience helpers for PAGI applications
+
+=head1 DESCRIPTION
+
+PAGI itself is a protocol; see L<PAGI::Tutorial> for the protocol tutorial.
+The C<PAGI-Tools> distribution adds B<optional> convenience helpers built on
+top of that protocol: middleware, request/response sugar, WebSocket and SSE
+helpers, routers, and ready-made applications. None of these are required to
+write a complete PAGI application; they exist to save you boilerplate when you
+want it, and every one of them is an ordinary PAGI application or a plain
+wrapper around the C<$scope>/C<$receive>/C<$send> protocol. This guide covers
+them.
+
+=head1 PART 1: MIDDLEWARE
+
+Middleware provides reusable functionality that wraps your application handlers. PAGI includes 30+ middleware components for logging, security, compression, sessions, and more.
+
+=head2 1.1 How Middleware Works
+
+Middleware wraps your application, intercepting requests and responses. Each middleware can:
+
+=over 4
+
+=item * Modify the request before passing it to the next handler
+
+=item * Short-circuit the request and return early
+
+=item * Modify the response on the way back
+
+=item * Add side effects like logging
+
+=back
+
+The pattern:
+
+  sub wrap {
+      my ($self, $app) = @_;
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+          # Before: modify $scope, check conditions, etc.
+          await $app->($scope, $receive, $send);
+          # After: response already sent, but can log, etc.
+      };
+  }
+
+=head2 1.2 Using Middleware with Builder
+
+The L<PAGI::Middleware::Builder> DSL lets you compose middleware into your application.
+
+=head3 Global Middleware
+
+Apply middleware to all routes using the C<builder> function:
+
+  use PAGI::Middleware::Builder;
+  use PAGI::App::Router;
+
+  my $router = PAGI::App::Router->new;
+
+  $router->get('/' => async sub {
+      my ($scope, $receive, $send) = @_;
+      await $send->({
+          type    => 'http.response.start',
+          status  => 200,
+          headers => [['content-type', 'text/plain']],
+      });
+      await $send->({
+          type => 'http.response.body',
+          body => 'Hello World',
+      });
+  });
+
+  my $inner_app = $router->to_app;
+
+  # Wrap with middleware using builder
+  my $app = builder {
+      enable 'AccessLog', format => 'combined';
+      enable 'CORS', origins => '*';
+      enable 'GZip', min_size => 1024;
+      $inner_app;
+  };
+
+Middleware executes in order: AccessLog -> CORS -> GZip -> app.
+
+=head3 Multiple Middleware Example
+
+  my $app = builder {
+      enable 'RequestId';                      # Add X-Request-Id header
+      enable 'AccessLog', format => 'tiny';    # Log requests
+      enable 'Runtime';                        # Add X-Runtime header
+      enable 'CORS', origins => '*';           # Enable CORS
+      enable 'SecurityHeaders';                # Add security headers
+      enable 'GZip', min_size => 1024;         # Compress responses
+      enable 'ErrorHandler', mode => 'development';  # Pretty errors
+      $router->to_app;
+  };
+
+=head2 1.3 Essential Middleware Reference
+
+=head3 Logging & Debugging
+
+=over 4
+
+=item * L<PAGI::Middleware::AccessLog>
+
+Log HTTP requests in Apache-style formats:
+
+  enable 'AccessLog', format => 'combined';  # Apache combined log
+  enable 'AccessLog', format => 'common';    # Apache common log
+  enable 'AccessLog', format => 'tiny';      # Minimal format
+
+=item * L<PAGI::Middleware::RequestId>
+
+Add unique request ID to each request:
+
+  enable 'RequestId';  # Adds X-Request-Id header
+
+Access via C<$scope-E<gt>{'pagi.request_id'}>.
+
+=item * L<PAGI::Middleware::Runtime>
+
+Add response time header:
+
+  enable 'Runtime';  # Adds X-Runtime header in seconds
+
+=back
+
+=head3 Security
+
+=over 4
+
+=item * L<PAGI::Middleware::CORS>
+
+Enable Cross-Origin Resource Sharing:
+
+  enable 'CORS',
+      origins     => '*',                    # or ['https://example.com']
+      methods     => ['GET', 'POST'],
+      headers     => ['Content-Type'],
+      credentials => 1,
+      max_age     => 86400;
+
+=item * L<PAGI::Middleware::SecurityHeaders>
+
+Add security-related HTTP headers:
+
+  enable 'SecurityHeaders';  # Adds CSP, X-Frame-Options, etc.
+
+Includes:
+
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  X-XSS-Protection: 1; mode=block
+  Referrer-Policy: strict-origin-when-cross-origin
+
+=item * L<PAGI::Middleware::CSRF>
+
+Protect against Cross-Site Request Forgery:
+
+  enable 'CSRF', cookie_name => '_csrf_token';
+
+Validates CSRF tokens on POST/PUT/PATCH/DELETE requests.
+
+=back
+
+=head3 Sessions & Cookies
+
+=over 4
+
+=item * L<PAGI::Middleware::Cookie>
+
+Parse request cookies:
+
+  enable 'Cookie';
+
+Access via C<$scope-E<gt>{'pagi.cookies'}>.
+
+=item * L<PAGI::Middleware::Session>
+
+Server-side sessions with signed cookies:
+
+  enable 'Session',
+      secret      => 'your-secret-key',
+      cookie_name => 'session',
+      max_age     => 86400;
+
+Access via C<$scope-E<gt>{'pagi.session'}>.
+
+=back
+
+=head3 Performance
+
+=over 4
+
+=item * L<PAGI::Middleware::GZip>
+
+Compress responses with gzip:
+
+  enable 'GZip',
+      min_size => 1024,               # Only compress if > 1KB
+      types    => ['text/', 'application/json'];
+
+=item * L<PAGI::Middleware::ETag>
+
+Automatic ETag generation and validation:
+
+  enable 'ETag';
+
+Returns 304 Not Modified for matching If-None-Match headers.
+
+=item * L<PAGI::Middleware::RateLimit>
+
+Rate limiting with configurable strategies:
+
+  enable 'RateLimit',
+      rate   => 100,                  # requests
+      period => 60,                   # seconds
+      by     => sub {                 # key generator
+          my ($scope) = @_;
+          return $scope->{client}[0];  # by IP
+      };
+
+=back
+
+=head3 Error Handling
+
+=over 4
+
+=item * L<PAGI::Middleware::ErrorHandler>
+
+Catch and format errors:
+
+  enable 'ErrorHandler', mode => 'development';  # Pretty HTML errors
+  enable 'ErrorHandler', mode => 'production';   # JSON errors
+
+=back
+
+=head2 1.4 Writing Custom Middleware
+
+Create reusable middleware by extending L<PAGI::Middleware>:
+
+  package MyApp::Middleware::Auth;
+  use parent 'PAGI::Middleware';
+  use Future::AsyncAwait;
+
+  sub new {
+      my ($class, %args) = @_;
+      return bless { secret => $args{secret} }, $class;
+  }
+
+  sub wrap {
+      my ($self, $app) = @_;
+
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+
+          # Check auth header
+          my $auth = $self->get_header($scope, 'Authorization');
+
+          if ($auth && $auth =~ /^Bearer (.+)/) {
+              my $token = $1;
+              my $user = verify_token($token, $self->{secret});
+              PAGI::Stash->new($scope)->set(user => $user) if $user;
+          }
+
+          # Call next middleware/app
+          await $app->($scope, $receive, $send);
+      };
+  }
+
+  sub get_header {
+      my ($self, $scope, $name) = @_;
+      $name = lc $name;
+      for my $header (@{$scope->{headers} || []}) {
+          return $header->[1] if lc($header->[0]) eq $name;
+      }
+      return undef;
+  }
+
+  sub verify_token {
+      my ($token, $secret) = @_;
+      # Token verification logic here
+      return { id => 1, username => 'alice' };
+  }
+
+  1;
+
+Use it with the builder:
+
+  my $app = builder {
+      enable 'MyApp::Middleware::Auth', secret => 'secret-key';
+      $router->to_app;
+  };
+
+Or per-route:
+
+  my $auth = MyApp::Middleware::Auth->new(secret => 'secret-key');
+  $router->get('/admin' => [$auth] => $handler);
+
+=head3 Middleware Patterns
+
+=over 4
+
+=item * Modify scope
+
+Add data for downstream handlers:
+
+  sub wrap {
+      my ($self, $app) = @_;
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+          PAGI::Stash->new($scope)->set(custom_data => 'value');
+          await $app->($scope, $receive, $send);
+      };
+  }
+
+=item * Intercept responses
+
+Modify outgoing events:
+
+  sub wrap {
+      my ($self, $app) = @_;
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+
+          my $wrapped_send = $self->intercept_send($send, async sub {
+              my ($event, $original_send) = @_;
+              if ($event->{type} eq 'http.response.start') {
+                  push @{$event->{headers}}, ['x-custom', 'value'];
+              }
+              await $original_send->($event);
+          });
+
+          await $app->($scope, $receive, $wrapped_send);
+      };
+  }
+
+=item * Short-circuit requests
+
+Return early without calling inner app:
+
+  sub wrap {
+      my ($self, $app) = @_;
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+
+          # Check condition
+          unless ($self->is_authorized($scope)) {
+              await $send->({
+                  type    => 'http.response.start',
+                  status  => 403,
+                  headers => [['content-type', 'text/plain']],
+              });
+              await $send->({
+                  type => 'http.response.body',
+                  body => 'Forbidden',
+              });
+              return;  # Don't call $app
+          }
+
+          await $app->($scope, $receive, $send);
+      };
+  }
+
+=back
+
+=head1 PART 2: THE HELPER CLASSES
+
+In the protocol tutorial (see L<PAGI::Tutorial>), we worked directly with the raw PAGI protocol (C<$scope>, C<$receive>, C<$send>). While powerful, this low-level approach requires a lot of boilerplate code for common tasks.
+
+PAGI provides four helper classes that make web development much easier:
+
+=over 4
+
+=item * L<PAGI::Response> - Fluent response builder
+
+=item * L<PAGI::Request> - Request parser with body handling
+
+=item * L<PAGI::WebSocket> - WebSocket helper
+
+=item * L<PAGI::SSE> - Server-Sent Events helper
+
+=back
+
+These classes handle UTF-8 encoding/decoding, body parsing, cookie handling, and more automatically.
+
+=head2 2.1 PAGI::Response - Fluent Response Builder
+
+L<PAGI::Response> provides a fluent interface for building HTTP responses. Instead of manually constructing C<http.response.start> and C<http.response.body> events, you use chainable methods.
+
+=head3 Creating a Response
+
+  use strict;
+  use warnings;
+  use Future::AsyncAwait;
+  use PAGI::Response;
+
+  async sub app {
+      my ($scope, $receive, $send) = @_;
+
+      die "Expected http scope" unless $scope->{type} eq 'http';
+
+      # Create a response builder
+      my $res = PAGI::Response->new($scope, $send);
+
+      # Use it to send responses
+      await $res->text('Hello, World!');
+  }
+
+  \&app;
+
+=head3 Simple Responses
+
+L<PAGI::Response> provides methods for common response types:
+
+  my $res = PAGI::Response->new($scope, $send);
+
+  # Plain text
+  await $res->text('Hello, World!');
+
+  # HTML
+  await $res->html('<h1>Hello, World!</h1>');
+
+  # JSON
+  await $res->json({ message => 'Hello, World!' });
+
+  # Empty response (204 No Content)
+  await $res->empty();
+
+Key points:
+
+=over 4
+
+=item * C<text()> sets Content-Type to text/plain; charset=utf-8
+
+=item * C<html()> sets Content-Type to text/html; charset=utf-8
+
+=item * C<json()> sets Content-Type to application/json; charset=utf-8
+
+=item * All methods automatically encode strings to UTF-8 bytes
+
+=back
+
+=head3 Status and Headers
+
+Use chainable methods to set status and headers before sending:
+
+  await $res->status(201)
+            ->header('X-Request-ID', '12345')
+            ->header('X-Custom', 'value')
+            ->content_type('application/json')
+            ->json({ created => 1 });
+
+Chainable methods:
+
+=over 4
+
+=item * C<status($code)> - Set HTTP status (default: 200)
+
+=item * C<header($name, $value)> - Add a response header
+
+=item * C<content_type($type)> - Set Content-Type header
+
+=item * C<cookie($name, $value, %opts)> - Set a cookie
+
+=back
+
+=head3 Redirects
+
+  # Temporary redirect (302 Found - default)
+  await $res->redirect('/new-page');
+
+  # Permanent redirect (301 Moved Permanently)
+  await $res->redirect('/modern', 301);
+
+  # See Other (303 - used after POST)
+  await $res->redirect('/success', 303);
+
+B<Note:> C<redirect()> sends the response immediately but does NOT stop Perl execution. Use C<return> after redirect if you have more code below.
+
+=head2 2.2 PAGI::Request - Request Parsing
+
+L<PAGI::Request> parses HTTP requests and provides convenient accessors for headers, query parameters, cookies, and request bodies.
+
+=head3 Creating a Request
+
+  my $req = PAGI::Request->new($scope, $receive);
+  my $res = PAGI::Response->new($scope, $send);
+
+  await $res->text("You requested: " . $req->path);
+
+=head3 Basic Properties
+
+  $req->method         # HTTP method (GET, POST, etc.)
+  $req->path           # URL path (decoded UTF-8)
+  $req->query_string   # Query string (raw bytes)
+  $req->scheme         # 'http' or 'https'
+  $req->host           # Host header value
+
+=head3 Headers
+
+  # Get single header (case-insensitive)
+  my $user_agent = $req->header('user-agent') // 'Unknown';
+
+  # Get content type
+  my $ct = $req->content_type;
+
+  # Get bearer token from Authorization: Bearer <token>
+  my $token = $req->bearer_token;
+
+=head3 Query Parameters
+
+  # Get single parameter
+  my $page = $req->query_param('page') // '1';
+
+  # Get all parameters as Hash::MultiValue
+  my $params = $req->query_params;
+  my @tags = $params->get_all('tag');  # For ?tag=foo&tag=bar
+
+=head3 Body Parsing
+
+  # Read entire body as raw bytes
+  my $bytes = await $req->body;
+
+  # Parse JSON body
+  my $data = await $req->json;
+
+  # Parse URL-encoded form
+  my $form = await $req->form_params;
+  my $name = $form->get('name');
+
+  # Or get a single form value directly
+  my $email = await $req->form_param('email');
+
+Content-type predicates:
+
+=over 4
+
+=item * C<is_json()> - True if Content-Type is application/json
+
+=item * C<is_form()> - True if form data (urlencoded or multipart)
+
+=back
+
+=head2 2.3 PAGI::WebSocket - WebSocket Helper
+
+L<PAGI::WebSocket> simplifies WebSocket connections:
+
+  my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+  await $ws->accept;
+
+  # Send and receive
+  await $ws->send_text("Hello!");
+  my $msg = await $ws->receive;
+
+  # JSON messages
+  await $ws->send_json({ type => 'greeting' });
+  my $data = await $ws->receive_json;
+
+  # Message loop
+  await $ws->each_text(async sub {
+      my ($text) = @_;
+      await $ws->send_text("Echo: $text");
+  });
+
+  await $ws->close(1000, 'Goodbye');
+
+=head2 2.4 PAGI::SSE - Server-Sent Events Helper
+
+L<PAGI::SSE> simplifies Server-Sent Events:
+
+  my $sse = PAGI::SSE->new($scope, $receive, $send);
+  await $sse->start;
+
+  # Send events
+  await $sse->send_event("Hello!");
+  await $sse->send_event("User logged in", event => 'login', id => '42');
+
+  # Send JSON
+  await $sse->send_json({ count => 5 }, event => 'update');
+
+  # Keepalive to prevent proxy timeouts
+  await $sse->keepalive(15);
+
+  # Wait for disconnect
+  await $sse->run;
+
+=head1 PART 3: BUILT-IN APPLICATIONS
+
+PAGI ships with several ready-to-use applications for common tasks. These can be mounted with routers or used standalone.
+
+=head2 3.1 PAGI::App::Router - Basic Routing
+
+L<PAGI::App::Router> provides lightweight functional routing:
+
+  use PAGI::App::Router;
+  use PAGI::Response;
+
+  my $router = PAGI::App::Router->new;
+
+  # HTTP routes
+  $router->get('/' => async sub {
+      my ($scope, $receive, $send) = @_;
+      my $res = PAGI::Response->new($scope, $send);
+      await $res->text('Home');
+  });
+
+  $router->post('/users' => async sub {
+      my ($scope, $receive, $send) = @_;
+      my $res = PAGI::Response->new($scope, $send);
+      await $res->status(201)->json({ created => 1 });
+  });
+
+  # Path parameters
+  $router->get('/users/:id' => async sub {
+      my ($scope, $receive, $send) = @_;
+      my $req = PAGI::Request->new($scope, $receive);
+      my $res = PAGI::Response->new($scope, $send);
+      my $id = $req->path_param('id');
+      await $res->json({ id => $id });
+  });
+
+  # WebSocket and SSE
+  $router->websocket('/ws' => async sub { ... });
+  $router->sse('/events' => async sub { ... });
+
+  $router->to_app;
+
+For advanced routing patterns (nested routers, route-level middleware, class-based routing), see L<PAGI::Cookbook>.
+
+=head2 3.2 PAGI::App::File - Static Files
+
+L<PAGI::App::File> serves static files with security, caching, and streaming:
+
+  use PAGI::App::File;
+
+  my $static = PAGI::App::File->new(root => './public');
+  $router->mount('/static' => $static->to_app);
+
+Features:
+
+=over 4
+
+=item * Efficient streaming (large files don't consume memory)
+
+=item * ETag caching with 304 Not Modified support
+
+=item * HTTP Range requests for resume support
+
+=item * Automatic MIME type detection
+
+=item * Security: path traversal protection
+
+=back
+
+=head2 3.3 PAGI::App::Healthcheck - Health Endpoints
+
+L<PAGI::App::Healthcheck> creates health check endpoints:
+
+  use PAGI::App::Healthcheck;
+
+  my $health = PAGI::App::Healthcheck->new(
+      version => '1.0.0',
+      checks => {
+          database => sub { $db && $db->ping },
+          cache    => sub { $redis && $redis->ping },
+      },
+  );
+
+  $router->mount('/health' => $health->to_app);
+
+=head2 3.4 PAGI::App::URLMap - Mount Applications
+
+L<PAGI::App::URLMap> routes requests to different apps based on URL prefix:
+
+  use PAGI::App::URLMap;
+
+  my $urlmap = PAGI::App::URLMap->new;
+  $urlmap->mount('/api' => $api_app);
+  $urlmap->mount('/admin' => $admin_app);
+  $urlmap->mount('/static' => $static);
+  $urlmap->to_app;
+
+=head2 3.5 PAGI::App::Cascade - Try Apps in Sequence
+
+L<PAGI::App::Cascade> tries apps in order until one returns a non-404:
+
+  use PAGI::App::Cascade;
+
+  my $app = PAGI::App::Cascade->new(
+      apps => [$static, $api, $fallback],
+      catch => [404, 405],
+  );
+
+=head2 3.6 PAGI::App::Proxy - Reverse Proxy
+
+L<PAGI::App::Proxy> forwards requests to backend servers:
+
+  use PAGI::App::Proxy;
+
+  my $proxy = PAGI::App::Proxy->new(
+      backend => 'http://localhost:8080',
+      timeout => 30,
+  );
+  $router->mount('/api' => $proxy->to_app);
+
+=head2 3.7 PAGI::App::WrapPSGI - Use Existing PSGI Apps
+
+L<PAGI::App::WrapPSGI> lets you use existing PSGI applications:
+
+  use PAGI::App::WrapPSGI;
+
+  my $wrapped = PAGI::App::WrapPSGI->new(psgi_app => $legacy_app);
+  $router->mount('/legacy' => $wrapped->to_app);
+
+Useful for incremental migration from PSGI to PAGI.
+
+=head1 SEE ALSO
+
+=over 4
+
+=item * L<PAGI::Tutorial> - the PAGI protocol tutorial (the foundation)
+
+=item * L<PAGI> - the PAGI specification distribution
+
+=item * L<PAGI::Cookbook> - recipes for common tasks
+
+=item * L<PAGI::Middleware::Builder>, L<PAGI::App::Router>, L<PAGI::Response>, L<PAGI::Request> - individual module documentation
+
+=back
+
+=head1 AUTHOR
+
+PAGI Contributors
+
+=head1 COPYRIGHT AND LICENSE
+
+This software is copyright (c) 2025 by the PAGI contributors.
+
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
+
+=cut

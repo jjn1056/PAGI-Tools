@@ -11,9 +11,9 @@ PAGI::Cookbook - Recipes for Common PAGI Tasks
 This cookbook provides ready-to-use solutions for common web development tasks
 with PAGI. Each recipe is self-contained and can be adapted to your needs.
 
-B<Prerequisites:> This cookbook assumes you've read the L<PAGI::Tutorial>,
-particularly Parts 1-3 covering the raw PAGI protocol, middleware, and helper
-classes.
+B<Prerequisites:> This cookbook assumes you've read L<PAGI::Tutorial> (the
+PAGI protocol tutorial) and L<PAGI::Tools::Tutorial> (this distribution's
+guide to middleware, helper classes, and built-in apps).
 
 =head1 ROUTING RECIPES
 
@@ -1441,7 +1441,9 @@ See L<PAGI::Test::Client> for the full API including WebSocket and SSE testing.
 
 =over 4
 
-=item * L<PAGI::Tutorial> - Learn PAGI from the ground up
+=item * L<PAGI::Tutorial> - Learn the PAGI protocol from the ground up
+
+=item * L<PAGI::Tools::Tutorial> - Guide to middleware, helpers, and built-in apps
 
 =item * L<PAGI::App::Router> - Functional routing
 
