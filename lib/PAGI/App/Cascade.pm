@@ -3,6 +3,7 @@ package PAGI::App::Cascade;
 use strict;
 use warnings;
 use Future::AsyncAwait;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -13,7 +14,7 @@ PAGI::App::Cascade - Try apps in sequence until success
     use PAGI::App::Cascade;
 
     my $app = PAGI::App::Cascade->new(
-        apps => [$static_app, $dynamic_app],
+        apps => [$static_app, PAGI::App::NotFound->new(body => 'nope')],
         catch => [404, 405],
     )->to_app;
 
@@ -23,7 +24,7 @@ sub new {
     my ($class, %args) = @_;
 
     return bless {
-        apps  => $args{apps} // [],
+        apps  => [map { PAGI::Utils::to_app($_) } @{$args{apps} // []}],
         catch => { map { $_ => 1 } @{$args{catch} // [404, 405]} },
     }, $class;
 }
@@ -31,7 +32,7 @@ sub new {
 sub add {
     my ($self, $app) = @_;
 
-    push @{$self->{apps}}, $app;
+    push @{$self->{apps}}, PAGI::Utils::to_app($app);
     return $self;
 }
 
@@ -95,7 +96,8 @@ app to be tried.
 
 =over 4
 
-=item * C<apps> - Arrayref of apps to try in order
+=item * C<apps> - Arrayref of apps to try in order.
+Entries in C<apps> (and arguments to C<add>) accept anything L<PAGI::Utils/to_app> accepts: a coderef, a component object with a C<to_app> method, or a class name.
 
 =item * C<catch> - Arrayref of status codes to catch (default: [404, 405])
 

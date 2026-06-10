@@ -360,4 +360,23 @@ subtest 'URLMap coerces components, class names, and default' => sub {
     is $sent[1]{body}, 'fallback', 'default coerced too';
 };
 
+subtest 'Cascade coerces apps list and add()' => sub {
+    require TestApps::Component;
+    require PAGI::App::NotFound;
+
+    my $cascade = PAGI::App::Cascade->new(
+        apps => [ PAGI::App::NotFound->new ],   # always 404s -> falls through
+    );
+    $cascade->add(TestApps::Component->new(body => 'second'));
+    my $app = $cascade->to_app;
+
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+    $app->({ type => 'http', method => 'GET', path => '/x' },
+        sub { Future->done }, $send)->get;
+
+    is $sent[0]{status}, 200, 'fell through the 404 component';
+    is $sent[1]{body}, 'second', 'component object added without ->to_app';
+};
+
 done_testing;
