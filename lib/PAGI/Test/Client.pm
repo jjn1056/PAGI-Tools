@@ -6,6 +6,7 @@ use Future::AsyncAwait;
 use Carp qw(croak);
 
 use PAGI::Test::Response;
+use PAGI::Utils ();
 
 
 sub new {
@@ -14,7 +15,7 @@ sub new {
     croak "app is required" unless $args{app};
 
     return bless {
-        app                  => $args{app},
+        app                  => PAGI::Utils::to_app($args{app}),
         headers              => $args{headers} // {},
         cookies              => {},
         lifespan             => $args{lifespan} // 0,
@@ -771,7 +772,18 @@ against L<PAGI::Server>.
 
 =item app (required)
 
-The PAGI application coderef to test.
+The PAGI application to test. Accepts anything L<PAGI::Utils/to_app> accepts:
+a coderef, a component object (anything with a C<to_app> method), or a class
+name string:
+
+    # Coderef (existing style)
+    my $client = PAGI::Test::Client->new(app => $coderef);
+
+    # Component object
+    my $client = PAGI::Test::Client->new(app => MyApp::Main->new(%opts));
+
+    # Class name - auto-required, then compiled via to_app
+    my $client = PAGI::Test::Client->new(app => 'MyApp::Main');
 
 =item headers
 
