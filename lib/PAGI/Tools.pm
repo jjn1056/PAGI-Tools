@@ -38,6 +38,10 @@ processing and ergonomics
 =item * L<PAGI::Test::Client> and friends - in-process test utilities for
 PAGI applications
 
+=item * L<PAGI::Utils> - composition and lifespan helpers; its
+L<to_app|PAGI::Utils/to_app> coercion is what lets every composition
+point above accept component objects and class names directly
+
 =back
 
 The reference server lives in the C<PAGI-Server> distribution; the

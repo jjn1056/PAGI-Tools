@@ -35,7 +35,7 @@ PAGI::App::Router - Unified routing for HTTP, WebSocket, and SSE
     $router->sse('/events/:channel' => $events_handler);
 
     # Mount with middleware (applies to all sub-routes)
-    $router->mount('/api' => [$auth_mw] => $api_router->to_app);
+    $router->mount('/api' => [$auth_mw] => $api_router);
 
     # Mount from a package (auto-require + to_app)
     $router->mount('/admin' => 'MyApp::Admin');
@@ -983,8 +983,8 @@ B<Example: Organizing a large application>
     # Main router
     my $main = PAGI::App::Router->new;
     $main->get('/' => $home);
-    $main->mount('/api' => $api->to_app);
-    $main->mount('/admin' => $admin->to_app);
+    $main->mount('/api' => $api);
+    $main->mount('/admin' => $admin);
 
     # Resulting routes:
     # GET /           -> $home
@@ -1068,7 +1068,7 @@ Mount middleware runs before any sub-router middleware:
     my $api = PAGI::App::Router->new;
     $api->get('/users' => [$rate_limit] => $list_users);
 
-    $router->mount('/api' => [$auth] => $api->to_app);
+    $router->mount('/api' => [$auth] => $api);
 
     # Request to /api/users runs: $auth -> $rate_limit -> $list_users
 
@@ -1219,7 +1219,7 @@ to a separate application.
     });
 
     # mount: routes live in a separate app
-    $router->mount('/api' => $api->to_app);  # $api is independent
+    $router->mount('/api' => $api);  # $api is independent
 
 =head2 Key Differences
 
@@ -1250,7 +1250,7 @@ C<< $scope->{root_path} >>.
     });
 
     # mount: handler sees stripped path
-    $router->mount('/api' => $api->to_app);
+    $router->mount('/api' => $api);
     # Inside $api, handler sees $scope->{path} = "/users"
     #                           $scope->{root_path} = "/api"
 
@@ -1327,7 +1327,7 @@ Use C<mount()> when composing independent applications that manage their
 own routing, middleware, and error handling:
 
     # Mount a completely separate admin app
-    $router->mount('/admin' => MyApp::Admin->to_app);
+    $router->mount('/admin' => 'MyApp::Admin');
 
     # Mount a PSGI/Plack application
     $router->mount('/legacy' => $plack_app);
@@ -1350,7 +1350,7 @@ together:
     });
 
     # Mounted independent apps
-    $router->mount('/admin' => MyApp::Admin->to_app);
+    $router->mount('/admin' => 'MyApp::Admin');
     $router->mount('/docs' => PAGI::App::File->new(root => './docs'));
 
 =cut

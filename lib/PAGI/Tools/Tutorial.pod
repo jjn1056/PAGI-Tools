@@ -73,14 +73,13 @@ Apply middleware to all routes using the C<builder> function:
       });
   });
 
-  my $inner_app = $router->to_app;
-
-  # Wrap with middleware using builder
+  # Wrap with middleware using builder; the block's final value can be
+  # an app coderef, a component, or (as here) the router itself
   my $app = builder {
       enable 'AccessLog', format => 'combined';
       enable 'CORS', origins => '*';
       enable 'GZip', min_size => 1024;
-      $inner_app;
+      $router;
   };
 
 Middleware executes in order: AccessLog -> CORS -> GZip -> app.
@@ -95,7 +94,21 @@ Middleware executes in order: AccessLog -> CORS -> GZip -> app.
       enable 'SecurityHeaders';                # Add security headers
       enable 'GZip', min_size => 1024;         # Compress responses
       enable 'ErrorHandler', mode => 'development';  # Pretty errors
-      $router->to_app;
+      $router;
+  };
+
+=head3 Middleware Instances
+
+C<enable> also accepts an already-configured middleware instance — useful
+when you build the instance elsewhere or want construction-time errors.
+The parentheses are required for the instance form:
+
+  my $gzip = PAGI::Middleware::GZip->new(min_size => 1024);
+
+  my $app = builder {
+      enable 'AccessLog', format => 'tiny';
+      enable($gzip);
+      $router;
   };
 
 =head2 1.3 Essential Middleware Reference
@@ -291,8 +304,17 @@ Create reusable middleware by extending L<PAGI::Middleware>:
 Use it with the builder:
 
   my $app = builder {
-      enable 'MyApp::Middleware::Auth', secret => 'secret-key';
-      $router->to_app;
+      enable '^MyApp::Middleware::Auth', secret => 'secret-key';
+      $router;
+  };
+
+The C<^> prefix tells the builder to use the class name as-is instead of
+prepending C<PAGI::Middleware::>. Or skip name resolution entirely by
+passing a configured instance (parentheses required):
+
+  my $app = builder {
+      enable(MyApp::Middleware::Auth->new(secret => 'secret-key'));
+      $router;
   };
 
 Or per-route:
@@ -638,7 +660,7 @@ L<PAGI::App::File> serves static files with security, caching, and streaming:
   use PAGI::App::File;
 
   my $static = PAGI::App::File->new(root => './public');
-  $router->mount('/static' => $static->to_app);
+  $router->mount('/static' => $static);
 
 Features:
 
@@ -670,7 +692,7 @@ L<PAGI::App::Healthcheck> creates health check endpoints:
       },
   );
 
-  $router->mount('/health' => $health->to_app);
+  $router->mount('/health' => $health);
 
 =head2 3.4 PAGI::App::URLMap - Mount Applications
 
@@ -705,7 +727,7 @@ L<PAGI::App::Proxy> forwards requests to backend servers:
       backend => 'http://localhost:8080',
       timeout => 30,
   );
-  $router->mount('/api' => $proxy->to_app);
+  $router->mount('/api' => $proxy);
 
 =head2 3.7 PAGI::App::WrapPSGI - Use Existing PSGI Apps
 
@@ -714,9 +736,59 @@ L<PAGI::App::WrapPSGI> lets you use existing PSGI applications:
   use PAGI::App::WrapPSGI;
 
   my $wrapped = PAGI::App::WrapPSGI->new(psgi_app => $legacy_app);
-  $router->mount('/legacy' => $wrapped->to_app);
+  $router->mount('/legacy' => $wrapped);
 
 Useful for incremental migration from PSGI to PAGI.
+
+=head1 PART 4: COMPOSITION
+
+Every place this toolkit accepts an application coerces its argument
+through L<PAGI::Utils/to_app>, so three forms are interchangeable in
+app position:
+
+=over 4
+
+=item * An B<async coderef> — the protocol-level form, used unchanged
+
+=item * A B<component object> — anything with a C<to_app> method,
+compiled once at composition time:
+C<< PAGI::App::File->new(root => 'public') >>
+
+=item * A B<class name string> — auto-required if needed, then compiled
+via the class-method C<to_app>: C<'MyApp::API'>
+
+=back
+
+App positions are: C<mount> targets and route handlers in
+L<PAGI::App::Router>, C<mount> and the final block value in
+L<PAGI::Middleware::Builder>'s C<builder {}>, L<PAGI::App::URLMap>
+mounts and its C<default>, L<PAGI::App::Cascade> entries, and the
+C<app> argument to L<PAGI::Test::Client>. Put together:
+
+  my $app = builder {
+      enable 'AccessLog';
+      mount '/static' => PAGI::App::File->new(root => 'public');
+      mount '/api'    => 'MyApp::API';
+      PAGI::App::NotFound->new(body => 'no such page');
+  };
+
+Compilation happens exactly once, when the composition point receives
+the component — never per request.
+
+Middleware position is the same idea with a different duck type:
+C<enable> accepts a middleware name (resolved under
+C<PAGI::Middleware::>, with C<^> to escape) or a configured instance
+with a C<wrap> method, and per-route middleware arrays in
+L<PAGI::App::Router> accept instances or
+C<($scope, $receive, $send, $next)> coderefs.
+
+Passing middleware where an app belongs (or vice versa) croaks at
+composition time with a message pointing at the right position.
+
+The one place that still wants an explicit C<< ->to_app >> is the value
+your F<app.pl> hands to the server: the server contract is a plain
+coderef, so end your file with C<< $router->to_app >> (or a
+C<builder {}> block, which already returns one).
 
 =head1 SEE ALSO
 

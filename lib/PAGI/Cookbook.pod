@@ -252,7 +252,7 @@ Use C<mount()> to attach sub-applications or routers at a prefix:
 
   # Mount API router at /api prefix
   # /api/users will be handled by $api_router
-  $main_router->mount('/api' => $api_router->to_app);
+  $main_router->mount('/api' => $api_router);
 
   # Mount with middleware (applies to all sub-routes)
   my $cors_mw = async sub {
@@ -261,9 +261,24 @@ Use C<mount()> to attach sub-applications or routers at a prefix:
       await $next->();
   };
 
-  $main_router->mount('/api' => [$cors_mw] => $api_router->to_app);
+  $main_router->mount('/api' => [$cors_mw] => $api_router);
 
   $main_router->to_app;
+
+=head3 Mounting Components and Class Names
+
+Mount targets (and route handlers) accept more than coderefs: anything
+L<PAGI::Utils/to_app> can coerce composes directly, compiled once at
+mount time.
+
+  # A component object
+  $main_router->mount('/static' => PAGI::App::File->new(root => './public'));
+
+  # A class name - auto-required, then to_app is called on the class
+  $main_router->mount('/admin' => 'MyApp::Admin');
+
+  # A router object
+  $main_router->mount('/api' => $api_router);
 
 =head2 Class-Based Routing with PAGI::Endpoint::Router
 
@@ -594,7 +609,7 @@ Create modular applications by mounting sub-routers:
       $r->get('/' => 'home');
 
       # Mount API router at /api prefix
-      $r->mount('/api' => MyApp::API->to_app);
+      $r->mount('/api' => 'MyApp::API');
   }
 
   async sub home {
@@ -1194,7 +1209,7 @@ The C<-M> flag loads modules before C<-e> code runs, like C<perl -M>:
 
   # Load multiple modules
   pagi-server -MPAGI::App::File -MPAGI::Middleware::Builder \
-      -e 'use PAGI::Middleware::Builder; builder { enable "GZip"; PAGI::App::File->new(root => ".")->to_app }'
+      -e 'use PAGI::Middleware::Builder; builder { enable "GZip"; PAGI::App::File->new(root => ".") }'
 
   # Cuddled form (no space after -M)
   pagi-server -MPAGI::App::File -e 'PAGI::App::File->new(root => ".")->to_app'
@@ -1304,7 +1319,7 @@ Configure an internal location for protected files:
       PAGI::App::File->new(
           root          => '/var/www/files',
           handle_ranges => 0,  # Let nginx handle Range requests
-      )->to_app;
+      );
   };
 
 B<Note:> Setting C<handle_ranges =E<gt> 0> is important. It tells your app
