@@ -1367,7 +1367,7 @@ For more control (authentication, logging, custom headers):
       enable 'XSendfile',
           type    => 'X-Accel-Redirect',
           mapping => { '/var/www/files/' => '/protected/' };
-      $router->to_app;
+      $router;
   };
 
 =head3 Apache Configuration (mod_xsendfile)
