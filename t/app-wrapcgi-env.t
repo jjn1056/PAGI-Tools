@@ -7,6 +7,9 @@ use FindBin;
 
 use PAGI::App::WrapCGI;
 
+plan skip_all => 'fork not supported'
+    unless eval { my $p = fork; defined $p and ($p == 0 ? exit : waitpid($p, 0)); 1 };
+
 my $app = PAGI::App::WrapCGI->new(
     script => "$FindBin::Bin/cgi-bin/env.cgi",
 )->to_app;
