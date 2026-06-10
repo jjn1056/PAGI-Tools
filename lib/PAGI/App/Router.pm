@@ -5,6 +5,7 @@ use warnings;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
 use Carp qw(croak);
+use PAGI::Utils ();
 
 =encoding UTF-8
 
@@ -104,24 +105,10 @@ sub mount {
     my ($middleware, $app_or_router) = $self->_parse_route_args(@rest);
 
     my $sub_router;
-    my $app;
     if (blessed($app_or_router) && $app_or_router->isa('PAGI::App::Router')) {
-        $sub_router = $app_or_router;
-        $app = $sub_router->to_app;
+        $sub_router = $app_or_router;  # Keep reference for ->as()
     }
-    elsif (!ref($app_or_router)) {
-        # String form: auto-require and call ->to_app
-        my $pkg = $app_or_router;
-        {
-            local $@;
-            eval "require $pkg; 1" or croak "Failed to load '$pkg': $@";
-        }
-        croak "'$pkg' does not have a to_app() method" unless $pkg->can('to_app');
-        $app = $pkg->to_app;
-    }
-    else {
-        $app = $app_or_router;
-    }
+    my $app = PAGI::Utils::to_app($app_or_router);
 
     my $mount = {
         prefix      => $prefix,
@@ -222,6 +209,7 @@ sub group {
 sub websocket {
     my ($self, $path, @rest) = @_;
     my ($middleware, $app) = $self->_parse_route_args(@rest);
+    $app = PAGI::Utils::to_app($app);
 
     # Apply accumulated group context (reverse: innermost prefix first)
     for my $ctx (reverse @{$self->{_group_stack}}) {
@@ -248,6 +236,7 @@ sub websocket {
 sub sse {
     my ($self, $path, @rest) = @_;
     my ($middleware, $app) = $self->_parse_route_args(@rest);
+    $app = PAGI::Utils::to_app($app);
 
     # Apply accumulated group context (reverse: innermost prefix first)
     for my $ctx (reverse @{$self->{_group_stack}}) {
@@ -275,6 +264,7 @@ sub route {
     my ($self, $method, $path, @rest) = @_;
 
     my ($middleware, $app) = $self->_parse_route_args(@rest);
+    $app = PAGI::Utils::to_app($app);
 
     # Apply accumulated group context (reverse: innermost prefix first)
     for my $ctx (reverse @{$self->{_group_stack}}) {
@@ -927,6 +917,9 @@ HTTP routes.
     $router->mount('/api' => $api_app);
     $router->mount('/admin' => $admin_router);
 
+    # Component object (auto-coerced via to_app)
+    $router->mount('/files' => PAGI::App::File->new(root => $dir));
+
     # String form (auto-require)
     $router->mount('/admin' => 'MyApp::Admin');
     $router->mount('/admin' => \@middleware => 'MyApp::Admin');
@@ -934,11 +927,16 @@ HTTP routes.
 Mount a PAGI app under a path prefix. The mounted app receives requests
 with the prefix stripped from the path and added to C<root_path>.
 
-The target can be a PAGI app coderef, a C<PAGI::App::Router> object, or
-a package name string. When a Router object is passed directly, C<< ->as() >>
-can be used to namespace its named routes. When a coderef or string form
-is used, C<< ->as() >> is not available because there is no router object
-to import names from.
+The target can be anything accepted by C<PAGI::Utils::to_app>: a coderef,
+a component object with a C<to_app> method, or a package name string.
+When a C<PAGI::App::Router> object is passed directly, C<< ->as() >> can
+be used to namespace its named routes. When a coderef, component object,
+or string form is used, C<< ->as() >> is not available because there is no
+router object to import names from.
+
+Route handlers registered with C<get>, C<post>, C<put>, C<patch>,
+C<delete>, C<head>, C<options>, C<any>, C<websocket>, and C<sse> also
+accept anything C<PAGI::Utils::to_app> accepts.
 
 B<String form:> The package is loaded via C<require>, then
 C<< $package->to_app >> is called. The result must be a PAGI app coderef.

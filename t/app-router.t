@@ -693,4 +693,23 @@ subtest 'mount string form error handling' => sub {
         'croak when package lacks to_app';
 };
 
+subtest 'router coerces mount and route targets' => sub {
+    require TestApps::Component;
+
+    my $router = PAGI::App::Router->new;
+    $router->mount('/c' => TestApps::Component->new(body => 'mounted-component'));
+    $router->get('/direct' => TestApps::Component->new(body => 'route-component'));
+    my $app = $router->to_app;
+
+    my ($send, $sent) = mock_send();
+    $app->({ type => 'http', method => 'GET', path => '/c/anything' },
+        sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'mounted-component', 'mount target coerced';
+
+    ($send, $sent) = mock_send();
+    $app->({ type => 'http', method => 'GET', path => '/direct' },
+        sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'route-component', 'route target coerced';
+};
+
 done_testing;
