@@ -11,7 +11,9 @@ use strict;
 use warnings;
 use Test2::V0;
 
-use lib 'lib';
+use FindBin;
+use lib 'lib', "$FindBin::Bin/lib";
+use Future::AsyncAwait;
 use PAGI::Middleware::Builder;
 
 # =============================================================================
@@ -76,6 +78,87 @@ subtest 'loading real nested middleware' => sub {
     my $class2 = $builder->_resolve_middleware('WebSocket::Compression');
     is $class2, 'PAGI::Middleware::WebSocket::Compression', 'WebSocket::Compression resolves correctly';
     ok $class2->can('wrap'), 'WebSocket::Compression class loaded and has wrap method';
+};
+
+# =============================================================================
+# Test enable() with a configured middleware instance
+# =============================================================================
+
+subtest 'enable accepts a configured middleware instance' => sub {
+    require PAGI::Middleware::Head;
+    require TestApps::Component;
+
+    my $app = builder {
+        enable(PAGI::Middleware::Head->new);
+        TestApps::Component->new(body => 'with-head');
+    };
+
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+
+    # HEAD request: Head middleware converts to GET internally but suppresses body
+    $app->({ type => 'http', method => 'HEAD', path => '/' },
+        sub { Future->done }, $send)->get;
+    is $sent[0]{status}, 200, 'instance middleware ran (response start passed through)';
+    is $sent[1]{body}, '', 'Head middleware stripped body for HEAD request';
+};
+
+subtest 'enable_if accepts a configured middleware instance' => sub {
+    require PAGI::Middleware::Head;
+    require TestApps::Component;
+
+    # Condition FALSE: inner app runs unmodified, HEAD body is NOT stripped
+    my $app_skip = builder {
+        enable_if { 0 } (PAGI::Middleware::Head->new);
+        TestApps::Component->new(body => 'skip-head');
+    };
+
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+
+    $app_skip->({ type => 'http', method => 'HEAD', path => '/' },
+        sub { Future->done }, $send)->get;
+    is $sent[1]{body}, 'skip-head', 'condition false: instance middleware bypassed';
+
+    # Condition TRUE: Head middleware runs and strips body
+    my $app_run = builder {
+        enable_if { 1 } (PAGI::Middleware::Head->new);
+        TestApps::Component->new(body => 'run-head');
+    };
+
+    @sent = ();
+    $app_run->({ type => 'http', method => 'HEAD', path => '/' },
+        sub { Future->done }, $send)->get;
+    is $sent[0]{status}, 200, 'condition true: instance middleware ran';
+    is $sent[1]{body}, '', 'condition true: Head middleware stripped body';
+};
+
+subtest 'enable croaks on instance plus config' => sub {
+    require PAGI::Middleware::Head;
+    my $builder = PAGI::Middleware::Builder->new;
+    like dies { $builder->add_middleware(PAGI::Middleware::Head->new, foo => 1) },
+        qr/takes no config/,
+        'config with instance belongs at construction time';
+};
+
+subtest 'builder coerces mounts and the final app' => sub {
+    require TestApps::Component;
+
+    my $app = builder {
+        mount '/c' => TestApps::Component->new(body => 'mounted');
+        TestApps::Component->new(body => 'fallback');
+    };
+
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+    $app->({ type => 'http', method => 'GET', path => '/c/x' },
+        sub { Future->done }, $send)->get;
+    is $sent[1]{body}, 'mounted', 'mounted component coerced to app';
+
+    @sent = ();
+    $app->({ type => 'http', method => 'GET', path => '/other' },
+        sub { Future->done }, $send)->get;
+    is $sent[1]{body}, 'fallback', 'final block value coerced to app';
 };
 
 done_testing;

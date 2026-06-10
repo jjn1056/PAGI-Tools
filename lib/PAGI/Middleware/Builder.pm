@@ -4,6 +4,8 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use Carp 'croak';
+use Scalar::Util qw(blessed);
+use PAGI::Utils ();
 
 # Note: We use traditional Perl subs because prototypes don't work with signatures.
 
@@ -64,6 +66,13 @@ our $_current_builder;
 
 Create a composed application using the DSL. The block should
 call enable(), enable_if(), mount(), and return the final app.
+The final value of the block is coerced via C<PAGI::Utils::to_app>,
+so you can return a component object or class name directly:
+
+    my $app = builder {
+        enable 'ContentLength';
+        PAGI::App::NotFound->new;
+    };
 
 =cut
 
@@ -79,10 +88,15 @@ sub builder (&) {
     enable 'MiddlewareName', %config;
     enable 'Auth::Basic', %config;        # PAGI::Middleware::Auth::Basic
     enable '^My::Custom::Middleware';     # My::Custom::Middleware (no prefix)
+    enable(PAGI::Middleware::GZip->new(level => 9));  # pre-configured instance
 
 Enable a middleware. The name is automatically prefixed with
 'PAGI::Middleware::' unless it starts with '^', which indicates
 a fully qualified class name (the '^' is stripped).
+
+When passed an already-configured middleware instance (an object with a
+C<wrap> method), it is used directly. Passing config args alongside an
+instance is an error — configure the instance at construction time.
 
 =cut
 
@@ -95,9 +109,12 @@ sub enable {
 =head2 enable_if
 
     enable_if { $condition } 'MiddlewareName', %config;
+    enable_if { $condition } (PAGI::Middleware::GZip->new(level => 9));
 
 Conditionally enable middleware. The condition block receives
-the scope and returns true/false.
+the scope and returns true/false. A pre-configured middleware instance
+may be passed instead of a class name; config args alongside an instance
+are an error.
 
 =cut
 
@@ -110,9 +127,13 @@ sub enable_if (&$;@) {
 =head2 mount
 
     mount '/path' => $app;
+    mount '/static' => PAGI::App::File->new(root => $dir);
+    mount '/api'    => 'MyApp::API';
 
 Mount an application at a path prefix. Requests matching the
-prefix are routed to the mounted app with adjusted paths.
+prefix are routed to the mounted app with adjusted paths. The app
+argument accepts anything C<PAGI::Utils::to_app> accepts: a coderef,
+a component object with C<to_app>, or a class name.
 
 =cut
 
@@ -150,6 +171,19 @@ Add middleware to the stack (OO interface).
 
 sub add_middleware {
     my ($self, $name, %config) = @_;
+
+    if (blessed($name)) {
+        croak "enable() with a middleware instance takes no config"
+            . " (configure it at construction time)" if %config;
+        croak ref($name) . " does not look like middleware (no wrap method)"
+            unless $name->can('wrap');
+        push @{$self->{middleware}}, {
+            instance  => $name,
+            condition => undef,
+        };
+        return $self;
+    }
+
     my $class = $self->_resolve_middleware($name);
     push @{$self->{middleware}}, {
         class     => $class,
@@ -169,6 +203,19 @@ Add conditional middleware to the stack (OO interface).
 
 sub add_middleware_if {
     my ($self, $condition, $name, %config) = @_;
+
+    if (blessed($name)) {
+        croak "enable_if() with a middleware instance takes no config"
+            . " (configure it at construction time)" if %config;
+        croak ref($name) . " does not look like middleware (no wrap method)"
+            unless $name->can('wrap');
+        push @{$self->{middleware}}, {
+            instance  => $name,
+            condition => $condition,
+        };
+        return $self;
+    }
+
     my $class = $self->_resolve_middleware($name);
     push @{$self->{middleware}}, {
         class     => $class,
@@ -194,7 +241,7 @@ sub add_mount {
 
     push @{$self->{mounts}}, {
         path => $path,
-        app  => $app,
+        app  => PAGI::Utils::to_app($app),
     };
     return $self;
 }
@@ -203,12 +250,17 @@ sub add_mount {
 
     my $app = $builder->to_app($inner_app);
 
-Build the composed application.
+Build the composed application. C<$inner_app> accepts anything
+C<PAGI::Utils::to_app> accepts: a coderef, a component object with
+C<to_app>, or a class name. This means C<builder { ...; $router }> and
+C<builder { ...; PAGI::App::NotFound->new }> work without an explicit
+C<< ->to_app >> call.
 
 =cut
 
 sub to_app {
     my ($self, $app) = @_;
+    $app = PAGI::Utils::to_app($app);
 
     # Apply mounts first (innermost)
     if (@{$self->{mounts}}) {
@@ -253,9 +305,25 @@ sub _resolve_middleware {
 # Private: wrap a middleware around an app
 sub _wrap_middleware {
     my ($self, $mw, $app) = @_;
-    my $class     = $mw->{class};
-    my $config    = $mw->{config};
     my $condition = $mw->{condition};
+
+    # Pre-configured instance path
+    if (my $instance = $mw->{instance}) {
+        my $wrapped = $instance->wrap($app);
+        return $wrapped unless $condition;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            if ($condition->($scope)) {
+                await $wrapped->($scope, $receive, $send);
+            } else {
+                await $app->($scope, $receive, $send);
+            }
+        };
+    }
+
+    # Class name + config path
+    my $class  = $mw->{class};
+    my $config = $mw->{config};
 
     if ($condition) {
         # Conditional middleware
