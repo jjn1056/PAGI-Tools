@@ -479,6 +479,7 @@ sub _include_router {
     my ($self, $source) = @_;
 
     # Re-register HTTP routes through route() (stack applies prefix/middleware)
+    # Re-registered apps are already compiled coderefs; to_app is identity on coderefs
     for my $route (@{$source->{routes}}) {
         $self->route(
             $route->{method},

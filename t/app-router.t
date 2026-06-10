@@ -710,6 +710,14 @@ subtest 'router coerces mount and route targets' => sub {
     $app->({ type => 'http', method => 'GET', path => '/direct' },
         sub { Future->done }, $send)->get;
     is $sent->[1]{body}, 'route-component', 'route target coerced';
+
+    my $router_s = PAGI::App::Router->new;
+    $router_s->get('/s' => 'TestApps::Component');
+    my $app_s = $router_s->to_app;
+    ($send, $sent) = mock_send();
+    $app_s->({ type => 'http', method => 'GET', path => '/s' },
+        sub { Future->done }, $send)->get;
+    is $sent->[1]{body}, 'component', 'class-name string route target coerced';
 };
 
 done_testing;
