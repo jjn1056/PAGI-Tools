@@ -65,6 +65,8 @@ sub header_all { shift->sse->header_all(@_) }
 
 __END__
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::Context::SSE - SSE context with protocol operations

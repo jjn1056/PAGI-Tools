@@ -7,6 +7,8 @@ use Scalar::Util qw(blessed);
 use Future::AsyncAwait;
 use Future;
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::Context - Per-request context with protocol-specific subclasses

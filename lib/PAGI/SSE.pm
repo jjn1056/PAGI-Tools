@@ -657,6 +657,8 @@ sub _watch_for_disconnect {
 
 __END__
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections

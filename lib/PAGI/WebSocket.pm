@@ -627,6 +627,8 @@ async sub keepalive {
 
 __END__
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::WebSocket - Convenience wrapper for PAGI WebSocket connections

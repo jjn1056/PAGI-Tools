@@ -9,6 +9,8 @@ use Encode qw(encode FB_CROAK);
 use JSON::MaybeXS ();
 
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::Response - Fluent response builder for PAGI applications

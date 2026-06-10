@@ -84,6 +84,8 @@ sub header_all { shift->ws->header_all(@_) }
 
 __END__
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::Context::WebSocket - WebSocket context with protocol operations

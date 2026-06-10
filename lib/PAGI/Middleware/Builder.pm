@@ -9,6 +9,8 @@ use PAGI::Utils ();
 
 # Note: We use traditional Perl subs because prototypes don't work with signatures.
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::Middleware::Builder - DSL for composing PAGI middleware
