@@ -9,5 +9,15 @@
   - New PAGI::Tools module anchors the distribution.
   - The application runner ships in the PAGI-Server distribution as
     PAGI::Server::Runner (the launcher lives with the server it launches).
+  - PAGI::Utils::to_app coerces coderefs, component objects, and class
+    names into PAGI apps. All composition points (builder mounts and
+    final value, router mount/route targets, Cascade, URLMap,
+    PAGI::Test::Client) accept anything it accepts - no more ->to_app
+    ceremony at composition sites.
+  - builder's enable() accepts configured middleware instances,
+    duck-typed on wrap(), matching router route middleware.
+  - Spec compliance: PAGI::App::URLMap now sets root_path (was the
+    off-spec script_name); PAGI::App::WrapCGI builds SCRIPT_NAME from
+    root_path (was reading the never-set script_name).
   - For changes prior to 0.002000, see the Changes file of the PAGI
     distribution (versions up to 0.001023).
