@@ -16,7 +16,7 @@ sub routes {
     $r->get('/' => 'home');
 
     # API subrouter
-    $r->mount('/api' => MyApp::API->to_app);
+    $r->mount('/api' => 'MyApp::API');
 
     # WebSocket echo
     $r->websocket('/ws/echo' => 'ws_echo');
@@ -26,7 +26,7 @@ sub routes {
 
     # Static files - find the root directory dynamically
     my $root = File::Spec->catdir(dirname(__FILE__), '..', '..', 'public');
-    $r->mount('/' => PAGI::App::File->new(root => $root)->to_app);
+    $r->mount('/' => PAGI::App::File->new(root => $root));
 }
 
 async sub home {

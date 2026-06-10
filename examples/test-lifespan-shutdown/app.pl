@@ -6,6 +6,8 @@ use PAGI::App::NotFound;
 
 print STDERR "Parent PID: $$\n";
 
+my $not_found = PAGI::App::NotFound->new->to_app;
+
 my $app = async sub {
     my ($scope, $receive, $send) = @_;
 
@@ -28,7 +30,7 @@ my $app = async sub {
     }
 
     # Default handler for HTTP
-    return await PAGI::App::NotFound->new->to_app->($scope, $receive, $send);
+    return await $not_found->($scope, $receive, $send);
 };
 
 $app;

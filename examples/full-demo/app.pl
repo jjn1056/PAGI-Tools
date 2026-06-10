@@ -196,6 +196,8 @@ $router->sse('/events' => async sub {
     $disconnect->cancel if $disconnect->can('cancel') && !$disconnect->is_ready;
 })->name('sse_events');
 
+my $router_app = $router->to_app;
+
 # ============================================================================
 # Main Application with Lifespan
 # ============================================================================
@@ -229,7 +231,7 @@ async sub pagi {
     ) if $scope->{type} eq 'lifespan';
 
     # Route all other requests through the router
-    return await $router->to_app->($scope, $receive, $send);
+    return await $router_app->($scope, $receive, $send);
 }
 
 \&pagi;
