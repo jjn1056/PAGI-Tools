@@ -98,6 +98,9 @@ When passed an already-configured middleware instance (an object with a
 C<wrap> method), it is used directly. Passing config args alongside an
 instance is an error — configure the instance at construction time.
 
+The parentheses are required for the instance form: C<enable $obj> without
+them is parsed as an indirect method call and dies with a confusing error.
+
 =cut
 
 sub enable {

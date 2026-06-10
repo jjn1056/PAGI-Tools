@@ -139,6 +139,14 @@ subtest 'enable croaks on instance plus config' => sub {
     like dies { $builder->add_middleware(PAGI::Middleware::Head->new, foo => 1) },
         qr/takes no config/,
         'config with instance belongs at construction time';
+
+    like dies { PAGI::Middleware::Builder->new->add_middleware(bless {}, 'TestApps::NotMiddleware') },
+        qr/no wrap method/,
+        'blessed object without wrap croaks';
+
+    like dies { PAGI::Middleware::Builder->new->add_middleware_if(sub { 1 }, PAGI::Middleware::Head->new, foo => 1) },
+        qr/takes no config/,
+        'enable_if instance plus config croaks';
 };
 
 subtest 'builder coerces mounts and the final app' => sub {
