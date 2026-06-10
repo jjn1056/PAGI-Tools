@@ -928,7 +928,7 @@ HTTP routes.
 Mount a PAGI app under a path prefix. The mounted app receives requests
 with the prefix stripped from the path and added to C<root_path>.
 
-The target can be anything accepted by C<PAGI::Utils::to_app>: a coderef,
+The target can be anything accepted by L<PAGI::Utils/to_app>: a coderef,
 a component object with a C<to_app> method, or a package name string.
 When a C<PAGI::App::Router> object is passed directly, C<< ->as() >> can
 be used to namespace its named routes. When a coderef, component object,
@@ -937,7 +937,7 @@ router object to import names from.
 
 Route handlers registered with C<get>, C<post>, C<put>, C<patch>,
 C<delete>, C<head>, C<options>, C<any>, C<websocket>, and C<sse> also
-accept anything C<PAGI::Utils::to_app> accepts.
+accept anything L<PAGI::Utils/to_app> accepts.
 
 B<String form:> The package is loaded via C<require>, then
 C<< $package->to_app >> is called. The result must be a PAGI app coderef.

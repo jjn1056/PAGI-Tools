@@ -66,7 +66,7 @@ our $_current_builder;
 
 Create a composed application using the DSL. The block should
 call enable(), enable_if(), mount(), and return the final app.
-The final value of the block is coerced via C<PAGI::Utils::to_app>,
+The final value of the block is coerced via L<PAGI::Utils/to_app>,
 so you can return a component object or class name directly:
 
     my $app = builder {
@@ -135,7 +135,7 @@ sub enable_if (&$;@) {
 
 Mount an application at a path prefix. Requests matching the
 prefix are routed to the mounted app with adjusted paths. The app
-argument accepts anything C<PAGI::Utils::to_app> accepts: a coderef,
+argument accepts anything L<PAGI::Utils/to_app> accepts: a coderef,
 a component object with C<to_app>, or a class name.
 
 =cut
@@ -254,7 +254,7 @@ sub add_mount {
     my $app = $builder->to_app($inner_app);
 
 Build the composed application. C<$inner_app> accepts anything
-C<PAGI::Utils::to_app> accepts: a coderef, a component object with
+L<PAGI::Utils/to_app> accepts: a coderef, a component object with
 C<to_app>, or a class name. This means C<builder { ...; $router }> and
 C<builder { ...; PAGI::App::NotFound->new }> work without an explicit
 C<< ->to_app >> call.
