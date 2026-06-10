@@ -40,7 +40,7 @@ sub to_app {
         # Build CGI environment
         my %env = (
             REQUEST_METHOD  => $scope->{method},
-            SCRIPT_NAME     => $scope->{script_name} // '',
+            SCRIPT_NAME     => $scope->{root_path} // '',
             PATH_INFO       => $scope->{path},
             QUERY_STRING    => $scope->{query_string} // '',
             SERVER_PROTOCOL => 'HTTP/' . ($scope->{http_version} // '1.1'),
