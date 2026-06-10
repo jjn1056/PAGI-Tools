@@ -324,6 +324,12 @@ subtest 'URLMap sets spec root_path key (not script_name)' => sub {
     is $coercion_calls[0]{root_path}, '/api', 'root_path set to mount prefix';
     is $coercion_calls[0]{path}, '/users', 'path has prefix stripped';
     ok !exists $coercion_calls[0]{script_name}, 'off-spec script_name key is gone';
+
+    @sent = ();
+    @coercion_calls = ();
+    $app->({ type => 'http', method => 'GET', path => '/api/users', root_path => '/outer' },
+        sub { Future->done }, $send)->get;
+    is $coercion_calls[0]{root_path}, '/outer/api', 'root_path appends to existing (nested mounts)';
 };
 
 subtest 'URLMap coerces components, class names, and default' => sub {
