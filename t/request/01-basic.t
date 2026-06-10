@@ -328,6 +328,35 @@ subtest 'on_disconnect with connection returns $self' => sub {
     is scalar @{$conn->{cbs}}, 1, 'callback was delegated to connection';
 };
 
+subtest 'on_complete returns $self for chaining' => sub {
+    my $scope = { type => 'http', method => 'GET', headers => [] };
+    my $req = PAGI::Request->new($scope);
+
+    # No connection — early-return path must still return $self
+    is $req->on_complete(sub {}), $req,
+        'on_complete returns $self when no connection';
+};
+
+subtest 'on_complete with connection delegates and returns $self' => sub {
+    {
+        package t::MockConnComplete;
+        sub new { bless { cbs => [] }, shift }
+        sub on_complete {
+            my ($self, $cb) = @_;
+            push @{$self->{cbs}}, $cb;
+        }
+    }
+
+    my $conn = t::MockConnComplete->new;
+    my $scope = { type => 'http', method => 'GET', headers => [],
+                  'pagi.connection' => $conn };
+    my $req = PAGI::Request->new($scope);
+
+    is $req->on_complete(sub {}), $req,
+        'on_complete returns $self when connection is present';
+    is scalar @{$conn->{cbs}}, 1, 'callback was delegated to connection';
+};
+
 subtest 'headers as Hash::MultiValue' => sub {
     my $scope = {
         type    => 'http',

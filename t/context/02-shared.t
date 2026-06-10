@@ -118,6 +118,33 @@ subtest 'connection state with mock connection' => sub {
     is($callbacks[0], $cb, 'correct callback registered');
 };
 
+subtest 'on_complete delegates to connection' => sub {
+    my @complete_cbs;
+
+    my $mock_conn = bless {}, 'MockConnComplete';
+    {
+        no strict 'refs';  ## no critic
+        no warnings 'once';
+        *MockConnComplete::on_complete = sub { push @complete_cbs, $_[1] };
+    }
+
+    my $scope = {
+        type              => 'http',
+        headers           => [],
+        'pagi.connection' => $mock_conn,
+    };
+    my $ctx = PAGI::Context->new($scope, sub {}, sub {});
+
+    my $cb = sub { 'done' };
+    $ctx->on_complete($cb);
+    is(scalar @complete_cbs, 1, 'on_complete registers callback');
+    is($complete_cbs[0], $cb, 'correct callback registered');
+
+    # No connection — must not die.
+    my $bare = PAGI::Context->new({ type => 'http', headers => [] }, sub {}, sub {});
+    ok(lives { $bare->on_complete(sub {}) }, 'on_complete is a no-op without a connection');
+};
+
 subtest 'stash shared across protocol helpers' => sub {
     my $scope = { type => 'http', method => 'GET', path => '/', headers => [] };
     my $ctx = PAGI::Context->new($scope, sub {}, sub {});

@@ -374,10 +374,13 @@ sub state {
     $ctx->connection;           # PAGI::Server::ConnectionState object
     $ctx->is_connected;         # boolean
     $ctx->is_disconnected;      # boolean
-    $ctx->disconnect_reason;    # string or undef
-    $ctx->on_disconnect($cb);   # register callback
+    $ctx->disconnect_reason;    # string or undef (abnormal disconnect only)
+    $ctx->on_disconnect($cb);   # callback on abnormal disconnect
+    $ctx->on_complete($cb);     # callback on clean completion
 
-Delegates to C<< $scope->{'pagi.connection'} >>.
+Delegates to C<< $scope->{'pagi.connection'} >>. C<on_disconnect> fires only on
+an abnormal end and C<on_complete> only on a clean finish -- exactly one per
+request.
 
 =cut
 
@@ -410,6 +413,13 @@ sub on_disconnect {
     my $conn = $self->connection;
     return unless $conn;
     $conn->on_disconnect($cb);
+}
+
+sub on_complete {
+    my ($self, $cb) = @_;
+    my $conn = $self->connection;
+    return unless $conn;
+    $conn->on_complete($cb);
 }
 
 =head1 EVENT DISPATCHER

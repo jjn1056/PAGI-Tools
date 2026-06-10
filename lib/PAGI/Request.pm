@@ -255,11 +255,21 @@ sub disconnect_reason {
     return $conn->disconnect_reason;
 }
 
-# Register a callback to be invoked when disconnect occurs
+# Register a callback to be invoked on an abnormal disconnect (not on a clean
+# finish). The counterpart to on_complete; exactly one of the two fires.
 sub on_disconnect {
     my ($self, $cb) = @_;
     my $conn = $self->connection;
     $conn->on_disconnect($cb) if $conn;
+    return $self;
+}
+
+# Register a callback to be invoked only when the request completes successfully.
+# The counterpart to on_disconnect; exactly one of the two fires.
+sub on_complete {
+    my ($self, $cb) = @_;
+    my $conn = $self->connection;
+    $conn->on_complete($cb) if $conn;
     return $self;
 }
 
@@ -1120,13 +1130,28 @@ See L<PAGI::Server::ConnectionState/disconnect_reason> for the full list.
 
     $req->on_disconnect(sub {
         my ($reason) = @_;
-        cleanup_resources();
+        rollback();
         log_info("Client disconnected: $reason");
     });
 
-Registers a callback to be invoked when the client disconnects. Multiple
-callbacks may be registered. If the client has already disconnected, the
-callback is invoked immediately.
+Registers a callback invoked B<only on an abnormal disconnect> (the client
+goes away, a timeout fires, an error occurs) -- not on a clean finish. The
+callback receives the disconnect reason. Multiple callbacks may be registered;
+if the client has already disconnected, the callback is invoked immediately.
+Returns the request for chaining. The counterpart to L</on_complete>: exactly
+one of the two fires per request.
+
+=head2 on_complete
+
+    $req->on_complete(sub {
+        commit();
+    });
+
+Registers a callback invoked B<only when the request completes successfully>
+(the response was fully delivered without the client disconnecting). Multiple
+callbacks may be registered; if the request has already completed, the callback
+is invoked immediately. Returns the request for chaining. The counterpart to
+L</on_disconnect>.
 
 =head2 disconnect_future
 
