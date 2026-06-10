@@ -7,6 +7,8 @@ use Future::AsyncAwait;
 use IO::Async::Loop;
 
 use lib 'lib';
+use FindBin;
+use lib "$FindBin::Bin/../lib";
 
 use PAGI::App::URLMap;
 use PAGI::App::Cascade;
@@ -295,6 +297,61 @@ subtest 'App::Redirect returns redirects' => sub {
         ok((grep { $_->[0] eq 'location' && $_->[1] eq '/prefix/test' } @{$sent[0]{headers}}),
             'dynamic Location');
     };
+};
+
+subtest 'URLMap sets spec root_path key (not script_name)' => sub {
+    my @coercion_calls;
+    my $inner = async sub {
+        my ($scope, $receive, $send) = @_;
+        push @coercion_calls, $scope;
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+        await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
+    };
+
+    my $map = PAGI::App::URLMap->new;
+    $map->mount('/api' => $inner);
+    my $app = $map->to_app;
+
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+    $app->({ type => 'http', method => 'GET', path => '/api/users' },
+        sub { Future->done }, $send)->get;
+
+    is $coercion_calls[0]{root_path}, '/api', 'root_path set to mount prefix';
+    is $coercion_calls[0]{path}, '/users', 'path has prefix stripped';
+    ok !exists $coercion_calls[0]{script_name}, 'off-spec script_name key is gone';
+};
+
+subtest 'URLMap coerces components, class names, and default' => sub {
+    require TestApps::Component;
+
+    my $map = PAGI::App::URLMap->new(
+        default => TestApps::Component->new(body => 'fallback'),
+    );
+    $map->mount('/c' => TestApps::Component->new(body => 'mounted'));
+    $map->mount('/s' => 'TestApps::Component');
+    my $app = $map->to_app;
+
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+
+    $app->({ type => 'http', method => 'GET', path => '/c/x' },
+        sub { Future->done }, $send)->get;
+    is $sent[1]{body}, 'mounted', 'component object mounted directly';
+
+    @sent = ();
+    $app->({ type => 'http', method => 'GET', path => '/s/x' },
+        sub { Future->done }, $send)->get;
+    is $sent[1]{body}, 'component', 'class name mounted directly';
+
+    @sent = ();
+    $app->({ type => 'http', method => 'GET', path => '/nomatch' },
+        sub { Future->done }, $send)->get;
+    is $sent[1]{body}, 'fallback', 'default coerced too';
 };
 
 done_testing;

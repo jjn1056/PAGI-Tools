@@ -3,6 +3,7 @@ package PAGI::App::URLMap;
 use strict;
 use warnings;
 use Future::AsyncAwait;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -13,8 +14,8 @@ PAGI::App::URLMap - Mount apps at URL path prefixes
     use PAGI::App::URLMap;
 
     my $map = PAGI::App::URLMap->new;
-    $map->mount('/api' => $api_app);
-    $map->mount('/static' => $static_app);
+    $map->mount('/api'    => $api_app);
+    $map->mount('/static' => PAGI::App::File->new(root => $dir));
     my $app = $map->to_app;
 
 =cut
@@ -23,8 +24,8 @@ sub new {
     my ($class, %args) = @_;
 
     return bless {
-        mounts => [],
-        default => $args{default},
+        mounts  => [],
+        default => defined $args{default} ? PAGI::Utils::to_app($args{default}) : undef,
     }, $class;
 }
 
@@ -32,7 +33,7 @@ sub mount {
     my ($self, $path, $app) = @_;
 
     $path =~ s{/+$}{};  # Remove trailing slashes
-    push @{$self->{mounts}}, [$path, $app];
+    push @{$self->{mounts}}, [$path, PAGI::Utils::to_app($app)];
     # Keep sorted by length (longest first) for proper matching
     @{$self->{mounts}} = sort { length($b->[0]) <=> length($a->[0]) } @{$self->{mounts}};
     return $self;
@@ -68,8 +69,8 @@ sub to_app {
 
                 my $new_scope = {
                     %$scope,
-                    path => $new_path,
-                    script_name => ($scope->{script_name} // '') . $prefix,
+                    path      => $new_path,
+                    root_path => ($scope->{root_path} // '') . $prefix,
                 };
 
                 await $app->($new_scope, $receive, $send);
@@ -101,11 +102,17 @@ URLMap routes requests to different apps based on URL path prefix.
 Longest prefix match wins. The mounted app sees an adjusted path
 with the prefix removed.
 
+Mount targets and C<default> accept anything L<PAGI::Utils/to_app> accepts:
+a coderef, a component object with a C<to_app> method, or a class name.
+Mounted apps receive a scope with C<path> stripped of the prefix and
+C<root_path> extended with it, per the PAGI specification.
+
 =head1 OPTIONS
 
 =over 4
 
-=item * C<default> - App to use when no prefix matches
+=item * C<default> - App (coderef, component object, or class name) to use
+when no prefix matches
 
 =back
 
