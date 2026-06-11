@@ -166,6 +166,28 @@ sub disconnect_reason {
     return $self->{_disconnect_reason};
 }
 
+# Outbound flow-control introspection (delegates to the pagi.transport handle)
+sub buffered_amount {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return 0 unless $t;
+    return $t->buffered_amount;
+}
+
+sub high_water_mark {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return undef unless $t;
+    return $t->high_water_mark;
+}
+
+sub low_water_mark {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return undef unless $t;
+    return $t->low_water_mark;
+}
+
 # Internal state setters
 sub _set_state {
     my ($self, $state) = @_;
@@ -901,6 +923,18 @@ Returns the reason for disconnect, if available. Common values:
 =back
 
 Returns C<undef> if connection is still open or reason is unknown.
+
+=head2 buffered_amount, high_water_mark, low_water_mark
+
+    my $pending = $sse->buffered_amount;   # bytes queued, not yet on the wire
+    my $ceiling = $sse->high_water_mark;    # backpressure ceiling (or undef)
+    my $floor   = $sse->low_water_mark;     # backpressure floor (or undef)
+
+Outbound flow-control introspection, delegated to the server-provided
+C<pagi.transport> handle (see L<PAGI::Spec::Www/"Transport Flow Control">). Use
+C<buffered_amount> to conflate, coalesce, shed load, or disconnect a slow client
+instead of only blocking on drain; when the server does not provide the handle,
+C<buffered_amount> returns C<0> and the watermarks return C<undef>.
 
 =head1 SEND METHODS
 

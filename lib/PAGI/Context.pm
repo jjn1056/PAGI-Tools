@@ -382,6 +382,13 @@ Delegates to C<< $scope->{'pagi.connection'} >>. C<on_disconnect> fires only on
 an abnormal end and C<on_complete> only on a clean finish -- exactly one per
 request.
 
+C<< $ctx->buffered_amount >>, C<< $ctx->high_water_mark >>, and
+C<< $ctx->low_water_mark >> expose outbound flow control via the server's
+C<pagi.transport> handle (see L<PAGI::Spec::Www/"Transport Flow Control">):
+bytes queued for the client but not yet on the wire, and the backpressure band.
+C<buffered_amount> returns C<0> (and the watermarks C<undef>) when the server
+does not provide the handle.
+
 =cut
 
 sub connection {
@@ -420,6 +427,28 @@ sub on_complete {
     my $conn = $self->connection;
     return unless $conn;
     $conn->on_complete($cb);
+}
+
+# Outbound flow-control introspection (delegates to the pagi.transport handle)
+sub buffered_amount {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return 0 unless $t;
+    return $t->buffered_amount;
+}
+
+sub high_water_mark {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return undef unless $t;
+    return $t->high_water_mark;
+}
+
+sub low_water_mark {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return undef unless $t;
+    return $t->low_water_mark;
 }
 
 =head1 EVENT DISPATCHER

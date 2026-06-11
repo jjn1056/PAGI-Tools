@@ -197,6 +197,28 @@ sub is_closed {
 sub close_code   { shift->{_close_code} }
 sub close_reason { shift->{_close_reason} }
 
+# Outbound flow-control introspection (delegates to the pagi.transport handle)
+sub buffered_amount {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return 0 unless $t;
+    return $t->buffered_amount;
+}
+
+sub high_water_mark {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return undef unless $t;
+    return $t->high_water_mark;
+}
+
+sub low_water_mark {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return undef unless $t;
+    return $t->low_water_mark;
+}
+
 # Internal state setters
 sub _set_state {
     my ($self, $state) = @_;
@@ -896,6 +918,18 @@ Idempotent - calling multiple times only sends close once.
     my $reason = $ws->close_reason;    # 'Normal closure'
 
 Available after connection closes. Defaults: code=1005, reason=''.
+
+=head2 buffered_amount, high_water_mark, low_water_mark
+
+    my $pending = $ws->buffered_amount;   # bytes queued, not yet on the wire
+    my $ceiling = $ws->high_water_mark;    # backpressure ceiling (or undef)
+    my $floor   = $ws->low_water_mark;     # backpressure floor (or undef)
+
+Outbound flow-control introspection, delegated to the server-provided
+C<pagi.transport> handle (see L<PAGI::Spec::Www/"Transport Flow Control">). Use
+C<buffered_amount> to conflate, coalesce, shed load, or disconnect a slow client
+instead of only blocking on drain; when the server does not provide the handle,
+C<buffered_amount> returns C<0> and the watermarks return C<undef>.
 
 =head1 SEND METHODS
 
