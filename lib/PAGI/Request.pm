@@ -303,6 +303,29 @@ sub low_water_mark {
     return $t->low_water_mark;
 }
 
+sub on_high_water {
+    my ($self, $cb) = @_;
+    my $t = $self->{scope}{'pagi.transport'};
+    $t->on_high_water($cb) if $t && $t->can('on_high_water');
+    return $self;
+}
+
+sub on_drain {
+    my ($self, $cb) = @_;
+    my $t = $self->{scope}{'pagi.transport'};
+    $t->on_drain($cb) if $t && $t->can('on_drain');
+    return $self;
+}
+
+sub is_writable {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return 1 unless $t;
+    my $high = $t->high_water_mark;
+    return 1 unless defined $high;
+    return $t->buffered_amount < $high ? 1 : 0;
+}
+
 # Content-type predicates
 sub is_json {
     my $self = shift;
@@ -1199,6 +1222,19 @@ C<pagi.transport> handle (see L<PAGI::Spec::Www/"Transport Flow Control">). For 
 streaming response, use C<buffered_amount> to conflate or shed load instead of
 only blocking on drain; when the server does not provide the handle,
 C<buffered_amount> returns C<0> and the watermarks return C<undef>.
+
+=head2 on_high_water, on_drain, is_writable
+
+    $req->on_high_water(sub { $source->pause });   # backpressure engaged
+    $req->on_drain(sub      { $source->resume });   # backpressure cleared
+    last unless $req->is_writable;                   # below the high mark?
+
+Backpressure controls delegated to the C<pagi.transport> handle. C<on_high_water>
+and C<on_drain> register edge-triggered callbacks (the Node/Mojo C<drain> model)
+for producers that cannot self-pace with a blocking send; each returns the
+object for chaining. C<is_writable> is true when the outbound buffer is below the
+high mark. When the server provides no transport handle (or only the read
+methods), the callbacks are quiet no-ops and C<is_writable> is true.
 
 =head1 AUTH HELPERS
 

@@ -389,6 +389,13 @@ bytes queued for the client but not yet on the wire, and the backpressure band.
 C<buffered_amount> returns C<0> (and the watermarks C<undef>) when the server
 does not provide the handle.
 
+C<< $ctx->on_high_water($cb) >> and C<< $ctx->on_drain($cb) >> register
+edge-triggered backpressure callbacks (pause/resume a producer), and
+C<< $ctx->is_writable >> is true while the buffer is below the high mark. Both
+delegate to C<pagi.transport> and degrade quietly -- the callbacks become no-ops
+and C<is_writable> stays true -- when the handle (or its callback support) is
+absent.
+
 =cut
 
 sub connection {
@@ -449,6 +456,29 @@ sub low_water_mark {
     my $t = $self->{scope}{'pagi.transport'};
     return undef unless $t;
     return $t->low_water_mark;
+}
+
+sub on_high_water {
+    my ($self, $cb) = @_;
+    my $t = $self->{scope}{'pagi.transport'};
+    $t->on_high_water($cb) if $t && $t->can('on_high_water');
+    return $self;
+}
+
+sub on_drain {
+    my ($self, $cb) = @_;
+    my $t = $self->{scope}{'pagi.transport'};
+    $t->on_drain($cb) if $t && $t->can('on_drain');
+    return $self;
+}
+
+sub is_writable {
+    my $self = shift;
+    my $t = $self->{scope}{'pagi.transport'};
+    return 1 unless $t;
+    my $high = $t->high_water_mark;
+    return 1 unless defined $high;
+    return $t->buffered_amount < $high ? 1 : 0;
 }
 
 =head1 EVENT DISPATCHER
