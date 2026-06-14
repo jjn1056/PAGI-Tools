@@ -121,11 +121,24 @@ async sub handle {
             await $send->({ type => 'lifespan.startup.complete' });
         }
         elsif ($type eq 'lifespan.shutdown') {
+            # Run every shutdown handler (best-effort cleanup: one failing
+            # handler must not prevent the others from releasing resources),
+            # collecting any errors so they can be reported rather than swallowed.
+            my @errors;
             for my $handler (reverse @handlers) {
                 next unless $handler->{shutdown};
                 eval { await $handler->{shutdown}->($state) };
+                push @errors, "$@" if $@;
             }
-            await $send->({ type => 'lifespan.shutdown.complete' });
+            if (@errors) {
+                await $send->({
+                    type    => 'lifespan.shutdown.failed',
+                    message => join("\n", @errors),
+                });
+            }
+            else {
+                await $send->({ type => 'lifespan.shutdown.complete' });
+            }
             return 1;
         }
     }
@@ -198,6 +211,16 @@ its C<startup> and C<shutdown> callbacks in C<< $scope->{'pagi.lifespan.handlers
 Startup callbacks run in registration order (outer to inner), and shutdown
 callbacks run in reverse order (inner to outer). The actual application
 does not receive lifespan events unless it explicitly handles them.
+
+=head2 Error Handling
+
+If a C<startup> handler dies, the manager sends C<lifespan.startup.failed>
+(with the error in C<message>) and stops; the application does not start.
+
+Shutdown is B<best-effort>: every C<shutdown> handler runs even if an earlier
+one dies, so a single failing cleanup cannot strand the others. If any handler
+dies, the manager sends C<lifespan.shutdown.failed> -- with the collected
+error(s) in C<message> -- instead of C<lifespan.shutdown.complete>.
 
 =head1 METHODS
 

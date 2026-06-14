@@ -132,4 +132,67 @@ subtest 'startup failure sends failed message' => sub {
     })->()->get;
 };
 
+subtest 'shutdown failure sends failed message' => sub {
+    my $inner_app = async sub { };
+
+    my $lifespan = PAGI::Lifespan->new(
+        app      => $inner_app,
+        shutdown => async sub { die "Cleanup failed"; },
+    );
+
+    my $app = $lifespan->to_app;
+
+    (async sub {
+        my @sent;
+        my $msg_index = 0;
+        my @messages = (
+            { type => 'lifespan.startup' },
+            { type => 'lifespan.shutdown' },
+        );
+        await $app->(
+            { type => 'lifespan' },
+            sub { Future->done($messages[$msg_index++]) },
+            sub { push @sent, $_[0]; Future->done }
+        );
+
+        is($sent[0]{type}, 'lifespan.startup.complete', 'startup complete sent');
+        is($sent[1]{type}, 'lifespan.shutdown.failed', 'shutdown failed sent, not complete');
+        like($sent[1]{message}, qr/Cleanup failed/, 'error message included');
+    })->()->get;
+};
+
+subtest 'shutdown runs all handlers despite a failure' => sub {
+    my $inner_app = async sub { };
+    my @ran;
+
+    # Two wrappers: outer registers first, inner registers second.
+    # Shutdown runs in reverse (inner first); the inner one dies, but the
+    # outer cleanup must still run.
+    my $lifespan = PAGI::Lifespan->new(
+        app      => $inner_app,
+        shutdown => async sub { push @ran, 'outer'; },   # registered first
+    );
+    $lifespan->on_shutdown(async sub { push @ran, 'inner'; die "inner cleanup failed"; });
+
+    my $app = $lifespan->to_app;
+
+    (async sub {
+        my @sent;
+        my $msg_index = 0;
+        my @messages = (
+            { type => 'lifespan.startup' },
+            { type => 'lifespan.shutdown' },
+        );
+        await $app->(
+            { type => 'lifespan' },
+            sub { Future->done($messages[$msg_index++]) },
+            sub { push @sent, $_[0]; Future->done }
+        );
+
+        is(\@ran, ['inner', 'outer'], 'both handlers ran (inner first), failure did not abort cleanup');
+        is($sent[1]{type}, 'lifespan.shutdown.failed', 'shutdown failed reported');
+        like($sent[1]{message}, qr/inner cleanup failed/, 'failing handler error reported');
+    })->()->get;
+};
+
 done_testing;
