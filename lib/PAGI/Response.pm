@@ -446,7 +446,7 @@ pub/sub callbacks, timers, or other contexts outside a single function:
         my ($self, $ctx) = @_;
         my $writer = await $ctx->response
             ->content_type('text/plain')
-            ->writer($send, on_close => sub { $bus->unsubscribe($id) });
+            ->writer($ctx->send, on_close => sub { $bus->unsubscribe($id) });
 
         my $id = $bus->subscribe(async sub ($line) {
             await $writer->write("$line\n");
