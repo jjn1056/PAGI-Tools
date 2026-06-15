@@ -120,7 +120,7 @@ subtest 'full HTTP round-trip' => sub {
     my $ctx = PAGI::Context->new($scope, $receive, $send);
 
     (async sub {
-        await $ctx->response->text('Hello from context!');
+        await $ctx->respond($ctx->response->text('Hello from context!'));
     })->()->get;
 
     is($sent[0]{status}, 200, 'response status sent');

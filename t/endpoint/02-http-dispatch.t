@@ -15,12 +15,12 @@ package TestEndpoint {
 
     async sub get {
         my ($self, $ctx) = @_;
-        await $ctx->response->text("GET response");
+        return $ctx->response->text("GET response");
     }
 
     async sub post {
         my ($self, $ctx) = @_;
-        await $ctx->response->text("POST response");
+        return $ctx->response->text("POST response");
     }
 }
 

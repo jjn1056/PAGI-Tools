@@ -31,13 +31,13 @@ subtest 'HTTP handler receives $ctx' => sub {
             my ($self, $ctx) = @_;
             die "Expected PAGI::Context::HTTP"
                 unless $ctx->isa('PAGI::Context::HTTP');
-            await $ctx->response->text('Hello!');
+            return $ctx->response->text('Hello!');
         }
 
         async sub get_user {
             my ($self, $ctx) = @_;
             my $id = $ctx->request->path_param('id');
-            await $ctx->response->json({ id => $id });
+            return $ctx->response->json({ id => $id });
         }
     }
 
@@ -177,14 +177,14 @@ subtest 'middleware receives $ctx' => sub {
                 $ctx->stash->set(user => { id => 1 });
                 await $next->();
             } else {
-                await $ctx->response->status(401)->json({ error => 'Unauthorized' });
+                await $ctx->respond($ctx->response->status(401)->json({ error => 'Unauthorized' }));
             }
         }
 
         async sub protected_handler {
             my ($self, $ctx) = @_;
             $handler_saw_user = $ctx->stash->get('user');
-            await $ctx->response->json({ user_id => $handler_saw_user->{id} });
+            return $ctx->response->json({ user_id => $handler_saw_user->{id} });
         }
     }
 
@@ -243,7 +243,7 @@ subtest 'state accessible via context' => sub {
         async sub test_handler {
             my ($self, $ctx) = @_;
             $state_value = $ctx->state->{db};
-            await $ctx->response->text('ok');
+            return $ctx->response->text('ok');
         }
     }
 
@@ -295,7 +295,7 @@ subtest 'custom context_class' => sub {
         async sub test_handler {
             my ($self, $ctx) = @_;
             $custom_method_result = $ctx->custom_method;
-            await $ctx->response->text('ok');
+            return $ctx->response->text('ok');
         }
     }
 
