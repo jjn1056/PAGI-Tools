@@ -63,4 +63,30 @@ subtest 'respond drives a stream callback' => sub {
     is $body[-1]{more}, 0, 'final chunk closes the stream';
 };
 
+subtest 'body methods set body and return self (class or instance)' => sub {
+    my $res = PAGI::Response->new;
+    ref_is $res->text('hi'), $res, 'instance text returns $self';
+
+    my ($send, $events) = recorder();
+    PAGI::Response->json({ ok => 1 })->respond($send)->get;
+    my %h = map { lc($_->[0]) => $_->[1] } @{$events->[0]{headers}};
+    like $h{'content-type'}, qr{application/json}, 'json content-type';
+    like $events->[1]{body}, qr/"ok"\s*:\s*1/, 'json body';
+
+    ($send, $events) = recorder();
+    PAGI::Response->text('hello')->status(202)->respond($send)->get;
+    is $events->[0]{status}, 202, 'factory value still chains status';
+    is $events->[1]{body}, 'hello', 'text body';
+
+    ($send, $events) = recorder();
+    PAGI::Response->redirect('/login')->respond($send)->get;
+    is $events->[0]{status}, 302, 'redirect default status';
+    my %rh = map { lc($_->[0]) => $_->[1] } @{$events->[0]{headers}};
+    is $rh{location}, '/login', 'redirect location';
+
+    ($send, $events) = recorder();
+    PAGI::Response->new->empty->respond($send)->get;
+    is $events->[0]{status}, 204, 'empty default 204';
+};
+
 done_testing;
