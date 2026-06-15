@@ -1097,7 +1097,7 @@ sub json {
 sub redirect {
     my ($proto, $url, $status) = @_;
     my $self = $proto->_self_or_new;
-    $self->status_try($status // 302)->header('Location', $url);
+    $self->status($status // 302)->header('location', $url);
     $self->_set_body('', undef);
     return $self;
 }

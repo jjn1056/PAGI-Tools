@@ -85,6 +85,10 @@ subtest 'body methods set body and return self (class or instance)' => sub {
     is $rh{location}, '/login', 'redirect location';
 
     ($send, $events) = recorder();
+    PAGI::Response->new->status(200)->redirect('/x', 308)->respond($send)->get;
+    is $events->[0]{status}, 308, 'explicit redirect status wins over prior status';
+
+    ($send, $events) = recorder();
     PAGI::Response->new->empty->respond($send)->get;
     is $events->[0]{status}, 204, 'empty default 204';
 };
