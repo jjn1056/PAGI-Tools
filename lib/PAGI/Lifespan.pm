@@ -4,12 +4,14 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use Carp qw(croak);
+use PAGI::Utils ();
 
 
 sub new {
     my ($class, %args) = @_;
 
     my $app = delete $args{app};
+    $app = PAGI::Utils::to_app($app) if defined $app;
 
     my @handlers;
     push @handlers, {
@@ -235,11 +237,17 @@ error(s) in C<message> -- instead of C<lifespan.shutdown.complete>.
 Both C<startup> and C<shutdown> callbacks receive the shared state
 hashref as their first argument.
 
+The C<app> argument accepts anything L<PAGI::Utils/to_app> accepts: a
+coderef, a component object with a C<to_app> method, or a class name
+string.  The coercion happens once at construction time.
+
 =head2 wrap
 
     my $app = PAGI::Lifespan->wrap($inner_app, startup => ..., shutdown => ...);
 
-Class method shortcut that creates a wrapper and returns the app coderef.
+Class method shortcut that creates a wrapper and returns the app coderef.  The
+first argument accepts anything L<PAGI::Utils/to_app> accepts (coderef,
+component object, or class name).
 
 =head2 to_app
 

@@ -15,7 +15,7 @@ my $router = MyApp::Main->new;
 
 # Wrap with lifecycle management
 PAGI::Lifespan->wrap(
-    $router->to_app,
+    $router,
     startup => async sub {
         my ($state) = @_;
         warn "MyApp starting up...\n";
