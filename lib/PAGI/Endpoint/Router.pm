@@ -142,8 +142,10 @@ sub _wrap_http_handler {
             require PAGI::Context;
 
             my $ctx = $context_class->new($scope, $receive, $send);
-
-            await $endpoint->$method($ctx);
+            my $res = await $endpoint->$method($ctx);
+            die "handler did not return a response\n"
+                unless Scalar::Util::blessed($res) && $res->can('respond');
+            await $ctx->respond($res);
         };
     }
 
@@ -154,8 +156,10 @@ sub _wrap_http_handler {
         require PAGI::Context;
 
         my $ctx = $context_class->new($scope, $receive, $send);
-
-        await $handler->($ctx);
+        my $res = await $handler->($ctx);
+        die "handler did not return a response\n"
+            unless Scalar::Util::blessed($res) && $res->can('respond');
+        await $ctx->respond($res);
     };
 }
 
@@ -354,13 +358,13 @@ PAGI::Endpoint::Router - Class-based router with wrapped handlers
         my $db = $self->state->{db};                 # Worker state via $self
         my $user = $ctx->stash->get('user');          # Set by middleware
         my $users = $db->get_users;
-        await $ctx->response->json($users);
+        return $ctx->response->json($users);
     }
 
     async sub get_user {
         my ($self, $ctx) = @_;
         my $id = $ctx->request->path_param('id');    # Route parameter
-        await $ctx->response->json({ id => $id });
+        return $ctx->response->json({ id => $id });
     }
 
     async sub chat_handler {
@@ -475,7 +479,7 @@ This enables middleware to pass data downstream:
     async sub get_profile {
         my ($self, $ctx) = @_;
         my $user = $ctx->stash->get('user');  # Set by middleware above
-        await $ctx->response->json($user);
+        return $ctx->response->json($user);
     }
 
 =head1 HANDLER SIGNATURES
@@ -484,22 +488,23 @@ All handlers receive a L<PAGI::Context> as the second argument.
 The context subclass depends on route type:
 
     # HTTP routes: get, post, put, patch, delete, head, options
-    async sub handler ($self, $ctx) { }
+    # MUST return a respond-able value (e.g. $ctx->response->json(...))
+    async sub handler { my ($self, $ctx) = @_; return $ctx->response->json(...) }
     # $ctx isa PAGI::Context::HTTP
     # $ctx->request, $ctx->response
 
-    # WebSocket routes
-    async sub handler ($self, $ctx) { }
+    # WebSocket routes (drive $ctx imperatively; return value ignored)
+    async sub handler { my ($self, $ctx) = @_; ... }
     # $ctx isa PAGI::Context::WebSocket
     # $ctx->websocket
 
-    # SSE routes
-    async sub handler ($self, $ctx) { }
+    # SSE routes (drive $ctx imperatively; return value ignored)
+    async sub handler { my ($self, $ctx) = @_; ... }
     # $ctx isa PAGI::Context::SSE
     # $ctx->sse
 
     # Middleware
-    async sub middleware ($self, $ctx, $next) { }
+    async sub middleware { my ($self, $ctx, $next) = @_; ... }
 
 =head1 METHODS
 
