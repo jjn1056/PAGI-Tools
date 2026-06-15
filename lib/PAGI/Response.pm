@@ -66,27 +66,27 @@ Attempting to call a finisher method twice will throw an error.
 
 =head2 new
 
-    my $res = PAGI::Response->new($scope, $send);
+    my $res = PAGI::Response->new;
+    my $res = PAGI::Response->new($scope);
 
-Creates a new response builder.
+Creates a detached response value. The response holds no connection and no
+C<$send> callback — it is a pure value object that accumulates status,
+headers, and body via the chainer methods.
 
 =over 4
 
-=item C<$send> - Required. The PAGI send callback (coderef).
-
-=item C<$scope> - Required. The PAGI scope hashref.
+=item C<$scope> - Optional. A PAGI scope hashref. When provided it is stored
+inert (for accessors like C<scope()> and helpers like L<PAGI::Stash>).
+It is B<not> used as a connection — no C<$send> is stored here.
 
 =back
 
-The scope is required because PAGI::Response stores the "response sent" flag
-in C<< $scope->{'pagi.response.sent'} >>. This ensures that if multiple
-Response objects are created from the same scope (e.g., in middleware chains),
-they all share the same "sent" state and prevent double-sending responses.
+To actually send the response, call L</respond> with the C<$send> callback,
+or mount it as a PAGI app via L</to_app>.
 
-B<Note:> Per-object state like C<status> and C<headers> is NOT shared between
-Response objects. Only the "sent" flag is shared via scope. This matches the
-ASGI pattern where middleware wraps the C<$send> callable to intercept/modify
-responses, and Response objects build their own status/headers before sending.
+Because the constructor stores no connection, the same response value can be
+served to multiple connections (re-entrantly) by calling C<respond> more than
+once.
 
 =head1 CHAINABLE METHODS
 
@@ -297,6 +297,41 @@ when origin-specific responses are used.
 typically respond with C<< $res->status(204)->empty() >>.
 
 =back
+
+=head1 SEND PRIMITIVE AND APP MOUNTING
+
+=head2 respond
+
+    await $res->respond($send);
+
+The single send primitive for a detached response value. Reads the
+accumulated status, headers, and body from C<$self> and emits the
+appropriate PAGI protocol events via C<$send>.
+
+C<$send> must be a coderef (the PAGI send callback). C<respond> does
+B<not> mutate the response object, so the same response value can be
+passed to C<respond> multiple times for different connections.
+
+For streaming responses (set up via the C<_stream> slot), C<respond>
+sends the start event, runs the stream callback with a
+L<PAGI::Response::Writer>, and ensures the writer is closed.
+
+Returns a L<Future>.
+
+=head2 to_app
+
+    my $app = $res->to_app;
+
+Returns a PAGI application coderef C<sub ($scope, $receive, $send)> that
+calls L</respond> with the given C<$send> when invoked. Use this to mount
+a response value directly as a PAGI app:
+
+    my $not_found = PAGI::Response->new
+        ->status(404)
+        ->_set_body('Not Found', 'text/plain');
+
+    # Mount as a fallback app
+    my $app = $not_found->to_app;
 
 =head1 FINISHER METHODS
 
@@ -789,20 +824,13 @@ PAGI Contributors
 =cut
 
 sub new {
-    my ($class, $scope, $send) = @_;
-    croak("scope is required") unless $scope && ref($scope) eq 'HASH';
-    croak("send is required") unless $send;
-    croak("send must be a coderef") unless ref($send) eq 'CODE';
-
-    my $self = bless {
-        send              => $send,
-        scope             => $scope,
-        # _status not set here - uses exists() check and lazy default of 200
-        _headers            => [],
-        _header_set         => {},
+    my ($class, $scope) = @_;
+    croak("scope must be a hashref") if defined $scope && ref($scope) ne 'HASH';
+    return bless {
+        scope       => $scope,           # optional, inert (accessors / Stash); NOT a connection
+        _headers    => [],
+        _header_set => {},
     }, $class;
-
-    return $self;
 }
 
 sub status {
@@ -897,6 +925,55 @@ sub has_content_type {
 }
 
 sub scope { shift->{scope} }
+
+sub _set_body {
+    my ($self, $bytes, $default_type) = @_;
+    $self->{_body} = $bytes;
+    $self->content_type_try($default_type) if defined $default_type;
+    return $self;
+}
+
+sub _render_headers {
+    my ($self, $extra_len) = @_;
+    my @headers = map { [$_->[0], $_->[1]] } @{$self->{_headers}};
+    push @headers, ['content-length', $extra_len] if defined $extra_len;
+    return \@headers;
+}
+
+async sub respond {
+    my ($self, $send) = @_;
+    croak("send must be a coderef") unless ref($send) eq 'CODE';
+
+    if ($self->{_stream}) {
+        await $send->({
+            type    => 'http.response.start',
+            status  => $self->status,
+            headers => $self->_render_headers(undef),
+        });
+        require PAGI::Response::Writer;
+        my $writer = PAGI::Response::Writer->new($send);
+        await $self->{_stream}->($writer);
+        await $writer->close() unless $writer->is_closed;
+        return;
+    }
+
+    my $body = $self->{_body} // '';
+    await $send->({
+        type    => 'http.response.start',
+        status  => $self->status,
+        headers => $self->_render_headers(length $body),
+    });
+    await $send->({ type => 'http.response.body', body => $body, more => 0 });
+    return;
+}
+
+sub to_app {
+    my ($self) = @_;
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        await $self->respond($send);
+    };
+}
 
 
 sub is_sent {
