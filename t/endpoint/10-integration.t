@@ -17,17 +17,17 @@ package MyApp::UserAPI {
 
     async sub get {
         my ($self, $ctx) = @_;
-        await $ctx->response->json({ users => ['alice', 'bob'] });
+        return $ctx->response->json({ users => ['alice', 'bob'] });
     }
 
     async sub post {
         my ($self, $ctx) = @_;
-        await $ctx->response->status(201)->json({ created => 1 });
+        return $ctx->response->status(201)->json({ created => 1 });
     }
 
     async sub delete {
         my ($self, $ctx) = @_;
-        await $ctx->response->status(204)->empty;
+        return $ctx->response->status(204)->empty;
     }
 }
 

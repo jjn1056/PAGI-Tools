@@ -16,7 +16,7 @@ subtest 'can create endpoint subclass' => sub {
 
         async sub get {
             my ($self, $ctx) = @_;
-            await $ctx->response->text("Hello");
+            return $ctx->response->text("Hello");
         }
     }
 

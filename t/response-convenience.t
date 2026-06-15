@@ -7,18 +7,9 @@ use Encode qw(encode);
 use PAGI::Response;
 use PAGI::Stash;
 
-my @sent;
-my $send = sub {
-    my ($msg) = @_;
-    push @sent, $msg;
-    return Future->done;
-};
-
-my $scope = { type => 'http' };
-
 subtest 'scope accessor returns scope hashref' => sub {
     my $test_scope = { type => 'http' };
-    my $res = PAGI::Response->new($test_scope, $send);
+    my $res = PAGI::Response->new($test_scope);
     ok($res->scope == $test_scope, 'scope returns same hashref');
 };
 
@@ -26,7 +17,7 @@ subtest 'stash accessor' => sub {
     my $scope_with_stash = {
         type => 'http',
     };
-    my $res = PAGI::Response->new($scope_with_stash, $send);
+    my $res = PAGI::Response->new($scope_with_stash);
     my $stash = PAGI::Stash->new($res);
 
     # Default stash is empty hashref
@@ -55,7 +46,7 @@ subtest 'stash shared with Request' => sub {
     PAGI::Stash->new($req)->set(user => { id => 42, role => 'admin' });
 
     # Response should see the same stash (via shared scope)
-    my $res = PAGI::Response->new($shared_scope, $send);
+    my $res = PAGI::Response->new($shared_scope);
     my $stash = PAGI::Stash->new($res);
     is($stash->get('user')->{id}, 42, 'Response sees stash set by Request');
     is($stash->get('user')->{role}, 'admin', 'full structure accessible');
@@ -72,7 +63,7 @@ subtest 'stash survives scope shallow copy' => sub {
     };
 
     # Set stash on original scope
-    my $res1 = PAGI::Response->new($original_scope, $send);
+    my $res1 = PAGI::Response->new($original_scope);
     PAGI::Stash->new($res1)->set(user => 'alice');
 
     # Middleware creates shallow copy (what PAGI middleware does)
@@ -82,7 +73,7 @@ subtest 'stash survives scope shallow copy' => sub {
     };
 
     # New Response on copied scope should see the same stash
-    my $res2 = PAGI::Response->new($new_scope, $send);
+    my $res2 = PAGI::Response->new($new_scope);
     my $stash2 = PAGI::Stash->new($res2);
     is($stash2->get('user'), 'alice', 'stash survives shallow copy');
 
