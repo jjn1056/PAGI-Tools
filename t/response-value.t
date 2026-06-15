@@ -79,6 +79,12 @@ subtest 'body methods set body and return self (class or instance)' => sub {
     is $events->[1]{body}, 'hello', 'text body';
 
     ($send, $events) = recorder();
+    PAGI::Response->new->content_type('text/markdown')->text('hi')->respond($send)->get;
+    my %ct = map { lc($_->[0]) => $_->[1] } @{$events->[0]{headers}};
+    is $ct{'content-type'}, 'text/markdown',
+        'an explicit content_type wins over a body method default';
+
+    ($send, $events) = recorder();
     PAGI::Response->redirect('/login')->respond($send)->get;
     is $events->[0]{status}, 302, 'redirect default status';
     my %rh = map { lc($_->[0]) => $_->[1] } @{$events->[0]{headers}};

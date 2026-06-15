@@ -350,6 +350,9 @@ Each method works as both a B<class-method factory> and an B<instance method>:
     # Chain body with other setters before sending
     PAGI::Response->json($data)->status(201)->respond($send)->get;
 
+The Content-Type these methods set is a B<default>: an explicit C<content_type>
+set beforehand is preserved, not overridden.
+
 =head2 text
 
     $res->text("Hello World");
