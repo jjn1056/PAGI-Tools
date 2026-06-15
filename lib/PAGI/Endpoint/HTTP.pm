@@ -173,6 +173,11 @@ B<Singleton:> C<to_app> creates a single endpoint instance that serves the
 entire application lifetime. State stored in C<$self> persists across
 requests (within the same worker process).
 
+B<Do not store per-request state on C<$self>> - one instance is shared by
+every request (and concurrent requests), so request-scoped data on C<$self>
+will leak between them. Keep configuration and long-lived services on
+C<$self>; put request-scoped data on C<$ctx> (e.g. C<< $ctx->stash >>).
+
 =head1 CLASS METHODS
 
 =head2 to_app
