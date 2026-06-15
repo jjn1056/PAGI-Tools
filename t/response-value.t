@@ -46,4 +46,21 @@ subtest 'to_app wraps respond' => sub {
     is $events->[1]{body}, 'app', 'mounted response serves its body';
 };
 
+subtest 'respond drives a stream callback' => sub {
+    my $res = PAGI::Response->new->content_type('text/plain');
+    $res->{_stream} = async sub {        # Task 3's stream($cb) will set this publicly
+        my ($writer) = @_;
+        await $writer->write('a');
+        await $writer->write('b');
+    };
+    my ($send, $events) = recorder();
+    $res->respond($send)->get;
+    is $events->[0]{type}, 'http.response.start', 'start first';
+    ok !(grep { lc($_->[0]) eq 'content-length' } @{$events->[0]{headers}}),
+        'no content-length for a stream';
+    my @body = grep { $_->{type} eq 'http.response.body' } @$events;
+    is join('', map { $_->{body} // '' } @body), 'ab', 'chunks streamed';
+    is $body[-1]{more}, 0, 'final chunk closes the stream';
+};
+
 done_testing;

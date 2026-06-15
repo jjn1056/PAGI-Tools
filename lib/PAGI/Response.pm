@@ -950,7 +950,6 @@ async sub respond {
             status  => $self->status,
             headers => $self->_render_headers(undef),
         });
-        require PAGI::Response::Writer;
         my $writer = PAGI::Response::Writer->new($send);
         await $self->{_stream}->($writer);
         await $writer->close() unless $writer->is_closed;
