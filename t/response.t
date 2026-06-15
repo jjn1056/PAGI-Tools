@@ -6,28 +6,22 @@ use Future::AsyncAwait;
 
 use PAGI::Response;
 
-subtest 'constructor' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+subtest 'constructor no args' => sub {
+    my $res = PAGI::Response->new;
     isa_ok $res, 'PAGI::Response';
 };
 
-subtest 'constructor requires scope' => sub {
-    like dies { PAGI::Response->new() }, qr/scope.*required/i, 'dies without scope';
+subtest 'constructor with scope' => sub {
+    my $res = PAGI::Response->new({});
+    isa_ok $res, 'PAGI::Response';
 };
 
-subtest 'constructor requires send' => sub {
-    like dies { PAGI::Response->new({}) }, qr/send.*required/i, 'dies without send';
-};
-
-subtest 'constructor requires coderef' => sub {
-    like dies { PAGI::Response->new({}, "not a coderef") },
-         qr/coderef/i, 'dies with non-coderef';
+subtest 'constructor rejects non-hashref scope' => sub {
+    like dies { PAGI::Response->new("not a hashref") }, qr/hashref/i, 'dies with non-hashref';
 };
 
 subtest 'status method' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new;
 
     my $ret = $res->status(404);
     is $ret, $res, 'status returns self for chaining';
@@ -35,8 +29,7 @@ subtest 'status method' => sub {
 };
 
 subtest 'header method' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new;
 
     my $ret = $res->header('X-Custom' => 'value');
     is $ret, $res, 'header returns self for chaining';
@@ -44,8 +37,7 @@ subtest 'header method' => sub {
 };
 
 subtest 'content_type method' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new;
 
     my $ret = $res->content_type('application/xml');
     is $ret, $res, 'content_type returns self for chaining';
@@ -53,23 +45,20 @@ subtest 'content_type method' => sub {
 };
 
 subtest 'chaining multiple methods' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new;
 
     my $ret = $res->status(201)->header('X-Foo' => 'bar')->content_type('text/plain');
     is $ret, $res, 'chaining works';
 };
 
 subtest 'status sets internal state' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new;
     $res->status(404);
     is $res->{_status}, 404, 'status code set correctly';
 };
 
 subtest 'header adds to headers array' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new;
     $res->header('X-Custom' => 'value1');
     $res->header('X-Other' => 'value2');
     is scalar(@{$res->{_headers}}), 2, 'two headers added';
@@ -77,8 +66,7 @@ subtest 'header adds to headers array' => sub {
 };
 
 subtest 'content_type replaces existing' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new;
     $res->header('Content-Type' => 'text/html');
     $res->content_type('text/plain');
     my @ct = grep { lc($_->[0]) eq 'content-type' } @{$res->{_headers}};
@@ -88,8 +76,7 @@ subtest 'content_type replaces existing' => sub {
 };
 
 subtest 'try setters and has_*' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new;
 
     ok !$res->has_status, 'no explicit status set initially';
     ok !$res->has_content_type, 'no content-type set initially';
@@ -122,8 +109,7 @@ subtest 'try setters and has_*' => sub {
 };
 
 subtest 'status rejects invalid codes' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new;
     like dies { $res->status("not a number") }, qr/number/i, 'rejects non-number';
     like dies { $res->status(99) }, qr/100-599/i, 'rejects < 100';
     like dies { $res->status(600) }, qr/100-599/i, 'rejects > 599';
@@ -132,10 +118,10 @@ subtest 'status rejects invalid codes' => sub {
 subtest 'send_raw method' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     $res->status(200)->header('x-test' => 'value');
-    $res->send_raw("Hello")->get;
+    $res->send_raw("Hello")->respond($send)->get;
 
     is scalar(@sent), 2, 'two messages sent';
     is $sent[0]->{type}, 'http.response.start', 'first is start';
@@ -148,9 +134,9 @@ subtest 'send_raw method' => sub {
 subtest 'send method encodes UTF-8' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->send("café")->get;
+    $res->send("café")->respond($send)->get;
 
     # Should be UTF-8 encoded bytes
     is $sent[1]->{body}, "caf\xc3\xa9", 'UTF-8 encoded';
@@ -160,52 +146,68 @@ subtest 'send method encodes UTF-8' => sub {
     like $headers{'content-type'}, qr/charset=utf-8/i, 'charset added';
 };
 
-subtest 'cannot send twice' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+subtest 'respond is re-entrant by design' => sub {
+    # respond() on a detached Response does NOT guard double-send.
+    # The same response value can be served to multiple connections.
+    # Double-send protection is the responsibility of the caller (e.g. $ctx->respond).
+    my $send1_count = 0;
+    my $send2_count = 0;
+    my $send1 = sub { $send1_count++; Future->done };
+    my $send2 = sub { $send2_count++; Future->done };
+    my $res = PAGI::Response->new->send_raw("hello");
 
-    $res->send_raw("first")->get;
-    like dies { $res->send_raw("second")->get }, qr/already sent/i, 'dies on second send';
+    $res->respond($send1)->get;
+    $res->respond($send2)->get;  # re-entrant — same value, different connections
+
+    ok $send1_count > 0, 'first connection received events';
+    ok $send2_count > 0, 'second connection received events';
 };
 
-subtest 'is_sent method' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+subtest 'is_sent reflects scope flag set by ctx->respond' => sub {
+    require PAGI::Context;
+    my @sent;
+    my $send = sub { push @sent, $_[0]; Future->done };
+    my $scope = { type => 'http', method => 'GET' };
+    my $ctx = PAGI::Context->new($scope, sub { Future->done }, $send);
+    my $res = $ctx->response;
 
-    ok !$res->is_sent, 'is_sent false before sending';
-    $res->send_raw("test")->get;
-    ok $res->is_sent, 'is_sent true after sending';
+    ok !$res->is_sent, 'is_sent false before ctx->respond';
+    $ctx->respond($res->send_raw("test"))->get;
+    ok $res->is_sent, 'is_sent true after ctx->respond sets scope flag';
 };
 
 subtest 'multiple Response objects share sent state via scope' => sub {
-    my $send = sub { Future->done };
-    my $scope = {};
+    require PAGI::Context;
+    my @sent;
+    my $send = sub { push @sent, $_[0]; Future->done };
+    my $scope = { type => 'http', method => 'GET' };
+    my $ctx = PAGI::Context->new($scope, sub { Future->done }, $send);
 
     # Create two Response objects with same scope (like middleware might)
-    my $res1 = PAGI::Response->new($scope, $send);
-    my $res2 = PAGI::Response->new($scope, $send);
+    my $res1 = PAGI::Response->new($scope);
+    my $res2 = PAGI::Response->new($scope);
 
     ok !$res1->is_sent, 'res1 not sent initially';
     ok !$res2->is_sent, 'res2 not sent initially';
 
-    # Send via res1
-    $res1->send_raw("test")->get;
+    # Send via ctx->respond (which sets the scope flag)
+    $ctx->respond($res1->send_raw("test"))->get;
 
-    # Both should see it as sent
+    # Both should see it as sent (shared scope)
     ok $res1->is_sent, 'res1 knows response was sent';
     ok $res2->is_sent, 'res2 also knows response was sent (shared via scope)';
 
-    # res2 should fail to send
-    like dies { $res2->send_raw("second")->get },
-        qr/already sent/i, 'res2 cannot send again';
+    # ctx->respond a second time should die
+    like dies { $ctx->respond($res2->send_raw("second"))->get },
+        qr/already sent/i, 'ctx->respond cannot send again on same request';
 };
 
 subtest 'text method' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->text("Hello World")->get;
+    $res->text("Hello World")->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     is $headers{'content-type'}, 'text/plain; charset=utf-8', 'content-type set';
@@ -215,9 +217,9 @@ subtest 'text method' => sub {
 subtest 'html method' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->html("<h1>Hello</h1>")->get;
+    $res->html("<h1>Hello</h1>")->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     is $headers{'content-type'}, 'text/html; charset=utf-8', 'content-type set';
@@ -226,9 +228,9 @@ subtest 'html method' => sub {
 subtest 'json method' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->json({ message => 'Hello', count => 42 })->get;
+    $res->json({ message => 'Hello', count => 42 })->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     is $headers{'content-type'}, 'application/json; charset=utf-8', 'content-type set';
@@ -241,9 +243,9 @@ subtest 'json method' => sub {
 subtest 'json with status' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->status(201)->json({ created => 1 })->get;
+    $res->status(201)->json({ created => 1 })->respond($send)->get;
 
     is $sent[0]->{status}, 201, 'custom status preserved';
 };
@@ -251,9 +253,9 @@ subtest 'json with status' => sub {
 subtest 'json with unicode' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->json({ message => 'café', count => 42 })->get;
+    $res->json({ message => 'café', count => 42 })->respond($send)->get;
 
     # Verify JSON is decodable and unicode is preserved
     # Body is UTF-8 bytes, so decode with utf8 => 1
@@ -265,9 +267,9 @@ subtest 'json with unicode' => sub {
 subtest 'redirect method default 302' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->redirect('/login')->get;
+    $res->redirect('/login')->respond($send)->get;
 
     is $sent[0]->{status}, 302, 'default status 302';
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
@@ -277,9 +279,9 @@ subtest 'redirect method default 302' => sub {
 subtest 'redirect with custom status' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->redirect('/permanent', 301)->get;
+    $res->redirect('/permanent', 301)->respond($send)->get;
 
     is $sent[0]->{status}, 301, 'custom status 301';
 };
@@ -287,9 +289,9 @@ subtest 'redirect with custom status' => sub {
 subtest 'redirect 303 See Other' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->redirect('/result', 303)->get;
+    $res->redirect('/result', 303)->respond($send)->get;
 
     is $sent[0]->{status}, 303, 'status 303';
 };
@@ -297,20 +299,20 @@ subtest 'redirect 303 See Other' => sub {
 subtest 'empty method' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->empty()->get;
+    $res->empty()->respond($send)->get;
 
     is $sent[0]->{status}, 204, 'default status 204';
-    is $sent[1]->{body}, undef, 'no body';
+    is $sent[1]->{body}, '', 'empty body';
 };
 
 subtest 'empty with custom status' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->status(201)->empty()->get;
+    $res->status(201)->empty()->respond($send)->get;
 
     is $sent[0]->{status}, 201, 'custom status preserved';
 };
@@ -318,12 +320,12 @@ subtest 'empty with custom status' => sub {
 subtest 'cookie method basic' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     my $ret = $res->cookie('session' => 'abc123');
     is $ret, $res, 'cookie returns self for chaining';
 
-    $res->text("ok")->get;
+    $res->text("ok")->respond($send)->get;
 
     my @cookies = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]->{headers}};
     is scalar(@cookies), 1, 'one set-cookie header';
@@ -333,7 +335,7 @@ subtest 'cookie method basic' => sub {
 subtest 'cookie with options' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     $res->cookie('token' => 'xyz',
         max_age  => 3600,
@@ -343,7 +345,7 @@ subtest 'cookie with options' => sub {
         httponly => 1,
         samesite => 'Strict',
     );
-    $res->text("ok")->get;
+    $res->text("ok")->respond($send)->get;
 
     my @cookies = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]->{headers}};
     my $cookie = $cookies[0][1];
@@ -360,12 +362,12 @@ subtest 'cookie with options' => sub {
 subtest 'delete_cookie' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     my $ret = $res->delete_cookie('session');
     is $ret, $res, 'delete_cookie returns self';
 
-    $res->text("ok")->get;
+    $res->text("ok")->respond($send)->get;
 
     my @cookies = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]->{headers}};
     my $cookie = $cookies[0][1];
@@ -377,10 +379,10 @@ subtest 'delete_cookie' => sub {
 subtest 'multiple cookies' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     $res->cookie('a' => '1')->cookie('b' => '2');
-    $res->text("ok")->get;
+    $res->text("ok")->respond($send)->get;
 
     my @cookies = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]->{headers}};
     is scalar(@cookies), 2, 'two set-cookie headers';
@@ -389,7 +391,7 @@ subtest 'multiple cookies' => sub {
 subtest 'stream method' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     $res->content_type('text/plain');
     $res->stream(async sub {
@@ -397,7 +399,7 @@ subtest 'stream method' => sub {
         await $writer->write("chunk1");
         await $writer->write("chunk2");
         await $writer->close();
-    })->get;
+    })->respond($send)->get;
 
     is scalar(@sent), 4, 'start + 2 chunks + close';
     is $sent[0]->{type}, 'http.response.start', 'first is start';
@@ -411,7 +413,7 @@ subtest 'stream method' => sub {
 subtest 'stream writer bytes_written' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     my $bytes;
     $res->stream(async sub {
@@ -420,7 +422,7 @@ subtest 'stream writer bytes_written' => sub {
         await $writer->write("67890");
         $bytes = $writer->bytes_written;
         await $writer->close();
-    })->get;
+    })->respond($send)->get;
 
     is $bytes, 10, 'bytes_written tracks total';
 };
@@ -428,9 +430,9 @@ subtest 'stream writer bytes_written' => sub {
 subtest 'json error response pattern' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->status(400)->json({ error => "Bad Request" })->get;
+    $res->status(400)->json({ error => "Bad Request" })->respond($send)->get;
 
     is $sent[0]->{status}, 400, 'status from error';
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
@@ -450,9 +452,9 @@ subtest 'send_file basic' => sub {
 
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->send_file($filename)->get;
+    $res->send_file($filename)->respond($send)->get;
 
     is $sent[0]->{status}, 200, 'status 200';
     is $sent[1]->{file}, $filename, 'file path sent via PAGI protocol';
@@ -471,9 +473,9 @@ subtest 'send_file with filename option' => sub {
 
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->send_file($filename, filename => 'download.txt')->get;
+    $res->send_file($filename, filename => 'download.txt')->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     like $headers{'content-disposition'}, qr/attachment/, 'attachment disposition';
@@ -487,19 +489,18 @@ subtest 'send_file inline' => sub {
 
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->send_file($filename, inline => 1)->get;
+    $res->send_file($filename, inline => 1)->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     like $headers{'content-disposition'}, qr/inline/, 'inline disposition';
 };
 
 subtest 'send_file not found' => sub {
-    my $send = sub { Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    like dies { $res->send_file('/nonexistent/file.txt')->get },
+    like dies { $res->send_file('/nonexistent/file.txt') },
         qr/not found|no such file/i, 'dies for missing file';
 };
 
@@ -510,9 +511,9 @@ subtest 'send_file with offset' => sub {
 
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->send_file($filename, offset => 5)->get;
+    $res->send_file($filename, offset => 5)->respond($send)->get;
 
     is $sent[1]->{file}, $filename, 'file path sent';
     is $sent[1]->{offset}, 5, 'offset included';
@@ -529,9 +530,9 @@ subtest 'send_file with offset and length' => sub {
 
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->send_file($filename, offset => 5, length => 5)->get;
+    $res->send_file($filename, offset => 5, length => 5)->respond($send)->get;
 
     is $sent[1]->{file}, $filename, 'file path sent';
     is $sent[1]->{offset}, 5, 'offset included';
@@ -546,21 +547,19 @@ subtest 'send_file offset validation' => sub {
     print $fh "small";  # 5 bytes
     close $fh;
 
-    my $send = sub { Future->done };
-
     # Negative offset
-    my $res1 = PAGI::Response->new({}, $send);
-    like dies { $res1->send_file($filename, offset => -1)->get },
+    my $res1 = PAGI::Response->new({});
+    like dies { $res1->send_file($filename, offset => -1) },
         qr/non-negative/, 'negative offset rejected';
 
     # Offset beyond file
-    my $res2 = PAGI::Response->new({}, $send);
-    like dies { $res2->send_file($filename, offset => 100)->get },
+    my $res2 = PAGI::Response->new({});
+    like dies { $res2->send_file($filename, offset => 100) },
         qr/exceeds file size/, 'offset beyond file rejected';
 
     # Negative length
-    my $res3 = PAGI::Response->new({}, $send);
-    like dies { $res3->send_file($filename, length => -1)->get },
+    my $res3 = PAGI::Response->new({});
+    like dies { $res3->send_file($filename, length => -1) },
         qr/non-negative/, 'negative length rejected';
 };
 
@@ -571,10 +570,10 @@ subtest 'send_file length clamped to remaining' => sub {
 
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     # Request more bytes than available
-    $res->send_file($filename, offset => 5, length => 100)->get;
+    $res->send_file($filename, offset => 5, length => 100)->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     is $headers{'content-length'}, 5, 'length clamped to available bytes';
@@ -584,12 +583,12 @@ subtest 'send_file length clamped to remaining' => sub {
 subtest 'cors basic' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     my $ret = $res->cors;
     is $ret, $res, 'cors returns self';
 
-    $res->json({ data => 'test' })->get;
+    $res->json({ data => 'test' })->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     is $headers{'access-control-allow-origin'}, '*', 'default origin is *';
@@ -600,9 +599,9 @@ subtest 'cors basic' => sub {
 subtest 'cors with specific origin' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
-    $res->cors(origin => 'https://example.com')->json({})->get;
+    $res->cors(origin => 'https://example.com')->json({})->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     is $headers{'access-control-allow-origin'}, 'https://example.com', 'specific origin';
@@ -611,12 +610,12 @@ subtest 'cors with specific origin' => sub {
 subtest 'cors with credentials' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     $res->cors(
         origin      => 'https://example.com',
         credentials => 1,
-    )->json({})->get;
+    )->json({})->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     is $headers{'access-control-allow-origin'}, 'https://example.com', 'origin set';
@@ -626,11 +625,11 @@ subtest 'cors with credentials' => sub {
 subtest 'cors with expose headers' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     $res->cors(
         expose => [qw(X-Request-Id X-RateLimit)],
-    )->json({})->get;
+    )->json({})->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     like $headers{'access-control-expose-headers'}, qr/X-Request-Id/, 'expose header 1';
@@ -640,7 +639,7 @@ subtest 'cors with expose headers' => sub {
 subtest 'cors preflight' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     $res->cors(
         origin    => 'https://example.com',
@@ -648,7 +647,7 @@ subtest 'cors preflight' => sub {
         headers   => [qw(Content-Type X-Custom)],
         max_age   => 3600,
         preflight => 1,
-    )->status(204)->empty->get;
+    )->status(204)->empty->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     is $headers{'access-control-allow-origin'}, 'https://example.com', 'origin';
@@ -663,14 +662,14 @@ subtest 'cors preflight' => sub {
 subtest 'cors credentials with wildcard uses request_origin' => sub {
     my @sent;
     my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    my $res = PAGI::Response->new({}, $send);
+    my $res = PAGI::Response->new({});
 
     # When credentials is true and origin is *, we must provide request_origin
     $res->cors(
         origin         => '*',
         credentials    => 1,
         request_origin => 'https://client.example.com',
-    )->json({})->get;
+    )->json({})->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
     is $headers{'access-control-allow-origin'}, 'https://client.example.com', 'echoes request origin';

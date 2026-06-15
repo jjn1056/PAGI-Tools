@@ -428,13 +428,16 @@ receives a L<PAGI::Response::Writer> and streams chunks. Returns C<$self>.
 
 =head2 writer
 
-    my $writer = await $res->writer;
-    my $writer = await $res->writer(on_close => sub { cleanup() });
-    my $writer = await $res->writer(on_close => async sub { await cleanup() });
+    my $writer = await $res->writer($send);
+    my $writer = await $res->writer($send, on_close => sub { cleanup() });
+    my $writer = await $res->writer($send, on_close => async sub { await cleanup() });
 
 Returns a L<PAGI::Response::Writer> directly, sending headers immediately.
 Unlike C<stream()>, the writer is not scoped to a callback — you own it
 and must call C<close()> when done.
+
+C<$send> must be a coderef (the PAGI send callback). This is the same
+C<$send> you would pass to L</respond>.
 
 This is useful when the writer needs to be passed to event handlers,
 pub/sub callbacks, timers, or other contexts outside a single function:
@@ -443,7 +446,7 @@ pub/sub callbacks, timers, or other contexts outside a single function:
         my ($self, $ctx) = @_;
         my $writer = await $ctx->response
             ->content_type('text/plain')
-            ->writer(on_close => sub { $bus->unsubscribe($id) });
+            ->writer($send, on_close => sub { $bus->unsubscribe($id) });
 
         my $id = $bus->subscribe(async sub ($line) {
             await $writer->write("$line\n");
@@ -1189,17 +1192,18 @@ sub stream {
 }
 
 async sub writer {
-    my ($self, %opts) = @_;
+    my ($self, $send, %opts) = @_;
+    croak("send must be a coderef") unless ref($send) eq 'CODE';
     $self->_mark_sent;
 
     # Send headers
-    await $self->{send}->({
+    await $send->({
         type    => 'http.response.start',
         status  => $self->status,
         headers => $self->{_headers},
     });
 
-    return PAGI::Response::Writer->new($self->{send}, %opts);
+    return PAGI::Response::Writer->new($send, %opts);
 }
 
 # Simple MIME type mapping
