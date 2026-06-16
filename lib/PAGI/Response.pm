@@ -1099,6 +1099,8 @@ sub _apply_opts {
     $self->status($opts{status}) if defined $opts{status};
     $self->content_type($opts{content_type}) if defined $opts{content_type};
     if (my $h = $opts{headers}) {
+        croak "headers must be an even-length arrayref [ name => value, ... ]"
+            if @$h % 2;
         my @pairs = @$h;
         while (@pairs) {
             my ($name, $value) = splice(@pairs, 0, 2);

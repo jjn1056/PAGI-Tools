@@ -116,12 +116,22 @@ subtest 'factory %opts: status / headers / content_type' => sub {
     is $h{'content-type'}, 'application/octet-stream', 'opts content_type';
 
     ($send, $events) = recorder();
+    PAGI::Response->html('<p>hi</p>', status => 418)->respond($send)->get;
+    is $events->[0]{status}, 418, 'html opts status';
+    %h = map { lc($_->[0]) => $_->[1] } @{$events->[0]{headers}};
+    like $h{'content-type'}, qr{text/html}, 'html keeps its content-type';
+
+    ($send, $events) = recorder();
     PAGI::Response->empty(status => 304)->respond($send)->get;
     is $events->[0]{status}, 304, 'empty opts status overrides the 204 default';
 
     like dies { PAGI::Response->json({}, staus => 404) },
         qr/[Uu]nknown response option 'staus'/,
         'unknown opt croaks (catches typos)';
+
+    like dies { PAGI::Response->text('x', headers => ['X-Only']) },
+        qr/even-length/,
+        'odd-length headers arrayref croaks';
 };
 
 done_testing;
