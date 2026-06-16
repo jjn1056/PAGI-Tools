@@ -47,5 +47,14 @@
     examples are rewritten for the value contract (return a response value /
     respond($send); factories with status/headers options; the value-as-app
     and null-object patterns).
+  - PAGI::Request loses its process-global config (the %CONFIG hash and the
+    configure/config class methods). Of the eight keys, only path_param_strict
+    was ever read at runtime; it is now a per-call option,
+    $req->path_params(strict => 1), mirroring path_param's strict option. The
+    multipart limits (max_file_size, spool_threshold, etc.) are passed per-call
+    to form_params (now documented) and default to the package variables in
+    PAGI::Request::MultiPartHandler (local-ize to change a default
+    process-wide); max_body_size is the server's concern and is gone from
+    Request. B<BREAKING>: PAGI::Request->configure and ->config are removed.
   - For changes prior to 0.002000, see the Changes file of the PAGI
     distribution (versions up to 0.001023).
