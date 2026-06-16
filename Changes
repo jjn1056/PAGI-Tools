@@ -32,5 +32,12 @@
     argument. B<BREAKING>: await $res->json(...) no longer sends -- use
     return $res->json(...) in handlers, or
     await $res->json(...)->respond($send) in raw apps.
+  - PAGI::Lifespan->wrap/new coerce their app argument via PAGI::Utils::to_app
+    (the sixth and final composition site).
+  - PAGI::App::Redirect and PAGI::App::NotFound now build a PAGI::Response value
+    internally; their docs lead with the value form (PAGI::Response->redirect
+    for a fixed target; PAGI::Response->text(...)->status(404) for a fixed 404)
+    and keep the modules for the dynamic case (coderef target/body, query
+    preservation). PAGI::App::Healthcheck is unchanged (it is per-request).
   - For changes prior to 0.002000, see the Changes file of the PAGI
     distribution (versions up to 0.001023).
