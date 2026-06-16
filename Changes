@@ -39,5 +39,13 @@
     for a fixed target; PAGI::Response->text(...)->status(404) for a fixed 404)
     and keep the modules for the dynamic case (coderef target/body, query
     preservation). PAGI::App::Healthcheck is unchanged (it is per-request).
+  - Documented the PAGI::Response subclassing seam for framework authors:
+    construct via new($scope), override respond($send) (the connection is the
+    argument, never stored), and build on the public accessor surface rather
+    than private internals. Pinned with a subclass test.
+  - The Tutorial, Cookbook, PAGI::Response SYNOPSIS/EXAMPLES, and the remaining
+    examples are rewritten for the value contract (return a response value /
+    respond($send); factories with status/headers options; the value-as-app
+    and null-object patterns).
   - For changes prior to 0.002000, see the Changes file of the PAGI
     distribution (versions up to 0.001023).
