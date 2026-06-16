@@ -389,11 +389,14 @@ sub basic_auth {
 # Path parameters - captured from URL path by router
 # Stored in scope->{path_params} for router-agnostic access
 sub path_params {
-    my $self = shift;
+    my ($self, %opts) = @_;
+    my $strict = delete $opts{strict};
+    croak("Unknown options to path_params: " . join(', ', keys %opts)) if %opts;
+
     my $params = $self->{scope}{path_params};
-    if (!defined $params && $CONFIG{path_param_strict}) {
+    if (!defined $params && $strict) {
         croak "path_params not set in scope (no router configured?). "
-            . "Set PAGI::Request->configure(path_param_strict => 0) to allow this.";
+            . "Pass strict => 0 to allow this.";
     }
     return $params // {};
 }
@@ -904,6 +907,16 @@ B<Note:> This method can be overridden in subclasses for custom parameter
 handling (e.g., lazy conversion from positional to named parameters).
 The C<path_param> method delegates to this method.
 
+B<Options:>
+
+=over 4
+
+=item * C<strict> - If true, die when no router has populated
+C<< $scope->{path_params} >> instead of returning an empty hashref. Default:
+false. Mirrors the C<strict> option on L</path_param>.
+
+=back
+
 =head2 path_param
 
     my $id = $req->path_param('id');
@@ -935,26 +948,24 @@ of dying. Default: true.
 
 =head2 Strict Mode
 
-By default, C<path_params> and C<path_param> return empty values if no router
-has set C<< $scope->{path_params} >>. This is the safest behavior for middleware
-and handlers that may run with or without a router.
+By default, C<path_params> returns an empty hashref if no router has set
+C<< $scope->{path_params} >>. This is the safest behavior for middleware and
+handlers that may run with or without a router.
 
-If you want to catch configuration errors early, enable strict mode:
+To catch configuration errors early, pass C<< strict => 1 >>:
 
-    PAGI::Request->configure(path_param_strict => 1);
+    # Dies if no router populated the scope:
+    my $params = $req->path_params(strict => 1);
+    # "path_params not set in scope (no router configured?)"
 
-With strict mode enabled, calling C<path_params> or C<path_param> when
-C<< $scope->{path_params} >> is undefined will die with an error message.
-This helps catch bugs where you expect a router but one isn't configured.
-
-    # Strict mode: dies if no router set path_params
-    PAGI::Request->configure(path_param_strict => 1);
+C<path_param> (singular) is strict by default for the requested key, so asking
+for a parameter when no router ran also dies, naming the missing key:
 
     my $id = $req->path_param('id');
-    # Dies: "path_params not set in scope (no router configured?)"
+    # "path_param 'id' not found. ... No path params set (no router?)"
 
-The default is C<path_param_strict =E<gt> 0> (non-strict), which matches
-Starlette's behavior of returning an empty dict when path_params is not set.
+This matches Starlette's behavior of returning an empty dict by default, while
+letting you opt into a loud failure per call.
 
 =head1 COOKIES
 

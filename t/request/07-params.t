@@ -93,54 +93,51 @@ subtest 'path_param does not include query params' => sub {
     is($req->query_param('baz'), 'qux', 'query() returns another query param');
 };
 
-subtest 'path_param_strict mode (class config)' => sub {
-    # This tests the CLASS-LEVEL path_param_strict config, which controls
-    # whether path_params/path_param die when $scope->{path_params} is not set
-    # (i.e., no router configured). This is separate from the PER-CALL strict
-    # option which controls whether path_param dies on missing keys.
+subtest 'path_params strict option (per-call)' => sub {
+    # path_params(strict => 1) dies when no router populated the scope.
+    # The default is non-strict: return an empty hashref. This mirrors the
+    # per-call strict option on path_param.
 
-    # Save original config
-    my $orig_strict = PAGI::Request->config->{path_param_strict};
-
-    # Test non-strict mode (default) - returns empty without dying
-    PAGI::Request->configure(path_param_strict => 0);
     my $scope_no_params = { type => 'http', method => 'GET', headers => [] };
     my $req = PAGI::Request->new($scope_no_params);
 
-    is($req->path_params, {}, 'non-strict: path_params returns empty hashref');
-    # Need strict => 0 to avoid the per-call key-existence check
-    is($req->path_param('id', strict => 0), undef, 'non-strict: path_param returns undef');
+    # Non-strict (default): empty hashref, no death
+    is($req->path_params, {}, 'default: path_params returns empty hashref');
+    is($req->path_params(strict => 0), {}, 'strict => 0: returns empty hashref');
 
-    # Test strict mode - dies when path_params not in scope
-    PAGI::Request->configure(path_param_strict => 1);
-    $req = PAGI::Request->new($scope_no_params);
-
+    # Strict: dies when path_params not in scope
     like(
-        dies { $req->path_params },
+        dies { $req->path_params(strict => 1) },
         qr/path_params not set in scope/,
-        'strict: path_params dies when not set'
+        'strict => 1: path_params dies when not set'
     );
 
+    # Unknown option is rejected
+    like(
+        dies { $req->path_params(bogus => 1) },
+        qr/Unknown options to path_params/,
+        'path_params rejects unknown options'
+    );
+
+    # path_param (singular) still dies for a missing key when no router ran,
+    # naming the key it could not find.
     like(
         dies { $req->path_param('id') },
-        qr/path_params not set in scope/,
-        'strict: path_param dies when not set (class-level strict)'
+        qr/path_param 'id' not found/,
+        'path_param dies for missing key when no router set'
     );
+    is($req->path_param('id', strict => 0), undef, 'path_param(strict => 0): returns undef');
 
-    # Strict mode should NOT die when path_params IS set
+    # When the scope HAS path_params, both strict modes return them
     my $scope_with_params = {
-        type => 'http',
-        method => 'GET',
-        headers => [],
+        type => 'http', method => 'GET', headers => [],
         path_params => { id => '42' },
     };
     $req = PAGI::Request->new($scope_with_params);
 
-    is($req->path_params, { id => '42' }, 'strict: path_params works when set');
-    is($req->path_param('id'), '42', 'strict: path_param works when set');
-
-    # Restore original config
-    PAGI::Request->configure(path_param_strict => $orig_strict);
+    is($req->path_params, { id => '42' }, 'path_params returns scope params');
+    is($req->path_params(strict => 1), { id => '42' }, 'strict => 1: returns scope params when set');
+    is($req->path_param('id'), '42', 'path_param returns value when set');
 };
 
 done_testing;
