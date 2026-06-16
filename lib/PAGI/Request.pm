@@ -397,6 +397,15 @@ sub path_param {
 
 sub scope { shift->{scope} }
 
+# Vend a detached response bound to this request's scope (the raw-app analog
+# of $ctx->response). It is a value, not a connection; call ->respond($send)
+# to send it.
+sub response {
+    my $self = shift;
+    require PAGI::Response;
+    return PAGI::Response->new($self->{scope});
+}
+
 
 # Application state (injected by PAGI::Lifespan, read-only)
 sub state {
@@ -1201,6 +1210,16 @@ Returns the raw PAGI scope hashref. Useful for constructing helper
 objects like L<PAGI::Stash> and L<PAGI::Session>:
 
     my $stash = PAGI::Stash->new($req);
+
+=head2 response
+
+    my $res = $req->response;
+
+Vends a detached L<PAGI::Response> bound to this request's scope: the
+raw-application analog of C<< $ctx->response >>. The response is a value, not a
+connection; build it up and send it with C<< $res->respond($send) >>:
+
+    await $req->response->status(201)->json($data)->respond($send);
 
 =head2 Per-Request Shared State
 
