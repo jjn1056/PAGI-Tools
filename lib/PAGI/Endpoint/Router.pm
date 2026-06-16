@@ -47,6 +47,7 @@ sub to_app {
 
     my $app = $internal_router->to_app;
     my $state = $instance->{_state};
+    my $context_class = $instance->context_class;
 
     return async sub {
         my ($scope, $receive, $send) = @_;
@@ -54,8 +55,16 @@ sub to_app {
         # Inject instance state into scope (allows $req->state to work)
         $scope->{state} //= $state;
 
-        # Dispatch to internal router
-        await $app->($scope, $receive, $send);
+        # HTTP routes return a response value that bubbles up through the
+        # value-flow method middleware; send it once here. Other dispatch
+        # outcomes (WS/SSE/mount/404/405) handle their own sending and yield
+        # a non-respond-able value.
+        my $res = await $app->($scope, $receive, $send);
+        if (Scalar::Util::blessed($res) && $res->can('respond')) {
+            require PAGI::Context;
+            my $ctx = $context_class->new($scope, $receive, $send);
+            await $ctx->respond($res);
+        }
     };
 }
 
@@ -145,7 +154,7 @@ sub _wrap_http_handler {
             my $res = await $endpoint->$method($ctx);
             die "handler did not return a response\n"
                 unless Scalar::Util::blessed($res) && $res->can('respond');
-            await $ctx->respond($res);
+            return $res;
         };
     }
 
@@ -159,7 +168,7 @@ sub _wrap_http_handler {
         my $res = await $handler->($ctx);
         die "handler did not return a response\n"
             unless Scalar::Util::blessed($res) && $res->can('respond');
-        await $ctx->respond($res);
+        return $res;
     };
 }
 
@@ -259,7 +268,7 @@ sub _wrap_middleware {
     my $endpoint = $self->{endpoint};
     my $context_class = $endpoint->context_class;
 
-    # String = method name
+    # String = endpoint method name → value-flow route middleware.
     if (!ref($mw)) {
         my $method = $endpoint->can($mw)
             or die "No such middleware method: $mw";
@@ -271,12 +280,19 @@ sub _wrap_middleware {
 
             my $ctx = $context_class->new($scope, $receive, $send);
 
-            await $endpoint->$method($ctx, $next);
+            my $res = await $endpoint->$method($ctx, $next);
+            die "route middleware '$mw' did not return a response\n"
+                unless blessed($res) && $res->can('respond');
+            return $res;
         };
     }
 
-    # Already a coderef or object - pass through
-    return $mw;
+    # Coderefs/objects are standard (event) middleware: they belong at the
+    # outer layer (App::Router mount/group), not inside an Endpoint route's
+    # value-flow chain.
+    die "Standard middleware (coderef/object) belong at the mount or group "
+      . "level, not in an Endpoint route's middleware list; route middleware "
+      . "are value-flow endpoint methods that return a response.\n";
 }
 
 # Pass through mount to internal router
@@ -350,7 +366,7 @@ PAGI::Endpoint::Router - Class-based router with wrapped handlers
         my ($self, $ctx, $next) = @_;
         my $user = verify_token($ctx->header('Authorization'));
         $ctx->stash->set(user => $user);  # Flows to handler and subrouters!
-        await $next->();
+        return await $next->();
     }
 
     async sub list_users {
@@ -472,8 +488,16 @@ This enables middleware to pass data downstream:
         my ($self, $ctx, $next) = @_;
         my $user = verify_token($ctx->header('Authorization'));
         $ctx->stash->set(user => $user);  # Available to ALL downstream
-        await $next->();
+        return await $next->();
     }
+
+Route middleware are value-flow: C<$next-E<gt>()> returns the handler's
+L<PAGI::Response>, which the middleware may decorate (C<$res-E<gt>header(...)>),
+observe, or replace by returning a different response. A middleware must
+B<return> a response (its own, or the one from C<$next>); forgetting to return
+is a loud error. Standard event middleware (L<PAGI::Middleware> instances and
+C<($scope, $receive, $send, $next)> coderefs) are applied at the mount or group
+level, where they wrap the whole endpoint.
 
     # Handler in subrouter - sees stash from parent middleware
     async sub get_profile {

@@ -175,9 +175,9 @@ subtest 'middleware receives $ctx' => sub {
             my $token = $ctx->header('authorization');
             if ($token && $token eq 'Bearer valid') {
                 $ctx->stash->set(user => { id => 1 });
-                await $next->();
+                return await $next->();
             } else {
-                await $ctx->respond($ctx->response->status(401)->json({ error => 'Unauthorized' }));
+                return $ctx->response->status(401)->json({ error => 'Unauthorized' });
             }
         }
 

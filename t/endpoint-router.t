@@ -245,16 +245,16 @@ subtest 'middleware as method names' => sub {
             my $token = $ctx->header('authorization');
             if ($token && $token eq 'Bearer valid') {
                 $ctx->stash->set(user => { id => 1 });
-                await $next->();
+                return await $next->();
             } else {
-                await $ctx->respond($ctx->response->status(401)->json({ error => 'Unauthorized' }));
+                return $ctx->response->status(401)->json({ error => 'Unauthorized' });
             }
         }
 
         async sub log_request {
             my ($self, $ctx, $next) = @_;
             $log_called = 1;
-            await $next->();
+            return await $next->();
         }
 
         async sub public_handler {
@@ -355,7 +355,7 @@ subtest 'stash flows through middleware to handler' => sub {
         async sub set_user {
             my ($self, $ctx, $next) = @_;
             $ctx->stash->set(user => 'alice');
-            await $next->();
+            return await $next->();
         }
 
         async sub check_user {
