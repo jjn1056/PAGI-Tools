@@ -415,8 +415,7 @@ L<PAGI::Response> provides a fluent interface for building HTTP responses. Inste
 
 =head3 Creating a Response
 
-  use strict;
-  use warnings;
+  use v5.40;
   use Future::AsyncAwait;
   use PAGI::Response;
 
@@ -425,32 +424,43 @@ L<PAGI::Response> provides a fluent interface for building HTTP responses. Inste
 
       die "Expected http scope" unless $scope->{type} eq 'http';
 
-      # Create a response builder
-      my $res = PAGI::Response->new($scope, $send);
+      # Create a response value (no connection yet)
+      my $res = PAGI::Response->new($scope);
 
-      # Use it to send responses
-      await $res->text('Hello, World!');
+      # Build the response, then send it via respond($send)
+      await $res->text('Hello, World!')->respond($send);
   }
 
   \&app;
 
 =head3 Simple Responses
 
-L<PAGI::Response> provides methods for common response types:
+L<PAGI::Response> provides methods for common response types. Each body
+method sets the body and returns C<$self>, so you chain C<respond($send)>
+to transmit:
 
-  my $res = PAGI::Response->new($scope, $send);
+  my $res = PAGI::Response->new($scope);
 
   # Plain text
-  await $res->text('Hello, World!');
+  await $res->text('Hello, World!')->respond($send);
 
   # HTML
-  await $res->html('<h1>Hello, World!</h1>');
+  await $res->html('<h1>Hello, World!</h1>')->respond($send);
 
   # JSON
-  await $res->json({ message => 'Hello, World!' });
+  await $res->json({ message => 'Hello, World!' })->respond($send);
 
   # Empty response (204 No Content)
-  await $res->empty();
+  await $res->empty()->respond($send);
+
+Factory class methods build a detached response value you can use directly
+or mount on a router:
+
+  # Build and send inline
+  await PAGI::Response->json({ ok => \1 })->respond($send);
+
+  # Mount a static value — dispatch calls respond automatically
+  $router->mount('/health' => PAGI::Response->json({ ok => \1 }));
 
 Key points:
 
@@ -468,13 +478,23 @@ Key points:
 
 =head3 Status and Headers
 
-Use chainable methods to set status and headers before sending:
+Use chainable methods to set status and headers before sending. In a raw
+app the chain ends with C<respond($send)>:
 
   await $res->status(201)
             ->header('X-Request-ID', '12345')
             ->header('X-Custom', 'value')
             ->content_type('application/json')
-            ->json({ created => 1 });
+            ->json({ created => 1 })
+            ->respond($send);
+
+Alternatively, pass C<status> and C<headers> as options directly to the
+body factory:
+
+  await PAGI::Response->json({ created => 1 },
+      status  => 201,
+      headers => [['X-Request-ID', '12345']],
+  )->respond($send);
 
 Chainable methods:
 
@@ -492,16 +512,25 @@ Chainable methods:
 
 =head3 Redirects
 
+C<redirect> takes the destination URL and an optional B<positional> status
+(default 302). In a raw app, chain C<respond($send)> to transmit:
+
   # Temporary redirect (302 Found - default)
-  await $res->redirect('/new-page');
+  await $res->redirect('/new-page')->respond($send);
 
   # Permanent redirect (301 Moved Permanently)
-  await $res->redirect('/modern', 301);
+  await $res->redirect('/modern', 301)->respond($send);
 
   # See Other (303 - used after POST)
-  await $res->redirect('/success', 303);
+  await $res->redirect('/success', 303)->respond($send);
 
-B<Note:> C<redirect()> sends the response immediately but does NOT stop Perl execution. Use C<return> after redirect if you have more code below.
+The factory form works the same way:
+
+  await PAGI::Response->redirect('/login', 302)->respond($send);
+
+B<Note:> C<redirect()> sets the body and returns C<$self>; the response is
+not transmitted until C<respond($send)> is called. Use C<return> after
+the await if you have more code below.
 
 =head2 2.2 PAGI::Request - Request Parsing
 
@@ -510,9 +539,9 @@ L<PAGI::Request> parses HTTP requests and provides convenient accessors for head
 =head3 Creating a Request
 
   my $req = PAGI::Request->new($scope, $receive);
-  my $res = PAGI::Response->new($scope, $send);
+  my $res = PAGI::Response->new($scope);
 
-  await $res->text("You requested: " . $req->path);
+  await $res->text("You requested: " . $req->path)->respond($send);
 
 =head3 Basic Properties
 
@@ -623,29 +652,32 @@ L<PAGI::App::Router> provides lightweight functional routing:
 
   my $router = PAGI::App::Router->new;
 
+  # Mount a static response value — dispatch sends it automatically
+  $router->mount('/health' => PAGI::Response->json({ ok => \1 }));
+
   # HTTP routes
   $router->get('/' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope, $send);
-      await $res->text('Home');
+      my $res = PAGI::Response->new($scope);
+      await $res->text('Home')->respond($send);
   });
 
   $router->post('/users' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope, $send);
-      await $res->status(201)->json({ created => 1 });
+      my $res = PAGI::Response->new($scope);
+      await $res->json({ created => 1 }, status => 201)->respond($send);
   });
 
   # Path parameters
   $router->get('/users/:id' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
       my $id = $req->path_param('id');
-      await $res->json({ id => $id });
+      await $res->json({ id => $id })->respond($send);
   });
 
-  # WebSocket and SSE
+  # WebSocket and SSE handlers drive $send imperatively — no return value
   $router->websocket('/ws' => async sub { ... });
   $router->sse('/events' => async sub { ... });
 
@@ -769,7 +801,7 @@ C<app> argument to L<PAGI::Test::Client>. Put together:
       enable 'AccessLog';
       mount '/static' => PAGI::App::File->new(root => 'public');
       mount '/api'    => 'MyApp::API';
-      PAGI::App::NotFound->new(body => 'no such page');
+      PAGI::Response->text('no such page')->status(404);
   };
 
 Compilation happens exactly once, when the composition point receives
