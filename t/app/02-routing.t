@@ -379,4 +379,33 @@ subtest 'Cascade coerces apps list and add()' => sub {
     is $sent[1]{body}, 'second', 'component object added without ->to_app';
 };
 
+subtest 'Redirect builds a response value (static + dynamic + query)' => sub {
+    require PAGI::App::Redirect;
+
+    my $run = sub {
+        my ($app, $scope) = @_;
+        my @sent;
+        my $send = sub { my ($m) = @_; push @sent, $m; Future->done };
+        $app->($scope, sub { Future->done }, $send)->get;
+        return \@sent;
+    };
+
+    my $sent = $run->(
+        PAGI::App::Redirect->new(to => '/new', status => 301)->to_app,
+        { type => 'http', method => 'GET', path => '/old' },
+    );
+    is $sent->[0]{status}, 301, 'status';
+    my %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
+    is $h{location}, '/new', 'location';
+    is $sent->[1]{body}, '', 'empty body';
+
+    $sent = $run->(
+        PAGI::App::Redirect->new(to => sub { '/dyn' })->to_app,
+        { type => 'http', method => 'GET', path => '/x', query_string => 'a=1' },
+    );
+    %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
+    is $h{location}, '/dyn?a=1', 'coderef target + query preserved';
+    is $sent->[0]{status}, 302, 'default status';
+};
+
 done_testing;
