@@ -56,5 +56,13 @@
     PAGI::Request::MultiPartHandler (local-ize to change a default
     process-wide); max_body_size is the server's concern and is gone from
     Request. B<BREAKING>: PAGI::Request->configure and ->config are removed.
+  - PAGI::Endpoint::Router route (method) middleware are now value-flow:
+    await $next->() returns the handler's PAGI::Response, which a middleware
+    may decorate, observe, short-circuit, or replace, then return (a forgotten
+    return is a loud error). The response bubbles up the route's method chain
+    and is sent once at the top, rather than at the bottom. Standard event
+    middleware remain the outer base, applied at the App::Router mount/group
+    level. PAGI::App::Router dispatch now returns the matched HTTP route's
+    value (the mechanism enabling the above). PAGI::Endpoint::HTTP is unchanged.
   - For changes prior to 0.002000, see the Changes file of the PAGI
     distribution (versions up to 0.001023).
