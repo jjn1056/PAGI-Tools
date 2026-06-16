@@ -99,4 +99,29 @@ subtest 'body methods set body and return self (class or instance)' => sub {
     is $events->[0]{status}, 204, 'empty default 204';
 };
 
+subtest 'factory %opts: status / headers / content_type' => sub {
+    my ($send, $events) = recorder();
+    PAGI::Response->json({ error => 'nope' }, status => 404)->respond($send)->get;
+    is $events->[0]{status}, 404, 'json opts status applied';
+
+    ($send, $events) = recorder();
+    PAGI::Response->text('hi', status => 201, headers => ['X-Foo' => 'bar'])->respond($send)->get;
+    is $events->[0]{status}, 201, 'text opts status';
+    my %h = map { lc($_->[0]) => $_->[1] } @{$events->[0]{headers}};
+    is $h{'x-foo'}, 'bar', 'opts headers applied';
+
+    ($send, $events) = recorder();
+    PAGI::Response->send_raw('xyz', content_type => 'application/octet-stream')->respond($send)->get;
+    %h = map { lc($_->[0]) => $_->[1] } @{$events->[0]{headers}};
+    is $h{'content-type'}, 'application/octet-stream', 'opts content_type';
+
+    ($send, $events) = recorder();
+    PAGI::Response->empty(status => 304)->respond($send)->get;
+    is $events->[0]{status}, 304, 'empty opts status overrides the 204 default';
+
+    like dies { PAGI::Response->json({}, staus => 404) },
+        qr/[Uu]nknown response option 'staus'/,
+        'unknown opt croaks (catches typos)';
+};
+
 done_testing;

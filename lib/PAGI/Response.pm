@@ -353,29 +353,61 @@ Each method works as both a B<class-method factory> and an B<instance method>:
 The Content-Type these methods set is a B<default>: an explicit C<content_type>
 set beforehand is preserved, not overridden.
 
+=head2 Trailing options (status, content_type, headers)
+
+The body methods C<text>, C<html>, C<json>, C<send_raw>, and C<empty> accept
+trailing named options as a convenience so you can set status, content-type,
+and extra headers in a single call without chaining:
+
+    PAGI::Response->json($data, status => 404);
+    PAGI::Response->text('Hi', status => 201, headers => ['X-Foo' => 'bar']);
+    PAGI::Response->send_raw($bytes, content_type => 'application/octet-stream');
+    PAGI::Response->empty(status => 304);
+
+Recognised options:
+
+=over 4
+
+=item B<status> — HTTP status code (integer).
+
+=item B<content_type> — sets the Content-Type header, overriding any default.
+
+=item B<headers> — a flat arrayref of C<< name => value >> pairs to append.
+Example: C<< headers => ['X-Foo' => 'bar', 'X-Baz' => 'qux'] >>.
+
+=back
+
+An unrecognised option name causes an immediate C<croak>, catching typos such
+as C<status_code => 404> before they silently send 200.
+
+The existing chaining form C<< ->json($data)->status(404) >> keeps working.
+
 =head2 text
 
     $res->text("Hello World");
     PAGI::Response->text("Hello World");
+    PAGI::Response->text("Not found", status => 404);
 
 Set body to the UTF-8–encoded string with Content-Type: text/plain; charset=utf-8.
-Returns C<$self>.
+Accepts trailing options (C<status>, C<content_type>, C<headers>). Returns C<$self>.
 
 =head2 html
 
     $res->html("<h1>Hello</h1>");
     PAGI::Response->html("<h1>Hello</h1>");
+    PAGI::Response->html("<p>Error</p>", status => 500);
 
 Set body to the UTF-8–encoded string with Content-Type: text/html; charset=utf-8.
-Returns C<$self>.
+Accepts trailing options (C<status>, C<content_type>, C<headers>). Returns C<$self>.
 
 =head2 json
 
     $res->json({ message => 'Hello' });
     PAGI::Response->json({ message => 'Hello' });
+    PAGI::Response->json({ error => 'nope' }, status => 404);
 
 Set body to the JSON-encoded data with Content-Type: application/json; charset=utf-8.
-Returns C<$self>.
+Accepts trailing options (C<status>, C<content_type>, C<headers>). Returns C<$self>.
 
 =head2 redirect
 
@@ -394,9 +426,11 @@ compatibility, set it explicitly after calling C<redirect>.
 
     $res->empty;
     PAGI::Response->new->empty;
+    PAGI::Response->empty(status => 304);
 
 Set an empty body with status 204 No Content (or keep a previously set status).
-Returns C<$self>.
+Accepts trailing options (C<status>, C<content_type>, C<headers>); an explicit
+C<status> option overrides the 204 default. Returns C<$self>.
 
 =head2 send
 
@@ -409,9 +443,11 @@ Adds charset to Content-Type if not present. Returns C<$self>.
 =head2 send_raw
 
     $res->send_raw($bytes);
+    PAGI::Response->send_raw($bytes, content_type => 'application/octet-stream');
 
 Set body to raw bytes without any encoding. Use for binary data or pre-encoded
-content. Returns C<$self>.
+content. Accepts trailing options (C<status>, C<content_type>, C<headers>).
+Returns C<$self>.
 
 =head2 stream
 
@@ -1052,10 +1088,31 @@ sub _enc {
     return encode($charset, $str // '', FB_CROAK);
 }
 
+my %_RESPONSE_OPTS = map { $_ => 1 } qw(status content_type headers);
+
+sub _apply_opts {
+    my ($self, %opts) = @_;
+    for my $k (keys %opts) {
+        croak "Unknown response option '$k' (known: status, content_type, headers)"
+            unless $_RESPONSE_OPTS{$k};
+    }
+    $self->status($opts{status}) if defined $opts{status};
+    $self->content_type($opts{content_type}) if defined $opts{content_type};
+    if (my $h = $opts{headers}) {
+        my @pairs = @$h;
+        while (@pairs) {
+            my ($name, $value) = splice(@pairs, 0, 2);
+            $self->header($name, $value);
+        }
+    }
+    return $self;
+}
+
 sub send_raw {
-    my ($proto, $body) = @_;
+    my ($proto, $body, %opts) = @_;
     my $self = $proto->_self_or_new;
     $self->_set_body($body // '', undef);
+    $self->_apply_opts(%opts);
     return $self;
 }
 
@@ -1079,24 +1136,27 @@ sub send {
 }
 
 sub text {
-    my ($proto, $body) = @_;
+    my ($proto, $body, %opts) = @_;
     my $self = $proto->_self_or_new;
     $self->_set_body(_enc($body), 'text/plain; charset=utf-8');
+    $self->_apply_opts(%opts);
     return $self;
 }
 
 sub html {
-    my ($proto, $body) = @_;
+    my ($proto, $body, %opts) = @_;
     my $self = $proto->_self_or_new;
     $self->_set_body(_enc($body), 'text/html; charset=utf-8');
+    $self->_apply_opts(%opts);
     return $self;
 }
 
 sub json {
-    my ($proto, $data) = @_;
+    my ($proto, $data, %opts) = @_;
     my $self = $proto->_self_or_new;
     my $body = JSON::MaybeXS->new(utf8 => 1, canonical => 1)->encode($data);
     $self->_set_body($body, 'application/json; charset=utf-8');
+    $self->_apply_opts(%opts);
     return $self;
 }
 
@@ -1109,10 +1169,11 @@ sub redirect {
 }
 
 sub empty {
-    my ($proto) = @_;
+    my ($proto, %opts) = @_;
     my $self = $proto->_self_or_new;
     $self->status_try(204);
     $self->_set_body('', undef);
+    $self->_apply_opts(%opts);
     return $self;
 }
 
