@@ -417,4 +417,42 @@ subtest 'Redirect builds a response value (static + dynamic + query)' => sub {
     is $h{location}, '/x', 'preserve_query => 0 suppresses query append';
 };
 
+subtest 'NotFound builds a response value (static + coderef body)' => sub {
+    require PAGI::App::NotFound;
+
+    my $run = sub {
+        my ($app, $scope) = @_;
+        my @sent;
+        my $send = sub { my ($m) = @_; push @sent, $m; Future->done };
+        $app->($scope, sub { Future->done }, $send)->get;
+        return \@sent;
+    };
+
+    # defaults
+    my $sent = $run->(
+        PAGI::App::NotFound->new->to_app,
+        { type => 'http', method => 'GET', path => '/nope' },
+    );
+    is $sent->[0]{status}, 404, 'default 404';
+    my %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
+    is $h{'content-type'}, 'text/plain', 'default content-type';
+    is $h{'content-length'}, length('Not Found'), 'content-length matches body';
+    is $sent->[1]{body}, 'Not Found', 'default body';
+
+    # custom status/content_type + coderef body that USES the scope
+    $sent = $run->(
+        PAGI::App::NotFound->new(
+            status       => 410,
+            content_type => 'text/html',
+            body         => sub { my ($s) = @_; "gone: $s->{path}" },
+        )->to_app,
+        { type => 'http', method => 'GET', path => '/x' },
+    );
+    is $sent->[0]{status}, 410, 'custom status';
+    %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
+    is $h{'content-type'}, 'text/html', 'custom content-type';
+    is $h{'content-length'}, length('gone: /x'), 'content-length for coderef body';
+    is $sent->[1]{body}, 'gone: /x', 'coderef body receives scope';
+};
+
 done_testing;
