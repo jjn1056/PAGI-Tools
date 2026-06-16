@@ -557,16 +557,18 @@ B<Range Request Example:>
             my $end = $2 || ($size - 1);
             my $length = $end - $start + 1;
 
-            return PAGI::Response->new
+            return await PAGI::Response->new
                 ->status(206)
                 ->header('Content-Range' => "bytes $start-$end/$size")
                 ->header('Accept-Ranges' => 'bytes')
-                ->send_file($path, offset => $start, length => $length);
+                ->send_file($path, offset => $start, length => $length)
+                ->respond($send);
         }
 
-        return PAGI::Response->new
+        return await PAGI::Response->new
             ->header('Accept-Ranges' => 'bytes')
-            ->send_file($path);
+            ->send_file($path)
+            ->respond($send);
     }
 
 B<Note:> For production file serving with full features (ETag caching,
