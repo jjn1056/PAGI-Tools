@@ -5,6 +5,8 @@ use warnings;
 use Future::AsyncAwait;
 use PAGI::Response;
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::App::Redirect - URL redirect app for the dynamic case

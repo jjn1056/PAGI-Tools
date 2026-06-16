@@ -6,6 +6,8 @@ use Carp qw(croak);
 
 our @ISA = ('PAGI::Context');
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::Context::HTTP - HTTP-specific context subclass
