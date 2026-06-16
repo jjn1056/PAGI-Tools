@@ -106,14 +106,14 @@ async sub _handle_submit {
         }
     }
 
-    my $res = PAGI::Response->new($req->raw, $send);
+    my $res = PAGI::Response->new($req->raw);
 
     # Return errors if any
     if (@errors) {
         return await $res->status(400)->json({
             success => 0,
             errors  => \@errors,
-        });
+        })->respond($send);
     }
 
     # Success response
@@ -128,7 +128,7 @@ async sub _handle_submit {
             subscribe => ($subscribe eq 'yes' ? 1 : 0),
             attachment => $saved_file,
         },
-    });
+    })->respond($send);
 }
 
 async sub _handle_lifespan {
