@@ -147,9 +147,9 @@ my $router = PAGI::App::Router->new;
 # Index page
 $router->get('/' => async sub {
     my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($scope, $send);
+    my $res = PAGI::Response->new($scope);
 
-    await $res->html(<<'HTML');
+    await $res->html(<<'HTML')->respond($send);
 <!DOCTYPE html>
 <html>
 <head><title>Background Tasks Demo</title></head>
@@ -190,13 +190,13 @@ HTML
 # GOOD: Fire-and-forget async I/O
 $router->get('/async' => async sub {
     my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($scope, $send);
+    my $res = PAGI::Response->new($scope);
 
     # Response goes out immediately
     await $res->json({
         status => 'ok',
         message => 'Response sent! Async tasks running in background.',
-    });
+    })->respond($send);
 
     # Fire-and-forget with error logging (on_fail + retain pattern)
     fire_and_forget(send_welcome_email('user@example.com'));
@@ -209,13 +209,13 @@ $router->get('/async' => async sub {
 # GOOD: CPU-bound work in subprocess
 $router->get('/blocking' => async sub {
     my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($scope, $send);
+    my $res = PAGI::Response->new($scope);
 
     # Response goes out immediately
     await $res->json({
         status => 'ok',
         message => 'Response sent! Heavy computation running in subprocess.',
-    });
+    })->respond($send);
 
     # Fire-and-forget: runs in child process, doesn't block event loop
     run_blocking_task("heavy_computation", 3);
@@ -226,7 +226,7 @@ $router->get('/blocking' => async sub {
 $router->post('/signup' => async sub {
     my ($scope, $receive, $send) = @_;
     my $req = PAGI::Request->new($scope, $receive);
-    my $res = PAGI::Response->new($scope, $send);
+    my $res = PAGI::Response->new($scope);
 
     my $data = await $req->json;
     my $email = $data->{email} // 'unknown@example.com';
@@ -235,7 +235,7 @@ $router->post('/signup' => async sub {
     await $res->status(201)->json({
         status => 'created',
         message => "Account created! Check $email for welcome email.",
-    });
+    })->respond($send);
 
     # Fire-and-forget async tasks (non-blocking)
     fire_and_forget(send_welcome_email($email));

@@ -2,8 +2,11 @@ package PAGI::Context::HTTP;
 
 use strict;
 use warnings;
+use Carp qw(croak);
 
 our @ISA = ('PAGI::Context');
+
+=encoding UTF-8
 
 =head1 NAME
 
@@ -29,7 +32,25 @@ Returns a L<PAGI::Request> instance. Lazy-constructed and cached.
 
     my $res = $ctx->response;
 
-Returns a L<PAGI::Response> instance. Lazy-constructed and cached.
+Returns a detached L<PAGI::Response> accumulator. Lazy-constructed and cached
+for the lifetime of the context. The response holds no connection — it is a
+pure value object you mutate via the chainer methods (C<status>, C<header>,
+C<json>, etc.) and then pass to L</respond> when ready to send.
+
+=head2 respond
+
+    $ctx->respond($res);
+
+Guarded send. Sends the L<PAGI::Response> value C<$res> over this request's
+connection, marks the request as done, and returns a L<Future> that resolves
+when all protocol events have been emitted.
+
+Dies (C<croak>) if called a second time on the same request — one HTTP response
+per request. The sent state is stored in the shared scope under
+C<pagi.response.sent> so middleware and the application share a single flag.
+
+Delegates to the unguarded primitive C<< $res->respond($send) >> after setting
+the flag.
 
 =head2 method
 
@@ -63,8 +84,16 @@ sub response {
     my ($self) = @_;
     return $self->{_response} //= do {
         require PAGI::Response;
-        PAGI::Response->new($self->{scope}, $self->{send});
+        PAGI::Response->new($self->{scope});    # detached accumulator; no $send
     };
+}
+
+sub respond {
+    my ($self, $res) = @_;
+    my $scope = $self->{scope};
+    croak("response already sent") if $scope && $scope->{'pagi.response.sent'};
+    $scope->{'pagi.response.sent'} = 1 if $scope;
+    return $res->respond($self->{send});
 }
 
 sub method { shift->{scope}{method} }

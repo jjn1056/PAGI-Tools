@@ -20,12 +20,15 @@ Visit http://localhost:5000/
 
 ## Upload Limits
 
+Pass per-request limits to `form_params` (the call that triggers multipart
+parsing):
+
 ```perl
-PAGI::Request->configure(
-    max_file_size   => 5 * 1024 * 1024,  # 5MB per file upload
-    spool_threshold => 64 * 1024,         # Spool to disk above 64KB
-);
+my $form = await $req->form_params(max_file_size => 5 * 1024 * 1024);
 ```
+
+To change a default process-wide, `local`-ize the package variable in
+`PAGI::Request::MultiPartHandler` (e.g. `$MAX_FILE_SIZE`).
 
 ## API
 

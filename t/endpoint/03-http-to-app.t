@@ -15,7 +15,7 @@ package HelloEndpoint {
     async sub get {
         my ($self, $ctx) = @_;
         my $name = $ctx->request->query_param('name') // 'World';
-        await $ctx->response->text("Hello, $name");
+        return $ctx->response->text("Hello, $name");
     }
 }
 

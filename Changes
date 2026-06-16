@@ -19,5 +19,50 @@
   - Spec compliance: PAGI::App::URLMap now sets root_path (was the
     off-spec script_name); PAGI::App::WrapCGI builds SCRIPT_NAME from
     root_path (was reading the never-set script_name).
+  - PAGI::Response is now a value. Factories (PAGI::Response->json/text/
+    html/redirect/empty) build detached responses with no connection; the
+    body methods (text/html/json/send/send_raw/empty/redirect/send_file/
+    stream) set the body and return $self; respond($send) is the single
+    send primitive; to_app makes any response mountable. PAGI::Context::HTTP
+    vends a detached accumulator via response(), and $ctx->respond($res) is
+    the guarded send (owns the per-request sent flag). Endpoint HTTP handlers
+    now RETURN a respond-able value (returning nothing is a loud error), and
+    PAGI::Endpoint::HTTP builds one instance for the app lifetime (keep
+    request state on $ctx, not $self). writer() now takes $send as its first
+    argument. B<BREAKING>: await $res->json(...) no longer sends -- use
+    return $res->json(...) in handlers, or
+    await $res->json(...)->respond($send) in raw apps.
+  - PAGI::Lifespan->wrap/new coerce their app argument via PAGI::Utils::to_app
+    (the sixth and final composition site).
+  - PAGI::App::Redirect and PAGI::App::NotFound now build a PAGI::Response value
+    internally; their docs lead with the value form (PAGI::Response->redirect
+    for a fixed target; PAGI::Response->text(...)->status(404) for a fixed 404)
+    and keep the modules for the dynamic case (coderef target/body, query
+    preservation). PAGI::App::Healthcheck is unchanged (it is per-request).
+  - Documented the PAGI::Response subclassing seam for framework authors:
+    construct via new($scope), override respond($send) (the connection is the
+    argument, never stored), and build on the public accessor surface rather
+    than private internals. Pinned with a subclass test.
+  - The Tutorial, Cookbook, PAGI::Response SYNOPSIS/EXAMPLES, and the remaining
+    examples are rewritten for the value contract (return a response value /
+    respond($send); factories with status/headers options; the value-as-app
+    and null-object patterns).
+  - PAGI::Request loses its process-global config (the %CONFIG hash and the
+    configure/config class methods). Of the eight keys, only path_param_strict
+    was ever read at runtime; it is now a per-call option,
+    $req->path_params(strict => 1), mirroring path_param's strict option. The
+    multipart limits (max_file_size, spool_threshold, etc.) are passed per-call
+    to form_params (now documented) and default to the package variables in
+    PAGI::Request::MultiPartHandler (local-ize to change a default
+    process-wide); max_body_size is the server's concern and is gone from
+    Request. B<BREAKING>: PAGI::Request->configure and ->config are removed.
+  - PAGI::Endpoint::Router route (method) middleware are now value-flow:
+    await $next->() returns the handler's PAGI::Response, which a middleware
+    may decorate, observe, short-circuit, or replace, then return (a forgotten
+    return is a loud error). The response bubbles up the route's method chain
+    and is sent once at the top, rather than at the bottom. Standard event
+    middleware remain the outer base, applied at the App::Router mount/group
+    level. PAGI::App::Router dispatch now returns the matched HTTP route's
+    value (the mechanism enabling the above). PAGI::Endpoint::HTTP is unchanged.
   - For changes prior to 0.002000, see the Changes file of the PAGI
     distribution (versions up to 0.001023).

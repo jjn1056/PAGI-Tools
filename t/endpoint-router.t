@@ -43,13 +43,13 @@ subtest 'HTTP route with method handler' => sub {
 
         async sub say_hello {
             my ($self, $ctx) = @_;
-            await $ctx->response->text('Hello!');
+            return $ctx->response->text('Hello!');
         }
 
         async sub get_user {
             my ($self, $ctx) = @_;
             my $id = $ctx->request->path_param('id');
-            await $ctx->response->json({ id => $id });
+            return $ctx->response->json({ id => $id });
         }
     }
 
@@ -203,7 +203,7 @@ subtest 'state accessible in handlers' => sub {
             $state_value = $self->state->{db};
             # Also accessible via $ctx->state
             $req_state_value = $ctx->state->{db};
-            await $ctx->response->text('ok');
+            return $ctx->response->text('ok');
         }
     }
 
@@ -245,27 +245,27 @@ subtest 'middleware as method names' => sub {
             my $token = $ctx->header('authorization');
             if ($token && $token eq 'Bearer valid') {
                 $ctx->stash->set(user => { id => 1 });
-                await $next->();
+                return await $next->();
             } else {
-                await $ctx->response->status(401)->json({ error => 'Unauthorized' });
+                return $ctx->response->status(401)->json({ error => 'Unauthorized' });
             }
         }
 
         async sub log_request {
             my ($self, $ctx, $next) = @_;
             $log_called = 1;
-            await $next->();
+            return await $next->();
         }
 
         async sub public_handler {
             my ($self, $ctx) = @_;
-            await $ctx->response->text('public');
+            return $ctx->response->text('public');
         }
 
         async sub protected_handler {
             my ($self, $ctx) = @_;
             my $user = $ctx->stash->get('user');
-            await $ctx->response->json({ user_id => $user->{id} });
+            return $ctx->response->json({ user_id => $user->{id} });
         }
     }
 
@@ -355,13 +355,13 @@ subtest 'stash flows through middleware to handler' => sub {
         async sub set_user {
             my ($self, $ctx, $next) = @_;
             $ctx->stash->set(user => 'alice');
-            await $next->();
+            return await $next->();
         }
 
         async sub check_user {
             my ($self, $ctx) = @_;
             $handler_saw_user = $ctx->stash->get('user');
-            await $ctx->response->text('ok');
+            return $ctx->response->text('ok');
         }
     }
 

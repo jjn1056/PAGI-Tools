@@ -15,15 +15,15 @@ package CRUDEndpoint {
 
     async sub get {
         my ($self, $ctx) = @_;
-        await $ctx->response->empty;
+        return $ctx->response->empty;
     }
     async sub post {
         my ($self, $ctx) = @_;
-        await $ctx->response->empty;
+        return $ctx->response->empty;
     }
     async sub delete {
         my ($self, $ctx) = @_;
-        await $ctx->response->empty;
+        return $ctx->response->empty;
     }
 }
 

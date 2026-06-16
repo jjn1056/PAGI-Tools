@@ -751,8 +751,7 @@ sub to_app {
                         'pagi.router' => { route => $route->{path} },
                     };
 
-                    await $route->{_handler}->($new_scope, $receive, $send);
-                    return;
+                    return await $route->{_handler}->($new_scope, $receive, $send);
                 }
 
                 if (ref($route->{method}) eq 'ARRAY') {

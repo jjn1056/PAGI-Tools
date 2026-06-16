@@ -34,7 +34,7 @@ package MessageAPI {
 
     async sub get {
         my ($self, $ctx) = @_;
-        await $ctx->response->json(\@messages);
+        return $ctx->response->json(\@messages);
     }
 
     async sub post {
@@ -46,7 +46,7 @@ package MessageAPI {
         # Notify SSE subscribers
         MessageEvents::broadcast($message);
 
-        await $ctx->response->status(201)->json($message);
+        return $ctx->response->status(201)->json($message);
     }
 }
 
@@ -156,10 +156,10 @@ my $require_json = async sub {
         }
 
         unless ($content_type =~ m{application/json}i) {
-            my $res = PAGI::Response->new($scope, $send);
+            my $res = PAGI::Response->new($scope);
             await $res->status(415)->json({
                 error => 'Content-Type must be application/json'
-            });
+            })->respond($send);
             return;  # Short-circuit - don't call $next
         }
     }

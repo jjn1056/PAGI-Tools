@@ -20,73 +20,86 @@ PAGI::Response - Fluent response builder for PAGI applications
     use PAGI::Response;
     use Future::AsyncAwait;
 
-    # Basic usage in a raw PAGI app
-    async sub app ($scope, $receive, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+    # A response is a VALUE: build it, then send it (or return it, or mount it).
 
-        # Fluent chaining - set status, headers, then send
+    # Raw PAGI app: build the value, send it with respond($send)
+    async sub app ($scope, $receive, $send) {
+        my $res = PAGI::Response->new($scope);        # detached -- no connection
         await $res->status(200)
                   ->header('X-Custom' => 'value')
-                  ->json({ message => 'Hello' });
+                  ->json({ message => 'Hello' })      # sets the body, returns $self
+                  ->respond($send);                   # the single send step
     }
 
-    # Various response types
-    await $res->text("Hello World");
-    await $res->html("<h1>Hello</h1>");
-    await $res->json({ data => 'value' });
-    await $res->redirect('/login');
+    # In an endpoint you just RETURN it; dispatch sends it for you:
+    async sub get ($self, $ctx) {
+        return $ctx->response->status(200)->json({ message => 'Hello' });
+    }
 
-    # Streaming large responses
-    await $res->stream(async sub ($writer) {
-        await $writer->write("chunk1");
-        await $writer->write("chunk2");
-        await $writer->close();
-    });
+    # Class-method factories build a detached response in one call;
+    # status/content_type/headers go as trailing options:
+    my $res = PAGI::Response->text("Hello World");
+    my $res = PAGI::Response->html("<h1>Hello</h1>");
+    my $res = PAGI::Response->json({ data => 'value' });
+    my $res = PAGI::Response->json({ error => 'not found' }, status => 404);
+    my $res = PAGI::Response->redirect('/login');
 
-    # File downloads
-    await $res->send_file('/path/to/file.pdf', filename => 'doc.pdf');
+    # Because it's a value, it works anywhere an app does:
+    $router->mount('/health' => PAGI::Response->json({ ok => \1 }));
+
+    # Streaming: the callback runs at send time (auto-closes when done)
+    await PAGI::Response->new($scope)
+        ->content_type('text/csv')
+        ->stream(async sub ($writer) {
+            await $writer->write("id,name\n");
+            await $writer->write("1,Alice\n");
+        })
+        ->respond($send);
+
+    # File downloads:
+    await PAGI::Response->new($scope)
+        ->send_file('/path/to/file.pdf', filename => 'doc.pdf')
+        ->respond($send);
 
 =head1 DESCRIPTION
 
 PAGI::Response provides a fluent interface for building HTTP responses in
-raw PAGI applications. It wraps the low-level C<$send> callback and provides
-convenient methods for common response types.
+PAGI applications. It is a detached value object: it holds status, headers,
+and body but has no connection. Sending is done via L</respond> or L</to_app>.
 
 B<Chainable methods> (C<status>, C<header>, C<content_type>, C<cookie>)
 return C<$self> for fluent chaining.
 
-B<Finisher methods> (C<text>, C<html>, C<json>, C<redirect>, etc.) return
-Futures and actually send the response. Once a finisher is called, the
-response is sent and cannot be modified.
-
-B<Important:> Each PAGI::Response instance can only send one response.
-Attempting to call a finisher method twice will throw an error.
+B<Body methods> (C<text>, C<html>, C<json>, C<redirect>, etc.) set the
+response body and also return C<$self>. They can be called as class-method
+factories (C<< PAGI::Response->json($data) >>) or as instance methods
+(C<< $res->json($data) >>).
 
 =head1 CONSTRUCTOR
 
 =head2 new
 
-    my $res = PAGI::Response->new($scope, $send);
+    my $res = PAGI::Response->new;
+    my $res = PAGI::Response->new($scope);
 
-Creates a new response builder.
+Creates a detached response value. The response holds no connection and no
+C<$send> callback — it is a pure value object that accumulates status,
+headers, and body via the chainer methods.
 
 =over 4
 
-=item C<$send> - Required. The PAGI send callback (coderef).
-
-=item C<$scope> - Required. The PAGI scope hashref.
+=item C<$scope> - Optional. A PAGI scope hashref. When provided it is stored
+inert (for accessors like C<scope()> and helpers like L<PAGI::Stash>).
+It is B<not> used as a connection — no C<$send> is stored here.
 
 =back
 
-The scope is required because PAGI::Response stores the "response sent" flag
-in C<< $scope->{'pagi.response.sent'} >>. This ensures that if multiple
-Response objects are created from the same scope (e.g., in middleware chains),
-they all share the same "sent" state and prevent double-sending responses.
+To actually send the response, call L</respond> with the C<$send> callback,
+or mount it as a PAGI app via L</to_app>.
 
-B<Note:> Per-object state like C<status> and C<headers> is NOT shared between
-Response objects. Only the "sent" flag is shared via scope. This matches the
-ASGI pattern where middleware wraps the C<$send> callable to intercept/modify
-responses, and Response objects build their own status/headers before sending.
+Because the constructor stores no connection, the same response value can be
+served to multiple connections (re-entrantly) by calling C<respond> more than
+once.
 
 =head1 CHAINABLE METHODS
 
@@ -100,7 +113,7 @@ These methods return C<$self> for fluent chaining.
 Set or get the HTTP status code (100-599). Returns C<$self> when setting
 for fluent chaining. When getting, returns 200 if no status has been set.
 
-    my $res = PAGI::Response->new($scope, $send);
+    my $res = PAGI::Response->new($scope);
     $res->status;           # 200 (default, nothing set yet)
     $res->has_status;       # false
     $res->status(201);      # set explicitly
@@ -298,88 +311,179 @@ typically respond with C<< $res->status(204)->empty() >>.
 
 =back
 
-=head1 FINISHER METHODS
+=head1 SEND PRIMITIVE AND APP MOUNTING
 
-These methods return Futures and send the response.
+=head2 respond
+
+    await $res->respond($send);
+
+The single send primitive for a detached response value. Reads the
+accumulated status, headers, and body from C<$self> and emits the
+appropriate PAGI protocol events via C<$send>.
+
+C<$send> must be a coderef (the PAGI send callback). C<respond> does
+B<not> mutate the response object, so the same response value can be
+passed to C<respond> multiple times for different connections.
+
+For streaming responses (set up via the C<_stream> slot), C<respond>
+sends the start event, runs the stream callback with a
+L<PAGI::Response::Writer>, and ensures the writer is closed.
+
+Returns a L<Future>.
+
+=head2 to_app
+
+    my $app = $res->to_app;
+
+Returns a PAGI application coderef C<sub ($scope, $receive, $send)> that
+calls L</respond> with the given C<$send> when invoked. Use this to mount
+a response value directly as a PAGI app:
+
+    my $not_found = PAGI::Response->new
+        ->status(404)
+        ->_set_body('Not Found', 'text/plain');
+
+    # Mount as a fallback app
+    my $app = $not_found->to_app;
+
+=head1 BODY METHODS
+
+These methods set the response body and return C<$self>. Sending happens via
+L</respond> / L</to_app> or the endpoint return contract.
+
+Each method works as both a B<class-method factory> and an B<instance method>:
+
+    # Class-method factory — creates a new detached response and returns it
+    return $ctx->response->json($data);          # instance method on existing $res
+    return PAGI::Response->json($data);          # factory shorthand
+
+    # Chain body with other setters before sending
+    PAGI::Response->json($data)->status(201)->respond($send)->get;
+
+The Content-Type these methods set is a B<default>: an explicit C<content_type>
+set beforehand is preserved, not overridden.
+
+=head2 Trailing options (status, content_type, headers)
+
+The body methods C<text>, C<html>, C<json>, C<send_raw>, and C<empty> accept
+trailing named options as a convenience so you can set status, content-type,
+and extra headers in a single call without chaining:
+
+    PAGI::Response->json($data, status => 404);
+    PAGI::Response->text('Hi', status => 201, headers => ['X-Foo' => 'bar']);
+    PAGI::Response->send_raw($bytes, content_type => 'application/octet-stream');
+    PAGI::Response->empty(status => 304);
+
+Recognised options:
+
+=over 4
+
+=item B<status> — HTTP status code (integer).
+
+=item B<content_type> — sets the Content-Type header, overriding any default.
+
+=item B<headers> — a flat arrayref of C<< name => value >> pairs to append.
+Example: C<< headers => ['X-Foo' => 'bar', 'X-Baz' => 'qux'] >>.
+
+=back
+
+An unrecognised option name causes an immediate C<croak>, catching typos such
+as C<status_code => 404> before they silently send 200.
+
+The existing chaining form C<< ->json($data)->status(404) >> keeps working.
 
 =head2 text
 
-    await $res->text("Hello World");
+    $res->text("Hello World");
+    PAGI::Response->text("Hello World");
+    PAGI::Response->text("Not found", status => 404);
 
-Send a plain text response with Content-Type: text/plain; charset=utf-8.
+Set body to the UTF-8–encoded string with Content-Type: text/plain; charset=utf-8.
+Accepts trailing options (C<status>, C<content_type>, C<headers>). Returns C<$self>.
 
 =head2 html
 
-    await $res->html("<h1>Hello</h1>");
+    $res->html("<h1>Hello</h1>");
+    PAGI::Response->html("<h1>Hello</h1>");
+    PAGI::Response->html("<p>Error</p>", status => 500);
 
-Send an HTML response with Content-Type: text/html; charset=utf-8.
+Set body to the UTF-8–encoded string with Content-Type: text/html; charset=utf-8.
+Accepts trailing options (C<status>, C<content_type>, C<headers>). Returns C<$self>.
 
 =head2 json
 
-    await $res->json({ message => 'Hello' });
+    $res->json({ message => 'Hello' });
+    PAGI::Response->json({ message => 'Hello' });
+    PAGI::Response->json({ error => 'nope' }, status => 404);
 
-Send a JSON response with Content-Type: application/json; charset=utf-8.
+Set body to the JSON-encoded data with Content-Type: application/json; charset=utf-8.
+Accepts trailing options (C<status>, C<content_type>, C<headers>). Returns C<$self>.
 
 =head2 redirect
 
-    await $res->redirect('/login');
-    await $res->redirect('/new-url', 301);
+    $res->redirect('/login');
+    $res->redirect('/new-url', 301);
+    PAGI::Response->redirect('/login');
 
-Send a redirect response with an empty body. Default status is 302.
-
-B<Note:> This method sends the response but does NOT stop Perl execution.
-Use C<return> after redirect if you have more code below:
-
-    await $res->redirect('/login');
-    return;  # Important! Code below would still run otherwise
+Set an empty body and a Location header. Default status is 302. Returns C<$self>.
 
 B<Why no body?> While RFC 7231 suggests including a short HTML body with a
 hyperlink for clients that don't auto-follow redirects, all modern browsers
 and HTTP clients ignore redirect bodies. If you need a body for legacy
-compatibility, use the lower-level C<$send-E<gt>()> calls directly.
+compatibility, set it explicitly after calling C<redirect>.
 
 =head2 empty
 
-    await $res->empty();
+    $res->empty;
+    PAGI::Response->new->empty;
+    PAGI::Response->empty(status => 304);
 
-Send an empty response with status 204 No Content (or custom status if set).
+Set an empty body with status 204 No Content (or keep a previously set status).
+Accepts trailing options (C<status>, C<content_type>, C<headers>); an explicit
+C<status> option overrides the 204 default. Returns C<$self>.
 
 =head2 send
 
-    await $res->send($text);
-    await $res->send($text, charset => 'iso-8859-1');
+    $res->send($text);
+    $res->send($text, charset => 'iso-8859-1');
 
-Send text, encoding it to UTF-8 (or specified charset). Adds charset to
-Content-Type if not present. This is the high-level method for sending
-text responses.
+Set body to the encoded text (UTF-8 by default, or the specified charset).
+Adds charset to Content-Type if not present. Returns C<$self>.
 
 =head2 send_raw
 
-    await $res->send_raw($bytes);
+    $res->send_raw($bytes);
+    PAGI::Response->send_raw($bytes, content_type => 'application/octet-stream');
 
-Send raw bytes as the response body without any encoding. Use this for
-binary data or when you've already encoded the content yourself.
+Set body to raw bytes without any encoding. Use for binary data or pre-encoded
+content. Accepts trailing options (C<status>, C<content_type>, C<headers>).
+Returns C<$self>.
 
 =head2 stream
 
-    await $res->stream(async sub ($writer) {
+    $res->stream(async sub {
+        my ($writer) = @_;
         await $writer->write("chunk1");
         await $writer->write("chunk2");
         await $writer->close();
     });
+    PAGI::Response->stream($callback);
 
-Stream response chunks via callback. The callback receives a writer object
-with C<write($chunk)>, C<close()>, and C<bytes_written()> methods.
+Store a streaming callback. When the response is sent via L</respond>, the callback
+receives a L<PAGI::Response::Writer> and streams chunks. Returns C<$self>.
 
 =head2 writer
 
-    my $writer = await $res->writer;
-    my $writer = await $res->writer(on_close => sub { cleanup() });
-    my $writer = await $res->writer(on_close => async sub { await cleanup() });
+    my $writer = await $res->writer($send);
+    my $writer = await $res->writer($send, on_close => sub { cleanup() });
+    my $writer = await $res->writer($send, on_close => async sub { await cleanup() });
 
 Returns a L<PAGI::Response::Writer> directly, sending headers immediately.
 Unlike C<stream()>, the writer is not scoped to a callback — you own it
 and must call C<close()> when done.
+
+C<$send> must be a coderef (the PAGI send callback). This is the same
+C<$send> you would pass to L</respond>.
 
 This is useful when the writer needs to be passed to event handlers,
 pub/sub callbacks, timers, or other contexts outside a single function:
@@ -388,7 +492,7 @@ pub/sub callbacks, timers, or other contexts outside a single function:
         my ($self, $ctx) = @_;
         my $writer = await $ctx->response
             ->content_type('text/plain')
-            ->writer(on_close => sub { $bus->unsubscribe($id) });
+            ->writer($ctx->send, on_close => sub { $bus->unsubscribe($id) });
 
         my $id = $bus->subscribe(async sub ($line) {
             await $writer->write("$line\n");
@@ -404,20 +508,24 @@ callbacks are both supported — see L</on_close> under L</WRITER OBJECT>.
 
 =head2 send_file
 
-    await $res->send_file('/path/to/file.pdf');
-    await $res->send_file('/path/to/file.pdf',
+    $res->send_file('/path/to/file.pdf');
+    $res->send_file('/path/to/file.pdf',
         filename => 'download.pdf',
         inline   => 1,
     );
+    PAGI::Response->send_file('/path/to/file.pdf');
 
     # Partial file (for range requests)
-    await $res->send_file('/path/to/video.mp4',
+    $res->send_file('/path/to/video.mp4',
         offset => 1024,       # Start from byte 1024
         length => 65536,      # Send 64KB
     );
 
-Send a file as the response. This method uses the PAGI protocol's C<file>
-key for efficient server-side streaming. The file is B<not> read into memory.
+Set the response to serve a file. Stats the file and sets Content-Type,
+Content-Length, and Content-Disposition at call time. The PAGI protocol's
+C<file> key is used for efficient server-side streaming (file not read into
+memory) when L</respond> is called. Returns C<$self>.
+
 For production, use L<PAGI::Middleware::XSendfile> to delegate file serving
 to your reverse proxy.
 
@@ -438,8 +546,8 @@ B<Options:>
 B<Range Request Example:>
 
     # Manual range request handling
-    async sub handle_video ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+    async sub handle_video {
+        my ($req, $send) = @_;
         my $path = '/videos/movie.mp4';
         my $size = -s $path;
 
@@ -449,14 +557,18 @@ B<Range Request Example:>
             my $end = $2 || ($size - 1);
             my $length = $end - $start + 1;
 
-            return await $res->status(206)
+            return await PAGI::Response->new
+                ->status(206)
                 ->header('Content-Range' => "bytes $start-$end/$size")
                 ->header('Accept-Ranges' => 'bytes')
-                ->send_file($path, offset => $start, length => $length);
+                ->send_file($path, offset => $start, length => $length)
+                ->respond($send);
         }
 
-        return await $res->header('Accept-Ranges' => 'bytes')
-                         ->send_file($path);
+        return await PAGI::Response->new
+            ->header('Accept-Ranges' => 'bytes')
+            ->send_file($path)
+            ->respond($send);
     }
 
 B<Note:> For production file serving with full features (ETag caching,
@@ -480,10 +592,10 @@ use L<PAGI::App::File> instead:
             if $scope->{type} eq 'lifespan';
 
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         if ($req->method eq 'GET' && $req->path eq '/') {
-            return await $res->html('<h1>Welcome</h1>');
+            return await $res->html('<h1>Welcome</h1>')->respond($send);
         }
 
         if ($req->method eq 'POST' && $req->path eq '/api/users') {
@@ -491,16 +603,17 @@ use L<PAGI::App::File> instead:
             # ... create user ...
             return await $res->status(201)
                              ->header('Location' => '/api/users/123')
-                             ->json({ id => 123, name => $data->{name} });
+                             ->json({ id => 123, name => $data->{name} })
+                             ->respond($send);
         }
 
-        return await $res->status(404)->json({ error => 'Not Found' });
+        return await $res->status(404)->json({ error => 'Not Found' })->respond($send);
     };
 
 =head2 Form Validation with Error Response
 
     async sub handle_contact ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
         my $form = await $req->form_params;
 
         my @errors;
@@ -513,23 +626,24 @@ use L<PAGI::App::File> instead:
 
         if (@errors) {
             return await $res->status(422)
-                             ->json({ error => 'Validation failed', errors => \@errors });
+                             ->json({ error => 'Validation failed', errors => \@errors })
+                             ->respond($send);
         }
 
         # Process valid form...
-        return await $res->json({ success => 1 });
+        return await $res->json({ success => 1 })->respond($send);
     }
 
 =head2 Authentication with Cookies
 
     async sub handle_login ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
         my $data = await $req->json;
 
         my $user = authenticate($data->{email}, $data->{password});
 
         unless ($user) {
-            return await $res->status(401)->json({ error => 'Invalid credentials' });
+            return await $res->status(401)->json({ error => 'Invalid credentials' })->respond($send);
         }
 
         my $session_id = create_session($user);
@@ -541,36 +655,38 @@ use L<PAGI::App::File> instead:
                 samesite => 'Strict',
                 max_age  => 86400,  # 24 hours
             )
-            ->json({ user => { id => $user->{id}, name => $user->{name} } });
+            ->json({ user => { id => $user->{id}, name => $user->{name} } })
+            ->respond($send);
     }
 
     async sub handle_logout ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         return await $res->delete_cookie('session', path => '/')
-                         ->json({ logged_out => 1 });
+                         ->json({ logged_out => 1 })
+                         ->respond($send);
     }
 
 =head2 File Download
 
     async sub handle_download ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
         my $file_id = $req->path_param('id');
 
         my $file = get_file($file_id); # Be sure to clean $file
         unless ($file && -f $file->{path}) {
-            return await $res->status(404)->json({ error => 'File not found' });
+            return await $res->status(404)->json({ error => 'File not found' })->respond($send);
         }
 
         return await $res->send_file($file->{path},
             filename => $file->{original_name},
-        );
+        )->respond($send);
     }
 
 =head2 Streaming Large Data
 
     async sub handle_export ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         await $res->content_type('text/csv')
                   ->header('Content-Disposition' => 'attachment; filename="export.csv"')
@@ -583,13 +699,14 @@ use L<PAGI::App::File> instead:
                       while (my $user = $cursor->next) {
                           await $writer->write("$user->{id},$user->{name},$user->{email}\n");
                       }
-                  });
+                  })
+                  ->respond($send);
     }
 
 =head2 Server-Sent Events Style Streaming
 
     async sub handle_events ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         await $res->content_type('text/event-stream')
                   ->header('Cache-Control' => 'no-cache')
@@ -598,39 +715,41 @@ use L<PAGI::App::File> instead:
                           await $writer->write("data: Event $i\n\n");
                           await some_delay(1);  # Wait 1 second
                       }
-                  });
+                  })
+                  ->respond($send);
     }
 
 =head2 Conditional Responses
 
     async sub handle_resource ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
         my $etag = '"abc123"';
 
         # Check If-None-Match for caching
         my $if_none_match = $req->header('If-None-Match') // '';
         if ($if_none_match eq $etag) {
-            return await $res->status(304)->empty();
+            return await $res->status(304)->empty()->respond($send);
         }
 
         return await $res->header('ETag' => $etag)
                          ->header('Cache-Control' => 'max-age=3600')
-                         ->json({ data => 'expensive computation result' });
+                         ->json({ data => 'expensive computation result' })
+                         ->respond($send);
     }
 
 =head2 CORS API Endpoint
 
     # Simple CORS - allow all origins
     async sub handle_api ($scope, $receive, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
-        return await $res->cors->json({ status => 'ok' });
+        return await $res->cors->json({ status => 'ok' })->respond($send);
     }
 
     # CORS with credentials (e.g., cookies, auth headers)
     async sub handle_api_with_auth ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         # Get the Origin header from request
         my $origin = $req->header('Origin');
@@ -639,7 +758,7 @@ use L<PAGI::App::File> instead:
             origin         => 'https://myapp.com',  # Or use request_origin
             credentials    => 1,
             expose         => [qw(X-Request-Id)],
-        )->json({ user => 'authenticated' });
+        )->json({ user => 'authenticated' })->respond($send);
     }
 
 =head2 CORS Preflight Handler
@@ -647,7 +766,7 @@ use L<PAGI::App::File> instead:
     # Handle OPTIONS preflight requests
     async sub app ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         # Handle preflight
         if ($req->method eq 'OPTIONS') {
@@ -658,14 +777,14 @@ use L<PAGI::App::File> instead:
                 credentials => 1,
                 max_age     => 86400,
                 preflight   => 1,  # Include preflight headers
-            )->status(204)->empty();
+            )->status(204)->empty()->respond($send);
         }
 
         # Handle actual request
         return await $res->cors(
             origin      => 'https://myapp.com',
             credentials => 1,
-        )->json({ data => 'response' });
+        )->json({ data => 'response' })->respond($send);
     }
 
 =head2 Dynamic CORS Origin
@@ -679,7 +798,7 @@ use L<PAGI::App::File> instead:
 
     async sub handle_api ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         my $request_origin = $req->header('Origin') // '';
 
@@ -688,11 +807,11 @@ use L<PAGI::App::File> instead:
             return await $res->cors(
                 origin      => $request_origin,  # Echo back the allowed origin
                 credentials => 1,
-            )->json({ data => 'allowed' });
+            )->json({ data => 'allowed' })->respond($send);
         }
 
         # Origin not allowed - respond without CORS headers
-        return await $res->status(403)->json({ error => 'Origin not allowed' });
+        return await $res->status(403)->json({ error => 'Origin not allowed' })->respond($send);
     }
 
 =head1 WRITER OBJECT
@@ -764,19 +883,62 @@ Returns true if the writer has been closed.
 The writer automatically closes when the C<stream()> callback completes,
 but calling C<close()> explicitly is recommended for clarity.
 
-=head1 ERROR HANDLING
+=head1 ERROR AND ALTERNATE RESPONSES
 
-All finisher methods return Futures. Errors in encoding (e.g., invalid UTF-8
-when C<strict> mode would be enabled) will cause the Future to fail.
+A response is a value, so "produce a 404 instead" is just returning a different
+value -- no exceptions needed:
 
-    use Syntax::Keyword::Try;
-
-    try {
-        await $res->json($data);
+    async sub show ($self, $ctx) {
+        my $user = await find_user($ctx->req->path_param('id'));
+        return PAGI::Response->json({ error => 'not found' }, status => 404)
+            unless $user;
+        return $ctx->response->json($user);
     }
-    catch ($e) {
-        warn "Failed to send response: $e";
-    }
+
+For cases that recur across handlers, prefer modeling the absence as a value
+(a "null object") whose own method returns the right response, instead of
+throwing from deep in the stack:
+
+    my $user = await find_user($ctx) // UnauthenticatedUser->new($ctx);
+    return $user->dashboard;   # a real user renders; an UnauthenticatedUser
+                               # returns a 401 / login response
+
+Here C<UnauthenticatedUser> is a class you define; its C<dashboard> method
+returns a C<PAGI::Response> just as a real user's would.
+
+=head1 SUBCLASSING (FRAMEWORK INTEGRATION)
+
+Framework authors can subclass C<PAGI::Response> to add their own response
+sugar while reusing the value machinery. The contract is small and stable:
+
+=over 4
+
+=item * B<Construct via> C<< $class->new($scope) >>. The scope is optional and
+inert (used only for C<scope()> and helpers like L<PAGI::Stash>); a response
+never holds a connection. A Moose subclass can C<extends 'PAGI::Response'> and
+provide C<FOREIGNBUILDARGS> returning C<($scope)>.
+
+=item * B<Override> C<< respond($send) >> to customize how the response is sent.
+Call C<< $self->SUPER::respond($send) >> to do the actual emission. The
+connection (C<$send>) arrives as the argument; do not store or re-bind it -- a
+response value is connection-free until the moment it is sent.
+
+=item * B<Build on the public surface> -- C<status>, C<header>, C<headers>,
+C<content_type>, C<cookie>, C<cors>, C<is_sent>, the C<has_*> predicates, and
+the body methods (C<text>/C<html>/C<json>/C<send_raw>/C<empty>/C<redirect>/
+C<stream>/C<send_file>, with trailing options). Do B<not> reach into the
+C<_>-prefixed internals (C<_headers>, C<_body>, C<_status>, C<_stream>, ...);
+they are private and may change.
+
+=item * Adding response sugar via a role/mixin works unchanged -- a role that
+calls the public chainers and body methods needs no special support.
+
+=back
+
+A response value never needs C<$send> until it is sent, so "I don't have a
+connection here" just means "I am not sending yet": hold the value and call
+C<respond> (or return it from an endpoint, where dispatch sends it) when a
+connection is available.
 
 =head1 SEE ALSO
 
@@ -789,20 +951,13 @@ PAGI Contributors
 =cut
 
 sub new {
-    my ($class, $scope, $send) = @_;
-    croak("scope is required") unless $scope && ref($scope) eq 'HASH';
-    croak("send is required") unless $send;
-    croak("send must be a coderef") unless ref($send) eq 'CODE';
-
-    my $self = bless {
-        send              => $send,
-        scope             => $scope,
-        # _status not set here - uses exists() check and lazy default of 200
-        _headers            => [],
-        _header_set         => {},
+    my ($class, $scope) = @_;
+    croak("scope must be a hashref") if defined $scope && ref($scope) ne 'HASH';
+    return bless {
+        scope       => $scope,           # optional, inert (accessors / Stash); NOT a connection
+        _headers    => [],
+        _header_set => {},
     }, $class;
-
-    return $self;
 }
 
 sub status {
@@ -898,6 +1053,72 @@ sub has_content_type {
 
 sub scope { shift->{scope} }
 
+sub _set_body {
+    my ($self, $bytes, $default_type) = @_;
+    $self->{_body} = $bytes;
+    $self->content_type_try($default_type) if defined $default_type;
+    return $self;
+}
+
+sub _render_headers {
+    my ($self, $extra_len) = @_;
+    my @headers = map { [$_->[0], $_->[1]] } @{$self->{_headers}};
+    push @headers, ['content-length', $extra_len] if defined $extra_len;
+    return \@headers;
+}
+
+async sub respond {
+    my ($self, $send) = @_;
+    croak("send must be a coderef") unless ref($send) eq 'CODE';
+
+    if ($self->{_stream}) {
+        await $send->({
+            type    => 'http.response.start',
+            status  => $self->status,
+            headers => $self->_render_headers(undef),
+        });
+        my $writer = PAGI::Response::Writer->new($send);
+        await $self->{_stream}->($writer);
+        await $writer->close() unless $writer->is_closed;
+        return;
+    }
+
+    if ($self->{_file}) {
+        my $fd = $self->{_file};
+        # Headers (incl. content-length) were set at send_file() build time.
+        await $send->({
+            type    => 'http.response.start',
+            status  => $self->status,
+            headers => $self->_render_headers(undef),
+        });
+        my $body_event = {
+            type => 'http.response.body',
+            file => $fd->{path},
+        };
+        $body_event->{offset} = $fd->{offset} if exists $fd->{offset};
+        $body_event->{length} = $fd->{length} if exists $fd->{length};
+        await $send->($body_event);
+        return;
+    }
+
+    my $body = $self->{_body} // '';
+    await $send->({
+        type    => 'http.response.start',
+        status  => $self->status,
+        headers => $self->_render_headers(length $body),
+    });
+    await $send->({ type => 'http.response.body', body => $body, more => 0 });
+    return;
+}
+
+sub to_app {
+    my ($self) = @_;
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        await $self->respond($send);
+    };
+}
+
 
 sub is_sent {
     my ($self) = @_;
@@ -910,84 +1131,111 @@ sub _mark_sent {
     $self->{scope}{'pagi.response.sent'} = 1;
 }
 
-async sub send_raw {
-    my ($self, $body) = @_;
-    $self->_mark_sent;
-
-    # Send start
-    await $self->{send}->({
-        type    => 'http.response.start',
-        status  => $self->status,  # uses lazy default of 200
-        headers => $self->{_headers},
-    });
-
-    # Send body
-    await $self->{send}->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+# Returns the invocant if it is already an instance; otherwise creates a new
+# detached instance from the class name. Allows finisher methods to be called
+# as either class-method factories or instance methods.
+sub _self_or_new {
+    my ($proto) = @_;
+    return ref($proto) ? $proto : $proto->new;
 }
 
-async sub send {
-    my ($self, $body, %opts) = @_;
-    my $charset = $opts{charset} // 'utf-8';
+# Encode a text string to UTF-8 bytes, croaking on invalid characters.
+# Replicates the encoding used by the old send() method.
+sub _enc {
+    my ($str, $charset) = @_;
+    $charset //= 'utf-8';
+    return encode($charset, $str // '', FB_CROAK);
+}
 
-    # Ensure content-type has charset
-    my $has_ct = 0;
-    for my $h (@{$self->{_headers}}) {
-        if (lc($h->[0]) eq 'content-type') {
-            $has_ct = 1;
-            unless ($h->[1] =~ /charset=/i) {
-                $h->[1] .= "; charset=$charset";
-            }
-            last;
+my %_RESPONSE_OPTS = map { $_ => 1 } qw(status content_type headers);
+
+sub _apply_opts {
+    my ($self, %opts) = @_;
+    for my $k (keys %opts) {
+        croak "Unknown response option '$k' (known: status, content_type, headers)"
+            unless $_RESPONSE_OPTS{$k};
+    }
+    $self->status($opts{status}) if defined $opts{status};
+    $self->content_type($opts{content_type}) if defined $opts{content_type};
+    if (my $h = $opts{headers}) {
+        croak "headers must be an even-length arrayref [ name => value, ... ]"
+            if @$h % 2;
+        my @pairs = @$h;
+        while (@pairs) {
+            my ($name, $value) = splice(@pairs, 0, 2);
+            $self->header($name, $value);
         }
     }
-    unless ($has_ct) {
-        push @{$self->{_headers}}, ['content-type', "text/plain; charset=$charset"];
+    return $self;
+}
+
+sub send_raw {
+    my ($proto, $body, %opts) = @_;
+    my $self = $proto->_self_or_new;
+    $self->_set_body($body // '', undef);
+    $self->_apply_opts(%opts);
+    return $self;
+}
+
+sub send {
+    my ($proto, $body, %opts) = @_;
+    my $self   = $proto->_self_or_new;
+    my $charset = $opts{charset} // 'utf-8';
+    my $encoded = _enc($body, $charset);
+    # Match old send() behaviour: set content-type with charset if not present,
+    # or append charset to an existing content-type that lacks it.
+    if ($self->has_content_type) {
+        my $ct = $self->content_type;
+        unless ($ct =~ /charset=/i) {
+            $self->content_type("$ct; charset=$charset");
+        }
+    } else {
+        $self->content_type("text/plain; charset=$charset");
     }
-
-    # Encode body
-    my $encoded = encode($charset, $body // '', FB_CROAK);
-
-    await $self->send_raw($encoded);
+    $self->{_body} = $encoded;
+    return $self;
 }
 
-async sub text {
-    my ($self, $body) = @_;
-    $self->content_type('text/plain; charset=utf-8');
-    await $self->send($body);
+sub text {
+    my ($proto, $body, %opts) = @_;
+    my $self = $proto->_self_or_new;
+    $self->_set_body(_enc($body), 'text/plain; charset=utf-8');
+    $self->_apply_opts(%opts);
+    return $self;
 }
 
-async sub html {
-    my ($self, $body) = @_;
-    $self->content_type('text/html; charset=utf-8');
-    await $self->send($body);
+sub html {
+    my ($proto, $body, %opts) = @_;
+    my $self = $proto->_self_or_new;
+    $self->_set_body(_enc($body), 'text/html; charset=utf-8');
+    $self->_apply_opts(%opts);
+    return $self;
 }
 
-async sub json {
-    my ($self, $data) = @_;
-    $self->content_type('application/json; charset=utf-8');
+sub json {
+    my ($proto, $data, %opts) = @_;
+    my $self = $proto->_self_or_new;
     my $body = JSON::MaybeXS->new(utf8 => 1, canonical => 1)->encode($data);
-    await $self->send_raw($body);
+    $self->_set_body($body, 'application/json; charset=utf-8');
+    $self->_apply_opts(%opts);
+    return $self;
 }
 
-async sub redirect {
-    my ($self, $url, $status) = @_;
-    $status //= 302;
-    $self->{_status} = $status;
-    $self->header('location', $url);
-    await $self->send_raw('');
+sub redirect {
+    my ($proto, $url, $status) = @_;
+    my $self = $proto->_self_or_new;
+    $self->status($status // 302)->header('location', $url);
+    $self->_set_body('', undef);
+    return $self;
 }
 
-async sub empty {
-    my ($self) = @_;
-    # Use 204 if status hasn't been explicitly set
-    unless (exists $self->{_status}) {
-        $self->{_status} = 204;
-    }
-    await $self->send_raw(undef);
+sub empty {
+    my ($proto, %opts) = @_;
+    my $self = $proto->_self_or_new;
+    $self->status_try(204);
+    $self->_set_body('', undef);
+    $self->_apply_opts(%opts);
+    return $self;
 }
 
 sub cookie {
@@ -1058,37 +1306,26 @@ sub cors {
     return $self;
 }
 
-async sub stream {
-    my ($self, $callback) = @_;
-    $self->_mark_sent;
-
-    # Send start
-    await $self->{send}->({
-        type    => 'http.response.start',
-        status  => $self->status,  # uses lazy default of 200
-        headers => $self->{_headers},
-    });
-
-    # Create writer and call callback
-    my $writer = PAGI::Response::Writer->new($self->{send});
-    await $callback->($writer);
-
-    # Ensure closed
-    await $writer->close() unless $writer->is_closed;
+sub stream {
+    my ($proto, $callback) = @_;
+    my $self = $proto->_self_or_new;
+    $self->{_stream} = $callback;
+    return $self;
 }
 
 async sub writer {
-    my ($self, %opts) = @_;
+    my ($self, $send, %opts) = @_;
+    croak("send must be a coderef") unless ref($send) eq 'CODE';
     $self->_mark_sent;
 
     # Send headers
-    await $self->{send}->({
+    await $send->({
         type    => 'http.response.start',
         status  => $self->status,
         headers => $self->{_headers},
     });
 
-    return PAGI::Response::Writer->new($self->{send}, %opts);
+    return PAGI::Response::Writer->new($send, %opts);
 }
 
 # Simple MIME type mapping
@@ -1118,8 +1355,10 @@ sub _mime_type {
     return $MIME_TYPES{lc($ext // '')} // 'application/octet-stream';
 }
 
-async sub send_file {
-    my ($self, $path, %opts) = @_;
+sub send_file {
+    my ($proto, $path, %opts) = @_;
+    my $self = $proto->_self_or_new;
+
     croak("File not found: $path") unless -f $path;
     croak("Cannot read file: $path") unless -r $path;
 
@@ -1144,10 +1383,7 @@ async sub send_file {
     }
 
     # Set content-type if not already set
-    my $has_ct = grep { lc($_->[0]) eq 'content-type' } @{$self->{_headers}};
-    unless ($has_ct) {
-        $self->content_type(_mime_type($path));
-    }
+    $self->content_type_try(_mime_type($path));
 
     # Set content-length based on actual bytes to send
     $self->header('content-length', $length);
@@ -1164,26 +1400,14 @@ async sub send_file {
     }
     $self->header('content-disposition', $disposition) if $disposition;
 
-    $self->_mark_sent;
+    # Store the file send descriptor; respond() handles the actual emission.
+    # offset/length are stored only when they narrow the full-file default.
+    my $file_desc = { path => $path };
+    $file_desc->{offset} = $offset if $offset > 0;
+    $file_desc->{length} = $length if $length < $max_length;
+    $self->{_file} = $file_desc;
 
-    # Send response start
-    await $self->{send}->({
-        type    => 'http.response.start',
-        status  => $self->status,  # uses lazy default of 200
-        headers => $self->{_headers},
-    });
-
-    # Use PAGI file protocol for efficient server-side streaming
-    my $body_event = {
-        type => 'http.response.body',
-        file => $path,
-    };
-
-    # Add offset/length only if not reading from start or not full file
-    $body_event->{offset} = $offset if $offset > 0;
-    $body_event->{length} = $length if $length < $max_length;
-
-    await $self->{send}->($body_event);
+    return $self;
 }
 
 # Writer class for streaming responses

@@ -38,19 +38,19 @@ Use C<:param> syntax for named parameters in routes:
   $router->get('/users/:id' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       # Access path parameter via $req->path_param()
       my $id = $req->path_param('id');
 
-      await $res->json({ id => $id, name => 'User ' . $id });
+      await $res->json({ id => $id, name => 'User ' . $id })->respond($send);
   });
 
   # Multiple parameters
   $router->get('/posts/:post_id/comments/:comment_id' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       my $post_id = $req->path_param('post_id');
       my $comment_id = $req->path_param('comment_id');
@@ -58,7 +58,7 @@ Use C<:param> syntax for named parameters in routes:
       await $res->json({
           post_id => $post_id,
           comment_id => $comment_id,
-      });
+      })->respond($send);
   });
 
   $router->to_app;
@@ -75,7 +75,7 @@ Use C<*name> syntax to capture multiple path segments:
   $router->get('/files/*path' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       # Access wildcard via $req->path_param()
       my $path = $req->path_param('path');
@@ -83,7 +83,7 @@ Use C<*name> syntax to capture multiple path segments:
       # /files/docs/readme.txt -> path = 'docs/readme.txt'
       # /files/images/logo.png -> path = 'images/logo.png'
 
-      await $res->text("File path: $path");
+      await $res->text("File path: $path")->respond($send);
   });
 
   $router->to_app;
@@ -196,8 +196,8 @@ Apply middleware to specific routes by passing an arrayref:
       }
 
       unless ($token eq 'Bearer secret123') {
-          my $res = PAGI::Response->new($scope, $send);
-          await $res->status(401)->json({ error => 'Unauthorized' });
+          my $res = PAGI::Response->new($scope);
+          await $res->status(401)->json({ error => 'Unauthorized' })->respond($send);
           return;  # Don't call $next->()
       }
 
@@ -208,8 +208,8 @@ Apply middleware to specific routes by passing an arrayref:
   # Apply middleware to specific routes
   $router->get('/admin' => [$auth_mw] => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope, $send);
-      await $res->text('Admin panel');
+      my $res = PAGI::Response->new($scope);
+      await $res->text('Admin panel')->respond($send);
   });
 
   # Multiple middleware
@@ -243,8 +243,8 @@ Use C<mount()> to attach sub-applications or routers at a prefix:
   my $api_router = PAGI::App::Router->new;
   $api_router->get('/users' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope, $send);
-      await $res->json([{ id => 1, name => 'Alice' }]);
+      my $res = PAGI::Response->new($scope);
+      await $res->json([{ id => 1, name => 'Alice' }])->respond($send);
   });
 
   # Create main router
@@ -304,19 +304,19 @@ L<PAGI::Endpoint::Router> provides an object-oriented approach to routing. You d
   # Handler methods receive ($self, $req, $res) for HTTP
   async sub home {
       my ($self, $req, $res) = @_;
-      await $res->html('<h1>Welcome!</h1>');
+      return $res->html('<h1>Welcome!</h1>');
   }
 
   async sub about {
       my ($self, $req, $res) = @_;
-      await $res->html('<h1>About Us</h1>');
+      return $res->html('<h1>About Us</h1>');
   }
 
   async sub contact {
       my ($self, $req, $res) = @_;
       my $data = await $req->json;
       # ... process contact form ...
-      await $res->json({ success => 1 });
+      return $res->json({ success => 1 });
   }
 
   1;
@@ -357,7 +357,7 @@ WebSocket handlers receive C<($self, $ws)>:
 
   async sub home {
       my ($self, $req, $res) = @_;
-      await $res->html('<h1>Home</h1>');
+      return $res->html('<h1>Home</h1>');
   }
 
   # WebSocket handler receives ($self, $ws)
@@ -407,7 +407,7 @@ SSE handlers receive C<($self, $sse)>:
 
   async sub home {
       my ($self, $req, $res) = @_;
-      await $res->html('<h1>Home</h1>');
+      return $res->html('<h1>Home</h1>');
   }
 
   # SSE handler receives ($self, $sse)
@@ -478,7 +478,7 @@ Override C<on_startup> and C<on_shutdown> for application lifecycle management:
       my $db = $self->state->{db};
       my $uptime = time() - $self->state->{started_at};
 
-      await $res->json({
+      return $res->json({
           uptime => $uptime,
           database => defined($db) ? 'connected' : 'disconnected',
       });
@@ -517,8 +517,7 @@ Define middleware methods and reference them by name:
       my $token = $req->header('authorization');
 
       unless ($token && $token eq 'Bearer secret123') {
-          await $res->status(401)->json({ error => 'Unauthorized' });
-          return;  # Don't call $next->()
+          return $res->status(401)->json({ error => 'Unauthorized' });
       }
 
       # Authorized - continue to handler
@@ -535,19 +534,19 @@ Define middleware methods and reference them by name:
 
   async sub home {
       my ($self, $req, $res) = @_;
-      await $res->html('<h1>Home</h1>');
+      return $res->html('<h1>Home</h1>');
   }
 
   async sub admin_page {
       my ($self, $req, $res) = @_;
-      await $res->html('<h1>Admin Panel</h1>');
+      return $res->html('<h1>Admin Panel</h1>');
   }
 
   async sub create_user {
       my ($self, $req, $res) = @_;
       my $data = await $req->json;
       # ... create user ...
-      await $res->status(201)->json({ success => 1 });
+      return $res->status(201)->json({ success => 1 });
   }
 
   1;
@@ -575,7 +574,7 @@ Create modular applications by mounting sub-routers:
 
   async sub list_users {
       my ($self, $req, $res) = @_;
-      await $res->json([
+      return $res->json([
           { id => 1, name => 'Alice' },
           { id => 2, name => 'Bob' },
       ]);
@@ -584,13 +583,13 @@ Create modular applications by mounting sub-routers:
   async sub get_user {
       my ($self, $req, $res) = @_;
       my $id = $req->path_param('id');
-      await $res->json({ id => $id, name => "User $id" });
+      return $res->json({ id => $id, name => "User $id" });
   }
 
   async sub create_user {
       my ($self, $req, $res) = @_;
       my $data = await $req->json;
-      await $res->status(201)->json({ id => 3, name => $data->{name} });
+      return $res->status(201)->json({ id => 3, name => $data->{name} });
   }
 
   1;
@@ -614,7 +613,7 @@ Create modular applications by mounting sub-routers:
 
   async sub home {
       my ($self, $req, $res) = @_;
-      await $res->html('<h1>Home</h1>');
+      return $res->html('<h1>Home</h1>');
   }
 
   1;
@@ -666,28 +665,28 @@ Here's a complete working example demonstrating all features:
   async sub require_auth {
       my ($self, $req, $res, $next) = @_;
       my $token = $req->header('authorization');
-      return await $res->status(401)->json({ error => 'Unauthorized' })
+      return $res->status(401)->json({ error => 'Unauthorized' })
           unless $token && $token eq 'Bearer secret';
       await $next->();
   }
 
   async sub home {
       my ($self, $req, $res) = @_;
-      await $res->html('<h1>Welcome to MyApp</h1>');
+      return $res->html('<h1>Welcome to MyApp</h1>');
   }
 
   async sub list_users {
       my ($self, $req, $res) = @_;
-      await $res->json($self->state->{users});
+      return $res->json($self->state->{users});
   }
 
   async sub get_user {
       my ($self, $req, $res) = @_;
       my $id = $req->path_param('id');
       my ($user) = grep { $_->{id} == $id } @{$self->state->{users}};
-      return await $res->status(404)->json({ error => 'Not found' })
+      return $res->status(404)->json({ error => 'Not found' })
           unless $user;
-      await $res->json($user);
+      return $res->json($user);
   }
 
   async sub create_user {
@@ -695,12 +694,12 @@ Here's a complete working example demonstrating all features:
       my $data = await $req->json;
       my $user = { id => scalar(@{$self->state->{users}}) + 1, name => $data->{name} };
       push @{$self->state->{users}}, $user;
-      await $res->status(201)->json($user);
+      return $res->status(201)->json($user);
   }
 
   async sub admin {
       my ($self, $req, $res) = @_;
-      await $res->json({ message => 'Admin access granted' });
+      return $res->json({ message => 'Admin access granted' });
   }
 
   async sub ws_echo {
@@ -779,35 +778,35 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/login' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       # Set session data
       $req->session->{user_id} = 123;
       $req->session->{username} = 'alice';
 
-      await $res->text('Logged in!');
+      await $res->text('Logged in!')->respond($send);
   });
 
   $router->get('/profile' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       # Read session data
       my $username = $req->session->{username} // 'Guest';
 
-      await $res->text("Hello, $username!");
+      await $res->text("Hello, $username!")->respond($send);
   });
 
   $router->get('/logout' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       # Clear session
       $req->session({});
 
-      await $res->text('Logged out!');
+      await $res->text('Logged out!')->respond($send);
   });
 
   $router->to_app;
@@ -834,8 +833,8 @@ Use L<PAGI::Middleware::Session> for session management:
 
   $router->get('/' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope, $send);
-      await $res->text('Protected content');
+      my $res = PAGI::Response->new($scope);
+      await $res->text('Protected content')->respond($send);
   });
 
   $router->to_app;
@@ -864,12 +863,12 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/api/me' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       # User data from validated token
       my $user = PAGI::Stash->new($req)->get('user');
 
-      await $res->json({ user => $user });
+      await $res->json({ user => $user })->respond($send);
   });
 
   $router->to_app;
@@ -1003,13 +1002,14 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
 
   $router->post('/signup' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
-      # Respond immediately
-      await $res->status(201)->json({ status => 'created' });
+      # Respond immediately -- the client does not wait for the email
+      await $res->status(201)->json({ status => 'created' })->respond($send);
 
-      # Fire-and-forget with error handling
-      # IMPORTANT: Always add on_fail() before retain() to avoid silent failures
+      # Fire-and-forget: scheduled now, runs on later event-loop ticks
+      # (after this handler returns). Always add on_fail() before retain()
+      # to avoid silently swallowing errors.
       send_welcome_email('user@example.com')
           ->on_fail(sub { warn "Email send failed: @_" })
           ->retain();
@@ -1057,18 +1057,18 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
 
   $router->post('/generate-pdf' => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       # Option A: Wait for result (blocks this request only)
       my $result = await $pdf_worker->call(args => ['report']);
-      await $res->json({ result => $result });
+      await $res->json({ result => $result })->respond($send);
 
-      # Option B: Fire-and-forget (respond immediately)
+      # Option B: respond immediately, generate in the background
+      # await $res->json({ status => 'processing' })->respond($send);
       # my $f = $pdf_worker->call(args => ['report']);
       # $f->on_done(sub { warn "PDF ready: $_[0]\n" });
       # $f->on_fail(sub { warn "PDF failed: $_[0]\n" });
       # $f->retain();
-      # await $res->json({ status => 'processing' });
   });
 
   $router->to_app;
@@ -1091,7 +1091,7 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       if ($req->method eq 'POST') {
           my $form = await $req->form_params;
@@ -1099,10 +1099,10 @@ See C<examples/background-tasks/> for complete working examples.
           my $password = $form->{password};
 
           # Validate and process...
-          await $res->redirect('/dashboard');
+          await $res->redirect('/dashboard')->respond($send);
       }
       else {
-          await $res->html(<<'HTML');
+          await $res->html(<<'HTML')->respond($send);
   <form method="POST">
       <input name="username" placeholder="Username">
       <input name="password" type="password" placeholder="Password">
@@ -1126,7 +1126,7 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       if ($req->method eq 'POST') {
           my $uploads = await $req->uploads;
@@ -1143,10 +1143,10 @@ See C<examples/background-tasks/> for complete working examples.
               # my $content = $upload->content;
           }
 
-          await $res->json({ uploaded => scalar(@$uploads) });
+          await $res->json({ uploaded => scalar(@$uploads) })->respond($send);
       }
       else {
-          await $res->html(<<'HTML');
+          await $res->html(<<'HTML')->respond($send);
   <form method="POST" enctype="multipart/form-data">
       <input type="file" name="file" multiple>
       <button type="submit">Upload</button>
@@ -1339,16 +1339,16 @@ For more control (authentication, logging, custom headers):
   $router->get('/download/:filename' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope, $send);
+      my $res = PAGI::Response->new($scope);
 
       my $filename = $req->path_param('filename');
       my $filepath = "/var/www/files/$filename";
 
       # Validate file exists and user has access
-      return await $res->status(404)->text('Not found')
+      return await $res->status(404)->text('Not found')->respond($send)
           unless -f $filepath;
 
-      # Send file response (XSendfile middleware will intercept)
+      # Send file response directly via raw protocol events (XSendfile middleware will intercept)
       await $send->({
           type    => 'http.response.start',
           status  => 200,

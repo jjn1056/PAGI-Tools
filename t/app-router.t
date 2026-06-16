@@ -720,4 +720,15 @@ subtest 'router coerces mount and route targets' => sub {
     is $sent->[1]{body}, 'component', 'class-name string route target coerced';
 };
 
+subtest 'dispatch returns the matched HTTP handler return value' => sub {
+    my $router = PAGI::App::Router->new;
+    $router->get('/v' => async sub { return 'THE-VALUE' });
+    my $app = $router->to_app;
+
+    my $ret = $app->({ type => 'http', method => 'GET', path => '/v' },
+                     sub { Future->done }, sub { Future->done })->get;
+
+    is $ret, 'THE-VALUE', 'matched route return value propagates to the caller';
+};
+
 done_testing;

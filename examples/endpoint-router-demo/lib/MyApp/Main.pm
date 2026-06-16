@@ -267,7 +267,7 @@ async sub home {
 </html>
 HTML
 
-    await $ctx->response->html($html);
+    return $ctx->response->html($html);
 }
 
 async sub ws_echo {

@@ -2,6 +2,8 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
+use FindBin;
+use lib "$FindBin::Bin/lib";
 
 my $loaded = eval { require PAGI::Lifespan; 1 };
 ok($loaded, 'PAGI::Lifespan loads') or diag $@;
@@ -193,6 +195,22 @@ subtest 'shutdown runs all handlers despite a failure' => sub {
         is($sent[1]{type}, 'lifespan.shutdown.failed', 'shutdown failed reported');
         like($sent[1]{message}, qr/inner cleanup failed/, 'failing handler error reported');
     })->()->get;
+};
+
+subtest 'Lifespan->wrap coerces its app argument' => sub {
+    require TestApps::Component;
+
+    my $app = PAGI::Lifespan->wrap(
+        TestApps::Component->new(body => 'lifespan-wrapped'),   # a component object, not a coderef
+        startup => async sub { 1 },
+    );
+    is ref($app), 'CODE', 'wrap returns a PAGI app coderef';
+
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+    $app->({ type => 'http', method => 'GET', path => '/' },
+        sub { Future->done }, $send)->get;
+    is $sent[1]{body}, 'lifespan-wrapped', 'wrapped component is served (was coerced)';
 };
 
 done_testing;

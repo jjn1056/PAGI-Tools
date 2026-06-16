@@ -13,30 +13,6 @@ use PAGI::Request::Upload;
 use PAGI::Request::Negotiate;
 use PAGI::Request::BodyStream;
 
-# Class-level configuration defaults
-our %CONFIG = (
-    max_body_size     => 10 * 1024 * 1024,   # 10MB total request body
-    max_field_size    => 1 * 1024 * 1024,    # 1MB per form field (non-file)
-    max_file_size     => 10 * 1024 * 1024,   # 10MB per file upload
-    max_files         => 20,
-    max_fields        => 1000,
-    path_param_strict => 0,                  # Die if path_params not in scope
-    spool_threshold => 64 * 1024,           # 64KB
-    temp_dir        => $ENV{TMPDIR} // '/tmp',
-);
-
-sub configure {
-    my ($class, %opts) = @_;
-    for my $key (keys %opts) {
-        $CONFIG{$key} = $opts{$key} if exists $CONFIG{$key};
-    }
-}
-
-sub config {
-    my $class = shift;
-    return \%CONFIG;
-}
-
 sub new {
     my ($class, $scope, $receive) = @_;
     return bless {
@@ -389,11 +365,14 @@ sub basic_auth {
 # Path parameters - captured from URL path by router
 # Stored in scope->{path_params} for router-agnostic access
 sub path_params {
-    my $self = shift;
+    my ($self, %opts) = @_;
+    my $strict = delete $opts{strict};
+    croak("Unknown options to path_params: " . join(', ', keys %opts)) if %opts;
+
     my $params = $self->{scope}{path_params};
-    if (!defined $params && $CONFIG{path_param_strict}) {
+    if (!defined $params && $strict) {
         croak "path_params not set in scope (no router configured?). "
-            . "Set PAGI::Request->configure(path_param_strict => 0) to allow this.";
+            . "Pass strict => 0 to allow this.";
     }
     return $params // {};
 }
@@ -417,6 +396,15 @@ sub path_param {
 }
 
 sub scope { shift->{scope} }
+
+# Vend a detached response bound to this request's scope (the raw-app analog
+# of $ctx->response). It is a value, not a connection; call ->respond($send)
+# to send it.
+sub response {
+    my $self = shift;
+    require PAGI::Response;
+    return PAGI::Response->new($self->{scope});
+}
 
 
 # Application state (injected by PAGI::Lifespan, read-only)
@@ -717,57 +705,6 @@ uploads.
 This is an optional convenience layer. Raw PAGI applications continue to
 work with C<$scope> and C<$receive> directly.
 
-=head1 CLASS METHODS
-
-=head2 configure
-
-    PAGI::Request->configure(
-        max_body_size     => 10 * 1024 * 1024,  # 10MB total body
-        max_field_size    => 1 * 1024 * 1024,   # 1MB per form field
-        max_file_size     => 10 * 1024 * 1024,  # 10MB per file upload
-        spool_threshold   => 64 * 1024,         # 64KB
-        path_param_strict => 0,                 # Die if path_params not in scope
-    );
-
-Set class-level defaults for body/upload handling and path parameters.
-
-=over 4
-
-=item max_body_size
-
-Maximum total request body size. Enforced by the server.
-
-=item max_field_size
-
-Maximum size for non-file form fields in multipart requests. Default: 1MB.
-Protects against oversized text submissions.
-
-=item max_file_size
-
-Maximum size for file uploads in multipart requests. Default: 10MB.
-Applies to parts with a filename in Content-Disposition.
-
-=item spool_threshold
-
-Size at which multipart data is spooled to disk. Default: 64KB.
-
-=item path_param_strict
-
-When set to 1, C<path_params> and C<path_param> will die if
-C<< $scope->{path_params} >> is not defined (i.e., no router has set it).
-Default: 0 (return empty hashref/undef silently).
-
-This is useful for catching configuration errors where you expect a router
-but one isn't configured. See L</Strict Mode> for details.
-
-=back
-
-=head2 config
-
-    my $config = PAGI::Request->config;
-
-Returns the current configuration hashref.
-
 =head1 CONSTRUCTOR
 
 =head2 new
@@ -904,6 +841,16 @@ B<Note:> This method can be overridden in subclasses for custom parameter
 handling (e.g., lazy conversion from positional to named parameters).
 The C<path_param> method delegates to this method.
 
+B<Options:>
+
+=over 4
+
+=item * C<strict> - If true, die when no router has populated
+C<< $scope->{path_params} >> instead of returning an empty hashref. Default:
+false. Mirrors the C<strict> option on L</path_param>.
+
+=back
+
 =head2 path_param
 
     my $id = $req->path_param('id');
@@ -935,26 +882,24 @@ of dying. Default: true.
 
 =head2 Strict Mode
 
-By default, C<path_params> and C<path_param> return empty values if no router
-has set C<< $scope->{path_params} >>. This is the safest behavior for middleware
-and handlers that may run with or without a router.
+By default, C<path_params> returns an empty hashref if no router has set
+C<< $scope->{path_params} >>. This is the safest behavior for middleware and
+handlers that may run with or without a router.
 
-If you want to catch configuration errors early, enable strict mode:
+To catch configuration errors early, pass C<< strict => 1 >>:
 
-    PAGI::Request->configure(path_param_strict => 1);
+    # Dies if no router populated the scope:
+    my $params = $req->path_params(strict => 1);
+    # "path_params not set in scope (no router configured?)"
 
-With strict mode enabled, calling C<path_params> or C<path_param> when
-C<< $scope->{path_params} >> is undefined will die with an error message.
-This helps catch bugs where you expect a router but one isn't configured.
-
-    # Strict mode: dies if no router set path_params
-    PAGI::Request->configure(path_param_strict => 1);
+C<path_param> (singular) is strict by default for the requested key, so asking
+for a parameter when no router ran also dies, naming the missing key:
 
     my $id = $req->path_param('id');
-    # Dies: "path_params not set in scope (no router configured?)"
+    # "path_param 'id' not found. ... No path params set (no router?)"
 
-The default is C<path_param_strict =E<gt> 0> (non-strict), which matches
-Starlette's behavior of returning an empty dict when path_params is not set.
+This matches Starlette's behavior of returning an empty dict by default, while
+letting you opt into a loud failure per call.
 
 =head1 COOKIES
 
@@ -1044,6 +989,13 @@ B<Options:>
 =item * C<strict> - If true, die on invalid UTF-8 sequences. Default: false.
 
 =item * C<raw> - If true, skip UTF-8 decoding entirely. Default: false.
+
+=item * C<max_field_size>, C<max_file_size>, C<spool_threshold>, C<max_files>,
+C<max_fields>, C<temp_dir> - Per-request limits for multipart parsing, passed
+through to L<PAGI::Request::MultiPartHandler>. Each defaults to the matching
+package variable in that module (e.g.
+C<$PAGI::Request::MultiPartHandler::MAX_FILE_SIZE>); C<local>-ize those to
+change a default process-wide.
 
 =back
 
@@ -1258,6 +1210,16 @@ Returns the raw PAGI scope hashref. Useful for constructing helper
 objects like L<PAGI::Stash> and L<PAGI::Session>:
 
     my $stash = PAGI::Stash->new($req);
+
+=head2 response
+
+    my $res = $req->response;
+
+Vends a detached L<PAGI::Response> bound to this request's scope: the
+raw-application analog of C<< $ctx->response >>. The response is a value, not a
+connection; build it up and send it with C<< $res->respond($send) >>:
+
+    await $req->response->status(201)->json($data)->respond($send);
 
 =head2 Per-Request Shared State
 
