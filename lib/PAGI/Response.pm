@@ -20,36 +20,46 @@ PAGI::Response - Fluent response builder for PAGI applications
     use PAGI::Response;
     use Future::AsyncAwait;
 
-    # Body methods set the body and return $self for further chaining.
-    # Sending is done via respond($send) or the endpoint return contract.
+    # A response is a VALUE: build it, then send it (or return it, or mount it).
 
-    # Class-method factory
-    my $res = PAGI::Response->json({ message => 'Hello' });
-    await $res->respond($send);
+    # Raw PAGI app: build the value, send it with respond($send)
+    async sub app ($scope, $receive, $send) {
+        my $res = PAGI::Response->new($scope);        # detached -- no connection
+        await $res->status(200)
+                  ->header('X-Custom' => 'value')
+                  ->json({ message => 'Hello' })      # sets the body, returns $self
+                  ->respond($send);                   # the single send step
+    }
 
-    # Instance method — chain freely
-    my $res = PAGI::Response->new
-        ->status(200)
-        ->header('X-Custom' => 'value')
-        ->json({ message => 'Hello' });
-    await $res->respond($send);
+    # In an endpoint you just RETURN it; dispatch sends it for you:
+    async sub get ($self, $ctx) {
+        return $ctx->response->status(200)->json({ message => 'Hello' });
+    }
 
-    # Various body types
-    PAGI::Response->text("Hello World");
-    PAGI::Response->html("<h1>Hello</h1>");
-    PAGI::Response->json({ data => 'value' });
-    PAGI::Response->redirect('/login');
+    # Class-method factories build a detached response in one call;
+    # status/content_type/headers go as trailing options:
+    my $res = PAGI::Response->text("Hello World");
+    my $res = PAGI::Response->html("<h1>Hello</h1>");
+    my $res = PAGI::Response->json({ data => 'value' });
+    my $res = PAGI::Response->json({ error => 'not found' }, status => 404);
+    my $res = PAGI::Response->redirect('/login');
 
-    # Streaming large responses
-    PAGI::Response->stream(async sub {
-        my ($writer) = @_;
-        await $writer->write("chunk1");
-        await $writer->write("chunk2");
-        await $writer->close();
-    });
+    # Because it's a value, it works anywhere an app does:
+    $router->mount('/health' => PAGI::Response->json({ ok => \1 }));
 
-    # File downloads
-    PAGI::Response->new->send_file('/path/to/file.pdf', filename => 'doc.pdf');
+    # Streaming: the callback runs at send time (auto-closes when done)
+    await PAGI::Response->new($scope)
+        ->content_type('text/csv')
+        ->stream(async sub ($writer) {
+            await $writer->write("id,name\n");
+            await $writer->write("1,Alice\n");
+        })
+        ->respond($send);
+
+    # File downloads:
+    await PAGI::Response->new($scope)
+        ->send_file('/path/to/file.pdf', filename => 'doc.pdf')
+        ->respond($send);
 
 =head1 DESCRIPTION
 
@@ -864,22 +874,28 @@ Returns true if the writer has been closed.
 The writer automatically closes when the C<stream()> callback completes,
 but calling C<close()> explicitly is recommended for clarity.
 
-=head1 ERROR HANDLING
+=head1 ERROR AND ALTERNATE RESPONSES
 
-Body methods (C<text>, C<json>, etc.) encode synchronously and croak on
-invalid input (e.g., unencodable characters with C<FB_CROAK>). Errors surface
-at call time, not at send time. Errors during L</respond> (e.g., a broken
-connection) will cause the returned Future to fail.
+A response is a value, so "produce a 404 instead" is just returning a different
+value -- no exceptions needed:
 
-    use Syntax::Keyword::Try;
-
-    try {
-        my $res = $ctx->response->json($data);
-        await $res->respond($send);
+    async sub show ($self, $ctx) {
+        my $user = await find_user($ctx->req->path_param('id'));
+        return PAGI::Response->json({ error => 'not found' }, status => 404)
+            unless $user;
+        return $ctx->response->json($user);
     }
-    catch ($e) {
-        warn "Response error: $e";
-    }
+
+For cases that recur across handlers, prefer modeling the absence as a value
+(a "null object") whose own method returns the right response, instead of
+throwing from deep in the stack:
+
+    my $user = await find_user($ctx) // UnauthenticatedUser->new($ctx);
+    return $user->dashboard;   # a real user renders; an UnauthenticatedUser
+                               # returns a 401 / login response
+
+Here C<UnauthenticatedUser> is a class you define; its C<dashboard> method
+returns a C<PAGI::Response> just as a real user's would.
 
 =head1 SUBCLASSING (FRAMEWORK INTEGRATION)
 
