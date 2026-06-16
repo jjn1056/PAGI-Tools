@@ -113,7 +113,7 @@ These methods return C<$self> for fluent chaining.
 Set or get the HTTP status code (100-599). Returns C<$self> when setting
 for fluent chaining. When getting, returns 200 if no status has been set.
 
-    my $res = PAGI::Response->new($scope, $send);
+    my $res = PAGI::Response->new($scope);
     $res->status;           # 200 (default, nothing set yet)
     $res->has_status;       # false
     $res->status(201);      # set explicitly
@@ -590,10 +590,10 @@ use L<PAGI::App::File> instead:
             if $scope->{type} eq 'lifespan';
 
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         if ($req->method eq 'GET' && $req->path eq '/') {
-            return await $res->html('<h1>Welcome</h1>');
+            return await $res->html('<h1>Welcome</h1>')->respond($send);
         }
 
         if ($req->method eq 'POST' && $req->path eq '/api/users') {
@@ -601,16 +601,17 @@ use L<PAGI::App::File> instead:
             # ... create user ...
             return await $res->status(201)
                              ->header('Location' => '/api/users/123')
-                             ->json({ id => 123, name => $data->{name} });
+                             ->json({ id => 123, name => $data->{name} })
+                             ->respond($send);
         }
 
-        return await $res->status(404)->json({ error => 'Not Found' });
+        return await $res->status(404)->json({ error => 'Not Found' })->respond($send);
     };
 
 =head2 Form Validation with Error Response
 
     async sub handle_contact ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
         my $form = await $req->form_params;
 
         my @errors;
@@ -623,23 +624,24 @@ use L<PAGI::App::File> instead:
 
         if (@errors) {
             return await $res->status(422)
-                             ->json({ error => 'Validation failed', errors => \@errors });
+                             ->json({ error => 'Validation failed', errors => \@errors })
+                             ->respond($send);
         }
 
         # Process valid form...
-        return await $res->json({ success => 1 });
+        return await $res->json({ success => 1 })->respond($send);
     }
 
 =head2 Authentication with Cookies
 
     async sub handle_login ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
         my $data = await $req->json;
 
         my $user = authenticate($data->{email}, $data->{password});
 
         unless ($user) {
-            return await $res->status(401)->json({ error => 'Invalid credentials' });
+            return await $res->status(401)->json({ error => 'Invalid credentials' })->respond($send);
         }
 
         my $session_id = create_session($user);
@@ -651,36 +653,38 @@ use L<PAGI::App::File> instead:
                 samesite => 'Strict',
                 max_age  => 86400,  # 24 hours
             )
-            ->json({ user => { id => $user->{id}, name => $user->{name} } });
+            ->json({ user => { id => $user->{id}, name => $user->{name} } })
+            ->respond($send);
     }
 
     async sub handle_logout ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         return await $res->delete_cookie('session', path => '/')
-                         ->json({ logged_out => 1 });
+                         ->json({ logged_out => 1 })
+                         ->respond($send);
     }
 
 =head2 File Download
 
     async sub handle_download ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
         my $file_id = $req->path_param('id');
 
         my $file = get_file($file_id); # Be sure to clean $file
         unless ($file && -f $file->{path}) {
-            return await $res->status(404)->json({ error => 'File not found' });
+            return await $res->status(404)->json({ error => 'File not found' })->respond($send);
         }
 
         return await $res->send_file($file->{path},
             filename => $file->{original_name},
-        );
+        )->respond($send);
     }
 
 =head2 Streaming Large Data
 
     async sub handle_export ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         await $res->content_type('text/csv')
                   ->header('Content-Disposition' => 'attachment; filename="export.csv"')
@@ -693,13 +697,14 @@ use L<PAGI::App::File> instead:
                       while (my $user = $cursor->next) {
                           await $writer->write("$user->{id},$user->{name},$user->{email}\n");
                       }
-                  });
+                  })
+                  ->respond($send);
     }
 
 =head2 Server-Sent Events Style Streaming
 
     async sub handle_events ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         await $res->content_type('text/event-stream')
                   ->header('Cache-Control' => 'no-cache')
@@ -708,39 +713,41 @@ use L<PAGI::App::File> instead:
                           await $writer->write("data: Event $i\n\n");
                           await some_delay(1);  # Wait 1 second
                       }
-                  });
+                  })
+                  ->respond($send);
     }
 
 =head2 Conditional Responses
 
     async sub handle_resource ($req, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
         my $etag = '"abc123"';
 
         # Check If-None-Match for caching
         my $if_none_match = $req->header('If-None-Match') // '';
         if ($if_none_match eq $etag) {
-            return await $res->status(304)->empty();
+            return await $res->status(304)->empty()->respond($send);
         }
 
         return await $res->header('ETag' => $etag)
                          ->header('Cache-Control' => 'max-age=3600')
-                         ->json({ data => 'expensive computation result' });
+                         ->json({ data => 'expensive computation result' })
+                         ->respond($send);
     }
 
 =head2 CORS API Endpoint
 
     # Simple CORS - allow all origins
     async sub handle_api ($scope, $receive, $send) {
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
-        return await $res->cors->json({ status => 'ok' });
+        return await $res->cors->json({ status => 'ok' })->respond($send);
     }
 
     # CORS with credentials (e.g., cookies, auth headers)
     async sub handle_api_with_auth ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         # Get the Origin header from request
         my $origin = $req->header('Origin');
@@ -749,7 +756,7 @@ use L<PAGI::App::File> instead:
             origin         => 'https://myapp.com',  # Or use request_origin
             credentials    => 1,
             expose         => [qw(X-Request-Id)],
-        )->json({ user => 'authenticated' });
+        )->json({ user => 'authenticated' })->respond($send);
     }
 
 =head2 CORS Preflight Handler
@@ -757,7 +764,7 @@ use L<PAGI::App::File> instead:
     # Handle OPTIONS preflight requests
     async sub app ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         # Handle preflight
         if ($req->method eq 'OPTIONS') {
@@ -768,14 +775,14 @@ use L<PAGI::App::File> instead:
                 credentials => 1,
                 max_age     => 86400,
                 preflight   => 1,  # Include preflight headers
-            )->status(204)->empty();
+            )->status(204)->empty()->respond($send);
         }
 
         # Handle actual request
         return await $res->cors(
             origin      => 'https://myapp.com',
             credentials => 1,
-        )->json({ data => 'response' });
+        )->json({ data => 'response' })->respond($send);
     }
 
 =head2 Dynamic CORS Origin
@@ -789,7 +796,7 @@ use L<PAGI::App::File> instead:
 
     async sub handle_api ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope, $send);
+        my $res = PAGI::Response->new($scope);
 
         my $request_origin = $req->header('Origin') // '';
 
@@ -798,11 +805,11 @@ use L<PAGI::App::File> instead:
             return await $res->cors(
                 origin      => $request_origin,  # Echo back the allowed origin
                 credentials => 1,
-            )->json({ data => 'allowed' });
+            )->json({ data => 'allowed' })->respond($send);
         }
 
         # Origin not allowed - respond without CORS headers
-        return await $res->status(403)->json({ error => 'Origin not allowed' });
+        return await $res->status(403)->json({ error => 'Origin not allowed' })->respond($send);
     }
 
 =head1 WRITER OBJECT
