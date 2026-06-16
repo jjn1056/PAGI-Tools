@@ -21,31 +21,122 @@ Middleware provides reusable functionality that wraps your application handlers.
 
 =head2 1.1 How Middleware Works
 
-Middleware wraps your application, intercepting requests and responses. Each middleware can:
+At the protocol level there is nothing special about middleware: it is simply a
+PAGI application that wraps another PAGI application. It receives the same
+C<($scope, $receive, $send)>, does its work before and/or after, and delegates
+to the app it wraps. That lets a middleware:
 
 =over 4
 
-=item * Modify the request before passing it to the next handler
+=item * Modify the request scope before the inner app sees it
 
-=item * Short-circuit the request and return early
+=item * Short-circuit the request and respond early, without calling the inner app
 
-=item * Modify the response on the way back
+=item * Intercept and modify the response on its way out
 
-=item * Add side effects like logging
+=item * Add side effects such as logging or timing
 
 =back
 
-The pattern:
+=head3 The raw-PAGI version
+
+Say we want to stamp every response with an C<X-Powered-By> header. With nothing
+but the protocol, a middleware is a function that wraps an app and intercepts the
+C<http.response.start> event by wrapping C<$send>:
+
+  use Future::AsyncAwait;
+
+  sub add_powered_by {
+      my ($app) = @_;
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+
+          # Wrap $send so we can edit the response-start event on its way out
+          my $wrapped_send = async sub {
+              my ($event) = @_;
+              if ($event->{type} eq 'http.response.start') {
+                  push @{ $event->{headers} }, ['x-powered-by', 'PAGI'];
+              }
+              await $send->($event);
+          };
+
+          await $app->($scope, $receive, $wrapped_send);
+      };
+  }
+
+It works, but you write the C<$send>-wrapping boilerplate by hand, and you
+compose middleware by nesting function calls — which reads inside-out and hides
+the running order:
+
+  my $app = add_powered_by( time_requests( access_log( $inner_app ) ) );
+
+=head3 The PAGI::Middleware version
+
+Here is the same middleware as a L<PAGI::Middleware> subclass. The base class
+supplies the wrapping helpers; C<intercept_send> hands your callback each
+outgoing C<$event> together with the original C<$send> to forward it to:
+
+  package MyApp::Middleware::PoweredBy;
+  use parent 'PAGI::Middleware';
+  use Future::AsyncAwait;
 
   sub wrap {
       my ($self, $app) = @_;
       return async sub {
           my ($scope, $receive, $send) = @_;
-          # Before: modify $scope, check conditions, etc.
-          await $app->($scope, $receive, $send);
-          # After: response already sent, but can log, etc.
+
+          my $wrapped_send = $self->intercept_send($send, async sub {
+              my ($event, $orig_send) = @_;
+              push @{ $event->{headers} }, ['x-powered-by', 'PAGI']
+                  if $event->{type} eq 'http.response.start';
+              await $orig_send->($event);
+          });
+
+          await $app->($scope, $receive, $wrapped_send);
       };
   }
+
+  1;
+
+Now it composes with the C<builder> as a flat stack that reads top-to-bottom, in
+the order it runs:
+
+  use PAGI::Middleware::Builder;
+
+  my $app = builder {
+      enable '^MyApp::Middleware::PoweredBy';
+      enable 'AccessLog';
+      enable 'Runtime';
+      $router;
+  };
+
+=head3 Why the toolkit version is worth it
+
+The behavior is identical — what you gain is everything around it:
+
+=over 4
+
+=item * B<Composition.> The C<builder> stack reads in run order, top to bottom,
+instead of inside-out function nesting. Adding, removing, or reordering a
+middleware is a one-line change.
+
+=item * B<Configuration.> A middleware is a configurable object —
+C<enable 'GZip', min_size =E<gt> 1024> — with construction-time validation,
+rather than a closure capturing lexicals.
+
+=item * B<Reuse.> It is an ordinary class: ship it on CPAN, share it between
+apps, or reach for one of the 30+ already in this distribution (see
+L</1.3 Essential Middleware Reference>) rather than writing your own.
+
+=item * B<Conditional and per-route use.> C<enable_if { ... } 'Name'> applies a
+middleware only when a condition holds, and any route can carry its own
+middleware list (see L</1.2 Using Middleware with Builder>).
+
+=item * B<Helpers.> The base provides C<intercept_send>, C<modify_scope>,
+C<buffer_request_body>, and friends, so each middleware isn't re-implementing
+the protocol plumbing.
+
+=back
 
 =head2 1.2 Using Middleware with Builder
 
