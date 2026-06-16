@@ -1004,14 +1004,15 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
       my ($scope, $receive, $send) = @_;
       my $res = PAGI::Response->new($scope);
 
-      # Schedule background work (non-blocking; runs while response is sent)
-      # IMPORTANT: Always add on_fail() before retain() to avoid silent failures
+      # Respond immediately -- the client does not wait for the email
+      await $res->status(201)->json({ status => 'created' })->respond($send);
+
+      # Fire-and-forget: scheduled now, runs on later event-loop ticks
+      # (after this handler returns). Always add on_fail() before retain()
+      # to avoid silently swallowing errors.
       send_welcome_email('user@example.com')
           ->on_fail(sub { warn "Email send failed: @_" })
           ->retain();
-
-      # Send response immediately
-      await $res->status(201)->json({ status => 'created' })->respond($send);
   });
 
   $router->to_app;
@@ -1062,12 +1063,12 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
       my $result = await $pdf_worker->call(args => ['report']);
       await $res->json({ result => $result })->respond($send);
 
-      # Option B: Fire-and-forget (respond immediately)
+      # Option B: respond immediately, generate in the background
+      # await $res->json({ status => 'processing' })->respond($send);
       # my $f = $pdf_worker->call(args => ['report']);
       # $f->on_done(sub { warn "PDF ready: $_[0]\n" });
       # $f->on_fail(sub { warn "PDF failed: $_[0]\n" });
       # $f->retain();
-      # await $res->json({ status => 'processing' })->respond($send);
   });
 
   $router->to_app;
