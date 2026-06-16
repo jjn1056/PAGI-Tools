@@ -13,7 +13,7 @@ PAGI::App::NotFound - Customizable 404 response
 
     # A fixed 404 is just a response value (preferred):
     use PAGI::Response;
-    $router->mount('/missing' => PAGI::Response->text('Not Found', status => 404));
+    $router->mount('/missing' => PAGI::Response->text('Not Found')->status(404));
 
     # PAGI::App::NotFound is for a computed body or custom defaults
     # (e.g. a Cascade fallback):
