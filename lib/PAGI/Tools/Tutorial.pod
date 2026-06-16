@@ -493,7 +493,7 @@ body factory:
 
   await PAGI::Response->json({ created => 1 },
       status  => 201,
-      headers => [['X-Request-ID', '12345']],
+      headers => ['X-Request-ID' => '12345'],   # flat [ name => value, ... ]
   )->respond($send);
 
 Chainable methods:
