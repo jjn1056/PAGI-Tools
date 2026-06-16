@@ -397,15 +397,24 @@ subtest 'Redirect builds a response value (static + dynamic + query)' => sub {
     is $sent->[0]{status}, 301, 'status';
     my %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
     is $h{location}, '/new', 'location';
+    is $h{'content-type'}, 'text/plain', 'content-type preserved';
+    is $h{'content-length'}, 0, 'content-length 0';
     is $sent->[1]{body}, '', 'empty body';
 
     $sent = $run->(
-        PAGI::App::Redirect->new(to => sub { '/dyn' })->to_app,
-        { type => 'http', method => 'GET', path => '/x', query_string => 'a=1' },
+        PAGI::App::Redirect->new(to => sub { my ($s) = @_; "/from$s->{path}" })->to_app,
+        { type => 'http', method => 'GET', path => '/p', query_string => 'a=1' },
     );
     %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
-    is $h{location}, '/dyn?a=1', 'coderef target + query preserved';
+    is $h{location}, '/from/p?a=1', 'coderef receives scope; query preserved';
     is $sent->[0]{status}, 302, 'default status';
+
+    $sent = $run->(
+        PAGI::App::Redirect->new(to => '/x', preserve_query => 0)->to_app,
+        { type => 'http', method => 'GET', path => '/y', query_string => 'a=1' },
+    );
+    %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
+    is $h{location}, '/x', 'preserve_query => 0 suppresses query append';
 };
 
 done_testing;
