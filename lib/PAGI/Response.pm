@@ -881,6 +881,40 @@ connection) will cause the returned Future to fail.
         warn "Response error: $e";
     }
 
+=head1 SUBCLASSING (FRAMEWORK INTEGRATION)
+
+Framework authors can subclass C<PAGI::Response> to add their own response
+sugar while reusing the value machinery. The contract is small and stable:
+
+=over 4
+
+=item * B<Construct via> C<< $class->new($scope) >>. The scope is optional and
+inert (used only for C<scope()> and helpers like L<PAGI::Stash>); a response
+never holds a connection. A Moose subclass can C<extends 'PAGI::Response'> and
+provide C<FOREIGNBUILDARGS> returning C<($scope)>.
+
+=item * B<Override> C<< respond($send) >> to customize how the response is sent.
+Call C<< $self->SUPER::respond($send) >> to do the actual emission. The
+connection (C<$send>) arrives as the argument; do not store or re-bind it -- a
+response value is connection-free until the moment it is sent.
+
+=item * B<Build on the public surface> -- C<status>, C<header>, C<headers>,
+C<content_type>, C<cookie>, C<cors>, C<is_sent>, the C<has_*> predicates, and
+the body methods (C<text>/C<html>/C<json>/C<send_raw>/C<empty>/C<redirect>/
+C<stream>/C<send_file>, with trailing options). Do B<not> reach into the
+C<_>-prefixed internals (C<_headers>, C<_body>, C<_status>, C<_stream>, ...);
+they are private and may change.
+
+=item * Adding response sugar via a role/mixin works unchanged -- a role that
+calls the public chainers and body methods needs no special support.
+
+=back
+
+A response value never needs C<$send> until it is sent, so "I don't have a
+connection here" just means "I am not sending yet": hold the value and call
+C<respond> (or return it from an endpoint, where dispatch sends it) when a
+connection is available.
+
 =head1 SEE ALSO
 
 L<PAGI>, L<PAGI::Request>, L<PAGI::Server>
