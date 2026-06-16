@@ -10,12 +10,6 @@ use PAGI::Request;
 use PAGI::Response;
 use PAGI::App::File;
 
-# Configure upload limits
-PAGI::Request->configure(
-    max_file_size   => 5 * 1024 * 1024,  # 5MB per file upload
-    spool_threshold => 64 * 1024,
-);
-
 my $PUBLIC_DIR = File::Spec->catdir(dirname(__FILE__), 'public');
 my $UPLOAD_DIR = File::Spec->catdir(dirname(__FILE__), 'uploads');
 
@@ -55,7 +49,8 @@ my $app = async sub {
 async sub _handle_submit {
     my ($req, $send) = @_;
 
-    my $form = await $req->form_params;
+    # 5MB per-file limit; applies to the whole multipart parse (uploads included)
+    my $form = await $req->form_params(max_file_size => 5 * 1024 * 1024);
     my @errors;
 
     # Validate required fields

@@ -13,30 +13,6 @@ use PAGI::Request::Upload;
 use PAGI::Request::Negotiate;
 use PAGI::Request::BodyStream;
 
-# Class-level configuration defaults
-our %CONFIG = (
-    max_body_size     => 10 * 1024 * 1024,   # 10MB total request body
-    max_field_size    => 1 * 1024 * 1024,    # 1MB per form field (non-file)
-    max_file_size     => 10 * 1024 * 1024,   # 10MB per file upload
-    max_files         => 20,
-    max_fields        => 1000,
-    path_param_strict => 0,                  # Die if path_params not in scope
-    spool_threshold => 64 * 1024,           # 64KB
-    temp_dir        => $ENV{TMPDIR} // '/tmp',
-);
-
-sub configure {
-    my ($class, %opts) = @_;
-    for my $key (keys %opts) {
-        $CONFIG{$key} = $opts{$key} if exists $CONFIG{$key};
-    }
-}
-
-sub config {
-    my $class = shift;
-    return \%CONFIG;
-}
-
 sub new {
     my ($class, $scope, $receive) = @_;
     return bless {
@@ -720,57 +696,6 @@ uploads.
 This is an optional convenience layer. Raw PAGI applications continue to
 work with C<$scope> and C<$receive> directly.
 
-=head1 CLASS METHODS
-
-=head2 configure
-
-    PAGI::Request->configure(
-        max_body_size     => 10 * 1024 * 1024,  # 10MB total body
-        max_field_size    => 1 * 1024 * 1024,   # 1MB per form field
-        max_file_size     => 10 * 1024 * 1024,  # 10MB per file upload
-        spool_threshold   => 64 * 1024,         # 64KB
-        path_param_strict => 0,                 # Die if path_params not in scope
-    );
-
-Set class-level defaults for body/upload handling and path parameters.
-
-=over 4
-
-=item max_body_size
-
-Maximum total request body size. Enforced by the server.
-
-=item max_field_size
-
-Maximum size for non-file form fields in multipart requests. Default: 1MB.
-Protects against oversized text submissions.
-
-=item max_file_size
-
-Maximum size for file uploads in multipart requests. Default: 10MB.
-Applies to parts with a filename in Content-Disposition.
-
-=item spool_threshold
-
-Size at which multipart data is spooled to disk. Default: 64KB.
-
-=item path_param_strict
-
-When set to 1, C<path_params> and C<path_param> will die if
-C<< $scope->{path_params} >> is not defined (i.e., no router has set it).
-Default: 0 (return empty hashref/undef silently).
-
-This is useful for catching configuration errors where you expect a router
-but one isn't configured. See L</Strict Mode> for details.
-
-=back
-
-=head2 config
-
-    my $config = PAGI::Request->config;
-
-Returns the current configuration hashref.
-
 =head1 CONSTRUCTOR
 
 =head2 new
@@ -1055,6 +980,13 @@ B<Options:>
 =item * C<strict> - If true, die on invalid UTF-8 sequences. Default: false.
 
 =item * C<raw> - If true, skip UTF-8 decoding entirely. Default: false.
+
+=item * C<max_field_size>, C<max_file_size>, C<spool_threshold>, C<max_files>,
+C<max_fields>, C<temp_dir> - Per-request limits for multipart parsing, passed
+through to L<PAGI::Request::MultiPartHandler>. Each defaults to the matching
+package variable in that module (e.g.
+C<$PAGI::Request::MultiPartHandler::MAX_FILE_SIZE>); C<local>-ize those to
+change a default process-wide.
 
 =back
 
