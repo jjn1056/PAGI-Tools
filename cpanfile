@@ -17,6 +17,11 @@ requires 'Hash::MultiValue', '0.16';
 requires 'Cookie::Baker', '0.11';
 requires 'HTTP::MultiPartParser', '0.02';
 
+# Response compression (PAGI::Middleware::GZip; WebSocket permessage-deflate).
+# Both ship with core Perl; declared so the dependency is explicit.
+requires 'IO::Compress::Gzip';
+recommends 'Compress::Raw::Zlib';
+
 # Date parsing for PAGI::Middleware::ConditionalGet
 requires 'HTTP::Date', '6.06';
 
@@ -46,4 +51,5 @@ on 'develop' => sub {
     requires 'Dist::Zilla::Plugin::MetaNoIndex';
     requires 'Dist::Zilla::Plugin::Prereqs::FromCPANfile';
     requires 'Dist::Zilla::Plugin::PkgVersion';
+    requires 'Dist::Zilla::Plugin::ReadmeAnyFromPod';
 };
