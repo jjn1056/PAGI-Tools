@@ -175,6 +175,9 @@ subtest 'App::Loader loads app from file' => sub {
     };
 
     subtest 'returns 500 for invalid file' => sub {
+        my @warnings;
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+
         my $app = PAGI::App::Loader->new(file => '/nonexistent/app.pl')->to_app;
 
         my @sent;
@@ -188,6 +191,8 @@ subtest 'App::Loader loads app from file' => sub {
         });
 
         is $sent[0]{status}, 500, 'returns 500 for invalid file';
+        like "@warnings", qr/Error loading|did not return a coderef/,
+            'load failure is logged (captured, not leaked to STDERR)';
     };
 };
 
