@@ -237,6 +237,8 @@ use strict;
 use warnings;
 
 use Future::AsyncAwait;
+use Carp qw(croak);
+use Fcntl qw(O_WRONLY O_CREAT O_EXCL O_NOFOLLOW);
 
 =head1 NAME
 
@@ -290,6 +292,30 @@ Returns 'file' for file parts, 'field' otherwise.
 
 Drains and discards any remaining body of this part.
 
+=head2 next_chunk
+
+    my $chunk = await $part->next_chunk;
+
+Returns this part's next body chunk (raw bytes), or undef at the part's end.
+
+=head2 value
+
+    my $bytes = await $part->value;
+
+Buffers and returns the part's entire body as raw bytes (for small fields).
+
+=head2 stream_to
+
+    my $count = await $part->stream_to($cb);
+
+Drains the part to a (possibly async) sink callback, returning the byte count.
+
+=head2 stream_to_file
+
+    my $count = await $part->stream_to_file($path);
+
+Writes the part's body to a new file at C<$path>, returning the byte count.
+
 =cut
 
 sub new { my ($c,%a)=@_; bless { stream=>$a{stream}, meta=>$a{meta}, _done=>0 }, $c }
@@ -301,5 +327,62 @@ sub headers      { $_[0]{meta}{headers} }
 sub is_file      { defined $_[0]{meta}{filename} ? 1 : 0 }
 sub type         { $_[0]->is_file ? 'file' : 'field' }
 async sub skip   { my $s=shift; 1 while defined(await $s->{stream}->_next_chunk); $s->{_done}=1; return; }
+
+async sub next_chunk {
+    my ($self) = @_;
+    return undef if $self->{_done};
+    my $chunk = await $self->{stream}->_next_chunk;
+    $self->{_done} = 1 unless defined $chunk;
+    return $chunk;
+}
+
+async sub value {                              # buffer the whole part (small fields). RAW BYTES.
+    my ($self) = @_;
+    my $buf = '';
+    while (defined(my $c = await $self->next_chunk)) { $buf .= $c }
+    return $buf;
+}
+
+async sub stream_to {                          # drain to a (possibly async) sink callback
+    my ($self, $cb) = @_;
+    croak "callback is required" unless $cb;
+    my $n = 0;
+    my $ok = eval {
+        while (defined(my $c = await $self->next_chunk)) {
+            my $r = $cb->($c);
+            await $r if ref $r && $r->can('get');  # allow an async sink (returns a Future)
+            $n += length $c;
+        }
+        1;
+    };
+    if (!$ok) {
+        my $err = $@;
+        # poison the stream so a later ->next croaks; do NOT auto-drain (the app aborted)
+        $self->{stream}{_failed} //= "sink error: $err";
+        die $err;
+    }
+    return $n;
+}
+
+async sub stream_to_file {
+    my ($self, $path) = @_;
+    croak "path is required" unless defined $path;
+    sysopen(my $fh, $path, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0600)
+        or croak "Cannot create $path: $!";
+    binmode $fh;
+    my $written = 0;
+    my $ok = eval {
+        while (defined(my $c = await $self->next_chunk)) {
+            print $fh $c or die "write to $path failed: $!\n";
+            $written += length $c;
+        }
+        1;
+    };
+    my $err      = $@;
+    my $close_ok = close $fh;
+    if (!$ok) { unlink $path; croak $err; }                       # write/limit/disconnect error wins
+    unless ($close_ok) { unlink $path; croak "Cannot close $path: $!"; }
+    return $written;
+}
 
 1;

@@ -50,4 +50,52 @@ subtest 'advancing past an unconsumed part auto-drains' => sub {
     ok $p2->is_file && $p2->filename eq 'a.txt', 'auto-drained to the file part';
 };
 
+subtest 'value buffers a small field' => sub {
+    my $s = PAGI::Request::MultipartStream->new(receive => receiver($body), boundary => $b);
+    is $s->next->get->value->get, 'Hello', 'field value';
+};
+subtest 'stream_to sends file bytes to a custom sink (no temp file)' => sub {
+    my $s = PAGI::Request::MultipartStream->new(receive => receiver($body), boundary => $b);
+    $s->next->get;                               # field
+    my $sunk = '';
+    my $n = $s->next->get->stream_to(sub { $sunk .= $_[0]; Future->done })->get;
+    is $sunk, "line1\nline2", 'streamed bytes';
+    is $n, 11, 'returned byte count';
+};
+subtest 'stream_to_file writes the part and refuses to clobber' => sub {
+    my $s = PAGI::Request::MultipartStream->new(receive => receiver($body), boundary => $b);
+    $s->next->get;
+    my $path = "/tmp/pagi-mp-$$.txt"; unlink $path;
+    my $n = $s->next->get->stream_to_file($path)->get;
+    open my $rfh,'<:raw',$path; local $/; my $got = <$rfh>; close $rfh; unlink $path;
+    is $got, "line1\nline2", 'file contents';
+    open my $x,'>',$path; close $x;              # pre-existing file
+    my $s2 = PAGI::Request::MultipartStream->new(receive => receiver($body), boundary => $b);
+    $s2->next->get;
+    like dies { $s2->next->get->stream_to_file($path)->get }, qr/Cannot create/, 'O_EXCL refuses existing path';
+    unlink $path;
+};
+subtest 'a throwing sink poisons the stream and does not auto-drain' => sub {
+    my $s = PAGI::Request::MultipartStream->new(receive => receiver($body), boundary => $b);
+    $s->next->get;
+    my $file = $s->next->get;
+    like dies { $file->stream_to(sub { die "boom\n" })->get }, qr/boom/, 'sink error propagates';
+    like dies { $s->next->get }, qr/sink error|boom/, 'stream poisoned after sink error';
+};
+
+subtest 'stream_to_file unlinks the partial file on a mid-write error' => sub {
+    # Split so the part yields and a first under-limit chunk is written (creating
+    # the file), then a later chunk trips max_file_size mid-write — exercising the
+    # partial-file cleanup path rather than tripping the limit during ->next.
+    my $big = mp_body($b, ['doc','big.bin','application/octet-stream', 'x' x 50]);
+    my $cut = index($big, "\r\n\r\n") + 4 + 5;   # 5 body bytes in the first chunk
+    my $s = PAGI::Request::MultipartStream->new(
+        receive => receiver(substr($big,0,$cut), substr($big,$cut)),
+        boundary => $b, max_file_size => 10);
+    my $p = $s->next->get;
+    my $path = "/tmp/pagi-mp-err-$$.bin"; unlink $path;
+    like dies { $p->stream_to_file($path)->get }, qr/too large/i, 'oversized file croaks';
+    ok !-e $path, 'partial file removed on error';
+};
+
 done_testing;
