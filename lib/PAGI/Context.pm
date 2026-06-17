@@ -78,6 +78,8 @@ C<Can't locate object method> error.
     Method              HTTP    WebSocket   SSE
     ──────────────────  ──────  ──────────  ──────
     request, response   yes     -           -
+    text, html, json    yes     -           -
+    redirect            yes     -           -
     method              yes     -           -
     accept              -       yes         -
     send_text           -       yes         -
