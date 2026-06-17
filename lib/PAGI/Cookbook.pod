@@ -301,22 +301,22 @@ L<PAGI::Endpoint::Router> provides an object-oriented approach to routing. You d
       $r->post('/contact' => 'contact');
   }
 
-  # Handler methods receive ($self, $req, $res) for HTTP
+  # Handler methods receive ($self, $ctx) for HTTP
   async sub home {
-      my ($self, $req, $res) = @_;
-      return $res->html('<h1>Welcome!</h1>');
+      my ($self, $ctx) = @_;
+      return $ctx->html('<h1>Welcome!</h1>');
   }
 
   async sub about {
-      my ($self, $req, $res) = @_;
-      return $res->html('<h1>About Us</h1>');
+      my ($self, $ctx) = @_;
+      return $ctx->html('<h1>About Us</h1>');
   }
 
   async sub contact {
-      my ($self, $req, $res) = @_;
-      my $data = await $req->json;
+      my ($self, $ctx) = @_;
+      my $data = await $ctx->req->json;
       # ... process contact form ...
-      return $res->json({ success => 1 });
+      return $ctx->json({ success => 1 });
   }
 
   1;
@@ -331,15 +331,15 @@ Handler methods are called with:
 
 =item * C<$self> - Router instance (access C<$self-E<gt>state> for per-instance data)
 
-=item * C<$req> - L<PAGI::Request> object (already constructed)
-
-=item * C<$res> - L<PAGI::Response> object (already constructed)
+=item * C<$ctx> - L<PAGI::Context> - read the request via C<< $ctx->req >>, build
+the response with C<< $ctx->json >> / C<< $ctx->html >> / C<< $ctx->text >> and
+return it
 
 =back
 
 =head3 WebSocket Handlers
 
-WebSocket handlers receive C<($self, $ws)>:
+WebSocket handlers receive C<($self, $ctx)>; call C<< $ctx->websocket >> for the channel:
 
   package MyApp;
   use parent 'PAGI::Endpoint::Router';
@@ -356,13 +356,14 @@ WebSocket handlers receive C<($self, $ws)>:
   }
 
   async sub home {
-      my ($self, $req, $res) = @_;
-      return $res->html('<h1>Home</h1>');
+      my ($self, $ctx) = @_;
+      return $ctx->html('<h1>Home</h1>');
   }
 
-  # WebSocket handler receives ($self, $ws)
+  # WebSocket handler receives ($self, $ctx)
   async sub handle_ws {
-      my ($self, $ws) = @_;
+      my ($self, $ctx) = @_;
+      my $ws = $ctx->websocket;
 
       await $ws->accept;
 
@@ -374,7 +375,8 @@ WebSocket handlers receive C<($self, $ws)>:
 
   # WebSocket with path parameters
   async sub handle_chat {
-      my ($self, $ws) = @_;
+      my ($self, $ctx) = @_;
+      my $ws = $ctx->websocket;
 
       # Access path parameter via $ws->path_param()
       my $room = $ws->path_param('room');
@@ -389,7 +391,7 @@ WebSocket handlers receive C<($self, $ws)>:
 
 =head3 SSE Handlers
 
-SSE handlers receive C<($self, $sse)>:
+SSE handlers receive C<($self, $ctx)>; call C<< $ctx->sse >> for the channel:
 
   package MyApp;
   use parent 'PAGI::Endpoint::Router';
@@ -406,13 +408,14 @@ SSE handlers receive C<($self, $sse)>:
   }
 
   async sub home {
-      my ($self, $req, $res) = @_;
-      return $res->html('<h1>Home</h1>');
+      my ($self, $ctx) = @_;
+      return $ctx->html('<h1>Home</h1>');
   }
 
-  # SSE handler receives ($self, $sse)
+  # SSE handler receives ($self, $ctx)
   async sub handle_events {
-      my ($self, $sse) = @_;
+      my ($self, $ctx) = @_;
+      my $sse = $ctx->sse;
 
       await $sse->keepalive(30);
       await $sse->send_event("Connected at: " . time);
@@ -421,7 +424,8 @@ SSE handlers receive C<($self, $sse)>:
 
   # SSE with path parameters
   async sub handle_channel {
-      my ($self, $sse) = @_;
+      my ($self, $ctx) = @_;
+      my $sse = $ctx->sse;
 
       # Access path parameter
       my $channel = $sse->scope->{'pagi.params'}{channel};
@@ -472,13 +476,13 @@ Override C<on_startup> and C<on_shutdown> for application lifecycle management:
   }
 
   async sub home {
-      my ($self, $req, $res) = @_;
+      my ($self, $ctx) = @_;
 
       # Access state initialized in on_startup
       my $db = $self->state->{db};
       my $uptime = time() - $self->state->{started_at};
 
-      return $res->json({
+      return $ctx->json({
           uptime => $uptime,
           database => defined($db) ? 'connected' : 'disconnected',
       });
@@ -510,48 +514,50 @@ Define middleware methods and reference them by name:
       $r->post('/admin/users' => ['log_request', 'require_auth'] => 'create_user');
   }
 
-  # Middleware method signature: ($self, $req, $res, $next)
+  # Middleware method signature: ($self, $ctx, $next)
   async sub require_auth {
-      my ($self, $req, $res, $next) = @_;
+      my ($self, $ctx, $next) = @_;
 
-      my $token = $req->header('authorization');
+      my $token = $ctx->req->header('authorization');
 
       unless ($token && $token eq 'Bearer secret123') {
-          return $res->status(401)->json({ error => 'Unauthorized' });
+          return $ctx->json({ error => 'Unauthorized' }, status => 401);
       }
 
       # Authorized - continue to handler
-      await $next->();
+      return await $next->();
   }
 
   async sub log_request {
-      my ($self, $req, $res, $next) = @_;
+      my ($self, $ctx, $next) = @_;
 
-      warn "Request: " . $req->method . " " . $req->path . "\n";
+      warn "Request: " . $ctx->req->method . " " . $ctx->req->path . "\n";
 
-      await $next->();
+      return await $next->();
   }
 
   async sub home {
-      my ($self, $req, $res) = @_;
-      return $res->html('<h1>Home</h1>');
+      my ($self, $ctx) = @_;
+      return $ctx->html('<h1>Home</h1>');
   }
 
   async sub admin_page {
-      my ($self, $req, $res) = @_;
-      return $res->html('<h1>Admin Panel</h1>');
+      my ($self, $ctx) = @_;
+      return $ctx->html('<h1>Admin Panel</h1>');
   }
 
   async sub create_user {
-      my ($self, $req, $res) = @_;
-      my $data = await $req->json;
+      my ($self, $ctx) = @_;
+      my $data = await $ctx->req->json;
       # ... create user ...
-      return $res->status(201)->json({ success => 1 });
+      return $ctx->json({ success => 1 }, status => 201);
   }
 
   1;
 
-Middleware methods receive C<($self, $req, $res, $next)> and must call C<await $next-E<gt>()> to continue to the handler.
+Middleware methods receive C<($self, $ctx, $next)>. C<< await $next->() >> runs
+the rest of the chain and returns the handler's response; return it (optionally
+after decorating), or return your own response to short-circuit.
 
 =head3 Mounting Sub-Routers
 
@@ -573,23 +579,23 @@ Create modular applications by mounting sub-routers:
   }
 
   async sub list_users {
-      my ($self, $req, $res) = @_;
-      return $res->json([
+      my ($self, $ctx) = @_;
+      return $ctx->json([
           { id => 1, name => 'Alice' },
           { id => 2, name => 'Bob' },
       ]);
   }
 
   async sub get_user {
-      my ($self, $req, $res) = @_;
-      my $id = $req->path_param('id');
-      return $res->json({ id => $id, name => "User $id" });
+      my ($self, $ctx) = @_;
+      my $id = $ctx->req->path_param('id');
+      return $ctx->json({ id => $id, name => "User $id" });
   }
 
   async sub create_user {
-      my ($self, $req, $res) = @_;
-      my $data = await $req->json;
-      return $res->status(201)->json({ id => 3, name => $data->{name} });
+      my ($self, $ctx) = @_;
+      my $data = await $ctx->req->json;
+      return $ctx->json({ id => 3, name => $data->{name} }, status => 201);
   }
 
   1;
@@ -612,8 +618,8 @@ Create modular applications by mounting sub-routers:
   }
 
   async sub home {
-      my ($self, $req, $res) = @_;
-      return $res->html('<h1>Home</h1>');
+      my ($self, $ctx) = @_;
+      return $ctx->html('<h1>Home</h1>');
   }
 
   1;
@@ -663,47 +669,48 @@ Here's a complete working example demonstrating all features:
   }
 
   async sub require_auth {
-      my ($self, $req, $res, $next) = @_;
-      my $token = $req->header('authorization');
-      return $res->status(401)->json({ error => 'Unauthorized' })
+      my ($self, $ctx, $next) = @_;
+      my $token = $ctx->req->header('authorization');
+      return $ctx->json({ error => 'Unauthorized' }, status => 401)
           unless $token && $token eq 'Bearer secret';
-      await $next->();
+      return await $next->();
   }
 
   async sub home {
-      my ($self, $req, $res) = @_;
-      return $res->html('<h1>Welcome to MyApp</h1>');
+      my ($self, $ctx) = @_;
+      return $ctx->html('<h1>Welcome to MyApp</h1>');
   }
 
   async sub list_users {
-      my ($self, $req, $res) = @_;
-      return $res->json($self->state->{users});
+      my ($self, $ctx) = @_;
+      return $ctx->json($self->state->{users});
   }
 
   async sub get_user {
-      my ($self, $req, $res) = @_;
-      my $id = $req->path_param('id');
+      my ($self, $ctx) = @_;
+      my $id = $ctx->req->path_param('id');
       my ($user) = grep { $_->{id} == $id } @{$self->state->{users}};
-      return $res->status(404)->json({ error => 'Not found' })
+      return $ctx->json({ error => 'Not found' }, status => 404)
           unless $user;
-      return $res->json($user);
+      return $ctx->json($user);
   }
 
   async sub create_user {
-      my ($self, $req, $res) = @_;
-      my $data = await $req->json;
+      my ($self, $ctx) = @_;
+      my $data = await $ctx->req->json;
       my $user = { id => scalar(@{$self->state->{users}}) + 1, name => $data->{name} };
       push @{$self->state->{users}}, $user;
-      return $res->status(201)->json($user);
+      return $ctx->json($user, status => 201);
   }
 
   async sub admin {
-      my ($self, $req, $res) = @_;
-      return $res->json({ message => 'Admin access granted' });
+      my ($self, $ctx) = @_;
+      return $ctx->json({ message => 'Admin access granted' });
   }
 
   async sub ws_echo {
-      my ($self, $ws) = @_;
+      my ($self, $ctx) = @_;
+      my $ws = $ctx->websocket;
       await $ws->accept;
       await $ws->each_text(async sub {
           my ($text) = @_;
@@ -712,7 +719,8 @@ Here's a complete working example demonstrating all features:
   }
 
   async sub events {
-      my ($self, $sse) = @_;
+      my ($self, $ctx) = @_;
+      my $sse = $ctx->sse;
       await $sse->keepalive(30);
       await $sse->send_json({ connected => time });
       await $sse->run;
