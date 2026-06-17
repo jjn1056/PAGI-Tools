@@ -71,6 +71,7 @@ sub new {
         _bytes_total => 0,
         _cur_is_file => 0,
         _cur_bytes   => 0,
+        _cur_name    => undef,
         _current     => undef,     # current Part
         _exhausted   => 0,
         _disconnect  => 0,
@@ -142,6 +143,7 @@ sub _build_parser {
             return if $self->{_failed};
             $self->{_cur_is_file} = $is_file;
             $self->{_cur_bytes}   = 0;
+            $self->{_cur_name}    = $meta->{name};
             push @{$self->{_queue}}, ['part', $meta];
         },
         on_body => sub {
@@ -150,8 +152,8 @@ sub _build_parser {
             $self->{_cur_bytes} += length $chunk;
             my $max = $self->{_cur_is_file} ? $self->{max_file_size} : $self->{max_field_size};
             if ($self->{_cur_bytes} > $max) {
-                $self->{_failed} = ($self->{_cur_is_file} ? 'File' : 'Field')
-                    . " part too large (max $max bytes)";
+                $self->{_failed} = sprintf("%s part '%s' too large (max %d bytes)",
+                    ($self->{_cur_is_file} ? 'File' : 'Field'), ($self->{_cur_name} // ''), $max);
                 return;                                  # stop enqueuing — bounds the queue
             }
             push @{$self->{_queue}}, ['body', $chunk];
