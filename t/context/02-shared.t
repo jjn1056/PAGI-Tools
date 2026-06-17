@@ -43,7 +43,7 @@ subtest 'session accessor' => sub {
 
 subtest 'session dies without middleware' => sub {
     my $ctx = PAGI::Context->new({ type => 'http', headers => [] }, sub {}, sub {});
-    ok(dies { $ctx->session }, 'session dies when pagi.session missing');
+    like(dies { $ctx->session }, qr/pagi\.session/, 'session dies when pagi.session missing');
 };
 
 subtest 'has_session' => sub {

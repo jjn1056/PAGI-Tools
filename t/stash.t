@@ -24,8 +24,8 @@ subtest 'from_data mutations visible in original' => sub {
 };
 
 subtest 'from_data dies without hashref' => sub {
-    ok(dies { PAGI::Stash->from_data("bad") }, 'dies on string');
-    ok(dies { PAGI::Stash->from_data(undef) }, 'dies on undef');
+    like(dies { PAGI::Stash->from_data("bad") }, qr/requires a hashref/, 'dies on string');
+    like(dies { PAGI::Stash->from_data(undef) }, qr/requires a hashref/, 'dies on undef');
 };
 
 # ===================
@@ -74,7 +74,7 @@ subtest 'new dies on invalid argument' => sub {
 
 subtest 'get strict dies on missing key' => sub {
     my $stash = PAGI::Stash->from_data({});
-    ok(dies { $stash->get('nope') }, 'dies on missing key');
+    like(dies { $stash->get('nope') }, qr/does not exist/, 'dies on missing key');
 };
 
 subtest 'get strict error lists keys when few' => sub {
@@ -110,12 +110,12 @@ subtest 'get with default returns real value when exists' => sub {
 
 subtest 'get dies on zero args' => sub {
     my $stash = PAGI::Stash->from_data({});
-    ok(dies { $stash->get() }, 'dies on zero args');
+    like(dies { $stash->get() }, qr/1 or 2 arguments/, 'dies on zero args');
 };
 
 subtest 'get dies on more than two args' => sub {
     my $stash = PAGI::Stash->from_data({});
-    ok(dies { $stash->get('a', 'b', 'c') }, 'dies on three args');
+    like(dies { $stash->get('a', 'b', 'c') }, qr/1 or 2 arguments/, 'dies on three args');
 };
 
 # ===================
@@ -154,8 +154,8 @@ subtest 'set no-ops on zero args' => sub {
 
 subtest 'set dies on odd args' => sub {
     my $stash = PAGI::Stash->from_data({});
-    ok(dies { $stash->set('lonely') }, 'dies on 1 arg');
-    ok(dies { $stash->set('a', 'b', 'c') }, 'dies on 3 args');
+    like(dies { $stash->set('lonely') }, qr/requires key/, 'dies on 1 arg');
+    like(dies { $stash->set('a', 'b', 'c') }, qr/requires key/, 'dies on 3 args');
 };
 
 # ===================
