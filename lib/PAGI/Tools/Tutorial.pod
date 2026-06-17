@@ -174,6 +174,40 @@ Content-type predicates:
 
 =back
 
+=head3 Streaming Large Request Bodies
+
+The body methods above buffer the whole body in memory. For large uploads,
+stream it instead with C<body_stream>, which returns a
+L<PAGI::Request::BodyStream> you consume incrementally:
+
+  # Pull chunks yourself (undef at end-of-body or client disconnect)
+  my $stream = $req->body_stream(max_bytes => 100 * 1024 * 1024);
+  while (defined(my $chunk = await $stream->next_chunk)) {
+      # ... process $chunk ...
+  }
+
+  # Or drain straight to a file (never holds the whole body in memory)
+  await $req->body_stream->stream_to_file('/uploads/data.bin');
+
+  # Or to a custom async sink — the read pauses until your sink resolves,
+  # giving you natural backpressure
+  await $req->body_stream->stream_to(async sub ($chunk) {
+      await $store->append($chunk);
+  });
+
+Options: C<max_bytes> (a size cap; defaults to the Content-Length header),
+C<decode> (e.g. C<'UTF-8'>, which handles multi-byte sequences split across
+chunk boundaries), and C<strict> (throw on invalid UTF-8).
+
+B<Streaming is mutually exclusive with the buffered methods.> Once you call
+C<body_stream>, C<body>/C<text>/C<json>/C<form_params> are unavailable on that
+request (and vice versa) — a body can only be consumed once.
+
+Multipart file uploads stream automatically: C<< $req->upload >> /
+C<< $req->uploads >> spool large parts to a temp file rather than holding them
+in memory, so you rarely need C<body_stream> for ordinary form uploads. See
+L<PAGI::Request::BodyStream> for the full API and backpressure examples.
+
 =head1 PART 4: BUILDING RESPONSES
 
 =head2 4.1 PAGI::Response - Fluent Response Builder
