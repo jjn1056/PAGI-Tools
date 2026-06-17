@@ -38,7 +38,7 @@ Use C<:param> syntax for named parameters in routes:
   $router->get('/users/:id' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       # Access path parameter via $req->path_param()
       my $id = $req->path_param('id');
@@ -50,7 +50,7 @@ Use C<:param> syntax for named parameters in routes:
   $router->get('/posts/:post_id/comments/:comment_id' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       my $post_id = $req->path_param('post_id');
       my $comment_id = $req->path_param('comment_id');
@@ -75,7 +75,7 @@ Use C<*name> syntax to capture multiple path segments:
   $router->get('/files/*path' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       # Access wildcard via $req->path_param()
       my $path = $req->path_param('path');
@@ -778,7 +778,7 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/login' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       # Set session data
       $req->session->{user_id} = 123;
@@ -790,7 +790,7 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/profile' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       # Read session data
       my $username = $req->session->{username} // 'Guest';
@@ -801,7 +801,7 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/logout' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       # Clear session
       $req->session({});
@@ -863,7 +863,7 @@ Use L<PAGI::Middleware::Session> for session management:
   $router->get('/api/me' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       # User data from validated token
       my $user = PAGI::Stash->new($req)->get('user');
@@ -1091,7 +1091,7 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       if ($req->method eq 'POST') {
           my $form = await $req->form_params;
@@ -1126,7 +1126,7 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       if ($req->method eq 'POST') {
           my $uploads = await $req->uploads;
@@ -1339,7 +1339,7 @@ For more control (authentication, logging, custom headers):
   $router->get('/download/:filename' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
+      my $res = $req->response;
 
       my $filename = $req->path_param('filename');
       my $filepath = "/var/www/files/$filename";

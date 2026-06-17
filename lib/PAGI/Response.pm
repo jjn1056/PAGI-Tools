@@ -24,7 +24,7 @@ PAGI::Response - Fluent response builder for PAGI applications
 
     # Raw PAGI app: build the value, send it with respond($send)
     async sub app ($scope, $receive, $send) {
-        my $res = PAGI::Response->new($scope);        # detached -- no connection
+        my $res = $req->response;        # detached -- no connection
         await $res->status(200)
                   ->header('X-Custom' => 'value')
                   ->json({ message => 'Hello' })      # sets the body, returns $self
@@ -592,7 +592,7 @@ use L<PAGI::App::File> instead:
             if $scope->{type} eq 'lifespan';
 
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
 
         if ($req->method eq 'GET' && $req->path eq '/') {
             return await $res->html('<h1>Welcome</h1>')->respond($send);
@@ -613,7 +613,7 @@ use L<PAGI::App::File> instead:
 =head2 Form Validation with Error Response
 
     async sub handle_contact ($req, $send) {
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
         my $form = await $req->form_params;
 
         my @errors;
@@ -637,7 +637,7 @@ use L<PAGI::App::File> instead:
 =head2 Authentication with Cookies
 
     async sub handle_login ($req, $send) {
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
         my $data = await $req->json;
 
         my $user = authenticate($data->{email}, $data->{password});
@@ -660,7 +660,7 @@ use L<PAGI::App::File> instead:
     }
 
     async sub handle_logout ($req, $send) {
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
 
         return await $res->delete_cookie('session', path => '/')
                          ->json({ logged_out => 1 })
@@ -670,7 +670,7 @@ use L<PAGI::App::File> instead:
 =head2 File Download
 
     async sub handle_download ($req, $send) {
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
         my $file_id = $req->path_param('id');
 
         my $file = get_file($file_id); # Be sure to clean $file
@@ -686,7 +686,7 @@ use L<PAGI::App::File> instead:
 =head2 Streaming Large Data
 
     async sub handle_export ($req, $send) {
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
 
         await $res->content_type('text/csv')
                   ->header('Content-Disposition' => 'attachment; filename="export.csv"')
@@ -706,7 +706,7 @@ use L<PAGI::App::File> instead:
 =head2 Server-Sent Events Style Streaming
 
     async sub handle_events ($req, $send) {
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
 
         await $res->content_type('text/event-stream')
                   ->header('Cache-Control' => 'no-cache')
@@ -722,7 +722,7 @@ use L<PAGI::App::File> instead:
 =head2 Conditional Responses
 
     async sub handle_resource ($req, $send) {
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
         my $etag = '"abc123"';
 
         # Check If-None-Match for caching
@@ -749,7 +749,7 @@ use L<PAGI::App::File> instead:
     # CORS with credentials (e.g., cookies, auth headers)
     async sub handle_api_with_auth ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
 
         # Get the Origin header from request
         my $origin = $req->header('Origin');
@@ -766,7 +766,7 @@ use L<PAGI::App::File> instead:
     # Handle OPTIONS preflight requests
     async sub app ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
 
         # Handle preflight
         if ($req->method eq 'OPTIONS') {
@@ -798,7 +798,7 @@ use L<PAGI::App::File> instead:
 
     async sub handle_api ($scope, $receive, $send) {
         my $req = PAGI::Request->new($scope, $receive);
-        my $res = PAGI::Response->new($scope);
+        my $res = $req->response;
 
         my $request_origin = $req->header('Origin') // '';
 

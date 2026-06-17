@@ -226,7 +226,7 @@ $router->get('/blocking' => async sub {
 $router->post('/signup' => async sub {
     my ($scope, $receive, $send) = @_;
     my $req = PAGI::Request->new($scope, $receive);
-    my $res = PAGI::Response->new($scope);
+    my $res = $req->response;
 
     my $data = await $req->json;
     my $email = $data->{email} // 'unknown@example.com';
