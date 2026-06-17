@@ -24,7 +24,7 @@ PAGI::Response - Fluent response builder for PAGI applications
 
     # Raw PAGI app: build the value, send it with respond($send)
     async sub app ($scope, $receive, $send) {
-        my $res = $req->response;        # detached -- no connection
+        my $res = PAGI::Response->new($scope);   # detached -- no connection
         await $res->status(200)
                   ->header('X-Custom' => 'value')
                   ->json({ message => 'Hello' })      # sets the body, returns $self
@@ -33,7 +33,7 @@ PAGI::Response - Fluent response builder for PAGI applications
 
     # In an endpoint you just RETURN it; dispatch sends it for you:
     async sub get ($self, $ctx) {
-        return $ctx->response->status(200)->json({ message => 'Hello' });
+        return $ctx->json({ message => 'Hello' }, status => 200);
     }
 
     # Class-method factories build a detached response in one call;
@@ -354,7 +354,7 @@ L</respond> / L</to_app> or the endpoint return contract.
 Each method works as both a B<class-method factory> and an B<instance method>:
 
     # Class-method factory — creates a new detached response and returns it
-    return $ctx->response->json($data);          # instance method on existing $res
+    return $ctx->json($data);                     # instance method on existing $res
     return PAGI::Response->json($data);          # factory shorthand
 
     # Chain body with other setters before sending
@@ -892,7 +892,7 @@ value -- no exceptions needed:
         my $user = await find_user($ctx->req->path_param('id'));
         return PAGI::Response->json({ error => 'not found' }, status => 404)
             unless $user;
-        return $ctx->response->json($user);
+        return $ctx->json($user);
     }
 
 For cases that recur across handlers, prefer modeling the absence as a value

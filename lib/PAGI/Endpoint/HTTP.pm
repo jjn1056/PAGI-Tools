@@ -96,14 +96,14 @@ PAGI::Endpoint::HTTP - Class-based HTTP endpoint handler
     async sub get {
         my ($self, $ctx) = @_;
         my $users = get_all_users();
-        return $ctx->response->json($users);
+        return $ctx->json($users);
     }
 
     async sub post {
         my ($self, $ctx) = @_;
         my $data = await $ctx->request->json;
         my $user = create_user($data);
-        return $ctx->response->status(201)->json($user);
+        return $ctx->json($user, status => 201);
     }
 
     async sub delete {
@@ -165,7 +165,7 @@ Use C<< $ctx->request >> for request data and C<< $ctx->response >> for
 building responses.
 
 B<Handler contract:> Every HTTP handler MUST return a respond-able value
-(e.g. C<< return $ctx->response->json(...) >>). Returning nothing (or an
+(e.g. C<< return $ctx->json(...) >>). Returning nothing (or an
 object without a C<respond> method) causes dispatch to croak. The return
 value is what dispatch sends to the client via C<< $ctx->respond($res) >>.
 

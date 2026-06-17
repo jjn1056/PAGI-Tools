@@ -34,7 +34,7 @@ package MessageAPI {
 
     async sub get {
         my ($self, $ctx) = @_;
-        return $ctx->response->json(\@messages);
+        return $ctx->json(\@messages);
     }
 
     async sub post {
@@ -46,7 +46,7 @@ package MessageAPI {
         # Notify SSE subscribers
         MessageEvents::broadcast($message);
 
-        return $ctx->response->status(201)->json($message);
+        return $ctx->json($message, status => 201);
     }
 }
 

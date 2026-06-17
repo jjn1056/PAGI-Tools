@@ -24,7 +24,7 @@ async sub get_info {
 
     my $config = $ctx->state->{config};
 
-    return $ctx->response->json({
+    return $ctx->json({
         app     => $config->{app_name},
         version => $config->{version},
         api     => 'v1',
@@ -34,7 +34,7 @@ async sub get_info {
 async sub list_users {
     my ($self, $ctx) = @_;
     $ctx->state->{metrics}{requests}++;
-    return $ctx->response->json(\@USERS);
+    return $ctx->json(\@USERS);
 }
 
 async sub get_user {
@@ -45,9 +45,9 @@ async sub get_user {
     my ($user) = grep { $_->{id} == $id } @USERS;
 
     if ($user) {
-        return $ctx->response->json($user);
+        return $ctx->json($user);
     } else {
-        return $ctx->response->status(404)->json({ error => 'User not found' });
+        return $ctx->json({ error => 'User not found' }, status => 404);
     }
 }
 
@@ -64,7 +64,7 @@ async sub create_user {
     };
     push @USERS, $new_user;
 
-    return $ctx->response->status(201)->json($new_user);
+    return $ctx->json($new_user, status => 201);
 }
 
 1;
