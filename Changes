@@ -64,5 +64,12 @@
     middleware remain the outer base, applied at the App::Router mount/group
     level. PAGI::App::Router dispatch now returns the matched HTTP route's
     value (the mechanism enabling the above). PAGI::Endpoint::HTTP is unchanged.
+  - PAGI::Request->multipart_stream - pull-based streaming multipart parsing;
+    the application controls each part's sink (next/value/stream_to/
+    stream_to_file), bypassing the temp-file spool of form_params/uploads.
+    Enforces per-field/per-file/per-count and aggregate body limits as bytes
+    arrive, writes uploads to new files path-safely (O_EXCL/O_NOFOLLOW, partial
+    files unlinked on error), and distinguishes a truncated upload from a clean
+    end of stream. Mutually exclusive with the buffered body methods.
   - For changes prior to 0.002000, see the Changes file of the PAGI
     distribution (versions up to 0.001023).

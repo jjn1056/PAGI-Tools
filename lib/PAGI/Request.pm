@@ -984,10 +984,64 @@ See L<PAGI::Request::BodyStream> for full documentation.
 =head2 multipart_stream
 
     my $stream = $req->multipart_stream;
+    my $stream = $req->multipart_stream(
+        max_files        => 1000,
+        max_fields       => 1000,
+        max_field_size   => 1024 * 1024,
+        max_file_size    => 100 * 1024 * 1024,
+        max_request_body => 1024 * 1024 * 1024,
+    );
 
 Returns a L<PAGI::Request::MultipartStream> for pull-based streaming of a
-C<multipart/form-data> body. Mutually exclusive with the buffered body methods
-(C<body>, C<text>, C<json>, C<form_params>, C<uploads>) and with C<body_stream>.
+C<multipart/form-data> request body. You pull one part at a time and choose
+where each one goes:
+
+    while (defined(my $part = await $stream->next)) {
+        if ($part->is_file) {
+            await $part->stream_to_file($path);
+        }
+        else {
+            my $value = await $part->value;  # raw bytes; you decode
+        }
+    }
+
+Each part is a L<PAGI::Request::Part> exposing its metadata (C<name>,
+C<filename>, C<content_type>, C<headers>, C<is_file>) and methods to consume
+its body: C<next_chunk> (pull raw bytes), C<value> (buffer the whole part as
+raw bytes), C<stream_to($cb)> (drain to a possibly-async sink), and
+C<stream_to_file($path)> (write to a new file, path-safe).
+
+Unlike the buffered multipart path (C<form_params>/C<uploads>), this does
+B<not> spool each upload to a temp file: the application owns the sink, so a
+part can stream straight to an object store or a transform, and that sink can
+be fully asynchronous (C<stream_to> awaits a Future-returning sink for
+backpressure) -- whereas the buffered spool is blocking.
+
+B<Options:>
+
+=over 4
+
+=item * C<max_files> - Maximum number of file parts. Default: 1000.
+
+=item * C<max_fields> - Maximum number of field parts. Default: 1000.
+
+=item * C<max_field_size> - Maximum bytes per field part. Default: 1 MiB.
+
+=item * C<max_file_size> - Maximum bytes per file part. Default: 100 MiB.
+
+=item * C<max_request_body> - Maximum total body bytes (per-stream
+defence-in-depth; the server's C<max_body_size> is the primary cap).
+Default: 1 GiB.
+
+=back
+
+B<Important:> Streaming the multipart body is mutually exclusive with the
+buffered body methods. C<multipart_stream> croaks if the body was already read
+or a stream was already created, and conversely C<body>/C<text>/C<json>/
+C<form_params>/C<uploads> croak once a stream exists -- a body can only be
+consumed once.
+
+See L<PAGI::Request::MultipartStream> for full documentation.
 
 =head2 body
 

@@ -208,6 +208,25 @@ C<< $req->uploads >> spool large parts to a temp file rather than holding them
 in memory, so you rarely need C<body_stream> for ordinary form uploads. See
 L<PAGI::Request::BodyStream> for the full API and backpressure examples.
 
+When you would rather own where each upload goes, C<multipart_stream> returns a
+L<PAGI::Request::MultipartStream> that yields one part at a time:
+
+  my $stream = $req->multipart_stream;
+  while (defined(my $part = await $stream->next)) {
+      if ($part->is_file) {
+          await $part->stream_to(async sub ($chunk) { await $sink->write($chunk) });
+      } else {
+          my $value = await $part->value;
+      }
+  }
+
+This bypasses the auto-spool, so each upload part goes straight to your sink (an
+S3 client, a transform, an async writer) instead of a temp file, and the sink
+can be fully asynchronous -- the read pauses until your sink's Future resolves.
+Slow-client and idle-read timeouts, and the aggregate C<max_body_size> cap, are
+enforced by the PAGI server, not by this layer (the stream cannot impose a
+wall-clock timeout itself).
+
 =head1 PART 4: BUILDING RESPONSES
 
 =head2 4.1 PAGI::Response - Fluent Response Builder
