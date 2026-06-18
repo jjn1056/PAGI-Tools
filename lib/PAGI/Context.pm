@@ -579,18 +579,18 @@ If no callbacks are registered, errors are emitted via C<warn>.
 
 Returns C<$ctx> for chaining.
 
-    # Avoid circular references - weaken if the callback closes over $ctx
-    use Scalar::Util qw(weaken);
-    my $weak = $ctx;
-    weaken $weak;
-    $ctx->on_error(sub { my ($ctx, $err, $src) = @_; warn "[$src] $err" });
+Handlers and error callbacks are cleared automatically when C<run()>
+resolves, so closures that capture C<$ctx> do not leak -- you do not need
+to C<weaken> them.  (Weakening only matters if you register callbacks and
+never call C<run()>.)
 
 =head2 stop
 
     $ctx->stop;   # returns $ctx
 
-Signal the C<run()> loop to exit cleanly after the current handler
-finishes.  C<run()> will resolve with reason C<'stop'>.
+Signal the C<run()> loop to exit cleanly after the current event's handlers
+finish, before the next event is read.  C<run()> will resolve with reason
+C<'stop'>.
 
 Returns C<$ctx> for chaining.
 
