@@ -552,6 +552,19 @@ continuing.
 
 Returns C<$ctx> for chaining.
 
+=head2 on_default
+
+    $ctx->on_default($callback);   # returns $ctx
+
+Register a single fallback handler, called with C<($ctx, $event)> for any
+event that has no type-specific handler -- except the terminal disconnect
+event, which always auto-terminates the loop.  The last registration wins.
+The callback may be a plain coderef or an C<async sub>; if it returns a
+L<Future>, C<run()> awaits it.  Exceptions are routed to C<on_error> with
+C<source = 'handler'>.
+
+Returns C<$ctx> for chaining.
+
 =head2 on_error
 
     $ctx->on_error($callback);   # returns $ctx
@@ -631,6 +644,14 @@ sub _terminal_event_type {
 sub on {
     my ($self, $type, $cb) = @_;
     push @{ $self->{_handlers}{$type} }, $cb;
+    return $self;
+}
+
+# Register a single fallback handler for events with no type-specific handler
+# (except the terminal disconnect). Last registration wins. Returns $self.
+sub on_default {
+    my ($self, $cb) = @_;
+    $self->{_on_default} = $cb;
     return $self;
 }
 
@@ -716,6 +737,12 @@ async sub _run {
                     await $self->_trigger_ctx_error($err, 'handler');
                 }
             }
+        } elsif ($self->{_on_default} && !($terminal && $type eq $terminal)) {
+            eval {
+                my $r = $self->{_on_default}->($self, $event);
+                if (blessed($r) && $r->isa('Future')) { await $r; }
+            };
+            if (my $err = $@) { await $self->_trigger_ctx_error($err, 'handler'); }
         } elsif ($ENV{PAGI_DEBUG} && !($terminal && $type eq $terminal)) {
             warn "PAGI::Context: unhandled event type '$type'\n";
         }
@@ -727,10 +754,11 @@ async sub _run {
     }
 
     # Clear callbacks to break any closure-based reference cycles.
-    $self->{_handlers} = {};
-    $self->{_on_error} = [];
-    $self->{_running}  = 0;
-    $self->{_stopped}  = 0;
+    $self->{_handlers}   = {};
+    $self->{_on_error}   = [];
+    $self->{_on_default} = undef;
+    $self->{_running}    = 0;
+    $self->{_stopped}    = 0;
 
     return $reason;
 }
