@@ -374,13 +374,13 @@ PAGI::Endpoint::Router - Class-based router with wrapped handlers
         my $db = $self->state->{db};                 # Worker state via $self
         my $user = $ctx->stash->get('user');          # Set by middleware
         my $users = $db->get_users;
-        return $ctx->response->json($users);
+        return $ctx->json($users);
     }
 
     async sub get_user {
         my ($self, $ctx) = @_;
         my $id = $ctx->request->path_param('id');    # Route parameter
-        return $ctx->response->json({ id => $id });
+        return $ctx->json({ id => $id });
     }
 
     async sub chat_handler {
@@ -503,7 +503,7 @@ level, where they wrap the whole endpoint.
     async sub get_profile {
         my ($self, $ctx) = @_;
         my $user = $ctx->stash->get('user');  # Set by middleware above
-        return $ctx->response->json($user);
+        return $ctx->json($user);
     }
 
 =head1 HANDLER SIGNATURES
@@ -512,8 +512,8 @@ All handlers receive a L<PAGI::Context> as the second argument.
 The context subclass depends on route type:
 
     # HTTP routes: get, post, put, patch, delete, head, options
-    # MUST return a respond-able value (e.g. $ctx->response->json(...))
-    async sub handler { my ($self, $ctx) = @_; return $ctx->response->json(...) }
+    # MUST return a respond-able value (e.g. $ctx->json(...))
+    async sub handler { my ($self, $ctx) = @_; return $ctx->json(...) }
     # $ctx isa PAGI::Context::HTTP
     # $ctx->request, $ctx->response
 

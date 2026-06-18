@@ -15,11 +15,55 @@ __END__
 
 PAGI::Tools - Application toolkit for the PAGI specification
 
+=head1 SYNOPSIS
+
+Raw PAGI is deliberately minimal — an application is just an C<async> sub that
+speaks the protocol directly:
+
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-type', 'application/json']],
+        });
+        await $send->({ type => 'http.response.body', body => '{"hello":"world"}' });
+    };
+
+PAGI-Tools adds the ergonomics — requests, response values, routing, a
+middleware suite — so the same application reads like this:
+
+    use PAGI::App::Router;
+    use PAGI::Request;
+    use PAGI::Response;
+
+    my $router = PAGI::App::Router->new;
+
+    # A response value mounts straight onto a route:
+    $router->get('/' => PAGI::Response->json({ hello => 'world' }));
+
+    # A dynamic handler builds a request and sends a response value:
+    $router->get('/users/:id' => async sub {
+        my ($scope, $receive, $send) = @_;
+        my $req = PAGI::Request->new($scope, $receive);
+        await PAGI::Response->json({ id => $req->path_param('id') })->respond($send);
+    });
+
+    my $app = $router->to_app;   # still just a PAGI app: an async sub
+
+Run it with any PAGI server (such as C<pagi-server> from the C<PAGI-Server>
+distribution), or mount it inside a larger PAGI application.
+
 =head1 DESCRIPTION
 
-PAGI-Tools is the application-side toolkit for L<PAGI|https://github.com/jjn1056/pagi>,
-the Perl Asynchronous Gateway Interface. It collects everything an
-application author needs on top of a PAGI-compliant server:
+L<PAGI> — the Perl Asynchronous Gateway Interface — is deliberately small: an
+application is just an C<async> sub that speaks a simple event protocol over
+C<$scope>, C<$receive>, and C<$send>. That minimalism is a virtue, but building
+applications directly against the raw protocol can get verbose.
+
+PAGI-Tools is the application-side toolkit that smooths this over. It collects
+the ergonomics an author reaches for again and again, so you can build real
+PAGI applications without hand-emitting protocol events:
 
 =over 4
 
@@ -43,6 +87,12 @@ L<to_app|PAGI::Utils/to_app> coercion is what lets every composition
 point above accept component objects and class names directly
 
 =back
+
+It is the author's hope that these tools serve two audiences: people
+I<exploring> PAGI, who get going with far less friction than the raw protocol
+asks for; and framework authors, who get a I<ready-made base> to build
+higher-order frameworks on top of, rather than starting from C<$scope>,
+C<$receive>, and C<$send> every time.
 
 The reference server lives in the C<PAGI-Server> distribution; the
 protocol specification lives in the C<PAGI> distribution.

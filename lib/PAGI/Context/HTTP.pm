@@ -70,6 +70,21 @@ Alias for C<request>.
 
 Alias for C<response>.
 
+=head2 text, html, json, redirect
+
+    return $ctx->text('Hello');
+    return $ctx->html('<h1>Hi</h1>');
+    return $ctx->json({ ok => 1 });
+    return $ctx->json($data, status => 201);
+    return $ctx->redirect('/login');
+
+Shorthands that set the body — and any trailing options such as C<status>,
+C<headers>, or C<content_type> — on this context's L</response>, then return the
+L<PAGI::Response> value, so a handler can build and return its response in a
+single call. C<< $ctx->json($data) >> is exactly C<< $ctx->response->json($data) >>.
+They operate on the one response accumulator, so you can still reach for
+C<< $ctx->response >> to set cookies or extra headers alongside them.
+
 =cut
 
 sub request {
@@ -100,6 +115,13 @@ sub method { shift->{scope}{method} }
 
 sub req  { shift->request }
 sub resp { shift->response }
+
+# Value-contract response shorthands: set the body (+ opts) on the cached
+# response accumulator and return it, so handlers can `return $ctx->json(...)`.
+sub text     { shift->response->text(@_) }
+sub html     { shift->response->html(@_) }
+sub json     { shift->response->json(@_) }
+sub redirect { shift->response->redirect(@_) }
 
 1;
 

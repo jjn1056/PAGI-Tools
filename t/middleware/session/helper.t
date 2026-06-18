@@ -193,7 +193,7 @@ subtest 'set multiple keys at once' => sub {
 
 subtest 'set dies on odd args greater than one' => sub {
     my $session = PAGI::Session->from_data({ _id => 'x' });
-    ok(dies { $session->set('a', 'b', 'c') }, 'dies on 3 args');
+    like(dies { $session->set('a', 'b', 'c') }, qr/requires key/, 'dies on 3 args');
 };
 
 # ===================
@@ -293,9 +293,9 @@ subtest 'construct from object with ->scope (duck typing)' => sub {
 };
 
 subtest 'dies on invalid argument' => sub {
-    ok(dies { PAGI::Session->new("string") }, 'dies on string');
-    ok(dies { PAGI::Session->new(undef) }, 'dies on undef');
-    ok(dies { PAGI::Session->new({}) }, 'dies on plain hashref without pagi.session');
+    like(dies { PAGI::Session->new("string") }, qr/pagi\.session/, 'dies on string');
+    like(dies { PAGI::Session->new(undef) }, qr/pagi\.session/, 'dies on undef');
+    like(dies { PAGI::Session->new({}) }, qr/pagi\.session/, 'dies on plain hashref without pagi.session');
     like(dies { PAGI::Session->new("bad") }, qr/requires/, 'error message');
 };
 
@@ -457,12 +457,12 @@ subtest 'set with zero args is no-op returning self' => sub {
 
 subtest 'set with single arg dies' => sub {
     my $session = PAGI::Session->from_data({ _id => 'x' });
-    ok(dies { $session->set('lonely') }, 'dies on single arg');
+    like(dies { $session->set('lonely') }, qr/requires key/, 'dies on single arg');
 };
 
 subtest 'set with three args dies' => sub {
     my $session = PAGI::Session->from_data({ _id => 'x' });
-    ok(dies { $session->set('a', 'b', 'c') }, 'dies on odd args');
+    like(dies { $session->set('a', 'b', 'c') }, qr/requires key/, 'dies on odd args');
 };
 
 # Fake request class for duck-typing test

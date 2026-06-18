@@ -78,6 +78,8 @@ C<Can't locate object method> error.
     Method              HTTP    WebSocket   SSE
     ──────────────────  ──────  ──────────  ──────
     request, response   yes     -           -
+    text, html, json    yes     -           -
+    redirect            yes     -           -
     method              yes     -           -
     accept              -       yes         -
     send_text           -       yes         -
@@ -200,6 +202,36 @@ sub scheme       { shift->{scope}{scheme} // 'http' }
 sub client       { shift->{scope}{client} }
 sub server       { shift->{scope}{server} }
 sub headers      { shift->{scope}{headers} }
+
+=head2 assert_http, assert_websocket, assert_sse
+
+    my $ctx = PAGI::Context->new($scope, $receive, $send)->assert_http;
+
+Type guards for handlers that support only one protocol. Each returns the
+context unchanged when C<< $ctx->type >> matches, and C<croak>s with a clear
+message otherwise — turning a forgotten scope-type check into a loud, early
+failure instead of a confusing C<Can't locate object method> deeper in the
+handler. Because they chain off the polymorphic L</new>, the whole gate is one
+line:
+
+    my $ctx = PAGI::Context->new(@_)->assert_http;   # croaks unless the scope is http
+
+They are named C<assert_*> rather than C<< PAGI::Context->http >> /
+C<< ->websocket >> because C<websocket> and C<sse> are already instance methods
+that return the underlying channel objects.
+
+=cut
+
+sub assert_http      { $_[0]->_assert_type('http') }
+sub assert_websocket { $_[0]->_assert_type('websocket') }
+sub assert_sse       { $_[0]->_assert_type('sse') }
+
+sub _assert_type {
+    my ($self, $want) = @_;
+    my $got = $self->type // '(none)';
+    croak "expected a '$want' context, got a '$got' context" unless $got eq $want;
+    return $self;
+}
 
 =head2 Path Parameters
 
