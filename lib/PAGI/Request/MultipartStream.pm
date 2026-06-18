@@ -74,7 +74,7 @@ sub new {
         _cur_name    => undef,
         _current     => undef,     # current Part
         _exhausted   => 0,
-        _disconnect  => 0,
+        _parser_finished => 0,     # guard: finish() is called at most once
         _failed      => undef,     # sticky failure message (poisons the stream)
     }, $class;
     $self->{_parser} = $self->_build_parser;
@@ -168,9 +168,8 @@ async sub _pump {
     return 0 if $self->{_exhausted};
     my $msg = await $self->{receive}->();
     if (!$msg || !$msg->{type} || $msg->{type} eq 'http.disconnect') {
-        $self->{_disconnect} = 1 if $msg && ($msg->{type} // '') eq 'http.disconnect';
-        $self->{_exhausted}  = 1;
-        $self->{_parser}->finish unless $self->{_disconnect};
+        $self->{_exhausted} = 1;
+        $self->_finish_parser if $self->{_bytes_total} > 0;   # 0 bytes => empty stream, clean EOF
         return 0;
     }
     if (defined $msg->{body} && length $msg->{body}) {
@@ -182,8 +181,28 @@ async sub _pump {
         }
         $self->{_parser}->parse($msg->{body});           # fires callbacks (enqueue + bookkeep)
     }
-    unless ($msg->{more}) { $self->{_exhausted} = 1; $self->{_parser}->finish; }
+    unless ($msg->{more}) { $self->{_exhausted} = 1; $self->_finish_parser if $self->{_bytes_total} > 0; }
     return 1;
+}
+
+# Finalize the parser once bytes have been fed and the stream has ended.
+# HTTP::MultiPartParser->finish on a complete stream (closing boundary already
+# parsed) is a clean no-op; called mid-part it signals truncation. The parser
+# routes that end-of-stream condition through on_error (which records into the
+# sticky _failed) rather than dying, so the eval guard is defence-in-depth in
+# case finish ever throws. When finish is what introduces the failure we reword
+# it to a clear "incomplete upload" message; a pre-existing failure (e.g. a
+# size-limit hit) is preserved untouched.
+sub _finish_parser {
+    my ($self) = @_;
+    return if $self->{_parser_finished};
+    $self->{_parser_finished} = 1;
+    my $had_failure = defined $self->{_failed};
+    eval { $self->{_parser}->finish; 1 } or $self->{_failed} //= "Multipart parse error (finish): $@";
+    if (!$had_failure && defined $self->{_failed}) {   # finish introduced it => truncation
+        $self->{_failed} = "Incomplete multipart upload: client disconnected or stream ended before the closing boundary";
+    }
+    return;
 }
 
 =head1 METHODS
@@ -211,8 +230,7 @@ async sub next {
         }
         last unless await $self->_pump;
     }
-    croak $self->{_failed} if $self->{_failed};
-    croak "Client disconnected mid-stream" if $self->{_disconnect};
+    croak $self->{_failed} if $self->{_failed};   # truncation surfaces via _failed (set by finish)
     return undef;
 }
 
@@ -227,9 +245,8 @@ async sub _next_chunk {
             return undef if $kind eq 'part';             # next part began -> current done
         }
         if (!(await $self->_pump)) {
-            croak $self->{_failed} if $self->{_failed};
-            croak "Client disconnected mid-stream" if $self->{_disconnect};
-            return undef;                                # clean EOF
+            croak $self->{_failed} if $self->{_failed};  # truncation surfaces via _failed (set by finish)
+            return undef;                                # clean EOF (complete body, then disconnect)
         }
     }
 }
