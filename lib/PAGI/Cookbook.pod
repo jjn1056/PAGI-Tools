@@ -981,6 +981,53 @@ JavaScript client:
 
 See C<examples/sse-dashboard/> for a complete dashboard example.
 
+=head2 Handling a Mixed Event Stream
+
+When the receive stream carries more than one kind of event -- the protocol's
+own events plus application events injected by middleware -- the
+L<PAGI::Context> event dispatcher lets you register one handler per event type
+and run a single loop, instead of hand-rolling a C<while> over C<receive>.
+
+  use PAGI::Context;
+
+  $router->websocket('/notify' => async sub {
+      my ($scope, $receive, $send) = @_;
+      my $ctx = PAGI::Context->new($scope, $receive, $send);
+      await $ctx->accept;
+
+      # A protocol event from the client
+      $ctx->on('websocket.receive', async sub {
+          my ($ctx, $event) = @_;
+          await $ctx->send_text("echo: " . ($event->{text} // ''));
+      });
+
+      # An application event injected into the receive stream by middleware
+      # (for example a pub/sub bridge such as the PAGI-Channels companion dist)
+      $ctx->on('app.notify', async sub {
+          my ($ctx, $event) = @_;
+          await $ctx->send_json({ notice => $event->{message} });
+      });
+
+      # A fallback for anything you did not register a handler for
+      $ctx->on_default(sub {
+          my ($ctx, $event) = @_;
+          warn "unexpected event: $event->{type}";
+      });
+
+      $ctx->on_error(sub {
+          my ($ctx, $err, $source) = @_;
+          warn "[$source] $err";
+      });
+
+      my $reason = await $ctx->run;   # 'disconnect', 'stop', or 'error'
+  });
+
+Handlers receive the protocol-typed C<$ctx> (so C<send_text>/C<send_json> work),
+run in registration order, and may be C<async sub>s. The loop runs until the
+client disconnects, a handler calls C<< $ctx->stop >>, or C<receive> fails;
+C<run()> resolves with the reason and clears the handlers afterward so closures
+over C<$ctx> do not leak.
+
 =head1 BACKGROUND WORK
 
 Web requests should respond quickly. Long-running work should be done in the background.

@@ -397,6 +397,30 @@ L<PAGI::SSE> simplifies Server-Sent Events:
   # Wait for disconnect
   await $sse->run;
 
+=head2 5.3 The Event Dispatcher
+
+When the receive stream mixes protocol events with application events -- for
+example, middleware that injects pub/sub messages -- L<PAGI::Context> offers a
+small dispatch loop: register a handler per event type and C<run> once, instead
+of a hand-rolled C<while (defined(my $e = await $ctx-E<gt>receive-E<gt>()))> loop.
+
+  my $ctx = PAGI::Context->new($scope, $receive, $send);
+  await $ctx->accept;
+
+  $ctx->on('websocket.receive', async sub {
+      my ($ctx, $event) = @_;
+      await $ctx->send_text("echo: $event->{text}");
+  });
+  $ctx->on('app.notify', async sub {        # an event injected by middleware
+      my ($ctx, $event) = @_;
+      await $ctx->send_json({ notice => $event->{message} });
+  });
+  $ctx->on_error(sub { my ($ctx, $err, $src) = @_; warn "[$src] $err" });
+
+  my $reason = await $ctx->run;   # 'disconnect', 'stop', or 'error'
+
+See L<PAGI::Cookbook/"Handling a Mixed Event Stream"> for a fuller example.
+
 =head1 PART 6: MIDDLEWARE
 
 Middleware provides reusable functionality that wraps your application handlers. PAGI includes 30+ middleware components for logging, security, compression, sessions, and more.
