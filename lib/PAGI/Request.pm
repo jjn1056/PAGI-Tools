@@ -441,6 +441,30 @@ sub body_stream {
     );
 }
 
+# Streaming multipart - mutually exclusive with buffered body methods
+sub multipart_stream {
+    my ($self, %opts) = @_;
+    croak "Body already consumed; multipart_stream() not available"
+        if $self->{scope}{'pagi.request.body.read'}
+        || $self->{scope}{'pagi.request.body.stream.created'};
+    croak "multipart_stream() requires a multipart/form-data request" unless $self->is_multipart;
+
+    my $ct = $self->header('content-type') // '';
+    my ($boundary) = $ct =~ /boundary=([^;\s]+)/;
+    $boundary =~ s/^["']|["']$//g if defined $boundary;  # Strip quotes
+    croak "No boundary found in Content-Type" unless defined $boundary && length $boundary;
+
+    $self->{scope}{'pagi.request.body.stream.created'} = 1;  # latch: lock out buffered readers
+
+    require PAGI::Request::MultipartStream;
+    return PAGI::Request::MultipartStream->new(
+        receive  => $self->{receive},
+        boundary => $boundary,
+        map { defined $opts{$_} ? ($_ => $opts{$_}) : () }
+            qw(max_files max_fields max_field_size max_file_size max_request_body),
+    );
+}
+
 # Read raw body bytes (async, cached in scope)
 async sub body {
     my $self = shift;
@@ -575,6 +599,9 @@ async sub raw_form_param {
 # Parse multipart form (internal, cached in scope)
 async sub _parse_multipart_form {
     my ($self, %opts) = @_;
+
+    croak "Body streaming already started; buffered helpers unavailable"
+        if $self->{scope}{'pagi.request.body.stream.created'};
 
     # Already parsed?
     return $self->{scope}{'pagi.request.form'}
@@ -953,6 +980,14 @@ Example:
     await $stream->stream_to_file('/uploads/data.bin');
 
 See L<PAGI::Request::BodyStream> for full documentation.
+
+=head2 multipart_stream
+
+    my $stream = $req->multipart_stream;
+
+Returns a L<PAGI::Request::MultipartStream> for pull-based streaming of a
+C<multipart/form-data> body. Mutually exclusive with the buffered body methods
+(C<body>, C<text>, C<json>, C<form_params>, C<uploads>) and with C<body_stream>.
 
 =head2 body
 
