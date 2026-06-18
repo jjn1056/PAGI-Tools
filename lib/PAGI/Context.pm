@@ -557,11 +557,18 @@ Returns C<$ctx> for chaining.
     $ctx->on_default($callback);   # returns $ctx
 
 Register a single fallback handler, called with C<($ctx, $event)> for any
-event that has no type-specific handler -- except the terminal disconnect
-event, which always auto-terminates the loop.  The last registration wins.
-The callback may be a plain coderef or an C<async sub>; if it returns a
-L<Future>, C<run()> awaits it.  Exceptions are routed to C<on_error> with
+event that has no type-specific handler.  The last registration wins.  The
+callback may be a plain coderef or an C<async sub>; if it returns a L<Future>,
+C<run()> awaits it.  Exceptions are routed to C<on_error> with
 C<source = 'handler'>.
+
+B<The terminal disconnect event is excluded.>  C<on_default> does B<not> fire
+for the protocol's disconnect event (C<websocket.disconnect>, C<sse.disconnect>,
+C<http.disconnect>): that event ends the loop normally and is not treated as an
+"unhandled" surprise.  To run cleanup or logging on disconnect, register a
+handler for it explicitly instead:
+
+    $ctx->on('websocket.disconnect', sub { ... });
 
 Returns C<$ctx> for chaining.
 
