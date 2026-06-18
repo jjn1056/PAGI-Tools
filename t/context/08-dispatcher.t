@@ -481,4 +481,15 @@ subtest 'context GCd after run() when handler captured object' => sub {
     is $weak, undef, 'context GCd after run() cleared callback cycle';
 };
 
+# ---------------------------------------------------------------------------
+# Re-entrancy: synchronous throw
+# ---------------------------------------------------------------------------
+
+subtest 'run() throws synchronously when already running' => sub {
+    my $ctx = ws_ctx({ type => 'websocket.disconnect' });
+    $ctx->{_running} = 1;
+    like dies { $ctx->run }, qr/already running/i, 'throws synchronously (no ->get needed)';
+    $ctx->{_running} = 0;
+};
+
 done_testing;

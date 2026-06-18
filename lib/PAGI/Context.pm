@@ -671,15 +671,19 @@ async sub _trigger_ctx_error {
     }
 }
 
-# Run the event dispatch loop.
+# Run the event dispatch loop. A plain sub so a re-entrant call croaks
+# synchronously (rather than as a failed Future); the async loop is in _run().
 # Always resolves (never rejects). Returns reason: 'disconnect', 'stop', 'error'.
-async sub run {
+sub run {
     my ($self) = @_;
-
     croak "PAGI::Context run() called while already running"
         if $self->{_running};
-
     $self->{_running} = 1;
+    return $self->_run;
+}
+
+async sub _run {
+    my ($self) = @_;
     $self->{_stopped} = 0;
     $self->{_on_error} //= [];
 
@@ -721,8 +725,6 @@ async sub run {
             last LOOP;
         }
     }
-
-    $reason = 'stop' if $self->{_stopped} && $reason eq 'stop';
 
     # Clear callbacks to break any closure-based reference cycles.
     $self->{_handlers} = {};
