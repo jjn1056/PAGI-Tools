@@ -552,6 +552,26 @@ continuing.
 
 Returns C<$ctx> for chaining.
 
+=head2 on_default
+
+    $ctx->on_default($callback);   # returns $ctx
+
+Register a single fallback handler, called with C<($ctx, $event)> for any
+event that has no type-specific handler.  The last registration wins.  The
+callback may be a plain coderef or an C<async sub>; if it returns a L<Future>,
+C<run()> awaits it.  Exceptions are routed to C<on_error> with
+C<source = 'handler'>.
+
+B<The terminal disconnect event is excluded.>  C<on_default> does B<not> fire
+for the protocol's disconnect event (C<websocket.disconnect>, C<sse.disconnect>,
+C<http.disconnect>): that event ends the loop normally and is not treated as an
+"unhandled" surprise.  To run cleanup or logging on disconnect, register a
+handler for it explicitly instead:
+
+    $ctx->on('websocket.disconnect', sub { ... });
+
+Returns C<$ctx> for chaining.
+
 =head2 on_error
 
     $ctx->on_error($callback);   # returns $ctx
@@ -566,18 +586,18 @@ If no callbacks are registered, errors are emitted via C<warn>.
 
 Returns C<$ctx> for chaining.
 
-    # Avoid circular references - weaken if the callback closes over $ctx
-    use Scalar::Util qw(weaken);
-    my $weak = $ctx;
-    weaken $weak;
-    $ctx->on_error(sub { my ($ctx, $err, $src) = @_; warn "[$src] $err" });
+Handlers and error callbacks are cleared automatically when C<run()>
+resolves, so closures that capture C<$ctx> do not leak -- you do not need
+to C<weaken> them.  (Weakening only matters if you register callbacks and
+never call C<run()>.)
 
 =head2 stop
 
     $ctx->stop;   # returns $ctx
 
-Signal the C<run()> loop to exit cleanly after the current handler
-finishes.  C<run()> will resolve with reason C<'stop'>.
+Signal the C<run()> loop to exit cleanly after the current event's handlers
+finish, before the next event is read.  C<run()> will resolve with reason
+C<'stop'>.
 
 Returns C<$ctx> for chaining.
 
@@ -634,6 +654,14 @@ sub on {
     return $self;
 }
 
+# Register a single fallback handler for events with no type-specific handler
+# (except the terminal disconnect). Last registration wins. Returns $self.
+sub on_default {
+    my ($self, $cb) = @_;
+    $self->{_on_default} = $cb;
+    return $self;
+}
+
 # Register an error handler. Called for both $receive->() failures
 # (source='receive') and handler exceptions (source='handler').
 # Returns $self for chaining.
@@ -671,15 +699,19 @@ async sub _trigger_ctx_error {
     }
 }
 
-# Run the event dispatch loop.
+# Run the event dispatch loop. A plain sub so a re-entrant call croaks
+# synchronously (rather than as a failed Future); the async loop is in _run().
 # Always resolves (never rejects). Returns reason: 'disconnect', 'stop', 'error'.
-async sub run {
+sub run {
     my ($self) = @_;
-
     croak "PAGI::Context run() called while already running"
         if $self->{_running};
-
     $self->{_running} = 1;
+    return $self->_run;
+}
+
+async sub _run {
+    my ($self) = @_;
     $self->{_stopped} = 0;
     $self->{_on_error} //= [];
 
@@ -712,6 +744,12 @@ async sub run {
                     await $self->_trigger_ctx_error($err, 'handler');
                 }
             }
+        } elsif ($self->{_on_default} && !($terminal && $type eq $terminal)) {
+            eval {
+                my $r = $self->{_on_default}->($self, $event);
+                if (blessed($r) && $r->isa('Future')) { await $r; }
+            };
+            if (my $err = $@) { await $self->_trigger_ctx_error($err, 'handler'); }
         } elsif ($ENV{PAGI_DEBUG} && !($terminal && $type eq $terminal)) {
             warn "PAGI::Context: unhandled event type '$type'\n";
         }
@@ -722,13 +760,12 @@ async sub run {
         }
     }
 
-    $reason = 'stop' if $self->{_stopped} && $reason eq 'stop';
-
     # Clear callbacks to break any closure-based reference cycles.
-    $self->{_handlers} = {};
-    $self->{_on_error} = [];
-    $self->{_running}  = 0;
-    $self->{_stopped}  = 0;
+    $self->{_handlers}   = {};
+    $self->{_on_error}   = [];
+    $self->{_on_default} = undef;
+    $self->{_running}    = 0;
+    $self->{_stopped}    = 0;
 
     return $reason;
 }

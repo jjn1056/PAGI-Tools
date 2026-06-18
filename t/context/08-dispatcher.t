@@ -481,4 +481,61 @@ subtest 'context GCd after run() when handler captured object' => sub {
     is $weak, undef, 'context GCd after run() cleared callback cycle';
 };
 
+# ---------------------------------------------------------------------------
+# Re-entrancy: synchronous throw
+# ---------------------------------------------------------------------------
+
+subtest 'run() throws synchronously when already running' => sub {
+    my $ctx = ws_ctx({ type => 'websocket.disconnect' });
+    $ctx->{_running} = 1;
+    like dies { $ctx->run }, qr/already running/i, 'throws synchronously (no ->get needed)';
+    $ctx->{_running} = 0;
+};
+
+# ---------------------------------------------------------------------------
+# on_default catch-all
+# ---------------------------------------------------------------------------
+
+subtest 'on_default fires for an unhandled event' => sub {
+    my $ctx = ws_ctx({ type => 'surprise.event', n => 7 }, { type => 'websocket.disconnect' });
+    my ($got_ctx, $got_event);
+    $ctx->on_default(sub { ($got_ctx, $got_event) = @_ });
+    $ctx->run->get;
+    ok $got_ctx == $ctx,    'on_default got $ctx';
+    is $got_event->{n}, 7,  'on_default got the event';
+};
+
+subtest 'a type-specific handler takes precedence over on_default' => sub {
+    my $ctx = ws_ctx({ type => 'known' }, { type => 'websocket.disconnect' });
+    my @fired;
+    $ctx->on('known' => sub { push @fired, 'specific' });
+    $ctx->on_default(sub { push @fired, 'default' });
+    $ctx->run->get;
+    is \@fired, ['specific'], 'on_default not called when a handler matched';
+};
+
+subtest 'on_default does not fire for the terminal disconnect' => sub {
+    my $ctx = ws_ctx({ type => 'websocket.disconnect' });
+    my $fired = 0;
+    $ctx->on_default(sub { $fired = 1 });
+    my $reason = $ctx->run->get;
+    is $reason, 'disconnect', 'still auto-terminates';
+    ok !$fired,               'on_default skipped the terminal event';
+};
+
+subtest 'on_default errors route to on_error(handler) and it is async-aware' => sub {
+    my $ctx = ws_ctx({ type => 'boom' }, { type => 'websocket.disconnect' });
+    my ($err, $src);
+    $ctx->on_error(sub { (undef, $err, $src) = @_ });
+    $ctx->on_default(async sub { die "default boom\n" });
+    $ctx->run->get;
+    like $err, qr/default boom/, 'error captured';
+    is $src, 'handler',          'source is handler';
+};
+
+subtest 'on_default returns $self' => sub {
+    my $ctx = ws_ctx({ type => 'websocket.disconnect' });
+    ok $ctx->on_default(sub {}) == $ctx, 'chainable';
+};
+
 done_testing;
