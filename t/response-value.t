@@ -151,6 +151,9 @@ subtest 'has_body_source reflects a registered body source (intent, not bytes)' 
     is(PAGI::Response->new->stream(async sub {})->has_body_source, 1,
         'stream registers a body source before respond runs it');
 
+    is(PAGI::Response->new->send_file($0)->has_body_source, 1,
+        'send_file registers a body source (the _file slot)');
+
     # Status-only is NOT a body source — proves the framework needs `|| has_status`.
     my $status_only = PAGI::Response->new->status(204);
     is $status_only->has_body_source, 0, 'status without a body method: no body source';
