@@ -1458,6 +1458,126 @@ is an easy drop-in for this:
 For plain filehandles, either use C<file =E<gt> $path> directly, or use
 L<IO::File::WithPath>. See L<PAGI::Middleware::XSendfile> for details.
 
+=head1 RESPONSE STATE & LIFECYCLE
+
+A C<PAGI::Response> is a detached value: building it is fully separate from
+sending it. That split means there is no single "is this done?" flag — instead
+there are a few distinct signals, each answering a different question. This
+section maps them so you can tell, at any point, what is going on.
+
+=head2 The three phases
+
+A response moves through three phases. Each has its own signal:
+
+=over 4
+
+=item 1. B<Build> — the handler accumulates status, headers, and a body source
+on the value. No connection, no I/O. The signal here is L<PAGI::Response/has_body_source>:
+"has a body source been registered?"
+
+=item 2. B<Send committed> — C<< $ctx->respond($res) >> (or a raw
+C<< $res->respond($send) >> behind the context's guard) has begun emitting the
+response and has taken the connection. The signal is L<PAGI::Response/is_sent>:
+"has this response gone out?" It is set at the moment the send is committed, so
+a second send is rejected.
+
+=item 3. B<Finished> — every byte has been emitted; for a stream, the callback
+has run to completion and the writer is closed. There is no flag for this: it is
+the resolution of the Future returned by C<respond>. C<await>-ing the send B<is>
+waiting for "finished".
+
+=back
+
+The reason "finished" is a Future and not a flag is the same reason the value is
+detached: PAGI never models a half-sent live byte-sink as state on the value.
+"Committed" is a flag; "finished" is the thing you C<await>.
+
+=head2 The signals you can inspect
+
+  Signal                      Phase          Question it answers
+  --------------------------  -------------  -------------------------------------
+  has_status                  build          Was a status code set explicitly?
+  has_header($name)           build          Was this header set?
+  has_content_type            build          Was Content-Type set?
+  has_body_source             build          Was a body (bytes/file/stream) set?
+  is_sent                     send           Has the response been emitted?
+  (Future from respond)       finished       Has every byte been written?
+  $writer->bytes_written      finished*      How many bytes streamed so far?
+  $writer->is_closed          finished*      Has the stream writer been closed?
+
+The C<$writer> signals (*) apply only while streaming, on the
+L<PAGI::Response::Writer> handed to your C<stream> callback or returned by
+C<writer>. They describe the live stream; the response value itself only carries
+the build and send signals.
+
+=head2 has_body_source is intent, not bytes
+
+The signal most likely to surprise you is C<has_body_source>. It reports that a
+body B<source> is registered — not that bytes exist, and not that anything was
+sent. For a stream this matters: the callback is stored at build time and does
+not run until C<respond>, so a freshly-registered stream has produced zero bytes
+yet C<has_body_source> is already true. That is deliberate and is the only
+coherent meaning — C<respond> is what drives the stream, so "are there bytes
+yet?" is unanswerable at build time and irrelevant to "is there a body to send?"
+
+This mirrors the distinction Node.js draws between C<writableEnded> ("the
+producer declared it is done") and C<writableFinished> ("all data has been
+flushed"). C<has_body_source> is the former, decoupled from any I/O;
+C<await>-ing C<respond> is the latter.
+
+Intentional empty bodies count as a registered source: C<empty>, C<redirect>,
+and C<send_raw('')> all set an (empty) body, so C<has_body_source> is true for
+them. Only a response that never had a body method called reports false.
+
+=head2 Deciding "did the handler produce a response?"
+
+A framework that lets handlers populate C<< $ctx->res >> and then auto-sends it
+needs to know, after the handler returns, whether to send, skip, or fall through
+to the next route. That is a three-way decision, and it is a precedence ladder —
+not a single predicate:
+
+    # After running the handler, which mutated $ctx->res:
+    if ($ctx->res->is_sent) {
+        # The handler already took the connection itself — e.g. it called
+        # ->writer($send) for live streaming, or used SSE/WebSocket. Do nothing;
+        # sending again would be a double-send.
+    }
+    elsif ($ctx->res->has_body_source || $ctx->res->has_status) {
+        # The handler registered a body, or set a status (a bare 204 / redirect
+        # has no body but IS a response). Send it once, through the guard.
+        await $ctx->respond($ctx->res);
+    }
+    else {
+        # The handler touched nothing send-able — fall through to the next match
+        # (or a 404).
+    }
+
+Three things make this ladder correct:
+
+=over 4
+
+=item * B<Check C<is_sent> first.> A handler that called C<< ->writer($send) >>
+has already emitted headers (C<writer> marks the response sent), but
+C<has_body_source> stays false because the live-writer path bypasses the body
+slots. Without the C<is_sent> guard you would mistake an actively-streaming
+response for "nothing produced".
+
+=item * B<C<|| has_status> is required.> A C<302> redirect or a C<204> can have
+no body source, yet it is a real response. C<has_status> catches the
+status-only case so you do not 404 a legitimate empty-body response.
+
+=item * B<Never inspect the private slots.> Use C<has_body_source>, not
+C<< exists $res->{_stream} >> and friends — those are private and may change
+(see L<PAGI::Response/SUBCLASSING (FRAMEWORK INTEGRATION)>). The predicate is
+the supported way to ask.
+
+=back
+
+If instead your framework has handlers B<return> the response (PAGI's own
+endpoint contract), you do not need this ladder at all: the returned value is
+the answer, and "fall through" is an explicit sentinel you define, not an
+inference from an empty response.
+
 =head1 TESTING
 
 Use L<PAGI::Test::Client> to test apps directly without a running server:

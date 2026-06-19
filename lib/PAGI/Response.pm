@@ -238,6 +238,42 @@ C<header_try>. Header names are case-insensitive.
 Returns true if Content-Type has been explicitly set via C<content_type>,
 C<content_type_try>, or C<header>/C<header_try> with a Content-Type name.
 
+=head2 has_body_source
+
+    if ($res->has_body_source) { ... }
+
+Returns true if a B<body source> has been registered on the response — a
+buffered body (via C<text>/C<html>/C<json>/C<send>/C<send_raw>/C<empty>/
+C<redirect>), a file (via C<send_file>), or a stream callback (via C<stream>).
+
+This is a B<build-phase, intent-level> signal. It answers "did the handler
+register something to send?", B<not> "have any bytes been produced or sent":
+
+=over 4
+
+=item * For a C<stream>, it is true the instant the callback is registered,
+B<before> C<respond> runs it and before a single byte is written. A registered
+stream that has produced zero bytes still reports C<has_body_source> true — that
+is the only coherent meaning, since C<respond> is what drives the stream.
+
+=item * An B<intentional empty body> counts: C<empty>, C<redirect>, and
+C<send_raw('')> all register a body (the empty string), so they report true.
+A response that has had no body method called reports false.
+
+=item * It is independent of L</is_sent>. C<has_body_source> describes the
+value; C<is_sent> describes whether the value has gone out on a connection. For
+"has the response been emitted", use C<is_sent>; for "has the stream finished",
+C<await> the Future returned by C<respond>.
+
+=back
+
+A response whose handler set only a status or a header (no body method) reports
+C<has_body_source> false even though it is a legitimate response (e.g. a bare
+C<204> or a redirect built only via C<status> + C<header>). Frameworks deciding
+whether to auto-send should therefore test C<< $res->has_body_source ||
+$res->has_status >>. See the L<PAGI::Cookbook/RESPONSE STATE & LIFECYCLE>
+section for the full state model.
+
 =head2 cors
 
     # Allow all origins (simplest case)
@@ -924,7 +960,8 @@ connection (C<$send>) arrives as the argument; do not store or re-bind it -- a
 response value is connection-free until the moment it is sent.
 
 =item * B<Build on the public surface> -- C<status>, C<header>, C<headers>,
-C<content_type>, C<cookie>, C<cors>, C<is_sent>, the C<has_*> predicates, and
+C<content_type>, C<cookie>, C<cors>, C<is_sent>, the C<has_*> predicates
+(C<has_status>, C<has_header>, C<has_content_type>, C<has_body_source>), and
 the body methods (C<text>/C<html>/C<json>/C<send_raw>/C<empty>/C<redirect>/
 C<stream>/C<send_file>, with trailing options). Do B<not> reach into the
 C<_>-prefixed internals (C<_headers>, C<_body>, C<_status>, C<_stream>, ...);
@@ -1049,6 +1086,11 @@ sub has_header {
 sub has_content_type {
     my ($self) = @_;
     return exists $self->{_content_type} ? 1 : 0;
+}
+
+sub has_body_source {
+    my ($self) = @_;
+    return (exists $self->{_body} || exists $self->{_stream} || exists $self->{_file}) ? 1 : 0;
 }
 
 sub scope { shift->{scope} }

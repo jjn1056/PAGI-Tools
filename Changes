@@ -1,6 +1,13 @@
 # Revision history for PAGI-Tools
 
 0.002000
+  - PAGI::Response->has_body_source - public predicate reporting whether a body
+    source (buffered body, file, or stream callback) has been registered. A
+    build-phase intent signal (true for a registered-but-unrun stream and for
+    intentional empty bodies; independent of is_sent). Lets framework authors
+    detect "did the handler produce a response?" without reaching into the
+    private _body/_file/_stream slots. Documented in PAGI::Response and the new
+    PAGI::Cookbook "Response State & Lifecycle" section.
   - The PAGI application toolkit (PAGI::Middleware::*, PAGI::App::*,
     PAGI::Endpoint::*, PAGI::Request/Response/Context, PAGI::Test::*)
     split out of the PAGI distribution into its own distribution. Git
