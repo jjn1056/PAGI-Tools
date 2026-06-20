@@ -40,6 +40,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 11. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
 12. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
 13. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
+14. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently
 
 **Note on `websocket-chat-v2/public`:** this directory is a symlink to
 `10-chat-showcase/public`. It works in git checkouts but is omitted from the
