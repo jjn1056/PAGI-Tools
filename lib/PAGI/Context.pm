@@ -343,11 +343,36 @@ for you. Use C<send> only for raw protocol access.
 
     my $send = $ctx->raw_send;
 
-Returns the raw C<$send> coderef, the same as L</send> on the base context.
-Unlike C<send>, subclasses do not override C<raw_send>: the SSE context overrides
-C<send> with the C<sse.send> convenience, so reach for C<raw_send> when you need
-the underlying channel — for example to emit your own event types for a
-middleware to render.
+Returns the raw C<$send> coderef on B<any> context type. On the base context
+this is identical to L</send>, but subclasses never override C<raw_send>, whereas
+some override C<send>: L<PAGI::Context::SSE> replaces C<send> with a C<sse.send>
+convenience (C<< $ctx->send($data) >> sends an SSE data event). So when you are
+holding an SSE (or any) context and need the actual underlying channel rather
+than the protocol convenience, reach for C<raw_send>.
+
+The reason you reach for it: emitting your B<own> event types that something
+downstream (a middleware) translates into the wire protocol — the same shape
+PAGI's SSE/WebSocket layers themselves use (C<sse.send> / C<websocket.send> are
+custom send events a layer renders).
+
+    # Inside an SSE handler: $ctx->send would emit an sse.send for you, but we
+    # want to emit our own typed event for a middleware to render.
+    my $emit = $ctx->raw_send;
+    await $emit->({ type => 'app.event', name => 'tick', data => 1 });
+
+    # A middleware wrapping $send catches it and renders to the wire:
+    #   my $wrapped = async sub ($ev) {
+    #       if (($ev->{type} // '') eq 'app.event') {
+    #           await $send->({ type => 'sse.send', event => $ev->{name},
+    #                           data  => encode_json({ value => $ev->{data} }) });
+    #           return;
+    #       }
+    #       await $send->($ev);   # real protocol events pass through
+    #   };
+
+Note the trap C<raw_send> avoids: on an SSE context C<< $ctx->send >> is a
+B<method that sends> (it calls C<< $ctx->sse->send >>), not an accessor — so
+C<< $ctx->send >> there is not the raw coderef. C<raw_send> always is.
 
 =cut
 
