@@ -407,4 +407,78 @@ subtest 'mixed middleware types' => sub {
     ], 'mixed middleware types work together';
 };
 
+subtest 'coderef middleware can wrap the receive channel' => sub {
+    my $router = PAGI::App::Router->new;
+
+    # Middleware injects a synthetic event ahead of the real receive.
+    my $inject = async sub {
+        my ($scope, $receive, $send, $next) = @_;
+        my $done = 0;
+        my $wrapped_receive = async sub {
+            return { type => 'tick' } unless $done++;
+            return await $receive->();
+        };
+        await $next->($scope, $wrapped_receive, $send);
+    };
+
+    # App reports the first event type it sees on the channel.
+    my $app_handler = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $event = await $receive->();
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => $event->{type}, more => 0 });
+    };
+
+    $router->get('/' => [$inject] => $app_handler);
+    my $events = request($router->to_app, path => '/')->get;
+
+    is $events->[1]{body}, 'tick', 'handler saw the injected event from the wrapped receive';
+};
+
+subtest 'coderef middleware can wrap the send channel' => sub {
+    my $router = PAGI::App::Router->new;
+
+    # Middleware stamps a header onto the response start event.
+    my $stamp = async sub {
+        my ($scope, $receive, $send, $next) = @_;
+        my $wrapped_send = async sub {
+            my ($event) = @_;
+            $event = { %$event, headers => [ @{ $event->{headers} // [] }, ['x-powered-by', 'PAGI'] ] }
+                if $event->{type} eq 'http.response.start';
+            await $send->($event);
+        };
+        await $next->($scope, $receive, $wrapped_send);
+    };
+
+    my $app_handler = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
+    };
+
+    $router->get('/' => [$stamp] => $app_handler);
+    my $events = request($router->to_app, path => '/')->get;
+
+    my %headers = map { @$_ } @{ $events->[0]{headers} };
+    is $headers{'x-powered-by'}, 'PAGI', 'response carries the header added by the wrapped send';
+};
+
+subtest 'arg-less $next still continues with the inherited channel' => sub {
+    my $router = PAGI::App::Router->new;
+    my @tracker;
+
+    # The common form: observe, then continue with $next->() (no args).
+    my $observe = async sub {
+        my ($scope, $receive, $send, $next) = @_;
+        push @tracker, 'observe';
+        await $next->();
+    };
+
+    $router->get('/' => [$observe] => make_app('home', \@tracker));
+    my $events = request($router->to_app, path => '/')->get;
+
+    is \@tracker, ['observe', 'app:home'], 'arg-less continue is unchanged';
+    is $events->[0]{status}, 200, 'response flows through';
+};
+
 done_testing;

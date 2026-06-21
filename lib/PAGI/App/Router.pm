@@ -577,11 +577,15 @@ sub _build_middleware_chain {
         my $next = $chain;
 
         if (ref($mw) eq 'CODE') {
-            # Coderef with $next signature
+            # Coderef with $next signature. Forward a transformed channel when the
+            # middleware passes one to $next (so a coderef can wrap $receive/$send
+            # or replace $scope, like an object middleware); otherwise continue
+            # with the inherited triple, preserving the arg-less $next->() form.
             $chain = async sub {
                 my ($scope, $receive, $send) = @_;
                 await $mw->($scope, $receive, $send, async sub {
-                    await $next->($scope, $receive, $send);
+                    my ($s, $r, $sd) = @_ ? @_ : ($scope, $receive, $send);
+                    await $next->($s, $r, $sd);
                 });
             };
         }
@@ -1027,6 +1031,21 @@ Any object with a C<call($scope, $receive, $send, $app)> method:
         warn sprintf "Request took %.3fs", time - $start;
     };
     $router->get('/api/data' => [$timing] => $handler);
+
+A coderef middleware may also transform the channel by passing a modified
+C<($scope, $receive, $send)> to C<$next> (at parity with object middleware) —
+for example wrapping C<$receive> to inject events or wrapping C<$send> to stamp
+response headers. Calling C<< $next->() >> with no arguments continues with the
+inherited channel:
+
+    my $stamp = async sub ($scope, $receive, $send, $next) {
+        my $wrapped_send = async sub ($event) {
+            $event = { %$event, headers => [ @{ $event->{headers} // [] }, ['x-powered-by', 'PAGI'] ] }
+                if $event->{type} eq 'http.response.start';
+            await $send->($event);
+        };
+        await $next->($scope, $receive, $wrapped_send);
+    };
 
 =back
 

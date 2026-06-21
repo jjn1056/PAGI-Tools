@@ -1,5 +1,14 @@
 # Revision history for PAGI-Tools
 
+  - PAGI::App::Router - coderef route middleware can now transform the channel.
+    The $next supplied to a coderef middleware forwards a transformed
+    ($scope, $receive, $send) when the middleware passes one (so a coderef can
+    wrap $receive/$send or replace $scope, at parity with object middleware),
+    while the arg-less $next->() form continues with the inherited channel
+    exactly as before. Previously a coderef's transformed channel was silently
+    ignored. Backward compatible: no existing middleware passes arguments to
+    $next.
+
 0.002000
   - PAGI::Response->has_body_source - public predicate reporting whether a body
     source (buffered body, file, or stream callback) has been registered. A
