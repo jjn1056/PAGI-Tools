@@ -1,5 +1,10 @@
 # Revision history for PAGI-Tools
 
+  - PAGI::Context - new raw_send accessor returning the raw $send coderef on any
+    context type. The base ->send already is the raw send, but PAGI::Context::SSE
+    overrides ->send with the sse.send convenience; raw_send is the stable,
+    override-proof accessor for the underlying channel.
+
   - PAGI::App::Router - coderef route middleware can now transform the channel.
     The $next supplied to a coderef middleware forwards a transformed
     ($scope, $receive, $send) when the middleware passes one (so a coderef can

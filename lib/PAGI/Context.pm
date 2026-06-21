@@ -339,10 +339,21 @@ Most users should prefer the protocol helpers (C<< $ctx->response >>,
 C<< $ctx->websocket >>, C<< $ctx->sse >>) which build and send events
 for you. Use C<send> only for raw protocol access.
 
+=head2 raw_send
+
+    my $send = $ctx->raw_send;
+
+Returns the raw C<$send> coderef, the same as L</send> on the base context.
+Unlike C<send>, subclasses do not override C<raw_send>: the SSE context overrides
+C<send> with the C<sse.send> convenience, so reach for C<raw_send> when you need
+the underlying channel — for example to emit your own event types for a
+middleware to render.
+
 =cut
 
 sub receive { shift->{receive} }
 sub send    { shift->{send} }
+sub raw_send { shift->{send} }
 
 =head2 stash
 
