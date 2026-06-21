@@ -12,8 +12,11 @@ subtest 'SSE context: raw_send bypasses the ->send override' => sub {
     my $ctx = PAGI::Context->new({ type => 'sse' }, sub { }, $send);
     isa_ok $ctx, ['PAGI::Context::SSE'];
     ok $ctx->raw_send == $send, 'raw_send is the underlying send coderef';
-    # ->send is the SSE convenience here, not the raw coderef
-    ok ref($ctx->can('send')) eq 'CODE', 'send is still available (the SSE convenience)';
+    # ->send is the SSE convenience (an override), not the raw coderef — assert the
+    # override is actually in place by comparing the resolved method to the base's.
+    # (Don't *call* $ctx->send: on SSE it would send an sse.send event.)
+    ok $ctx->can('send') != PAGI::Context->can('send'),
+        'SSE overrides send, so raw_send reaches past the override';
 };
 
 subtest 'HTTP context: raw_send equals the raw send' => sub {
