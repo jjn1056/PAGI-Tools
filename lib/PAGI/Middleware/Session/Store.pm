@@ -20,7 +20,7 @@ PAGI::Middleware::Session::Store - Base class for async session storage
 
     sub set {
         my ($self, $id, $data) = @_;
-        # Return Future resolving to 1
+        # Return Future resolving to the transport value
     }
 
     sub delete {
@@ -72,8 +72,11 @@ sub get {
 
     my $future = $store->set($id, $data);
 
-Store session data for the given ID. Returns a Future that resolves to 1
-on success. Subclasses must implement this.
+Store session data for the given ID. Returns a Future that resolves to
+the B<transport value> — the opaque token the session middleware hands to
+the State handler to send to the client. For server-side stores this is the
+session ID (unchanged from the C<$id> argument); for cookie stores it is the
+encoded session blob. Subclasses must implement this.
 
 =cut
 
