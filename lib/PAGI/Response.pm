@@ -213,9 +213,14 @@ Response object or from the shared scope:
         return;
     }
 
-Returns true if the response has already been finalized (sent to the client).
-Useful in error handlers or middleware that need to check whether they can
-still send a response.
+Returns true if the server-owned C<pagi.connection> object for this request
+reports C<response_started> — meaning the response has started on this
+connection (headers have been emitted). Reflects a server-owned fact, not a
+flag on this Response value.
+
+Returns 0 if there is no C<pagi.connection> in scope (server-less / not
+started). Dies (C<croak>) if a C<pagi.connection> is present but lacks the
+C<response_started> method, which indicates a non-conforming server.
 
 =head2 has_status
 
@@ -1197,13 +1202,11 @@ sub to_app {
 
 sub is_sent {
     my ($self) = @_;
-    return $self->{scope}{'pagi.response.sent'} ? 1 : 0;
-}
-
-sub _mark_sent {
-    my ($self) = @_;
-    croak("Response already sent") if $self->{scope}{'pagi.response.sent'};
-    $self->{scope}{'pagi.response.sent'} = 1;
+    my $conn = $self->{scope} ? $self->{scope}{'pagi.connection'} : undef;
+    return 0 unless $conn;                       # no connection object: server-less / not started
+    Carp::croak("pagi.connection lacks response_started (non-conforming server)")
+        unless $conn->can('response_started');
+    return $conn->response_started ? 1 : 0;
 }
 
 # Returns the invocant if it is already an instance; otherwise creates a new
@@ -1386,7 +1389,6 @@ sub stream {
 async sub writer {
     my ($self, $send, %opts) = @_;
     croak("send must be a coderef") unless ref($send) eq 'CODE';
-    $self->_mark_sent;
 
     # Send headers
     await $send->({
