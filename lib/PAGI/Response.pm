@@ -1389,6 +1389,11 @@ sub stream {
 async sub writer {
     my ($self, $send, %opts) = @_;
     croak("send must be a coderef") unless ref($send) eq 'CODE';
+    # A writer takes over the connection for live streaming; it can only be
+    # taken once on a given response value. (The cross-stack "did a response
+    # start" fact lives on pagi.connection; this is a local single-takeover guard.)
+    croak("Response already sent") if $self->{_writer_started};
+    $self->{_writer_started} = 1;
 
     # Send headers
     await $send->({
