@@ -5,6 +5,7 @@ use warnings;
 use Future::AsyncAwait;
 use Carp qw(croak);
 
+use PAGI::Test::ConnectionState;
 use PAGI::Test::Response;
 use PAGI::Utils ();
 
@@ -105,6 +106,11 @@ sub _request {
         my ($event) = @_;
         my %captured = %$event;
 
+        if (my $conn = $scope->{'pagi.connection'}) {
+            $conn->_mark_response_started
+                if ($captured{type} // '') eq 'http.response.start';
+        }
+
         if (($captured{type} // '') eq 'http.response.body') {
             if ($method eq 'HEAD') {
                 $captured{body} = '';
@@ -130,6 +136,10 @@ sub _request {
             die $exception;
         }
         # Mimic server behavior: return 500 response
+        if (my $conn = $scope->{'pagi.connection'}) {
+            $conn->_mark_response_started;            # the 500 IS a response
+            $conn->_mark_disconnected('server_error');# abnormal end — not on_complete
+        }
         return PAGI::Test::Response->new(
             status    => 500,
             headers   => [['content-type', 'text/plain']],
@@ -144,6 +154,10 @@ sub _request {
         die "App returned without sending response. "
           . "Did you forget to 'await' your \$send calls? "
           . "See PAGI::Tutorial section on async patterns.\n";
+    }
+
+    if (my $conn = $scope->{'pagi.connection'}) {
+        $conn->_mark_complete;
     }
 
     # Parse response from captured events
@@ -185,8 +199,9 @@ sub _build_scope {
         query_string => $query_string,
         root_path    => '',
         headers      => $headers,
-        client       => ['127.0.0.1', 12345],
-        server       => ['testserver', 80],
+        client          => ['127.0.0.1', 12345],
+        server          => ['testserver', 80],
+        'pagi.connection' => PAGI::Test::ConnectionState->new,
     };
 
     # Add state if lifespan is enabled
