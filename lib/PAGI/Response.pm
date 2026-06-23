@@ -399,6 +399,15 @@ Each method works as both a B<class-method factory> and an B<instance method>:
 The Content-Type these methods set is a B<default>: an explicit C<content_type>
 set beforehand is preserved, not overridden.
 
+These helpers UTF-8-encode the body, so they make the Content-Type advertise
+that encoding. When you preset a charset-less type they append C<; charset=utf-8>
+to it — C<< content_type('application/xml')->html($xml) >> sends
+C<application/xml; charset=utf-8> (charset is meaningful for XML and C<text/*>,
+RFC 7303). The exceptions are C<application/json> and the C<+json> structured-suffix
+types, which are left bare: JSON is always UTF-8 and defines no charset parameter
+(RFC 8259). An explicit charset you set yourself is never overridden. If you need
+a body in some other encoding, encode it yourself and use L</send_raw>.
+
 =head2 Trailing options (status, content_type, headers)
 
 The body methods C<text>, C<html>, C<json>, C<send_raw>, and C<empty> accept
@@ -452,8 +461,10 @@ Accepts trailing options (C<status>, C<content_type>, C<headers>). Returns C<$se
     PAGI::Response->json({ message => 'Hello' });
     PAGI::Response->json({ error => 'nope' }, status => 404);
 
-Set body to the JSON-encoded data with Content-Type: application/json; charset=utf-8.
-Accepts trailing options (C<status>, C<content_type>, C<headers>). Returns C<$self>.
+Set body to the JSON-encoded data with Content-Type: application/json. No charset
+parameter is added — JSON is always UTF-8 and C<application/json> defines none
+(RFC 8259). Accepts trailing options (C<status>, C<content_type>, C<headers>).
+Returns C<$self>.
 
 =head2 redirect
 
@@ -484,7 +495,9 @@ C<status> option overrides the 204 default. Returns C<$self>.
     $res->send($text, charset => 'iso-8859-1');
 
 Set body to the encoded text (UTF-8 by default, or the specified charset).
-Adds charset to Content-Type if not present. Returns C<$self>.
+Defaults the Content-Type to C<text/plain> and appends the charset to a
+charset-less type, on the same rules as L</text> (C<application/json> and
+C<+json> types stay bare). Returns C<$self>.
 
 =head2 send_raw
 
@@ -1102,6 +1115,26 @@ sub _set_body {
     return $self;
 }
 
+# The UTF-8 text body helpers call this so the Content-Type advertises the
+# encoding they just applied. A charset is appended only when the type both
+# lacks one and actually defines a charset parameter. application/json and the
+# structured-suffix +json types define none — JSON is always UTF-8 per RFC 8259
+# — so they are left bare; application/xml, text/*, and the +xml types do carry
+# charset (RFC 7303), so they get it.
+sub _ensure_charset {
+    my ($self, $charset) = @_;
+    $charset //= 'utf-8';
+    return $self unless $self->has_content_type;
+    my $ct = $self->content_type;
+    return $self if $ct =~ /charset=/i;
+    my ($type) = $ct =~ m{^\s*([^;]+)};
+    $type //= '';
+    $type =~ s/\s+\z//;
+    return $self if lc($type) eq 'application/json' || $type =~ /\+json\z/i;
+    $self->content_type("$ct; charset=$charset");
+    return $self;
+}
+
 sub _render_headers {
     my ($self, $extra_len) = @_;
     my @headers = map { [$_->[0], $_->[1]] } @{$self->{_headers}};
@@ -1224,16 +1257,8 @@ sub send {
     my $self   = $proto->_self_or_new;
     my $charset = $opts{charset} // 'utf-8';
     my $encoded = _enc($body, $charset);
-    # Match old send() behaviour: set content-type with charset if not present,
-    # or append charset to an existing content-type that lacks it.
-    if ($self->has_content_type) {
-        my $ct = $self->content_type;
-        unless ($ct =~ /charset=/i) {
-            $self->content_type("$ct; charset=$charset");
-        }
-    } else {
-        $self->content_type("text/plain; charset=$charset");
-    }
+    $self->content_type("text/plain; charset=$charset") unless $self->has_content_type;
+    $self->_ensure_charset($charset);
     $self->{_body} = $encoded;
     return $self;
 }
@@ -1243,6 +1268,7 @@ sub text {
     my $self = $proto->_self_or_new;
     $self->_set_body(_enc($body), 'text/plain; charset=utf-8');
     $self->_apply_opts(%opts);
+    $self->_ensure_charset;
     return $self;
 }
 
@@ -1251,6 +1277,7 @@ sub html {
     my $self = $proto->_self_or_new;
     $self->_set_body(_enc($body), 'text/html; charset=utf-8');
     $self->_apply_opts(%opts);
+    $self->_ensure_charset;
     return $self;
 }
 
@@ -1258,8 +1285,9 @@ sub json {
     my ($proto, $data, %opts) = @_;
     my $self = $proto->_self_or_new;
     my $body = JSON::MaybeXS->new(utf8 => 1, canonical => 1)->encode($data);
-    $self->_set_body($body, 'application/json; charset=utf-8');
+    $self->_set_body($body, 'application/json');
     $self->_apply_opts(%opts);
+    $self->_ensure_charset;
     return $self;
 }
 

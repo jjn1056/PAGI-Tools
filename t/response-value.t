@@ -81,8 +81,8 @@ subtest 'body methods set body and return self (class or instance)' => sub {
     ($send, $events) = recorder();
     PAGI::Response->new->content_type('text/markdown')->text('hi')->respond($send)->get;
     my %ct = map { lc($_->[0]) => $_->[1] } @{$events->[0]{headers}};
-    is $ct{'content-type'}, 'text/markdown',
-        'an explicit content_type wins over a body method default';
+    is $ct{'content-type'}, 'text/markdown; charset=utf-8',
+        'explicit content_type wins, with charset appended for the UTF-8 body';
 
     ($send, $events) = recorder();
     PAGI::Response->redirect('/login')->respond($send)->get;

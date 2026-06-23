@@ -290,7 +290,7 @@ Key points:
 
 =item * C<html()> sets Content-Type to text/html; charset=utf-8
 
-=item * C<json()> sets Content-Type to application/json; charset=utf-8
+=item * C<json()> sets Content-Type to application/json (no charset; JSON is always UTF-8)
 
 =item * All methods automatically encode strings to UTF-8 bytes
 

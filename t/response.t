@@ -233,7 +233,7 @@ subtest 'json method' => sub {
     $res->json({ message => 'Hello', count => 42 })->respond($send)->get;
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
-    is $headers{'content-type'}, 'application/json; charset=utf-8', 'content-type set';
+    is $headers{'content-type'}, 'application/json', 'content-type set';
 
     # Body should be valid JSON
     like $sent[1]->{body}, qr/"message"/, 'contains message key';
@@ -436,10 +436,91 @@ subtest 'json error response pattern' => sub {
 
     is $sent[0]->{status}, 400, 'status from error';
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
-    is $headers{'content-type'}, 'application/json; charset=utf-8', 'json content-type';
+    is $headers{'content-type'}, 'application/json', 'json content-type';
 
     my $body = JSON::MaybeXS->new(utf8 => 1)->decode($sent[1]->{body});
     is $body->{error}, 'Bad Request', 'error message in body';
+};
+
+subtest 'json content-type carries no charset (RFC 8259)' => sub {
+    # JSON is always UTF-8; application/json defines no charset parameter, so
+    # the body helpers never advertise one.
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+
+    PAGI::Response->new({})->json({ ok => 1 })->respond($send)->get;
+    my %h = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $h{'content-type'}, 'application/json', 'json() emits bare application/json';
+
+    @sent = ();
+    PAGI::Response->new({})
+        ->content_type('application/json')->json({ ok => 1 })
+        ->respond($send)->get;
+    %h = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $h{'content-type'}, 'application/json', 'explicit application/json stays bare';
+
+    @sent = ();
+    PAGI::Response->new({})
+        ->content_type('application/ld+json')->json({ ok => 1 })
+        ->respond($send)->get;
+    %h = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $h{'content-type'}, 'application/ld+json', '+json suffix types stay bare';
+};
+
+subtest 'body helpers append charset to a charset-less text type' => sub {
+    # text/html/json UTF-8-encode the body, so the Content-Type must advertise
+    # the encoding for types where charset is meaningful (RFC 7303 for XML).
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+
+    my %cases = (
+        'application/xml'       => 'application/xml; charset=utf-8',
+        'application/xhtml+xml' => 'application/xhtml+xml; charset=utf-8',
+        'text/csv'              => 'text/csv; charset=utf-8',
+        'text/javascript'       => 'text/javascript; charset=utf-8',
+    );
+    for my $preset (sort keys %cases) {
+        @sent = ();
+        PAGI::Response->new({})
+            ->content_type($preset)->text('<doc/>')
+            ->respond($send)->get;
+        my %h = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+        is $h{'content-type'}, $cases{$preset}, "text() appends charset to $preset";
+    }
+
+    @sent = ();
+    PAGI::Response->new({})
+        ->content_type('application/xml')->html('<doc/>')
+        ->respond($send)->get;
+    my %h = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $h{'content-type'}, 'application/xml; charset=utf-8',
+        'html() appends charset to application/xml';
+};
+
+subtest 'an explicit charset is never overridden' => sub {
+    # A deliberate (even non-UTF-8) charset choice is left untouched; the
+    # helpers only fill in a missing one.
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+
+    PAGI::Response->new({})
+        ->content_type('application/xml; charset=iso-8859-1')->text('x')
+        ->respond($send)->get;
+    my %h = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $h{'content-type'}, 'application/xml; charset=iso-8859-1',
+        'preset charset preserved';
+};
+
+subtest 'send() leaves application/json bare' => sub {
+    my @sent;
+    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
+
+    PAGI::Response->new({})
+        ->content_type('application/json')->send('{"ok":1}')
+        ->respond($send)->get;
+    my %h = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $h{'content-type'}, 'application/json',
+        'send() does not add charset to application/json';
 };
 
 use File::Temp qw(tempfile);
