@@ -114,11 +114,10 @@ sub wrap {
         }
 
         # Create modified scope with parsed body
-        my $new_scope = {
-            %$scope,
+        my $new_scope = $self->modify_scope($scope, {
             'pagi.parsed_body' => $parsed,
             'pagi.raw_body'    => $body,
-        };
+        });
 
         # Create a receive that returns empty (body already consumed)
         my $empty_receive = async sub {

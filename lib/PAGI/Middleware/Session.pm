@@ -299,11 +299,10 @@ sub wrap {
         $session_id = $session->{_id};
 
         # Add session to scope
-        my $new_scope = {
-            %$scope,
+        my $new_scope = $self->modify_scope($scope, {
             'pagi.session'    => $session,
             'pagi.session_id' => $session_id,
-        };
+        });
 
         # Wrap send to save session and inject state
         my $wrapped_send = async sub {

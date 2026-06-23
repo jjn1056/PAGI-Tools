@@ -74,11 +74,10 @@ sub wrap {
         );
 
         # Add cookies and jar to scope
-        my $new_scope = {
-            %$scope,
+        my $new_scope = $self->modify_scope($scope, {
             'pagi.cookies'    => $cookies,
             'pagi.cookie_jar' => $cookie_jar,
-        };
+        });
 
         # Wrap send to add Set-Cookie headers
         my $wrapped_send = async sub  {

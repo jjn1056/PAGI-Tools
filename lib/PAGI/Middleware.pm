@@ -100,8 +100,25 @@ sub wrap {
 
     my $new_scope = $self->modify_scope($scope, \%additions);
 
-Create a new scope with additional keys, without mutating the original.
-This is the recommended way to pass additional data to inner apps.
+Return a new scope -- a shallow copy of C<$scope> with C<%additions> merged in --
+B<without mutating the original>. This is the supported way to pass extra data to
+inner apps, and the canonical middleware in this distribution use it.
+
+Why copy instead of writing C<< $scope->{key} = ... >> directly? Middleware form a
+stack, and the scope you are handed is shared with the layers around you. Mutating
+it in place lets your change leak B<upward> to parent and sibling layers (and, for
+a long-lived WebSocket scope, persist across every event on the connection).
+Copying keeps your additions B<downward only> -- seen by the inner app you call,
+invisible to everyone above.
+
+The copy is B<shallow> on purpose. Top-level keys you add are private to the new
+scope, but values that are B<references> -- the C<pagi.connection> object, the
+lifespan C<state> namespace, the stash -- are shared, so the inner app still sees
+the same connection state and shared objects. A deep copy would sever those. One
+corollary worth knowing: a plain B<scalar> set as a top-level scope key does not
+propagate back to outer layers, so to share mutable state across layers you mutate
+B<through a reference> (see L<PAGI::Stash>). The full model -- and why it works
+this way -- is in L<PAGI::Building/MIDDLEWARE>.
 
 =cut
 

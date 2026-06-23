@@ -92,11 +92,10 @@ sub wrap {
             my $upper_method = uc($override_method);
             if ($self->{allowed_lookup}{$upper_method}) {
                 # Create new scope with overridden method
-                my $new_scope = {
-                    %$scope,
+                my $new_scope = $self->modify_scope($scope, {
                     method => $upper_method,
                     original_method => $scope->{method},
-                };
+                });
                 await $app->($new_scope, $receive, $send);
                 return;
             }

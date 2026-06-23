@@ -91,11 +91,10 @@ sub wrap {
 
         # Add preferred type to scope
         my @accepted = $self->_parse_accept($accept);
-        my $new_scope = {
-            %$scope,
+        my $new_scope = $self->modify_scope($scope, {
             'pagi.preferred_content_type' => $preferred,
             'pagi.accepted_types' => \@accepted,
-        };
+        });
 
         await $app->($new_scope, $receive, $send);
     };
