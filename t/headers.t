@@ -87,4 +87,13 @@ subtest 'output forms + clone independence' => sub {
     is $h->get('x-a'), '1', 'clone is independent of the original';
 };
 
+subtest 'undef header value is rejected (fail loud, never stored)' => sub {
+    my $h = PAGI::Headers->new([['X-A','1']]);
+    like dies { $h->add('X-B', undef) }, qr/value must be defined/, 'add rejects undef value';
+    like dies { $h->set('X-C', undef) }, qr/value must be defined/, 'set rejects undef value';
+    like dies { $h->set_default('X-D', undef) }, qr/value must be defined/, 'set_default rejects undef value';
+    is $h->to_pairs, [['X-A','1']], 'nothing was stored by the rejected calls';
+    like dies { $h->get(undef) }, qr/header name required/, 'the undef-NAME guard still holds';
+};
+
 done_testing;

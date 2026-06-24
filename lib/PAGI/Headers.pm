@@ -24,6 +24,14 @@ sorted). Multiple values per name are first-class (e.g. C<Set-Cookie>).
 Lookups scan the ordered list -- header sets are small, so this is deliberately
 indexless.
 
+Header values are opaque bytes and pass through untouched -- including C<CR>,
+C<LF>, and C<NUL>. This container does B<not> validate or sanitize them; rejecting
+injection bytes on the wire is the server's job, which it B<MUST> do when emitting
+a response (see L<PAGI::Spec::Www/"Response Start - send event">). A value must,
+however, be B<defined>: C<add>, C<set>, and C<set_default> C<croak> on an C<undef>
+value rather than storing it, since an undefined header value is a caller bug, not
+data.
+
 =cut
 
 # ASCII-only lowercase for name keying. Field names are ASCII tokens (RFC 7230);
@@ -92,6 +100,7 @@ sub is_empty { @{ $_[0]->{pairs} } ? 0 : 1 }
 sub set {
     my ($self, $name, @values) = @_;
     croak("header name required") unless defined $name;
+    croak("header value must be defined") if grep { !defined } @values;
     my $key = _fold($name);
     @{$self->{pairs}} = grep { _fold($_->[0]) ne $key } @{$self->{pairs}};
     push @{$self->{pairs}}, [ $name, $_ ] for @values;
@@ -101,6 +110,7 @@ sub set {
 sub add {
     my ($self, $name, @values) = @_;
     croak("header name required") unless defined $name;
+    croak("header value must be defined") if grep { !defined } @values;
     push @{$self->{pairs}}, [ $name, $_ ] for @values;
     return $self;
 }
