@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use Carp qw(croak);
 use Encode qw(encode FB_CROAK);
 use JSON::MaybeXS ();
+use PAGI::Headers ();
 
 
 =encoding UTF-8
@@ -142,7 +143,9 @@ If called with only a name, returns the last value for that header or C<undef>.
 
     my $headers = $res->headers;
 
-Returns the full header arrayref C<[ name, value ]> in order.
+Returns the response headers as a L<PAGI::Headers> object. The object's C<@{}>
+overload yields a copy of the C<[name, value]> pairs in insertion order, so
+existing code that iterates C<@{$res->headers}> continues to work.
 
 =head2 header_all
 
@@ -156,12 +159,22 @@ Returns all values for the given header name (case-insensitive).
 
 Add a response header only if that header name has not already been set.
 
+=head2 remove_header
+
+    $res->remove_header('X-Custom');
+
+Remove all instances of the named header (case-insensitive). Returns C<$self>
+for fluent chaining. No-op if the header was not set.
+
 =head2 content_type
 
     $res->content_type('text/html; charset=utf-8');
     my $type = $res->content_type;
+    $res->content_type(undef);   # clears Content-Type so a body method can re-default it
 
-Set the Content-Type header, replacing any existing one.
+Set the Content-Type header, replacing any existing one. Passing C<undef>
+removes Content-Type entirely, which lets a subsequent body method (C<html>,
+C<text>, C<json>) re-apply its default.
 
 =head2 content_type_try
 
@@ -1009,9 +1022,8 @@ sub new {
     my ($class, $scope) = @_;
     croak("scope must be a hashref") if defined $scope && ref($scope) ne 'HASH';
     return bless {
-        scope       => $scope,           # optional, inert (accessors / Stash); NOT a connection
-        _headers    => [],
-        _header_set => {},
+        scope    => $scope,           # optional, inert (accessors / Stash); NOT a connection
+        _headers => PAGI::Headers->new,
     }, $class;
 }
 
@@ -1033,60 +1045,44 @@ sub status_try {
 sub header {
     my ($self, $name, $value) = @_;
     croak("Header name is required") unless defined $name;
-    if (@_ == 2) {
-        my $key = lc($name);
-        for (my $i = $#{$self->{_headers}}; $i >= 0; $i--) {
-            my $pair = $self->{_headers}[$i];
-            return $pair->[1] if lc($pair->[0]) eq $key;
-        }
-        return undef;
-    }
-    push @{$self->{_headers}}, [$name, $value];
-    my $key = lc($name // '');
-    $self->{_header_set}{$key} = 1 if length $key;
-    if ($key eq 'content-type') {
-        $self->{_content_type} = $value;
-    }
+    return $self->{_headers}->get($name) if @_ == 2;   # getter: last value
+    $self->{_headers}->add($name, $value);              # setter: append
     return $self;
 }
 
-sub headers {
-    my ($self) = @_;
-    return $self->{_headers};
-}
+sub headers { return $_[0]->{_headers} }
 
 sub header_all {
     my ($self, $name) = @_;
     croak("Header name is required") unless defined $name;
-    my $key = lc($name);
-    my @values;
-    for my $pair (@{$self->{_headers}}) {
-        push @values, $pair->[1] if lc($pair->[0]) eq $key;
-    }
-    return @values;
+    return $self->{_headers}->get_all($name);
 }
 
 sub header_try {
     my ($self, $name, $value) = @_;
-    return $self if $self->has_header($name);
-    return $self->header($name, $value);
+    $self->{_headers}->set_default($name, $value);
+    return $self;
+}
+
+sub remove_header {
+    my ($self, $name) = @_;
+    croak("Header name is required") unless defined $name;
+    $self->{_headers}->remove($name);
+    return $self;
 }
 
 sub content_type {
     my ($self, $type) = @_;
-    return $self->{_content_type} if @_ == 1;
-    # Remove existing content-type headers
-    $self->{_headers} = [grep { lc($_->[0]) ne 'content-type' } @{$self->{_headers}}];
-    push @{$self->{_headers}}, ['content-type', $type];
-    $self->{_header_set}{'content-type'} = 1;
-    $self->{_content_type} = $type;
+    return $self->{_headers}->get('content-type') if @_ == 1;   # getter
+    if (defined $type) { $self->{_headers}->set('content-type', $type) }
+    else               { $self->{_headers}->remove('content-type') }  # content_type(undef) clears
     return $self;
 }
 
 sub content_type_try {
     my ($self, $type) = @_;
-    return $self if exists $self->{_content_type};
-    return $self->content_type($type);
+    $self->{_headers}->set_default('content-type', $type);
+    return $self;
 }
 
 sub has_status {
@@ -1094,17 +1090,8 @@ sub has_status {
     return exists $self->{_status} ? 1 : 0;
 }
 
-sub has_header {
-    my ($self, $name) = @_;
-    my $key = lc($name // '');
-    return 0 unless length $key;
-    return $self->{_header_set}{$key} ? 1 : 0;
-}
-
-sub has_content_type {
-    my ($self) = @_;
-    return exists $self->{_content_type} ? 1 : 0;
-}
+sub has_header       { return $_[0]->{_headers}->has($_[1]) }
+sub has_content_type { return $_[0]->{_headers}->has('content-type') }
 
 sub has_body_source {
     my ($self) = @_;
@@ -1142,9 +1129,18 @@ sub _ensure_charset {
 
 sub _render_headers {
     my ($self, $extra_len) = @_;
-    my @headers = map { [$_->[0], $_->[1]] } @{$self->{_headers}};
-    push @headers, ['content-length', $extra_len] if defined $extra_len;
-    return \@headers;
+    my $pairs = $self->{_headers}->to_pairs;
+    if (defined $extra_len) {
+        # Buffered response: Content-Length is authoritative. Drop any user-set
+        # Content-Length (no duplicates) and any Transfer-Encoding (CL+TE is a
+        # request-smuggling vector), then append the one true length.
+        @$pairs = grep {
+            (my $k = $_->[0]) =~ tr/A-Z/a-z/;   # ASCII fold (field names are ASCII tokens)
+            $k ne 'content-length' && $k ne 'transfer-encoding'
+        } @$pairs;
+        push @$pairs, ['content-length', $extra_len];
+    }
+    return $pairs;
 }
 
 async sub respond {
@@ -1324,7 +1320,7 @@ sub cookie {
     push @parts, "SameSite=$opts{samesite}" if defined $opts{samesite};
 
     my $cookie_str = join('; ', @parts);
-    push @{$self->{_headers}}, ['set-cookie', $cookie_str];
+    $self->{_headers}->add('set-cookie', $cookie_str);
 
     return $self;
 }
@@ -1399,7 +1395,7 @@ async sub writer {
     await $send->({
         type    => 'http.response.start',
         status  => $self->status,
-        headers => $self->{_headers},
+        headers => $self->_render_headers(undef),
     });
 
     return PAGI::Response::Writer->new($send, %opts);

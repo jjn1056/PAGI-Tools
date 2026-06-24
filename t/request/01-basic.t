@@ -357,7 +357,7 @@ subtest 'on_complete with connection delegates and returns $self' => sub {
     is scalar @{$conn->{cbs}}, 1, 'callback was delegated to connection';
 };
 
-subtest 'headers as Hash::MultiValue' => sub {
+subtest 'headers is a PAGI::Headers' => sub {
     my $scope = {
         type    => 'http',
         method  => 'GET',
@@ -371,11 +371,11 @@ subtest 'headers as Hash::MultiValue' => sub {
 
     my $req = PAGI::Request->new($scope);
 
-    # headers returns Hash::MultiValue
+    # headers returns PAGI::Headers
     my $headers = $req->headers;
-    isa_ok $headers, 'Hash::MultiValue';
+    isa_ok $headers, ['PAGI::Headers'], 'headers() is a PAGI::Headers';
 
-    # Single value access (last value - keys are normalized to lowercase)
+    # Single value access (last value - case-insensitive)
     is($headers->get('accept'), 'application/json', 'get returns last value');
     is($headers->get('content-type'), 'text/plain', 'access other headers');
 
@@ -386,6 +386,23 @@ subtest 'headers as Hash::MultiValue' => sub {
     # header_all method
     my @accepts2 = $req->header_all('accept');
     is(\@accepts2, ['text/html', 'application/json'], 'header_all works');
+};
+
+subtest 'request headers are a PAGI::Headers' => sub {
+    my $scope = {
+        type => 'http', method => 'GET',
+        headers => [['Host','example.com'],['Accept','text/html'],['X-Multi','a'],['X-Multi','b']],
+    };
+    my $req = PAGI::Request->new($scope);
+    isa_ok $req->headers, ['PAGI::Headers'], 'headers() is a PAGI::Headers';
+    is $req->header('host'), 'example.com', 'case-insensitive single lookup';
+    is [$req->header_all('x-multi')], ['a','b'], 'multi-value via header_all';
+};
+
+subtest 'mutating the returned headers does not affect the request' => sub {
+    my $req = PAGI::Request->new({ type => 'http', method => 'GET', headers => [['Host','x.com']] });
+    $req->headers->clear;                 # mutate the returned object (a clone)
+    is $req->header('host'), 'x.com', 'request lookups unaffected -- headers() is a clone';
 };
 
 done_testing;

@@ -789,4 +789,68 @@ subtest 'cors credentials with wildcard uses request_origin' => sub {
     is $headers{'access-control-allow-credentials'}, 'true', 'credentials set';
 };
 
+subtest 'headers() returns a PAGI::Headers object' => sub {
+    my $res = PAGI::Response->new;
+    $res->header('X-Foo' => 'a')->header('X-Foo' => 'b');
+    isa_ok $res->headers, ['PAGI::Headers'], 'headers() is a PAGI::Headers';
+    is [$res->headers->get_all('x-foo')], ['a','b'], 'object exposes get_all';
+    is scalar(@{$res->headers}), 2, '@{$res->headers} still yields the pairs';
+};
+
+subtest 'remove_header' => sub {
+    my $res = PAGI::Response->new;
+    $res->header('X-Gone' => '1')->header('X-Keep' => '2');
+    is $res->remove_header('x-gone'), $res, 'remove_header returns self';
+    ok !$res->has_header('X-Gone'), 'header removed';
+    ok $res->has_header('X-Keep'), 'other header kept';
+};
+
+subtest 'content_type(undef) clears so a body method re-defaults' => sub {
+    my @sent;
+    my $send = sub { push @sent, $_[0]; Future->done };
+    my $res = PAGI::Response->new({});
+    $res->content_type('application/xml');
+    is $res->content_type, 'application/xml', 'set';
+    $res->content_type(undef);
+    ok !$res->has_content_type, 'cleared';
+    $res->html('<x/>')->respond($send)->get;
+    my %h = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $h{'content-type'}, 'text/html; charset=utf-8', 'html default re-applied after clear';
+};
+
+subtest 'buffered response: one authoritative Content-Length, no Transfer-Encoding' => sub {
+    my @sent;
+    my $send = sub { push @sent, $_[0]; Future->done };
+    my $res = PAGI::Response->new({});
+    $res->header('content-length' => '9999')        # user-set (wrong)
+        ->header('transfer-encoding' => 'chunked')   # smuggling vector
+        ->send_raw('hello');                         # 5-byte body
+    $res->respond($send)->get;
+    my @cl = grep { lc($_->[0]) eq 'content-length' } @{$sent[0]{headers}};
+    is scalar(@cl), 1, 'exactly one Content-Length';
+    is $cl[0][1], 5, 'Content-Length is the actual body length';
+    my @te = grep { lc($_->[0]) eq 'transfer-encoding' } @{$sent[0]{headers}};
+    is scalar(@te), 0, 'Transfer-Encoding stripped on a buffered response';
+};
+
+subtest 'middleware push over writer() survives (real arrayref, not a copy)' => sub {
+    my @start;
+    # A "middleware" send wrapper that mutates the start event's headers in place,
+    # like PAGI::Middleware::SecurityHeaders.
+    my $send = sub {
+        my ($e) = @_;
+        if (($e->{type} // '') eq 'http.response.start') {
+            push @{$e->{headers}}, ['x-frame-options', 'DENY'];
+            push @start, $e;
+        }
+        Future->done;
+    };
+    my $res = PAGI::Response->new({});
+    $res->status(200)->header('content-type' => 'text/plain');
+    $res->writer($send)->get;
+    my %h = map { lc($_->[0]) => $_->[1] } @{$start[0]{headers}};
+    is $h{'x-frame-options'}, 'DENY', 'a header pushed onto the writer start event survives';
+    is $h{'content-type'}, 'text/plain', 'response headers present too';
+};
+
 done_testing;
