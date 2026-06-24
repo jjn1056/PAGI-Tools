@@ -789,4 +789,33 @@ subtest 'cors credentials with wildcard uses request_origin' => sub {
     is $headers{'access-control-allow-credentials'}, 'true', 'credentials set';
 };
 
+subtest 'headers() returns a PAGI::Headers object' => sub {
+    my $res = PAGI::Response->new;
+    $res->header('X-Foo' => 'a')->header('X-Foo' => 'b');
+    isa_ok $res->headers, ['PAGI::Headers'], 'headers() is a PAGI::Headers';
+    is [$res->headers->get_all('x-foo')], ['a','b'], 'object exposes get_all';
+    is scalar(@{$res->headers}), 2, '@{$res->headers} still yields the pairs';
+};
+
+subtest 'remove_header' => sub {
+    my $res = PAGI::Response->new;
+    $res->header('X-Gone' => '1')->header('X-Keep' => '2');
+    is $res->remove_header('x-gone'), $res, 'remove_header returns self';
+    ok !$res->has_header('X-Gone'), 'header removed';
+    ok $res->has_header('X-Keep'), 'other header kept';
+};
+
+subtest 'content_type(undef) clears so a body method re-defaults' => sub {
+    my @sent;
+    my $send = sub { push @sent, $_[0]; Future->done };
+    my $res = PAGI::Response->new({});
+    $res->content_type('application/xml');
+    is $res->content_type, 'application/xml', 'set';
+    $res->content_type(undef);
+    ok !$res->has_content_type, 'cleared';
+    $res->html('<x/>')->respond($send)->get;
+    my %h = map { lc($_->[0]) => $_->[1] } @{$sent[0]->{headers}};
+    is $h{'content-type'}, 'text/html; charset=utf-8', 'html default re-applied after clear';
+};
+
 done_testing;
