@@ -45,12 +45,13 @@ Guarded send. Sends the L<PAGI::Response> value C<$res> over this request's
 connection, marks the request as done, and returns a L<Future> that resolves
 when all protocol events have been emitted.
 
-Dies (C<croak>) if called a second time on the same request — one HTTP response
-per request. The sent state is stored in the shared scope under
-C<pagi.response.sent> so middleware and the application share a single flag.
+The sent state is read from C<< $scope->{'pagi.connection'}->response_started >>,
+the server-seeded per-request object — a shared reference, so the fact propagates
+across the whole middleware stack even though middleware shallow-clone the scope.
+A second C<respond> on the same context is rejected synchronously via a per-context
+flag; the server enforces single-response at the protocol level as the backstop.
 
-Delegates to the unguarded primitive C<< $res->respond($send) >> after setting
-the flag.
+Delegates to the unguarded primitive C<< $res->respond($send) >>.
 
 =head2 method
 
@@ -105,9 +106,13 @@ sub response {
 
 sub respond {
     my ($self, $res) = @_;
-    my $scope = $self->{scope};
-    croak("response already sent") if $scope && $scope->{'pagi.response.sent'};
-    $scope->{'pagi.response.sent'} = 1 if $scope;
+    my $conn = $self->{scope} ? $self->{scope}{'pagi.connection'} : undef;
+    if ($conn && !$conn->can('response_started')) {
+        croak("pagi.connection lacks response_started (non-conforming server)");
+    }
+    croak("response already sent")
+        if $self->{_responded} || ($conn && $conn->response_started);   # mutex + cross-context read
+    $self->{_responded} = 1;                                            # synchronous, self-owned
     return $res->respond($self->{send});
 }
 
