@@ -2,6 +2,7 @@ package PAGI::Request;
 use strict;
 use warnings;
 use Hash::MultiValue;
+use PAGI::Headers ();
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Cookie::Baker qw(crush_cookie);
 use MIME::Base64 qw(decode_base64);
@@ -70,38 +71,22 @@ sub content_length {
     return $self->header('content-length');
 }
 
-# Single header lookup (case-insensitive, returns last value)
-sub header {
-    my ($self, $name) = @_;
-    $name = lc($name);
-    my $value;
-    for my $pair (@{$self->{scope}{headers} // []}) {
-        if (lc($pair->[0]) eq $name) {
-            $value = $pair->[1];
-        }
-    }
-    return $value;
-}
-
-# All headers as Hash::MultiValue (cached in scope, case-insensitive keys)
-sub headers {
+# Private cache: the source of truth for header lookups (built once per request).
+sub _header_snapshot {
     my $self = shift;
-    return $self->{scope}{'pagi.request.headers'} if $self->{scope}{'pagi.request.headers'};
-
-    my @pairs;
-    for my $pair (@{$self->{scope}{headers} // []}) {
-        push @pairs, lc($pair->[0]), $pair->[1];
-    }
-
-    $self->{scope}{'pagi.request.headers'} = Hash::MultiValue->new(@pairs);
-    return $self->{scope}{'pagi.request.headers'};
+    return $self->{scope}{'pagi.request.headers'}
+        //= PAGI::Headers->new($self->{scope}{headers} // []);
 }
+
+# Public: a PAGI::Headers snapshot of the inbound headers. Returns an independent
+# CLONE so mutating it cannot poison later header()/content_type()/cookie lookups.
+sub headers { return $_[0]->_header_snapshot->clone }
+
+# Single header lookup (case-insensitive, last value)
+sub header     { return $_[0]->_header_snapshot->get($_[1]) }
 
 # All values for a header
-sub header_all {
-    my ($self, $name) = @_;
-    return $self->headers->get_all(lc($name));
-}
+sub header_all { return $_[0]->_header_snapshot->get_all($_[1]) }
 
 # Query params as Hash::MultiValue (cached in scope)
 # Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
@@ -804,9 +789,12 @@ Get all values for a header.
 
 =head2 headers
 
-    my $headers = $req->headers;  # Hash::MultiValue
+    my $headers = $req->headers;  # PAGI::Headers
 
-Get all headers as a L<Hash::MultiValue> object.
+Returns a L<PAGI::Headers> clone of the inbound headers snapshot. The returned
+object is independent: mutating it (C<clear>, C<set>, etc.) does not affect
+subsequent calls to C<header>, C<header_all>, C<content_type>, or C<cookie>
+-- those always read the private snapshot, not the clone.
 
 =head1 QUERY PARAMETERS
 
