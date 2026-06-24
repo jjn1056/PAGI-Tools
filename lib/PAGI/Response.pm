@@ -1129,9 +1129,18 @@ sub _ensure_charset {
 
 sub _render_headers {
     my ($self, $extra_len) = @_;
-    my @headers = map { [$_->[0], $_->[1]] } @{$self->{_headers}};
-    push @headers, ['content-length', $extra_len] if defined $extra_len;
-    return \@headers;
+    my $pairs = $self->{_headers}->to_pairs;
+    if (defined $extra_len) {
+        # Buffered response: Content-Length is authoritative. Drop any user-set
+        # Content-Length (no duplicates) and any Transfer-Encoding (CL+TE is a
+        # request-smuggling vector), then append the one true length.
+        @$pairs = grep {
+            my $k = lc $_->[0];
+            $k ne 'content-length' && $k ne 'transfer-encoding'
+        } @$pairs;
+        push @$pairs, ['content-length', $extra_len];
+    }
+    return $pairs;
 }
 
 async sub respond {
@@ -1386,7 +1395,7 @@ async sub writer {
     await $send->({
         type    => 'http.response.start',
         status  => $self->status,
-        headers => $self->{_headers},
+        headers => $self->_render_headers(undef),
     });
 
     return PAGI::Response::Writer->new($send, %opts);
