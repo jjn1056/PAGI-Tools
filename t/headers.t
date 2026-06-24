@@ -87,6 +87,80 @@ subtest 'output forms + clone independence' => sub {
     is $h->get('x-a'), '1', 'clone is independent of the original';
 };
 
+subtest 'get returns the LAST value and never comma-joins' => sub {
+    my $h = PAGI::Headers->new;
+    $h->add('Vary','Accept');
+    $h->add('Vary','Accept-Encoding');
+    is $h->get('vary'), 'Accept-Encoding', 'get returns the last value';
+    isnt $h->get('vary'), 'Accept, Accept-Encoding',
+        'get does NOT comma-join (divergence from HTTP::Headers / Mojo::Headers)';
+    is [$h->get_all('vary')], ['Accept','Accept-Encoding'], 'get_all keeps values separate, in order';
+};
+
+subtest 'header values are opaque bytes: CR/LF/NUL/whitespace pass through' => sub {
+    # The container never sanitizes. The SERVER rejects injection bytes when it
+    # emits a response (PAGI::Spec::Www, "Response Start"); these pin the
+    # container's deliberate pass-through so nobody "hardens" it here and breaks
+    # the facts/policy boundary.
+    my $h = PAGI::Headers->new;
+    $h->add('X-Evil', "a\r\nInjected: 1");
+    is $h->get('x-evil'), "a\r\nInjected: 1", 'CR/LF preserved verbatim -- no fold, no croak';
+    like $h->to_string, qr/X-Evil: a\r\nInjected: 1\r\n/,
+        'to_string emits the raw bytes (debug-only, unsafe -- server validates the wire)';
+
+    $h->set('X-Nul', "a\x00b");
+    is $h->get('x-nul'), "a\x00b", 'NUL preserved verbatim';
+
+    $h->set('X-Ws', '  spaced  ');
+    is $h->get('x-ws'), '  spaced  ', 'leading/trailing whitespace preserved (no normalization)';
+};
+
+subtest 'empty-string and zero values are real values, not absence' => sub {
+    my $h = PAGI::Headers->new;
+    $h->add('X-Empty', '');
+    is $h->has('x-empty'), 1, 'empty-value header is present';
+    is $h->get('x-empty'), '', 'empty value retrievable as ""';
+    $h->add('X-Zero', '0');
+    is $h->get('x-zero'), '0', 'zero value round-trips (not treated as false/absent)';
+    like $h->to_string, qr/X-Zero: 0\r\n/, 'zero survives serialization';
+};
+
+subtest 'duplicate names are retained as distinct pairs' => sub {
+    my $h = PAGI::Headers->new([['Set-Cookie','a=1'],['Set-Cookie','b=2']]);
+    is $h->to_pairs, [['Set-Cookie','a=1'],['Set-Cookie','b=2']], 'dups kept in to_pairs';
+    is [$h->flatten], ['Set-Cookie','a=1','Set-Cookie','b=2'], 'dups kept in flatten';
+    is [$h->names], ['Set-Cookie'], 'names collapses to distinct';
+    is $h->count, 2, 'count reflects lines, not distinct names';
+};
+
+subtest 'mutation order: remove-then-add appends at the end; set on absent adds' => sub {
+    my $h = PAGI::Headers->new([['X-A','1'],['X-B','2']]);
+    $h->remove('X-A');
+    $h->add('X-A','3');
+    is [map { $_->[0] } @{$h->to_pairs}], ['X-B','X-A'], 're-added header lands at the end (insertion order)';
+
+    my $e = PAGI::Headers->new;
+    $e->set('X-New','v');
+    is $e->get('x-new'), 'v', 'set on an absent name just adds it';
+};
+
+subtest 'remove of an absent header is a harmless no-op' => sub {
+    my $h = PAGI::Headers->new([['X-A','1']]);
+    is [$h->remove('X-Absent')], [], 'returns empty list';
+    is $h->to_pairs, [['X-A','1']], 'container unchanged';
+};
+
+subtest 'construction round-trip; clone independent in both directions' => sub {
+    my $pairs = [['Content-Type','text/html'],['Set-Cookie','a'],['Set-Cookie','b']];
+    my $round_trip = PAGI::Headers->new($pairs)->to_pairs;
+    is $round_trip, $pairs, 'new(pairs)->to_pairs round-trips identically';
+
+    my $h = PAGI::Headers->new([['X-A','1']]);
+    my $c = $h->clone;
+    $h->set('X-A','changed-original');   # mutate the ORIGINAL (existing test mutates the clone)
+    is $c->get('x-a'), '1', 'clone unaffected when the original is mutated';
+};
+
 subtest 'undef header value is rejected (fail loud, never stored)' => sub {
     my $h = PAGI::Headers->new([['X-A','1']]);
     like dies { $h->add('X-B', undef) }, qr/value must be defined/, 'add rejects undef value';
