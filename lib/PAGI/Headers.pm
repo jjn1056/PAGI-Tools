@@ -24,6 +24,23 @@ sorted). Multiple values per name are first-class (e.g. C<Set-Cookie>).
 Lookups scan the ordered list -- header sets are small, so this is deliberately
 indexless.
 
+This container is B<not> a hash and does not overload hash dereference; iterate
+names with C<names> and read values with C<get>/C<get_all>, or take an explicit
+plain-hash snapshot with C<to_hash>.
+
+=head1 METHODS
+
+=head2 to_hash
+
+    my $flat  = $headers->to_hash;     # { Name => last-value }
+    my $multi = $headers->to_hash(1);  # { Name => [ all values ] }
+
+Returns a plain hashref snapshot keyed by distinct header name (grouped
+case-insensitively, using the casing and order C<names> reports). The flat form
+mirrors C<get> -- one value per name, last wins. Passing a true argument returns
+the multi-value form, mirroring C<get_all> -- an arrayref of every value for each
+name. Values are B<not> comma-joined (unlike L<HTTP::Headers>/L<Mojo::Headers>).
+
 Header values are opaque bytes and pass through untouched -- including C<CR>,
 C<LF>, and C<NUL>. This container does B<not> validate or sanitize them; rejecting
 injection bytes on the wire is the server's job, which it B<MUST> do when emitting
@@ -158,6 +175,16 @@ sub dehop {
 
 sub to_pairs { return [ map { [ $_->[0], $_->[1] ] } @{ $_[0]->{pairs} } ] }
 sub flatten  { return map { @$_ } @{ $_[0]->{pairs} } }
+
+# Plain-hash snapshot, keyed by distinct name (case-insensitively grouped, in
+# names() order/casing). Flat form mirrors get() -- one value per name, last
+# wins; multi form (truthy arg) mirrors get_all() -- an arrayref of every value.
+# This is the explicit "I want a hash" path; the container itself is NOT a hash.
+sub to_hash {
+    my ($self, $multi) = @_;
+    return { map { $_ => [ $self->get_all($_) ] } $self->names } if $multi;
+    return { map { $_ => $self->get($_) } $self->names };
+}
 
 # Debug/inspection only -- NOT a wire-emission helper. It does not validate or
 # strip CR/LF, so it is unsafe for untrusted header values; wire safety is the

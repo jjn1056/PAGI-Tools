@@ -87,6 +87,26 @@ subtest 'output forms + clone independence' => sub {
     is $h->get('x-a'), '1', 'clone is independent of the original';
 };
 
+subtest 'to_hash: flat (last value) and multi (arrayref), case-insensitively grouped' => sub {
+    my $h = PAGI::Headers->new([
+        ['Content-Type','text/html'],
+        ['X-Multi','a'], ['X-Multi','b'],
+    ]);
+    is $h->to_hash, { 'Content-Type' => 'text/html', 'X-Multi' => 'b' },
+        'flat to_hash: one value per name, last wins (mirrors get)';
+    is $h->to_hash(1), { 'Content-Type' => ['text/html'], 'X-Multi' => ['a','b'] },
+        'to_hash(1): arrayref of all values per name (mirrors get_all)';
+
+    my $mixed = PAGI::Headers->new([['X-Foo','1'],['x-foo','2']]);
+    is $mixed->to_hash, { 'X-Foo' => '2' },
+        'mixed-case same name grouped under first-seen casing, last value';
+    is $mixed->to_hash(1), { 'X-Foo' => ['1','2'] },
+        'to_hash(1) groups all case-insensitive matches';
+
+    my $empty = PAGI::Headers->new->to_hash;
+    is $empty, {}, 'empty container -> empty hash';
+};
+
 subtest 'get returns the LAST value and never comma-joins' => sub {
     my $h = PAGI::Headers->new;
     $h->add('Vary','Accept');
