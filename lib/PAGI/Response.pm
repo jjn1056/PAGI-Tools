@@ -1135,7 +1135,7 @@ sub _render_headers {
         # Content-Length (no duplicates) and any Transfer-Encoding (CL+TE is a
         # request-smuggling vector), then append the one true length.
         @$pairs = grep {
-            my $k = lc $_->[0];
+            (my $k = $_->[0]) =~ tr/A-Z/a-z/;   # ASCII fold (field names are ASCII tokens)
             $k ne 'content-length' && $k ne 'transfer-encoding'
         } @$pairs;
         push @$pairs, ['content-length', $extra_len];
