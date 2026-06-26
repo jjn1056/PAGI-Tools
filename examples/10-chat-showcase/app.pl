@@ -21,6 +21,9 @@ use Future::AsyncAwait;
 use File::Basename qw(dirname);
 use lib dirname(__FILE__) . '/lib';
 
+use PAGI::App::Router;
+use PAGI::Lifespan;
+
 use ChatApp::State qw(get_stats);
 use ChatApp::HTTP;
 use ChatApp::WebSocket;
@@ -67,60 +70,34 @@ sub with_logging {
     };
 }
 
-# Main application
-my $app = with_logging(async sub {
-    my ($scope, $receive, $send) = @_;
-    my $type = $scope->{type} // '';
-    my $path = $scope->{path} // '/';
+# Route by protocol and path with PAGI::App::Router. WebSocket and SSE
+# endpoints are first-class routes; everything else (static files and the
+# REST API) is mounted at the root, where ChatApp::HTTP handles it.
+my $router = PAGI::App::Router->new;
+$router->websocket('/ws/chat' => $ws_handler);
+$router->sse('/events'        => $sse_handler);
+$router->mount('/'            => $http_handler);
 
-    # Handle lifespan events
-    if ($type eq 'lifespan') {
-        return await _handle_lifespan($scope, $receive, $send);
-    }
+# The router ignores lifespan events, so wrap it with PAGI::Lifespan to run
+# the application's startup/shutdown hooks.
+my $lifespan = PAGI::Lifespan->new(
+    startup => async sub {
+        say STDERR "[lifespan] Application starting up...";
 
-    # Route based on protocol and path
-    if ($type eq 'websocket' && $path eq '/ws/chat') {
-        return await $ws_handler->($scope, $receive, $send);
-    }
+        # Default rooms are created on module load
+        my $stats = get_stats();
+        say STDERR "[lifespan] Initialized with $stats->{rooms_count} default rooms";
+    },
+    shutdown => async sub {
+        say STDERR "[lifespan] Application shutting down...";
 
-    if ($type eq 'sse' && $path eq '/events') {
-        return await $sse_handler->($scope, $receive, $send);
-    }
+        my $stats = get_stats();
+        say STDERR "[lifespan] Final stats: $stats->{users_online} users, $stats->{messages_total} messages";
+    },
+    app => $router->to_app,
+);
 
-    if ($type eq 'http') {
-        return await $http_handler->($scope, $receive, $send);
-    }
-
-    # Unsupported protocol
-    die "Unsupported scope type: $type";
-});
-
-async sub _handle_lifespan {
-    my ($scope, $receive, $send) = @_;
-
-    while (1) {
-        my $event = await $receive->();
-
-        if ($event->{type} eq 'lifespan.startup') {
-            say STDERR "[lifespan] Application starting up...";
-
-            # Initialize state (default rooms are created on module load)
-            my $stats = get_stats();
-            say STDERR "[lifespan] Initialized with $stats->{rooms_count} default rooms";
-
-            await $send->({ type => 'lifespan.startup.complete' });
-        }
-        elsif ($event->{type} eq 'lifespan.shutdown') {
-            say STDERR "[lifespan] Application shutting down...";
-
-            my $stats = get_stats();
-            say STDERR "[lifespan] Final stats: $stats->{users_online} users, $stats->{messages_total} messages";
-
-            await $send->({ type => 'lifespan.shutdown.complete' });
-            last;
-        }
-    }
-}
+my $app = with_logging($lifespan->to_app);
 
 $app;
 
