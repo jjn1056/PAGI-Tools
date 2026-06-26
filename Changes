@@ -1,6 +1,6 @@
 # Revision history for PAGI-Tools
 
-0.002000
+0.002000 - 2026-06-26
   - Split out of the PAGI distribution into its own distribution (git history
     preserved).
   - New PAGI::Tools module anchors the distribution.
