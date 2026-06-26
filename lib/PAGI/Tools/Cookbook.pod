@@ -4,7 +4,7 @@
 
 =head1 NAME
 
-PAGI::Cookbook - Recipes for Common PAGI Tasks
+PAGI::Tools::Cookbook - Recipes for Common PAGI Tasks
 
 =head1 DESCRIPTION
 
@@ -149,7 +149,7 @@ Route Server-Sent Events by path:
       my $sse = PAGI::SSE->new($scope, $receive, $send);
 
       await $sse->keepalive(30);  # Prevent proxy timeouts
-      await $sse->send_event("Connected at: " . time);
+      await $sse->send_event(data => "Connected at: " . time);
       await $sse->run;  # Wait for disconnect
   });
 
@@ -162,7 +162,7 @@ Route Server-Sent Events by path:
       my $channel = $scope->{path_params}{channel};
 
       await $sse->start;
-      await $sse->send_event("Subscribed to: $channel");
+      await $sse->send_event(data => "Subscribed to: $channel");
 
       # ... streaming logic ...
   });
@@ -418,7 +418,7 @@ SSE handlers receive C<($self, $ctx)>; call C<< $ctx->sse >> for the channel:
       my $sse = $ctx->sse;
 
       await $sse->keepalive(30);
-      await $sse->send_event("Connected at: " . time);
+      await $sse->send_event(data => "Connected at: " . time);
       await $sse->run;
   }
 
@@ -428,19 +428,22 @@ SSE handlers receive C<($self, $ctx)>; call C<< $ctx->sse >> for the channel:
       my $sse = $ctx->sse;
 
       # Access path parameter
-      my $channel = $sse->scope->{'pagi.params'}{channel};
+      my $channel = $sse->path_param('channel');
 
       await $sse->start;
-      await $sse->send_event("Channel: $channel");
+      await $sse->send_event(data => "Channel: $channel");
 
       # ... streaming logic ...
   }
 
   1;
 
-=head3 Lifecycle Hooks
+=head3 Initializing Resources
 
-Override C<on_startup> and C<on_shutdown> for application lifecycle management:
+C<PAGI::Endpoint::Router> calls your C<routes> method once, when the app is
+built, on the instance that lives for the app's lifetime. That makes C<routes>
+the natural place to initialize per-worker resources and seed state: whatever
+you store in C<< $self->state >> is visible to every handler.
 
   package MyApp;
   use parent 'PAGI::Endpoint::Router';
@@ -448,29 +451,12 @@ Override C<on_startup> and C<on_shutdown> for application lifecycle management:
   use warnings;
   use Future::AsyncAwait;
 
-  # Called when application starts
-  async sub on_startup {
-      my ($self) = @_;
-
-      # Initialize resources
-      $self->state->{db} = DBI->connect('dbi:SQLite:dbname=app.db');
-      $self->state->{started_at} = time();
-
-      warn "Application started\n";
-  }
-
-  # Called when application shuts down
-  async sub on_shutdown {
-      my ($self) = @_;
-
-      # Clean up resources
-      $self->state->{db}->disconnect if $self->state->{db};
-
-      warn "Application shut down\n";
-  }
-
   sub routes {
       my ($self, $r) = @_;
+
+      # Initialize resources once, at build time
+      $self->state->{db} = DBI->connect('dbi:SQLite:dbname=app.db');
+      $self->state->{started_at} = time();
 
       $r->get('/' => 'home');
   }
@@ -478,12 +464,12 @@ Override C<on_startup> and C<on_shutdown> for application lifecycle management:
   async sub home {
       my ($self, $ctx) = @_;
 
-      # Access state initialized in on_startup
+      # Access state initialized in routes()
       my $db = $self->state->{db};
       my $uptime = time() - $self->state->{started_at};
 
       return $ctx->json({
-          uptime => $uptime,
+          uptime   => $uptime,
           database => defined($db) ? 'connected' : 'disconnected',
       });
   }
@@ -491,6 +477,23 @@ Override C<on_startup> and C<on_shutdown> for application lifecycle management:
   1;
 
 Note: C<$self-E<gt>state> is per-worker in multi-worker mode. For shared state, use an external store (Redis, database, etc.).
+
+For B<asynchronous> startup and shutdown hooks -- running code on the
+C<lifespan.startup> and C<lifespan.shutdown> protocol events -- wrap the app
+with L<PAGI::Lifespan>, which runs C<startup>/C<shutdown> callbacks around the
+application:
+
+  use PAGI::Lifespan;
+
+  my $app = PAGI::Lifespan->new(
+      startup  => async sub ($state) {
+          $state->{db} = DBI->connect('dbi:SQLite:dbname=app.db');
+      },
+      shutdown => async sub ($state) {
+          $state->{db}->disconnect if $state->{db};
+      },
+      app      => MyApp->to_app,
+  )->to_app;
 
 =head3 Route-Level Middleware with Method Names
 
@@ -640,17 +643,15 @@ Here's a complete working example demonstrating all features:
   use warnings;
   use Future::AsyncAwait;
 
-  async sub on_startup {
-      my ($self) = @_;
+  sub routes {
+      my ($self, $r) = @_;
+
+      # Seed per-worker state at build time
       $self->state->{started} = time();
       $self->state->{users} = [
           { id => 1, name => 'Alice' },
           { id => 2, name => 'Bob' },
       ];
-  }
-
-  sub routes {
-      my ($self, $r) = @_;
 
       # HTTP routes
       $r->get('/' => 'home');
@@ -764,24 +765,20 @@ See C<examples/endpoint-router-demo/> for more examples.
 
 =head2 Session Management
 
-Use L<PAGI::Middleware::Session> for session management:
+Use L<PAGI::Middleware::Session> for session management. The middleware
+populates C<< $scope->{'pagi.session'} >>; the L<PAGI::Session> helper wraps
+that hashref with a convenient (and typo-catching) API.
 
   use strict;
   use warnings;
   use Future::AsyncAwait;
   use PAGI::App::Router;
-  use PAGI::Middleware::Session;
+  use PAGI::Middleware::Builder;
+  use PAGI::Session;
   use PAGI::Request;
   use PAGI::Response;
 
   my $router = PAGI::App::Router->new;
-
-  # Add session middleware
-  $router->use(PAGI::Middleware::Session->new(
-      secret => 'your-secret-key-here',
-      cookie_name => 'session_id',
-      expires => 86400,  # 1 day
-  ));
 
   $router->get('/login' => async sub {
       my ($scope, $receive, $send) = @_;
@@ -789,8 +786,9 @@ Use L<PAGI::Middleware::Session> for session management:
       my $res = $req->response;
 
       # Set session data
-      $req->session->{user_id} = 123;
-      $req->session->{username} = 'alice';
+      my $session = PAGI::Session->new($scope);
+      $session->set(user_id  => 123);
+      $session->set(username => 'alice');
 
       await $res->text('Logged in!')->respond($send);
   });
@@ -800,8 +798,9 @@ Use L<PAGI::Middleware::Session> for session management:
       my $req = PAGI::Request->new($scope, $receive);
       my $res = $req->response;
 
-      # Read session data
-      my $username = $req->session->{username} // 'Guest';
+      # Read session data (the second arg is a default for optional keys)
+      my $session = PAGI::Session->new($scope);
+      my $username = $session->get('username', 'Guest');
 
       await $res->text("Hello, $username!")->respond($send);
   });
@@ -811,13 +810,20 @@ Use L<PAGI::Middleware::Session> for session management:
       my $req = PAGI::Request->new($scope, $receive);
       my $res = $req->response;
 
-      # Clear session
-      $req->session({});
+      # Clear session data
+      PAGI::Session->new($scope)->clear;
 
       await $res->text('Logged out!')->respond($send);
   });
 
-  $router->to_app;
+  # Wrap the router with the session middleware
+  my $app = builder {
+      enable 'Session',
+          secret      => 'your-secret-key-here',
+          cookie_name => 'session_id',
+          expire      => 86400;  # 1 day
+      $router;
+  };
 
 =head2 Basic Authentication
 
@@ -825,19 +831,10 @@ Use L<PAGI::Middleware::Session> for session management:
   use warnings;
   use Future::AsyncAwait;
   use PAGI::App::Router;
-  use PAGI::Middleware::BasicAuth;
+  use PAGI::Middleware::Builder;
   use PAGI::Response;
 
   my $router = PAGI::App::Router->new;
-
-  # Protect routes with Basic Auth
-  $router->use(PAGI::Middleware::BasicAuth->new(
-      realm => 'Admin Area',
-      authenticator => sub {
-          my ($username, $password) = @_;
-          return $username eq 'admin' && $password eq 'secret';
-      },
-  ));
 
   $router->get('/' => async sub {
       my ($scope, $receive, $send) = @_;
@@ -845,7 +842,16 @@ Use L<PAGI::Middleware::Session> for session management:
       await $res->text('Protected content')->respond($send);
   });
 
-  $router->to_app;
+  # Protect every route with Basic Auth
+  my $app = builder {
+      enable 'Auth::Basic',
+          realm         => 'Admin Area',
+          authenticator => sub {
+              my ($username, $password) = @_;
+              return $username eq 'admin' && $password eq 'secret';
+          };
+      $router;
+  };
 
 =head2 Bearer Token (JWT)
 
@@ -853,33 +859,35 @@ Use L<PAGI::Middleware::Session> for session management:
   use warnings;
   use Future::AsyncAwait;
   use PAGI::App::Router;
-  use PAGI::Middleware::Auth::Bearer;
+  use PAGI::Middleware::Builder;
   use PAGI::Request;
   use PAGI::Response;
 
   my $router = PAGI::App::Router->new;
-
-  # Verify JWT tokens
-  $router->use(PAGI::Middleware::Auth::Bearer->new(
-      validate => sub {
-          my ($token) = @_;
-          # Return user data if valid, undef if not
-          return decode_jwt($token);  # Your JWT decode logic
-      },
-  ));
 
   $router->get('/api/me' => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
       my $res = $req->response;
 
-      # User data from validated token
-      my $user = PAGI::Stash->new($req)->get('user');
+      # Claims from the validated token: the middleware stores
+      # { type => 'bearer', token => ..., claims => ... } under 'pagi.auth'
+      my $claims = $scope->{'pagi.auth'}{claims};
 
-      await $res->json({ user => $user })->respond($send);
+      await $res->json({ user => $claims })->respond($send);
   });
 
-  $router->to_app;
+  # Verify Bearer tokens with a custom validator (returns claims or undef).
+  # When the validator returns undef the middleware sends 401 itself, so the
+  # handler above only runs for valid tokens.
+  my $app = builder {
+      enable 'Auth::Bearer',
+          validator => sub {
+              my ($token) = @_;
+              return decode_jwt($token);  # Your JWT decode logic
+          };
+      $router;
+  };
 
 =head1 REAL-TIME PATTERNS
 
@@ -902,7 +910,7 @@ For real-time features with multiple WebSocket clients:
   $router->websocket('/chat/:room' => async sub {
       my ($scope, $receive, $send) = @_;
       my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-      my $room = $scope->{'pagi.params'}{room};
+      my $room = $scope->{path_params}{room};
       my $client_id = $next_id++;
 
       await $ws->accept;
@@ -914,11 +922,11 @@ For real-time features with multiple WebSocket clients:
       $rooms{$room}{$client_id} = $ws;
 
       # Broadcast received messages to all clients in room
-      await $ws->each_text(sub {
+      await $ws->each_text(async sub {
           my ($text) = @_;
           for my $id (keys %{$rooms{$room}}) {
               next if $id == $client_id;  # Don't echo back to sender
-              $rooms{$room}{$id}->try_send_text($text);
+              await $rooms{$room}{$id}->try_send_text($text);
           }
       });
 
@@ -1184,9 +1192,12 @@ See C<examples/background-tasks/> for complete working examples.
       my $res = $req->response;
 
       if ($req->method eq 'POST') {
+          # uploads() returns a Hash::MultiValue keyed by form field name;
+          # ->values gives every uploaded file across all fields
           my $uploads = await $req->uploads;
+          my @files = $uploads->values;
 
-          for my $upload (@$uploads) {
+          for my $upload (@files) {
               my $filename = $upload->filename;
               my $size = $upload->size;
               my $type = $upload->content_type;
@@ -1194,11 +1205,11 @@ See C<examples/background-tasks/> for complete working examples.
               # Save to disk (blocking I/O)
               $upload->move_to('/uploads/' . $filename);
 
-              # Or read content
-              # my $content = $upload->content;
+              # Or read content into memory
+              # my $content = $upload->slurp;
           }
 
-          await $res->json({ uploaded => scalar(@$uploads) })->respond($send);
+          await $res->json({ uploaded => scalar(@files) })->respond($send);
       }
       else {
           await $res->html(<<'HTML')->respond($send);
@@ -1299,8 +1310,8 @@ The C<-M> flag loads modules before C<-e> code runs, like C<perl -M>:
 L<PAGI::Server> supports TLS natively:
 
   pagi-server app.pl --port 443 \
-      --tls-cert /path/to/cert.pem \
-      --tls-key /path/to/key.pem
+      --ssl-cert /path/to/cert.pem \
+      --ssl-key /path/to/key.pem
 
 For development, generate a self-signed certificate:
 
@@ -1308,7 +1319,7 @@ For development, generate a self-signed certificate:
       -days 365 -nodes -subj '/CN=localhost'
 
   pagi-server app.pl --port 3443 \
-      --tls-cert cert.pem --tls-key key.pem
+      --ssl-cert cert.pem --ssl-key key.pem
 
 Then access via C<https://localhost:3443> (browser will warn about self-signed cert).
 

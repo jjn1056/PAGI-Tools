@@ -101,7 +101,7 @@ L<PAGI::App::Router> provides lightweight functional routing:
 
   $router->to_app;
 
-For advanced routing patterns (nested routers, route-level middleware, class-based routing), see L<PAGI::Cookbook>.
+For advanced routing patterns (nested routers, route-level middleware, class-based routing), see L<PAGI::Tools::Cookbook>.
 
 =head1 PART 3: HANDLING REQUESTS
 
@@ -384,12 +384,15 @@ L<PAGI::SSE> simplifies Server-Sent Events:
   my $sse = PAGI::SSE->new($scope, $receive, $send);
   await $sse->start;
 
-  # Send events
-  await $sse->send_event("Hello!");
-  await $sse->send_event("User logged in", event => 'login', id => '42');
+  # Send events (data is a named argument)
+  await $sse->send_event(data => "Hello!");
+  await $sse->send_event(data => "User logged in", event => 'login', id => '42');
 
-  # Send JSON
-  await $sse->send_json({ count => 5 }, event => 'update');
+  # Send JSON with an event name (hashref/arrayref data is auto-encoded)
+  await $sse->send_event(data => { count => 5 }, event => 'update');
+
+  # Or, for a plain JSON message with no event name:
+  await $sse->send_json({ count => 5 });
 
   # Keepalive to prevent proxy timeouts
   await $sse->keepalive(15);
@@ -419,7 +422,7 @@ of a hand-rolled C<while (defined(my $e = await $ctx-E<gt>receive-E<gt>()))> loo
 
   my $reason = await $ctx->run;   # 'disconnect', 'stop', or 'error'
 
-See L<PAGI::Cookbook/"Handling a Mixed Event Stream"> for a fuller example.
+See L<PAGI::Tools::Cookbook/"Handling a Mixed Event Stream"> for a fuller example.
 
 =head1 PART 6: MIDDLEWARE
 
@@ -590,7 +593,7 @@ Middleware executes in order: AccessLog -> CORS -> GZip -> app.
       enable 'CORS', origins => '*';           # Enable CORS
       enable 'SecurityHeaders';                # Add security headers
       enable 'GZip', min_size => 1024;         # Compress responses
-      enable 'ErrorHandler', mode => 'development';  # Pretty errors
+      enable 'ErrorHandler', development => 1;  # Pretty errors
       $router;
   };
 
@@ -628,7 +631,7 @@ Add unique request ID to each request:
 
   enable 'RequestId';  # Adds X-Request-Id header
 
-Access via C<$scope-E<gt>{'pagi.request_id'}>.
+Access via C<$scope-E<gt>{request_id}>.
 
 =item * L<PAGI::Middleware::Runtime>
 
@@ -661,7 +664,7 @@ Add security-related HTTP headers:
 
 Includes:
 
-  X-Frame-Options: DENY
+  X-Frame-Options: SAMEORIGIN
   X-Content-Type-Options: nosniff
   X-XSS-Protection: 1; mode=block
   Referrer-Policy: strict-origin-when-cross-origin
@@ -695,7 +698,7 @@ Server-side sessions with signed cookies:
   enable 'Session',
       secret      => 'your-secret-key',
       cookie_name => 'session',
-      max_age     => 86400;
+      expire      => 86400;
 
 Access via C<$scope-E<gt>{'pagi.session'}>.
 
@@ -710,8 +713,8 @@ Access via C<$scope-E<gt>{'pagi.session'}>.
 Compress responses with gzip:
 
   enable 'GZip',
-      min_size => 1024,               # Only compress if > 1KB
-      types    => ['text/', 'application/json'];
+      min_size   => 1024,             # Only compress if > 1KB
+      mime_types => ['text/', 'application/json'];
 
 =item * L<PAGI::Middleware::ETag>
 
@@ -726,11 +729,11 @@ Returns 304 Not Modified for matching If-None-Match headers.
 Rate limiting with configurable strategies:
 
   enable 'RateLimit',
-      rate   => 100,                  # requests
-      period => 60,                   # seconds
-      by     => sub {                 # key generator
+      requests_per_second => 100,         # token-bucket refill rate
+      burst               => 100,         # bucket capacity (max burst)
+      key_generator       => sub {        # key generator (defaults to client IP)
           my ($scope) = @_;
-          return $scope->{client}[0];  # by IP
+          return $scope->{client}[0];      # by IP
       };
 
 =back
@@ -743,8 +746,12 @@ Rate limiting with configurable strategies:
 
 Catch and format errors:
 
-  enable 'ErrorHandler', mode => 'development';  # Pretty HTML errors
-  enable 'ErrorHandler', mode => 'production';   # JSON errors
+  enable 'ErrorHandler', development => 1;  # Pretty HTML errors with stack traces
+  enable 'ErrorHandler';                    # Production (default): generic errors, no stack leak
+
+C<ErrorHandler> renders C<text/html> by default; set
+C<< content_type => 'application/json' >> (or C<'text/plain'>) to change the
+format.
 
 =back
 
@@ -1035,7 +1042,7 @@ C<builder {}> block, which already returns one).
 
 =item * L<PAGI> - the PAGI specification distribution
 
-=item * L<PAGI::Cookbook> - recipes for common tasks
+=item * L<PAGI::Tools::Cookbook> - recipes for common tasks
 
 =item * L<PAGI::Middleware::Builder>, L<PAGI::App::Router>, L<PAGI::Response>, L<PAGI::Request> - individual module documentation
 
