@@ -3,6 +3,8 @@ package PAGI::Middleware::Session::Store;
 use strict;
 use warnings;
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::Middleware::Session::Store - Base class for async session storage
