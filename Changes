@@ -1,27 +1,60 @@
 # Revision history for PAGI-Tools
 
-  - PAGI::Context - new raw_send accessor returning the raw $send coderef on any
-    context type. The base ->send already is the raw send, but PAGI::Context::SSE
-    overrides ->send with the sse.send convenience; raw_send is the stable,
-    override-proof accessor for the underlying channel.
-
-  - PAGI::App::Router - coderef route middleware can now transform the channel.
-    The $next supplied to a coderef middleware forwards a transformed
-    ($scope, $receive, $send) when the middleware passes one (so a coderef can
-    wrap $receive/$send or replace $scope, at parity with object middleware),
-    while the arg-less $next->() form continues with the inherited channel
-    exactly as before. Previously a coderef's transformed channel was silently
-    ignored. Backward compatible: no existing middleware passes arguments to
-    $next.
-
 0.002000
+  - PAGI::Headers - new ordered, case-insensitive, multi-value header
+    container. Values are opaque bytes passed through untouched (CR/LF/NUL
+    included; wire safety is the server's emission job per the spec) but MUST
+    be defined: add/set/set_default croak on an undef value rather than store a
+    [name, undef] footgun. to_hash returns { Name => last-value } and to_hash(1)
+    returns { Name => [all values] } (values are not comma-joined, unlike
+    HTTP::Headers/Mojo::Headers). PAGI::Response now stores and renders its
+    headers through PAGI::Headers - new remove_header, content_type clearing,
+    ASCII-folded header names, and a writer() that emits a real header arrayref
+    with one authoritative Content-Length and Transfer-Encoding stripped.
+    PAGI::Request->headers() returns a PAGI::Headers clone snapshot.
+  - is_sent now reflects the connection, not the scope. PAGI::Response and
+    PAGI::Context report is_sent from the response-started fact on the
+    pagi.connection object instead of a scope scalar, so it survives the shallow
+    scope copy middleware makes (a cloned scope no longer loses the flag).
+    writer()'s single-takeover guard is restored as a per-response instance
+    flag, independent of that fact. New PAGI::Test::ConnectionState models the
+    full pagi.connection double (disconnect + response_started); PAGI::Test::Client
+    seeds it and drives response_started from the send stream.
+  - PAGI::Response charset now follows the body. text/html/send append
+    "; charset=utf-8" to a charset-less Content-Type (RFC 7303); json() emits
+    a bare "application/json" (RFC 8259 defines no charset for JSON). An explicit
+    charset set by the caller is never overridden.
+  - PAGI::Context conveniences: $ctx->text/html/json/redirect response shorthands
+    on Context::HTTP; assert_http/assert_websocket/assert_sse type guards;
+    on_default catch-all on the event dispatcher (and run() now throws
+    synchronously on re-entry); and raw_send, a stable accessor for the
+    underlying $send on any context type (Context::SSE overrides ->send with the
+    sse.send convenience, so raw_send is the override-proof channel).
+  - Backpressure and lifecycle helpers: on_complete (mirrors on_disconnect) on
+    PAGI::Request and PAGI::Context; buffered_amount / high_water_mark /
+    low_water_mark accessors; on_high_water / on_drain / is_writable controls;
+    and PAGI::WebSocket->deny() for the denial-response extension.
+  - PAGI::App::Router coderef route middleware can transform the channel. A
+    coderef that calls $next->($scope, $receive, $send) now forwards the
+    transformed channel (parity with object middleware); the arg-less $next->()
+    continues with the inherited channel. Previously a coderef's transformed
+    channel was silently ignored.
+  - PAGI::Lifespan reports shutdown-handler failures instead of swallowing them.
+  - The canonical scope-adding middleware (Cookie, ContentNegotiation, FormBody,
+    JSONBody, MethodOverride, Rewrite, Session) route their scope additions
+    through the modify_scope helper (behavior-preserving), whose POD now explains
+    the downward-only shallow-copy model.
+  - Docs: this distribution's recipes are now PAGI::Tools::Cookbook (the bare
+    PAGI::Cookbook name belongs to the protocol cookbook in the PAGI dist); the
+    Tutorial and Cookbook examples are corrected against the current API; and
+    the chat-showcase example routes via PAGI::App::Router + PAGI::Lifespan.
   - PAGI::Response->has_body_source - public predicate reporting whether a body
     source (buffered body, file, or stream callback) has been registered. A
     build-phase intent signal (true for a registered-but-unrun stream and for
     intentional empty bodies; independent of is_sent). Lets framework authors
     detect "did the handler produce a response?" without reaching into the
     private _body/_file/_stream slots. Documented in PAGI::Response and the new
-    PAGI::Cookbook "Response State & Lifecycle" section.
+    PAGI::Tools::Cookbook "Response State & Lifecycle" section.
   - The PAGI application toolkit (PAGI::Middleware::*, PAGI::App::*,
     PAGI::Endpoint::*, PAGI::Request/Response/Context, PAGI::Test::*)
     split out of the PAGI distribution into its own distribution. Git
