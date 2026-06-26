@@ -79,7 +79,7 @@ protocol specification lives in the `PAGI` distribution.
 
 [PAGI::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATutorial) (the protocol tutorial, in the `PAGI` distribution),
 [PAGI::Tools::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ATutorial) (this distribution's helpers guide),
-[PAGI::Cookbook](https://metacpan.org/pod/PAGI%3A%3ACookbook), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
+[PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook) (this distribution's recipes), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
 [PAGI::Server::Runner](https://metacpan.org/pod/PAGI%3A%3AServer%3A%3ARunner) - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
 

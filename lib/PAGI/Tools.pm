@@ -101,7 +101,7 @@ protocol specification lives in the C<PAGI> distribution.
 
 L<PAGI::Tutorial> (the protocol tutorial, in the C<PAGI> distribution),
 L<PAGI::Tools::Tutorial> (this distribution's helpers guide),
-L<PAGI::Cookbook>, L<PAGI::Spec>,
+L<PAGI::Tools::Cookbook> (this distribution's recipes), L<PAGI::Spec>,
 L<PAGI::Server::Runner> - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
 
