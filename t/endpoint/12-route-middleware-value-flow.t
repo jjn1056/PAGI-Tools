@@ -70,4 +70,12 @@ subtest 'standard middleware in a route array is rejected' => sub {
         qr/mount or group/, 'coderef route middleware is rejected with guidance';
 };
 
+subtest 'response is sent exactly once (no double-respond)' => sub {
+    my $app = T::MW->to_app;
+    my ($send, $events) = recorder();
+    $app->({ type => 'http', method => 'GET', path => '/decorate' }, sub { Future->done }, $send)->get;
+    my @starts = grep { defined $_->{type} && $_->{type} eq 'http.response.start' } @$events;
+    is scalar(@starts), 1, 'exactly one http.response.start event (no double-respond)';
+};
+
 done_testing;
