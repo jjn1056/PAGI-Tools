@@ -497,9 +497,9 @@ Route middleware are value-flow: C<$next-E<gt>()> returns the handler's
 L<PAGI::Response>, which the middleware may decorate (C<$res-E<gt>header(...)>),
 observe, or replace by returning a different response. A middleware must
 B<return> a response (its own, or the one from C<$next>); forgetting to return
-is a loud error. Standard event middleware (L<PAGI::Middleware> instances and
-C<($scope, $receive, $send, $next)> coderefs) are applied at the mount or group
-level, where they wrap the whole endpoint.
+is a loud error. Standard event middleware (L<PAGI::Middleware> instances and factory coderefs of
+the form C<sub { my ($app) = @_; async sub { my ($scope, $receive, $send) = @_; ... } }>)
+are applied at the mount or group level, where they wrap the whole endpoint.
 
     # Handler in subrouter - sees stash from parent middleware
     async sub get_profile {
