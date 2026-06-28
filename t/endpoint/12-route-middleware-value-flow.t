@@ -30,6 +30,18 @@ use Future::AsyncAwait;
   async sub show { my ($self, $ctx) = @_; return $ctx->response->text('ok') }
 }
 
+# A router that passes middleware to a WebSocket route — must be rejected.
+{ package T::BadWsMW; use parent 'PAGI::Endpoint::Router'; use Future::AsyncAwait;
+  sub routes { my ($self, $r) = @_; $r->websocket('/ws' => ['some_mw'] => 'ws_handler'); }
+  async sub ws_handler { }
+}
+
+# A router that passes middleware to an SSE route — must be rejected.
+{ package T::BadSseMW; use parent 'PAGI::Endpoint::Router'; use Future::AsyncAwait;
+  sub routes { my ($self, $r) = @_; $r->sse('/sse' => ['some_mw'] => 'sse_handler'); }
+  async sub sse_handler { }
+}
+
 sub recorder { my @e; my $s = sub { push @e, $_[0]; Future->done }; return ($s, \@e) }
 sub headers_of { my $e = shift; return map { lc($_->[0]) => $_->[1] } @{$e->{headers}} }
 
@@ -68,6 +80,18 @@ subtest 'middleware that forgets to return is a loud error' => sub {
 subtest 'standard middleware in a route array is rejected' => sub {
     like dies { T::BadMW->to_app },
         qr/mount or group/, 'coderef route middleware is rejected with guidance';
+};
+
+subtest 'middleware on a WebSocket route is rejected loudly' => sub {
+    like dies { T::BadWsMW->to_app },
+        qr/WebSocket routes do not support route-level middleware/,
+        'ws route-level middleware dies with clear guidance';
+};
+
+subtest 'middleware on an SSE route is rejected loudly' => sub {
+    like dies { T::BadSseMW->to_app },
+        qr/SSE routes do not support route-level middleware/,
+        'sse route-level middleware dies with clear guidance';
 };
 
 subtest 'response is sent exactly once (no double-respond)' => sub {

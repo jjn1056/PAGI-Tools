@@ -180,6 +180,11 @@ sub websocket {
     my ($self, $path, @rest) = @_;
 
     my ($middleware, $handler) = $self->_parse_route_args(@rest);
+
+    die "WebSocket routes do not support route-level middleware; "
+      . "apply event middleware at the mount or group level\n"
+        if @$middleware;
+
     my $wrapped = $self->_wrap_websocket_handler($handler);
 
     $self->{router}->websocket($path, $wrapped);
@@ -224,6 +229,11 @@ sub sse {
     my ($self, $path, @rest) = @_;
 
     my ($middleware, $handler) = $self->_parse_route_args(@rest);
+
+    die "SSE routes do not support route-level middleware; "
+      . "apply event middleware at the mount or group level\n"
+        if @$middleware;
+
     my $wrapped = $self->_wrap_sse_handler($handler);
 
     $self->{router}->sse($path, $wrapped);
