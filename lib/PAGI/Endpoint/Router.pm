@@ -138,12 +138,7 @@ sub _build_value_app {
         my $next = async sub { await $handler_code->($ctx) };
         for my $m (reverse @mw) {
             my $inner = $next;
-            $next = async sub {
-                my $res = await $m->($ctx, $inner);
-                die "route middleware did not return a response\n"
-                    unless Scalar::Util::blessed($res) && $res->can('respond');
-                return $res;
-            };
+            $next = async sub { await $m->($ctx, $inner) };
         }
 
         await $ctx->respond(await $next->());
@@ -285,7 +280,10 @@ sub _resolve_value_mw {
             or die "No such middleware method: $mw";
         return async sub {
             my ($ctx, $next) = @_;
-            await $endpoint->$method($ctx, $next);
+            my $res = await $endpoint->$method($ctx, $next);
+            die "route middleware '$mw' did not return a response\n"
+                unless Scalar::Util::blessed($res) && $res->can('respond');
+            return $res;
         };
     }
 

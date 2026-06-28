@@ -70,11 +70,12 @@ subtest 'middleware observes the handler response' => sub {
     is $h{'x-seen'}, 201, 'middleware saw the handler status on the way up';
 };
 
-subtest 'middleware that forgets to return is a loud error' => sub {
+subtest 'middleware that forgets to return is a loud error - names the method' => sub {
     my $app = T::MW->to_app;
     my ($send, $events) = recorder();
-    like dies { $app->({ type => 'http', method => 'GET', path => '/forgot' }, sub { Future->done }, $send)->get },
-        qr/did not return a response/, 'forgot-to-return croaks';
+    my $err = dies { $app->({ type => 'http', method => 'GET', path => '/forgot' }, sub { Future->done }, $send)->get };
+    like $err, qr/did not return a response/, 'forgot-to-return croaks';
+    like $err, qr/route middleware 'bad' did not return a response/, 'error names the offending method';
 };
 
 subtest 'standard middleware in a route array is rejected' => sub {
