@@ -21,10 +21,12 @@ async sub handle {
     my ($self, $ctx) = @_;
     my $sse = $ctx->sse;
 
-    # Configure keepalive if specified
+    # Configure keepalive if specified. keepalive() is async (it sends an
+    # sse.keepalive event); await it so the send completes rather than being a
+    # fire-and-forget Future (PAGI applications must await all $send calls).
     my $keepalive = $self->keepalive_interval;
     if ($keepalive > 0) {
-        $sse->keepalive($keepalive);
+        await $sse->keepalive($keepalive);
     }
 
     # Register disconnect callback
