@@ -187,10 +187,12 @@ Idempotent — only sends C<sse.start> once.
 =head2 close
 
     await $ctx->close;
+    await $ctx->close(reason => 'job_complete');
 
-Marks the connection as closed and runs C<on_close> callbacks. Returns a Future
-and is asynchronous, so C<await> it -- this ensures asynchronous C<on_close>
-callbacks run to completion before C<close> resolves.
+Ends the SSE stream by sending an C<sse.close> event, then runs C<on_close>
+callbacks. The optional C<reason> is server-side metadata only -- passed to
+C<on_close> but B<never> written to the wire. Delegates to L<PAGI::SSE/close>;
+returns a Future and is asynchronous, so C<await> it.
 
 =head1 SEND METHODS
 
