@@ -541,13 +541,13 @@ async sub _run_close_callbacks {
 }
 
 # Close the connection
-sub close {
+async sub close {
     my ($self) = @_;
 
     return $self if $self->is_closed;
 
     $self->_set_closed;
-    $self->_run_close_callbacks->get;
+    await $self->_run_close_callbacks;
 
     return $self;
 }
@@ -908,9 +908,11 @@ Idempotent - only sends sse.start once.
 
 =head2 close
 
-    $sse->close;
+    await $sse->close;
 
-Marks connection as closed and runs on_close callbacks.
+Marks the connection as closed and runs C<on_close> callbacks. Returns a Future
+and is asynchronous, so C<await> it -- this ensures asynchronous C<on_close>
+callbacks run to completion before C<close> resolves.
 
 =head2 run
 

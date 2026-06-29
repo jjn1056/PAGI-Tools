@@ -186,9 +186,11 @@ Idempotent — only sends C<sse.start> once.
 
 =head2 close
 
-    $ctx->close;
+    await $ctx->close;
 
-Marks connection as closed and runs on_close callbacks.
+Marks the connection as closed and runs C<on_close> callbacks. Returns a Future
+and is asynchronous, so C<await> it -- this ensures asynchronous C<on_close>
+callbacks run to completion before C<close> resolves.
 
 =head1 SEND METHODS
 
