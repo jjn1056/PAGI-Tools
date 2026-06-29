@@ -183,26 +183,29 @@ Apply middleware to specific routes by passing an arrayref:
   my $router = PAGI::App::Router->new;
 
   # Define middleware
-  my $auth_mw = async sub {
-      my ($scope, $receive, $send, $next) = @_;
+  my $auth_mw = sub {
+      my ($app) = @_;
+      async sub {
+          my ($scope, $receive, $send) = @_;
 
-      # Check authorization
-      my $token = '';
-      for my $h (@{$scope->{headers}}) {
-          if (lc($h->[0]) eq 'authorization') {
-              $token = $h->[1];
-              last;
+          # Check authorization
+          my $token = '';
+          for my $h (@{$scope->{headers}}) {
+              if (lc($h->[0]) eq 'authorization') {
+                  $token = $h->[1];
+                  last;
+              }
           }
-      }
 
-      unless ($token eq 'Bearer secret123') {
-          my $res = PAGI::Response->new($scope);
-          await $res->status(401)->json({ error => 'Unauthorized' })->respond($send);
-          return;  # Don't call $next->()
-      }
+          unless ($token eq 'Bearer secret123') {
+              my $res = PAGI::Response->new($scope);
+              await $res->status(401)->json({ error => 'Unauthorized' })->respond($send);
+              return;  # Don't call $app->()
+          }
 
-      # Authorized - continue to handler
-      await $next->();
+          # Authorized - continue to handler
+          await $app->($scope, $receive, $send);
+      };
   };
 
   # Apply middleware to specific routes
@@ -213,10 +216,13 @@ Apply middleware to specific routes by passing an arrayref:
   });
 
   # Multiple middleware
-  my $log_mw = async sub {
-      my ($scope, $receive, $send, $next) = @_;
-      warn "Request: $scope->{method} $scope->{path}\n";
-      await $next->();
+  my $log_mw = sub {
+      my ($app) = @_;
+      async sub {
+          my ($scope, $receive, $send) = @_;
+          warn "Request: $scope->{method} $scope->{path}\n";
+          await $app->($scope, $receive, $send);
+      };
   };
 
   $router->post('/admin/users' => [$log_mw, $auth_mw] => async sub {
@@ -255,10 +261,13 @@ Use C<mount()> to attach sub-applications or routers at a prefix:
   $main_router->mount('/api' => $api_router);
 
   # Mount with middleware (applies to all sub-routes)
-  my $cors_mw = async sub {
-      my ($scope, $receive, $send, $next) = @_;
-      # Add CORS headers...
-      await $next->();
+  my $cors_mw = sub {
+      my ($app) = @_;
+      async sub {
+          my ($scope, $receive, $send) = @_;
+          # Add CORS headers...
+          await $app->($scope, $receive, $send);
+      };
   };
 
   $main_router->mount('/api' => [$cors_mw] => $api_router);
