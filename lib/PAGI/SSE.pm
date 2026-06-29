@@ -220,6 +220,11 @@ sub _set_state {
 sub _set_closed {
     my ($self) = @_;
     $self->{_state} = 'closed';
+
+    # Wake a parked run() (which races this future against $receive) so a close
+    # from deep in a helper actually ends the stream.
+    $self->{_closed_future}->done
+        if $self->{_closed_future} && !$self->{_closed_future}->is_ready;
 }
 
 # Start the SSE stream
@@ -542,9 +547,19 @@ async sub _run_close_callbacks {
 
 # Close the connection
 async sub close {
-    my ($self) = @_;
+    my ($self, %opts) = @_;
 
     return $self if $self->is_closed;
+
+    # Record the reason so on_close callbacks (and the server access log) see it.
+    $self->{_disconnect_reason} //= $opts{reason} // 'app_closed';
+
+    # Tell the server to end the stream now (sse.close). The reason is
+    # server-side only and is never written to the wire.
+    await $self->{send}->({
+        type => 'sse.close',
+        (defined $opts{reason} ? (reason => $opts{reason}) : ()),
+    });
 
     $self->_set_closed;
     await $self->_run_close_callbacks;
@@ -558,12 +573,19 @@ async sub run {
 
     await $self->start unless $self->is_started;
 
+    # Race incoming events against an explicit close() (which resolves this
+    # future via _set_closed), so run() returns when the stream is closed from
+    # anywhere -- not only when the client disconnects.
+    $self->{_closed_future} //= Future->new;
+
     while (!$self->is_closed) {
-        my $event = eval { await $self->{receive}->() };
+        my $event = eval { await Future->wait_any($self->{receive}->(), $self->{_closed_future}) };
         if (my $err = $@) {
             warn "PAGI::SSE receive error: $err";
             last;
         }
+
+        last if $self->is_closed;   # woken by close()
 
         my $type = $event->{type} // '';
 
@@ -909,10 +931,16 @@ Idempotent - only sends sse.start once.
 =head2 close
 
     await $sse->close;
+    await $sse->close(reason => 'job_complete');
 
-Marks the connection as closed and runs C<on_close> callbacks. Returns a Future
-and is asynchronous, so C<await> it -- this ensures asynchronous C<on_close>
-callbacks run to completion before C<close> resolves.
+Ends the SSE stream by sending an C<sse.close> event, then runs C<on_close>
+callbacks. The optional C<reason> is server-side metadata only (logging,
+metrics, tracing): it is passed to C<on_close> callbacks but is B<never> written
+to the wire -- SSE has no close frame, so to signal anything to the client send
+an ordinary C<send_event> before closing. Calling C<close> also wakes a parked
+L</run>, so you can end the stream from deep in a helper. Returns a Future and is
+asynchronous, so C<await> it -- this ensures the C<sse.close> send and any
+asynchronous C<on_close> callbacks complete before C<close> resolves.
 
 =head2 run
 
