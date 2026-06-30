@@ -1064,18 +1064,47 @@ Send a message. Dies if connection is closed.
 =head2 try_send_text, try_send_bytes, try_send_json
 
     my $sent = await $ws->try_send_json($data);
-    if (!$sent) {
-        # Send did not happen (already closed, or the send errored)
-        skip_recipient($id);
-    }
 
-Returns true if the send happened, false if the socket is already closed or the
-send raised. Never throws. A false return does B<not> mutate connection state or
-fabricate a close code — a failed send is not a disconnect (per the spec a send
-after close is a silent no-op). Detect an actual disconnect through the
-C<websocket.disconnect> receive event, not the result of a send. Useful for
-broadcasting to multiple clients, where one bad recipient must not abort the loop
-or corrupt the shared connection's state.
+B<Best-effort send.> Attempts the send and B<never throws>, returning a boolean.
+Intended for broadcast-style loops -- "send to many, skip the failures" -- where
+one bad recipient must not abort the loop or corrupt shared connection state (a
+failed send leaves C<is_closed>/C<close_code> untouched).
+
+B<The boolean is a weak signal; do not treat it as a delivery receipt:>
+
+=over 4
+
+=item *
+
+A B<false> return means the send definitely did not happen -- the socket is
+already known-closed, or the underlying send raised. It tells you I<that> it
+failed, not I<why>.
+
+=item *
+
+A B<true> return does B<not> guarantee delivery. Per the spec, a send to a peer
+that has disconnected is a silent no-op, so if the client has vanished but the
+server has not yet surfaced the C<websocket.disconnect> event, the send no-ops
+and this still returns true. "Sent" means "the send call did not fail," not "the
+client received it."
+
+=back
+
+If you need more than best-effort, reach for the right tool instead of inspecting
+this return value:
+
+=over 4
+
+=item * B<Why did it fail?> Use C<send_text>/C<send_bytes>/C<send_json>, which
+throw the underlying error.
+
+=item * B<Is the peer still there?> Use C<is_connected> (or the
+C<send_*_if_connected> variants) and react to the C<websocket.disconnect> event.
+
+=item * B<Is the connection backpressured?> Use C<is_writable> /
+C<buffered_amount> and the watermark / C<on_drain> controls.
+
+=back
 
 =head2 send_text_if_connected, send_bytes_if_connected, send_json_if_connected
 
