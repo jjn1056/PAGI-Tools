@@ -1,10 +1,6 @@
 # Revision history for PAGI-Tools
 
 0.002001
-  - HEAD requests no longer ship a response body. Endpoint::HTTP answers HEAD
-    via the GET handler; it now puts the response in head mode so it emits
-    GET's headers (incl. Content-Length) with an empty body -- correct without
-    requiring Middleware::Head. New public PAGI::Response->head/is_head.
   - PAGI::WebSocket->deny() no longer records the HTTP denial status as a
     WebSocket close code; close_code is undef after an HTTP denial (a denial
     sends a response, not a close frame). The bare-403 fallback still reports

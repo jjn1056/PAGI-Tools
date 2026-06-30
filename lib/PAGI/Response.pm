@@ -526,21 +526,6 @@ Set body to raw bytes without any encoding. Use for binary data or pre-encoded
 content. Accepts trailing options (C<status>, C<content_type>, C<headers>).
 Returns C<$self>.
 
-=head2 head, is_head
-
-    $res->head(1);          # enable HEAD mode
-    $res->head(0);          # disable
-    my $bool = $res->is_head;
-
-Puts the response in B<HEAD mode>: C<respond> emits C<http.response.start> with
-the normal headers (including the C<Content-Length> the body would have
-produced) but a single empty C<http.response.body>, skipping the real
-body/file/stream. Use it to answer a HEAD request from a response built as if
-for GET. C<PAGI::Endpoint::HTTP> sets this automatically when a HEAD request
-falls back to the C<get> handler, so an endpoint is correct without
-L<PAGI::Middleware::Head> in the stack. C<head> returns C<$self>; C<is_head>
-returns 0 or 1.
-
 =head2 stream
 
     $res->stream(async sub {
@@ -1168,10 +1153,6 @@ async sub respond {
             status  => $self->status,
             headers => $self->_render_headers(undef),
         });
-        if ($self->{_head}) {
-            await $send->({ type => 'http.response.body', body => '', more => 0 });
-            return;
-        }
         my $writer = PAGI::Response::Writer->new($send);
         await $self->{_stream}->($writer);
         await $writer->close() unless $writer->is_closed;
@@ -1186,10 +1167,6 @@ async sub respond {
             status  => $self->status,
             headers => $self->_render_headers(undef),
         });
-        if ($self->{_head}) {
-            await $send->({ type => 'http.response.body', body => '', more => 0 });
-            return;
-        }
         my $body_event = {
             type => 'http.response.body',
             file => $fd->{path},
@@ -1206,10 +1183,6 @@ async sub respond {
         status  => $self->status,
         headers => $self->_render_headers(length $body),
     });
-    if ($self->{_head}) {
-        await $send->({ type => 'http.response.body', body => '', more => 0 });
-        return;
-    }
     await $send->({ type => 'http.response.body', body => $body, more => 0 });
     return;
 }
@@ -1277,20 +1250,6 @@ sub send_raw {
     $self->_apply_opts(%opts);
     return $self;
 }
-
-# HEAD mode: respond() emits http.response.start with the normal headers
-# (including the Content-Length the body would have produced) but an empty
-# body, skipping the real body/file/stream. Set by Endpoint::HTTP when a HEAD
-# request falls back to the GET handler, so an Endpoint is correct standalone
-# (no Middleware::Head required).
-sub head {
-    my ($self, $v) = @_;
-    $self = $self->_self_or_new;
-    $self->{_head} = defined $v ? ($v ? 1 : 0) : 1;
-    return $self;
-}
-
-sub is_head { $_[0]->{_head} ? 1 : 0 }
 
 sub send {
     my ($proto, $body, %opts) = @_;
