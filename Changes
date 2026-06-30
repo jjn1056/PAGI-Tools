@@ -1,6 +1,18 @@
 # Revision history for PAGI-Tools
 
 0.002001
+  - PAGI::WebSocket->deny() no longer records the HTTP denial status as a
+    WebSocket close code; close_code is undef after an HTTP denial (a denial
+    sends a response, not a close frame). The bare-403 fallback still reports
+    1008.
+  - PAGI::WebSocket try_send_text/bytes/json no longer fabricate a 1006
+    "Connection lost" close (and no longer mark the socket closed) when a send
+    errors. A failed send returns false without mutating connection state; a
+    real disconnect is still detected via the websocket.disconnect event.
+  - Docs: PAGI::SSE scope caching described accurately (cached while
+    referenced via a weak ref, not a guaranteed singleton);
+    PAGI::Request::Negotiate content-negotiation example reads the Accept
+    header through PAGI::Request instead of the (fatal) $scope->{headers}{...}.
   - REMOVED PAGI::Middleware::WebSocket::Compression. permessage-deflate
     (RFC 7692) is a WebSocket framing-layer feature -- a compressed message is
     signalled by the RSV1 frame bit, which only the server's framing layer can
