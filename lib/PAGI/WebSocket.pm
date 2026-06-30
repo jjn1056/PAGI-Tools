@@ -563,7 +563,12 @@ async sub receive {
             return undef;
         }
 
-        # Skip connect events - they're handled by accept()
+        # websocket.connect is a handshake event, not application data, so it is
+        # filtered out of the message stream here. PAGI's handshake contract: the
+        # server sends websocket.connect and waits for the app's reply; the app
+        # replies by sending accept()/close(). The app does not need to consume
+        # the connect event itself — this filter makes a stray one a no-op rather
+        # than surfacing it as a message. See accept() for the contract.
         next if $event->{type} eq 'websocket.connect';
 
         return $event;
@@ -956,6 +961,17 @@ C<< $ws->query($name, raw => 1) >>.
 
 Accepts the WebSocket connection. Optionally specify a subprotocol
 to use and additional response headers.
+
+B<Handshake contract.> The server sends a C<websocket.connect> event and waits
+for the application's reply before completing the handshake; the reply is
+C<accept> (this method) or C<close>/C<deny>. The application does B<not> need to
+receive the C<websocket.connect> event itself — C<accept> sends the reply
+directly, and any C<websocket.connect> in the receive stream is filtered out by
+L</receive> rather than surfaced as a message. This matches ASGI, whose
+normative requirements bind only the server (the application is never required
+to consume C<connect> before accepting); the reference server, RFC 6455, and
+other frameworks (e.g. Mojolicious, which auto-upgrades) impose no such app-side
+ordering either.
 
 =head2 close
 
