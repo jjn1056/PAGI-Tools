@@ -419,7 +419,11 @@ async sub deny {
         more => 0,
     });
 
-    $self->_set_closed($status, '');
+    # An HTTP denial sends a response, not a WebSocket close frame — there is no
+    # RFC6455 close code, so mark closed without recording one (close_code stays
+    # undef). The bare-403 fallback above DID send a real close frame and keeps
+    # its 1008 via _set_closed.
+    $self->{_state} = 'closed';
     return $self;
 }
 
@@ -1017,7 +1021,10 @@ See L<PAGI::Spec::Www/"WebSocket Denial Response">.
     my $code = $ws->close_code;        # 1000, 1001, etc.
     my $reason = $ws->close_reason;    # 'Normal closure'
 
-Available after connection closes. Defaults: code=1005, reason=''.
+Available after connection closes. A real close frame defaults to code=1005,
+reason=''. After an HTTP denial via C<deny> on a denial-response-capable server,
+C<close_code> is C<undef>: a denial sends an HTTP response, not a WebSocket
+close frame, so there is no RFC6455 close code.
 
 =head2 buffered_amount, high_water_mark, low_water_mark
 
