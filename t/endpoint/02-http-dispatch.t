@@ -66,13 +66,17 @@ subtest 'returns 405 for unimplemented method' => sub {
     is($sent->[0]{status}, 405, '405 status for unimplemented');
 };
 
-subtest 'HEAD dispatches to get if no head method' => sub {
+subtest 'HEAD dispatches to get but ships no body' => sub {
     my ($ctx, $sent) = $make_ctx->('HEAD');
     my $endpoint = TestEndpoint->new;
 
     $endpoint->dispatch($ctx)->get;
 
-    is($sent->[1]{body}, 'GET response', 'HEAD falls back to GET');
+    # HEAD routes to the GET handler (so Content-Length reflects the GET body)
+    # but the body itself is suppressed.
+    my %h = map { lc($_->[0]) => $_->[1] } @{ $sent->[0]{headers} // [] };
+    is($h{'content-length'}, length('GET response'), 'Content-Length from the GET body');
+    is($sent->[1]{body}, '', 'HEAD response carries no body');
 };
 
 done_testing;

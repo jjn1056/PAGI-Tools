@@ -42,9 +42,12 @@ async sub dispatch {
         my $allow = join(', ', $self->allowed_methods);
         $res = $ctx->response->header('Allow', $allow)->empty;
     }
-    # HEAD falls back to GET if not explicitly defined
+    # HEAD falls back to GET if not explicitly defined. Put the response in head
+    # mode so it ships GET's headers (incl. Content-Length) but an empty body —
+    # correct without requiring Middleware::Head in the stack.
     elsif ($http_method eq 'head' && !$self->can('head') && $self->can('get')) {
         $res = await $self->get($ctx);
+        $res->head(1) if blessed($res) && $res->can('head');
     }
     # Dispatch to the appropriate method handler
     elsif ($self->can($http_method)) {
