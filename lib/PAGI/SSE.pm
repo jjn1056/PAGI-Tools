@@ -828,11 +828,16 @@ Creates a new SSE wrapper. Requires:
 
 Dies if scope type is not 'sse'.
 
-B<Singleton pattern:> The SSE object is cached in C<< $scope->{'pagi.sse'} >>.
-If you call C<new()> multiple times with the same scope, you get the same
-SSE object back. This ensures consistent state (is_started, is_closed,
-callbacks) across multiple code paths that may create SSE objects from
-the same scope.
+B<Cached per scope (while referenced):> The SSE object is cached in
+C<< $scope->{'pagi.sse'} >>, so calling C<new()> again with the same scope
+returns the B<same object> — preserving state (is_started, is_closed,
+callbacks) across code paths that build an SSE object from the same scope —
+B<as long as you hold a strong reference to it>. The cache is deliberately
+B<weak> (to avoid a C<< $scope >> <-> SSE reference cycle), so it is B<not> a
+guaranteed singleton: if every strong reference is dropped the object may be
+garbage-collected, and a later C<new()> will build a fresh one with reset
+state. In normal use a handler keeps C<$sse> alive for the life of the
+connection, so this does not arise.
 
 =head1 SCOPE ACCESSORS
 

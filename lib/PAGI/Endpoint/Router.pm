@@ -74,7 +74,8 @@ package PAGI::Endpoint::Router::RouteBuilder;
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use Scalar::Util qw(blessed);
+use Carp qw(croak);
+use PAGI::Utils qw(is_response);
 
 sub new {
     my ($class, $endpoint, $router) = @_;
@@ -156,8 +157,8 @@ sub _resolve_handler {
         return async sub {
             my ($ctx) = @_;
             my $res = await $endpoint->$method($ctx);
-            die "handler did not return a response\n"
-                unless Scalar::Util::blessed($res) && $res->can('respond');
+            croak "handler did not return a response"
+                unless is_response($res);
             return $res;
         };
     }
@@ -165,8 +166,8 @@ sub _resolve_handler {
     return async sub {
         my ($ctx) = @_;
         my $res = await $handler->($ctx);
-        die "handler did not return a response\n"
-            unless Scalar::Util::blessed($res) && $res->can('respond');
+        croak "handler did not return a response"
+            unless is_response($res);
         return $res;
     };
 }
@@ -281,8 +282,8 @@ sub _resolve_value_mw {
         return async sub {
             my ($ctx, $next) = @_;
             my $res = await $endpoint->$method($ctx, $next);
-            die "route middleware '$mw' did not return a response\n"
-                unless Scalar::Util::blessed($res) && $res->can('respond');
+            croak "route middleware '$mw' did not return a response"
+                unless is_response($res);
             return $res;
         };
     }
