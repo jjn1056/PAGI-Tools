@@ -1,6 +1,12 @@
 # Revision history for PAGI-Tools
 
 0.002001
+  - PAGI::SSE / PAGI::Context::SSE: add is_connected, derived from the SSE
+    wrapper's own state machine (true while started and not closed), mirroring
+    PAGI::WebSocket. Context::SSE::is_connected overrides the base method, which
+    reads pagi.connection (not applicable to sse) and therefore wrongly reported
+    a live stream as disconnected. Like the WebSocket counterpart it is "not
+    falsely stale" rather than a live network probe.
   - PAGI::App::Router: an unmatched SSE or WebSocket route now returns a real
     404 instead of crashing the connection. The 404 is emitted with the event
     family that matches the scope -- sse.http.response.* on SSE and
