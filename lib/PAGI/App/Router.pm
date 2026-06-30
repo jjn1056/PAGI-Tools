@@ -788,6 +788,10 @@ scopes. This matters because those scopes reject a plain C<http.response.*>
 before a stream or handshake begins, so an unmatched SSE or WebSocket route
 returns a real 404 instead of crashing the connection.
 
+The C<sse.http.response.*> decline events require a server that implements them
+(L<PAGI::Server> 0.002005 or later); the C<websocket.http.response.*> denial is
+the long-standing WebSocket denial-response extension.
+
 =head1 OPTIONS
 
 =over 4

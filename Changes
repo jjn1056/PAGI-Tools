@@ -1,6 +1,21 @@
 # Revision history for PAGI-Tools
 
-0.002001
+0.002001 - 2026-06-30
+  - PAGI::Endpoint / PAGI::Endpoint::Router: route-level event middleware is now
+    spec-pure factory form, composed at build time. The vestigial call() and the
+    old 4-arg ($scope, $receive, $send, $next) middleware form are removed; the
+    endpoint owns the value-flow chain and responds at the framework boundary
+    (await $next->() returns the handler's response value). WS/SSE route-level
+    middleware now fail loudly (unsupported), and a value-flow non-response error
+    names the offending method.
+  - PAGI::SSE: close() now sends an explicit sse.close event (with an optional
+    server-side reason) and wakes a parked run(); close() is async so on_close
+    callbacks run to completion.
+  - PAGI::Endpoint::SSE: await keepalive() so the sse.keepalive event is actually
+    emitted on a fully-async server.
+  - PAGI::Utils::is_response: one predicate for "did the handler return a
+    response?", shared by the endpoint and router dispatch paths so the
+    diagnostics stay consistent.
   - PAGI::SSE / PAGI::Context::SSE: add is_connected, derived from the SSE
     wrapper's own state machine (true while started and not closed), mirroring
     PAGI::WebSocket. Context::SSE::is_connected overrides the base method, which
@@ -18,7 +33,10 @@
   - Docs: PAGI::SSE scope caching described accurately (cached while
     referenced via a weak ref, not a guaranteed singleton);
     PAGI::Request::Negotiate content-negotiation example reads the Accept
-    header through PAGI::Request instead of the (fatal) $scope->{headers}{...}.
+    header through PAGI::Request instead of the (fatal) $scope->{headers}{...};
+    try_send_* documented as best-effort with a send-method ladder; a cookbook
+    recipe on declining an SSE request (404 / 401 / 204 stop-reconnect);
+    examples and Endpoint POD migrated off the removed 4-arg middleware form.
   - REMOVED PAGI::Middleware::WebSocket::Compression. permessage-deflate
     (RFC 7692) is a WebSocket framing-layer feature -- a compressed message is
     signalled by the RSV1 frame bit, which only the server's framing layer can
