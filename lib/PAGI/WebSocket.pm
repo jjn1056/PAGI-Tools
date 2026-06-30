@@ -483,10 +483,10 @@ async sub try_send_text {
             text => $text,
         });
     };
-    if ($@) {
-        $self->_set_closed(1006, 'Connection lost');
-        return 0;
-    }
+    # A failed send is not a disconnect (a send after close is a silent no-op per
+    # spec), so return false per the try_* contract without fabricating a 1006
+    # close or mutating connection state.
+    return 0 if $@;
     return 1;
 }
 
@@ -500,10 +500,10 @@ async sub try_send_bytes {
             bytes => $bytes,
         });
     };
-    if ($@) {
-        $self->_set_closed(1006, 'Connection lost');
-        return 0;
-    }
+    # A failed send is not a disconnect (a send after close is a silent no-op per
+    # spec), so return false per the try_* contract without fabricating a 1006
+    # close or mutating connection state.
+    return 0 if $@;
     return 1;
 }
 
@@ -518,10 +518,10 @@ async sub try_send_json {
             text => $json,
         });
     };
-    if ($@) {
-        $self->_set_closed(1006, 'Connection lost');
-        return 0;
-    }
+    # A failed send is not a disconnect (a send after close is a silent no-op per
+    # spec), so return false per the try_* contract without fabricating a 1006
+    # close or mutating connection state.
+    return 0 if $@;
     return 1;
 }
 
@@ -1065,12 +1065,17 @@ Send a message. Dies if connection is closed.
 
     my $sent = await $ws->try_send_json($data);
     if (!$sent) {
-        # Client disconnected
-        cleanup_user($id);
+        # Send did not happen (already closed, or the send errored)
+        skip_recipient($id);
     }
 
-Returns true if sent, false if failed or closed. Does not throw.
-Useful for broadcasting to multiple clients.
+Returns true if the send happened, false if the socket is already closed or the
+send raised. Never throws. A false return does B<not> mutate connection state or
+fabricate a close code — a failed send is not a disconnect (per the spec a send
+after close is a silent no-op). Detect an actual disconnect through the
+C<websocket.disconnect> receive event, not the result of a send. Useful for
+broadcasting to multiple clients, where one bad recipient must not abort the loop
+or corrupt the shared connection's state.
 
 =head2 send_text_if_connected, send_bytes_if_connected, send_json_if_connected
 
