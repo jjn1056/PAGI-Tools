@@ -1102,6 +1102,61 @@ for the method, L<PAGI::Spec::Www/"Close SSE - C<send> event"> for the protocol
 event, and L<PAGI::Cookbook/"Ending a stream: return vs C<sse.close>"> for the
 raw form.
 
+=head2 Declining an SSE request (404 / 401 / 204 stop-reconnect)
+
+An SSE request is an ordinary C<GET> with C<Accept: text/event-stream>. Before
+you start the stream you can B<decline> it and return a normal HTTP response
+instead -- no event stream. Send C<sse.http.response.start> followed by
+C<sse.http.response.body> on the raw C<$send> (the same one you passed to
+C<< PAGI::SSE->new >>), instead of calling C<< $sse->start >>:
+
+  $router->sse('/feed' => async sub {
+      my ($scope, $receive, $send) = @_;
+      my $sse = PAGI::SSE->new($scope, $receive, $send);
+
+      # Auth check before we commit to a stream.
+      unless (authorized($sse->query_param('token'))) {
+          await $send->({
+              type    => 'sse.http.response.start',
+              status  => 401,
+              headers => [['content-type', 'text/plain']],
+          });
+          await $send->({ type => 'sse.http.response.body', body => 'Unauthorized', more => 0 });
+          return;
+      }
+
+      await $sse->start;
+      # ... stream ...
+  });
+
+Three common reasons to decline:
+
+=over 4
+
+=item * B<404> -- no such SSE endpoint. C<PAGI::App::Router> already does this
+for an unmatched SSE route (see L</SSE Routes>); you rarely write it by hand.
+
+=item * B<401> / B<403> -- authentication or authorization failed; don't open a
+stream.
+
+=item * B<204> -- the spec's mechanism to B<stop> an C<EventSource> from
+reconnecting. A browser's C<EventSource> reconnects on any non-success or
+network drop; answering the request with C<204 No Content> tells it to stop for
+good.
+
+=back
+
+  # Tell EventSource to stop reconnecting: a bare 204.
+  await $send->({ type => 'sse.http.response.start', status => 204, headers => [] });
+  await $send->({ type => 'sse.http.response.body', body => '', more => 0 });
+
+First-send-wins picks the mode: once you have sent C<sse.start> a decline
+raises, and once you have sent C<sse.http.response.start> a stream event
+(C<sse.send>, C<sse.start>, ...) raises. Decide before you start.
+
+See L<PAGI::Spec::Www/"Decline SSE - C<send> event"> for the protocol events and
+the full state machine.
+
 =head1 BACKGROUND WORK
 
 Web requests should respond quickly. Long-running work should be done in the background.
