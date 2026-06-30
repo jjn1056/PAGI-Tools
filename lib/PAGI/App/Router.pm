@@ -612,6 +612,28 @@ sub to_app {
         return 0;  # No match
     };
 
+    # Emit an unmatched-route response using the event family that matches the
+    # scope. HTTP uses plain http.response.*; SSE and WebSocket scopes only
+    # accept their namespaced decline events (sse.http.response.* /
+    # websocket.http.response.*) before a stream/handshake starts — a plain
+    # http.response.* on those scopes raises on a conforming server. A custom
+    # not_found app, if configured, takes over for every scope type.
+    my $send_not_found = async sub {
+        my ($scope, $receive, $send) = @_;
+        if ($not_found) {
+            await $not_found->($scope, $receive, $send);
+            return;
+        }
+        my $type   = $scope->{type} // 'http';
+        my $prefix = $type eq 'http' ? 'http.response' : "$type.http.response";
+        await $send->({
+            type    => "$prefix.start",
+            status  => 404,
+            headers => [['content-type', 'text/plain']],
+        });
+        await $send->({ type => "$prefix.body", body => 'Not Found', more => 0 });
+    };
+
     return async sub {
         my ($scope, $receive, $send) = @_;
         my $type   = $scope->{type} // 'http';
@@ -647,16 +669,7 @@ sub to_app {
                 return;
             }
             # No mount matched either - 404
-            if ($not_found) {
-                await $not_found->($scope, $receive, $send);
-            } else {
-                await $send->({
-                    type => 'http.response.start',
-                    status => 404,
-                    headers => [['content-type', 'text/plain']],
-                });
-                await $send->({ type => 'http.response.body', body => 'Not Found', more => 0 });
-            }
+            await $send_not_found->($scope, $receive, $send);
             return;
         }
 
@@ -686,16 +699,7 @@ sub to_app {
                 return;
             }
             # No mount matched either - 404
-            if ($not_found) {
-                await $not_found->($scope, $receive, $send);
-            } else {
-                await $send->({
-                    type => 'http.response.start',
-                    status => 404,
-                    headers => [['content-type', 'text/plain']],
-                });
-                await $send->({ type => 'http.response.body', body => 'Not Found', more => 0 });
-            }
+            await $send_not_found->($scope, $receive, $send);
             return;
         }
 
@@ -762,16 +766,7 @@ sub to_app {
         }
 
         # No mount matched either - 404
-        if ($not_found) {
-            await $not_found->($scope, $receive, $send);
-        } else {
-            await $send->({
-                type => 'http.response.start',
-                status => 404,
-                headers => [['content-type', 'text/plain']],
-            });
-            await $send->({ type => 'http.response.body', body => 'Not Found', more => 0 });
-        }
+        await $send_not_found->($scope, $receive, $send);
     };
 }
 
@@ -786,11 +781,22 @@ interface. Routes requests based on scope type first, then path pattern.
 HTTP routes additionally match on method. Returns 404 for unmatched paths
 and 405 for unmatched HTTP methods. Lifespan events are automatically ignored.
 
+The 404 response is emitted with the event family that matches the scope:
+plain C<http.response.*> on an HTTP scope, and the namespaced decline events
+C<sse.http.response.*> / C<websocket.http.response.*> on SSE and WebSocket
+scopes. This matters because those scopes reject a plain C<http.response.*>
+before a stream or handshake begins, so an unmatched SSE or WebSocket route
+returns a real 404 instead of crashing the connection.
+
 =head1 OPTIONS
 
 =over 4
 
-=item * C<not_found> - Custom app to handle unmatched routes (all scope types)
+=item * C<not_found> - Custom app to handle unmatched routes (all scope types).
+
+When set, it replaces the default 404 for every scope type and is responsible
+for emitting a scope-appropriate response itself (e.g. C<sse.http.response.*>
+on an SSE scope).
 
 =back
 

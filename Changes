@@ -1,5 +1,15 @@
 # Revision history for PAGI-Tools
 
+0.002001
+  - PAGI::App::Router: an unmatched SSE or WebSocket route now returns a real
+    404 instead of crashing the connection. The 404 is emitted with the event
+    family that matches the scope -- sse.http.response.* on SSE and
+    websocket.http.response.* on WebSocket, plain http.response.* on HTTP --
+    since those scopes reject a plain http.response.* before a stream or
+    handshake starts. A custom not_found app still takes over for every scope
+    type. Requires a server supporting the sse.http.response.* decline events
+    (PAGI-Server 0.002005+).
+
 0.002000 - 2026-06-26
   - Split out of the PAGI distribution into its own distribution (git history
     preserved).
