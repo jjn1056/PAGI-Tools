@@ -159,6 +159,15 @@ sub is_closed {
     return $self->{_state} eq 'closed';
 }
 
+# True while the stream is live (started and not yet closed/disconnected).
+# Mirrors PAGI::WebSocket->is_connected (state eq 'connected'): an SSE scope
+# carries no pagi.connection (spec: N/A for sse), so connection liveness is
+# derived from this object's own state machine, not the base Context method.
+sub is_connected {
+    my $self = shift;
+    return $self->{_state} eq 'started';
+}
+
 # Disconnect reason - why the connection closed
 # Common values: 'client_closed', 'write_error', 'send_timeout', 'idle_timeout'
 sub disconnect_reason {
@@ -783,7 +792,7 @@ boilerplate and provides:
 
 =item * Multiple send methods (send, send_json, send_event)
 
-=item * Connection state tracking (is_started, is_closed)
+=item * Connection state tracking (is_started, is_closed, is_connected)
 
 =item * Cleanup callback registration (on_close)
 
@@ -961,6 +970,22 @@ handler to keep the connection open.
     if ($sse->is_started) { ... }
     if ($sse->is_closed) { ... }
     my $state = $sse->connection_state;    # 'pending', 'started', 'closed'
+
+=head2 is_connected
+
+    if ($sse->is_connected) { ... }
+
+True while the stream is live: started and not yet closed or disconnected
+(equivalently, C<connection_state eq 'started'>). This is a synchronous,
+non-destructive check that does not consume the receive queue. Mirrors
+L<PAGI::WebSocket/is_connected>.
+
+Because an SSE scope carries no C<pagi.connection> (the spec marks it
+B<not applicable> for C<sse>), liveness is derived from this object's own
+state machine. Like its WebSocket counterpart, the value is only as fresh
+as the last observed I/O: a half-open connection is not detected until the
+next send fails or the server reports a disconnect, so treat it as
+"not falsely stale" rather than a live network probe.
 
 =head2 disconnect_reason
 

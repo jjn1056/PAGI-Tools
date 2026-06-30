@@ -42,6 +42,10 @@ sub every { shift->sse->every(@_) }
 sub is_started { shift->sse->is_started }
 sub is_closed  { shift->sse->is_closed }
 
+# is_connected overrides the base Context method (which reads pagi.connection,
+# N/A for sse) to use the SSE wrapper's own state — mirrors Context::WebSocket.
+sub is_connected { shift->sse->is_connected }
+
 # ── Protocol metadata ────────────────────────────────────────────────
 
 sub last_event_id { shift->sse->last_event_id }
@@ -265,6 +269,16 @@ True after C<start()> or first send.
     if ($ctx->is_closed) { ... }
 
 True after close or disconnect.
+
+=head2 is_connected
+
+    if ($ctx->is_connected) { ... }
+
+True while the stream is live (started and not closed/disconnected).
+Overrides the base C<is_connected> — which reads C<pagi.connection>, not
+applicable to SSE — to use the SSE wrapper's own state, mirroring
+L<PAGI::Context::WebSocket>. See L<PAGI::SSE/is_connected> for the freshness
+caveat.
 
 =head2 last_event_id
 
