@@ -437,7 +437,7 @@ missing or empty. Intended for C<< enforce => 'app' >> mode on
 L<PAGI::Middleware::CSRF>, where the middleware only issues the token and the
 app validates it once it has parsed the submitted params:
 
-    return $ctx->text(403, 'CSRF token validation failed')
+    return $ctx->text('CSRF token validation failed', status => 403)
         unless $ctx->csrf_verify($params->{_csrf_token});
 
 The app decides the response for a failed check; this method only reports
