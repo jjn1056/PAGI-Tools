@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Digest::SHA qw(sha256_hex);
 use PAGI::Utils::Random qw(secure_random_bytes);
+use PAGI::Utils::SecureCompare qw(secure_compare);
 
 =head1 NAME
 
@@ -112,7 +113,7 @@ sub wrap {
         my $submitted_token = $self->_get_submitted_token($scope);
 
         # Use timing-safe comparison to prevent timing attacks
-        if (!$submitted_token || !$cookie_token || !$self->_secure_compare($submitted_token, $cookie_token)) {
+        if (!$submitted_token || !$cookie_token || !secure_compare($submitted_token, $cookie_token)) {
             await $self->_send_error($send, 403, 'CSRF token validation failed');
             return;
         }
@@ -167,20 +168,6 @@ sub _get_header {
         return $h->[1] if lc($h->[0]) eq $name;
     }
     return;
-}
-
-# Constant-time string comparison to prevent timing attacks
-sub _secure_compare {
-    my ($self, $a, $b) = @_;
-
-    return 0 unless defined $a && defined $b;
-    return 0 unless length($a) == length($b);
-
-    my $result = 0;
-    for my $i (0 .. length($a) - 1) {
-        $result |= ord(substr($a, $i, 1)) ^ ord(substr($b, $i, 1));
-    }
-    return $result == 0;
 }
 
 async sub _send_error {
