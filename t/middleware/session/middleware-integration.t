@@ -8,6 +8,7 @@ use IO::Async::Loop;
 use PAGI::Middleware::Session;
 use PAGI::Middleware::Session::State::Header;
 use PAGI::Middleware::Session::Store::Memory;
+use PAGI::Session;
 
 my $loop = IO::Async::Loop->new;
 
@@ -329,6 +330,211 @@ subtest 'regenerate creates new session ID and deletes old' => sub {
     run_async { $session_mw->wrap($app3)->($scope4, async sub { {} }, async sub { }) };
     is($captured_session->{user_id}, 42, 'data preserved under new ID');
     is($captured_session->{logged_in}, 1, 'new data also present');
+};
+
+# ===================
+# Integration: mutating an existing session emits a fresh Set-Cookie
+# ===================
+
+subtest 'mutating an existing session emits a fresh Set-Cookie carrying the new data' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'dirty-secret');
+
+    # Request 1: create session, set counter => 1
+    my $session_id;
+    my $app1 = async sub {
+        my ($scope, $receive, $send) = @_;
+        $session_id = $scope->{'pagi.session_id'};
+        $scope->{'pagi.session'}{counter} = 1;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    run_async { $session_mw->wrap($app1)->(make_scope(), async sub { {} }, async sub { }) };
+
+    # Request 2: mutate existing session via PAGI::Session->set (not new, not regenerated)
+    my @events2;
+    my $app2 = async sub {
+        my ($scope, $receive, $send) = @_;
+        PAGI::Session->new($scope)->set(counter => 2);
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    my $scope2 = make_scope(headers => [['Cookie', "pagi_session=$session_id"]]);
+    run_async {
+        $session_mw->wrap($app2)->($scope2, async sub { {} }, async sub { push @events2, $_[0] })
+    };
+
+    my @cookies2 = map { $_->[1] } grep { lc($_->[0]) eq 'set-cookie' } @{$events2[0]{headers}};
+    ok(scalar(@cookies2), 'Set-Cookie header emitted on mutation of existing session');
+
+    # Request 3: reuse cookie from request 2, confirm mutated value round-trips
+    my $captured_session;
+    my $app3 = async sub {
+        my ($scope, $receive, $send) = @_;
+        $captured_session = $scope->{'pagi.session'};
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    my $scope3 = make_scope(headers => [['Cookie', $cookies2[0]]]);
+    run_async { $session_mw->wrap($app3)->($scope3, async sub { {} }, async sub { }) };
+    is($captured_session->{counter}, 2, 'mutated value restored on next request');
+};
+
+# ===================
+# Integration: mutating via $session->data directly is also observed
+# ===================
+
+subtest 'mutating via $session->data directly is also observed' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'dirty-data-secret');
+
+    # Request 1: create session, set counter => 1
+    my $session_id;
+    my $app1 = async sub {
+        my ($scope, $receive, $send) = @_;
+        $session_id = $scope->{'pagi.session_id'};
+        $scope->{'pagi.session'}{counter} = 1;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    run_async { $session_mw->wrap($app1)->(make_scope(), async sub { {} }, async sub { }) };
+
+    # Request 2: mutate existing session via raw ->data hashref, bypassing set/delete/clear
+    my @events2;
+    my $app2 = async sub {
+        my ($scope, $receive, $send) = @_;
+        PAGI::Session->new($scope)->data->{counter} = 2;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    my $scope2 = make_scope(headers => [['Cookie', "pagi_session=$session_id"]]);
+    run_async {
+        $session_mw->wrap($app2)->($scope2, async sub { {} }, async sub { push @events2, $_[0] })
+    };
+
+    my @cookies2 = map { $_->[1] } grep { lc($_->[0]) eq 'set-cookie' } @{$events2[0]{headers}};
+    ok(scalar(@cookies2), 'Set-Cookie header emitted on direct ->data mutation');
+
+    # Request 3: reuse cookie from request 2, confirm mutated value round-trips
+    my $captured_session;
+    my $app3 = async sub {
+        my ($scope, $receive, $send) = @_;
+        $captured_session = $scope->{'pagi.session'};
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    my $scope3 = make_scope(headers => [['Cookie', $cookies2[0]]]);
+    run_async { $session_mw->wrap($app3)->($scope3, async sub { {} }, async sub { }) };
+    is($captured_session->{counter}, 2, 'mutated value restored on next request');
+};
+
+# ===================
+# Integration: pure read request emits no new Set-Cookie
+# ===================
+
+subtest 'pure read request emits no new Set-Cookie' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'pure-read-secret');
+
+    # Request 1: create session
+    my $session_id;
+    my $app1 = async sub {
+        my ($scope, $receive, $send) = @_;
+        $session_id = $scope->{'pagi.session_id'};
+        $scope->{'pagi.session'}{counter} = 1;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    run_async { $session_mw->wrap($app1)->(make_scope(), async sub { {} }, async sub { }) };
+
+    # Request 2: reuse cookie, perform no mutation at all
+    my @events2;
+    my $app2 = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $value = $scope->{'pagi.session'}{counter};
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    my $scope2 = make_scope(headers => [['Cookie', "pagi_session=$session_id"]]);
+    run_async {
+        $session_mw->wrap($app2)->($scope2, async sub { {} }, async sub { push @events2, $_[0] })
+    };
+
+    my @cookies2 = map { $_->[1] } grep { lc($_->[0]) eq 'set-cookie' } @{$events2[0]{headers}};
+    is(scalar(@cookies2), 0, 'no Set-Cookie header emitted on pure-read request');
+};
+
+# ===================
+# Integration: regenerate after mutation emits exactly one Set-Cookie
+# ===================
+
+subtest 'regenerate after mutation emits exactly one Set-Cookie' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'regen-mutate-secret');
+
+    # Create a session
+    my $old_id;
+    my $app1 = async sub {
+        my ($scope, $receive, $send) = @_;
+        $old_id = $scope->{'pagi.session_id'};
+        $scope->{'pagi.session'}{user_id} = 42;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    run_async { $session_mw->wrap($app1)->(make_scope(), async sub { {} }, async sub { }) };
+
+    # Regenerate the session ID while also mutating data in the same request
+    my $app2 = async sub {
+        my ($scope, $receive, $send) = @_;
+        $scope->{'pagi.session'}{_regenerated} = 1;
+        $scope->{'pagi.session'}{logged_in} = 1;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+
+    my @events;
+    my $scope2 = make_scope(headers => [['Cookie', "pagi_session=$old_id"]]);
+    run_async {
+        $session_mw->wrap($app2)->($scope2, async sub { {} }, async sub { push @events, $_[0] })
+    };
+
+    my @cookies = map { $_->[1] } grep { lc($_->[0]) eq 'set-cookie' } @{$events[0]{headers}};
+    is(scalar(@cookies), 1, 'exactly one Set-Cookie header on regenerate-after-mutate, no double-inject');
+};
+
+# ===================
+# Integration: expired-then-reloaded session with no snapshot is treated as new for dirty purposes
+# ===================
+
+subtest 'expired-then-reloaded session with no snapshot is treated as new for dirty purposes' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'expired-secret', expire => -1);
+
+    # Request 1: create a session (immediately expired due to expire => -1)
+    my $session_id;
+    my $app1 = async sub {
+        my ($scope, $receive, $send) = @_;
+        $session_id = $scope->{'pagi.session_id'};
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    run_async { $session_mw->wrap($app1)->(make_scope(), async sub { {} }, async sub { }) };
+
+    # Request 2: present the (now-expired) cookie; middleware falls through to
+    # create-new-session path, so $snapshot is undef and $is_new is 1
+    my @events2;
+    my $app2 = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    my $scope2 = make_scope(headers => [['Cookie', "pagi_session=$session_id"]]);
+    run_async {
+        $session_mw->wrap($app2)->($scope2, async sub { {} }, async sub { push @events2, $_[0] })
+    };
+
+    my @cookies2 = map { $_->[1] } grep { lc($_->[0]) eq 'set-cookie' } @{$events2[0]{headers}};
+    ok(scalar(@cookies2), 'Set-Cookie still emitted for expired-then-recreated session');
 };
 
 done_testing;

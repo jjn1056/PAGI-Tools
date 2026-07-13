@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Digest::SHA qw(sha256_hex);
+use JSON::MaybeXS;
 use PAGI::Utils::Random qw(secure_random_bytes);
 
 =head1 NAME
@@ -247,6 +248,7 @@ sub _init {
     $self->{secret} = $config->{secret}
         // die "Session middleware requires 'secret' option";
     $self->{expire} = $config->{expire} // 3600;
+    $self->{_json}  = JSON::MaybeXS->new(canonical => 1);
 
     # State: pluggable session ID transport
     if ($config->{state}) {
@@ -295,7 +297,7 @@ sub wrap {
         my $session_id = $self->{state}->extract($scope);
 
         # Validate and load session
-        my ($session, $is_new) = await $self->_load_or_create_session($session_id);
+        my ($session, $is_new, $snapshot) = await $self->_load_or_create_session($session_id);
         $session_id = $session->{_id};
 
         # Add session to scope
@@ -326,9 +328,16 @@ sub wrap {
                     $self->{state}->inject(\@headers, $transport, {});
                 }
                 else {
-                    # Normal: save and inject if new
+                    # Normal: save always; inject if new or the session's
+                    # data changed since it was loaded (the transport for
+                    # cookie-backed stores IS the data, so a stale client
+                    # copy after mutation is a correctness bug, not just
+                    # a missed refresh).
+                    my $dirty = $is_new
+                        || !defined($snapshot)
+                        || $self->{_json}->encode($session) ne $snapshot;
                     my $transport = await $self->_save_session($session_id, $session);
-                    if ($is_new) {
+                    if ($dirty) {
                         $self->{state}->inject(\@headers, $transport, {});
                     }
                 }
@@ -353,7 +362,7 @@ async sub _load_or_create_session {
         my $session = await $self->_get_session($session_id);
         if ($session && !$self->_is_expired($session)) {
             $session->{_last_access} = time();
-            return ($session, 0);
+            return ($session, 0, $self->{_json}->encode($session));
         }
     }
 
@@ -365,7 +374,7 @@ async sub _load_or_create_session {
         _last_access => time(),
     };
 
-    return ($session, 1);
+    return ($session, 1, undef);
 }
 
 sub _generate_session_id {
@@ -456,6 +465,22 @@ session data is deleted from the store and the client-side state
 (cookie) is cleared. Use this for logout.
 
 =back
+
+=head1 WHEN THE SESSION TRANSPORT IS EMITTED
+
+On each response, the middleware saves the session unconditionally, but
+only emits the transport (e.g. C<Set-Cookie>) via C<< $state->inject >>
+when the session is B<new>, B<regenerated>, or its data has B<changed
+since it was loaded> at the start of the request. A pure-read request
+against an existing, unmodified session emits no transport.
+
+"Changed" is determined by comparing the session's data at load time
+against its data immediately before saving, regardless of how the
+mutation happened: C<< $session->set(...) >>, C<< $session->data->{...}
+= ... >>, or direct hashref mutation via C<< $scope->{'pagi.session'} >>
+all count. This matters most for transport-is-data stores (e.g.
+L<PAGI::Middleware::Session::Store::Cookie>), where a discarded transport
+after a mutation would leave the client holding stale, incorrect data.
 
 =head1 SEE ALSO
 
