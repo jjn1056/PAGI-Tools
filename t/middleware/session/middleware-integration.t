@@ -578,6 +578,74 @@ subtest 'websocket-scope upgrade with a valid session sees the same data an http
     is $captured_session_id, $session_id, 'websocket scope sees the real session id';
 };
 
+# SSE scopes (real PAGI::Server::Connection::_create_sse_scope) are typed
+# 'sse' -- a genuinely distinct scope type from 'http', NOT 'http' plus an
+# extension flag -- and carry the SAME 'headers' key an http/websocket scope
+# does (confirmed reading the installed PAGI::Server source directly). The
+# non-http branch added for websockets makes no websocket-specific
+# assumption anywhere (it only ever checks scope type != 'http' and the
+# presence of a 'headers' key), so this proves that same read-only session
+# support covers 'sse' scopes too, with no additional code -- per John's
+# own explicit requirement: "if there is a session then websockets and SSE
+# need to see it."
+subtest 'sse-scope request with a valid session sees the same data an http request would' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'sse-secret');
+
+    my $session_id;
+    my $http_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $session_id = $scope->{'pagi.session_id'};
+        $scope->{'pagi.session'}{user_id} = 9;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    run_async { $session_mw->wrap($http_app)->(make_scope(), async sub { {} }, async sub { }) };
+    ok $session_id, 'http request established a real session';
+
+    my ($captured_session, $captured_session_id);
+    my $sse_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $captured_session = $scope->{'pagi.session'};
+        $captured_session_id = $scope->{'pagi.session_id'};
+        return;
+    };
+    my $sse_scope = make_scope(type => 'sse', headers => [['Cookie', "pagi_session=$session_id"]]);
+    run_async { $session_mw->wrap($sse_app)->($sse_scope, async sub { {} }, async sub { }) };
+
+    is $captured_session->{user_id}, 9, 'sse scope sees the same session data an http request would';
+    is $captured_session_id, $session_id, 'sse scope sees the real session id';
+};
+
+subtest 'sse-scope request with an absent/garbage session gets an empty, present session (no crash)' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'sse-miss-secret');
+
+    for my $case (
+        { name => 'no cookie at all',    headers => [] },
+        { name => 'unresolvable cookie', headers => [['Cookie', 'pagi_session=not-a-real-session-id']] },
+    ) {
+        my ($captured_session, $captured_has_id);
+        my $sse_app = async sub {
+            my ($scope, $receive, $send) = @_;
+            $captured_session = $scope->{'pagi.session'};
+            $captured_has_id  = exists $scope->{'pagi.session_id'};
+            return;
+        };
+        my $sse_scope = make_scope(type => 'sse', headers => $case->{headers});
+
+        my $survived = eval {
+            run_async { $session_mw->wrap($sse_app)->($sse_scope, async sub { {} }, async sub { }) };
+            1;
+        };
+        ok $survived, "$case->{name}: does not die (no crash)" or diag $@;
+
+        ok defined($captured_session), "$case->{name}: pagi.session is present, not a missing key";
+        is $captured_session, {}, "$case->{name}: pagi.session is an explicit empty hashref";
+        ok !$captured_has_id, "$case->{name}: pagi.session_id is not set (no real session to report)";
+    }
+};
+
 subtest 'websocket-scope upgrade with an absent/garbage session gets an empty, present session (no crash)' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
     my $session_mw = PAGI::Middleware::Session->new(secret => 'ws-miss-secret');

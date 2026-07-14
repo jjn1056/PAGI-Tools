@@ -242,14 +242,19 @@ logic instead of stacking multiple Session middleware instances:
 
 =head1 NON-HTTP SCOPES (WebSocket, SSE, ...)
 
-A scope whose C<type> is not C<'http'> but which still carries a C<headers>
-key (a WebSocket or SSE upgrade request, for example) gets a B<read-only>
-session: the same C<state-E<gt>extract> + C<store-E<gt>get> lookup the
-C<'http'> path uses, populating C<< $scope->{'pagi.session'} >> (and
+If there is a session, WebSocket and SSE connections see it too: a scope
+whose C<type> is not C<'http'> but which still carries a C<headers> key --
+both a WebSocket upgrade request and an SSE request are typed this way (see
+L<PAGI::Context>'s C<is_websocket>/C<is_sse>; SSE is its own distinct scope
+C<type>, not C<'http'> plus a flag) -- gets a B<read-only> session: the
+same C<state-E<gt>extract> + C<store-E<gt>get> lookup the C<'http'> path
+uses, populating C<< $scope->{'pagi.session'} >> (and
 C<< $scope->{'pagi.session_id'} >>, when a real session was found) before
 calling the wrapped app. This is store-agnostic -- it works with whatever
 C<store>/C<state> pair the middleware was configured with, not just
-cookie-backed setups.
+cookie-backed setups -- and scope-type-agnostic: any current or future
+scope type with a C<headers> key gets the same treatment, WebSocket and SSE
+are simply the two named, tested cases today.
 
 B<Nothing is ever saved.> There is no C<http.response.start>-shaped event on
 a protocol upgrade to hook a save onto, so C<< store->set >> is never called
