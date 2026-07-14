@@ -1,6 +1,17 @@
 # Revision history for PAGI-Tools
 
 0.002002
+  - PAGI::Middleware::Session: non-'http' scopes that still carry a headers
+    key (WebSocket, SSE upgrades) now get a READ-ONLY, store-agnostic session
+    populated via the same state->extract + store->get path 'http' uses,
+    instead of being skipped entirely. Nothing is ever saved for one of these
+    scopes (there is no http.response.start-shaped channel to hook a save
+    onto on a protocol upgrade); an unresolvable session id gets an explicit
+    empty hashref, not a missing key, so app code that unconditionally builds
+    a PAGI::Session from the scope keeps working uniformly across scope
+    types. A scope with no headers key at all (lifespan) is still skipped
+    entirely, unchanged. See PAGI::Middleware::Session's own new "NON-HTTP
+    SCOPES" POD section.
   - PAGI::Middleware::CSRF: new 'enforce' config, 'header' (default, unchanged
     behavior: unsafe methods need a matching header token or the middleware
     403s) or 'app' (issue-only: the middleware mints/persists the cookie

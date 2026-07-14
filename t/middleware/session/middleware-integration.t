@@ -20,7 +20,7 @@ sub run_async (&) {
 sub make_scope {
     my (%opts) = @_;
     return {
-        type    => 'http',
+        type    => $opts{type} // 'http',
         method  => $opts{method} // 'GET',
         path    => $opts{path} // '/',
         headers => $opts{headers} // [],
@@ -535,6 +535,93 @@ subtest 'expired-then-reloaded session with no snapshot is treated as new for di
 
     my @cookies2 = map { $_->[1] } grep { lc($_->[0]) eq 'set-cookie' } @{$events2[0]{headers}};
     ok(scalar(@cookies2), 'Set-Cookie still emitted for expired-then-recreated session');
+};
+
+# ===================
+# Non-HTTP scopes (websocket, sse, ...): read-only, store-agnostic session
+# support -- store-agnostic is proven here by using Store::Memory (a
+# completely different store than the cookie-as-transport Store::Cookie a
+# sibling dist exercises for the same feature) with the SAME extract/get
+# path the http branch already uses.
+# ===================
+
+subtest 'websocket-scope upgrade with a valid session sees the same data an http request would' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'ws-secret');
+
+    # Establish a real session over a normal 'http' request first.
+    my $session_id;
+    my $http_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $session_id = $scope->{'pagi.session_id'};
+        $scope->{'pagi.session'}{user_id} = 7;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    run_async { $session_mw->wrap($http_app)->(make_scope(), async sub { {} }, async sub { }) };
+    ok $session_id, 'http request established a real session';
+
+    # A websocket-typed scope presenting the SAME session cookie -> the
+    # wrapped app sees the loaded session data, read-only (no send event
+    # of any kind -- an upgrade handshake, not an HTTP response).
+    my ($captured_session, $captured_session_id);
+    my $ws_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $captured_session = $scope->{'pagi.session'};
+        $captured_session_id = $scope->{'pagi.session_id'};
+        return;
+    };
+    my $ws_scope = make_scope(type => 'websocket', headers => [['Cookie', "pagi_session=$session_id"]]);
+    run_async { $session_mw->wrap($ws_app)->($ws_scope, async sub { {} }, async sub { }) };
+
+    is $captured_session->{user_id}, 7, 'websocket scope sees the same session data an http request would';
+    is $captured_session_id, $session_id, 'websocket scope sees the real session id';
+};
+
+subtest 'websocket-scope upgrade with an absent/garbage session gets an empty, present session (no crash)' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'ws-miss-secret');
+
+    for my $case (
+        { name => 'no cookie at all',    headers => [] },
+        { name => 'unresolvable cookie', headers => [['Cookie', 'pagi_session=not-a-real-session-id']] },
+    ) {
+        my ($captured_session, $captured_has_id);
+        my $ws_app = async sub {
+            my ($scope, $receive, $send) = @_;
+            $captured_session = $scope->{'pagi.session'};
+            $captured_has_id  = exists $scope->{'pagi.session_id'};
+            return;
+        };
+        my $ws_scope = make_scope(type => 'websocket', headers => $case->{headers});
+
+        my $survived = eval {
+            run_async { $session_mw->wrap($ws_app)->($ws_scope, async sub { {} }, async sub { }) };
+            1;
+        };
+        ok $survived, "$case->{name}: does not die (no crash)" or diag $@;
+
+        ok defined($captured_session), "$case->{name}: pagi.session is present, not a missing key";
+        is $captured_session, {}, "$case->{name}: pagi.session is an explicit empty hashref";
+        ok !$captured_has_id, "$case->{name}: pagi.session_id is not set (no real session to report)";
+    }
+};
+
+subtest 'a non-http scope with no headers at all (lifespan) is skipped entirely, as before' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'lifespan-secret');
+
+    my $captured_scope;
+    my $lifespan_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $captured_scope = $scope;
+        return;
+    };
+    my $lifespan_scope = { type => 'lifespan', state => {} }; # deliberately no 'headers' key
+    run_async { $session_mw->wrap($lifespan_app)->($lifespan_scope, async sub { {} }, async sub { }) };
+
+    ok !exists $captured_scope->{'pagi.session'}, 'lifespan scope gets no pagi.session key at all';
+    ok !exists $captured_scope->{'pagi.session_id'}, 'lifespan scope gets no pagi.session_id key at all';
 };
 
 done_testing;
