@@ -675,6 +675,51 @@ subtest 'websocket-scope upgrade with an absent/garbage session gets an empty, p
     }
 };
 
+# Review finding (Important): expired-session-on-upgrade is structurally
+# rejected by _wrap_non_http (it calls the SAME _is_expired check the http
+# branch uses) but was untested anywhere -- the one auth-bypass-shaped edge
+# this feature has: an attacker presenting a stale/expired session cookie
+# on a WebSocket upgrade must NOT get its data. Ages a real session
+# directly in the store (mutating its _last_access, the same field
+# _is_expired reads) rather than the shortcut the earlier "expired-then-
+# reloaded" http-side test uses (a contrived expire => -1 config) -- this
+# exercises _is_expired's own elapsed-time arithmetic instead of bypassing
+# it, closer to what real elapsed wall-clock time would produce.
+subtest 'websocket-scope upgrade with an EXPIRED session gets an empty, present session (not the stale data)' => sub {
+    PAGI::Middleware::Session::Store::Memory->clear_all;
+    my $store = PAGI::Middleware::Session::Store::Memory->new();
+    my $session_mw = PAGI::Middleware::Session->new(secret => 'ws-expired-secret', store => $store);
+
+    my $session_id;
+    my $http_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $session_id = $scope->{'pagi.session_id'};
+        $scope->{'pagi.session'}{user_id} = 123;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+    run_async { $session_mw->wrap($http_app)->(make_scope(), async sub { {} }, async sub { }) };
+    ok $session_id, 'http request established a real session';
+
+    my $session_data = $store->get($session_id)->get;
+    ok $session_data, 'session data fetched directly from the store';
+    $session_data->{_last_access} = time() - 100_000; # WAY past the default 3600s expire
+    $store->set($session_id, $session_data)->get;
+
+    my ($captured_session, $captured_has_id);
+    my $ws_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $captured_session = $scope->{'pagi.session'};
+        $captured_has_id  = exists $scope->{'pagi.session_id'};
+        return;
+    };
+    my $ws_scope = make_scope(type => 'websocket', headers => [['Cookie', "pagi_session=$session_id"]]);
+    run_async { $session_mw->wrap($ws_app)->($ws_scope, async sub { {} }, async sub { }) };
+
+    is $captured_session, {}, 'expired session is treated as a miss -- empty hashref, not the stale user_id=>123 data';
+    ok !$captured_has_id, 'pagi.session_id is not set for an expired session (no real session to report)';
+};
+
 subtest 'a non-http scope with no headers at all (lifespan) is skipped entirely, as before' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
     my $session_mw = PAGI::Middleware::Session->new(secret => 'lifespan-secret');

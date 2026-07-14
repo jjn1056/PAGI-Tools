@@ -325,8 +325,12 @@ sub wrap {
         my ($scope, $receive, $send) = @_;
 
         # Idempotency: skip if session already exists in scope. Checked
-        # before the type/headers branch below -- applies uniformly
-        # regardless of scope type, same as it always did.
+        # before the type/headers branch below, so it now applies uniformly
+        # regardless of scope type -- NOT "same as it always did": before
+        # the non-http read-only support this file added, a non-'http'
+        # scope returned (pass-through, no session at all) before this
+        # check was ever reached, so it was unreachable code for any
+        # non-http scope. This move is what MAKES it apply uniformly.
         if (exists $scope->{'pagi.session'}) {
             warn "Session middleware: pagi.session already in scope, skipping\n"
                 if $ENV{PAGI_DEBUG};
