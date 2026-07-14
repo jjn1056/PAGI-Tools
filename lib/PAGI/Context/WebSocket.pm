@@ -21,6 +21,8 @@ sub ws { shift->websocket }
 
 sub accept   { shift->ws->accept(@_) }
 sub close    { shift->ws->close(@_) }
+sub deny     { shift->ws->deny(@_) }
+sub supports_denial_response { shift->ws->supports_denial_response(@_) }
 
 # ── Send methods ─────────────────────────────────────────────────────
 
@@ -201,6 +203,24 @@ additional response headers.
 
 Closes the connection.  Default code is 1000 (normal closure).
 Idempotent — calling multiple times only sends close once.
+
+=head2 supports_denial_response
+
+    if ($ctx->supports_denial_response) { ... }
+
+Returns true (1) if the server advertised the C<websocket.http.response>
+extension on the WebSocket scope, false (0) otherwise.
+
+=head2 deny
+
+    await $ctx->deny(status => 401);
+    await $ctx->deny(status => 401, headers => [['www-authenticate', 'Bearer']], body => '{"error":"unauthorized"}');
+
+Rejects the WebSocket handshake with a custom HTTP response instead of the
+bare C<403 Forbidden>.  Valid only before C<accept>.  Marks the connection
+closed on return.  Falls back to a plain C<close> when the server does not
+advertise the C<websocket.http.response> extension.  See
+L<PAGI::WebSocket/deny> for the full option list.
 
 =head1 SEND METHODS
 

@@ -97,6 +97,45 @@ subtest 'close with code and reason' => sub {
     is($ctx->close_reason, 'Custom reason', 'close_reason accessor');
 };
 
+subtest 'supports_denial_response delegates to ws' => sub {
+    my ($ctx) = make_ws_ctx();
+    ok(!$ctx->supports_denial_response, 'false when extension absent');
+
+    my ($ctx_ext) = make_ws_ctx(
+        extra_scope => { extensions => { 'websocket.http.response' => {} } },
+    );
+    ok($ctx_ext->supports_denial_response, 'true when extension present');
+};
+
+subtest 'deny delegates to ws' => sub {
+    my ($ctx, $sent) = make_ws_ctx(
+        extra_scope => { extensions => { 'websocket.http.response' => {} } },
+    );
+
+    (async sub {
+        await $ctx->deny(status => 401, body => 'no');
+    })->()->get;
+
+    is(scalar @$sent, 2, 'two events sent');
+    is($sent->[0]{type}, 'websocket.http.response.start', 'response.start sent');
+    is($sent->[0]{status}, 401, 'status forwarded');
+    is($sent->[1]{type}, 'websocket.http.response.body', 'response.body sent');
+    is($sent->[1]{body}, 'no', 'body forwarded');
+    ok($ctx->is_closed, 'ctx marked closed after deny');
+};
+
+subtest 'deny falls back to close when extension absent' => sub {
+    my ($ctx, $sent) = make_ws_ctx();
+
+    (async sub {
+        await $ctx->deny(status => 401);
+    })->()->get;
+
+    is(scalar @$sent, 1, 'one event sent');
+    is($sent->[0]{type}, 'websocket.close', 'falls back to websocket.close');
+    ok($ctx->is_closed, 'ctx marked closed after deny fallback');
+};
+
 # ---------------------------------------------------------------------------
 # Send method delegation
 # ---------------------------------------------------------------------------
