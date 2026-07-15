@@ -57,6 +57,12 @@ Cookie name for the CSRF token.
 
 HTTP methods that don't require CSRF validation.
 
+=item * secure (default: 0)
+
+Add the C<Secure> attribute to the CSRF cookie, restricting it to HTTPS
+requests. Off by default so plain-HTTP development setups keep working;
+for production HTTPS deployments, add C<< secure => 1 >>.
+
 =item * enforce (default: 'header')
 
 How unsafe methods (anything not in C<safe_methods>) are checked:
@@ -92,6 +98,7 @@ sub _init {
     $self->{token_header} = $config->{token_header} // 'X-CSRF-Token';
     $self->{cookie_name}  = $config->{cookie_name} // 'csrf_token';
     $self->{safe_methods} = { map { $_ => 1 } @{$config->{safe_methods} // [qw(GET HEAD OPTIONS TRACE)]} };
+    $self->{secure}       = $config->{secure} // 0;
 
     $self->{enforce} = $config->{enforce} // 'header';
     die "CSRF middleware 'enforce' must be 'header' or 'app', got '$self->{enforce}'"
@@ -131,10 +138,9 @@ sub wrap {
             my $wrapped_send = $cookie_token ? $send : async sub {
                 my ($event) = @_;
                 if ($event->{type} eq 'http.response.start') {
-                    push @{$event->{headers}}, [
-                        'Set-Cookie',
-                        "$self->{cookie_name}=$token; Path=/; HttpOnly; SameSite=Strict"
-                    ];
+                    my $cookie = "$self->{cookie_name}=$token; Path=/; HttpOnly; SameSite=Strict";
+                    $cookie .= "; Secure" if $self->{secure};
+                    push @{$event->{headers}}, ['Set-Cookie', $cookie];
                 }
                 await $send->($event);
             };

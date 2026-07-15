@@ -690,4 +690,52 @@ subtest "CSRF enforce => 'app' stashes the existing COOKIE token, not a new one"
     is scalar(@set_cookie), 0, 'no Set-Cookie re-issued when the cookie token already existed';
 };
 
+subtest 'CSRF cookie has no Secure attribute by default' => sub {
+    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret');
+
+    my $app = async sub  {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+
+    my @sent;
+    run_async(async sub {
+        await $mw->wrap($app)->(
+            { type => 'http', path => '/', method => 'GET', headers => [] },
+            async sub { { type => 'http.disconnect' } },
+            async sub  {
+        my ($event) = @_; push @sent, $event },
+        );
+    });
+
+    my ($set_cookie) = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]{headers}};
+    ok $set_cookie, 'cookie issued';
+    unlike $set_cookie->[1], qr/;\s*Secure/, 'no Secure attribute by default (would break plain-http dev usage)';
+};
+
+subtest "CSRF cookie includes Secure attribute when secure => 1" => sub {
+    my $mw = PAGI::Middleware::CSRF->new(secret => 'test-secret', secure => 1);
+
+    my $app = async sub  {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    };
+
+    my @sent;
+    run_async(async sub {
+        await $mw->wrap($app)->(
+            { type => 'http', path => '/', method => 'GET', headers => [] },
+            async sub { { type => 'http.disconnect' } },
+            async sub  {
+        my ($event) = @_; push @sent, $event },
+        );
+    });
+
+    my ($set_cookie) = grep { lc($_->[0]) eq 'set-cookie' } @{$sent[0]{headers}};
+    ok $set_cookie, 'cookie issued';
+    like $set_cookie->[1], qr/;\s*Secure/, 'Secure attribute present when configured';
+};
+
 done_testing;

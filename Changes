@@ -45,6 +45,11 @@
     in PAGI::Utils::SecureCompare::secure_compare. Without it, comparing two
     undef signatures (or an undef against an empty string) incorrectly
     returned a match.
+  - PAGI::Middleware::CSRF: new 'secure' config (default 0) to add the
+    Secure attribute to the CSRF cookie, mirroring PAGI::Middleware::Session's
+    cookie_options secure convention. Off by default so plain-HTTP
+    development setups keep working; add secure => 1 for production HTTPS
+    deployments.
 
 0.002001 - 2026-06-30
   - PAGI::Endpoint / PAGI::Endpoint::Router: route-level event middleware is now
