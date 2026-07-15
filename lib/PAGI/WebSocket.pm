@@ -630,18 +630,30 @@ async sub receive_json {
 
 # Iteration helpers
 
+# Internal: run one per-message callback, running on_close cleanup before
+# re-raising if it dies (idempotent; _run_close_callbacks may already have run).
+# Takes a thunk so each caller's varying callback arg list stays at the call
+# site; awaits the thunk's Future and returns its value for callers that use it.
+async sub _guarded_dispatch {
+    my ($self, $thunk) = @_;
+
+    my $result;
+    my $ok = eval { $result = await $thunk->(); 1 };
+    unless ($ok) {
+        my $err = $@;
+        await $self->_run_close_callbacks;    # idempotent; may already have run
+        die $err;                             # re-raise: caller still sees the error
+    }
+
+    return $result;
+}
+
 async sub each_message {
     my ($self, $callback) = @_;
 
     while (my $event = await $self->receive) {
         next unless $event->{type} eq 'websocket.receive';
-
-        my $ok = eval { await $callback->($event); 1 };
-        unless ($ok) {
-            my $err = $@;
-            await $self->_run_close_callbacks;    # idempotent; may already have run
-            die $err;                             # re-raise: caller still sees the error
-        }
+        await $self->_guarded_dispatch(sub { $callback->($event) });
     }
 
     return;
@@ -651,12 +663,7 @@ async sub each_text {
     my ($self, $callback) = @_;
 
     while (my $text = await $self->receive_text) {
-        my $ok = eval { await $callback->($text); 1 };
-        unless ($ok) {
-            my $err = $@;
-            await $self->_run_close_callbacks;    # idempotent; may already have run
-            die $err;                             # re-raise: caller still sees the error
-        }
+        await $self->_guarded_dispatch(sub { $callback->($text) });
     }
 
     return;
@@ -666,12 +673,7 @@ async sub each_bytes {
     my ($self, $callback) = @_;
 
     while (my $bytes = await $self->receive_bytes) {
-        my $ok = eval { await $callback->($bytes); 1 };
-        unless ($ok) {
-            my $err = $@;
-            await $self->_run_close_callbacks;    # idempotent; may already have run
-            die $err;                             # re-raise: caller still sees the error
-        }
+        await $self->_guarded_dispatch(sub { $callback->($bytes) });
     }
 
     return;
@@ -685,12 +687,7 @@ async sub each_json {
         last unless defined $text;
 
         my $data = JSON::MaybeXS::decode_json($text);
-        my $ok = eval { await $callback->($data); 1 };
-        unless ($ok) {
-            my $err = $@;
-            await $self->_run_close_callbacks;    # idempotent; may already have run
-            die $err;                             # re-raise: caller still sees the error
-        }
+        await $self->_guarded_dispatch(sub { $callback->($data) });
     }
 
     return;

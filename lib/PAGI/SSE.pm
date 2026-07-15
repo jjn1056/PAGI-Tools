@@ -624,6 +624,24 @@ async sub run {
     return;
 }
 
+# Internal: run one per-item callback, running on_close cleanup before
+# re-raising if it dies (idempotent; _run_close_callbacks may already have run).
+# Takes a thunk so each caller's varying callback arg list stays at the call
+# site; awaits the thunk's Future and returns its value for callers that use it.
+async sub _guarded_dispatch {
+    my ($self, $thunk) = @_;
+
+    my $result;
+    my $ok = eval { $result = await $thunk->(); 1 };
+    unless ($ok) {
+        my $err = $@;
+        await $self->_run_close_callbacks;    # idempotent; may already have run
+        die $err;                             # re-raise: caller still sees the error
+    }
+
+    return $result;
+}
+
 # Iterate over items and send events
 async sub each {
     my ($self, $source, $callback) = @_;
@@ -637,13 +655,7 @@ async sub each {
         for my $item (@$source) {
             last if $self->is_closed;
 
-            my $result;
-            my $ok = eval { $result = await $callback->($item, $index++); 1 };
-            unless ($ok) {
-                my $err = $@;
-                await $self->_run_close_callbacks;    # idempotent; may already have run
-                die $err;                             # re-raise: caller still sees the error
-            }
+            my $result = await $self->_guarded_dispatch(sub { $callback->($item, $index++) });
 
             # If callback returns a hashref, treat as event spec
             if (ref $result eq 'HASH') {
@@ -657,13 +669,7 @@ async sub each {
             my $item = $source->();
             last unless defined $item;
 
-            my $result;
-            my $ok = eval { $result = await $callback->($item, $index++); 1 };
-            unless ($ok) {
-                my $err = $@;
-                await $self->_run_close_callbacks;    # idempotent; may already have run
-                die $err;                             # re-raise: caller still sees the error
-            }
+            my $result = await $self->_guarded_dispatch(sub { $callback->($item, $index++) });
 
             if (ref $result eq 'HASH') {
                 await $self->send_event(%$result);
