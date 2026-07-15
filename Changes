@@ -50,6 +50,41 @@
     cookie_options secure convention. Off by default so plain-HTTP
     development setups keep working; add secure => 1 for production HTTPS
     deployments.
+  - PAGI::WebSocket / PAGI::SSE: a per-message callback that dies inside the
+    iteration helpers (each_message/each_text/each_bytes/each_json on WebSocket,
+    each() on SSE) now runs on_close cleanup before the exception propagates.
+    Previously the callback ran with no eval guard, so a dying handler bypassed
+    on_close entirely and apps had to wrap each_* in their own eval to guarantee
+    cleanup. The guard runs _run_close_callbacks (idempotent) then re-raises, so
+    the caller still sees the error. SSE::every() already cleaned up but
+    swallowed the error afterward; it now re-raises too, canceling its
+    background disconnect watcher first. WebSocket::run()'s callback loop is
+    deliberately unchanged -- it isolates a single handler's error via on_error
+    and keeps serving the connection, which the terminal one-shot cleanup would
+    break.
+  - PAGI::Context::WebSocket / PAGI::Context::SSE: a terminal disconnect driven
+    through $c->run now fires the underlying PAGI::WebSocket/PAGI::SSE object's
+    on_close callbacks. The run() terminal branch read the shared receive
+    coderef directly and only recorded the reason, never touching the underlying
+    connection object, so its on_close never fired and is_closed/is_connected
+    (which delegate to it) then lied about connection state. A new
+    _sync_terminal_disconnect hook on the base Context (a no-op) is called at the
+    terminal branch and overridden by the WebSocket/SSE contexts to sync their
+    object via a new _note_disconnected method factored out of
+    WebSocket::receive()/SSE::run()'s inline disconnect handling. Both context
+    subclasses also gain on_close() croak-pointer stubs that redirect to
+    $c->websocket->on_close / $c->sse->on_close instead of dying with a generic
+    "no such method".
+  - PAGI::Test::Client: start() now drives the event loop during lifespan
+    startup and dies on startup failure instead of silently hanging or
+    swallowing the error. The startup wait busy-waited a 5s wall-clock deadline
+    without advancing the loop, so a startup hook awaiting real off-loop I/O
+    never resolved (start() spun the full deadline then marked started anyway),
+    and $send never inspected lifespan.startup.failed. Startup now resolves a
+    Future ($send marks it done on lifespan.startup.complete, failed with the
+    app's message on lifespan.startup.failed); a synchronous startup touches no
+    loop, an off-loop one is driven via Future::IO with a 5s backstop that fails
+    loud, and an app that unwinds without signaling startup croaks immediately.
 
 0.002001 - 2026-06-30
   - PAGI::Endpoint / PAGI::Endpoint::Router: route-level event middleware is now
