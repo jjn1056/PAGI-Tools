@@ -613,18 +613,24 @@ sub to_app {
     };
 
     # Emit an unmatched-route response using the event family that matches the
-    # scope. HTTP uses plain http.response.*; SSE and WebSocket scopes only
-    # accept their namespaced decline events (sse.http.response.* /
-    # websocket.http.response.*) before a stream/handshake starts — a plain
-    # http.response.* on those scopes raises on a conforming server. A custom
-    # not_found app, if configured, takes over for every scope type.
+    # scope. HTTP uses plain http.response.*; SSE uses sse.http.response.*.
+    # WebSocket uses websocket.http.response.* only when the optional denial
+    # extension is advertised, otherwise a close before acceptance asks the
+    # server to supply a bare 403. A custom not_found app, if configured, takes
+    # over for every scope type.
     my $send_not_found = async sub {
         my ($scope, $receive, $send) = @_;
         if ($not_found) {
             await $not_found->($scope, $receive, $send);
             return;
         }
-        my $type   = $scope->{type} // 'http';
+        my $type = $scope->{type} // 'http';
+        if ($type eq 'websocket'
+                && !exists(($scope->{extensions} // {})->{'websocket.http.response'})) {
+            await $send->({ type => 'websocket.close' });
+            return;
+        }
+
         my $prefix = $type eq 'http' ? 'http.response' : "$type.http.response";
         await $send->({
             type    => "$prefix.start",
@@ -782,15 +788,14 @@ HTTP routes additionally match on method. Returns 404 for unmatched paths
 and 405 for unmatched HTTP methods. Lifespan events are automatically ignored.
 
 The 404 response is emitted with the event family that matches the scope:
-plain C<http.response.*> on an HTTP scope, and the namespaced decline events
-C<sse.http.response.*> / C<websocket.http.response.*> on SSE and WebSocket
-scopes. This matters because those scopes reject a plain C<http.response.*>
-before a stream or handshake begins, so an unmatched SSE or WebSocket route
-returns a real 404 instead of crashing the connection.
+plain C<http.response.*> on an HTTP scope and C<sse.http.response.*> on an SSE
+scope. On a WebSocket scope, C<websocket.http.response.*> is used only when the
+optional C<websocket.http.response> extension is advertised. Without that
+extension, an unmatched WebSocket route sends C<websocket.close> before
+acceptance and the server supplies the spec-defined bare 403 response.
 
 The C<sse.http.response.*> decline events require a server that implements them
-(L<PAGI::Server> 0.002005 or later); the C<websocket.http.response.*> denial is
-the long-standing WebSocket denial-response extension.
+(L<PAGI::Server> 0.002005 or later).
 
 =head1 OPTIONS
 

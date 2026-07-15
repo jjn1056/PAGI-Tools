@@ -329,7 +329,11 @@ subtest 'mixed protocol routing' => sub {
 
     # Test 404 for unmatched websocket path
     ($send, $sent) = mock_send();
-    $app->({ type => 'websocket', path => '/ws/unknown' }, sub { Future->done }, $send)->get;
+    $app->({
+        type       => 'websocket',
+        path       => '/ws/unknown',
+        extensions => { 'websocket.http.response' => {} },
+    }, sub { Future->done }, $send)->get;
     is $sent->[0]{status}, 404, 'unmatched websocket returns 404';
 
     # Test lifespan is ignored
@@ -455,7 +459,11 @@ subtest 'constraints on websocket and sse routes' => sub {
 
     # WebSocket fails constraint
     ($send, $sent) = mock_send();
-    $app->({ type => 'websocket', path => '/ws/lobby!!' }, sub { Future->done }, $send)->get;
+    $app->({
+        type       => 'websocket',
+        path       => '/ws/lobby!!',
+        extensions => { 'websocket.http.response' => {} },
+    }, sub { Future->done }, $send)->get;
     is $sent->[0]{status}, 404, 'websocket inline constraint rejects';
 
     # SSE with chained constraint

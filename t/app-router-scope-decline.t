@@ -7,11 +7,12 @@ use Future::AsyncAwait;
 use PAGI::App::Router;
 
 # An unmatched route must answer with the event family that matches the scope:
-# plain http.response.* on http, but the namespaced decline events
-# sse.http.response.* / websocket.http.response.* on those scopes. Emitting a
-# plain http.response.* on an sse/websocket scope raises on a conforming server
-# (the per-scope send-dispatch has no http.response.* branch), so an unmatched
-# SSE/WS route would crash the connection instead of returning a 404.
+# plain http.response.* on http and sse.http.response.* on SSE. WebSocket uses
+# websocket.http.response.* only when the optional denial extension is
+# advertised; otherwise it closes before acceptance so the server returns the
+# portable bare 403. Emitting a plain http.response.* on an sse/websocket scope
+# raises on a conforming server (the per-scope send-dispatch has no
+# http.response.* branch).
 
 sub mock_send {
     my @sent;
@@ -44,17 +45,32 @@ subtest 'unmatched SSE route -> sse.http.response.* 404' => sub {
     is $sent->[1]{more},   0,                         'body closes the response';
 };
 
-subtest 'unmatched WebSocket route -> websocket.http.response.* 404' => sub {
+subtest 'unmatched WebSocket route with denial extension -> namespaced 404' => sub {
+    my $router = PAGI::App::Router->new;
+    my $app = $router->to_app;
+
+    my ($send, $sent) = mock_send();
+    $app->({
+        type       => 'websocket',
+        path       => '/nope',
+        extensions => { 'websocket.http.response' => {} },
+    }, sub { Future->done }, $send)->get;
+
+    is $sent->[0]{type},   'websocket.http.response.start', 'extension permits custom start';
+    is $sent->[0]{status}, 404,                             'status 404';
+    is $sent->[1]{type},   'websocket.http.response.body',  'extension permits custom body';
+    is $sent->[1]{more},   0,                               'body closes the response';
+};
+
+subtest 'unmatched WebSocket route without denial extension -> portable close' => sub {
     my $router = PAGI::App::Router->new;
     my $app = $router->to_app;
 
     my ($send, $sent) = mock_send();
     $app->({ type => 'websocket', path => '/nope' }, sub { Future->done }, $send)->get;
 
-    is $sent->[0]{type},   'websocket.http.response.start', 'start event is namespaced for ws';
-    is $sent->[0]{status}, 404,                             'status 404';
-    is $sent->[1]{type},   'websocket.http.response.body',  'body event is namespaced for ws';
-    is $sent->[1]{more},   0,                               'body closes the response';
+    is $sent, [{ type => 'websocket.close' }],
+        'close before accept asks the server for the spec-defined bare 403';
 };
 
 subtest 'custom not_found handler is still delegated to on every scope' => sub {

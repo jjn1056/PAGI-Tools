@@ -389,7 +389,11 @@ subtest 'websocket and sse in groups' => sub {
 
     # Without prefix — 404
     ($send, $sent) = mock_send();
-    $app->({ type => 'websocket', path => '/chat/general' }, sub { Future->done }, $send)->get;
+    $app->({
+        type       => 'websocket',
+        path       => '/chat/general',
+        extensions => { 'websocket.http.response' => {} },
+    }, sub { Future->done }, $send)->get;
     is $sent->[0]{status}, 404, 'ws without group prefix is 404';
 };
 
