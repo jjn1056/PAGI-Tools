@@ -1,90 +1,49 @@
 # Revision history for PAGI-Tools
 
 0.002002 - 2026-07-15
-  - PAGI::Middleware::Session: non-'http' scopes that still carry a headers
-    key (WebSocket, SSE upgrades) now get a READ-ONLY, store-agnostic session
-    populated via the same state->extract + store->get path 'http' uses,
-    instead of being skipped entirely. Nothing is ever saved for one of these
-    scopes (there is no http.response.start-shaped channel to hook a save
-    onto on a protocol upgrade); an unresolvable session id gets an explicit
-    empty hashref, not a missing key, so app code that unconditionally builds
-    a PAGI::Session from the scope keeps working uniformly across scope
-    types. A scope with no headers key at all (lifespan) is still skipped
-    entirely, unchanged. See PAGI::Middleware::Session's own new "NON-HTTP
-    SCOPES" POD section.
-  - PAGI::Middleware::CSRF: new 'enforce' config, 'header' (default, unchanged
-    behavior: unsafe methods need a matching header token or the middleware
-    403s) or 'app' (issue-only: the middleware mints/persists the cookie
-    token and stashes it into scope as csrf_token for every method, never
-    auto-rejecting; the app validates via the new PAGI::Context helpers).
-    'app' mode exists because the middleware cannot read form-submitted
-    params without buffering/replaying the body event stream, so it hands
-    validation to the app instead.
-  - PAGI::Context: add csrf_token (reads the token PAGI::Middleware::CSRF
-    stashed in scope) and csrf_verify (timing-safe check of a submitted
-    token against it). Both flow to PAGI::Nano contexts by inheritance.
-  - REMOVED PAGI::Middleware::CSRF's 'token_param' config. It was dead: the
-    documented form-field lookup was never implemented (only the header was
-    ever checked), so the option did nothing. No replacement/compat shim --
-    use enforce => 'app' with $ctx->csrf_verify for form-submitted tokens.
-  - PAGI::Utils::SecureCompare: new module for the constant-time string
-    comparison shared by PAGI::Middleware::CSRF and PAGI::Context (one
-    implementation instead of a private per-class copy).
+  - PAGI::Middleware::Session: non-'http' scopes that carry a headers key
+    (WebSocket, SSE upgrades) now get a READ-ONLY session populated the same
+    way 'http' does, instead of being skipped; nothing is ever saved for them,
+    and an unresolvable id yields an empty hashref rather than a missing key.
+    See the new "NON-HTTP SCOPES" POD section.
+  - PAGI::Middleware::CSRF: new 'enforce' config -- 'header' (default,
+    unchanged: unsafe methods need a matching header token or a 403) or 'app'
+    (issue-only: mint/stash the token for every method, never auto-reject, and
+    let the app validate). 'app' exists because the middleware cannot read
+    form params without buffering the body stream.
+  - PAGI::Context: add csrf_token and csrf_verify (timing-safe token check).
+    Both inherit into PAGI::Nano contexts.
+  - REMOVED PAGI::Middleware::CSRF's 'token_param' config: it was dead (the
+    form-field lookup was never implemented). Use enforce => 'app' with
+    $ctx->csrf_verify for form tokens.
+  - PAGI::Utils::SecureCompare: new module for the constant-time string compare
+    shared by PAGI::Middleware::CSRF and PAGI::Context.
   - Docs: PAGI::Middleware::CSRF's USAGE section no longer contradicts itself
-    (a JS getCookie() example against a cookie set HttpOnly, which JS cannot
-    read); it now documents the header flow (meta tag + fetch header) and
-    the form flow (hidden field + $ctx->csrf_verify) separately and honestly.
-  - t/integration/sse-decline-end-to-end.t now skips unless the installed
-    PAGI::Server is >= 0.002005, the release that added the
-    sse.http.response.* decline protocol this test exercises. Older servers
-    don't recognize 'sse.http.response.start' and answer the unmatched SSE
-    route with a 500 instead of a 404 (CPAN Testers FAIL against PAGI-Tools
-    0.002001, reported with PAGI::Server 0.001012 on @INC).
-  - PAGI::Middleware::Auth::Bearer: fix _secure_compare to reject undef
-    arguments instead of numifying them, matching the guard already present
-    in PAGI::Utils::SecureCompare::secure_compare. Without it, comparing two
-    undef signatures (or an undef against an empty string) incorrectly
-    returned a match.
-  - PAGI::Middleware::CSRF: new 'secure' config (default 0) to add the
-    Secure attribute to the CSRF cookie, mirroring PAGI::Middleware::Session's
-    cookie_options secure convention. Off by default so plain-HTTP
-    development setups keep working; add secure => 1 for production HTTPS
-    deployments.
-  - PAGI::WebSocket / PAGI::SSE: a per-message callback that dies inside the
-    iteration helpers (each_message/each_text/each_bytes/each_json on WebSocket,
-    each() on SSE) now runs on_close cleanup before the exception propagates.
-    Previously the callback ran with no eval guard, so a dying handler bypassed
-    on_close entirely and apps had to wrap each_* in their own eval to guarantee
-    cleanup. The guard runs _run_close_callbacks (idempotent) then re-raises, so
-    the caller still sees the error. SSE::every() already cleaned up but
-    swallowed the error afterward; it now re-raises too, canceling its
-    background disconnect watcher first. WebSocket::run()'s callback loop is
-    deliberately unchanged -- it isolates a single handler's error via on_error
-    and keeps serving the connection, which the terminal one-shot cleanup would
-    break.
+    (a JS getCookie() against an HttpOnly cookie); it now documents the header
+    and form flows separately.
+  - t/integration/sse-decline-end-to-end.t now skips unless PAGI::Server is
+    >= 0.002005, the release that added the sse.http.response.* decline
+    protocol it exercises. Fixes a CPAN Testers FAIL against 0.002001 (older
+    servers answer an unmatched SSE route with 500 instead of 404).
+  - PAGI::Middleware::Auth::Bearer: _secure_compare now rejects undef arguments
+    instead of numifying them, so two undef (or undef vs empty) signatures no
+    longer compare equal.
+  - PAGI::Middleware::CSRF: new 'secure' config (default 0) to set the Secure
+    attribute on the CSRF cookie; enable for HTTPS deployments.
+  - PAGI::WebSocket / PAGI::SSE: a per-message callback that dies in the
+    iteration helpers (each_message/each_text/each_bytes/each_json, SSE each()
+    and every()) now runs on_close cleanup before re-raising, instead of
+    bypassing it. WebSocket::run() is unchanged -- it isolates errors and keeps
+    serving.
   - PAGI::Context::WebSocket / PAGI::Context::SSE: a terminal disconnect driven
-    through $c->run now fires the underlying PAGI::WebSocket/PAGI::SSE object's
-    on_close callbacks. The run() terminal branch read the shared receive
-    coderef directly and only recorded the reason, never touching the underlying
-    connection object, so its on_close never fired and is_closed/is_connected
-    (which delegate to it) then lied about connection state. A new
-    _sync_terminal_disconnect hook on the base Context (a no-op) is called at the
-    terminal branch and overridden by the WebSocket/SSE contexts to sync their
-    object via a new _note_disconnected method factored out of
-    WebSocket::receive()/SSE::run()'s inline disconnect handling. Both context
-    subclasses also gain on_close() croak-pointer stubs that redirect to
-    $c->websocket->on_close / $c->sse->on_close instead of dying with a generic
-    "no such method".
+    through $c->run now fires the underlying object's on_close (previously it
+    only recorded the reason, so on_close never fired and is_closed/is_connected
+    lied). Both also gain on_close() stubs pointing at
+    $c->websocket->on_close / $c->sse->on_close.
   - PAGI::Test::Client: start() now drives the event loop during lifespan
-    startup and dies on startup failure instead of silently hanging or
-    swallowing the error. The startup wait busy-waited a 5s wall-clock deadline
-    without advancing the loop, so a startup hook awaiting real off-loop I/O
-    never resolved (start() spun the full deadline then marked started anyway),
-    and $send never inspected lifespan.startup.failed. Startup now resolves a
-    Future ($send marks it done on lifespan.startup.complete, failed with the
-    app's message on lifespan.startup.failed); a synchronous startup touches no
-    loop, an off-loop one is driven via Future::IO with a 5s backstop that fails
-    loud, and an app that unwinds without signaling startup croaks immediately.
+    startup and dies on failure, instead of busy-waiting a 5s deadline without
+    advancing the loop (which hung off-loop startup hooks and ignored
+    lifespan.startup.failed).
 
 0.002001 - 2026-06-30
   - PAGI::Endpoint / PAGI::Endpoint::Router: route-level event middleware is now
