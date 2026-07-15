@@ -782,6 +782,13 @@ async sub _trigger_ctx_error {
     }
 }
 
+# Hook for protocol subclasses (Context::WebSocket, Context::SSE) to sync
+# their underlying object's close state when the terminal disconnect event
+# is consumed here in _run() rather than through the object's own
+# receive()/run(). The base class has no underlying object, so this is a
+# no-op; overridden by the subclasses that have one.
+async sub _sync_terminal_disconnect { return; }
+
 # Run the event dispatch loop. A plain sub so a re-entrant call croaks
 # synchronously (rather than as a failed Future); the async loop is in _run().
 # Always resolves (never rejects). Returns reason: 'disconnect', 'stop', 'error'.
@@ -839,6 +846,7 @@ async sub _run {
 
         if ($terminal && $type eq $terminal) {
             $reason = 'disconnect';
+            await $self->_sync_terminal_disconnect($event->{code}, $event->{reason});
             last LOOP;
         }
     }

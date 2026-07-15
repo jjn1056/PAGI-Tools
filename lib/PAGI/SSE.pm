@@ -554,6 +554,23 @@ async sub _run_close_callbacks {
     $self->{_on_error} = [];
 }
 
+# Internal: mark closed and fire on_close callbacks for a disconnect that
+# arrived directly off the wire (not via close()). Shared by run()'s own
+# disconnect handling and PAGI::Context::SSE's _sync_terminal_disconnect hook
+# (fired when the disconnect is instead consumed via $ctx->run()). Does NOT
+# send an sse.close wire event -- the peer is already gone.
+async sub _note_disconnected {
+    my ($self, $code, $reason) = @_;
+    # $code is accepted for signature parity with PAGI::WebSocket's version
+    # (Context::WebSocket and Context::SSE both call this positionally) but
+    # unused -- SSE has no RFC6455-style close code, only a reason.
+
+    $self->{_disconnect_reason} = $reason // 'client_closed';
+    $self->_set_closed;
+    await $self->_run_close_callbacks;
+    return;
+}
+
 # Close the connection
 async sub close {
     my ($self, %opts) = @_;
@@ -599,9 +616,7 @@ async sub run {
         my $type = $event->{type} // '';
 
         if ($type eq 'sse.disconnect') {
-            $self->{_disconnect_reason} = $event->{reason} // 'client_closed';
-            $self->_set_closed;
-            await $self->_run_close_callbacks;
+            await $self->_note_disconnected(undef, $event->{reason});
             last;
         }
     }

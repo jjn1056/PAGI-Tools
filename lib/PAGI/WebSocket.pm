@@ -292,6 +292,20 @@ async sub _run_close_callbacks {
     $self->{_on_message} = [];
 }
 
+# Internal: mark closed and fire on_close callbacks for a disconnect that
+# arrived directly off the wire (not via close()). Shared by receive()'s own
+# disconnect handling and PAGI::Context::WebSocket's _sync_terminal_disconnect
+# hook (fired when the disconnect is instead consumed via $ctx->run()). Does
+# NOT send a websocket.close wire event -- the peer is already gone.
+async sub _note_disconnected {
+    my ($self, $code, $reason) = @_;
+
+    # 1005 = No Status Rcvd (RFC 6455)
+    $self->_set_closed($code // 1005, $reason // '');
+    await $self->_run_close_callbacks;
+    return;
+}
+
 # Register callback to run on errors
 sub on_error {
     my ($self, $callback) = @_;
@@ -559,11 +573,7 @@ async sub receive {
         my $event = await $self->{receive}->();
 
         if (!defined($event) || $event->{type} eq 'websocket.disconnect') {
-            # 1005 = No Status Rcvd (RFC 6455)
-            my $code = $event->{code} // 1005;
-            my $reason = $event->{reason} // '';
-            $self->_set_closed($code, $reason);
-            await $self->_run_close_callbacks;
+            await $self->_note_disconnected($event->{code}, $event->{reason});
             return undef;
         }
 

@@ -542,6 +542,52 @@ subtest 'run() is Context dispatcher, not WS run()' => sub {
 };
 
 # ---------------------------------------------------------------------------
+# Terminal disconnect syncs underlying object (B1)
+# ---------------------------------------------------------------------------
+
+subtest 'ws on_close fires and state syncs on $ctx->run terminal disconnect' => sub {
+    my $close_fired = 0;
+    my ($ctx) = make_ws_ctx(events => [
+        { type => 'websocket.disconnect', code => 1001, reason => 'going away' },
+    ]);
+
+    (async sub { await $ctx->accept })->()->get;
+    $ctx->ws->on_close(sub { $close_fired = 1 });
+
+    ok($ctx->is_connected, 'sanity: connected after accept, before run');
+
+    my $reason = (async sub { return await $ctx->run })->()->get;
+
+    is($reason, 'disconnect', 'run resolved with disconnect reason');
+    ok($close_fired, 'ws on_close callback fired');
+    ok($ctx->is_closed, '$ctx->is_closed true after run() terminal disconnect');
+    ok(!$ctx->is_connected, '$ctx->is_connected false after run() terminal disconnect');
+};
+
+subtest '_sync_terminal_disconnect is a no-op when ->ws was never touched' => sub {
+    my ($ctx) = make_ws_ctx(events => [
+        { type => 'websocket.disconnect', code => 1001, reason => 'going away' },
+    ]);
+
+    # Never call $ctx->ws / $ctx->accept - a pure-dispatcher context should
+    # not pay for lazily instantiating the underlying object.
+    my $reason = (async sub { return await $ctx->run })->()->get;
+
+    is($reason, 'disconnect', 'run still resolves with disconnect reason');
+    ok(!exists $ctx->{_websocket}, 'underlying ws object was never instantiated');
+};
+
+subtest 'on_close() croaks with a pointer to the underlying object' => sub {
+    my ($ctx) = make_ws_ctx();
+
+    like(
+        dies { $ctx->on_close(sub {}) },
+        qr/\$c->websocket->on_close/,
+        'on_close explains where the real method lives',
+    );
+};
+
+# ---------------------------------------------------------------------------
 # ws() accessor still works
 # ---------------------------------------------------------------------------
 
