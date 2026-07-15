@@ -229,6 +229,7 @@ sub _base64url_encode {
 sub _secure_compare {
     my ($self, $a, $b) = @_;
 
+    return 0 unless defined $a && defined $b;
     return 0 unless length($a) == length($b);
     my $result = 0;
     for my $i (0 .. length($a) - 1) {

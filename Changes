@@ -40,6 +40,11 @@
     don't recognize 'sse.http.response.start' and answer the unmatched SSE
     route with a 500 instead of a 404 (CPAN Testers FAIL against PAGI-Tools
     0.002001, reported with PAGI::Server 0.001012 on @INC).
+  - PAGI::Middleware::Auth::Bearer: fix _secure_compare to reject undef
+    arguments instead of numifying them, matching the guard already present
+    in PAGI::Utils::SecureCompare::secure_compare. Without it, comparing two
+    undef signatures (or an undef against an empty string) incorrectly
+    returned a match.
 
 0.002001 - 2026-06-30
   - PAGI::Endpoint / PAGI::Endpoint::Router: route-level event middleware is now
