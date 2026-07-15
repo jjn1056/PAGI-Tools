@@ -1,6 +1,6 @@
 # Revision history for PAGI-Tools
 
-0.002002
+0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that still carry a headers
     key (WebSocket, SSE upgrades) now get a READ-ONLY, store-agnostic session
     populated via the same state->extract + store->get path 'http' uses,
