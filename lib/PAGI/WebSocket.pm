@@ -625,7 +625,13 @@ async sub each_message {
 
     while (my $event = await $self->receive) {
         next unless $event->{type} eq 'websocket.receive';
-        await $callback->($event);
+
+        my $ok = eval { await $callback->($event); 1 };
+        unless ($ok) {
+            my $err = $@;
+            await $self->_run_close_callbacks;    # idempotent; may already have run
+            die $err;                             # re-raise: caller still sees the error
+        }
     }
 
     return;
@@ -635,7 +641,12 @@ async sub each_text {
     my ($self, $callback) = @_;
 
     while (my $text = await $self->receive_text) {
-        await $callback->($text);
+        my $ok = eval { await $callback->($text); 1 };
+        unless ($ok) {
+            my $err = $@;
+            await $self->_run_close_callbacks;    # idempotent; may already have run
+            die $err;                             # re-raise: caller still sees the error
+        }
     }
 
     return;
@@ -645,7 +656,12 @@ async sub each_bytes {
     my ($self, $callback) = @_;
 
     while (my $bytes = await $self->receive_bytes) {
-        await $callback->($bytes);
+        my $ok = eval { await $callback->($bytes); 1 };
+        unless ($ok) {
+            my $err = $@;
+            await $self->_run_close_callbacks;    # idempotent; may already have run
+            die $err;                             # re-raise: caller still sees the error
+        }
     }
 
     return;
@@ -659,7 +675,12 @@ async sub each_json {
         last unless defined $text;
 
         my $data = JSON::MaybeXS::decode_json($text);
-        await $callback->($data);
+        my $ok = eval { await $callback->($data); 1 };
+        unless ($ok) {
+            my $err = $@;
+            await $self->_run_close_callbacks;    # idempotent; may already have run
+            die $err;                             # re-raise: caller still sees the error
+        }
     }
 
     return;

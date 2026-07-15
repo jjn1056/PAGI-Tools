@@ -622,7 +622,13 @@ async sub each {
         for my $item (@$source) {
             last if $self->is_closed;
 
-            my $result = await $callback->($item, $index++);
+            my $result;
+            my $ok = eval { $result = await $callback->($item, $index++); 1 };
+            unless ($ok) {
+                my $err = $@;
+                await $self->_run_close_callbacks;    # idempotent; may already have run
+                die $err;                             # re-raise: caller still sees the error
+            }
 
             # If callback returns a hashref, treat as event spec
             if (ref $result eq 'HASH') {
@@ -636,7 +642,13 @@ async sub each {
             my $item = $source->();
             last unless defined $item;
 
-            my $result = await $callback->($item, $index++);
+            my $result;
+            my $ok = eval { $result = await $callback->($item, $index++); 1 };
+            unless ($ok) {
+                my $err = $@;
+                await $self->_run_close_callbacks;    # idempotent; may already have run
+                die $err;                             # re-raise: caller still sees the error
+            }
 
             if (ref $result eq 'HASH') {
                 await $self->send_event(%$result);
@@ -682,7 +694,8 @@ async sub every {
             # Callback failed - connection likely closed or error occurred
             $self->_set_closed;
             await $self->_run_close_callbacks;
-            last;
+            $disconnect_future->cancel if $disconnect_future->can('cancel') && !$disconnect_future->is_ready;
+            die $err;    # re-raise: caller still sees the error, matching each()/each_*
         }
 
         # Race between sleep and disconnect detection
