@@ -1,16 +1,14 @@
 # Revision history for PAGI-Tools
 
-0.002003
-  - PAGI::App::Router: an unmatched WebSocket route now uses the optional
-    websocket.http.response denial extension only when advertised; otherwise
-    it closes before acceptance so the server supplies the bare 403 response.
-
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key
     (WebSocket, SSE upgrades) now get a READ-ONLY session populated the same
     way 'http' does, instead of being skipped; nothing is ever saved for them,
     and an unresolvable id yields an empty hashref rather than a missing key.
     See the new "NON-HTTP SCOPES" POD section.
+  - PAGI::App::Router: an unmatched WebSocket route now uses the optional
+    websocket.http.response denial extension only when advertised; otherwise
+    it closes before acceptance so the server supplies the bare 403 response.
   - PAGI::Middleware::CSRF: new 'enforce' config -- 'header' (default,
     unchanged: unsafe methods need a matching header token or a 403) or 'app'
     (issue-only: mint/stash the token for every method, never auto-reject, and
