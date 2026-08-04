@@ -6,6 +6,11 @@ use Test2::V0;
 my @core_modules = qw(
     PAGI::Tools
     PAGI::Authority
+    PAGI::Routing
+    PAGI::Routing::Router
+    PAGI::Routing::Route
+    PAGI::Routing::Mount
+    PAGI::Routing::Middleware
     PAGI::Middleware
     PAGI::Middleware::Builder
     PAGI::App::Router
