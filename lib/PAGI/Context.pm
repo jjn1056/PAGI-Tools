@@ -7,6 +7,7 @@ use Scalar::Util qw(blessed);
 use Future::AsyncAwait;
 use Future;
 use PAGI::Utils::SecureCompare qw(secure_compare);
+use PAGI::Authority ();
 
 =encoding UTF-8
 
@@ -25,6 +26,7 @@ PAGI::Context - Per-request context with protocol-specific subclasses
     # Shared methods (all protocol types)
     my $type  = $ctx->type;        # 'http', 'websocket', 'sse'
     my $path  = $ctx->path;
+    my $host  = $ctx->host;
     my $stash = $ctx->stash;       # PAGI::Stash
     my $session = $ctx->session;   # PAGI::Session
 
@@ -75,6 +77,8 @@ subclasses so you can use C<$ctx> as your single object:
 Each context type has a different set of available methods.  Calling a
 method that belongs to a different protocol type raises a standard Perl
 C<Can't locate object method> error.
+
+All three built-in Context types inherit the base C<host> accessor.
 
     Method              HTTP    WebSocket   SSE
     ──────────────────  ──────  ──────────  ──────
@@ -191,6 +195,7 @@ sub _resolve_class {
     $ctx->client;         # $scope->{client}
     $ctx->server;         # $scope->{server}
     $ctx->headers;        # $scope->{headers} arrayref of [name, value]
+    $ctx->host;           # validated Host field or undef
 
 =cut
 
@@ -203,6 +208,23 @@ sub scheme       { shift->{scope}{scheme} // 'http' }
 sub client       { shift->{scope}{client} }
 sub server       { shift->{scope}{server} }
 sub headers      { shift->{scope}{headers} }
+
+=head2 host
+
+    my $host = $ctx->host;
+
+Returns the complete validated Host field, including an explicit port. Returns
+C<undef> only when Host is absent, and croaks when Host is malformed or occurs
+more than once. All built-in HTTP, WebSocket, and SSE Context types inherit
+this accessor. Use L</header> with C<'host'> as the raw, last-value escape
+hatch when that behavior is required.
+
+=cut
+
+sub host {
+    my ($self) = @_;
+    return PAGI::Authority->host_from_scope($self->{scope});
+}
 
 =head2 assert_http, assert_websocket, assert_sse
 
@@ -286,7 +308,8 @@ sub is_sse       { (shift->{scope}{type} // '') eq 'sse' }
     my $value = $ctx->header('Content-Type');
 
 Returns the last value for the named header (case-insensitive), or
-C<undef> if not found.
+C<undef> if not found. In particular, C<< $ctx->header('host') >> is the raw,
+last-value escape hatch; use L</host> for validated Host semantics.
 
 =cut
 
