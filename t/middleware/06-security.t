@@ -386,6 +386,154 @@ subtest 'TrustedHosts supports wildcard patterns' => sub {
     ok $app_called, 'wildcard pattern matches subdomain';
 };
 
+subtest 'TrustedHosts rejects invalid Host authority before downstream' => sub {
+    my @cases = (
+        [
+            [['Host', 'example.com'], ['host', 'example.com']],
+            'duplicate identical Host',
+            ['example.com'],
+        ],
+        [
+            [['Host', 'example.com'], ['host', 'evil.example']],
+            'duplicate conflicting Host',
+            ['example.com'],
+        ],
+        [
+            [['Host', 'example.com/path']],
+            'malformed Host',
+            ['example.com/path'],
+        ],
+    );
+
+    for my $case (@cases) {
+        my $mw = PAGI::Middleware::TrustedHosts->new(hosts => $case->[2]);
+        my $app_calls = 0;
+        my $wrapped = $mw->wrap(async sub { $app_calls++ });
+        my @sent;
+
+        run_async(async sub {
+            await $wrapped->(
+                {
+                    type    => 'http',
+                    path    => '/',
+                    method  => 'GET',
+                    headers => $case->[0],
+                },
+                async sub { { type => 'http.disconnect' } },
+                async sub { my ($event) = @_; push @sent, $event },
+            );
+        });
+
+        is $app_calls, 0, "$case->[1] does not call downstream";
+        is scalar(@sent), 2, "$case->[1] sends start and terminal body";
+        is $sent[0]{type}, 'http.response.start', "$case->[1] sends response start";
+        is $sent[0]{status}, 400, "$case->[1] returns 400";
+        is $sent[1], {
+            type => 'http.response.body',
+            body => 'Invalid Host header',
+            more => 0,
+        }, "$case->[1] returns a generic terminal body";
+    }
+};
+
+subtest 'TrustedHosts applies allowlist and allow_empty after structural validation' => sub {
+    my @cases = (
+        {
+            name        => 'valid Host with explicit port',
+            config      => { hosts => ['example.com:8080'] },
+            headers     => [['Host', 'example.com:8080']],
+            app_calls   => 1,
+            first_status => 200,
+        },
+        {
+            name        => 'missing Host allowed by allow_empty',
+            config      => { hosts => ['example.com'], allow_empty => 1 },
+            headers     => [],
+            app_calls   => 1,
+            first_status => 200,
+        },
+        {
+            name        => 'missing Host rejected without allow_empty',
+            config      => { hosts => ['example.com'] },
+            headers     => [],
+            app_calls   => 0,
+            first_status => 400,
+        },
+    );
+
+    for my $case (@cases) {
+        my $mw = PAGI::Middleware::TrustedHosts->new(%{$case->{config}});
+        my $app_calls = 0;
+        my $wrapped = $mw->wrap(async sub {
+            my ($scope, $receive, $send) = @_;
+            $app_calls++;
+            await $send->({ type => 'http.response.start', status => 200, headers => [] });
+            await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+        });
+        my @sent;
+
+        run_async(async sub {
+            await $wrapped->(
+                {
+                    type    => 'http',
+                    path    => '/',
+                    method  => 'GET',
+                    headers => $case->{headers},
+                },
+                async sub { { type => 'http.disconnect' } },
+                async sub { my ($event) = @_; push @sent, $event },
+            );
+        });
+
+        is $app_calls, $case->{app_calls}, "$case->{name}: downstream call count";
+        is $sent[0]{status}, $case->{first_status}, "$case->{name}: response status";
+    }
+};
+
+subtest 'TrustedHosts preserves non-HTTP pass-through gate' => sub {
+    my $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com']);
+    my $seen_scope;
+    my $scope = {
+        type    => 'websocket',
+        path    => '/socket',
+        headers => [['Host', 'one.example'], ['host', 'two.example']],
+    };
+    my $wrapped = $mw->wrap(async sub {
+        ($seen_scope) = @_;
+    });
+
+    run_async(async sub {
+        await $wrapped->(
+            $scope,
+            async sub { { type => 'websocket.disconnect' } },
+            async sub { },
+        );
+    });
+
+    is $seen_scope, $scope, 'WebSocket scope with duplicate Host passes through untouched';
+};
+
+subtest 'TrustedHosts does not catch downstream exceptions' => sub {
+    my $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com']);
+    my $diagnostic = "TrustedHosts downstream sentinel\n";
+    my $wrapped = $mw->wrap(async sub { die $diagnostic });
+
+    my $future = $wrapped->(
+        {
+            type    => 'http',
+            path    => '/',
+            method  => 'GET',
+            headers => [['Host', 'example.com']],
+        },
+        async sub { { type => 'http.disconnect' } },
+        async sub { },
+    );
+    $loop->await($future);
+
+    ok $future->is_failed, 'wrapped Future remains failed';
+    is [$future->failure]->[0], $diagnostic, 'exact downstream failure propagates';
+};
+
 # =============================================================================
 # Test: CSRF middleware validates tokens on POST requests
 # =============================================================================

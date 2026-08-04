@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Authority;
 
 =head1 NAME
 
@@ -21,8 +22,12 @@ PAGI::Middleware::TrustedHosts - Host header validation middleware
 
 =head1 DESCRIPTION
 
-PAGI::Middleware::TrustedHosts validates the Host header against a list
-of allowed hosts. This helps prevent host header injection attacks.
+PAGI::Middleware::TrustedHosts structurally validates the Host header before
+matching its raw, validated value against a list of allowed hosts. Duplicate or
+malformed Host headers receive a generic HTTP 400 response. This helps prevent
+host header injection attacks.
+
+Non-HTTP scopes continue to pass through unchanged without Host validation.
 
 =head1 CONFIGURATION
 
@@ -74,8 +79,16 @@ sub wrap {
             return;
         }
 
-        # Get Host header
-        my $host = $self->_get_header($scope, 'host');
+        my ($host, $authority_error);
+        {
+            local $@;
+            $host = eval { PAGI::Authority->host_from_scope($scope) };
+            $authority_error = $@;
+        }
+        if ($authority_error) {
+            await $self->_send_error($send, 400, 'Invalid Host header');
+            return;
+        }
 
         # Check if host is allowed
         if (!defined $host || $host eq '') {
@@ -87,7 +100,7 @@ sub wrap {
             return;
         }
 
-        # Strip port for matching if needed
+        # Match the raw value after structural validation
         my $host_for_match = $host;
 
         # Check against patterns
@@ -105,16 +118,6 @@ sub wrap {
             await $self->_send_error($send, 400, 'Invalid Host header');
         }
     };
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
 }
 
 async sub _send_error {

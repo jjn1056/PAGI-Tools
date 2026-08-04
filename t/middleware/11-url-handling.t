@@ -196,6 +196,146 @@ subtest 'HTTPSRedirect - excludes paths' => sub {
     is $events[0]{status}, 200, 'excluded path not redirected';
 };
 
+subtest 'HTTPSRedirect - builds redirect authority from Host or server' => sub {
+    my @cases = (
+        {
+            name     => 'Host is preferred over server',
+            scope    => make_scope(
+                path    => '/preferred',
+                headers => [['Host', 'header.example:8443']],
+                server  => ['fallback.example', 80],
+            ),
+            location => 'https://header.example:8443/preferred',
+        },
+        {
+            name     => 'explicit Host port 80 is preserved',
+            scope    => make_scope(
+                path    => '/port',
+                headers => [['Host', 'example.com:80']],
+            ),
+            location => 'https://example.com:80/port',
+        },
+        {
+            name     => 'absent Host falls back to HTTP default-port server',
+            scope    => make_scope(
+                path    => '/path',
+                headers => [],
+                server  => ['example.com', 80],
+            ),
+            location => 'https://example.com/path',
+        },
+        {
+            name     => 'server IPv6 is bracketed',
+            scope    => make_scope(
+                path    => '/v6',
+                headers => [],
+                server  => ['2001:db8::1', 8080],
+            ),
+            location => 'https://[2001:db8::1]:8080/v6',
+        },
+        {
+            name     => 'query string is retained',
+            scope    => make_scope(
+                path         => '/search',
+                query_string => 'q=host&page=2',
+                headers      => [['Host', 'example.com']],
+            ),
+            location => 'https://example.com/search?q=host&page=2',
+        },
+    );
+
+    for my $case (@cases) {
+        my $redirect = PAGI::Middleware::HTTPSRedirect->new;
+        my $wrapped = $redirect->wrap(async sub { die "redirect called downstream\n" });
+        my @events;
+
+        run_async {
+            $wrapped->(
+                $case->{scope},
+                async sub { {} },
+                async sub { my ($event) = @_; push @events, $event },
+            )
+        };
+
+        is $events[0]{status}, 301, "$case->{name}: redirect status";
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
+        is $headers{location}, $case->{location}, "$case->{name}: redirect location";
+    }
+};
+
+subtest 'HTTPSRedirect - invalid authority returns local 400' => sub {
+    my @cases = (
+        {
+            name  => 'duplicate Host',
+            scope => make_scope(
+                headers => [['Host', 'example.com'], ['host', 'evil.example']],
+                server  => ['fallback.example', 80],
+            ),
+        },
+        {
+            name  => 'malformed Host',
+            scope => make_scope(
+                headers => [['Host', 'example.com/path']],
+                server  => ['fallback.example', 80],
+            ),
+        },
+        {
+            name  => 'absent Host with unusable server',
+            scope => make_scope(headers => [], server => ['bad..example', 80]),
+        },
+    );
+
+    for my $case (@cases) {
+        my $redirect = PAGI::Middleware::HTTPSRedirect->new;
+        my $app_calls = 0;
+        my $wrapped = $redirect->wrap(async sub { $app_calls++ });
+        my @events;
+
+        run_async {
+            $wrapped->(
+                $case->{scope},
+                async sub { {} },
+                async sub { my ($event) = @_; push @events, $event },
+            )
+        };
+
+        is $app_calls, 0, "$case->{name}: downstream is not called";
+        is scalar(@events), 2, "$case->{name}: start and terminal body are sent";
+        is $events[0]{type}, 'http.response.start', "$case->{name}: response starts";
+        is $events[0]{status}, 400, "$case->{name}: status is 400";
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
+        is $headers{'content-length'}, length('Invalid Host header'),
+            "$case->{name}: Content-Length matches generic body";
+        is $events[1], {
+            type => 'http.response.body',
+            body => 'Invalid Host header',
+            more => 0,
+        }, "$case->{name}: generic terminal body";
+    }
+};
+
+subtest 'HTTPSRedirect - non-HTTP downstream exception propagates' => sub {
+    my $redirect = PAGI::Middleware::HTTPSRedirect->new;
+    my $diagnostic = "HTTPSRedirect downstream sentinel\n";
+    my $wrapped = $redirect->wrap(async sub { die $diagnostic });
+
+    my $future = $wrapped->(
+        {
+            type    => 'websocket',
+            path    => '/socket',
+            scheme  => 'ws',
+            headers => [['Host', 'one.example'], ['host', 'two.example']],
+        },
+        async sub { {} },
+        async sub { },
+    );
+    $loop->await($future);
+
+    ok $future->is_failed, 'wrapped Future remains failed';
+    is [$future->failure]->[0], $diagnostic,
+        'exact non-HTTP downstream failure propagates';
+};
+
 # ===================
 # ReverseProxy Middleware Tests
 # ===================

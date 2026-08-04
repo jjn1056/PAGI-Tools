@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Authority;
 
 =head1 NAME
 
@@ -20,8 +21,13 @@ PAGI::Middleware::HTTPSRedirect - Force HTTPS redirect middleware
 
 =head1 DESCRIPTION
 
-PAGI::Middleware::HTTPSRedirect redirects HTTP requests to HTTPS.
-Useful for enforcing secure connections in production.
+PAGI::Middleware::HTTPSRedirect redirects HTTP requests to HTTPS. Redirect
+authority comes from the validated Host header when present, otherwise from the
+scope server tuple. It never invents a C<localhost> authority; duplicate or
+malformed Host data and unusable server fallbacks receive a generic HTTP 400
+response. Useful for enforcing secure connections in production.
+
+Non-HTTP scopes continue to pass through unchanged without authority handling.
 
 =head1 CONFIGURATION
 
@@ -101,12 +107,21 @@ sub wrap {
             return;
         }
 
-        # Build HTTPS URL
-        my $host = $self->_get_header($scope, 'host') // 'localhost';
+        my ($authority, $authority_error);
+        {
+            local $@;
+            $authority = eval { PAGI::Authority->from_scope($scope) };
+            $authority_error = $@;
+        }
+        if ($authority_error) {
+            await $self->_send_error($send, 400, 'Invalid Host header');
+            return;
+        }
+
         my $path = $scope->{path} // '/';
         my $query = $scope->{query_string};
 
-        my $url = "https://$host$path";
+        my $url = "https://$authority$path";
         $url .= "?$query" if defined $query && $query ne '';
 
         await $self->_send_redirect($send, $url);
@@ -148,14 +163,22 @@ async sub _send_redirect {
     });
 }
 
-sub _get_header {
-    my ($self, $scope, $name) = @_;
+async sub _send_error {
+    my ($self, $send, $status, $message) = @_;
 
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
+    await $send->({
+        type    => 'http.response.start',
+        status  => $status,
+        headers => [
+            ['Content-Type', 'text/plain'],
+            ['Content-Length', length($message)],
+        ],
+    });
+    await $send->({
+        type => 'http.response.body',
+        body => $message,
+        more => 0,
+    });
 }
 
 1;
@@ -167,6 +190,10 @@ __END__
 This middleware checks C<$scope-E<gt>{scheme}> to determine if the request
 is already using HTTPS. Make sure your server sets this correctly, especially
 when behind a reverse proxy (use ReverseProxy middleware).
+
+Host validation and server fallback are only used when constructing an HTTP
+redirect. Existing HTTPS, excluded paths, and non-HTTP scopes retain their
+pass-through behavior.
 
 =head1 SEE ALSO
 
