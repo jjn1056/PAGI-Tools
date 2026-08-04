@@ -5,11 +5,13 @@ use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use JSON::MaybeXS;
+use Scalar::Util qw(refaddr);
 
 use PAGI::Middleware::Rewrite;
 use PAGI::Middleware::HTTPSRedirect;
 use PAGI::Middleware::ReverseProxy;
 use PAGI::Middleware::Healthcheck;
+use PAGI::Request;
 
 my $loop = IO::Async::Loop->new;
 
@@ -412,6 +414,256 @@ subtest 'ReverseProxy - ignores untrusted proxies' => sub {
     run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
 
     is $captured_scope->{client}[0], '192.168.1.100', 'client IP unchanged for untrusted proxy';
+};
+
+subtest 'ReverseProxy - trusted forwarded Host replaces every Host exactly once' => sub {
+    my @cases = (
+        {
+            name    => 'no incoming Host',
+            headers => [
+                ['X-First', 'one'],
+                ['X-Forwarded-Host', 'public.example:8443'],
+                ['X-Last', 'two'],
+            ],
+            expected => [
+                ['X-First', 'one'],
+                ['X-Forwarded-Host', 'public.example:8443'],
+                ['X-Last', 'two'],
+                ['host', 'public.example:8443'],
+            ],
+        },
+        {
+            name    => 'one incoming Host',
+            headers => [
+                ['Host', 'internal.example'],
+                ['X-First', 'one'],
+                ['X-Forwarded-Host', 'public.example:8443'],
+                ['X-Last', 'two'],
+            ],
+            expected => [
+                ['X-First', 'one'],
+                ['X-Forwarded-Host', 'public.example:8443'],
+                ['X-Last', 'two'],
+                ['host', 'public.example:8443'],
+            ],
+        },
+        {
+            name    => 'multiple mixed-case incoming Host fields',
+            headers => [
+                ['X-First', 'one'],
+                ['Host', 'internal.example'],
+                ['X-Middle', 'middle'],
+                ['hOsT', 'other-internal.example'],
+                ['X-Forwarded-Host', 'public.example:8443'],
+                ['X-Last', 'two'],
+            ],
+            expected => [
+                ['X-First', 'one'],
+                ['X-Middle', 'middle'],
+                ['X-Forwarded-Host', 'public.example:8443'],
+                ['X-Last', 'two'],
+                ['host', 'public.example:8443'],
+            ],
+        },
+    );
+
+    for my $case (@cases) {
+        my $proxy = PAGI::Middleware::ReverseProxy->new(
+            trusted_proxies => ['127.0.0.1'],
+        );
+        my $captured_scope;
+        my $wrapped = $proxy->wrap(async sub {
+            my ($scope) = @_;
+            $captured_scope = $scope;
+        });
+        my $scope = make_scope(
+            client  => ['127.0.0.1', 12345],
+            headers => $case->{headers},
+        );
+        my $json = JSON::MaybeXS->new(canonical => 1);
+        my $scope_bytes = $json->encode($scope);
+        my $input_headers = $scope->{headers};
+        my @input_pairs = map { refaddr($_) } @$input_headers;
+
+        run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
+
+        my @host = grep {
+            my $name = $_->[0];
+            $name =~ tr/A-Z/a-z/;
+            $name eq 'host';
+        } @{$captured_scope->{headers}};
+        is \@host, [['host', 'public.example:8443']],
+            "$case->{name}: downstream sees exactly one validated Host";
+        is $captured_scope->{headers}, $case->{expected},
+            "$case->{name}: unrelated header order is retained and Host is appended";
+        isnt refaddr($captured_scope), refaddr($scope),
+            "$case->{name}: downstream receives a shallow scope copy";
+        isnt refaddr($captured_scope->{headers}), refaddr($input_headers),
+            "$case->{name}: rewritten headers use a new array";
+        is $json->encode($scope), $scope_bytes,
+            "$case->{name}: input scope bytes remain unchanged";
+        is refaddr($scope->{headers}), refaddr($input_headers),
+            "$case->{name}: input retains its header array";
+        is [map { refaddr($_) } @{$scope->{headers}}], \@input_pairs,
+            "$case->{name}: input retains every header pair";
+    }
+};
+
+subtest 'ReverseProxy - trusted forwarded Host rejects ambiguity and invalid authority' => sub {
+    my @cases = (
+        {
+            name    => 'repeated identical field',
+            headers => [
+                ['X-Forwarded-Host', 'public.example'],
+                ['X-Forwarded-Host', 'public.example'],
+            ],
+        },
+        {
+            name    => 'repeated conflicting field',
+            headers => [
+                ['X-Forwarded-Host', 'public.example'],
+                ['X-Forwarded-Host', 'evil.example'],
+            ],
+        },
+        {
+            name    => 'mixed-case repeated field',
+            headers => [
+                ['X-FoRwArDeD-HoSt', 'public.example'],
+                ['x-forwarded-host', 'public.example'],
+            ],
+        },
+        {
+            name    => 'comma-containing value',
+            headers => [['X-Forwarded-Host', 'public.example, evil.example']],
+        },
+        {
+            name    => 'malformed authority',
+            headers => [['X-Forwarded-Host', 'public.example/path']],
+        },
+        {
+            name    => 'port exceeds 65535',
+            headers => [['X-Forwarded-Host', 'public.example:65536']],
+        },
+    );
+
+    for my $case (@cases) {
+        my $proxy = PAGI::Middleware::ReverseProxy->new(
+            trusted_proxies => ['127.0.0.1'],
+        );
+        my $app_calls = 0;
+        my $wrapped = $proxy->wrap(async sub { $app_calls++ });
+        my $scope = make_scope(
+            client  => ['127.0.0.1', 12345],
+            headers => $case->{headers},
+        );
+        my @events;
+
+        run_async {
+            $wrapped->(
+                $scope,
+                async sub { {} },
+                async sub { my ($event) = @_; push @events, $event },
+            )
+        };
+
+        is $app_calls, 0, "$case->{name}: downstream is not called";
+        is \@events, [
+            {
+                type    => 'http.response.start',
+                status  => 400,
+                headers => [
+                    ['Content-Type', 'text/plain'],
+                    ['Content-Length', length('Invalid forwarded Host')],
+                ],
+            },
+            {
+                type => 'http.response.body',
+                body => 'Invalid forwarded Host',
+                more => 0,
+            },
+        ], "$case->{name}: generic 400 response is sent";
+    }
+};
+
+subtest 'ReverseProxy - untrusted malformed forwarded Host passes through unchanged' => sub {
+    my $proxy = PAGI::Middleware::ReverseProxy->new(
+        trusted_proxies => ['10.0.0.1'],
+    );
+    my $captured_scope;
+    my $app_calls = 0;
+    my $wrapped = $proxy->wrap(async sub {
+        ($captured_scope) = @_;
+        $app_calls++;
+    });
+    my $scope = make_scope(
+        client  => ['192.168.1.100', 12345],
+        headers => [
+            ['Host', 'internal.example'],
+            ['X-Forwarded-Host', 'public.example/path'],
+        ],
+    );
+    my $json = JSON::MaybeXS->new(canonical => 1);
+    my $scope_bytes = $json->encode($scope);
+    my @events;
+
+    run_async {
+        $wrapped->(
+            $scope,
+            async sub { {} },
+            async sub { my ($event) = @_; push @events, $event },
+        )
+    };
+
+    is $app_calls, 1, 'untrusted malformed field reaches downstream';
+    is refaddr($captured_scope), refaddr($scope),
+        'untrusted request passes the original scope through';
+    is $json->encode($scope), $scope_bytes,
+        'untrusted malformed field and scope remain byte-for-byte unchanged';
+    is \@events, [], 'ReverseProxy sends no local rejection';
+};
+
+subtest 'ReverseProxy - rewritten scope does not inherit stale Request headers' => sub {
+    my $proxy = PAGI::Middleware::ReverseProxy->new(
+        trusted_proxies => ['127.0.0.1'],
+    );
+    my $scope = make_scope(
+        client  => ['127.0.0.1', 12345],
+        headers => [
+            ['Host', 'internal.example'],
+            ['X-Forwarded-Host', 'public.example:8443'],
+        ],
+    );
+    my $original_request = PAGI::Request->new($scope, async sub { {} });
+    $original_request->headers;
+    my $original_cache = $scope->{'pagi.request.headers'};
+    my $input_headers = $scope->{headers};
+
+    my $wrapped = $proxy->wrap(async sub {
+        my ($rewritten_scope) = @_;
+        ok !exists($rewritten_scope->{'pagi.request.headers'}),
+            'rewritten scope starts without the inherited Request header cache';
+        my $downstream_request = PAGI::Request->new(
+            $rewritten_scope,
+            async sub { {} },
+        );
+        is $downstream_request->host, 'public.example:8443',
+            'downstream host reads the forwarded value from raw headers';
+        is $downstream_request->header('host'), 'public.example:8443',
+            'downstream header lookup builds a fresh forwarded Host snapshot';
+    });
+
+    run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
+
+    is refaddr($scope->{'pagi.request.headers'}), refaddr($original_cache),
+        'original scope retains ownership of its cached snapshot';
+    is $scope->{'pagi.request.headers'}->get('host'), 'internal.example',
+        'original cached snapshot retains its original Host';
+    is refaddr($scope->{headers}), refaddr($input_headers),
+        'original scope retains its raw header array';
+    is $scope->{headers}, [
+        ['Host', 'internal.example'],
+        ['X-Forwarded-Host', 'public.example:8443'],
+    ], 'original raw headers remain unchanged';
 };
 
 # ===================

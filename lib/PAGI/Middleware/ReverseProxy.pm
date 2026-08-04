@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Authority;
 
 =head1 NAME
 
@@ -21,8 +22,12 @@ PAGI::Middleware::ReverseProxy - Handle X-Forwarded-* headers from reverse proxi
 
 =head1 DESCRIPTION
 
-PAGI::Middleware::ReverseProxy processes X-Forwarded-* headers from trusted
-reverse proxies and updates the scope with the original client information.
+PAGI::Middleware::ReverseProxy processes X-Forwarded-* headers only after the
+request passes its trusted-proxy check, and updates the scope with the original
+client information. When supplied, a trusted X-Forwarded-Host must occur exactly
+once and be a single valid authority; repeated fields, comma-containing values,
+and malformed authorities receive a generic HTTP 400 response. Non-HTTP and
+untrusted scopes continue to pass through unchanged.
 
 =head1 CONFIGURATION
 
@@ -46,7 +51,8 @@ If true, trust X-Forwarded headers from any source. Use with caution!
 
 =item * X-Forwarded-Proto - Original protocol (http/https)
 
-=item * X-Forwarded-Host - Original Host header
+=item * X-Forwarded-Host - Original Host header. The trusted field must occur
+exactly once and contain one valid authority, not a comma-separated list.
 
 =item * X-Forwarded-Port - Original port
 
@@ -78,6 +84,34 @@ sub wrap {
         unless ($self->{trust_all} || $self->_is_trusted($client_ip)) {
             await $app->($scope, $receive, $send);
             return;
+        }
+
+        my @forwarded_host = map { $_->[1] }
+            grep {
+                my $name = $_->[0];
+                $name =~ tr/A-Z/a-z/;
+                $name eq 'x-forwarded-host';
+            } @{ $scope->{headers} // [] };
+
+        if (@forwarded_host > 1) {
+            await $self->_send_error($send, 400, 'Invalid forwarded Host');
+            return;
+        }
+
+        my $safe_forwarded_host;
+        if (@forwarded_host == 1) {
+            my $validation_error;
+            {
+                local $@;
+                $safe_forwarded_host = eval {
+                    PAGI::Authority->validate($forwarded_host[0]);
+                };
+                $validation_error = $@;
+            }
+            if ($validation_error) {
+                await $self->_send_error($send, 400, 'Invalid forwarded Host');
+                return;
+            }
         }
 
         # Build modified scope
@@ -115,18 +149,15 @@ sub wrap {
         }
 
         # X-Forwarded-Host
-        my $forwarded_host = $self->_get_header($scope, 'x-forwarded-host');
-        if ($forwarded_host) {
-            # Update headers with new Host
-            my @new_headers;
-            for my $h (@{$scope->{headers} // []}) {
-                if (lc($h->[0]) eq 'host') {
-                    push @new_headers, ['host', $forwarded_host];
-                } else {
-                    push @new_headers, $h;
-                }
-            }
+        if (defined $safe_forwarded_host) {
+            my @new_headers = grep {
+                my $name = $_->[0];
+                $name =~ tr/A-Z/a-z/;
+                $name ne 'host';
+            } @{$scope->{headers} // []};
+            push @new_headers, ['host', $safe_forwarded_host];
             $new_scope{headers} = \@new_headers;
+            delete $new_scope{'pagi.request.headers'};
         }
 
         # X-Forwarded-Port
@@ -199,6 +230,24 @@ sub _get_header {
     return;
 }
 
+async sub _send_error {
+    my ($self, $send, $status, $message) = @_;
+
+    await $send->({
+        type    => 'http.response.start',
+        status  => $status,
+        headers => [
+            ['Content-Type', 'text/plain'],
+            ['Content-Length', length($message)],
+        ],
+    });
+    await $send->({
+        type => 'http.response.body',
+        body => $message,
+        more => 0,
+    });
+}
+
 1;
 
 __END__
@@ -215,7 +264,10 @@ When headers are processed from a trusted proxy:
 
 =item * scheme - Updated to 'https' if X-Forwarded-Proto indicates
 
-=item * headers - Host header updated if X-Forwarded-Host present
+=item * headers - A valid trusted X-Forwarded-Host atomically removes every
+existing Host pair and appends exactly one lowercase C<host> pair. The copied
+C<pagi.request.headers> cache is removed so later request lookups use the
+rewritten header array. The input scope and its header pairs are not mutated.
 
 =item * server - Port updated if X-Forwarded-Port present
 
@@ -223,9 +275,15 @@ When headers are processed from a trusted proxy:
 
 =head1 SECURITY
 
-Only trust X-Forwarded headers from known reverse proxies.
-Never enable C<trust_all> in production unless you fully understand
-the security implications.
+Only trust X-Forwarded headers from known reverse proxies. Forwarded Host
+validation happens after this trust decision, so untrusted requests retain
+their existing pass-through behavior. A trusted forwarded Host is accepted
+only as one field containing one validated authority; duplicate fields and
+comma-separated values fail closed. HTTP-only and trusted-proxy gates otherwise
+retain their existing behavior.
+
+Never enable C<trust_all> in production unless you fully understand the
+security implications.
 
 =head1 SEE ALSO
 
