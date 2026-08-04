@@ -153,7 +153,8 @@ Accepted hosts are:
   `-`, or `~`. Dot-separated labels must be nonempty, apart from one optional
   trailing root dot. Punycode is ordinary ASCII and is accepted.
 - A dotted-decimal IPv4 address. A four-part digits-and-dots candidate must
-  have four octets in the range 0 through 255.
+  have four octets in the range 0 through 255, with no leading zero unless the
+  octet is exactly `0`.
 - A bracketed IPv6 literal accepted by Perl's core `Socket` IPv6 parser.
 
 Any accepted host may have `:` followed by a nonempty decimal port in the range
