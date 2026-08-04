@@ -1,9 +1,9 @@
-# Declarative Routing and Context Contract
+# Declarative Routing
 
 **Date:** 2026-08-03
-**Status:** Approved in design discussion; pending written-spec review
-**Scope:** PAGI-Tools declarative routing, middleware composition helpers, and
-the Context/Response contract required by the new handler adapter
+**Status:** Approved
+**Scope:** PAGI-Tools declarative routing and middleware composition using the
+currently shipped Context and Response contracts
 
 ## 1. Summary
 
@@ -16,13 +16,20 @@ remain available through an explicit `raw` option.
 
 The new API is not a replacement, facade, or compatibility layer for
 `PAGI::App::Router`. The existing mutable router remains the traditional
-choice. The declarative API is recommended where a decomposed, inspectable
-route tree is clearer.
+native-PAGI choice. `PAGI::Endpoint::Router` also remains supported as the
+class-based `$c` handler and value-flow middleware layer built over
+`PAGI::App::Router`; it is not a separate matching engine. `PAGI::Routing`
+introduces a second matcher with deliberately different declaration-ordered
+semantics and is recommended where an immutable, decomposed, inspectable route
+tree is clearer. The documentation compares all three public APIs and
+identifies which matching engine and middleware contract each uses.
 
-This design also finishes the Context/Response vocabulary required to make
-`$c` the safe default. Methods that build local response state are named
-differently from methods that emit protocol events, while backwards-compatible
-aliases remain on `PAGI::Response` where required.
+This design does not change the semantics of shipped `PAGI::Context` or
+`PAGI::Response` methods. Normal `$c` handlers use their existing APIs, while
+explicit `raw` routes bypass the Context adapter. The additive Context reverse
+routing methods and scope integration are defined below. Potential vocabulary
+changes to existing Context and Response methods are tracked in a separate
+compatibility design and are not prerequisites for declarative routing.
 
 The router is intentionally narrower than Starlette's top-level `Starlette`
 application object. A future PAGI application constructor may own lifespan,
@@ -40,7 +47,9 @@ not belong in this routing change.
 - Preserve declaration-order routing, while correctly distinguishing no match
   from path-match/method-mismatch.
 - Support named routes, mounted namespaces, request-independent path
-  generation, and request-aware absolute URI generation.
+  generation, and request-aware absolute URL generation.
+- Generate absolute URLs from normalized request-scope scheme and authority
+  without parsing proxy headers in the router.
 - Support Perl regexes, synchronous predicates, and Type::Tiny-compatible path
   constraints without coercing captured values.
 - Make the immutable route tree inspectable and allow descriptive annotations.
@@ -52,14 +61,30 @@ not belong in this routing change.
 
 The first release will not include:
 
-- HTTP verb constructors such as `get`, `post`, or `any`.
+- HTTP verb constructors such as `get`, `post`, or `any`. They are
+  intentionally omitted from the core functional API: `get` and `post`
+  commonly collide with application handler names, while `delete` collides
+  with Perl's core builtin. One `route` constructor keeps standard, extension,
+  and application-defined methods uniform:
+
+  ```perl
+  route('/users' => \&create_user, methods => ['POST']);
+  route('/rpc'   => \&rpc,         methods => ['RPC']);
+  route('/any'   => \&catch_all,   methods => '*');
+  ```
+
+  The existing class-based routers retain their verb methods. A higher-level
+  application framework may add convenience shortcuts later without expanding
+  the core routing vocabulary.
 - Automatic `OPTIONS` responses.
 - Automatic trailing-slash normalization or redirection. Exact paths remain
   exact. Slash redirection may later be optional middleware.
 - A top-level Starlette-like application constructor. Lifespan and
   application-wide exception policy belong there when it is designed.
 - General handled-HTTP-exception types or 401/403/500 response helpers.
-- A generalized value-flow `$next` middleware tier.
+- Adding value-flow route middleware to `PAGI::Routing`, or unifying the two
+  existing middleware models. `PAGI::Endpoint::Router` continues to support its
+  shipped `async sub ($c, $next) -> PAGI::Response` route-middleware contract.
 - Async or database-aware route constraints.
 - Path-parameter coercion.
 - String evaluation for package methods or a bound-method loader.
@@ -84,10 +109,27 @@ It exports nothing by default.
 - `:routes` exports `router`, `route`, `websocket`, `sse`, and `mount`.
 - `:middleware` exports `middleware`.
 - `:ALL` exports every public constructor.
-- `:all` is a lowercase alias for `:ALL`.
 
 The absence of default exports prevents collisions with application functions
 and leaves the source file explicit about the DSL it uses.
+
+`PAGI::Middleware::Builder` also exports a different `mount` function by
+default. A compilation unit must not import both symbols under the same name or
+rely on module load order to choose one. A declarative-routing application
+normally does not need Builder. In the occasional outer composition layer that
+uses both APIs, import the Builder functions selectively:
+
+```perl
+use PAGI::Middleware::Builder qw(builder enable enable_if);
+use PAGI::Routing qw(:routes :middleware);
+```
+
+Alternatively, use the object-oriented Builder API without imports:
+
+```perl
+use PAGI::Middleware::Builder ();
+my $builder = PAGI::Middleware::Builder->new;
+```
 
 ## 5. Canonical API shape
 
@@ -135,6 +177,18 @@ my $routing = router(
 my $app = $routing->to_app;
 ```
 
+Coderef meaning is determined only by its documented argument position. The
+router does not inspect signatures or guess intent:
+
+| Form | Coderef meaning | Called with | Required result |
+|---|---|---|---|
+| `route('/x' => $code)` | Normal HTTP handler | `($c)` | `PAGI::Response` |
+| `websocket('/x' => $code)` | Normal WebSocket handler | `($c)` | Inert; completion is awaited |
+| `sse('/x' => $code)` | Normal SSE handler | `($c)` | Inert; completion is awaited |
+| `route('/x', raw => $code)` | Native PAGI application | `($scope, $receive, $send)` | Inert |
+| `mount('/x' => $code)` | Native PAGI application/component | `($scope, $receive, $send)` after coercion | Inert |
+| `middleware($code)` | Synchronous build-time factory | `($inner_app)` | Native PAGI app coderef |
+
 For compatibility with the distribution's minimum Perl, documentation uses
 the portable named-sub form above. On a Perl version supporting signatures,
 users may write `async sub home ($c) { ... }`. The invalid ordering
@@ -174,24 +228,36 @@ complete one-node router, preserving its path/method matching and default
 not-found/method-not-allowed behavior. A middleware descriptor is not itself an
 application and does not implement `to_app`.
 
-Executable objects may overload `&{}` so this is convenient:
-
-```perl
-await $routing->($scope, $receive, $send);
-```
-
-The canonical server boundary remains:
+Executable routing objects are intentionally not callable. `to_app` is the
+single compilation boundary and returns an actual PAGI application coderef:
 
 ```perl
 my $app = $routing->to_app;
+await $app->($scope, $receive, $send);
 ```
 
-`PAGI::Server::Runner` requires an actual `CODE` reference; callable overload
-does not change `ref($routing)` into `CODE`.
+This coderef is accepted by `PAGI::Server::Runner` and native PAGI composition
+points. Routing objects may also be passed directly to composition helpers that
+explicitly support `PAGI::Utils::to_app`.
 
-Each `to_app` call compiles a fresh application. Compilation never mutates the
-source description. Middleware factories and component wrappers are applied
-once per compiled application, not once per request.
+Each `to_app` call builds a fresh wrapper graph. Middleware factories and
+class-name descriptors are resolved once for that compiled application, so
+their ordinary internal state is independent from applications produced by
+other `to_app` calls. Applications should therefore call `to_app` once per
+intended application instance, not once per request, and retain the resulting
+coderef. Compilation never mutates the source description.
+
+One compiled application handles concurrent in-flight requests. Compiled
+routing structures contain no request-specific mutable state; request data
+remains in the request scope, Context, or invocation-local lexicals.
+
+Reusing an explicitly constructed middleware/component instance, or a factory
+closure that captures external state, still shares that caller-owned state.
+Fresh compilation does not clone arbitrary user objects or closure captures.
+
+If the same declarative subtree is mounted twice, each mount occurrence
+receives its own compiled middleware wrapper graph unless both occurrences
+explicitly reference shared instances or captured state.
 
 ## 7. Route-node grammar
 
@@ -220,10 +286,62 @@ Supplying both a positional handler and `raw`, or supplying neither, croaks.
 explicit string `'*'`. Methods are normalized to uppercase and deduplicated.
 An empty method collection is invalid.
 
-When `methods` is omitted, the route accepts `GET` and automatically accepts
-`HEAD`. Any route containing `GET` also contains `HEAD` in its normalized
-method set. There is no automatic `OPTIONS` behavior. Handling all methods
-must be explicit with `methods => '*'`.
+When `methods` is omitted, the route accepts `GET`. Every route containing GET
+also automatically accepts HEAD; there is no opt-out that can leave a GET
+resource without HEAD support. By default, the same handler runs for GET and
+HEAD.
+
+For an expensive GET, the canonical custom-HEAD form is two ordinary routes
+with the explicit HEAD route declared first:
+
+```perl
+route('/report' => \&head_report,
+    methods => ['HEAD'],
+),
+
+route('/report' => \&get_report,
+    methods => ['GET'],
+),
+```
+
+This is declaration-order behavior, not a special relationship between the two
+nodes. For a HEAD request, the first route is a full explicit match. For a GET
+request, the HEAD route is partial, scanning continues, and the GET route is a
+full match. If the custom HEAD route's constraints reject a value, scanning
+continues and the GET route's automatic HEAD support remains the fallback.
+
+The router does not associate, reorder, or otherwise recognize the pair. If the
+GET route is declared first, its automatic HEAD match wins immediately and a
+later custom HEAD handler is not invoked. Documentation keeps the two routes
+adjacent, puts HEAD first, and calls out the ordering requirement wherever the
+pattern is taught.
+
+`methods => '*'` explicitly includes HEAD. There is no automatic `OPTIONS`
+behavior. Handling all methods must be explicit with `methods => '*'`.
+
+The compiled router owns HTTP HEAD semantics; `PAGI::Middleware::Head` is not
+required. At the router's outer dispatch boundary, a HEAD request retains
+`method => 'HEAD'` for matching and handlers, while `$send` is wrapped to:
+
+- Forward `http.response.start` unchanged, preserving calculated headers such
+  as `Content-Length`.
+- Never forward an original `http.response.body` event. This suppresses both
+  ordinary `body` bytes and the `file`, `offset`, and `length` sendfile variant.
+- Drop streaming body events whose `more` value is true.
+- Treat a false or absent `more` value as terminal. On the first terminal body
+  event, including a sendfile event with no `more` field, emit exactly one
+  replacement `{ type => 'http.response.body', body => '', more => 0 }`.
+- Suppress response trailers and never open or transfer a referenced file.
+
+This applies to matched routes, generated 404/405 responses, inline subtrees,
+and application mounts. The selected handler still constructs the corresponding
+full response so its status and headers match the equivalent GET response. A
+custom HEAD route can instead avoid the expensive GET work, but its wire body
+is suppressed in the same way.
+
+`PAGI::Middleware::Head` remains available for applications outside this
+router. Wrapping this router with it is redundant and changes the method
+observed by inner handlers from HEAD to GET.
 
 ### 7.2 WebSocket routes
 
@@ -268,12 +386,15 @@ There are exactly two mount forms.
 An inline declarative subtree:
 
 ```perl
-mount('/api',
-    namespace  => 'api',
-    desc       => 'Public API subtree',
+mount('/tenants/{tenant_id}',
+    namespace  => 'tenant',
+    desc       => 'Tenant API subtree',
     middleware => [ ... ],
+    constraints => {
+        tenant_id => qr/[a-z0-9-]+/,
+    },
     routes     => [
-        route('/users' => \&users),
+        route('/users/{user_id}' => \&user),
     ],
 );
 ```
@@ -292,6 +413,38 @@ A positional target is always an application accepted by
 `PAGI::Utils::to_app`; a coderef in that position is therefore a native PAGI
 application, not a `$c` handler.
 
+Mount prefixes accept the same single-segment parameter syntax and constraint
+types as routes. A wildcard is invalid in a mount prefix because every mount
+already has an implicit remainder. A failed mount constraint is no match, so
+the parent continues scanning later siblings. Mount captures validate but do
+not coerce.
+
+A mount prefix begins with `/`. A trailing slash is removed except for the root
+mount, so `/api` and `/api/` describe the same boundary. A root mount `/`
+matches every path and consumes zero path characters. It leaves both `path` and
+`root_path` unchanged; in particular, it never changes an empty `root_path` to
+`/`. `raw_path` also remains the original on-the-wire bytes.
+
+For example, these values are identical before and inside `mount('/' => $app)`:
+
+```perl
+{
+    path      => '/users/42',
+    root_path => '/outer',
+    raw_path  => '/outer/users/42',
+}
+```
+
+A request whose path exactly equals a non-root mount prefix matches that mount
+directly, and the child receives `/` as its `path`, never an empty string.
+
+This exact-prefix behavior deliberately differs from Starlette. Starlette's
+`Mount('/api', ...)` matches `/api/`; its default slash-redirect behavior sends
+`/api` to `/api/`, while disabling slash redirects leaves `/api` unmatched.
+`PAGI::Routing` instead follows the shipped `PAGI::App::Router` behavior: both
+spellings enter the mount directly, with no redirect. Applications that want a
+canonical slash form may add separate redirect middleware.
+
 After a mount prefix matches, that mount owns the request. The parent does not
 resume scanning later sibling routes based on the mounted application's
 response status. Whatever an application mount sends is final; a 404 or 405 is
@@ -306,8 +459,49 @@ A separately constructed router passed positionally is an application mount
 and owns its configuration. Use the `routes => [...]` form when structural
 inheritance is wanted.
 
-Mounting adjusts `path` and `root_path` according to PAGI composition rules.
-Reverse routing always includes the mount prefix.
+On a match, the actual consumed prefix is appended to `root_path`, named mount
+captures are merged into `path_params`, and `path` becomes the unconsumed
+remainder. `raw_path` remains the original on-the-wire path bytes. These child
+scope values are installed before mount middleware and the mounted app or
+inline child router run. Reverse routing always includes the mount prefix.
+
+For example, `/tenants/acme/users/42` under the inline mount above reaches the
+child route with the effective scope:
+
+```perl
+{
+    path      => '/users/42',
+    root_path => '/tenants/acme',
+    raw_path  => '/tenants/acme/users/42',
+    path_params => {
+        tenant_id => 'acme',
+        user_id   => '42',
+    },
+}
+```
+
+An existing `root_path` is retained and extended. Reusing a path-parameter name
+across a known inline mount/route ancestry is rejected at compilation rather
+than silently overwriting an outer capture.
+
+An application mount and a raw HTTP route both accept native PAGI apps, but
+they are not interchangeable:
+
+| Behavior | `route(..., raw => $app)` | `mount(... => $app)` |
+|---|---|---|
+| Path selection | Matches its exact route pattern; a wildcard must be declared explicitly | Matches a possibly parameterized path prefix at a segment boundary; the remainder is implicit |
+| HTTP methods | Participates in the route method set, automatic HEAD, partial matching, and `Allow` | Applies no method filter; the mounted app owns method handling |
+| Protocol | HTTP only; use raw `websocket` or `sse` nodes for those protocols | Delegates applicable HTTP, WebSocket, and SSE scopes to the mounted app |
+| Child scope | Keeps the routed path and `root_path`, adding captured path parameters | Removes the matched prefix from `path`, appends the actual match to `root_path`, and merges mount captures into `path_params` |
+| Parent behavior | A nonmatching route lets scanning continue; a method mismatch contributes a partial match | A matching prefix immediately owns the request; child 404/405 outcomes do not resume the parent scan |
+| Reverse routing | May be named and generated as an ordinary route | An opaque application mount exposes no child names or routes to its parent |
+
+For example, given a request for `/files/a.txt`, a raw wildcard route such as
+`route('/files/*path', raw => $app)` calls the application with the routed path
+still `/files/a.txt` and `path_params->{path}` equal to `a.txt`. In contrast,
+`mount('/files' => $app)` calls it with `path` equal to `/a.txt` and
+`root_path` extended by `/files`. Use a raw route to select a native app as one
+route endpoint; use a mount to give an application ownership of a URL subtree.
 
 ## 9. Matching algorithm
 
@@ -316,20 +510,51 @@ sorting or hidden prioritization.
 
 For HTTP:
 
-1. Iterate nodes in declared order.
-2. A path and method match is `FULL`; dispatch the first full match
-   immediately.
-3. A path match with the wrong method is `PARTIAL`. Record its allowed methods
-   and continue looking for a later full match.
-4. If no full match exists and one or more partial matches exist, invoke
-   `method_not_allowed` with the union of all allowed methods.
-5. If neither a full nor partial match exists, invoke `not_found`.
+1. Iterate nodes in declaration order with an initially empty set of allowed
+   methods.
+2. For an ordinary HTTP route, a path-and-method match is `FULL`; dispatch it
+   immediately. A path match with the wrong method is `PARTIAL`; add its
+   normalized methods to the allowed set and continue.
+3. For a mount, first test its prefix at a path-segment boundary: `/api` matches
+   `/api` and `/api/...`, but not `/apix`. If it does not match, continue. If it
+   matches and its constraints pass, select the mount immediately; do not
+   examine later siblings. A failed constraint is no match.
+4. An application mount receives the rewritten scope and owns the result. An
+   inline mount recursively runs its child router with a fresh allowed-method
+   set and its inherited `not_found` and `method_not_allowed` handlers.
+5. A child subtree's partial matches are resolved inside that subtree. They do
+   not join partial matches previously accumulated by the parent. Likewise, a
+   child not-found result does not resume the parent scan.
+6. After all nodes have been examined, invoke `method_not_allowed` with the
+   allowed-method union if it is non-empty; otherwise invoke `not_found`.
 
-The 405 `Allow` header contains the normalized union, including automatic
-`HEAD` wherever `GET` is allowed.
+The 405 `Allow` header contains the normalized union from every partial match
+at the current routing level, not merely the first route with that path.
+Methods retain deterministic first-seen order across route declarations and
+within each declared method list; an automatically added HEAD appears
+immediately after its GET. For example, separate GET and POST routes for one
+path produce `Allow: GET, HEAD, POST` for a PUT request. A later full match
+still dispatches normally and discards the accumulated partial-match set.
+
+This ordering deliberately differs from `PAGI::App::Router`, which
+alphabetically sorts the deduplicated method set. `Allow` represents a set, so
+its ordering does not express routing priority. `PAGI::Routing` nevertheless
+preserves declaration order to avoid hidden reordering and to make generated
+output deterministic. For example, POST followed by GET produces
+`Allow: POST, GET, HEAD`. A custom HEAD route declared before its GET route
+produces `Allow: HEAD, GET` when both are partial matches. An automatically
+derived HEAD is inserted after GET only when HEAD has not already been seen;
+deduplication never moves an earlier method.
+
+This deliberately differs from `PAGI::App::Router`, which evaluates routes
+before mounts regardless of declaration order and then checks mounts
+longest-prefix-first. `PAGI::Routing` treats mounts as declared nodes: an
+earlier matching mount can preempt a later sibling route, and an earlier
+broader mount can preempt a later narrower mount. Applications must therefore
+declare narrower mounts first when both prefixes may match.
 
 For WebSocket and SSE, only nodes for that protocol plus applicable mounts are
-considered. Protocol-specific unmatched behavior is defined in section 13.
+considered. Protocol-specific unmatched behavior is defined in section 14.
 
 A constraint returning false converts that candidate to no match. Constraint
 failure does not select a route and does not create a 405 partial match.
@@ -349,11 +574,37 @@ Canonical parameter syntax uses braces:
 route('/users/{id}' => \&show_user);
 ```
 
-A wildcard captures the remaining path:
+A wildcard occupies one complete terminal path segment and captures the
+remaining decoded path:
 
 ```perl
 route('/files/*path' => \&serve_file);
 ```
+
+- A route may contain at most one wildcard, and it must be terminal.
+- The wildcard may match an empty remainder.
+- The separating slash is not part of the capture; internal slashes are.
+- `/files/*path` matches `/files/` with `path => ''` and `/files/a/b` with
+  `path => 'a/b'`. It does not match `/files`, because paths remain exact.
+- `/*path` matches `/` with `path => ''`, making it a real root-level
+  catch-all.
+- Reverse generation accepts an empty value and values containing `/`,
+  preserving those internal separators while escaping each path component.
+- Forms such as `/files/*path/more`, `/files/prefix*path`, and multiple
+  wildcards are invalid.
+
+This intentionally differs from `PAGI::App::Router`, whose `(.+)` wildcard
+requires at least one captured character.
+
+Wildcard captures are untrusted decoded request input. The router intentionally
+preserves values such as `.`, `..`, repeated separators, backslashes, and other
+filesystem-significant characters; validation and non-coercion do not make
+them safe paths. Never concatenate a wildcard capture directly with a document
+root. File-serving code must canonicalize the resulting path and verify, at a
+path-component boundary, that the resolved target remains beneath the
+configured root. Prefer a dedicated file-serving component over implementing
+this policy in a route handler, but verify that component's containment and
+symlink policy for the deployment.
 
 The existing `:id` and `{id:\d+}` spellings accepted by `PAGI::App::Router`
 are also accepted for familiarity, but documentation uses braces plus explicit
@@ -365,16 +616,27 @@ constraints => {
 }
 ```
 
+An inline `{name:pattern}` constraint is syntax sugar for a regex constraint on
+that captured segment. It is compiled through the same matcher as
+`constraints => { name => qr/.../ }`, using `\A(?:$pattern)\z` for both request
+matching and reverse generation. There is no separate `^...$` inline-constraint
+path. Consequently, both spellings reject trailing newlines and other partial
+matches identically.
+
 A constraint may be:
 
-- A `Regexp`. It must match the complete captured value.
+- A `Regexp`. The router evaluates it as `\A(?:$pattern)\z` against the decoded
+  captured value, preserving the pattern's embedded flags. `\A` and `\z` are
+  mandatory implementation semantics; `^` and `$` are not substitutes because
+  `$` may match before a trailing newline. Consequently, `qr/\d+/` accepts
+  `"12"` but rejects `"12\n"`.
 - A synchronous unary predicate coderef. It receives exactly the captured
   string and returns truth for acceptance.
 - A blessed Type::Tiny-compatible object with `check($value)`, plus optional
   `get_message($value)` diagnostics.
 
-Constraint names must correspond to declared path parameters. Invalid names
-croak during construction.
+Constraint names must correspond to parameters declared by that route or
+mount. Invalid names croak during construction.
 
 Constraints validate but never coerce. Captured path parameters remain the
 original decoded strings. A constraint returning a `Future` is rejected with a
@@ -390,8 +652,9 @@ database queries. They belong in route middleware or the selected handler. A
 missing resource after route selection returns a normal application 404; the
 router does not continue scanning.
 
-Constraints are also applied during reverse generation. Invalid values croak,
-using `get_message` when a Type::Tiny-compatible object provides it.
+Constraints are also applied during reverse generation using the same wrapped
+matcher. Invalid values croak, using `get_message` when a Type::Tiny-compatible
+object provides it.
 
 ## 11. Handler contracts and adaptation
 
@@ -407,11 +670,40 @@ async sub create_user {
 ```
 
 Both immediate responses from synchronous subs and Futures resolving to a
-response are accepted. Dispatch normalizes the value, awaits when necessary,
-validates the response type, and emits it exactly once through `$c->respond`.
+response are accepted. Dispatch normalizes the returned value, awaits it when
+necessary, and requires the resolved value to be a `PAGI::Response`. Any other
+value, including `undef`, croaks with the established diagnostic `handler did
+not return a response`. Dispatch then emits that Response exactly once through
+`$c->respond`.
 
 A normal handler does not receive raw `$scope`, `$receive`, or `$send`. It does
-not emit response events itself. Native channel ownership requires `raw`.
+not emit response events itself. In particular, it must not call `$c->respond`
+itself. Manually responding and returning `undef` still produces `handler did
+not return a response`; manually responding and returning a Response produces
+the existing `response already sent` error when dispatch attempts
+framework-owned emission. Native response-event ownership requires `raw`.
+
+Documentation presents `raw` as the explicit escape hatch for advanced cases
+that must emit events manually, and contrasts the two complete lifecycles:
+
+```perl
+# Normal: build local state, return it, let routing emit once.
+route('/normal' => async sub {
+    my ($c) = @_;
+    return $c->text('Hello');
+});
+
+# Raw: own all three PAGI channels and emit protocol events directly.
+route('/raw', raw => async sub {
+    my ($scope, $receive, $send) = @_;
+    await $send->({
+        type => 'http.response.start', status => 200, headers => [],
+    });
+    await $send->({
+        type => 'http.response.body', body => 'Hello', more => 0,
+    });
+});
+```
 
 ### 11.2 WebSocket and SSE
 
@@ -463,11 +755,27 @@ Before invoking `method_not_allowed`, it seeds status 405 and the computed
 `Allow` header. The normal `$c->text`, `$c->html`, and `$c->json` helpers mutate
 that same accumulator and therefore preserve the seeded values.
 
-The returned `PAGI::Response` is respected and sent unchanged. The router does
-not reassert the status or headers after the handler returns. A handler that
-intentionally redirects, changes the status, removes a header, or constructs a
-separate response is responsible for that choice. Documentation recommends the
-seeded `$c` helpers as the safe and concise path.
+The returned `PAGI::Response` is final except for one protocol invariant. After
+invoking `method_not_allowed`, if the returned response still has status 405
+and lacks an `Allow` header, the router adds the computed `Allow` value before
+emission. An existing `Allow` header is preserved. If the handler changes the
+status, redirects, or otherwise returns a non-405 response, the router adds
+nothing. `not_found` responses and responses from fully matched routes remain
+entirely untouched. Documentation recommends the seeded `$c` helpers as the
+safe and concise path.
+
+This safety rule also covers a detached response that did not retain the seeded
+accumulator:
+
+```perl
+return PAGI::Response->json(
+    { error => 'Method Not Allowed' },
+    status => 405,
+);
+```
+
+The router adds only the missing computed `Allow`; it does not restyle the
+status, body, content type, or other headers.
 
 Defaults use ordinary handlers equivalent to:
 
@@ -616,11 +924,19 @@ A middleware object supplies `wrap($app)`. A class-name descriptor resolves and
 configures the class using the existing middleware conventions, then applies
 `wrap($app)`.
 
-There is no direct four-argument `($scope,$receive,$send,$next)` middleware
-form. The previously removed form made `$next` ambiguously mean inherited
-channels or replacement channels, blurred factory time and request time, and
-diverged from the PAGI middleware specification. `$next` remains reserved for
-a possible future value-flow abstraction.
+`PAGI::Routing` supports only PAGI-spec event middleware factories. At build
+time a factory maps one native PAGI app to another; at request time the wrapped
+app receives only `($scope, $receive, $send)`. There is no direct four-argument
+`($scope,$receive,$send,$next)` middleware form. The previously removed form
+made `$next` ambiguously mean inherited channels or replacement channels,
+blurred factory time and request time, and diverged from the PAGI middleware
+specification.
+
+This is distinct from `PAGI::Endpoint::Router`'s shipped value-flow route
+middleware, where `$next->()` resolves to a `PAGI::Response` that middleware
+may inspect, decorate, or replace. That specialized class-based contract
+remains supported, but no attempt is made here to generalize or unify it with
+declarative event middleware.
 
 The first middleware listed is outermost. Placement is:
 
@@ -651,10 +967,15 @@ middleware => [
 
 ## 16. Middleware authoring helpers
 
-`PAGI::Middleware` will offer explicit importable helpers through `:helpers`:
+`PAGI::Middleware::Helpers` is a standalone, non-inherited Exporter module with
+no default exports:
 
 ```perl
-use PAGI::Middleware qw(:helpers);
+use PAGI::Middleware::Helpers qw(
+    clone_scope
+    wrap_send
+    wrap_receive
+);
 
 my $child_scope    = clone_scope($scope, \%changes);
 my $wrapped_send   = wrap_send($send, $interceptor);
@@ -663,17 +984,55 @@ my $wrapped_receive = wrap_receive($receive, $interceptor);
 
 - `clone_scope` performs a shallow local clone plus requested changes. It does
   no I/O and returns immediately.
-- `wrap_send` constructs a callback. Construction does no I/O. When the returned
-  callback is later invoked, it runs/awaits the interceptor and downstream send
-  according to the documented contract.
-- `wrap_receive` likewise constructs a callback. Actual receive I/O happens only
-  when the returned callback is invoked and awaited.
-- Interceptors that delegate must await the downstream callback so completion,
-  backpressure, and failure propagate.
+- `wrap_send($send, $interceptor)` returns an async send callback. When invoked
+  with an event, it calls the interceptor with
+  `($event, $downstream_send)`. The interceptor owns delegation and may forward,
+  replace, suppress, or expand the event into multiple downstream sends.
+- `wrap_receive($receive, $interceptor)` returns an async receive callback.
+  When invoked, it calls the interceptor with `($downstream_receive)`. The
+  interceptor may receive once or repeatedly, filter or replace an event, or
+  synthesize an event without reading downstream.
+- Wrapper construction performs no I/O and starts no work. Receive I/O occurs
+  only if the returned callback is invoked and its interceptor calls the
+  downstream receive callback.
+- Interceptors may return an immediate value or a Future. The wrapper resolves
+  to that result and propagates failures. Interceptors that delegate must await
+  or return the downstream Future so completion, backpressure, and failure are
+  not detached.
+- The scope, changes, channel, and interceptor arguments are validated as the
+  appropriate hashrefs or coderefs when each helper is constructed. The helpers
+  do not inspect event types, invent return-value conventions, or delegate
+  automatically.
 
-Existing OO helpers such as `modify_scope` and `intercept_send` remain
-compatibility surfaces and delegate to the functional helpers.
-`buffer_request_body` remains a separate higher-level operation.
+For example:
+
+```perl
+my $wrapped_send = wrap_send($send, async sub {
+    my ($event, $downstream_send) = @_;
+    return if should_drop($event);
+    await $downstream_send->($event);
+});
+
+my $wrapped_receive = wrap_receive($receive, async sub {
+    my ($downstream_receive) = @_;
+    while (1) {
+        my $event = await $downstream_receive->();
+        next if $event->{type} eq 'app.heartbeat';
+        return $event;
+    }
+});
+```
+
+The downstream callbacks are the real PAGI channels with fixed signatures;
+they are not an application continuation or another `$next` abstraction.
+
+`PAGI::Middleware` remains an OO base class and does not install utility
+functions into subclasses. Its existing `modify_scope` and `intercept_send`
+methods remain unchanged compatibility surfaces. Their implementations may
+delegate internally where the functional contracts are identical, but that is
+not part of the public promise. `wrap_receive` is initially functional-only;
+no OO counterpart is added. `buffer_request_body` remains a separate
+higher-level operation.
 
 Every helper's documentation states:
 
@@ -684,85 +1043,7 @@ Every helper's documentation states:
 - Whether it starts any work automatically.
 - Its short-circuit and error-propagation semantics.
 
-## 17. Context and Response vocabulary
-
-The normal `$c` contract must be sufficient so raw-channel access is genuinely
-exceptional.
-
-### 17.1 Raw callbacks
-
-`$c->raw_send` and `$c->raw_receive` are the canonical raw channel accessors.
-The base Context no longer uses `send` or `receive` as raw accessors.
-
-Protocol-specific high-level methods retain names that describe actions. In
-particular, SSE `$c->send(...)` remains an actual SSE event emission method;
-WebSocket uses its typed send/receive methods; HTTP uses `respond`.
-
-This is an intentional Context cleanup. Documentation, tests, and examples are
-updated together so `send` no longer sometimes means "return a callback" and
-sometimes means "emit an event".
-
-### 17.2 `PAGI::Response`
-
-A Response is a detached local value. Canonical methods are:
-
-- `body($bytes)` sets a raw byte body locally.
-- `text($characters, charset => ...)` encodes and sets a text body locally.
-- `html`, `json`, `empty`, `stream`, and related builders modify local response
-  state.
-- `respond($send)` emits the accumulated HTTP response events and returns a
-  Future for their completion.
-
-For backwards compatibility:
-
-- Existing `send` remains a documented compatibility alias to `text`.
-- Existing `send_raw` remains a documented compatibility alias to `body`.
-
-The aliases are explicitly described as local body setters, not event-emission
-methods. Examples prefer the canonical names.
-
-### 17.3 Query data
-
-HTTP, WebSocket, and SSE contexts expose the same query API backed by one parser
-and cache over `scope->{query_string}`:
-
-- `query_param`
-- `query_params`
-- `raw_query_param`
-- `raw_query_params`
-- `raw_query`
-
-Existing protocol-specific compatibility aliases remain, but delegate to the
-shared implementation so parsing and caching are not duplicated.
-
-### 17.4 Headers
-
-Shared Context header access is:
-
-- `header($name)` for the last value or `undef`.
-- `header_all($name)` for every value.
-- `headers()` for a `PAGI::Headers` snapshot/object.
-- `raw_headers()` for the original wire-pair representation.
-
-Changing `$c->headers` from raw pairs to `PAGI::Headers` is intentional and is
-documented as a migration. `raw_headers` is the explicit escape hatch.
-
-### 17.5 State and stash
-
-`$c->state` returns the scope's application state hashref when it exists and
-`undef` when it does not. It does not silently allocate or return an unrelated
-empty hashref. `$c->has_state` distinguishes presence explicitly.
-
-Application lifespan state and per-request `stash` remain separate concepts.
-Documentation explains their ownership and lifetime.
-
-### 17.6 Scope selection
-
-A missing scope type continues to default to HTTP for compatibility. An
-explicit, unrecognized scope type croaks instead of silently constructing an
-HTTP context.
-
-## 18. Names, namespaces, and reverse routing
+## 17. Names, namespaces, and reverse routing
 
 Each HTTP, WebSocket, and SSE route may have `name`. A mount may have
 `namespace`. Mount path prefixes and name namespaces are independent:
@@ -789,6 +1070,24 @@ $routing->path_for('v1.show', { id => 42 });
 $routing->path_for('v2.show', { id => 42 });
 ```
 
+Dynamic inline mount parameters participate in reverse generation alongside
+child-route parameters:
+
+```perl
+mount('/tenants/{tenant_id}', namespace => 'tenant', routes => [
+    route('/users/{user_id}' => \&show, name => 'user.show'),
+]);
+
+$routing->path_for('tenant.user.show', {
+    tenant_id => 'acme',
+    user_id   => 42,
+});
+# /tenants/acme/users/42
+```
+
+An application mount receives its captured parameters in scope but remains an
+opaque reverse-routing leaf.
+
 Namespaces are not derived from URL paths; changing a deployment prefix must
 not silently rename logical routes.
 
@@ -801,34 +1100,118 @@ Reverse APIs are:
 ```perl
 $routing->path_for($name, \%path_params, \%query_params);
 $c->path_for($name, \%path_params, \%query_params);
-$c->uri_for($name, \%path_params, \%query_params);
+$c->url_for($name, \%path_params, \%query_params);
 ```
 
 - Router `path_for` is request-independent and returns the application path.
 - Context `path_for` includes request `root_path`.
-- Context `uri_for` returns an absolute request-aware URI.
+- Context `url_for` returns an absolute request-aware URL string.
 
-`uri_for` uses the normalized scope scheme and authority. It prefers a valid
+`url_for` uses the normalized scope scheme and authority. It prefers a valid
 Host header and falls back to server information where possible. HTTP and SSE
 use HTTP(S); WebSocket reverse targets map HTTP/HTTPS to WS/WSS as appropriate.
-If no usable authority exists, `uri_for` croaks rather than inventing one.
+If no usable authority exists, `url_for` croaks rather than inventing one.
 
-The router does not parse `Forwarded` or `X-Forwarded-*` itself.
-`PAGI::Middleware::ReverseProxy` validates trusted proxy information and clones
-the normalized scheme/host/server into scope; `uri_for` consumes that scope.
-`PAGI::Middleware::TrustedHosts` validates authority. Documentation includes
-the proxy/host ordering and warns that trusting arbitrary forwarded hosts
-creates host-header poisoning vulnerabilities.
+`PAGI::Routing` does not introduce another `uri_for`. The shipped
+`PAGI::App::Router->uri_for` and `PAGI::Endpoint::Router->uri_for` remain
+unchanged as legacy path-returning APIs.
+
+The router does not parse `Forwarded` or `X-Forwarded-*`. `url_for` consumes the
+scheme, authority, and server information present in the normalized request
+scope.
+
+The shipped `PAGI::Middleware::ReverseProxy` and
+`PAGI::Middleware::TrustedHosts` currently process only HTTP scopes. Extending
+either middleware to WebSocket or SSE is not part of this routing design and is
+not a prerequisite for declarative routing. Those extensions are tracked in a
+separate cross-protocol compatibility design because they change the behavior
+of existing middleware for scopes that currently pass through untouched.
+
+For HTTP deployments using the shipped middleware, the canonical order remains:
+
+```text
+ReverseProxy
+  -> TrustedHosts
+    -> PAGI::Routing
+```
+
+WebSocket and SSE deployments are responsible for supplying correctly
+normalized and validated scope information until protocol-aware middleware
+behavior is separately designed and released. Documentation warns that
+trusting arbitrary forwarded hosts creates host-header poisoning
+vulnerabilities.
 
 Path and query values are URI-escaped. Wildcard generation preserves path
 separators while escaping each component. Missing/extra path parameters and
 constraint failures croak with route-name-specific diagnostics.
 
-At compilation the router is injected into request scope so Context reverse
-lookups use the selected route tree. Calling Context `path_for`/`uri_for`
-without a router croaks clearly.
+`PAGI::Routing` reserves the complete `pagi.routing` scope key. It does not
+read, replace, or repurpose the existing `pagi.router` metadata used by
+`PAGI::App::Router`; the two keys remain independent when applications combine
+the routers.
 
-## 19. Description and introspection
+The value is a versioned stack of request-local routing frames:
+
+```perl
+{
+    version => 1,
+    frames  => [
+        {
+            resolver => $resolver,
+            mounts   => [],
+            match    => undef,
+        },
+    ],
+}
+```
+
+The router installs its frame before invoking router middleware. The frame is
+shared through that router's shallow internal scope clones. Consumers may
+inspect it but must treat it as read-only; dispatch and reverse routing do not
+accept consumer mutation as configuration.
+
+When an inline mount matches, the router appends a descriptor containing its
+declared path, namespace, and description to the current frame's `mounts`
+before invoking that mount's middleware. Nested inline mounts update the same
+frame. When a leaf route matches, `match` becomes:
+
+```perl
+{
+    kind  => 'route', # or websocket / sse
+    route => '/tenants/{tenant_id}/users/{user_id}',
+    name  => 'tenant.user.show',
+    desc  => 'Display one tenant user',
+}
+```
+
+`route` is the effective mounted pattern and `name` is the effective namespaced
+name. Unnamed routes have `name => undef`. This metadata is installed before
+route middleware and the handler run. A selected application mount records
+`kind => 'mount'` and its effective mount pattern, but cannot publish
+information about the opaque child application. Router-generated 404 and 405
+outcomes leave `match` undefined; an inline mount chain may still be present.
+
+Because the frame is a shared request-local reference, router and mount
+middleware can inspect the final match after awaiting downstream execution.
+Middleware outside the compiled routing boundary receives its original scope
+and must not assume downstream top-level scope additions propagate upward.
+
+A separately compiled `PAGI::Routing` application receives a new shallow scope
+containing a new `pagi.routing` container with its frame appended to the prior
+frames. It never overwrites an ancestor frame. Context `path_for` and `url_for`
+always use the last frame's resolver. This covers routers, individual routing
+nodes compiled with `to_app`, raw routes targeting another compiled router, and
+application mounts containing a separately compiled router. Parent middleware
+retains its own terminal mount metadata, while middleware inside the child can
+inspect the complete routing ancestry.
+
+If an existing `pagi.routing` value does not have the supported version and
+frame-stack shape, request dispatch croaks with a scope-key collision diagnostic
+rather than silently overwriting foreign data. The key and frame schema are
+public scope integration surfaces and are documented alongside the PAGI
+scope-extension conventions.
+
+## 18. Description and introspection
 
 `desc` is an optional human-readable string accepted by `router`, `route`,
 `websocket`, `sse`, and `mount`. It has no routing or schema behavior. It exists
@@ -859,9 +1242,9 @@ $node->target;      # original handler/application target
 ```
 
 HTTP route accessors additionally expose `methods` and `constraints`. Mounts
-expose `namespace`, `routes` for inline child nodes, and `target` for an
-application mount. A method that is inapplicable to a node returns `undef`
-rather than exposing internal hashes.
+expose `namespace`, `constraints`, `routes` for inline child nodes, and `target`
+for an application mount. A method that is inapplicable to a node returns
+`undef` rather than exposing internal hashes.
 
 Users can recursively traverse `router->routes` and inline `mount->routes` in
 declaration order. Application mounts are opaque leaves. A future flattened
@@ -869,7 +1252,7 @@ route-table API is deferred until a concrete OpenAPI/debugging consumer defines
 whether it needs effective mounted paths, namespaces, middleware stacks, or
 compiled matcher information.
 
-## 20. Validation, compilation, and failures
+## 19. Validation, compilation, and failures
 
 Construction or compilation rejects:
 
@@ -878,6 +1261,7 @@ Construction or compilation rejects:
 - Unknown options.
 - Invalid paths or wildcard placement.
 - Constraints for undeclared parameters.
+- Duplicate parameter names across known inline mount/route ancestry.
 - Empty/invalid method sets.
 - `methods` on WebSocket or SSE nodes.
 - Invalid middleware descriptors.
@@ -893,7 +1277,7 @@ indexes, middleware chains, and inherited inline-subtree defaults. Per-request
 dispatch performs only request-specific matching, constraint checking, Context
 construction, and handler invocation.
 
-## 21. Testing strategy
+## 20. Testing strategy
 
 Implementation follows test-driven development. The test matrix covers:
 
@@ -904,39 +1288,62 @@ Implementation follows test-driven development. The test matrix covers:
 - Immutability and collection-copy behavior.
 - `desc` and all node accessors.
 - `to_app` for a router and every individual executable node.
-- Callable overload convenience versus the real-CODE `to_app` boundary.
-- Fresh independent compilation on repeated `to_app` calls.
+- Routing objects are not callable; `to_app` returns a real `CODE` reference.
+- State persistence within one compiled app and ordinary isolation across two
+  `to_app` results, including explicitly shared instance/closure exceptions.
+- Concurrent in-flight requests do not leak request-specific state.
 
 ### Matching
 
 - Strict declaration order.
 - Full match after an earlier partial match.
-- GET default, automatic HEAD, scalar/array methods, explicit `'*'`.
+- GET default, automatic HEAD, custom HEAD-before-GET override ordering,
+  reversed-order behavior, constraint fallback, scalar/array methods, and
+  explicit `'*'`.
 - No automatic OPTIONS.
-- Unioned `Allow` for multiple partial matches.
+- Unioned `Allow` for multiple partial matches, first-seen ordering, automatic
+  HEAD placement/deduplication, and the shipped router's alphabetical-order
+  divergence.
 - Exact trailing-slash behavior.
-- Regex, predicate, and Type::Tiny-compatible constraints.
+- Explicit and inline regex constraints with the same absolute whole-value
+  anchoring, including literal and percent-decoded trailing newlines; predicate
+  and Type::Tiny-compatible constraints.
 - False, throwing, and Future-returning constraint outcomes.
-- Wildcard routes and their documented 405 interactions.
+- Empty and non-empty wildcard captures, invalid wildcard placement, reverse
+  generation, documented 405 interactions, and preservation of decoded
+  traversal-like input without filesystem interpretation.
 
 ### Handlers and protocols
 
 - Synchronous Response and Future-resolved Response HTTP handlers.
-- Wrong HTTP handler return type diagnostics.
+- Wrong HTTP handler return type diagnostics, including `undef` after a manual
+  `$c->respond` attempt.
 - Respond exactly once.
 - Imperative WebSocket and SSE completion with inert return values.
 - Raw HTTP, WebSocket, and SSE applications.
 - HTTP, SSE, WebSocket, lifespan, and unknown-scope fallbacks.
+- HEAD preserves the request method while suppressing buffered, streamed, and
+  mounted response bodies and trailers, including generated 404/405 outcomes.
+- HEAD suppresses the `file`, `offset`, and `length` sendfile body variant,
+  treats an absent `more` as terminal, and emits one empty terminal body event.
 
 ### Defaults and mounts
 
 - Default and customized `not_found`/`method_not_allowed`.
 - Seeded status and `Allow` when using `$c` response helpers.
-- An explicitly returned replacement response remains untouched.
+- A detached 405 response receives a missing computed `Allow`; an existing
+  `Allow` and a returned non-405 status remain untouched.
 - A matched handler's custom 404/405 remains untouched.
 - Inline inheritance and mount middleware coverage.
 - Application-mount ownership and opacity.
 - Prefix/root-path rewriting and declaration-order mount ownership.
+- Static, root, and parameterized mount prefixes; mount constraints and
+  inherited path parameters; exact-prefix child `/`; original `raw_path`
+  preservation.
+- Root mounts leave `path`, `raw_path`, and both empty and non-empty incoming
+  `root_path` values unchanged.
+- Mounting the same subtree twice produces independent compiled middleware
+  wrappers unless sharing is explicit.
 
 ### Middleware
 
@@ -955,44 +1362,54 @@ Implementation follows test-driven development. The test matrix covers:
 - Duplicate-name diagnostics.
 - Constraint validation and URI escaping during generation.
 - `root_path`, scheme/authority, HTTP-to-WebSocket scheme mapping.
-- Trusted proxy/host integration and missing-authority failure.
+- Versioned `pagi.routing` frame creation, inline updates, effective route/name
+  metadata, and current-frame reverse resolution.
+- Nested compiled routers preserve frame ancestry without overwriting
+  `pagi.router`, parent frames, or malformed foreign values.
+- HTTP trusted proxy/host integration, middleware ordering, and
+  missing-authority failure.
+- WebSocket and SSE URL generation from already-normalized scopes without
+  changing the shipped HTTP-only proxy/Host middleware behavior.
 - Direct and recursive route-tree inspection without mutation.
-
-### Context/Response migration
-
-- `raw_send`/`raw_receive` and removal of raw base `send`/`receive` meanings.
-- SSE `send` remains actual event emission.
-- `body`/`text` local state versus `respond` event emission.
-- `Response->send` and `send_raw` compatibility aliases.
-- Unified query cache/API across protocols.
-- `headers` object and `raw_headers` wire pairs.
-- Missing `state` returns `undef`; `has_state` distinguishes presence.
 
 The full distribution suite must pass. Intentional failures capture diagnostics
 without noisy test output.
 
-## 22. Documentation requirements
+## 21. Documentation requirements
 
 Documentation is part of the feature, not follow-up work. It includes:
 
 - A small single-file declarative application.
 - Canonical named handlers loaded from other packages.
 - Inline mounts versus application mounts.
+- Dynamic mount captures across child handlers, middleware, scope rewriting,
+  and reverse generation.
+- Exact mount-prefix behavior, including the deliberate difference from
+  Starlette's default trailing-slash redirect.
 - Route, mount, child-router, and router middleware ordering.
 - Middleware factory examples using the authoring helpers.
 - Negotiated `not_found` and `method_not_allowed` handlers.
 - True catch-all routes at root and mounted-subtree levels, including method
   matching consequences.
+- The explicit-HEAD-before-GET convention for inexpensive custom HEAD handlers,
+  including why reversing the declarations invokes the GET handler instead.
 - HTTP, WebSocket, SSE, and explicit raw applications.
+- Normal Response-returning HTTP lifecycle versus the explicit `raw` escape
+  hatch for manual channel ownership.
 - Regex, predicate, and Type::Tiny constraints.
+- Wildcard security, including decoded traversal input, canonical containment
+  checks, symlink policy, and why route matching is not filesystem sanitization.
 - Route names, optional namespaces, duplicate-name errors, `path_for`, and
-  proxy-safe `uri_for`.
+  proxy-safe `url_for`.
+- The `pagi.routing` scope schema, matched-route metadata lifecycle, nested
+  frame behavior, and visibility from each middleware level.
+- HTTP trusted-proxy and Host-validation ordering, plus the current
+  cross-protocol pass-through limitation.
 - Route descriptions and recursive inspection.
 - Lifecycle composition with `PAGI::Lifespan` around the router object.
-- A comparison explaining when declarative routing or `PAGI::App::Router` is
-  the clearer choice.
-- Migration notes for every breaking Context name and every Response
-  compatibility alias.
+- A comparison explaining the roles, matching engines, and middleware contracts
+  of declarative routing, `PAGI::App::Router`, and `PAGI::Endpoint::Router`,
+  including their observable `Allow` ordering difference.
 
 Every helper documents where it sits in the request cycle and explicitly says
 whether it only changes local state, constructs a callback for later, or emits
@@ -1001,19 +1418,17 @@ and awaits protocol events.
 POD examples used as canonical recipes should be exercised by the existing
 cookbook/example test infrastructure where practical.
 
-## 23. Implementation sequencing
+## 22. Implementation sequencing
 
-The implementation plan will separate the work into three ordered phases:
+The implementation plan will separate the work into two ordered phases:
 
-1. **Context and Response contract cleanup.** Establish the handler-facing
-   vocabulary, compatibility aliases, unified query/header/state behavior, and
-   migration documentation.
-2. **Declarative routing core.** Implement immutable nodes, matching,
+1. **Declarative routing core.** Implement immutable nodes, matching,
    constraints, handler adapters, mounts, defaults, reverse routing,
-   descriptions, inspection, and `to_app`/overload behavior.
-3. **Middleware helpers and integration documentation.** Implement descriptors
+   descriptions, inspection, and `to_app` behavior.
+2. **Middleware helpers and integration documentation.** Implement descriptors
    and authoring helpers, verify placement/lifecycle behavior, and complete the
-   tutorial/cookbook/reference material.
+   tutorial/cookbook/reference material. Cross-protocol changes to the shipped
+   proxy and Host middleware remain outside this routing release.
 
 The phases may be delivered as separate commits or reviewable changes, but the
 public routing release is not complete until all required documentation and
