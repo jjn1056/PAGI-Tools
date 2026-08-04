@@ -3,12 +3,16 @@ package PAGI::Routing::Middleware;
 use strict;
 use warnings;
 use Carp qw(croak);
+use Scalar::Util qw(blessed);
 
 sub new {
     my ($class, $factory, @args) = @_;
 
-    croak 'middleware requires a factory, object, or class name'
-        unless defined $factory;
+    croak 'middleware requires a coderef, blessed object, or nonempty class name'
+        unless ref($factory) eq 'CODE'
+            || blessed($factory)
+            || (!ref($factory) && defined $factory
+                && $factory =~ /\A[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/);
     croak 'middleware configuration must be key/value pairs'
         if @args % 2;
 

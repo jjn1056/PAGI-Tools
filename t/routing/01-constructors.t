@@ -45,8 +45,16 @@ subtest 'exports are opt-in and tag-specific' => sub {
     ok(!RouteImports->can('middleware'), 'routes tag excludes middleware');
     ok(MiddlewareImports->can('middleware'), 'middleware tag exports middleware');
     ok(!MiddlewareImports->can('route'), 'middleware tag excludes route');
-    like dies { eval q{ package BadImports; use PAGI::Routing qw(:all); 1 } or die $@ },
+    my ($error, $stderr);
+    {
+        local *STDERR;
+        open STDERR, '>', \$stderr or die "cannot capture STDERR: $!";
+        $error = dies { eval q{ package BadImports; use PAGI::Routing qw(:all); 1 } or die $@ };
+    }
+    like $error,
         qr/Can't continue after import errors/, 'lowercase all is rejected';
+    like $stderr, qr/"all" is not defined in %PAGI::Routing::EXPORT_TAGS/,
+        'lowercase all diagnostic is captured';
 };
 
 subtest 'route descriptions preserve target identity and normalize HTTP methods' => sub {
@@ -120,8 +128,11 @@ subtest 'mount and router descriptions copy their collections' => sub {
     my $leaf = route '/leaf' => $handler;
     my $children = [$leaf];
     my $constraints = { tenant => 'a' };
+    my $mount_middleware = middleware('Mount');
+    my $mount_middleware_input = [$mount_middleware];
     my $inline = mount '/api', routes => $children,
-        namespace => 'API', desc => '', constraints => $constraints;
+        namespace => 'API', desc => '', constraints => $constraints,
+        middleware => $mount_middleware_input;
     isa_ok($inline, 'PAGI::Routing::Mount');
     is($inline->kind, 'mount', 'mount kind');
     is($inline->path, '/api', 'mount path');
@@ -133,15 +144,20 @@ subtest 'mount and router descriptions copy their collections' => sub {
     ok(!$inline->is_raw, 'inline mount is not raw');
     is($inline->target, undef, 'inline mount has no target');
     is($inline->methods, undef, 'methods are inapplicable to mount');
+    is($inline->middleware, [$mount_middleware], 'mount middleware preserves descriptor');
 
     push @$children, route '/other' => $handler;
     $constraints->{tenant} = 'b';
+    push @$mount_middleware_input, middleware('MountInputMutation');
     my $returned_routes = $inline->routes;
     my $returned_constraints = $inline->constraints;
+    my $returned_mount_middleware = $inline->middleware;
     push @$returned_routes, route '/third' => $handler;
     $returned_constraints->{tenant} = 'c';
+    push @$returned_mount_middleware, middleware('MountResultMutation');
     is($inline->routes, [$leaf], 'mount route arrays are copied');
     is($inline->constraints, { tenant => 'a' }, 'mount constraints are copied');
+    is($inline->middleware, [$mount_middleware], 'mount middleware arrays are copied');
 
     my $app = sub { };
     my $raw = mount '/app' => $app;
@@ -154,22 +170,35 @@ subtest 'mount and router descriptions copy their collections' => sub {
     my $routes = [$inline, $raw];
     my $not_found = sub { };
     my $method_not_allowed = sub { };
+    my $router_middleware = middleware('Top');
+    my $router_middleware_input = [$router_middleware];
     my $router = router(
         routes => $routes,
-        middleware => [middleware('Top')],
+        middleware => $router_middleware_input,
+        desc => 'Root routes',
         not_found => $not_found,
         method_not_allowed => $method_not_allowed,
     );
     isa_ok($router, 'PAGI::Routing::Router');
+    is($router->kind, 'router', 'router kind');
+    is($router->name, undef, 'name is inapplicable to router');
+    is($router->desc, 'Root routes', 'router description');
     is($router->routes, [$inline, $raw], 'router routes');
-    is($router->middleware, [@{$router->middleware}], 'router middleware values');
+    is($router->middleware, [$router_middleware], 'router middleware preserves descriptor');
     push @$routes, $leaf;
+    push @$router_middleware_input, middleware('RouterInputMutation');
     my $returned_router_routes = $router->routes;
+    my $returned_router_middleware = $router->middleware;
     push @$returned_router_routes, $leaf;
+    push @$returned_router_middleware, middleware('RouterResultMutation');
     is($router->routes, [$inline, $raw], 'router route arrays are copied');
+    is($router->middleware, [$router_middleware], 'router middleware arrays are copied');
     is($router->path, undef, 'path is inapplicable to router');
     is($router->target, undef, 'target is inapplicable to router');
     is($router->is_raw, undef, 'raw status is inapplicable to router');
+    is($router->methods, undef, 'methods are inapplicable to router');
+    is($router->constraints, undef, 'constraints are inapplicable to router');
+    is($router->namespace, undef, 'namespace is inapplicable to router');
     is(refaddr($router->not_found), refaddr($not_found), 'router retains not-found handler identity');
     is(refaddr($router->method_not_allowed), refaddr($method_not_allowed), 'router retains method-not-allowed handler identity');
 };
@@ -214,12 +243,17 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/not-component' => TestRoutingApp->new($handler) }, qr/handler must be a coderef/, 'normal route does not coerce component targets';
     like dies { mount '/both' => $handler, routes => [] }, qr/mount requires exactly one of target or routes/, 'mount rejects target plus routes';
     like dies { mount '/missing' }, qr/mount requires exactly one of target or routes/, 'mount requires a target or routes';
+    like dies { mount '/undefined-target', undef }, qr/mount requires exactly one of target or routes/, 'mount rejects an undefined target';
+    like dies { mount '/undefined-mixed', undef, routes => [] }, qr/mount requires exactly one of target or routes/, 'mount rejects undefined target plus routes';
     like dies { mount '/bad-routes', routes => 'nope' }, qr/routes must contain PAGI::Routing nodes/, 'mount routes must be an arrayref';
     like dies { mount '/bad-node', routes => [bless {}, 'Elsewhere'] }, qr/routes must contain PAGI::Routing nodes/, 'mount routes contain only nodes';
     like dies { router(routes => 'nope') }, qr/routes must contain PAGI::Routing nodes/, 'router routes must be an arrayref';
     like dies { router(not_found => 'not a handler') }, qr/not_found must be a coderef/, 'router fallback handlers must be coderefs';
     like dies { route '/bad-middleware' => $handler, middleware => 'nope' }, qr/middleware must be an arrayref/, 'middleware must be an arrayref';
     like dies { route '/bare-middleware' => $handler, middleware => [$handler] }, qr/middleware must contain PAGI::Routing::Middleware descriptors/, 'middleware entries must be descriptors';
+    like dies { middleware([]) }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an unblessed arrayref';
+    like dies { middleware({}) }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an unblessed hashref';
+    like dies { middleware('') }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an empty class name';
     like dies { route '/bad-desc' => $handler, desc => {} }, qr/desc must be a string/, 'descriptions cannot be references';
     like dies { route '/bad-name' => $handler, name => '' }, qr/name must be a nonempty string/, 'names must be nonempty strings';
     like dies { mount '/bad-namespace', routes => [], namespace => [] }, qr/namespace must be a nonempty string/, 'namespaces cannot be references';

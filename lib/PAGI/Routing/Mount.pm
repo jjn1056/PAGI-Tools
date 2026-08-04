@@ -10,8 +10,9 @@ sub new {
     my ($class, $path, @args) = @_;
     croak 'mount path must be a string' unless defined $path && !ref($path);
 
+    my $has_target = !(@args && defined $args[0] && !ref($args[0]) && $args[0] eq 'routes');
     my $target;
-    if (!(@args && defined $args[0] && !ref($args[0]) && $args[0] eq 'routes')) {
+    if ($has_target) {
         $target = shift @args;
     }
 
@@ -19,7 +20,7 @@ sub new {
     my %opts = @args;
     my $has_routes = exists $opts{routes};
     croak 'mount requires exactly one of target or routes'
-        if (defined $target && $has_routes) || (!defined $target && !$has_routes);
+        if $has_target == $has_routes || ($has_target && !defined $target);
 
     my %allowed = map { $_ => 1 } qw(routes namespace desc constraints middleware);
     for my $key (keys %opts) {
