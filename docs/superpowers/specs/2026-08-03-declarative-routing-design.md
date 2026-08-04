@@ -31,6 +31,11 @@ routing methods and scope integration are defined below. Potential vocabulary
 changes to existing Context and Response methods are tracked in a separate
 compatibility design and are not prerequisites for declarative routing.
 
+The approved `PAGI::Authority` design is a prerequisite. It provides the
+validated Host and server-fallback authority consumed by request-aware reverse
+routing. `PAGI::Routing` does not duplicate its header cardinality, authority
+grammar, or fallback implementation.
+
 The router is intentionally narrower than Starlette's top-level `Starlette`
 application object. A future PAGI application constructor may own lifespan,
 application-wide exception policy, and global middleware. Those concerns do
@@ -1107,10 +1112,11 @@ $c->url_for($name, \%path_params, \%query_params);
 - Context `path_for` includes request `root_path`.
 - Context `url_for` returns an absolute request-aware URL string.
 
-`url_for` uses the normalized scope scheme and authority. It prefers a valid
-Host header and falls back to server information where possible. HTTP and SSE
-use HTTP(S); WebSocket reverse targets map HTTP/HTTPS to WS/WSS as appropriate.
-If no usable authority exists, `url_for` croaks rather than inventing one.
+`url_for` obtains authority from `PAGI::Authority->from_scope($scope)`. A valid
+Host is preferred; server information is used only when Host is absent. A
+malformed or duplicate Host croaks rather than falling back, and no usable
+source also croaks rather than inventing one. HTTP and SSE use HTTP(S);
+WebSocket reverse targets map HTTP/HTTPS to WS/WSS as appropriate.
 
 `PAGI::Routing` does not introduce another `uri_for`. The shipped
 `PAGI::App::Router->uri_for` and `PAGI::Endpoint::Router->uri_for` remain

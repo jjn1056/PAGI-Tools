@@ -14,6 +14,11 @@ authority, and server information already present in request scope.
 The routing design does not parse proxy headers and does not change the scope
 types handled by existing middleware.
 
+This work does depend on the approved `PAGI::Authority` design and its shipped
+implementation. Every future HTTP/WebSocket/SSE Host decision reuses that
+module's cardinality, grammar, and formatting rules; this compatibility design
+owns only protocol coverage, trust policy, migration, and rejection events.
+
 ## 2. Shipped behavior
 
 `PAGI::Middleware::ReverseProxy` and `PAGI::Middleware::TrustedHosts` currently
@@ -31,7 +36,8 @@ validation apply consistently to header-bearing HTTP, WebSocket, and SSE
 scopes. Potential behavior includes:
 
 - Applying trusted `X-Forwarded-*` normalization to all three protocols.
-- Replacing or inserting the Host header from a trusted forwarded authority.
+- Replacing or inserting exactly one Host header after validating a trusted
+  forwarded authority through `PAGI::Authority`.
 - Mapping forwarded HTTP/HTTPS schemes to WS/WSS for WebSocket scopes.
 - Validating Host for WebSocket and SSE rather than passing them through.
 - Sending protocol-correct rejection events for invalid or missing authority.
@@ -63,6 +69,8 @@ The eventual plan must cover:
 - Explicit compatibility tests proving the current WebSocket/SSE pass-through
   behavior before any migration.
 - Missing, valid, and invalid Host values for every supported protocol.
+- Duplicate Host values using the shared `PAGI::Authority` behavior rather
+  than protocol-specific selection.
 - Trusted and untrusted proxy sources.
 - Forwarded scheme, authority, client, and server normalization.
 - Protocol-correct WebSocket and SSE rejection behavior.
