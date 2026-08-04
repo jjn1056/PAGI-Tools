@@ -1,5 +1,22 @@
 # Revision history for PAGI-Tools
 
+0.002003
+  - New PAGI::Authority centralizes strict validation and scope-derived authority
+    formatting. PAGI::Request->host and PAGI::Context->host now return only a
+    single structurally valid Host field (including an explicit port), return
+    undef when it is absent, and reject malformed or duplicate fields. This is
+    intentional security hardening; raw, last-value header('host')
+    remains the compatibility escape hatch.
+  - PAGI::Middleware::TrustedHosts and ::HTTPSRedirect now fail closed with a
+    generic HTTP 400 for malformed or duplicate Host data. HTTPSRedirect uses
+    the validated server tuple only when Host is absent, rather than inventing
+    a fallback authority.
+  - PAGI::Middleware::ReverseProxy accepts a trusted X-Forwarded-Host exactly
+    once, validates it as one authority, replaces every existing Host pair with
+    one rewritten pair, and invalidates the request-header cache. Its proxy
+    trust and HTTP-only gates are unchanged; this release does not extend these
+    middleware behaviors to other protocols.
+
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key
     (WebSocket, SSE upgrades) now get a READ-ONLY session populated the same
