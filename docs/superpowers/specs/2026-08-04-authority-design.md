@@ -1,7 +1,7 @@
 # Authority Validation and Resolution
 
 **Date:** 2026-08-04
-**Status:** Draft for user review
+**Status:** Approved
 **Scope:** One authority parser for request accessors, absolute URLs, and the
 currently supported protocol surfaces of Host-aware middleware
 
