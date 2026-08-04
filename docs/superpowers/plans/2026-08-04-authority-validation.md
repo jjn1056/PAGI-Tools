@@ -596,8 +596,8 @@ repository's IO::Async test harness. No new runtime dependency.
 - Spec coverage: Tasks 1–5 cover all public APIs, grammar/fallback rules,
   Request/Context delegation, current HTTP middleware consumers, ReverseProxy
   cache mutation, compatibility notes, protocol-gate preservation, and tests.
-- Placeholders: no TBD/TODO/deferred implementation steps remain. Deferred
-  cross-protocol middleware behavior is explicitly outside this plan and has a
+- Placeholder review: every in-scope implementation step is concrete. The
+  cross-protocol middleware work is explicitly outside this plan and has a
   separate design.
 - Interface consistency: every consumer calls one of Task 1's exact class
   methods; `host` is header-only while `from_scope` owns server fallback;
