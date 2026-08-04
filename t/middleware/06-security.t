@@ -490,6 +490,39 @@ subtest 'TrustedHosts applies allowlist and allow_empty after structural validat
     }
 };
 
+subtest 'TrustedHosts rejects undefined headers even when empty Host is allowed' => sub {
+    my $mw = PAGI::Middleware::TrustedHosts->new(
+        hosts       => ['example.com'],
+        allow_empty => 1,
+    );
+    my $app_calls = 0;
+    my $wrapped = $mw->wrap(async sub { $app_calls++ });
+    my @sent;
+
+    run_async(async sub {
+        await $wrapped->(
+            {
+                type    => 'http',
+                path    => '/',
+                method  => 'GET',
+                headers => undef,
+            },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; push @sent, $event },
+        );
+    });
+
+    is $app_calls, 0, 'undefined headers container does not call downstream';
+    is scalar(@sent), 2, 'undefined headers container sends start and terminal body';
+    is $sent[0]{type}, 'http.response.start', 'undefined headers container sends response start';
+    is $sent[0]{status}, 400, 'undefined headers container returns 400';
+    is $sent[1], {
+        type => 'http.response.body',
+        body => 'Invalid Host header',
+        more => 0,
+    }, 'undefined headers container returns a generic terminal body';
+};
+
 subtest 'TrustedHosts preserves non-HTTP pass-through gate' => sub {
     my $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com']);
     my $seen_scope;

@@ -285,6 +285,14 @@ subtest 'HTTPSRedirect - invalid authority returns local 400' => sub {
             name  => 'absent Host with unusable server',
             scope => make_scope(headers => [], server => ['bad..example', 80]),
         },
+        {
+            name  => 'undefined headers container',
+            scope => do {
+                my $scope = make_scope(server => ['fallback.example', 80]);
+                $scope->{headers} = undef;
+                $scope;
+            },
+        },
     );
 
     for my $case (@cases) {

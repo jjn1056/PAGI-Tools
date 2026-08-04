@@ -30,7 +30,7 @@ sub host_from_scope {
     my ($class, $scope) = @_;
 
     croak 'authority scope must be a hashref' unless ref($scope) eq 'HASH';
-    my $pairs = $scope->{headers} // [];
+    my $pairs = exists $scope->{headers} ? $scope->{headers} : [];
     croak 'scope headers must be an arrayref of pairs'
         unless ref($pairs) eq 'ARRAY';
 

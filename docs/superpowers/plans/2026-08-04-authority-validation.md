@@ -218,7 +218,7 @@ repository's IO::Async test harness. No new runtime dependency.
   sub host_from_scope {
       my ($class, $scope) = @_;
       croak 'authority scope must be a hashref' unless ref($scope) eq 'HASH';
-      my $pairs = $scope->{headers} // [];
+      my $pairs = exists $scope->{headers} ? $scope->{headers} : [];
       croak 'scope headers must be an arrayref of pairs'
           unless ref($pairs) eq 'ARRAY';
 
@@ -238,6 +238,10 @@ repository's IO::Async test harness. No new runtime dependency.
       return $class->validate($host[0]);
   }
   ```
+
+  **D-001 correction:** The `exists` check distinguishes a missing key from a
+  present undefined container, aligning this plan with the approved design's
+  malformed-shape rule and server-fallback policy.
 
   `from_scope` returns that value when defined. Otherwise require a one- or
   two-element server tuple and delegate to a private formatter:

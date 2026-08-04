@@ -92,6 +92,7 @@ subtest 'host_from_scope validates raw Host header cardinality and leaves scope 
     }
 
     for my $bad_scope (
+        { headers => undef },
         { headers => [['Host', undef]] },
         { headers => ['Host'] },
         { headers => [['Host']] },
@@ -154,6 +155,16 @@ subtest 'from_scope prefers Host and only falls back when Host is absent' => sub
         }) },
         qr/invalid authority/,
         'malformed Host cannot fall back to server',
+    );
+
+    like(
+        dies { PAGI::Authority->from_scope({
+            headers => undef,
+            server  => ['fallback.example', 80],
+            scheme  => 'http',
+        }) },
+        qr/scope headers must be an arrayref of pairs/,
+        'undefined headers container cannot fall back to server',
     );
 };
 
