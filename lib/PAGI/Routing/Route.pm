@@ -137,6 +137,7 @@ sub constraints { $_[0]->{_has_constraints} ? $_[0]->{_pattern}->constraints : u
 sub middleware  { [ @{$_[0]->{middleware}} ] }
 sub namespace   { undef }
 sub routes      { undef }
+sub _pattern    { $_[0]->{_pattern} }
 
 sub to_app {
     my ($self) = @_;
