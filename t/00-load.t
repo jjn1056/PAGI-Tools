@@ -12,6 +12,7 @@ my @core_modules = qw(
     PAGI::Routing::Mount
     PAGI::Routing::Middleware
     PAGI::Middleware
+    PAGI::Middleware::Helpers
     PAGI::Middleware::Builder
     PAGI::App::Router
     PAGI::App::File
