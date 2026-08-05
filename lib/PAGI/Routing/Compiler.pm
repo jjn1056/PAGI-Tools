@@ -5,9 +5,83 @@ use warnings;
 use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
+use Scalar::Util qw(blessed refaddr);
 use PAGI::Context;
 use PAGI::Routing::Middleware ();
 use PAGI::Utils ();
+
+sub compile {
+    my ($class, $description) = @_;
+
+    croak 'routing description is required'
+        unless blessed($description);
+
+    if ($description->isa('PAGI::Routing::Route')
+            || $description->isa('PAGI::Routing::Mount')) {
+        require PAGI::Routing::Router;
+        $description = PAGI::Routing::Router->new(routes => [$description]);
+    }
+
+    croak 'unsupported routing description'
+        unless $description->isa('PAGI::Routing::Router');
+
+    return $class->_compile_http_router($description);
+}
+
+sub _compile_http_router {
+    my ($class, $router) = @_;
+
+    my @compiled_entries;
+    for my $node (@{$router->routes}) {
+        next unless $node->isa('PAGI::Routing::Route')
+            && $node->kind eq 'route';
+        push @compiled_entries, {
+            route => $node,
+            app => $class->_compile_http_leaf($node),
+        };
+    }
+
+    my $not_found_handler = $router->not_found || sub {
+        my ($context) = @_;
+        return $context->text('Not Found');
+    };
+    my $method_not_allowed_handler = $router->method_not_allowed || sub {
+        my ($context) = @_;
+        return $context->text('Method Not Allowed');
+    };
+    my $not_found = $class->_compile_generated_handler(
+        $not_found_handler,
+        404,
+    );
+    my $method_not_allowed = $class->_compile_generated_handler(
+        $method_not_allowed_handler,
+        405,
+    );
+
+    my $dispatcher = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $decision = $class->_select_http(\@compiled_entries, $scope);
+
+        if ($decision->{kind} eq 'full') {
+            await $decision->{app}->($decision->{scope}, $receive, $send);
+            return;
+        }
+
+        if ($decision->{kind} eq 'partial') {
+            my $allow = join ', ', @{$decision->{allowed_methods}};
+            await $method_not_allowed->($scope, $receive, $send, $allow);
+            return;
+        }
+
+        await $not_found->($scope, $receive, $send);
+        return;
+    };
+
+    return PAGI::Routing::Middleware->_wrap_descriptors(
+        $router->middleware,
+        $dispatcher,
+    );
+}
 
 sub _compile_http_leaf {
     my ($class, $route) = @_;
@@ -33,20 +107,56 @@ sub _compile_http_leaf {
 }
 
 sub _compile_http_handler {
-    my ($class, $handler) = @_;
+    my ($class, $handler, $policy) = @_;
 
     return async sub {
-        my ($scope, $receive, $send) = @_;
+        my ($scope, $receive, $send, @policy_arguments) = @_;
         my $context = PAGI::Context->new($scope, $receive, $send);
+        my $policy_state = $policy
+            ? $policy->{before}->($context, @policy_arguments)
+            : undef;
         my $returned = $handler->($context);
         my $result = await Future->wrap($returned);
 
         croak 'handler did not return a response'
             unless PAGI::Utils::is_response($result);
 
+        $policy->{after}->($result, $policy_state) if $policy;
         await $context->respond($result);
         return;
     };
+}
+
+sub _compile_generated_handler {
+    my ($class, $handler, $status) = @_;
+
+    my $policy = {
+        before => sub {
+            my ($context, $allow) = @_;
+            my $seeded = $context->response->status($status);
+            $seeded->header('Allow' => $allow)
+                if $status == 405 && defined $allow;
+            return {
+                response => $seeded,
+                allow => $allow,
+            };
+        },
+        after => sub {
+            my ($result, $state) = @_;
+            return unless $status == 405;
+
+            if ($result->status == 405) {
+                $result->header_try('Allow' => $state->{allow});
+                return;
+            }
+
+            if (refaddr($result) == refaddr($state->{response})) {
+                $result->remove_header('Allow');
+            }
+        },
+    };
+
+    return $class->_compile_http_handler($handler, $policy);
 }
 
 sub _select_http {
@@ -107,8 +217,9 @@ PAGI::Routing::Compiler - Internal declarative routing compiler
 
 =head1 DESCRIPTION
 
-Compiles declarative routing leaves and builds request-local selection
-decisions. The public compilation entry point is completed by the generated
-HTTP outcome layer.
+Compiles declarative HTTP routing descriptions into fresh application graphs.
+Full decisions invoke their selected leaf, while partial and none decisions
+are rendered through the normal handler adapter as generated 405 and 404
+responses. Generated response and Allow state remain request-local.
 
 =cut

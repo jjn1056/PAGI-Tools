@@ -117,6 +117,6 @@ and C<methods> return undef for a mount.
 
 =head2 to_app
 
-Defers compilation to C<PAGI::Routing::Compiler>.
+Compiles this mount through a fresh complete one-node router on every call.
 
 =cut

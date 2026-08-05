@@ -176,6 +176,6 @@ declaration values. C<namespace> and C<routes> return undef for a leaf route.
 
 =head2 to_app
 
-Defers compilation to C<PAGI::Routing::Compiler>.
+Compiles this route through a fresh complete one-node router on every call.
 
 =cut

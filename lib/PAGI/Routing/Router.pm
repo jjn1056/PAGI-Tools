@@ -86,6 +86,7 @@ handler coderefs.
 
 =head2 to_app
 
-Defers compilation to C<PAGI::Routing::Compiler>.
+Compiles and returns a fresh PAGI application graph through
+C<PAGI::Routing::Compiler> on every call.
 
 =cut
