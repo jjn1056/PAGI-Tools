@@ -232,6 +232,7 @@ subtest 'descriptions have no coderef overload and defer compilation' => sub {
 
 subtest 'constructors reject invalid declarations' => sub {
     my $handler = sub { };
+    my $child_router = router(routes => []);
     like dies { route '/missing' }, qr/route requires exactly one of handler or raw/, 'route requires a target';
     like dies { route '/both' => $handler, raw => $handler }, qr/route requires exactly one of handler or raw/, 'route rejects handler plus raw';
     like dies { route '/unknown' => $handler, nope => 1 }, qr/unknown route option/, 'route rejects unknown option';
@@ -250,6 +251,12 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { mount '/bad-routes', routes => 'nope' }, qr/routes must contain PAGI::Routing nodes/, 'mount routes must be an arrayref';
     like dies { mount '/bad-node', routes => [bless {}, 'Elsewhere'] }, qr/routes must contain PAGI::Routing nodes/, 'mount routes contain only nodes';
     like dies { router(routes => 'nope') }, qr/routes must contain PAGI::Routing nodes/, 'router routes must be an arrayref';
+    like dies { mount '/nested-router', routes => [$child_router] },
+        qr/Router objects cannot appear in structural routes.*mount.*positionally/,
+        'inline mount routes reject a nested Router with application-mount guidance';
+    like dies { router(routes => [$child_router]) },
+        qr/Router objects cannot appear in structural routes.*mount.*positionally/,
+        'router route lists reject a nested Router rather than accepting an inert node';
     like dies { router(not_found => 'not a handler') }, qr/not_found must be a coderef/, 'router fallback handlers must be coderefs';
     like dies { route '/bad-middleware' => $handler, middleware => 'nope' }, qr/middleware must be an arrayref/, 'middleware must be an arrayref';
     like dies { route '/bare-middleware' => $handler, middleware => [$handler] }, qr/middleware must contain PAGI::Routing::Middleware descriptors/, 'middleware entries must be descriptors';

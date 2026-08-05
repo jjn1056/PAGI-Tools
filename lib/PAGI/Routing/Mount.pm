@@ -61,11 +61,13 @@ sub _validate_routes {
     my ($routes) = @_;
     croak 'routes must contain PAGI::Routing nodes' unless ref($routes) eq 'ARRAY';
     for my $node (@$routes) {
+        croak 'PAGI::Routing::Router objects cannot appear in structural routes; '
+            . "mount('/prefix' => \$router) positionally as an application"
+            if blessed($node) && $node->isa('PAGI::Routing::Router');
         croak 'routes must contain PAGI::Routing nodes'
             unless blessed($node)
                 && ($node->isa('PAGI::Routing::Route')
-                    || $node->isa('PAGI::Routing::Mount')
-                    || $node->isa('PAGI::Routing::Router'));
+                    || $node->isa('PAGI::Routing::Mount'));
     }
 }
 

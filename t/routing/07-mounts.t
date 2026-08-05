@@ -456,6 +456,56 @@ subtest 'application-mounted routers retain independent middleware boundaries an
     is($mount_middleware_compilations, 1, 'mount middleware is not rebuilt per request');
 };
 
+subtest 'two mount occurrences compile independent wrapper-local state' => sub {
+    my $factory_calls = 0;
+    my $next_wrapper = 0;
+    my $stateful_middleware = middleware(sub {
+        my ($inner) = @_;
+        ++$factory_calls;
+        my $wrapper = ++$next_wrapper;
+        my $requests = 0;
+
+        return sub {
+            my ($request_scope, $receive, $send) = @_;
+            my $child_scope = {
+                %$request_scope,
+                'task7.wrapper' => $wrapper,
+                'task7.requests' => ++$requests,
+            };
+            return $inner->($child_scope, $receive, $send);
+        };
+    });
+    my $shared_leaf = route('/state', raw => async sub {
+        my ($request_scope, $receive, $send) = @_;
+        my $body = join ':',
+            $request_scope->{'task7.wrapper'},
+            $request_scope->{'task7.requests'};
+        await response_app($body)->(@_);
+    }, middleware => [$stateful_middleware]);
+    my $app = router(routes => [
+        mount('/left', routes => [$shared_leaf]),
+        mount('/right', routes => [$shared_leaf]),
+    ])->to_app;
+
+    is($factory_calls, 2, 'the shared subtree middleware factory runs once for each mount occurrence');
+    is(
+        response_body(run_app($app, path => '/left/state', raw_path => '/left/state')),
+        '1:1',
+        'the first mount starts its own wrapper-local request state',
+    );
+    is(
+        response_body(run_app($app, path => '/left/state', raw_path => '/left/state')),
+        '1:2',
+        'a second request reuses the first mount occurrence wrapper',
+    );
+    is(
+        response_body(run_app($app, path => '/right/state', raw_path => '/right/state')),
+        '2:1',
+        'the second mount has a distinct wrapper and independent local state',
+    );
+    is($factory_calls, 2, 'neither mount recompiles the shared subtree per request');
+};
+
 done_testing;
 
 {
