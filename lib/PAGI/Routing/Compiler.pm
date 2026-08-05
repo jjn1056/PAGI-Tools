@@ -25,10 +25,10 @@ sub compile {
     croak 'unsupported routing description'
         unless $description->isa('PAGI::Routing::Router');
 
-    return $class->_compile_http_router($description);
+    return $class->_compile_router($description);
 }
 
-sub _compile_http_router {
+sub _compile_router {
     my ($class, $router) = @_;
 
     my $not_found_handler = $router->not_found || sub {
@@ -47,7 +47,7 @@ sub _compile_http_router {
         $method_not_allowed_handler,
         405,
     );
-    my $dispatcher = $class->_compile_http_dispatcher(
+    my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
         $not_found,
         $method_not_allowed,
@@ -60,7 +60,7 @@ sub _compile_http_router {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
-        my $is_head = ($scope->{type} // '') eq 'http'
+        my $is_head = ($scope->{type} // 'http') eq 'http'
             && ($scope->{method} // '') eq 'HEAD';
         my $wire_send = $is_head
             ? $class->_head_wire_send($send)
@@ -71,16 +71,17 @@ sub _compile_http_router {
     };
 }
 
-sub _compile_http_dispatcher {
+sub _compile_dispatcher {
     my ($class, $nodes, $not_found, $method_not_allowed) = @_;
 
     my @compiled_entries;
     for my $node (@$nodes) {
-        if ($node->isa('PAGI::Routing::Route')
-                && $node->kind eq 'route') {
+        if ($node->isa('PAGI::Routing::Route')) {
             push @compiled_entries, {
                 route => $node,
-                app   => $class->_compile_http_leaf($node),
+                app   => $node->kind eq 'route'
+                    ? $class->_compile_http_leaf($node)
+                    : $class->_compile_protocol_leaf($node),
             };
             next;
         }
@@ -98,7 +99,7 @@ sub _compile_http_dispatcher {
             };
         }
         else {
-            $mounted_app = $class->_compile_http_dispatcher(
+            $mounted_app = $class->_compile_dispatcher(
                 $node->routes,
                 $not_found,
                 $method_not_allowed,
@@ -117,6 +118,31 @@ sub _compile_http_dispatcher {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
+        my $type = $scope->{type} // 'http';
+        return if $type eq 'lifespan';
+        croak "unsupported PAGI scope type '$type'"
+            unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
+
+        if ($type eq 'websocket' || $type eq 'sse') {
+            my $decision = $class->_select_protocol(
+                \@compiled_entries,
+                $scope,
+                $type,
+            );
+            if ($decision->{kind} eq 'full') {
+                my $returned = $decision->{app}->(
+                    $decision->{scope},
+                    $receive,
+                    $send,
+                );
+                await Future->wrap($returned);
+                return;
+            }
+
+            await $class->_send_protocol_not_found($scope, $send);
+            return;
+        }
+
         my $decision = $class->_select_http(\@compiled_entries, $scope);
 
         if ($decision->{kind} eq 'full') {
@@ -150,6 +176,60 @@ sub _compile_http_dispatcher {
         await $not_found->($scope, $receive, $send);
         return;
     };
+}
+
+async sub _send_protocol_not_found {
+    my ($class, $scope, $send) = @_;
+    my $type = $scope->{type};
+
+    if ($type eq 'websocket'
+            && !exists(($scope->{extensions} // {})->{'websocket.http.response'})) {
+        await $send->({ type => 'websocket.close' });
+        return;
+    }
+
+    my $prefix = "$type.http.response";
+    await $send->({
+        type    => "$prefix.start",
+        status  => 404,
+        headers => [['content-type', 'text/plain']],
+    });
+    await $send->({
+        type => "$prefix.body",
+        body => 'Not Found',
+        more => 0,
+    });
+    return;
+}
+
+sub _compile_protocol_leaf {
+    my ($class, $route) = @_;
+
+    my $app;
+    if ($route->is_raw) {
+        my $raw_app = PAGI::Utils::to_app($route->target);
+        $app = async sub {
+            my ($scope, $receive, $send) = @_;
+            my $returned = $raw_app->($scope, $receive, $send);
+            await Future->wrap($returned);
+            return;
+        };
+    }
+    else {
+        my $handler = $route->target;
+        $app = async sub {
+            my ($scope, $receive, $send) = @_;
+            my $context = PAGI::Context->new($scope, $receive, $send);
+            my $returned = $handler->($context);
+            await Future->wrap($returned);
+            return;
+        };
+    }
+
+    return PAGI::Routing::Middleware->_wrap_descriptors(
+        $route->middleware,
+        $app,
+    );
 }
 
 sub _head_wire_send {
@@ -353,6 +433,44 @@ sub _select_http {
         kind => 'partial',
         allowed_methods => [@allowed_methods],
     } if @allowed_methods;
+
+    return { kind => 'none' };
+}
+
+sub _select_protocol {
+    my ($class, $compiled_entries, $scope, $protocol) = @_;
+
+    my $path = defined $scope->{path} ? $scope->{path} : '/';
+    for my $entry (@$compiled_entries) {
+        if (my $mount = $entry->{mount}) {
+            my $match = $mount->_pattern->match_mount($path);
+            next unless defined $match;
+
+            return {
+                kind  => 'full',
+                app   => $entry->{app},
+                scope => $class->_mount_scope($scope, $match),
+            };
+        }
+
+        my $route = $entry->{route};
+        next unless $route->kind eq $protocol;
+        my $captures = $route->_pattern->match_route($path);
+        next unless defined $captures;
+
+        my %path_params = (
+            %{ref($scope->{path_params}) eq 'HASH' ? $scope->{path_params} : {}},
+            %$captures,
+        );
+        return {
+            kind => 'full',
+            app => $entry->{app},
+            scope => {
+                %$scope,
+                path_params => \%path_params,
+            },
+        };
+    }
 
     return { kind => 'none' };
 }
