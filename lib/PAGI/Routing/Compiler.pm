@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
 use PAGI::Context;
 use PAGI::Routing::Middleware ();
+use PAGI::Routing::Resolver ();
 use PAGI::Utils ();
 
 sub compile {
@@ -47,10 +48,13 @@ sub _compile_router {
         $method_not_allowed_handler,
         405,
     );
+    my $resolver = PAGI::Routing::Resolver->new(routes => $router->routes);
     my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
         $not_found,
         $method_not_allowed,
+        $resolver,
+        [],
     );
 
     my $app = PAGI::Routing::Middleware->_wrap_descriptors(
@@ -65,25 +69,37 @@ sub _compile_router {
         croak "unsupported PAGI scope type '$type'"
             unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
 
+        my $routing_scope = $class->_routing_scope($scope, $resolver);
+
         my $is_head = $type eq 'http'
             && ($scope->{method} // '') eq 'HEAD';
         my $wire_send = $is_head
             ? $class->_head_wire_send($send)
             : $send;
 
-        await $app->($scope, $receive, $wire_send);
+        await $app->($routing_scope, $receive, $wire_send);
         return;
     };
 }
 
 sub _compile_dispatcher {
-    my ($class, $nodes, $not_found, $method_not_allowed) = @_;
+    my ($class, $nodes, $not_found, $method_not_allowed, $resolver,
+        $location_prefix) = @_;
+
+    $location_prefix ||= [];
 
     my @compiled_entries;
-    for my $node (@$nodes) {
+    for my $index (0 .. $#$nodes) {
+        my $node = $nodes->[$index];
+        my @location = (@$location_prefix, $index);
+        my $metadata = $resolver
+            ? $resolver->_metadata_for_location(\@location)
+            : undef;
+
         if ($node->isa('PAGI::Routing::Route')) {
             push @compiled_entries, {
                 route => $node,
+                metadata => $metadata,
                 app   => $node->kind eq 'route'
                     ? $class->_compile_http_leaf($node)
                     : $class->_compile_protocol_leaf($node),
@@ -108,6 +124,8 @@ sub _compile_dispatcher {
                 $node->routes,
                 $not_found,
                 $method_not_allowed,
+                $resolver,
+                \@location,
             );
         }
 
@@ -117,6 +135,7 @@ sub _compile_dispatcher {
         );
         push @compiled_entries, {
             mount => $node,
+            metadata => $metadata,
             app   => $mounted_app,
         };
     }
@@ -393,6 +412,8 @@ sub _select_http {
             my $match = $mount->_pattern->match_mount($path);
             next unless defined $match;
 
+            $class->_record_mount_match($scope, $entry->{metadata});
+
             return {
                 kind  => 'full',
                 app   => $entry->{app},
@@ -411,6 +432,7 @@ sub _select_http {
             : grep { $_ eq $method } @$methods;
 
         if ($method_matches) {
+            $class->_record_leaf_match($scope, $entry->{metadata});
             my %path_params = (
                 %{ref($scope->{path_params}) eq 'HASH' ? $scope->{path_params} : {}},
                 %$captures,
@@ -449,6 +471,8 @@ sub _select_protocol {
             my $match = $mount->_pattern->match_mount($path);
             next unless defined $match;
 
+            $class->_record_mount_match($scope, $entry->{metadata});
+
             return {
                 kind  => 'full',
                 app   => $entry->{app},
@@ -460,6 +484,8 @@ sub _select_protocol {
         next unless $route->kind eq $protocol;
         my $captures = $route->_pattern->match_route($path);
         next unless defined $captures;
+
+        $class->_record_leaf_match($scope, $entry->{metadata});
 
         my %path_params = (
             %{ref($scope->{path_params}) eq 'HASH' ? $scope->{path_params} : {}},
@@ -476,6 +502,88 @@ sub _select_protocol {
     }
 
     return { kind => 'none' };
+}
+
+sub _routing_scope {
+    my ($class, $scope, $resolver) = @_;
+
+    my @ancestor_frames;
+    my $incoming = $scope->{'pagi.routing'};
+    if ($class->_compatible_routing_container($incoming)) {
+        @ancestor_frames = @{$incoming->{frames}};
+    }
+
+    my $frame = {
+        resolver => $resolver,
+        mounts   => [],
+        match    => undef,
+    };
+    my @frames = (@ancestor_frames, $frame);
+    my $container = {
+        version => 1,
+        frames  => \@frames,
+    };
+
+    return {
+        %$scope,
+        'pagi.routing' => $container,
+    };
+}
+
+sub _compatible_routing_container {
+    my ($class, $container) = @_;
+
+    return 0 unless ref($container) eq 'HASH';
+    return 0 unless defined $container->{version}
+        && !ref($container->{version})
+        && $container->{version} eq '1';
+    return 0 unless ref($container->{frames}) eq 'ARRAY';
+
+    for my $frame (@{$container->{frames}}) {
+        return 0 unless ref($frame) eq 'HASH';
+        return 0 unless blessed($frame->{resolver})
+            && $frame->{resolver}->can('path_for');
+        return 0 unless ref($frame->{mounts}) eq 'ARRAY';
+        return 0 if defined $frame->{match}
+            && ref($frame->{match}) ne 'HASH';
+    }
+
+    return 1;
+}
+
+sub _current_routing_frame {
+    my ($class, $scope) = @_;
+    return unless ref($scope) eq 'HASH';
+    my $container = $scope->{'pagi.routing'};
+    return unless ref($container) eq 'HASH';
+    my $frames = $container->{frames};
+    return unless ref($frames) eq 'ARRAY' && @$frames;
+    my $frame = $frames->[-1];
+    return ref($frame) eq 'HASH' ? $frame : undef;
+}
+
+sub _record_mount_match {
+    my ($class, $scope, $metadata) = @_;
+    return unless ref($metadata) eq 'HASH';
+    my $frame = $class->_current_routing_frame($scope);
+    return unless $frame;
+
+    if ($metadata->{is_raw}) {
+        $frame->{match} = { %{$metadata->{match}} };
+        return;
+    }
+
+    push @{$frame->{mounts}}, { %{$metadata->{mount}} };
+    return;
+}
+
+sub _record_leaf_match {
+    my ($class, $scope, $metadata) = @_;
+    return unless ref($metadata) eq 'HASH';
+    my $frame = $class->_current_routing_frame($scope);
+    return unless $frame;
+    $frame->{match} = { %{$metadata->{match}} };
+    return;
 }
 
 sub _mount_scope {

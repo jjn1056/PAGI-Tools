@@ -21,23 +21,45 @@ sub new {
     PAGI::Routing::Mount::_validate_routes($routes);
 
     my $self = bless {
-        records => [],
-        by_name => {},
+        records              => [],
+        by_name              => {},
+        metadata_by_location => {},
     }, $class;
 
-    $self->_visit($routes, '', '', [], {});
+    $self->_visit($routes, '', '', [], {}, []);
     return $self;
 }
 
 sub _visit {
-    my ($self, $nodes, $path_prefix, $name_prefix, $outer_names, $outer_constraints) = @_;
+    my ($self, $nodes, $path_prefix, $name_prefix, $outer_names,
+        $outer_constraints, $location_prefix) = @_;
 
-    for my $node (@$nodes) {
+    for my $index (0 .. $#$nodes) {
+        my $node = $nodes->[$index];
+        my @location = (@$location_prefix, $index);
+        my $location_key = join '.', @location;
+
         if ($node->isa('PAGI::Routing::Mount')) {
-            next if $node->is_raw;
-
             my $mount_path = $node->path eq '/' ? '' : $node->path;
             my $effective_path = $path_prefix . $mount_path;
+            my $published_path = length $effective_path ? $effective_path : '/';
+            $self->{metadata_by_location}{$location_key} = {
+                match => {
+                    kind  => 'mount',
+                    route => $published_path,
+                    name  => undef,
+                    desc  => $node->desc,
+                },
+                mount => {
+                    path      => $node->path,
+                    namespace => $node->namespace,
+                    desc      => $node->desc,
+                },
+                is_raw => $node->is_raw ? 1 : 0,
+            };
+
+            next if $node->is_raw;
+
             my ($names, $constraints) = _extend_parameters(
                 $outer_names, $outer_constraints, $node, $effective_path,
             );
@@ -49,6 +71,7 @@ sub _visit {
                 $effective_namespace,
                 $names,
                 $constraints,
+                \@location,
             );
             next;
         }
@@ -60,8 +83,22 @@ sub _visit {
             $outer_names, $outer_constraints, $node, $effective_path,
         );
         my $declared_name = $node->name;
-        next unless defined $declared_name && length $declared_name;
-        my $effective_name = _join_name($name_prefix, $declared_name);
+        my $effective_name = defined $declared_name && length $declared_name
+            ? _join_name($name_prefix, $declared_name)
+            : undef;
+
+        $self->{metadata_by_location}{$location_key} = {
+            match => {
+                kind  => $node->kind,
+                route => $effective_path,
+                name  => $effective_name,
+                desc  => $node->desc,
+            },
+            mount  => undef,
+            is_raw => 0,
+        };
+
+        next unless defined $effective_name;
 
         my $pattern = PAGI::Routing::Pattern->new(
             path => $effective_path,
@@ -85,6 +122,21 @@ sub _visit {
         push @{$self->{records}}, $record;
         $self->{by_name}{$effective_name} = $record;
     }
+}
+
+sub _metadata_for_location {
+    my ($self, $location) = @_;
+    croak 'resolver metadata location must be an arrayref'
+        unless ref($location) eq 'ARRAY';
+
+    my $record = $self->{metadata_by_location}{join '.', @$location};
+    croak 'resolver metadata location is unknown' unless $record;
+
+    return {
+        match  => { %{$record->{match}} },
+        mount  => defined $record->{mount} ? { %{$record->{mount}} } : undef,
+        is_raw => $record->{is_raw},
+    };
 }
 
 sub _extend_parameters {
