@@ -5,6 +5,7 @@ use warnings;
 use Carp qw(croak);
 use PAGI::Routing::Route ();
 use PAGI::Routing::Mount ();
+use PAGI::Routing::Resolver ();
 
 sub new {
     my ($class, @args) = @_;
@@ -25,9 +26,13 @@ sub new {
             if exists $opts{$name} && ref($opts{$name}) ne 'CODE';
     }
 
+    my @routes = @$routes;
+    my $resolver = PAGI::Routing::Resolver->new(routes => \@routes);
+
     return bless {
         kind       => 'router',
-        routes     => [ @$routes ],
+        routes     => \@routes,
+        _resolver  => $resolver,
         middleware => exists $opts{middleware} ? [ @{$opts{middleware}} ] : [],
         desc       => $opts{desc},
         not_found  => $opts{not_found},
@@ -48,6 +53,9 @@ sub constraints { undef }
 sub namespace  { undef }
 sub not_found { $_[0]->{not_found} }
 sub method_not_allowed { $_[0]->{method_not_allowed} }
+sub named_routes { $_[0]->{_resolver}->named_routes }
+sub route_named  { $_[0]->{_resolver}->route_named($_[1]) }
+sub path_for     { my $self = shift; return $self->{_resolver}->path_for(@_) }
 
 sub to_app {
     my ($self) = @_;
