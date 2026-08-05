@@ -69,7 +69,19 @@ sub _compile_http_router {
 
         if ($decision->{kind} eq 'partial') {
             my $allow = join ', ', @{$decision->{allowed_methods}};
-            await $method_not_allowed->($scope, $receive, $send, $allow);
+            my $provenance = {};
+            my $generated_send = $class->_generated_allow_send(
+                $send,
+                $allow,
+                $provenance,
+            );
+            await $method_not_allowed->(
+                $scope,
+                $receive,
+                $generated_send,
+                $allow,
+                $provenance,
+            );
             return;
         }
 
@@ -132,31 +144,74 @@ sub _compile_generated_handler {
 
     my $policy = {
         before => sub {
-            my ($context, $allow) = @_;
+            my ($context, $allow, $provenance) = @_;
+            $provenance ||= {};
             my $seeded = $context->response->status($status);
             $seeded->header('Allow' => $allow)
                 if $status == 405 && defined $allow;
-            return {
-                response => $seeded,
-                allow => $allow,
-            };
+            $provenance->{seed_identity} = refaddr($seeded);
+            return $provenance;
         },
         after => sub {
             my ($result, $state) = @_;
-            return unless $status == 405;
-
-            if ($result->status == 405) {
-                $result->header_try('Allow' => $state->{allow});
-                return;
-            }
-
-            if (refaddr($result) == refaddr($state->{response})) {
-                $result->remove_header('Allow');
-            }
+            $state->{returned_seed} = refaddr($result) == $state->{seed_identity}
+                ? 1
+                : 0;
         },
     };
 
     return $class->_compile_http_handler($handler, $policy);
+}
+
+sub _generated_allow_send {
+    my ($class, $send, $allow, $provenance) = @_;
+
+    return sub {
+        my ($event) = @_;
+        return $send->($event)
+            unless ($event->{type} // '') eq 'http.response.start';
+
+        my $headers = ref($event->{headers}) eq 'ARRAY'
+            ? $event->{headers}
+            : [];
+
+        if (($event->{status} // 0) == 405) {
+            for my $pair (@$headers) {
+                return $send->($event)
+                    if ref($pair) eq 'ARRAY'
+                        && defined $pair->[0]
+                        && lc($pair->[0]) eq 'allow';
+            }
+
+            return $send->({
+                %$event,
+                headers => [@$headers, ['Allow' => $allow]],
+            });
+        }
+
+        return $send->($event) unless $provenance->{returned_seed};
+
+        my @filtered;
+        my $removed_seed;
+        for my $pair (@$headers) {
+            if (!$removed_seed
+                    && ref($pair) eq 'ARRAY'
+                    && defined $pair->[0]
+                    && lc($pair->[0]) eq 'allow'
+                    && defined $pair->[1]
+                    && $pair->[1] eq $allow) {
+                $removed_seed = 1;
+                next;
+            }
+            push @filtered, $pair;
+        }
+
+        return $send->($event) unless $removed_seed;
+        return $send->({
+            %$event,
+            headers => \@filtered,
+        });
+    };
 }
 
 sub _select_http {

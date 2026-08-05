@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Scalar::Util qw(refaddr);
 
 use PAGI::Response;
 use PAGI::Routing qw(router route mount middleware);
@@ -131,7 +132,7 @@ subtest 'the final 405 response receives Allow without overriding application po
         method_not_allowed => sub {
             return PAGI::Response->new
                 ->status(405)
-                ->header('Allow' => 'PATCH')
+                ->header('aLlOw' => 'PATCH')
                 ->text('custom Allow');
         },
     )->to_app;
@@ -147,6 +148,74 @@ subtest 'the final 405 response receives Allow without overriding application po
     $events = run_app($changed, method => 'POST', path => '/items');
     is(response_start($events)->{status}, 409, 'a method handler may change the seeded status');
     is(response_header($events, 'Allow'), undef, 'the compiler-seeded Allow is absent after status changes away from 405');
+
+    my $changed_with_custom = simple_router(
+        method_not_allowed => sub {
+            my ($c) = @_;
+            return $c->response
+                ->status(409)
+                ->header('Allow' => 'PATCH')
+                ->text('changed status with custom Allow');
+        },
+    )->to_app;
+    $events = run_app($changed_with_custom, method => 'POST', path => '/items');
+    my @allow_values = map { $_->[1] }
+        grep { lc($_->[0]) eq 'allow' }
+        @{response_start($events)->{headers}};
+    is(\@allow_values, ['PATCH'], 'status-away filtering removes only the compiler seed and preserves later custom Allow');
+};
+
+subtest 'a respond-only generated 405 receives Allow at the event boundary' => sub {
+    my $original_start = {
+        type => 'http.response.start',
+        status => 405,
+        headers => [['x-opaque' => 'yes']],
+    };
+    my $opaque = Local::OpaqueResponse->new($original_start, 'opaque method');
+    my $app = simple_router(
+        method_not_allowed => sub { return $opaque },
+    )->to_app;
+
+    my $events = run_app($app, method => 'POST', path => '/items');
+
+    is(response_start($events)->{status}, 405, 'the respond-only value emits its 405 start event');
+    is(response_header($events, 'x-opaque'), 'yes', 'the respond-only value retains its original header');
+    is(response_header($events, 'Allow'), 'GET, HEAD', 'the event boundary appends the computed Allow');
+    is(response_body($events), 'opaque method', 'the respond-only value emits its body');
+    is(
+        $original_start,
+        {
+            type => 'http.response.start',
+            status => 405,
+            headers => [['x-opaque' => 'yes']],
+        },
+        'the original start event and header array remain unmodified',
+    );
+};
+
+subtest 'a detached non-405 start event and intentional Allow pass by identity' => sub {
+    my $original_headers = [
+        ['Allow' => 'PATCH'],
+        ['x-opaque' => 'detached'],
+    ];
+    my $original_start = {
+        type => 'http.response.start',
+        status => 409,
+        headers => $original_headers,
+    };
+    my $opaque = Local::OpaqueResponse->new($original_start, 'opaque conflict');
+    my $app = simple_router(
+        method_not_allowed => sub { return $opaque },
+    )->to_app;
+
+    my $events = run_app($app, method => 'POST', path => '/items');
+    my $emitted_start = response_start($events);
+
+    is($emitted_start->{status}, 409, 'the detached response controls its final non-405 status');
+    is(response_header($events, 'Allow'), 'PATCH', 'the detached intentional Allow is preserved');
+    is(refaddr($emitted_start), refaddr($original_start), 'the non-405 detached start event passes by identity');
+    is(refaddr($emitted_start->{headers}), refaddr($original_headers), 'its original header array passes by identity');
+    is(response_body($events), 'opaque conflict', 'the detached response body is sent');
 };
 
 subtest 'fully matched application 404 and 405 responses pass untouched' => sub {
@@ -330,5 +399,27 @@ subtest 'each to_app call resolves an independent middleware graph' => sub {
     is($builds, 2, 'the middleware factory resolves once for each newly compiled graph');
     is(\@instances, [1, 1, 2], 'the two apps retain independent middleware instances');
 };
+
+{
+    package Local::OpaqueResponse;
+
+    sub new {
+        my ($class, $start, $body) = @_;
+        return bless {
+            start => $start,
+            body => $body,
+        }, $class;
+    }
+
+    sub respond {
+        my ($self, $send) = @_;
+        $send->($self->{start})->get;
+        return $send->({
+            type => 'http.response.body',
+            body => $self->{body},
+            more => 0,
+        });
+    }
+}
 
 done_testing;
