@@ -291,6 +291,97 @@ sub path_param {
     return $params->{$name};
 }
 
+=head2 Routing Reverse Methods
+
+    my $path = $ctx->path_for(
+        'account.user.show',
+        { account_id => 7, user_id => 42 },
+        { tab => 'profile' },
+    );
+
+    my $url = $ctx->url_for(
+        'account.user.show',
+        { account_id => 7, user_id => 42 },
+        { tab => 'profile' },
+    );
+
+C<path_for> renders a named declarative route through the resolver in the last
+valid C<pagi.routing> frame and prefixes the application path with the current
+request's C<root_path>. C<url_for> uses the same resolver and returns an
+absolute URL whose scheme follows the named route kind: HTTP and SSE targets
+use C<http> or C<https>, while WebSocket targets use C<ws> or C<wss>. Missing
+path and query hashes default to empty hashes. These methods perform no
+protocol I/O.
+
+Absolute URL generation delegates authority selection and validation to
+L<PAGI::Authority>. Invalid or duplicate Host fields fail rather than falling
+back to C<< scope->{server} >>. Code that deliberately needs the raw
+last-value header behavior may use C<< $ctx->header('host') >>; reverse routing
+does not use that escape hatch.
+
+For HTTP deployments, the shipped middleware should be ordered from outermost
+to innermost as:
+
+    ReverseProxy -> TrustedHosts -> PAGI::Routing
+
+This lets trusted proxy data normalize the scope before Host policy and URL
+generation consume it. The shipped C<PAGI::Middleware::ReverseProxy> and
+C<PAGI::Middleware::TrustedHosts> still pass WebSocket and SSE scopes through
+untouched. Those scopes therefore must already contain normalized and
+validated scheme and authority data. Cross-protocol middleware support is a
+separate planned compatibility change, not behavior supplied by routing.
+
+=cut
+
+sub path_for {
+    my ($self, @args) = @_;
+    my $resolver = $self->_routing_resolver('path_for');
+    my $path = $resolver->path_for(@args);
+    return _join_root_path($self->{scope}{root_path}, $path);
+}
+
+sub url_for {
+    my ($self, @args) = @_;
+    my $resolver = $self->_routing_resolver('url_for');
+    return $resolver->url_for_scope($self->{scope}, @args);
+}
+
+sub _routing_resolver {
+    my ($self, $operation) = @_;
+    my $container = $self->{scope}{'pagi.routing'};
+    my $valid = ref($container) eq 'HASH'
+        && defined $container->{version}
+        && !ref($container->{version})
+        && $container->{version} eq '1'
+        && ref($container->{frames}) eq 'ARRAY'
+        && @{$container->{frames}};
+
+    if ($valid) {
+        for my $frame (@{$container->{frames}}) {
+            $valid = 0, last unless ref($frame) eq 'HASH'
+                && blessed($frame->{resolver})
+                && $frame->{resolver}->can('path_for')
+                && ref($frame->{mounts}) eq 'ARRAY'
+                && (!defined $frame->{match} || ref($frame->{match}) eq 'HASH');
+        }
+    }
+
+    my $resolver = $valid ? $container->{frames}[-1]{resolver} : undef;
+    $valid = 0 if $operation eq 'url_for'
+        && (!$resolver || !$resolver->can('url_for_scope'));
+
+    croak "$operation requires a PAGI::Routing resolver in scope" unless $valid;
+    return $resolver;
+}
+
+sub _join_root_path {
+    my ($root_path, $path) = @_;
+    $root_path = '' unless defined $root_path;
+    chop $root_path if length($root_path) && substr($root_path, -1) eq '/'
+        && length($path) && substr($path, 0, 1) eq '/';
+    return $root_path . $path;
+}
+
 =head2 Protocol Introspection
 
     $ctx->is_http;        # true if type eq 'http'

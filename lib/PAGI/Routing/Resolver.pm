@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Encode qw(encode FB_CROAK);
+use PAGI::Authority ();
 use PAGI::Routing::Mount ();
 use PAGI::Routing::Pattern ();
 
@@ -190,6 +191,41 @@ sub path_for {
     }
 
     return @pairs ? $path . '?' . join('&', @pairs) : $path;
+}
+
+sub url_for_scope {
+    my ($self, $scope, $name, $path_params, $query_params) = @_;
+    my $path = $self->path_for($name, $path_params, $query_params);
+    my $kind = $self->route_kind($name);
+    my $scope_scheme = defined $scope->{scheme} ? $scope->{scheme} : 'http';
+    croak 'unsupported URL scheme'
+        if ref($scope_scheme) || $scope_scheme !~ /\A(?:http|https|ws|wss)\z/;
+
+    my $url_scheme;
+    if ($kind eq 'websocket') {
+        my %scheme_for = (
+            http => 'ws', https => 'wss', ws => 'ws', wss => 'wss',
+        );
+        $url_scheme = $scheme_for{$scope_scheme};
+    }
+    else {
+        my %scheme_for = (
+            http => 'http', https => 'https', ws => 'http', wss => 'https',
+        );
+        $url_scheme = $scheme_for{$scope_scheme};
+    }
+
+    my $authority = PAGI::Authority->from_scope($scope);
+    $path = _join_root_path($scope->{root_path}, $path);
+    return "$url_scheme://$authority$path";
+}
+
+sub _join_root_path {
+    my ($root_path, $path) = @_;
+    $root_path = '' unless defined $root_path;
+    chop $root_path if length($root_path) && substr($root_path, -1) eq '/'
+        && length($path) && substr($path, 0, 1) eq '/';
+    return $root_path . $path;
 }
 
 sub _encode_component {
