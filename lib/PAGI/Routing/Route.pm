@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
+use PAGI::Routing::Pattern ();
 
 sub new {
     my ($class, $kind, @args) = @_;
@@ -48,16 +49,22 @@ sub new {
     my $methods = $kind eq 'route'
         ? _normalize_methods(exists $opts{methods} ? $opts{methods} : 'GET')
         : undef;
+    my $has_constraints = $kind eq 'route' && exists $opts{constraints};
+    my $pattern = PAGI::Routing::Pattern->new(
+        path => $path,
+        mode => 'route',
+        constraints => $has_constraints ? $opts{constraints} : {},
+    );
 
     return bless {
         kind        => $kind,
-        path        => $path,
+        _pattern    => $pattern,
         target      => $target,
         is_raw      => $is_raw,
         name        => $opts{name},
         desc        => $opts{desc},
         methods     => $methods,
-        constraints => exists $opts{constraints} ? { %{$opts{constraints}} } : undef,
+        _has_constraints => $has_constraints,
         middleware  => exists $opts{middleware} ? [ @{$opts{middleware}} ] : [],
     }, $class;
 }
@@ -119,13 +126,14 @@ sub _normalize_methods {
 }
 
 sub kind        { $_[0]->{kind} }
-sub path        { $_[0]->{path} }
+sub path        { $_[0]->{_pattern}->path }
+sub parameters  { $_[0]->{_pattern}->parameters }
 sub name        { $_[0]->{name} }
 sub desc        { $_[0]->{desc} }
 sub target      { $_[0]->{target} }
 sub is_raw      { $_[0]->{is_raw} }
 sub methods     { ref($_[0]->{methods}) eq 'ARRAY' ? [ @{$_[0]->{methods}} ] : $_[0]->{methods} }
-sub constraints { defined $_[0]->{constraints} ? { %{$_[0]->{constraints}} } : undef }
+sub constraints { $_[0]->{_has_constraints} ? $_[0]->{_pattern}->constraints : undef }
 sub middleware  { [ @{$_[0]->{middleware}} ] }
 sub namespace   { undef }
 sub routes      { undef }
@@ -154,14 +162,14 @@ PAGI::Routing::Route - Immutable declarative route description
 
 A route represents an HTTP, WebSocket, or SSE leaf. The ordinary target is a
 coderef handler; C<raw> targets remain explicit applications for the compiler
-to coerce through L<PAGI::Utils/to_app>. Collection and hash accessors return
-shallow copies.
+to coerce through L<PAGI::Utils/to_app>. Its path pattern is compiled during
+construction. Collection and hash accessors return shallow copies.
 
 =head1 ACCESSORS
 
-C<kind>, C<path>, C<name>, C<desc>, C<target>, C<is_raw>, C<methods>,
-C<constraints>, and C<middleware> return the corresponding declaration values.
-C<namespace> and C<routes> return undef for a leaf route.
+C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<target>, C<is_raw>,
+C<methods>, C<constraints>, and C<middleware> return the corresponding
+declaration values. C<namespace> and C<routes> return undef for a leaf route.
 
 =head1 METHODS
 

@@ -5,6 +5,7 @@ use warnings;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use PAGI::Routing::Route ();
+use PAGI::Routing::Pattern ();
 
 sub new {
     my ($class, $path, @args) = @_;
@@ -36,15 +37,22 @@ sub new {
         _validate_routes($opts{routes});
     }
 
+    my $has_constraints = exists $opts{constraints};
+    my $pattern = PAGI::Routing::Pattern->new(
+        path => $path,
+        mode => 'mount',
+        constraints => $has_constraints ? $opts{constraints} : {},
+    );
+
     return bless {
         kind        => 'mount',
-        path        => $path,
+        _pattern    => $pattern,
         target      => $target,
         is_raw      => $has_routes ? 0 : 1,
         routes      => $has_routes ? [ @{$opts{routes}} ] : undef,
         namespace   => $opts{namespace},
         desc        => $opts{desc},
-        constraints => exists $opts{constraints} ? { %{$opts{constraints}} } : undef,
+        _has_constraints => $has_constraints,
         middleware  => exists $opts{middleware} ? [ @{$opts{middleware}} ] : [],
     }, $class;
 }
@@ -62,14 +70,15 @@ sub _validate_routes {
 }
 
 sub kind        { $_[0]->{kind} }
-sub path        { $_[0]->{path} }
+sub path        { $_[0]->{_pattern}->path }
+sub parameters  { $_[0]->{_pattern}->parameters }
 sub name        { undef }
 sub namespace   { $_[0]->{namespace} }
 sub desc        { $_[0]->{desc} }
 sub target      { $_[0]->{target} }
 sub is_raw      { $_[0]->{is_raw} }
 sub routes      { defined $_[0]->{routes} ? [ @{$_[0]->{routes}} ] : undef }
-sub constraints { defined $_[0]->{constraints} ? { %{$_[0]->{constraints}} } : undef }
+sub constraints { $_[0]->{_has_constraints} ? $_[0]->{_pattern}->constraints : undef }
 sub middleware  { [ @{$_[0]->{middleware}} ] }
 sub methods     { undef }
 
@@ -95,13 +104,14 @@ PAGI::Routing::Mount - Immutable declarative mount description
 
 A mount contains either an inline array of routing nodes or an application.
 Application targets remain intact until the compiler converts them through
-L<PAGI::Utils/to_app>. Collection and hash accessors return shallow copies.
+L<PAGI::Utils/to_app>. Its normalized prefix pattern is compiled during
+construction. Collection and hash accessors return shallow copies.
 
 =head1 ACCESSORS
 
-C<kind>, C<path>, C<namespace>, C<desc>, C<target>, C<is_raw>,
-C<routes>, C<constraints>, and C<middleware> return declaration values.
-C<name> and C<methods> return undef for a mount.
+C<kind>, C<path>, C<parameters>, C<namespace>, C<desc>, C<target>, C<is_raw>,
+C<routes>, C<constraints>, and C<middleware> return declaration values. C<name>
+and C<methods> return undef for a mount.
 
 =head1 METHODS
 

@@ -62,34 +62,35 @@ subtest 'route descriptions preserve target identity and normalize HTTP methods'
     my $config = { enabled => 1 };
     my $mw = middleware('Example::Trace', level => 2, config => $config);
     my $methods = ['post', 'get', 'GET', 'rpc'];
-    my $constraints = { host => 'example.test' };
-    my $node = route '/things' => $handler,
+    my $host_constraint = qr/example[.]test/;
+    my $constraints = { host => $host_constraint };
+    my $node = route '/things/{host}' => $handler,
         name => 'things', desc => '', methods => $methods,
         constraints => $constraints, middleware => [$mw];
 
     isa_ok($node, 'PAGI::Routing::Route');
     is($node->kind, 'route', 'HTTP route kind');
-    is($node->path, '/things', 'route path');
+    is($node->path, '/things/{host}', 'route path');
     is($node->name, 'things', 'route name');
     is($node->desc, '', 'empty description is retained');
     is(refaddr($node->target), refaddr($handler), 'handler identity is retained');
     is($node->methods, ['POST', 'GET', 'HEAD', 'RPC'], 'methods normalize, deduplicate, and add HEAD');
-    is($node->constraints, { host => 'example.test' }, 'route constraints');
+    is(refaddr($node->constraints->{host}), refaddr($host_constraint), 'route constraints retain declared checker');
     is($node->middleware, [$mw], 'route middleware descriptors');
     ok(!$node->is_raw, 'normal route is not raw');
     is($node->namespace, undef, 'namespace is inapplicable to route');
     is($node->routes, undef, 'routes are inapplicable to route');
 
     $methods->[0] = 'DELETE';
-    $constraints->{host} = 'changed.test';
+    $constraints->{host} = qr/changed[.]test/;
     my $returned_methods = $node->methods;
     my $returned_constraints = $node->constraints;
     my $returned_middleware = $node->middleware;
     push @$returned_methods, 'DELETE';
-    $returned_constraints->{host} = 'mutated.test';
+    $returned_constraints->{host} = qr/mutated[.]test/;
     push @$returned_middleware, middleware('Another');
     is($node->methods, ['POST', 'GET', 'HEAD', 'RPC'], 'method collections are copied');
-    is($node->constraints, { host => 'example.test' }, 'constraint hashes are copied');
+    is(refaddr($node->constraints->{host}), refaddr($host_constraint), 'constraint hashes are copied');
     is($node->middleware, [$mw], 'middleware arrays are copied');
 
     my $wildcard = route '/all' => $handler, methods => '*';
@@ -127,36 +128,37 @@ subtest 'mount and router descriptions copy their collections' => sub {
     my $handler = sub { };
     my $leaf = route '/leaf' => $handler;
     my $children = [$leaf];
-    my $constraints = { tenant => 'a' };
+    my $tenant_constraint = qr/[a-z]+/;
+    my $constraints = { tenant => $tenant_constraint };
     my $mount_middleware = middleware('Mount');
     my $mount_middleware_input = [$mount_middleware];
-    my $inline = mount '/api', routes => $children,
+    my $inline = mount '/api/{tenant}', routes => $children,
         namespace => 'API', desc => '', constraints => $constraints,
         middleware => $mount_middleware_input;
     isa_ok($inline, 'PAGI::Routing::Mount');
     is($inline->kind, 'mount', 'mount kind');
-    is($inline->path, '/api', 'mount path');
+    is($inline->path, '/api/{tenant}', 'mount path');
     is($inline->name, undef, 'name is inapplicable to mount');
     is($inline->namespace, 'API', 'mount namespace');
     is($inline->desc, '', 'mount empty description');
     is($inline->routes, [$leaf], 'inline mount routes');
-    is($inline->constraints, { tenant => 'a' }, 'mount constraints');
+    is(refaddr($inline->constraints->{tenant}), refaddr($tenant_constraint), 'mount constraints retain declared checker');
     ok(!$inline->is_raw, 'inline mount is not raw');
     is($inline->target, undef, 'inline mount has no target');
     is($inline->methods, undef, 'methods are inapplicable to mount');
     is($inline->middleware, [$mount_middleware], 'mount middleware preserves descriptor');
 
     push @$children, route '/other' => $handler;
-    $constraints->{tenant} = 'b';
+    $constraints->{tenant} = qr/b/;
     push @$mount_middleware_input, middleware('MountInputMutation');
     my $returned_routes = $inline->routes;
     my $returned_constraints = $inline->constraints;
     my $returned_mount_middleware = $inline->middleware;
     push @$returned_routes, route '/third' => $handler;
-    $returned_constraints->{tenant} = 'c';
+    $returned_constraints->{tenant} = qr/c/;
     push @$returned_mount_middleware, middleware('MountResultMutation');
     is($inline->routes, [$leaf], 'mount route arrays are copied');
-    is($inline->constraints, { tenant => 'a' }, 'mount constraints are copied');
+    is(refaddr($inline->constraints->{tenant}), refaddr($tenant_constraint), 'mount constraints are copied');
     is($inline->middleware, [$mount_middleware], 'mount middleware arrays are copied');
 
     my $app = sub { };
