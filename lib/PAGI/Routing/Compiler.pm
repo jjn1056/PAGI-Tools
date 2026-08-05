@@ -89,10 +89,49 @@ sub _compile_http_router {
         return;
     };
 
-    return PAGI::Routing::Middleware->_wrap_descriptors(
+    my $app = PAGI::Routing::Middleware->_wrap_descriptors(
         $router->middleware,
         $dispatcher,
     );
+
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $is_head = ($scope->{type} // '') eq 'http'
+            && ($scope->{method} // '') eq 'HEAD';
+        my $wire_send = $is_head
+            ? $class->_head_wire_send($send)
+            : $send;
+
+        await $app->($scope, $receive, $wire_send);
+        return;
+    };
+}
+
+sub _head_wire_send {
+    my ($class, $send) = @_;
+    my $terminal_sent = 0;
+
+    return sub {
+        my ($event) = @_;
+        my $type = $event->{type} // '';
+
+        return Future->done
+            if $type eq 'http.response.trailers';
+
+        if ($type eq 'http.response.body') {
+            return Future->done
+                if $terminal_sent || $event->{more};
+
+            $terminal_sent = 1;
+            return $send->({
+                type => 'http.response.body',
+                body => '',
+                more => 0,
+            });
+        }
+
+        return $send->($event);
+    };
 }
 
 sub _compile_http_leaf {
