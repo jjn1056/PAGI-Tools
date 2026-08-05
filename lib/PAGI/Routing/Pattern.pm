@@ -41,8 +41,9 @@ sub new {
         my $remaining = substr($path, $position);
         my ($name, $inline, $token_text);
 
-        if ($remaining =~ /\A\{([A-Za-z_][A-Za-z0-9_]*):([^}]*)\}/s) {
-            ($name, $inline, $token_text) = ($1, $2, $&);
+        my $inline_token = _scan_inline_parameter($path, $position);
+        if ($inline_token) {
+            ($name, $inline, $token_text) = @{$inline_token}{qw(name source token_text)};
             _push_literal(\@tokens, \$literal);
             _reject_duplicate(\%seen, $name);
             my $token = {
@@ -148,6 +149,97 @@ sub new {
         parameters  => \@names,
         matcher     => $matcher,
     }, $class;
+}
+
+sub _scan_inline_parameter {
+    my ($path, $position) = @_;
+    my $remaining = substr($path, $position);
+    return unless $remaining =~ /\A\{([A-Za-z_][A-Za-z0-9_]*):/;
+
+    my $name = $1;
+    my $source_start = $position + length($&);
+    my $cursor = $source_start;
+    my $brace_depth = 0;
+    my $in_class = 0;
+    my $class_initial = 0;
+    my $class_special;
+
+    while ($cursor < length $path) {
+        my $character = substr($path, $cursor, 1);
+
+        if ($character eq '\\') {
+            $class_initial = 0 if $in_class;
+            $cursor += $cursor + 1 < length($path) ? 2 : 1;
+            next;
+        }
+
+        if ($in_class) {
+            if (defined $class_special) {
+                if ($character eq $class_special
+                        && $cursor + 1 < length($path)
+                        && substr($path, $cursor + 1, 1) eq ']') {
+                    $cursor += 2;
+                    $class_special = undef;
+                }
+                else {
+                    $cursor++;
+                }
+                next;
+            }
+
+            if ($character eq '[' && $cursor + 1 < length($path)) {
+                my $delimiter = substr($path, $cursor + 1, 1);
+                if ($delimiter eq ':' || $delimiter eq '.' || $delimiter eq '=') {
+                    $class_special = $delimiter;
+                    $class_initial = 0;
+                    $cursor += 2;
+                    next;
+                }
+            }
+            if ($character eq ']' && !$class_initial) {
+                $in_class = 0;
+                $cursor++;
+                next;
+            }
+            if ($class_initial && $character eq '^') {
+                $cursor++;
+                next;
+            }
+
+            $class_initial = 0;
+            $cursor++;
+            next;
+        }
+
+        if ($character eq '[') {
+            $in_class = 1;
+            $class_initial = 1;
+            $cursor++;
+            next;
+        }
+        if ($character eq '{') {
+            $brace_depth++;
+            $cursor++;
+            next;
+        }
+        if ($character eq '}') {
+            if ($brace_depth) {
+                $brace_depth--;
+                $cursor++;
+                next;
+            }
+
+            return {
+                name       => $name,
+                source     => substr($path, $source_start, $cursor - $source_start),
+                token_text => substr($path, $position, $cursor - $position + 1),
+            };
+        }
+
+        $cursor++;
+    }
+
+    return;
 }
 
 sub _push_literal {

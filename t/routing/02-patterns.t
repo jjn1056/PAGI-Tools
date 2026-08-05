@@ -259,6 +259,54 @@ subtest 'constraints are anchored synchronous validators and never coercions' =>
         'inline regex text may contain a path-separator character class',
     );
 
+    my $quantified;
+    is(
+        dies {
+            $quantified = PAGI::Routing::Pattern->new(
+                path => '/fixed/{id:\d{2}}', mode => 'route', constraints => {},
+            );
+        },
+        undef,
+        'regex quantifier braces do not terminate the route token',
+    );
+    is(
+        $quantified ? $quantified->match_route('/fixed/42') : undef,
+        { id => '42' },
+        'quantified inline regex matches after safe tokenization',
+    );
+
+    my $escaped_brace;
+    is(
+        dies {
+            $escaped_brace = PAGI::Routing::Pattern->new(
+                path => '/escaped-brace/{value:\}}', mode => 'route', constraints => {},
+            );
+        },
+        undef,
+        'escaped closing brace does not terminate the route token',
+    );
+    is(
+        $escaped_brace ? $escaped_brace->match_route('/escaped-brace/}') : undef,
+        { value => '}' },
+        'escaped closing brace remains part of the inline regex',
+    );
+
+    my $class_brace;
+    is(
+        dies {
+            $class_brace = PAGI::Routing::Pattern->new(
+                path => '/class-brace/{value:[}]}', mode => 'route', constraints => {},
+            );
+        },
+        undef,
+        'closing brace inside a character class does not terminate the route token',
+    );
+    is(
+        $class_brace ? $class_brace->match_route('/class-brace/}') : undef,
+        { value => '}' },
+        'character-class closing brace remains part of the inline regex',
+    );
+
     my $literal_newline = PAGI::Routing::Pattern->new(
         path => "/literal\n", mode => 'route', constraints => {},
     );
@@ -429,6 +477,37 @@ subtest 'rendering encodes components and validates exact unencoded parameters' 
         \@render_values,
         [ ["caf\x{e9} value"], ['wrong'] ],
         'render predicate remains unary and receives unencoded input',
+    );
+
+    my @combined_render_values;
+    my $combined = PAGI::Routing::Pattern->new(
+        path => "/combined/{value:caf\x{e9} value}", mode => 'route',
+        constraints => {
+            value => sub {
+                push @combined_render_values, [ @_ ];
+                return 1;
+            },
+        },
+    );
+    like(
+        dies { $combined->render({ value => 'wrong' }, 'combined') },
+        qr/path parameter 'value' failed constraint.*combined/,
+        'inline render checker rejects before the explicit checker',
+    );
+    is(
+        \@combined_render_values,
+        [],
+        'explicit render checker is not called after inline rejection',
+    );
+    is(
+        $combined->render({ value => "caf\x{e9} value" }, 'combined'),
+        '/combined/caf%C3%A9%20value',
+        'inline and explicit render checkers both accept before encoding',
+    );
+    is(
+        \@combined_render_values,
+        [ ["caf\x{e9} value"] ],
+        'explicit render checker receives the same unencoded value after inline acceptance',
     );
 
     my $type = Local::RoutingType->new('right');
