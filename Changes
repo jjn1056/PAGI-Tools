@@ -1,6 +1,20 @@
 # Revision history for PAGI-Tools
 
 0.002003
+  - New PAGI::Routing provides an immutable, declaration-ordered route tree as
+    an alternative to PAGI::App::Router. Normal HTTP handlers receive one
+    PAGI::Context and return a PAGI::Response; explicit raw routes retain native
+    channel ownership. The release includes inline and application mounts,
+    route/mount/router pure event middleware, WebSocket and SSE Context
+    handlers, automatic HEAD wire suppression, custom generated 404/405
+    handlers, first-seen Allow, synchronous constraints, reverse URLs,
+    request-local matched-route frames, inspection, and an executable example.
+    PAGI::App::Router and PAGI::Endpoint::Router remain supported.
+  - Declarative mount prefixes accept both the exact prefix and its slash form
+    without redirecting, deliberately differing from Starlette's default
+    slash behavior. ReverseProxy and TrustedHosts remain HTTP-only; routing
+    does not ship the separately planned cross-protocol compatibility changes
+    or Context/Response vocabulary changes.
   - New PAGI::Authority centralizes strict validation and scope-derived authority
     formatting. PAGI::Request->host and PAGI::Context->host now return only a
     single structurally valid Host field (including an explicit port), return

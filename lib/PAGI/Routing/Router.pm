@@ -77,16 +77,32 @@ PAGI::Routing::Router - Immutable declarative router description
 
 =head1 DESCRIPTION
 
-The root routing description. Its C<routes> and C<middleware> accessors return
-shallow copies. Leaf and mount-specific accessors, including C<name>, return
-undef. C<not_found> and C<method_not_allowed> expose optional HTTP fallback
-handler coderefs.
+The root routing description. Construction validates its direct node list,
+fallback handlers, middleware descriptors, descriptions, effective names, and
+known inline-mount ancestry. This is compile-time configuration only: the
+object stores no request scope, match, or response state.
+
+=head1 ACCESSORS
+
+C<routes> returns a shallow arrayref copy of direct children in declaration
+order. C<named_routes> returns a shallow hashref copy mapping effective names
+to their original immutable leaves; C<route_named($name)> returns one such leaf
+or undef. C<path_for> renders an application-relative named path without
+request state or protocol I/O.
+
+C<middleware>, C<desc>, C<not_found>, and C<method_not_allowed> return the
+declaration values; collection accessors copy their top-level containers.
+Leaf/mount-only accessors such as C<name>, C<path>, C<target>, C<methods>, and
+C<constraints> return undef.
 
 =head1 METHODS
 
 =head2 to_app
 
-Compiles and returns a fresh PAGI application graph through
-C<PAGI::Routing::Compiler> on every call.
+Synchronously compiles and returns a fresh PAGI application graph through
+L<PAGI::Routing::Compiler> on every call. Middleware factories and components
+are resolved during this call. It emits no events and starts no requests; the
+returned coderef performs request matching and protocol I/O only when invoked.
+Retain that coderef rather than compiling per request.
 
 =cut

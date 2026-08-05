@@ -269,4 +269,12 @@ named leaves by their effective dot-separated names, retains their original
 description objects for inspection, and renders application-relative paths.
 Application mounts remain opaque.
 
+Construction validates/builds the effective name and path index once and does
+no request I/O. C<path_for> validates path/query values and returns a string.
+C<url_for_scope> additionally reads one request scope, delegates authority to
+L<PAGI::Authority>, applies the compiled-router C<root_path> boundary, and
+returns an absolute string; it emits no events. C<named_routes> returns a
+defensive hashref, while C<route_named> and C<route_kind> return immutable
+indexed values.
+
 =cut

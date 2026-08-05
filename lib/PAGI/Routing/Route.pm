@@ -164,18 +164,27 @@ PAGI::Routing::Route - Immutable declarative route description
 A route represents an HTTP, WebSocket, or SSE leaf. The ordinary target is a
 coderef handler; C<raw> targets remain explicit applications for the compiler
 to coerce through L<PAGI::Utils/to_app>. Its path pattern is compiled during
-construction. Collection and hash accessors return shallow copies.
+construction, and constructor validation performs no request I/O. The
+description never stores a request match or handler result. Collection and
+hash accessors return shallow copies.
 
 =head1 ACCESSORS
 
 C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<target>, C<is_raw>,
 C<methods>, C<constraints>, and C<middleware> return the corresponding
 declaration values. C<namespace> and C<routes> return undef for a leaf route.
+HTTP C<methods> are normalized at construction; GET includes HEAD. Constraint
+values are returned as declared and validate decoded captures only during a
+request match or reverse render.
 
 =head1 METHODS
 
 =head2 to_app
 
-Compiles this route through a fresh complete one-node router on every call.
+Synchronously compiles this route through a fresh complete one-node router on
+every call. Compilation resolves middleware and raw components but emits no
+events. The returned app performs matching and invokes the handler later;
+normal HTTP dispatch emits the returned Response, while raw dispatch leaves
+event ownership with the target.
 
 =cut

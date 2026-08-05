@@ -630,4 +630,19 @@ generated 405 and 404 responses. Inline mounts inherit those handlers with a
 fresh local Allow set. Application mounts remain opaque after their prefix
 matches. Generated response and Allow state remain request-local.
 
+C<compile> is a synchronous build-time boundary: it resolves middleware,
+native components, match entries, and fallback adapters but starts no request
+and emits no events. It returns a native async PAGI coderef. Invocation of that
+coderef installs a fresh request-local C<pagi.routing> frame, matches the
+request, awaits the selected handler/application, and emits or forwards the
+appropriate protocol events.
+
+Compatible version-1 routing metadata contributes ancestor frames. Opaque,
+malformed, or newer metadata is preserved on the incoming scope as an
+incompatible boundary: the new shallow child scope receives a fresh version-1
+container and ignores foreign ancestry rather than croaking or mutating it.
+Each frame captures the compiled router's entry C<root_path>; Context reverse
+routing uses that field and falls back only for legacy/manual v1 frames that
+omit it.
+
 =cut

@@ -109,18 +109,24 @@ PAGI::Routing::Mount - Immutable declarative mount description
 A mount contains either an inline array of routing nodes or an application.
 Application targets remain intact until the compiler converts them through
 L<PAGI::Utils/to_app>. Its normalized prefix pattern is compiled during
-construction. Collection and hash accessors return shallow copies.
+construction. Constructor work validates/builds configuration only and emits
+no events. Collection and hash accessors return shallow copies.
 
 =head1 ACCESSORS
 
 C<kind>, C<path>, C<parameters>, C<namespace>, C<desc>, C<target>, C<is_raw>,
 C<routes>, C<constraints>, and C<middleware> return declaration values. C<name>
-and C<methods> return undef for a mount.
+and C<methods> return undef for a mount. C<routes> returns a shallow copy for
+an inline mount and undef for an opaque application mount.
 
 =head1 METHODS
 
 =head2 to_app
 
-Compiles this mount through a fresh complete one-node router on every call.
+Synchronously compiles this mount through a fresh complete one-node router on
+every call. It emits no events. When the returned app is later invoked and the
+prefix matches, dispatch creates a request-local shallow child scope, merges
+captures, rewrites C<path>/C<root_path>, and then calls mount middleware and
+the child. C<raw_path> remains unchanged.
 
 =cut

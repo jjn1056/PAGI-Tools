@@ -90,7 +90,9 @@ by the enclosing middleware.
     my $clone = clone_scope($scope, \%changes);
 
 Returns a defensive shallow top-level clone. Changed keys override original
-keys, while referenced values remain shared.
+keys, while referenced values remain shared. It validates and changes only
+local in-memory state at the point it is called. It constructs no callback,
+starts no request, and emits or awaits no protocol event.
 
 =head2 wrap_send
 
@@ -98,7 +100,12 @@ keys, while referenced values remain shared.
 
 Returns an async callback. On invocation, the interceptor receives the event
 and original send callback. Its immediate or Future result is normalized and
-awaited.
+awaited. Calling C<wrap_send> validates/builds that callback synchronously and
+does no I/O. Later invocation runs the interceptor for whatever event family
+the enclosing middleware receives. Only the interceptor can emit, replace,
+suppress, or expand events by calling the downstream send; delegation is not
+automatic. Returning or awaiting downstream keeps completion, backpressure,
+and failures attached.
 
 =head2 wrap_receive
 
@@ -106,6 +113,11 @@ awaited.
 
 Returns an async callback. On invocation, the interceptor receives the original
 receive callback. It can pull, replace, filter, or synthesize events. Its
-immediate or Future result is normalized and awaited.
+immediate or Future result is normalized and awaited. Calling C<wrap_receive>
+validates/builds that callback synchronously and performs no receive. Later
+invocation runs the interceptor; I/O occurs only if it calls the downstream
+receive. The interceptor may await once or repeatedly, return a replacement,
+or synthesize an event without I/O. Delegation is not automatic, and immediate
+values plus Future failures propagate through the wrapper.
 
 =cut

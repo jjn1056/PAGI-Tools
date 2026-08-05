@@ -124,7 +124,9 @@ PAGI::Routing::Middleware - Immutable declarative middleware description
 
 Stores the middleware factory and a shallow copy of its configuration.
 Configured objects must provide C<wrap> and take no additional descriptor
-configuration.
+configuration. This validates/builds an immutable compile-time descriptor; it
+does not call the factory, construct the class, start a request, or emit an
+event.
 
 =head2 factory
 
@@ -148,6 +150,8 @@ caller-owned fully qualified class. Resolution happens once for each compiled
 wrapper, never once per request.
 
 When a descriptor list is folded, the first descriptor listed is the outermost
-wrapper.
+wrapper. Compilation itself performs no protocol I/O. Only the app coderef
+returned by the wrapper runs at request time; that app owns whether it calls
+downstream and which receive/send events it awaits or emits.
 
 =cut

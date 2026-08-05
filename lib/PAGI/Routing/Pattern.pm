@@ -428,4 +428,15 @@ literal-safe matchers and synchronous constraint records, and retains tokens
 for reverse URI rendering. Route matches are exact; mount matches consume a
 segment-aligned prefix.
 
+Construction validates and builds immutable matcher state at compile time and
+does no protocol I/O. C<match_route> and C<match_mount> run against one
+request's decoded path and return fresh capture hashes. C<render> validates
+caller-supplied scalars and returns an escaped path string; it does not mutate
+scope or emit events. C<parameters> and C<constraints> return defensive
+top-level copies.
+
+Regex and inline constraints are anchored with C<\A> and C<\z>. Predicates and
+C<check> objects run synchronously during match or render, validate without
+coercing, and may propagate exceptions. A Future result is rejected.
+
 =cut
