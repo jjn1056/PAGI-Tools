@@ -60,7 +60,12 @@ sub _compile_router {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
-        my $is_head = ($scope->{type} // 'http') eq 'http'
+        my $type = $scope->{type} // 'http';
+        return if $type eq 'lifespan';
+        croak "unsupported PAGI scope type '$type'"
+            unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
+
+        my $is_head = $type eq 'http'
             && ($scope->{method} // '') eq 'HEAD';
         my $wire_send = $is_head
             ? $class->_head_wire_send($send)
@@ -119,9 +124,6 @@ sub _compile_dispatcher {
     return async sub {
         my ($scope, $receive, $send) = @_;
         my $type = $scope->{type} // 'http';
-        return if $type eq 'lifespan';
-        croak "unsupported PAGI scope type '$type'"
-            unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
 
         if ($type eq 'websocket' || $type eq 'sse') {
             my $decision = $class->_select_protocol(
@@ -399,6 +401,7 @@ sub _select_http {
         }
 
         my $route = $entry->{route};
+        next unless $route->kind eq 'route';
         my $captures = $route->_pattern->match_route($path);
         next unless defined $captures;
 

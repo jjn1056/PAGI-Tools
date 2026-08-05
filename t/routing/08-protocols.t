@@ -314,6 +314,31 @@ subtest 'protocol selection is declaration ordered, protocol local, and mount aw
     ], 'an application mount owns every supported scope type without an HTTP method filter');
 };
 
+subtest 'HTTP selection ignores WebSocket and SSE leaves without warnings' => sub {
+    my $app = router(routes => [
+        websocket('/ws-only' => sub { return 'inert' }),
+        sse('/sse-only' => sub { return 'inert' }),
+        websocket('/shared' => sub { return 'inert' }),
+        sse('/shared' => sub { return 'inert' }),
+        route('/shared' => sub { return $_[0]->text('http leaf') }),
+    ])->to_app;
+
+    my @warnings;
+    my ($ws_only, $sse_only, $shared);
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        $ws_only = run_scope($app, scope(path => '/ws-only'));
+        $sse_only = run_scope($app, scope(path => '/sse-only'));
+        $shared = run_scope($app, scope(path => '/shared'));
+    }
+
+    is(\@warnings, [], 'mixed-protocol route tables do not warn during HTTP selection');
+    is($ws_only->[0]{status}, 404, 'a WebSocket-only path is absent from HTTP routing');
+    is($sse_only->[0]{status}, 404, 'an SSE-only path is absent from HTTP routing');
+    is($shared->[0]{status}, 200, 'HTTP scanning continues to a later same-path HTTP leaf');
+    is($shared->[1]{body}, 'http leaf', 'the later HTTP leaf owns the response');
+};
+
 subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcomes' => sub {
     my @http_fallback_calls;
     my $app = router(
@@ -406,6 +431,74 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
     );
     is([$grpc_reads, $grpc_sends], [0, 0],
         'unknown scope rejection does not touch either channel');
+};
+
+subtest 'scope-type gates run before short-circuiting router middleware' => sub {
+    my @middleware_types;
+    my $short_circuit = middleware(sub {
+        my ($inner) = @_;
+        return async sub {
+            my ($request_scope, $receive, $send) = @_;
+            push @middleware_types, $request_scope->{type} // 'http';
+            await $receive->();
+            await $send->({
+                type => 'http.response.start', status => 200, headers => [],
+            });
+            await $send->({
+                type => 'http.response.body', body => 'middleware', more => 0,
+            });
+            return;
+        };
+    });
+    my $app = router(
+        routes => [],
+        middleware => [$short_circuit],
+    )->to_app;
+
+    my ($lifespan_reads, $lifespan_sends) = (0, 0);
+    is(
+        $app->(
+            { type => 'lifespan' },
+            sub { ++$lifespan_reads; return Future->done({ type => 'lifespan.startup' }) },
+            sub { ++$lifespan_sends; return Future->done },
+        )->get,
+        undef,
+        'lifespan returns before short-circuiting router middleware',
+    );
+    is([$lifespan_reads, $lifespan_sends], [0, 0],
+        'router middleware cannot read or send on lifespan');
+    is(\@middleware_types, [], 'lifespan never enters router middleware');
+
+    my ($grpc_reads, $grpc_sends) = (0, 0);
+    like(
+        dies {
+            $app->(
+                { type => 'grpc', path => '/' },
+                sub { ++$grpc_reads; return Future->done({ type => 'grpc.request' }) },
+                sub { ++$grpc_sends; return Future->done },
+            )->get;
+        },
+        qr/unsupported PAGI scope type 'grpc'/,
+        'unknown scopes are rejected before short-circuiting router middleware',
+    );
+    is([$grpc_reads, $grpc_sends], [0, 0],
+        'router middleware cannot touch unknown-scope channels');
+    is(\@middleware_types, [], 'unknown scopes never enter router middleware');
+
+    my $http_reads = 0;
+    my @http_events;
+    my $http_running = $app->(
+        scope(method => 'HEAD', path => '/short'),
+        sub { ++$http_reads; return Future->done({ type => 'http.request' }) },
+        sub { push @http_events, $_[0]; return Future->done },
+    );
+    $http_running->get;
+    is($http_reads, 1, 'supported HTTP still reaches router middleware');
+    is(\@middleware_types, ['http'], 'supported type enters router middleware normally');
+    is(\@http_events, [
+        { type => 'http.response.start', status => 200, headers => [] },
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'the outer HEAD wire boundary still suppresses middleware-owned bodies');
 };
 
 subtest 'standalone protocol leaves and mounts compile as complete applications' => sub {
