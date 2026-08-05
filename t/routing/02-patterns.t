@@ -307,6 +307,25 @@ subtest 'constraints are anchored synchronous validators and never coercions' =>
         'character-class closing brace remains part of the inline regex',
     );
 
+    my @unterminated = (
+        ['missing outer token delimiter', '/bad/{id:\d+'],
+        ['unclosed nested regex brace', '/bad/{id:\d{2}'],
+        ['unclosed character class', '/bad/{id:[abc}'],
+        ['dangling escape at EOF', '/bad/{id:\d+' . '\\'],
+    );
+    for my $case (@unterminated) {
+        my ($description, $path) = @$case;
+        like(
+            dies {
+                PAGI::Routing::Pattern->new(
+                    path => $path, mode => 'route', constraints => {},
+                );
+            },
+            qr/\Aunterminated inline constraint for 'id'/,
+            "$description is rejected during construction",
+        );
+    }
+
     my $literal_newline = PAGI::Routing::Pattern->new(
         path => "/literal\n", mode => 'route', constraints => {},
     );

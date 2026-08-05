@@ -239,7 +239,7 @@ sub _scan_inline_parameter {
         $cursor++;
     }
 
-    return;
+    croak "unterminated inline constraint for '$name'";
 }
 
 sub _push_literal {
