@@ -429,11 +429,41 @@ Each compiled router installs a fresh request-local frame before router
 middleware. C<root_path> records that router's entry boundary so inline mount
 prefixes are not added twice during reverse generation. Older/manual v1 frames
 may omit it, in which case Context reverse routing falls back to the current
-scope C<root_path>. Inline mounts append declared path/namespace/description
-records to C<mounts>; a selected leaf sets C<match> to its effective kind,
-pattern, name, and description. Generated 404/405 outcomes leave C<match>
-undefined. A selected application mount publishes only its opaque terminal
-mount record.
+scope C<root_path>. Inline mounts append records to C<mounts>. The exact public
+record for one matched inline mount is:
+
+    {
+        path      => '/tenants/{tenant_id}', # declared mount path
+        namespace => 'tenant',               # declared value or undef
+        desc      => 'Tenant routes',         # declared value or undef
+    }
+
+All three keys are present. Nested inline mounts append these records in
+outer-to-inner match order. The exact C<match> record for a selected leaf is:
+
+    {
+        kind  => 'route', # or websocket / sse
+        route => '/tenants/{tenant_id}/users/{user_id}',
+        name  => 'tenant.user.show',
+        desc  => 'Display one tenant user',
+    }
+
+C<route> is the complete effective mounted route. C<name> is the complete
+effective namespaced name, or undef for an unnamed leaf. C<desc> is that
+leaf's declared description, or undef.
+
+A selected opaque application mount uses the same four C<match> keys:
+
+    {
+        kind  => 'mount',
+        route => '/admin/{tenant_id}', # complete effective mount path
+        name  => undef,
+        desc  => 'Tenant admin app',   # declared value or undef
+    }
+
+The opaque mount does not append an entry for itself to C<mounts>; its terminal
+C<match> is the only record it adds. Generated 404/405 outcomes leave C<match>
+undefined.
 
 Compatible nested v1 routers copy the frame list and append a child frame.
 Opaque, malformed, or newer C<pagi.routing> data is an incompatible boundary:

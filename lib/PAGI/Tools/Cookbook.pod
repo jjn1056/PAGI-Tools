@@ -352,11 +352,33 @@ router middleware:
       }],
   };
 
-Inline mounts append declared path/namespace/description records. A selected
-leaf sets the effective kind, pattern, name, and description in C<match> before
-route middleware. A generated 404/405 leaves it undefined. A separately
-compiled compatible router appends a frame, so child middleware can inspect
-ancestry while the parent keeps its terminal mount record.
+An inline mount appends this exact record before its middleware runs:
+
+  {
+      path      => '/tenants/{tenant_id}', # declared mount path
+      namespace => 'tenant',               # declared value or undef
+      desc      => 'Tenant routes',         # declared value or undef
+  }
+
+All keys are present; nested records are outer-to-inner. A selected leaf sets
+this exact C<match> before route middleware:
+
+  {
+      kind  => 'route', # or websocket / sse
+      route => '/tenants/{tenant_id}/users/{user_id}', # effective route
+      name  => 'tenant.user.show',                     # effective or undef
+      desc  => 'Display one tenant user',              # declared or undef
+  }
+
+An opaque application mount instead sets terminal C<match> with
+C<kind =E<gt> 'mount'>, its complete effective mount path in C<route>,
+C<name =E<gt> undef>, and its declared C<desc> or undef. It does not append an
+inline C<mounts> record for itself. A generated 404/405 leaves C<match>
+undefined. See L<PAGI::Routing/MATCHED-ROUTE SCOPE CONVENTION> for the complete
+public schema.
+
+A separately compiled compatible router appends a frame, so child middleware
+can inspect ancestry while the parent keeps its terminal mount record.
 
 The frame is shared through request-local shallow scopes: router/mount
 middleware can inspect the final match after awaiting downstream. Middleware

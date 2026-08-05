@@ -20,6 +20,8 @@ PAGI::Tools - Application toolkit for the PAGI specification
 Raw PAGI is deliberately minimal — an application is just an C<async> sub that
 speaks the protocol directly:
 
+    use Future::AsyncAwait;
+
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({
