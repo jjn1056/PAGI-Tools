@@ -31,16 +31,6 @@ sub compile {
 sub _compile_http_router {
     my ($class, $router) = @_;
 
-    my @compiled_entries;
-    for my $node (@{$router->routes}) {
-        next unless $node->isa('PAGI::Routing::Route')
-            && $node->kind eq 'route';
-        push @compiled_entries, {
-            route => $node,
-            app => $class->_compile_http_leaf($node),
-        };
-    }
-
     my $not_found_handler = $router->not_found || sub {
         my ($context) = @_;
         return $context->text('Not Found');
@@ -57,13 +47,85 @@ sub _compile_http_router {
         $method_not_allowed_handler,
         405,
     );
+    my $dispatcher = $class->_compile_http_dispatcher(
+        $router->routes,
+        $not_found,
+        $method_not_allowed,
+    );
 
-    my $dispatcher = async sub {
+    my $app = PAGI::Routing::Middleware->_wrap_descriptors(
+        $router->middleware,
+        $dispatcher,
+    );
+
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $is_head = ($scope->{type} // '') eq 'http'
+            && ($scope->{method} // '') eq 'HEAD';
+        my $wire_send = $is_head
+            ? $class->_head_wire_send($send)
+            : $send;
+
+        await $app->($scope, $receive, $wire_send);
+        return;
+    };
+}
+
+sub _compile_http_dispatcher {
+    my ($class, $nodes, $not_found, $method_not_allowed) = @_;
+
+    my @compiled_entries;
+    for my $node (@$nodes) {
+        if ($node->isa('PAGI::Routing::Route')
+                && $node->kind eq 'route') {
+            push @compiled_entries, {
+                route => $node,
+                app   => $class->_compile_http_leaf($node),
+            };
+            next;
+        }
+
+        next unless $node->isa('PAGI::Routing::Mount');
+
+        my $mounted_app;
+        if ($node->is_raw) {
+            my $target = PAGI::Utils::to_app($node->target);
+            $mounted_app = async sub {
+                my ($scope, $receive, $send) = @_;
+                my $returned = $target->($scope, $receive, $send);
+                await Future->wrap($returned);
+                return;
+            };
+        }
+        else {
+            $mounted_app = $class->_compile_http_dispatcher(
+                $node->routes,
+                $not_found,
+                $method_not_allowed,
+            );
+        }
+
+        $mounted_app = PAGI::Routing::Middleware->_wrap_descriptors(
+            $node->middleware,
+            $mounted_app,
+        );
+        push @compiled_entries, {
+            mount => $node,
+            app   => $mounted_app,
+        };
+    }
+
+    return async sub {
         my ($scope, $receive, $send) = @_;
         my $decision = $class->_select_http(\@compiled_entries, $scope);
 
         if ($decision->{kind} eq 'full') {
-            await $decision->{app}->($decision->{scope}, $receive, $send);
+            my $returned = $decision->{app}->(
+                $decision->{scope},
+                $receive,
+                $send,
+            );
+            await Future->wrap($returned);
             return;
         }
 
@@ -86,23 +148,6 @@ sub _compile_http_router {
         }
 
         await $not_found->($scope, $receive, $send);
-        return;
-    };
-
-    my $app = PAGI::Routing::Middleware->_wrap_descriptors(
-        $router->middleware,
-        $dispatcher,
-    );
-
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-        my $is_head = ($scope->{type} // '') eq 'http'
-            && ($scope->{method} // '') eq 'HEAD';
-        my $wire_send = $is_head
-            ? $class->_head_wire_send($send)
-            : $send;
-
-        await $app->($scope, $receive, $wire_send);
         return;
     };
 }
@@ -262,6 +307,17 @@ sub _select_http {
     my %method_seen;
 
     for my $entry (@$compiled_entries) {
+        if (my $mount = $entry->{mount}) {
+            my $match = $mount->_pattern->match_mount($path);
+            next unless defined $match;
+
+            return {
+                kind  => 'full',
+                app   => $entry->{app},
+                scope => $class->_mount_scope($scope, $match),
+            };
+        }
+
         my $route = $entry->{route};
         my $captures = $route->_pattern->match_route($path);
         next unless defined $captures;
@@ -301,6 +357,27 @@ sub _select_http {
     return { kind => 'none' };
 }
 
+sub _mount_scope {
+    my ($class, $scope, $match) = @_;
+
+    my %path_params = (
+        %{ref($scope->{path_params}) eq 'HASH' ? $scope->{path_params} : {}},
+        %{$match->{captures}},
+    );
+    my $child_scope = {
+        %$scope,
+        path_params => \%path_params,
+    };
+
+    if (length $match->{consumed}) {
+        $child_scope->{path} = $match->{remainder};
+        $child_scope->{root_path} = ($scope->{root_path} // '')
+            . $match->{consumed};
+    }
+
+    return $child_scope;
+}
+
 1;
 
 __END__
@@ -312,8 +389,10 @@ PAGI::Routing::Compiler - Internal declarative routing compiler
 =head1 DESCRIPTION
 
 Compiles declarative HTTP routing descriptions into fresh application graphs.
-Full decisions invoke their selected leaf, while partial and none decisions
-are rendered through the normal handler adapter as generated 405 and 404
-responses. Generated response and Allow state remain request-local.
+Full decisions invoke their selected leaf or declaration-ordered mount, while
+partial and none decisions are rendered through the normal handler adapter as
+generated 405 and 404 responses. Inline mounts inherit those handlers with a
+fresh local Allow set. Application mounts remain opaque after their prefix
+matches. Generated response and Allow state remain request-local.
 
 =cut

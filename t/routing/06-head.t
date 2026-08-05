@@ -7,7 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
-use PAGI::Routing qw(router route middleware);
+use PAGI::Routing qw(router route mount middleware);
 
 sub scope {
     my (%changes) = @_;
@@ -349,6 +349,93 @@ subtest 'HEAD forwards unrelated response events unchanged' => sub {
         { type => 'http.response.body', body => '', more => 0 },
     ], 'only body and trailer events are special at the HEAD boundary');
     is(refaddr($events->[1]), refaddr($diagnostic), 'the unrelated event is forwarded by identity');
+};
+
+subtest 'the outer HEAD boundary covers application and inline mounts' => sub {
+    my $buffered = router(routes => [
+        mount('/buffered' => async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({
+                type    => 'http.response.start',
+                status  => 200,
+                headers => [['content-length' => 16]],
+            });
+            await $send->({
+                type => 'http.response.body',
+                body => 'mounted buffered',
+                more => 0,
+            });
+        }),
+    ])->to_app;
+    my $buffered_events = run_app(
+        $buffered,
+        method => 'HEAD',
+        path => '/buffered/resource',
+    );
+    is(response_header($buffered_events, 'Content-Length'), 16,
+        'an application mount retains its buffered representation length');
+    is(response_bodies($buffered_events), [
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'an application mount buffered body is suppressed');
+
+    my $streamed = router(routes => [
+        mount('/stream', routes => [
+            route('/events', raw => async sub {
+                my ($scope, $receive, $send) = @_;
+                await $send->({
+                    type    => 'http.response.start',
+                    status  => 200,
+                    headers => [['x-mounted' => 'stream']],
+                });
+                await $send->({ type => 'http.response.body', body => 'one', more => 1 });
+                await $send->({ type => 'http.response.body', body => 'two', more => 0 });
+                await $send->({ type => 'http.response.trailers', headers => [] });
+            }),
+        ]),
+    ])->to_app;
+    my $streamed_events = run_app(
+        $streamed,
+        method => 'HEAD',
+        path => '/stream/events',
+    );
+    is($streamed_events, [
+        {
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['x-mounted' => 'stream']],
+        },
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'an inline mounted stream emits only start and one empty terminal body');
+
+    my $sendfile = router(routes => [
+        mount('/files' => async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({
+                type    => 'http.response.start',
+                status  => 200,
+                headers => [['content-length' => 91]],
+            });
+            await $send->({
+                type   => 'http.response.body',
+                file   => 't/routing/mounted-file-must-not-exist',
+                offset => 9,
+                length => 91,
+            });
+        }),
+    ])->to_app;
+    my $sendfile_events = run_app(
+        $sendfile,
+        method => 'HEAD',
+        path => '/files/report',
+    );
+    is($sendfile_events, [
+        {
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-length' => 91]],
+        },
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'an application-mounted sendfile descriptor is suppressed before transport');
 };
 
 done_testing;
