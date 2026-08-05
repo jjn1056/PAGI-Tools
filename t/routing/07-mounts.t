@@ -134,6 +134,18 @@ subtest 'application mounts rewrite static and exact-prefix scopes' => sub {
         root_path => '',
         raw_path  => '/api',
     );
+    run_app(
+        $app,
+        path      => '/api/rooted',
+        root_path => '/',
+        raw_path  => '/api/rooted',
+    );
+    run_app(
+        $app,
+        path      => '/api/trailing',
+        root_path => '/outer/',
+        raw_path  => '/outer/api/trailing',
+    );
 
     is(
         { map { $_ => $seen[0]{$_} } qw(path root_path raw_path path_params) },
@@ -148,6 +160,8 @@ subtest 'application mounts rewrite static and exact-prefix scopes' => sub {
     is($seen[1]{path}, '/', 'an exact non-root mount prefix produces slash rather than an empty path');
     is($seen[1]{root_path}, '/api', 'an exact mount extends an empty root path');
     is($seen[1]{raw_path}, '/api', 'an exact mount retains raw_path');
+    is($seen[2]{root_path}, '/api', 'a root-only incoming prefix joins with one boundary slash');
+    is($seen[3]{root_path}, '/outer/api', 'a trailing incoming prefix joins with one boundary slash');
     isnt(refaddr($seen[0]), refaddr($parent_scope), 'the mounted application receives a shallow child scope');
     isnt(refaddr($seen[0]{path_params}), refaddr($parent_scope->{path_params}),
         'the mounted application receives request-local path parameters');

@@ -225,9 +225,17 @@ sub url_for_scope {
 sub _join_root_path {
     my ($root_path, $path) = @_;
     $root_path = '' unless defined $root_path;
+    $root_path = _encode_path($root_path);
     chop $root_path if length($root_path) && substr($root_path, -1) eq '/'
         && length($path) && substr($path, 0, 1) eq '/';
     return $root_path . $path;
+}
+
+sub _encode_path {
+    my ($value) = @_;
+    my $bytes = encode('UTF-8', $value, FB_CROAK);
+    $bytes =~ s{([^A-Za-z0-9\-._~/])}{sprintf('%%%02X', ord($1))}ge;
+    return $bytes;
 }
 
 sub _encode_component {
@@ -273,8 +281,9 @@ Construction validates/builds the effective name and path index once and does
 no request I/O. C<path_for> validates path/query values and returns a string.
 C<url_for_scope> additionally reads one request scope, delegates authority to
 L<PAGI::Authority>, applies the compiled-router C<root_path> boundary, and
-returns an absolute string; it emits no events. C<named_routes> returns a
-defensive hashref, while C<route_named> and C<route_kind> return immutable
-indexed values.
+returns an absolute string; it emits no events. The decoded Unicode boundary
+is escaped component-wise before it is joined to the already escaped generated
+path. C<named_routes> returns a defensive hashref, while C<route_named> and
+C<route_kind> return immutable indexed values.
 
 =cut

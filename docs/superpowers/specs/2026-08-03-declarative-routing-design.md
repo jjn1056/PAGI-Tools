@@ -166,15 +166,15 @@ my $routing = router(
         ),
 
         mount('/api',
-            namespace => 'api',
-            desc      => 'Versioned JSON API',
-            routes    => [
+            routes => [
                 route('/users/{id}' => \&show_user,
                     name        => 'users.show',
                     methods     => ['GET'],
                     constraints => { id => qr/\d+/ },
                 ),
             ],
+            namespace => 'api',
+            desc      => 'Versioned JSON API',
         ),
     ],
 );
@@ -344,6 +344,13 @@ full response so its status and headers match the equivalent GET response. A
 custom HEAD route can instead avoid the expensive GET work, but its wire body
 is suppressed in the same way.
 
+Separately compiled declarative routers coordinate with an unforgeable private
+marker propagated only through shallow request-scope copies. Only the
+outermost participating compiled router installs the wire suppressor. Parent
+router, application-mount, and raw-route middleware therefore see the full
+child representation, and no incoming scope or shared mutable matcher state is
+changed.
+
 `PAGI::Middleware::Head` remains available for applications outside this
 router. Wrapping this router with it is redundant and changes the method
 observed by inner handlers from HEAD to GET.
@@ -392,15 +399,15 @@ An inline declarative subtree:
 
 ```perl
 mount('/tenants/{tenant_id}',
+    routes     => [
+        route('/users/{user_id}' => \&user),
+    ],
     namespace  => 'tenant',
     desc       => 'Tenant API subtree',
     middleware => [ ... ],
     constraints => {
         tenant_id => qr/[a-z0-9-]+/,
     },
-    routes     => [
-        route('/users/{user_id}' => \&user),
-    ],
 );
 ```
 
@@ -469,6 +476,8 @@ captures are merged into `path_params`, and `path` becomes the unconsumed
 remainder. `raw_path` remains the original on-the-wire path bytes. These child
 scope values are installed before mount middleware and the mounted app or
 inline child router run. Reverse routing always includes the mount prefix.
+The incoming decoded `root_path` and decoded consumed prefix are joined with
+exactly one boundary slash. Their other slashes and characters are retained.
 
 For example, `/tenants/acme/users/42` under the inline mount above reaches the
 child route with the effective scope:
@@ -627,6 +636,11 @@ that captured segment. It is compiled through the same matcher as
 matching and reverse generation. There is no separate `^...$` inline-constraint
 path. Consequently, both spellings reject trailing newlines and other partial
 matches identically.
+
+Inline tokenization recognizes escaped braces, character classes, quantifier
+braces, and ordinary `(?#...)` regex comments, but it is intentionally not a
+complete Perl regex parser. Complex regexes, especially extended-mode comments,
+use the explicit `constraints => { name => qr/.../ }` form.
 
 A constraint may be:
 
@@ -925,6 +939,11 @@ native PAGI application coderef. An accidental async factory returns a Future
 and croaks during compilation with a diagnostic such as "middleware factory
 must return PAGI app coderef; got Future".
 
+Nonempty descriptor configuration is accepted only for class names. A coderef
+factory captures configuration in its closure; passing `%config` beside it
+croaks rather than silently discarding options. Configured objects likewise
+take no additional descriptor configuration.
+
 A middleware object supplies `wrap($app)`. A class-name descriptor resolves and
 configures the class using the existing middleware conventions, then applies
 `wrap($app)`.
@@ -1068,8 +1087,8 @@ mount('/api/users', routes => [
 The same child tree can be mounted more than once with explicit namespaces:
 
 ```perl
-mount('/api/v1', namespace => 'v1', routes => $routes);
-mount('/api/v2', namespace => 'v2', routes => $routes);
+mount('/api/v1', routes => $routes, namespace => 'v1');
+mount('/api/v2', routes => $routes, namespace => 'v2');
 
 $routing->path_for('v1.show', { id => 42 });
 $routing->path_for('v2.show', { id => 42 });
@@ -1079,9 +1098,9 @@ Dynamic inline mount parameters participate in reverse generation alongside
 child-route parameters:
 
 ```perl
-mount('/tenants/{tenant_id}', namespace => 'tenant', routes => [
+mount('/tenants/{tenant_id}', routes => [
     route('/users/{user_id}' => \&show, name => 'user.show'),
-]);
+], namespace => 'tenant');
 
 $routing->path_for('tenant.user.show', {
     tenant_id => 'acme',
@@ -1113,6 +1132,11 @@ $c->url_for($name, \%path_params, \%query_params);
   router's entry boundary. Older or manually constructed version-1 frames that
   omit the additive field fall back to the current request `root_path`.
 - Context `url_for` returns an absolute request-aware URL string.
+
+Scope `root_path` is decoded Unicode. Context reverse routing percent-encodes
+it component-wise while preserving `/`, then joins that boundary to the
+resolver's already encoded application path and query without encoding either
+part a second time.
 
 `url_for` obtains authority from `PAGI::Authority->from_scope($scope)`. A valid
 Host is preferred; server information is used only when Host is absent. A

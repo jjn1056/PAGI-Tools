@@ -11,6 +11,9 @@ use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
 use PAGI::Utils ();
 
+my $HEAD_BOUNDARY_SCOPE_KEY = "\0PAGI::Routing::Compiler::head_boundary";
+my $HEAD_BOUNDARY_MARKER = sub { return };
+
 sub compile {
     my ($class, $description) = @_;
 
@@ -69,17 +72,28 @@ sub _compile_router {
         croak "unsupported PAGI scope type '$type'"
             unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
 
-        my $routing_scope = $class->_routing_scope($scope, $resolver);
-
         my $is_head = $type eq 'http'
             && ($scope->{method} // '') eq 'HEAD';
-        my $wire_send = $is_head
+        my $owns_head_boundary = $is_head
+            && !$class->_has_head_boundary($scope);
+        my $routing_scope = $class->_routing_scope($scope, $resolver);
+        $routing_scope->{$HEAD_BOUNDARY_SCOPE_KEY} = $HEAD_BOUNDARY_MARKER
+            if $owns_head_boundary;
+
+        my $wire_send = $owns_head_boundary
             ? $class->_head_wire_send($send)
             : $send;
 
         await $app->($routing_scope, $receive, $wire_send);
         return;
     };
+}
+
+sub _has_head_boundary {
+    my ($class, $scope) = @_;
+    my $candidate = $scope->{$HEAD_BOUNDARY_SCOPE_KEY};
+    return ref($candidate)
+        && refaddr($candidate) == refaddr($HEAD_BOUNDARY_MARKER);
 }
 
 sub _compile_dispatcher {
@@ -606,11 +620,21 @@ sub _mount_scope {
 
     if (length $match->{consumed}) {
         $child_scope->{path} = $match->{remainder};
-        $child_scope->{root_path} = ($scope->{root_path} // '')
-            . $match->{consumed};
+        $child_scope->{root_path} = $class->_join_path_boundary(
+            $scope->{root_path},
+            $match->{consumed},
+        );
     }
 
     return $child_scope;
+}
+
+sub _join_path_boundary {
+    my ($class, $prefix, $suffix) = @_;
+    $prefix = '' unless defined $prefix;
+    chop $prefix if length($prefix) && substr($prefix, -1) eq '/'
+        && length($suffix) && substr($suffix, 0, 1) eq '/';
+    return $prefix . $suffix;
 }
 
 1;

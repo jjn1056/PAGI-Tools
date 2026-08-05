@@ -163,9 +163,16 @@ sub _scan_inline_parameter {
     my $in_class = 0;
     my $class_initial = 0;
     my $class_special;
+    my $in_comment = 0;
 
     while ($cursor < length $path) {
         my $character = substr($path, $cursor, 1);
+
+        if ($in_comment) {
+            $in_comment = 0 if $character eq ')';
+            $cursor++;
+            next;
+        }
 
         if ($character eq '\\') {
             $class_initial = 0 if $in_class;
@@ -215,6 +222,11 @@ sub _scan_inline_parameter {
             $in_class = 1;
             $class_initial = 1;
             $cursor++;
+            next;
+        }
+        if (substr($path, $cursor, 3) eq '(?#') {
+            $in_comment = 1;
+            $cursor += 3;
             next;
         }
         if ($character eq '{') {
@@ -438,5 +450,9 @@ top-level copies.
 Regex and inline constraints are anchored with C<\A> and C<\z>. Predicates and
 C<check> objects run synchronously during match or render, validate without
 coercing, and may propagate exceptions. A Future result is rejected.
+
+Inline tokenization recognizes ordinary regex comments C<(?#...)> but is not a
+complete Perl regex parser. Complex patterns, particularly extended-mode
+comments, should use an explicit C<constraints> regex.
 
 =cut

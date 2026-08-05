@@ -1,6 +1,7 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
+use utf8;
 use Test2::V0;
 use Future;
 
@@ -376,6 +377,71 @@ subtest 'Context paths add root_path only at the application boundary' => sub {
         $routing->path_for('item', { id => 'one' }, { q => 'two words' }),
         '/items/one?q=two%20words',
         'router path_for remains request-independent',
+    );
+};
+
+subtest 'Context URI-encodes decoded root_path without re-encoding generated paths' => sub {
+    my $resolver = _resolver(
+        route('/items/{id}' => sub { }, name => 'item'),
+    );
+    my $context = _context('http', $resolver,
+        root_path => "/proxy space/50%/caf\x{e9}/",
+        scheme    => 'https',
+        headers   => [['host', 'public.example']],
+    );
+
+    is(
+        $context->path_for('item', { id => 'a b%' }, { q => "caf\x{e9} %" }),
+        '/proxy%20space/50%25/caf%C3%A9/items/a%20b%25?q=caf%C3%A9%20%25',
+        'path_for encodes the decoded prefix component-wise and preserves the generated query',
+    );
+    is(
+        $context->url_for('item', { id => 'a b%' }, { q => "caf\x{e9} %" }),
+        'https://public.example/proxy%20space/50%25/caf%C3%A9/items/a%20b%25?q=caf%C3%A9%20%25',
+        'url_for emits the same single-encoded path after the authority',
+    );
+};
+
+subtest 'a dynamic application mount keeps scope paths decoded and reverses from its encoded child boundary' => sub {
+    my @seen;
+    my $child = router(routes => [
+        route('/items/{id}' => sub {
+            my ($context) = @_;
+            my $frames = $context->scope->{'pagi.routing'}{frames};
+            push @seen, {
+                scope_root_path => $context->scope->{root_path},
+                frame_root_path => $frames->[-1]{root_path},
+                path => $context->path_for(
+                    'item', { id => 'a b%' }, { q => "caf\x{e9} %" },
+                ),
+                url => $context->url_for(
+                    'item', { id => 'a b%' }, { q => "caf\x{e9} %" },
+                ),
+            };
+            return $context->text('child');
+        }, name => 'item'),
+    ])->to_app;
+    my $parent = router(routes => [
+        mount('/tenants/{tenant}' => $child),
+    ])->to_app;
+
+    _run_compiled($parent,
+        path      => "/tenants/caf\x{e9} 50%/items/current",
+        raw_path  => '/edge%20root/tenants/caf%C3%A9%2050%25/items/current',
+        root_path => '/edge root/',
+        scheme    => 'https',
+        headers   => [['host', 'public.example']],
+    );
+
+    is(
+        \@seen,
+        [{
+            scope_root_path => "/edge root/tenants/caf\x{e9} 50%",
+            frame_root_path => "/edge root/tenants/caf\x{e9} 50%",
+            path => '/edge%20root/tenants/caf%C3%A9%2050%25/items/a%20b%25?q=caf%C3%A9%20%25',
+            url => 'https://public.example/edge%20root/tenants/caf%C3%A9%2050%25/items/a%20b%25?q=caf%C3%A9%20%25',
+        }],
+        'the mounted child sees decoded scope data and emits each prefix and generated value exactly once',
     );
 };
 

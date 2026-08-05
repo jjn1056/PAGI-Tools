@@ -208,13 +208,18 @@ selector and therefore immediately follows the path.
 
 =head2 middleware
 
-    middleware($factory_or_object_or_class, %config)
+    middleware($factory)
+    middleware($configured_object)
+    middleware($class, %config)
 
 Creates a middleware description for use in a routing object's C<middleware>
 array. A target may be a synchronous factory coderef, an object with C<wrap>,
 or a class name plus constructor configuration. Simple class names resolve
 under C<PAGI::Middleware::>; C<^MyApp::Middleware> selects a fully qualified
 caller-owned class.
+
+Configuration is accepted only for class targets. Coderef factories capture
+options in their closure, and objects are already configured.
 
 The distribution deliberately provides no C<get>, C<post>, C<delete>, or
 C<any> constructors. Common handler names would collide with C<get>/C<post>,
@@ -280,6 +285,12 @@ response starts and calculated headers are preserved, while body, sendfile,
 streaming, and trailer events are suppressed and one empty terminal body is
 sent.
 
+Separately compiled declarative routers coordinate through a private
+request-local scope marker. Only the outermost participating router suppresses
+the wire stream, so enclosing parent-router, application-mount, and raw-route
+middleware still sees the child router's full representation. Incoming scopes
+are not mutated.
+
 That guarantee includes middleware in the router's C<middleware> list. A
 body-derived transformer wrapped I<outside> the compiled app sees the already
 suppressed wire body and can produce a false C<Content-Length>, ETag, or
@@ -301,6 +312,11 @@ a Type::Tiny-compatible object with C<check> and optional C<get_message>.
 Regexes and inline patterns match the complete decoded value with C<\A> and
 C<\z>. Predicates receive only that scalar. Constraints validate but never
 coerce; false means no match, exceptions propagate, and a Future is rejected.
+
+Inline patterns support ordinary regex comments C<(?#...)>, but their route
+tokenizer is intentionally not a complete Perl regex parser. Put complex
+patterns, especially extended-mode comments, in the explicit
+C<constraints =E<gt> { name =E<gt> qr/.../ }> form.
 
 A wildcard is one terminal whole segment:
 
@@ -342,6 +358,9 @@ remainder in C<path>, the actual decoded prefix appended to C<root_path>, and
 merged captures in C<path_params>; C<raw_path> remains the original wire path.
 An exact prefix produces child path C</>. A root mount consumes nothing and
 leaves C<path>, C<root_path>, and C<raw_path> unchanged.
+
+The decoded C<root_path> and consumed prefix are joined with exactly one slash
+at their boundary; existing internal slashes are not normalized.
 
 C<mount('/api')> accepts both C</api> and C</api/> at the mount boundary and
 does not redirect. This deliberately differs from Starlette's default trailing
@@ -389,6 +408,10 @@ compiled-router entry C<root_path>; C<url_for> also selects HTTP(S) or WS(S)
 from the route kind and uses L<PAGI::Authority> for a validated Host or server
 fallback. Duplicate or malformed Host fields never fall back. Routing does not
 parse Forwarded or X-Forwarded headers.
+
+Scope C<root_path> is decoded Unicode. Context reverse routing percent-encodes
+it component-wise while preserving slashes, then joins it to the resolver's
+already escaped path without double-encoding route or query values.
 
 For HTTP behind a trusted proxy, use this outer-to-inner order:
 

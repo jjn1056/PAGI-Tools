@@ -307,6 +307,22 @@ subtest 'constraints are anchored synchronous validators and never coercions' =>
         'character-class closing brace remains part of the inline regex',
     );
 
+    my $comment_brace;
+    is(
+        dies {
+            $comment_brace = PAGI::Routing::Pattern->new(
+                path => '/comment-brace/{value:(?#})x}', mode => 'route', constraints => {},
+            );
+        },
+        undef,
+        'a closing brace inside a regex comment does not terminate the route token',
+    );
+    is(
+        $comment_brace ? $comment_brace->match_route('/comment-brace/x') : undef,
+        { value => 'x' },
+        'the inline regex remains intact after a comment containing a closing brace',
+    );
+
     my @unterminated = (
         ['missing outer token delimiter', '/bad/{id:\d+'],
         ['unclosed nested regex brace', '/bad/{id:\d{2}'],

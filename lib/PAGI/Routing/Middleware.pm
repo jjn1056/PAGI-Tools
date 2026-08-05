@@ -17,7 +17,11 @@ sub new {
         if @args % 2;
 
     my %config = @args;
-    if (blessed($factory)) {
+    if (ref($factory) eq 'CODE') {
+        croak 'middleware factory takes no config'
+            if %config;
+    }
+    elsif (blessed($factory)) {
         croak 'middleware object must provide a wrap method'
             unless $factory->can('wrap');
         croak 'middleware object takes no config'
@@ -120,13 +124,16 @@ PAGI::Routing::Middleware - Immutable declarative middleware description
 
 =head2 new
 
-    PAGI::Routing::Middleware->new($factory_or_object_or_class, %config)
+    PAGI::Routing::Middleware->new($factory)
+    PAGI::Routing::Middleware->new($configured_object)
+    PAGI::Routing::Middleware->new($class, %config)
 
 Stores the middleware factory and a shallow copy of its configuration.
-Configured objects must provide C<wrap> and take no additional descriptor
-configuration. This validates/builds an immutable compile-time descriptor; it
-does not call the factory, construct the class, start a request, or emit an
-event.
+Configuration is constructor input only for class targets. Coderef factories
+capture their own options in a closure, and configured objects take no
+additional descriptor configuration. Objects must provide C<wrap>. This
+validates/builds an immutable compile-time descriptor; it does not call the
+factory, construct the class, start a request, or emit an event.
 
 =head2 factory
 

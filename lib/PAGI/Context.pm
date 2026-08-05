@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use Future;
 use PAGI::Utils::SecureCompare qw(secure_compare);
 use PAGI::Authority ();
+use PAGI::Routing::Resolver ();
 
 =encoding UTF-8
 
@@ -330,6 +331,10 @@ fall back to the current scope's C<root_path>. A separately compiled child
 therefore records the parent application mount in its own boundary, while
 inline mounts continue to share their compiled router's original boundary.
 
+The scope value remains decoded Unicode. Reverse methods percent-encode that
+boundary component-wise while preserving slashes, then join it to the
+resolver's already escaped route and query without double encoding.
+
 Absolute URL generation delegates authority selection and validation to
 L<PAGI::Authority>. Invalid or duplicate Host fields fail rather than falling
 back to C<< scope->{server} >>. Code that deliberately needs the raw
@@ -408,10 +413,7 @@ sub _routing_frame {
 
 sub _join_root_path {
     my ($root_path, $path) = @_;
-    $root_path = '' unless defined $root_path;
-    chop $root_path if length($root_path) && substr($root_path, -1) eq '/'
-        && length($path) && substr($path, 0, 1) eq '/';
-    return $root_path . $path;
+    return PAGI::Routing::Resolver::_join_root_path($root_path, $path);
 }
 
 =head2 Protocol Introspection

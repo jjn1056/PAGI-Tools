@@ -185,6 +185,11 @@ subtest 'invalid descriptor resolutions fail loudly' => sub {
         'configured object plus constructor config is rejected',
     );
     like(
+        dies { middleware(sub { return $_[0] }, label => 'audit') },
+        qr/middleware factory.*takes no config/i,
+        'coderef factory plus unused constructor config is rejected',
+    );
+    like(
         dies { middleware(sub { die "factory exploded\n" })->_wrap($inner) },
         qr/factory exploded/,
         'factory exceptions propagate',

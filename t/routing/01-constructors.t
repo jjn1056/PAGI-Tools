@@ -205,12 +205,17 @@ subtest 'mount and router descriptions copy their collections' => sub {
     is(refaddr($router->method_not_allowed), refaddr($method_not_allowed), 'router retains method-not-allowed handler identity');
 };
 
-subtest 'middleware descriptions preserve factories and copy config' => sub {
+subtest 'middleware descriptions preserve targets and copy class config' => sub {
     my $factory = sub { };
+    my $factory_node = middleware($factory);
+    isa_ok($factory_node, 'PAGI::Routing::Middleware');
+    is(refaddr($factory_node->factory), refaddr($factory), 'factory identity is retained');
+    is($factory_node->config, {}, 'a closure-configured factory has no descriptor config');
+
     my $options = { retry => 1 };
-    my $node = middleware($factory, options => $options);
+    my $node = middleware('Configured', options => $options);
     isa_ok($node, 'PAGI::Routing::Middleware');
-    is(refaddr($node->factory), refaddr($factory), 'factory identity is retained');
+    is($node->factory, 'Configured', 'class target is retained');
     is($node->config, { options => $options }, 'middleware config');
     $options->{retry} = 2;
     my $returned = $node->config;

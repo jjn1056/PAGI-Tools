@@ -180,6 +180,78 @@ subtest 'the outer HEAD boundary lets router middleware observe the full represe
         'suppression happens only after router middleware finishes');
 };
 
+subtest 'one outer HEAD owner covers separately compiled child routers' => sub {
+    my @cases = (
+        [
+            'parent router middleware',
+            sub {
+                my ($child) = @_;
+                return router(
+                    routes => [mount('/api' => $child)],
+                    middleware => [middleware('ContentLength')],
+                )->to_app;
+            },
+            '/api/item',
+            '/item',
+        ],
+        [
+            'application mount middleware',
+            sub {
+                my ($child) = @_;
+                return router(routes => [
+                    mount('/api' => $child,
+                        middleware => [middleware('ContentLength')]),
+                ])->to_app;
+            },
+            '/api/item',
+            '/item',
+        ],
+        [
+            'raw route middleware',
+            sub {
+                my ($child) = @_;
+                return router(routes => [
+                    route('/item', raw => $child,
+                        middleware => [middleware('ContentLength')]),
+                ])->to_app;
+            },
+            '/item',
+            '/item',
+        ],
+    );
+
+    for my $case (@cases) {
+        my ($label, $build_parent, $request_path, $child_path) = @$case;
+        my $child = router(routes => [
+            route($child_path, raw => async sub {
+                my ($scope, $receive, $send) = @_;
+                await $send->({
+                    type    => 'http.response.start',
+                    status  => 200,
+                    headers => [['content-type' => 'text/plain']],
+                });
+                await $send->({
+                    type => 'http.response.body',
+                    body => 'child representation',
+                    more => 0,
+                });
+            }),
+        ]);
+        my $app = $build_parent->($child);
+
+        my $get = run_app($app, method => 'GET', path => $request_path);
+        my $head = run_app($app, method => 'HEAD', path => $request_path);
+
+        is(response_header($get, 'Content-Length'), 20,
+            "$label derives GET metadata from the full child body");
+        is(response_header($head, 'Content-Length'), 20,
+            "$label derives identical HEAD metadata before outer suppression");
+        is(response_bodies($head), [
+            { type => 'http.response.body', body => '', more => 0 },
+        ], "$label still emits only the outer empty HEAD body");
+    }
+};
+
 subtest 'HEAD streaming suppression waits for an explicit terminal body' => sub {
     my $start = {
         type    => 'http.response.start',
