@@ -36,6 +36,57 @@ subtest 'constructor and basic properties' => sub {
     is($req->client, ['127.0.0.1', 54321], 'client');
 };
 
+subtest 'host validates the raw Host field instead of using a last-value lookup' => sub {
+    is(
+        PAGI::Request->new({
+            type    => 'http',
+            headers => [['Host', 'example.com:8443']],
+        })->host,
+        'example.com:8443',
+        'preserves an explicit Host port',
+    );
+
+    is(
+        PAGI::Request->new({ type => 'http', headers => [] })->host,
+        undef,
+        'returns undef when Host is absent',
+    );
+
+    like(
+        dies {
+            PAGI::Request->new({
+                type    => 'http',
+                headers => [['Host', 'bad.example:65536']],
+            })->host;
+        },
+        qr/invalid authority/,
+        'rejects a malformed Host field',
+    );
+
+    for my $case (
+        [['Host', 'same.example'], ['host', 'same.example'], 'identical duplicates'],
+        [['Host', 'one.example'], ['host', 'two.example'], 'conflicting duplicates'],
+        [['hOsT', 'one.example'], ['HOST', 'two.example'], 'mixed-case duplicates'],
+    ) {
+        my ($first, $second, $description) = @$case;
+        my $request = PAGI::Request->new({
+            type    => 'http',
+            headers => [$first, $second],
+        });
+
+        is(
+            $request->header('host'),
+            $second->[1],
+            "raw lookup remains last-value for $description",
+        );
+        like(
+            dies { $request->host },
+            qr/Host header must occur at most once/,
+            "host rejects $description",
+        );
+    }
+};
+
 subtest 'predicate methods' => sub {
     my $get_scope = { type => 'http', method => 'GET', headers => [] };
     my $post_scope = { type => 'http', method => 'POST', headers => [] };

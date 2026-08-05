@@ -7,6 +7,8 @@ use Scalar::Util qw(blessed);
 use Future::AsyncAwait;
 use Future;
 use PAGI::Utils::SecureCompare qw(secure_compare);
+use PAGI::Authority ();
+use PAGI::Routing::Resolver ();
 
 =encoding UTF-8
 
@@ -25,6 +27,7 @@ PAGI::Context - Per-request context with protocol-specific subclasses
     # Shared methods (all protocol types)
     my $type  = $ctx->type;        # 'http', 'websocket', 'sse'
     my $path  = $ctx->path;
+    my $host  = $ctx->host;
     my $stash = $ctx->stash;       # PAGI::Stash
     my $session = $ctx->session;   # PAGI::Session
 
@@ -75,6 +78,8 @@ subclasses so you can use C<$ctx> as your single object:
 Each context type has a different set of available methods.  Calling a
 method that belongs to a different protocol type raises a standard Perl
 C<Can't locate object method> error.
+
+All three built-in Context types inherit the base C<host> accessor.
 
     Method              HTTP    WebSocket   SSE
     ──────────────────  ──────  ──────────  ──────
@@ -191,6 +196,7 @@ sub _resolve_class {
     $ctx->client;         # $scope->{client}
     $ctx->server;         # $scope->{server}
     $ctx->headers;        # $scope->{headers} arrayref of [name, value]
+    $ctx->host;           # validated Host field or undef
 
 =cut
 
@@ -203,6 +209,23 @@ sub scheme       { shift->{scope}{scheme} // 'http' }
 sub client       { shift->{scope}{client} }
 sub server       { shift->{scope}{server} }
 sub headers      { shift->{scope}{headers} }
+
+=head2 host
+
+    my $host = $ctx->host;
+
+Returns the complete validated Host field, including an explicit port. Returns
+C<undef> only when Host is absent, and croaks when Host is malformed or occurs
+more than once. All built-in HTTP, WebSocket, and SSE Context types inherit
+this accessor. Use L</header> with C<'host'> as the raw, last-value escape
+hatch when that behavior is required.
+
+=cut
+
+sub host {
+    my ($self) = @_;
+    return PAGI::Authority->host_from_scope($self->{scope});
+}
 
 =head2 assert_http, assert_websocket, assert_sse
 
@@ -269,6 +292,130 @@ sub path_param {
     return $params->{$name};
 }
 
+=head2 Routing Reverse Methods
+
+    my $path = $ctx->path_for(
+        'account.user.show',
+        { account_id => 7, user_id => 42 },
+        { tab => 'profile' },
+    );
+
+    my $url = $ctx->url_for(
+        'account.user.show',
+        { account_id => 7, user_id => 42 },
+        { tab => 'profile' },
+    );
+
+C<path_for> renders a named declarative route through the resolver in the last
+valid C<pagi.routing> frame and prefixes the application path with the
+C<root_path> captured when that compiled router was entered. Inline mount
+prefixes already occur in the resolver's generated path, so the handler's
+later rewritten C<root_path> is not added a second time. C<url_for> uses the
+same resolver boundary and returns an absolute URL whose scheme follows the
+named route kind: HTTP and SSE targets use C<http> or C<https>, while WebSocket
+targets use C<ws> or C<wss>. Missing path and query hashes default to empty
+hashes. These methods perform no protocol I/O.
+
+The compatible version-1 frame shape is:
+
+    {
+        resolver  => $resolver,
+        root_path => '/deployment-prefix', # optional additive field
+        mounts    => [],
+        match     => undef,
+    }
+
+C<root_path> is a validated scalar captured at each compiled-router boundary.
+Older or manually constructed version-1 frames may omit it; only those frames
+fall back to the current scope's C<root_path>. A separately compiled child
+therefore records the parent application mount in its own boundary, while
+inline mounts continue to share their compiled router's original boundary.
+
+The scope value remains decoded Unicode. Reverse methods percent-encode that
+boundary component-wise while preserving slashes, then join it to the
+resolver's already escaped route and query without double encoding.
+
+Absolute URL generation delegates authority selection and validation to
+L<PAGI::Authority>. Invalid or duplicate Host fields fail rather than falling
+back to C<< scope->{server} >>. Code that deliberately needs the raw
+last-value header behavior may use C<< $ctx->header('host') >>; reverse routing
+does not use that escape hatch.
+
+For HTTP deployments, the shipped middleware should be ordered from outermost
+to innermost as:
+
+    ReverseProxy -> TrustedHosts -> PAGI::Routing
+
+This lets trusted proxy data normalize the scope before Host policy and URL
+generation consume it. The shipped C<PAGI::Middleware::ReverseProxy> and
+C<PAGI::Middleware::TrustedHosts> still pass WebSocket and SSE scopes through
+untouched. Those scopes therefore must already contain normalized and
+validated scheme and authority data. Cross-protocol middleware support is a
+separate planned compatibility change, not behavior supplied by routing.
+
+=cut
+
+sub path_for {
+    my ($self, @args) = @_;
+    my $frame = $self->_routing_frame('path_for');
+    my $path = $frame->{resolver}->path_for(@args);
+    my $root_path = exists $frame->{root_path}
+        ? $frame->{root_path}
+        : $self->{scope}{root_path};
+    return _join_root_path($root_path, $path);
+}
+
+sub url_for {
+    my ($self, $name, $path_params, $query_params) = @_;
+    my $frame = $self->_routing_frame('url_for');
+    my $root_path = exists $frame->{root_path}
+        ? $frame->{root_path}
+        : $self->{scope}{root_path};
+    return $frame->{resolver}->url_for_scope(
+        $self->{scope},
+        $name,
+        $path_params,
+        $query_params,
+        $root_path,
+    );
+}
+
+sub _routing_frame {
+    my ($self, $operation) = @_;
+    my $container = $self->{scope}{'pagi.routing'};
+    my $valid = ref($container) eq 'HASH'
+        && defined $container->{version}
+        && !ref($container->{version})
+        && $container->{version} eq '1'
+        && ref($container->{frames}) eq 'ARRAY'
+        && @{$container->{frames}};
+
+    if ($valid) {
+        for my $frame (@{$container->{frames}}) {
+            $valid = 0, last unless ref($frame) eq 'HASH'
+                && blessed($frame->{resolver})
+                && $frame->{resolver}->can('path_for')
+                && ref($frame->{mounts}) eq 'ARRAY'
+                && (!defined $frame->{match} || ref($frame->{match}) eq 'HASH')
+                && (!exists $frame->{root_path}
+                    || (defined $frame->{root_path} && !ref($frame->{root_path})));
+        }
+    }
+
+    my $frame = $valid ? $container->{frames}[-1] : undef;
+    my $resolver = $frame ? $frame->{resolver} : undef;
+    $valid = 0 if $operation eq 'url_for'
+        && (!$resolver || !$resolver->can('url_for_scope'));
+
+    croak "$operation requires a PAGI::Routing resolver in scope" unless $valid;
+    return $frame;
+}
+
+sub _join_root_path {
+    my ($root_path, $path) = @_;
+    return PAGI::Routing::Resolver::_join_root_path($root_path, $path);
+}
+
 =head2 Protocol Introspection
 
     $ctx->is_http;        # true if type eq 'http'
@@ -286,7 +433,8 @@ sub is_sse       { (shift->{scope}{type} // '') eq 'sse' }
     my $value = $ctx->header('Content-Type');
 
 Returns the last value for the named header (case-insensitive), or
-C<undef> if not found.
+C<undef> if not found. In particular, C<< $ctx->header('host') >> is the raw,
+last-value escape hatch; use L</host> for validated Host semantics.
 
 =cut
 

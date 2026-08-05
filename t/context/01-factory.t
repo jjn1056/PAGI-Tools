@@ -101,6 +101,52 @@ subtest 'scope accessor defaults' => sub {
     is($ctx2->raw_path, '/fallback', 'raw_path falls back to path');
 };
 
+subtest 'host is inherited and validates Host consistently across protocols' => sub {
+    for my $type (qw(http websocket sse)) {
+        is(
+            PAGI::Context->new({
+                type    => $type,
+                headers => [['Host', 'example.com:8443']],
+            }, sub {}, sub {})->host,
+            'example.com:8443',
+            "$type context preserves an explicit Host port",
+        );
+
+        is(
+            PAGI::Context->new({ type => $type, headers => [] }, sub {}, sub {})->host,
+            undef,
+            "$type context returns undef when Host is absent",
+        );
+
+        like(
+            dies {
+                PAGI::Context->new({
+                    type    => $type,
+                    headers => [['Host', 'bad.example:65536']],
+                }, sub {}, sub {})->host;
+            },
+            qr/invalid authority/,
+            "$type context rejects a malformed Host field",
+        );
+
+        my $scope = {
+            type    => $type,
+            headers => [['Host', 'one.example'], ['host', 'two.example']],
+        };
+        my $ctx = PAGI::Context->new($scope, sub {}, sub {});
+        is($ctx->header('host'), 'two.example', "$type raw lookup remains last-value");
+        like(
+            dies { $ctx->host },
+            qr/Host header must occur at most once/,
+            "$type context rejects duplicate Host fields",
+        );
+        ok(
+            !exists $scope->{'pagi.request.headers'},
+            "$type host does not create a header cache",
+        );
+    }
+};
+
 subtest 'protocol introspection' => sub {
     my $receive = sub {};
     my $send = sub {};

@@ -5,7 +5,14 @@ use Test2::V0;
 # Public entry points that must always load
 my @core_modules = qw(
     PAGI::Tools
+    PAGI::Authority
+    PAGI::Routing
+    PAGI::Routing::Router
+    PAGI::Routing::Route
+    PAGI::Routing::Mount
+    PAGI::Routing::Middleware
     PAGI::Middleware
+    PAGI::Middleware::Helpers
     PAGI::Middleware::Builder
     PAGI::App::Router
     PAGI::App::File

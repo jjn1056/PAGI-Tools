@@ -17,9 +17,396 @@ guide to middleware, helper classes, and built-in apps).
 
 =head1 ROUTING RECIPES
 
-These recipes cover advanced routing patterns using L<PAGI::App::Router> and
-L<PAGI::Endpoint::Router>. For basic routing, see the Tutorial's Built-in
-Applications section.
+These recipes cover the immutable L<PAGI::Routing> tree, the mutable
+L<PAGI::App::Router>, and the class-based L<PAGI::Endpoint::Router>. For a
+small runnable declarative app, see F<examples/declarative-routing>.
+
+=head2 A Declarative Route Tree with Package Handlers
+
+Load handler packages normally and pass fully qualified coderefs. This gives
+Perl's usual compile-time loading and avoids method-name strings or signature
+guessing:
+
+  package MyApp::Routes::Home;
+  use strict;
+  use warnings;
+  use Future::AsyncAwait;
+
+  async sub home {
+      my ($c) = @_;
+      return $c->html('<h1>Home</h1>');
+  }
+
+  1;
+
+  # app.pl
+  use MyApp::Routes::Home ();
+  use PAGI::Routing qw(:routes);
+
+  my $routing = router(
+      routes => [
+          route('/' => \&MyApp::Routes::Home::home, name => 'home'),
+      ],
+  );
+
+  $routing->to_app;
+
+The final expression is the native PAGI app. Compile once for the application
+instance; do not call C<to_app> inside a request.
+
+=head2 Inline and Application Mounts
+
+The C<routes> form is structural. Its names, fallbacks, and reverse paths are
+known to the parent:
+
+  mount('/tenants/{tenant_id}',
+      routes => [
+          route('/users/{user_id}' => \&show_user, name => 'user'),
+      ],
+      namespace  => 'tenant',
+      constraints => { tenant_id => qr/[a-z0-9-]+/ },
+  )
+
+For C</tenants/acme/users/42>, child handlers and mount/route middleware see
+C<tenant_id =E<gt> 'acme'> and C<user_id =E<gt> '42'> in
+C<path_params>. The child C<path> is C</users/42>, C<root_path> contains the
+actual C</tenants/acme> prefix, and C<raw_path> remains the original wire path.
+Reverse routing supplies both captures:
+
+  $c->path_for('tenant.user', {
+      tenant_id => 'acme',
+      user_id   => 42,
+  });
+
+The positional form is an opaque application mount:
+
+  mount('/admin' => $admin_app)
+
+Once its prefix matches, it owns the outcome. Its 404/405 cannot resume parent
+scanning, it applies no HTTP method filter, and its child names are not visible
+to the parent.
+
+A raw route is different again:
+
+  route('/files/*path', raw => $file_endpoint, methods => ['GET'])
+
+That is one exact/wildcard HTTP leaf. It participates in methods, automatic
+HEAD, partial matching, and names, and receives the original routed path. A
+C<< mount('/files' =E<gt> $file_app) >> owns a protocol-capable prefix,
+receives the implicit remainder in child C<path>, and extends C<root_path>.
+
+Mounts are declaration-ordered owners. Put a narrow mount before a broad one.
+C<mount('/api')> accepts both C</api> and C</api/> directly and passes child
+path C</>; unlike Starlette's default behavior it does not redirect C</api> to
+C</api/>.
+
+=head2 Declarative Middleware Placement and Helpers
+
+Middleware descriptors are pure app-to-app PAGI wrappers. The complete order
+is:
+
+  router middleware
+    -> mount middleware
+      -> separately compiled child-router middleware
+        -> route middleware
+          -> handler
+
+Scope rewriting and match metadata happen before the matching mount/route
+wrapper. Mount middleware can therefore read dynamic mount captures. The first
+descriptor in each list is outermost.
+
+Use L<PAGI::Middleware::Helpers> to keep channel ownership visible:
+
+  use Future::AsyncAwait;
+  use PAGI::Middleware::Helpers qw(clone_scope wrap_send wrap_receive);
+  use PAGI::Routing qw(middleware);
+
+  my $descriptor = middleware(sub {
+      my ($app) = @_;
+
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+
+          # Immediate request-local shallow state change; no I/O.
+          my $child = clone_scope($scope, { request_id => make_id() });
+
+          # Construction only: no event has been emitted or received yet.
+          my $out = wrap_send($send, async sub {
+              my ($event, $downstream) = @_;
+              if (($event->{type} // '') eq 'http.response.start') {
+                  $event = {
+                      %$event,
+                      headers => [@{$event->{headers} // []},
+                          ['x-request-id', $child->{request_id}]],
+                  };
+              }
+              await $downstream->($event); # this actually emits and awaits
+          });
+
+          my $in = wrap_receive($receive, async sub {
+              my ($downstream) = @_;
+              my $event = await $downstream->(); # receive happens here
+              return $event;
+          });
+
+          await $app->($child, $in, $out);
+      };
+  });
+
+C<wrap_send> and C<wrap_receive> never delegate automatically. An interceptor
+may short-circuit, replace, expand, filter, or synthesize events. Return or
+await the downstream Future when completion, failure, and backpressure must
+remain attached. Factory execution happens once during C<to_app>; returned
+wrappers run per request.
+
+=head2 Negotiated 404 and 405 Responses
+
+Fallbacks are ordinary Context handlers. The router seeds 404 or 405 plus
+C<Allow> before invoking them, so one function can negotiate both:
+
+  async sub http_error {
+      my ($c) = @_;
+      my $status = $c->response->status;
+      my $type = $c->request->preferred_type(
+          'application/json', 'text/html', 'text/plain',
+      ) // 'text/plain';
+
+      $c->response->header('Vary' => 'Accept');
+      return $c->json({ status => $status })
+          if $type eq 'application/json';
+      return $c->html("<h1>$status</h1>")
+          if $type eq 'text/html';
+      return $c->text("HTTP $status");
+  }
+
+  my $routing = router(
+      routes                 => \@routes,
+      not_found              => \&http_error,
+      method_not_allowed     => \&http_error,
+  );
+
+A selected application's own 404 or 405 is left untouched. If a detached
+custom 405 response lacks Allow, the router adds only that required field; an
+existing Allow or changed status wins.
+
+=head2 Real Catch-All Routes
+
+A fallback means "nothing matched." A wildcard is a real route:
+
+  router(routes => [
+      route('/api/users' => \&users),
+      route('/*path' => \&spa, methods => ['GET']), # keep last
+  ]);
+
+  router(routes => [
+      mount('/docs', routes => [
+          route('/assets/*path' => \&asset),
+          route('/*path' => \&docs_spa, methods => ['GET']),
+      ]),
+      route('/health' => \&health),
+  ]);
+
+The subtree catch-all affects only C</docs>. A GET-only catch-all makes an
+unknown POST a 405 because its path matched partially. C<methods =E<gt> '*'>
+turns the catch-all into a full match for every method and can supersede a 405
+collected from an earlier specific route.
+
+=head2 Custom HEAD without Running an Expensive GET
+
+Put the explicit HEAD route before GET:
+
+  route('/report' => \&head_report, methods => ['HEAD']),
+  route('/report' => \&get_report,  methods => ['GET']),
+
+Reversing the declarations invokes GET for HEAD because GET automatically
+includes HEAD and the first full match wins. If C<head_report>'s constraint
+returns false, the GET route's automatic HEAD remains the fallback. The router
+suppresses the final wire body for either handler while preserving status and
+GET-equivalent headers. Put body-derived response middleware in the router's
+C<middleware> list, inside that HEAD boundary.
+
+=head2 Constraint Forms and Wildcard Safety
+
+All constraints receive one decoded scalar and validate without coercion:
+
+  route('/regex/{id}' => \&show,
+      constraints => { id => qr/\d+/ },
+  );
+
+  route('/predicate/{slug}' => \&show,
+      constraints => { slug => sub {
+          my ($value) = @_;
+          return $value =~ /\A[a-z0-9-]+\z/;
+      } },
+  );
+
+  route('/typed/{id}' => \&show,
+      constraints => { id => $type_tiny_compatible_object },
+  );
+
+The final object needs C<check($value)> and may provide
+C<get_message($value)>; Type::Tiny is not a hard dependency. Regex and inline
+C<{id:\d+}> constraints are anchored over the complete value. Predicates must
+be synchronous; database/resource checks belong in selected middleware or the
+handler.
+
+C<*path> captures decoded values including C<..>, repeated separators, and
+backslashes. Never concatenate that value with a filesystem root. Canonicalize
+the candidate, verify containment at a path-component boundary, and decide how
+symlinks are handled. Prefer a dedicated static/file component whose
+containment policy you have verified.
+
+=head2 Normal, Raw, WebSocket, and SSE Handler Lifecycles
+
+A normal HTTP handler builds local response state and returns it. Routing owns
+the single emission:
+
+  route('/normal' => async sub {
+      my ($c) = @_;
+      return $c->text('Hello');
+  });
+
+A raw endpoint owns every event and receives all channels:
+
+  route('/raw', raw => async sub {
+      my ($scope, $receive, $send) = @_;
+      await $send->({
+          type => 'http.response.start', status => 200, headers => [],
+      });
+      await $send->({
+          type => 'http.response.body', body => 'Hello', more => 0,
+      });
+  });
+
+Do not call C<< $c->respond >> inside a normal handler. Return the Response, or
+choose C<raw> for manual event ownership.
+
+Normal WebSocket and SSE handlers are imperative and their completion is
+awaited:
+
+  websocket('/chat/{room}' => async sub {
+      my ($c) = @_;
+      await $c->accept;
+      await $c->send_text('joined ' . $c->path_param('room'));
+      await $c->run;
+  });
+
+  sse('/events' => async sub {
+      my ($c) = @_;
+      await $c->start;
+      await $c->send_event(data => 'ready');
+      await $c->run;
+  });
+
+Use C<< websocket('/raw', raw =E<gt> $app) >> or
+C<< sse('/raw', raw =E<gt> $app) >> when a native application must own those
+protocol events. Their resolved return values are inert.
+
+=head2 Names, Reverse URLs, and Inspection
+
+Mount namespaces are optional and affect lookup names, not paths:
+
+  my $routing = router(routes => [
+      mount('/api/v1', routes => $shared, namespace => 'v1'),
+      mount('/api/v2', routes => $shared, namespace => 'v2'),
+  ]);
+
+  $routing->path_for('v1.user', { id => 42 });
+  $c->path_for('v2.user', { id => 42 });
+  $c->url_for('v2.user',  { id => 42 });
+
+An unnamed mount leaves child names unprefixed. Duplicate effective names
+croak with both paths and namespace guidance. Router C<path_for> has no request
+prefix; Context C<path_for> includes the compiled-router entry C<root_path>.
+C<url_for> adds a scheme and authority validated by L<PAGI::Authority>.
+
+For HTTP behind a trusted proxy, wrap outer-to-inner:
+
+  ReverseProxy -> TrustedHosts -> PAGI::Routing
+
+Malformed or duplicate Host never falls back to C<server>. The shipped proxy
+and Host middleware remain HTTP-only, so WebSocket/SSE scopes must already be
+normalized and validated.
+
+Inspect direct children and named leaves without mutating the tree:
+
+  my $children = $routing->routes;
+  my $named    = $routing->named_routes;
+  my $leaf     = $routing->route_named('v2.user');
+
+Recurse into inline C<< $mount->routes >>; application mounts are opaque.
+C<desc> is a human note for listings and tools.
+
+=head2 Matched-Route Metadata
+
+Each compiled router publishes a request-local, read-only convention before
+router middleware:
+
+  $scope->{'pagi.routing'} = {
+      version => 1,
+      frames  => [{
+          resolver  => $resolver,
+          root_path => '/proxy', # optional additive v1 field
+          mounts    => [],
+          match     => undef,
+      }],
+  };
+
+An inline mount appends this exact record before its middleware runs:
+
+  {
+      path      => '/tenants/{tenant_id}', # declared mount path
+      namespace => 'tenant',               # declared value or undef
+      desc      => 'Tenant routes',         # declared value or undef
+  }
+
+All keys are present; nested records are outer-to-inner. A selected leaf sets
+this exact C<match> before route middleware:
+
+  {
+      kind  => 'route', # or websocket / sse
+      route => '/tenants/{tenant_id}/users/{user_id}', # effective route
+      name  => 'tenant.user.show',                     # effective or undef
+      desc  => 'Display one tenant user',              # declared or undef
+  }
+
+An opaque application mount instead sets terminal C<match> with
+C<kind =E<gt> 'mount'>, its complete effective mount path in C<route>,
+C<name =E<gt> undef>, and its declared C<desc> or undef. It does not append an
+inline C<mounts> record for itself. A generated 404/405 leaves C<match>
+undefined. See L<PAGI::Routing/MATCHED-ROUTE SCOPE CONVENTION> for the complete
+public schema.
+
+A separately compiled compatible router appends a frame, so child middleware
+can inspect ancestry while the parent keeps its terminal mount record.
+
+The frame is shared through request-local shallow scopes: router/mount
+middleware can inspect the final match after awaiting downstream. Middleware
+outside the compiled app keeps its original top-level scope and does not see
+downstream top-level additions.
+
+Opaque, malformed, or newer C<pagi.routing> data forms an incompatible
+boundary. The child installs a fresh v1 container, ignores foreign ancestry,
+and leaves the incoming data untouched; it does not croak. Older/manual v1
+frames may omit C<root_path>, and Context reverse routing then falls back to
+the current request value.
+
+=head2 Lifespan Around Declarative Routing
+
+Routing deliberately ignores lifespan scopes. Compose lifecycle policy around
+the immutable object; L<PAGI::Lifespan> uses C<PAGI::Utils::to_app> and compiles
+it once:
+
+  use PAGI::Lifespan;
+  use Future::AsyncAwait;
+
+  my $app = PAGI::Lifespan->wrap(
+      $routing,
+      startup => async sub {
+          my ($state) = @_;
+          $state->{db} = await connect_db();
+      },
+  );
 
 =head2 Path Parameters and Wildcards
 
@@ -1766,6 +2153,12 @@ See L<PAGI::Test::Client> for the full API including WebSocket and SSE testing.
 =item * L<PAGI::Tutorial> - Learn the PAGI protocol from the ground up
 
 =item * L<PAGI::Tools::Tutorial> - Guide to middleware, helpers, and built-in apps
+
+=item * L<PAGI::Routing> - Immutable declarative routing reference
+
+=item * L<PAGI::Middleware::Helpers> - Functional event-channel wrappers
+
+=item * L<PAGI::Authority> - Validated request authority
 
 =item * L<PAGI::App::Router> - Functional routing
 

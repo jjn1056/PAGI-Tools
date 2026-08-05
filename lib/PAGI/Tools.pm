@@ -20,6 +20,8 @@ PAGI::Tools - Application toolkit for the PAGI specification
 Raw PAGI is deliberately minimal — an application is just an C<async> sub that
 speaks the protocol directly:
 
+    use Future::AsyncAwait;
+
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({
@@ -51,6 +53,29 @@ middleware suite — so the same application reads like this:
 
     my $app = $router->to_app;   # still just a PAGI app: an async sub
 
+For an immutable route tree whose HTTP handlers receive one Context and return
+Response values, use the additive declarative API instead:
+
+    use PAGI::Routing qw(:routes);
+
+    async sub home {
+        my ($c) = @_;
+        return $c->json({ hello => 'world' });
+    }
+
+    my $routing = router(routes => [
+        route('/' => \&home, name => 'home'),
+    ]);
+
+    my $app = $routing->to_app;
+
+Declarative mount prefixes accept both the exact prefix and its slash form
+without redirecting, a deliberate difference from Starlette's default mount
+behavior. Its request-aware URLs consume normalized scope data; the shipped
+ReverseProxy and TrustedHosts middleware still process HTTP only, so
+WebSocket/SSE deployments must normalize and validate those scopes outside
+routing.
+
 Run it with any PAGI server (such as C<pagi-server> from the C<PAGI-Server>
 distribution), or mount it inside a larger PAGI application.
 
@@ -79,6 +104,9 @@ framework
 =item * L<PAGI::Request>, L<PAGI::Response>, L<PAGI::Context> - request
 processing and ergonomics
 
+=item * L<PAGI::Routing> - immutable declarative route trees and Context
+handlers; an alternative to, not a replacement for, L<PAGI::App::Router>
+
 =item * L<PAGI::Test::Client> and friends - in-process test utilities for
 PAGI applications
 
@@ -101,7 +129,8 @@ protocol specification lives in the C<PAGI> distribution.
 
 L<PAGI::Tutorial> (the protocol tutorial, in the C<PAGI> distribution),
 L<PAGI::Tools::Tutorial> (this distribution's helpers guide),
-L<PAGI::Tools::Cookbook> (this distribution's recipes), L<PAGI::Spec>,
+L<PAGI::Tools::Cookbook> (this distribution's recipes), L<PAGI::Routing>,
+L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, L<PAGI::Spec>,
 L<PAGI::Server::Runner> - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
 

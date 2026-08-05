@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Hash::MultiValue;
 use PAGI::Headers ();
+use PAGI::Authority ();
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Cookie::Baker qw(crush_cookie);
 use MIME::Base64 qw(decode_base64);
@@ -50,10 +51,9 @@ sub _decode_utf8 {
     return decode('UTF-8', $str, $flag);
 }
 
-# Host from headers
 sub host {
-    my $self = shift;
-    return $self->header('host');
+    my ($self) = @_;
+    return PAGI::Authority->host_from_scope($self->{scope});
 }
 
 # Content-Type shortcut
@@ -750,7 +750,10 @@ C<http> or C<https>.
 
 =head2 host
 
-Host from the Host header.
+Returns the complete validated Host field, including an explicit port. Returns
+C<undef> only when Host is absent, and croaks when Host is malformed or occurs
+more than once. Use L</header> with C<'host'> as the raw, last-value escape
+hatch when that behavior is required.
 
 =head2 http_version
 

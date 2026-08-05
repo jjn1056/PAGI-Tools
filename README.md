@@ -7,6 +7,8 @@ PAGI::Tools - Application toolkit for the PAGI specification
 Raw PAGI is deliberately minimal — an application is just an `async` sub that
 speaks the protocol directly:
 
+    use Future::AsyncAwait;
+
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({
@@ -38,6 +40,29 @@ middleware suite — so the same application reads like this:
 
     my $app = $router->to_app;   # still just a PAGI app: an async sub
 
+For an immutable route tree whose HTTP handlers receive one Context and return
+Response values, use the additive declarative API instead:
+
+    use PAGI::Routing qw(:routes);
+
+    async sub home {
+        my ($c) = @_;
+        return $c->json({ hello => 'world' });
+    }
+
+    my $routing = router(routes => [
+        route('/' => \&home, name => 'home'),
+    ]);
+
+    my $app = $routing->to_app;
+
+Declarative mount prefixes accept both the exact prefix and its slash form
+without redirecting, a deliberate difference from Starlette's default mount
+behavior. Its request-aware URLs consume normalized scope data; the shipped
+ReverseProxy and TrustedHosts middleware still process HTTP only, so
+WebSocket/SSE deployments must normalize and validate those scopes outside
+routing.
+
 Run it with any PAGI server (such as `pagi-server` from the `PAGI-Server`
 distribution), or mount it inside a larger PAGI application.
 
@@ -60,6 +85,8 @@ WebSocket chat/echo, PSGI bridging)
 framework
 - [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::Context](https://metacpan.org/pod/PAGI%3A%3AContext) - request
 processing and ergonomics
+- [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting) - immutable declarative route trees and Context
+handlers; an alternative to, not a replacement for, [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter)
 - [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and friends - in-process test utilities for
 PAGI applications
 - [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils) - composition and lifespan helpers; its
@@ -79,7 +106,8 @@ protocol specification lives in the `PAGI` distribution.
 
 [PAGI::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATutorial) (the protocol tutorial, in the `PAGI` distribution),
 [PAGI::Tools::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ATutorial) (this distribution's helpers guide),
-[PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook) (this distribution's recipes), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
+[PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook) (this distribution's recipes), [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting),
+[PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
 [PAGI::Server::Runner](https://metacpan.org/pod/PAGI%3A%3AServer%3A%3ARunner) - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
 

@@ -61,7 +61,57 @@ applications (PART 7).
 
 =head1 PART 2: ROUTING
 
-=head2 2.1 PAGI::App::Router - Basic Routing
+=head2 2.1 PAGI::Routing - Immutable Declarative Routing
+
+L<PAGI::Routing> is the compact route-tree API when handlers should receive one
+L<PAGI::Context> and HTTP handlers should return Response values:
+
+  use Future::AsyncAwait;
+  use PAGI::Routing qw(:routes);
+
+  async sub home {
+      my ($c) = @_;
+      return $c->html('<h1>Home</h1>');
+  }
+
+  async sub user {
+      my ($c) = @_;
+      return $c->json({ id => $c->path_param('id') });
+  }
+
+  my $routing = router(
+      routes => [
+          route('/' => \&home, name => 'home'),
+          mount('/api',
+              routes => [
+                  route('/users/{id}' => \&user,
+                      name        => 'user',
+                      methods     => ['GET'],
+                      constraints => { id => qr/\d+/ },
+                  ),
+              ],
+              namespace => 'api',
+          ),
+      ],
+  );
+
+  $routing->to_app;
+
+Constructors validate and build immutable descriptions. C<to_app> compiles a
+fresh native PAGI wrapper graph and starts no request; call it once for the app
+instance and retain the returned coderef. At request time routing matches in
+declaration order, constructs C<$c>, awaits the handler, and emits its returned
+Response exactly once.
+
+GET includes HEAD automatically. Paths are exact, with no slash redirect or
+automatic OPTIONS. Inline mounts are structural; positional mounts are opaque
+applications that own a prefix. Pure route/mount/router middleware is described
+with C<middleware(...)>. Native three-channel endpoints remain explicit with
+C<raw>. See L<PAGI::Routing> for the complete lifecycle and
+L<PAGI::Tools::Cookbook> for mounted, raw, protocol, reverse-routing, and
+metadata recipes.
+
+=head2 2.2 PAGI::App::Router - Basic Routing
 
 L<PAGI::App::Router> provides lightweight functional routing:
 
@@ -101,7 +151,29 @@ L<PAGI::App::Router> provides lightweight functional routing:
 
   $router->to_app;
 
-For advanced routing patterns (nested routers, route-level middleware, class-based routing), see L<PAGI::Tools::Cookbook>.
+For advanced routing patterns (nested routers, route-level middleware,
+class-based routing), see L<PAGI::Tools::Cookbook>.
+
+=head2 2.3 Choosing a Router
+
+The three APIs are alternatives at different abstraction boundaries:
+
+  API                    Matcher                         Handler                         Route middleware
+  ---------------------  ------------------------------  ------------------------------  ------------------------------
+  PAGI::Routing          immutable declaration-ordered   $c; HTTP returns Response       pure app-to-app event wrapper
+  PAGI::App::Router      mutable route-first/mount-last  native PAGI application         pure app-to-app event wrapper
+  PAGI::Endpoint::Router delegates to App::Router        class method + $c; Response     value-flow ($c, $next)
+
+There are two matching engines: C<PAGI::Routing> owns the new
+declaration-ordered matcher, while C<PAGI::Endpoint::Router> delegates to the
+existing C<PAGI::App::Router> matcher. The latter checks routes before mounts
+and then mounts by longest prefix. C<PAGI::Routing> treats mounts as declared
+nodes that can immediately own a request.
+
+For generated 405 responses, C<PAGI::Routing> renders methods in first-seen
+order; C<PAGI::App::Router> (and therefore Endpoint::Router) renders them
+alphabetically. C<Allow> is a set, so neither display order expresses method
+priority.
 
 =head1 PART 3: HANDLING REQUESTS
 
@@ -1004,7 +1076,8 @@ via the class-method C<to_app>: C<'MyApp::API'>
 =back
 
 App positions are: C<mount> targets and route handlers in
-L<PAGI::App::Router>, C<mount> and the final block value in
+L<PAGI::App::Router>, opaque mounts and explicit C<raw> leaves in
+L<PAGI::Routing>, C<mount> and the final block value in
 L<PAGI::Middleware::Builder>'s C<builder {}>, L<PAGI::App::URLMap>
 mounts and its C<default>, L<PAGI::App::Cascade> entries, and the
 C<app> argument to L<PAGI::Test::Client>. Put together:
@@ -1031,7 +1104,8 @@ composition time with a message pointing at the right position.
 
 The one place that still wants an explicit C<< ->to_app >> is the value
 your F<app.pl> hands to the server: the server contract is a plain
-coderef, so end your file with C<< $router->to_app >> (or a
+coderef, so end your file with C<< $router->to_app >> or
+C<< $routing->to_app >> (or a
 C<builder {}> block, which already returns one).
 
 =head1 SEE ALSO
@@ -1044,7 +1118,9 @@ C<builder {}> block, which already returns one).
 
 =item * L<PAGI::Tools::Cookbook> - recipes for common tasks
 
-=item * L<PAGI::Middleware::Builder>, L<PAGI::App::Router>, L<PAGI::Response>, L<PAGI::Request> - individual module documentation
+=item * L<PAGI::Routing>, L<PAGI::Middleware::Builder>,
+L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, L<PAGI::Response>,
+L<PAGI::Request> - individual module documentation
 
 =back
 
