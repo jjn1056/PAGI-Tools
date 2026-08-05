@@ -1109,7 +1109,9 @@ $c->url_for($name, \%path_params, \%query_params);
 ```
 
 - Router `path_for` is request-independent and returns the application path.
-- Context `path_for` includes request `root_path`.
+- Context `path_for` includes the `root_path` captured at the selected compiled
+  router's entry boundary. Older or manually constructed version-1 frames that
+  omit the additive field fall back to the current request `root_path`.
 - Context `url_for` returns an absolute request-aware URL string.
 
 `url_for` obtains authority from `PAGI::Authority->from_scope($scope)`. A valid
@@ -1163,18 +1165,25 @@ The value is a versioned stack of request-local routing frames:
     version => 1,
     frames  => [
         {
-            resolver => $resolver,
-            mounts   => [],
-            match    => undef,
+            resolver  => $resolver,
+            root_path => '/proxy', # optional additive version-1 field
+            mounts    => [],
+            match     => undef,
         },
     ],
 }
 ```
 
-The router installs its frame before invoking router middleware. The frame is
-shared through that router's shallow internal scope clones. Consumers may
-inspect it but must treat it as read-only; dispatch and reverse routing do not
-accept consumer mutation as configuration.
+The router installs its frame before invoking router middleware. Each compiled
+router publishes a scalar `root_path` captured before any of that router's
+inline mounts rewrite the scope. This prevents reverse generation from adding
+inline prefixes twice while allowing a separately compiled child to retain its
+parent application-mount prefix. The field is an additive version-1 extension:
+older or manually constructed frames may omit it, and Context reverse routing
+then falls back to the current scope `root_path`. If present it must be a
+defined non-reference scalar. The frame is shared through that router's shallow
+internal scope clones. Consumers may inspect it but must treat it as read-only;
+dispatch and reverse routing do not accept consumer mutation as configuration.
 
 When an inline mount matches, the router appends a descriptor containing its
 declared path, namespace, and description to the current frame's `mounts`
@@ -1205,11 +1214,11 @@ and must not assume downstream top-level scope additions propagate upward.
 A separately compiled `PAGI::Routing` application receives a new shallow scope
 containing a new `pagi.routing` container with its frame appended to the prior
 frames. It never overwrites an ancestor frame. Context `path_for` and `url_for`
-always use the last frame's resolver. This covers routers, individual routing
-nodes compiled with `to_app`, raw routes targeting another compiled router, and
-application mounts containing a separately compiled router. Parent middleware
-retains its own terminal mount metadata, while middleware inside the child can
-inspect the complete routing ancestry.
+always use the last frame's resolver and router-entry `root_path`. This covers
+routers, individual routing nodes compiled with `to_app`, raw routes targeting
+another compiled router, and application mounts containing a separately
+compiled router. Parent middleware retains its own terminal mount metadata,
+while middleware inside the child can inspect the complete routing ancestry.
 
 If an existing `pagi.routing` value does not have the supported version and
 frame-stack shape, request dispatch croaks with a scope-key collision diagnostic

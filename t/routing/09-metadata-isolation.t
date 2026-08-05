@@ -318,6 +318,11 @@ subtest 'separately compiled routers append frames without overwriting legacy me
         name => 'items.show',
         desc => 'Child item',
     }, 'the child frame records its own application-relative route');
+    is(
+        [map { $_->{root_path} } @$frames],
+        ['', '/api'],
+        'each compiled router records the root_path at its own entry boundary',
+    );
     isnt(refaddr($frames->[0]), refaddr($frames->[1]), 'parent and child use distinct current frames');
     isnt(refaddr($frames->[0]{resolver}), refaddr($frames->[1]{resolver}),
         'independently compiled routers retain their own immutable resolvers');
@@ -380,6 +385,15 @@ subtest 'supported ancestry composes while foreign routing values form fresh bou
                 resolver => $ancestor_resolver,
                 mounts => [],
                 match => 'not-a-hash',
+            }],
+        }],
+        ['malformed prior root_path', {
+            version => 1,
+            frames => [{
+                resolver => $ancestor_resolver,
+                mounts => [],
+                match => undef,
+                root_path => [],
             }],
         }],
     );

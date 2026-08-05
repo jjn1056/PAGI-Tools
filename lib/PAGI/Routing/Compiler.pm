@@ -507,6 +507,9 @@ sub _select_protocol {
 sub _routing_scope {
     my ($class, $scope, $resolver) = @_;
 
+    my $root_path = defined $scope->{root_path} ? $scope->{root_path} : '';
+    croak 'scope root_path must be a string' if ref($root_path);
+
     my @ancestor_frames;
     my $incoming = $scope->{'pagi.routing'};
     if ($class->_compatible_routing_container($incoming)) {
@@ -514,9 +517,10 @@ sub _routing_scope {
     }
 
     my $frame = {
-        resolver => $resolver,
-        mounts   => [],
-        match    => undef,
+        resolver  => $resolver,
+        root_path => $root_path,
+        mounts    => [],
+        match     => undef,
     };
     my @frames = (@ancestor_frames, $frame);
     my $container = {
@@ -546,6 +550,8 @@ sub _compatible_routing_container {
         return 0 unless ref($frame->{mounts}) eq 'ARRAY';
         return 0 if defined $frame->{match}
             && ref($frame->{match}) ne 'HASH';
+        return 0 if exists $frame->{root_path}
+            && (!defined $frame->{root_path} || ref($frame->{root_path}));
     }
 
     return 1;

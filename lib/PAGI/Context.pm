@@ -306,12 +306,29 @@ sub path_param {
     );
 
 C<path_for> renders a named declarative route through the resolver in the last
-valid C<pagi.routing> frame and prefixes the application path with the current
-request's C<root_path>. C<url_for> uses the same resolver and returns an
-absolute URL whose scheme follows the named route kind: HTTP and SSE targets
-use C<http> or C<https>, while WebSocket targets use C<ws> or C<wss>. Missing
-path and query hashes default to empty hashes. These methods perform no
-protocol I/O.
+valid C<pagi.routing> frame and prefixes the application path with the
+C<root_path> captured when that compiled router was entered. Inline mount
+prefixes already occur in the resolver's generated path, so the handler's
+later rewritten C<root_path> is not added a second time. C<url_for> uses the
+same resolver boundary and returns an absolute URL whose scheme follows the
+named route kind: HTTP and SSE targets use C<http> or C<https>, while WebSocket
+targets use C<ws> or C<wss>. Missing path and query hashes default to empty
+hashes. These methods perform no protocol I/O.
+
+The compatible version-1 frame shape is:
+
+    {
+        resolver  => $resolver,
+        root_path => '/deployment-prefix', # optional additive field
+        mounts    => [],
+        match     => undef,
+    }
+
+C<root_path> is a validated scalar captured at each compiled-router boundary.
+Older or manually constructed version-1 frames may omit it; only those frames
+fall back to the current scope's C<root_path>. A separately compiled child
+therefore records the parent application mount in its own boundary, while
+inline mounts continue to share their compiled router's original boundary.
 
 Absolute URL generation delegates authority selection and validation to
 L<PAGI::Authority>. Invalid or duplicate Host fields fail rather than falling
@@ -335,18 +352,30 @@ separate planned compatibility change, not behavior supplied by routing.
 
 sub path_for {
     my ($self, @args) = @_;
-    my $resolver = $self->_routing_resolver('path_for');
-    my $path = $resolver->path_for(@args);
-    return _join_root_path($self->{scope}{root_path}, $path);
+    my $frame = $self->_routing_frame('path_for');
+    my $path = $frame->{resolver}->path_for(@args);
+    my $root_path = exists $frame->{root_path}
+        ? $frame->{root_path}
+        : $self->{scope}{root_path};
+    return _join_root_path($root_path, $path);
 }
 
 sub url_for {
-    my ($self, @args) = @_;
-    my $resolver = $self->_routing_resolver('url_for');
-    return $resolver->url_for_scope($self->{scope}, @args);
+    my ($self, $name, $path_params, $query_params) = @_;
+    my $frame = $self->_routing_frame('url_for');
+    my $root_path = exists $frame->{root_path}
+        ? $frame->{root_path}
+        : $self->{scope}{root_path};
+    return $frame->{resolver}->url_for_scope(
+        $self->{scope},
+        $name,
+        $path_params,
+        $query_params,
+        $root_path,
+    );
 }
 
-sub _routing_resolver {
+sub _routing_frame {
     my ($self, $operation) = @_;
     my $container = $self->{scope}{'pagi.routing'};
     my $valid = ref($container) eq 'HASH'
@@ -362,16 +391,19 @@ sub _routing_resolver {
                 && blessed($frame->{resolver})
                 && $frame->{resolver}->can('path_for')
                 && ref($frame->{mounts}) eq 'ARRAY'
-                && (!defined $frame->{match} || ref($frame->{match}) eq 'HASH');
+                && (!defined $frame->{match} || ref($frame->{match}) eq 'HASH')
+                && (!exists $frame->{root_path}
+                    || (defined $frame->{root_path} && !ref($frame->{root_path})));
         }
     }
 
-    my $resolver = $valid ? $container->{frames}[-1]{resolver} : undef;
+    my $frame = $valid ? $container->{frames}[-1] : undef;
+    my $resolver = $frame ? $frame->{resolver} : undef;
     $valid = 0 if $operation eq 'url_for'
         && (!$resolver || !$resolver->can('url_for_scope'));
 
     croak "$operation requires a PAGI::Routing resolver in scope" unless $valid;
-    return $resolver;
+    return $frame;
 }
 
 sub _join_root_path {

@@ -194,7 +194,8 @@ sub path_for {
 }
 
 sub url_for_scope {
-    my ($self, $scope, $name, $path_params, $query_params) = @_;
+    my ($self, $scope, $name, $path_params, $query_params, $root_path) = @_;
+    my $has_root_path = @_ >= 6;
     my $path = $self->path_for($name, $path_params, $query_params);
     my $kind = $self->route_kind($name);
     my $scope_scheme = defined $scope->{scheme} ? $scope->{scheme} : 'http';
@@ -216,7 +217,8 @@ sub url_for_scope {
     }
 
     my $authority = PAGI::Authority->from_scope($scope);
-    $path = _join_root_path($scope->{root_path}, $path);
+    $root_path = $scope->{root_path} unless $has_root_path;
+    $path = _join_root_path($root_path, $path);
     return "$url_scheme://$authority$path";
 }
 

@@ -2,10 +2,11 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 
 use lib 'lib';
 use PAGI::Context;
-use PAGI::Routing qw(route router sse websocket);
+use PAGI::Routing qw(mount route router sse websocket);
 use PAGI::Routing::Resolver;
 
 sub _resolver {
@@ -35,6 +36,30 @@ sub _context {
         },
         %scope,
     }, sub { }, sub { });
+}
+
+sub _run_compiled {
+    my ($app, %scope) = @_;
+    my @events;
+    my $request_scope = {
+        type        => 'http',
+        method      => 'GET',
+        path        => '/',
+        root_path   => '',
+        raw_path    => '/',
+        path_params => {},
+        headers     => [['host', 'example.test']],
+        scheme      => 'http',
+        %scope,
+    };
+    my $receive = sub { Future->done({ type => 'unused.receive' }) };
+    my $send = sub {
+        push @events, $_[0];
+        return Future->done;
+    };
+
+    $app->($request_scope, $receive, $send)->get;
+    return \@events;
 }
 
 subtest 'Context selects the last resolver from a valid routing frame stack' => sub {
@@ -106,6 +131,15 @@ subtest 'missing and malformed routing metadata fail at the Context boundary' =>
             version => 1,
             frames  => [{ resolver => $resolver, mounts => [], match => [] }],
         }],
+        ['last frame has malformed root_path', {
+            version => 1,
+            frames  => [{
+                resolver  => $resolver,
+                mounts    => [],
+                match     => undef,
+                root_path => [],
+            }],
+        }],
     );
 
     for my $case (@cases) {
@@ -129,6 +163,174 @@ subtest 'missing and malformed routing metadata fail at the Context boundary' =>
             "$label is rejected by url_for",
         );
     }
+};
+
+subtest 'compiled inline mounts reverse from the router boundary across protocols' => sub {
+    my @seen;
+    my $capture = sub {
+        my ($label, $own_name, $own_params) = @_;
+        return sub {
+            my ($context) = @_;
+            my $frame = $context->scope->{'pagi.routing'}{frames}[-1];
+            push @seen, {
+                label           => $label,
+                scope_root_path => $context->scope->{root_path},
+                frame_root_path => $frame->{root_path},
+                own_path        => $context->path_for(
+                    $own_name,
+                    $own_params,
+                    { via => $label },
+                ),
+                own_url         => $context->url_for(
+                    $own_name,
+                    $own_params,
+                    { via => $label },
+                ),
+                sibling_path    => $context->path_for(
+                    'tenant.sibling',
+                    { tenant => 'acme', id => 8 },
+                    { via => $label },
+                ),
+                sibling_url     => $context->url_for(
+                    'tenant.sibling',
+                    { tenant => 'acme', id => 8 },
+                    { via => $label },
+                ),
+            };
+            return $context->text('ok') if $label eq 'http';
+            return;
+        };
+    };
+
+    my $app = router(routes => [
+        mount('/tenants/{tenant}', routes => [
+            route('/show/{id}' => $capture->(
+                'http', 'tenant.show', { tenant => 'acme', id => 7 },
+            ), name => 'show'),
+            route('/sibling/{id}' => sub { return $_[0]->text('sibling') },
+                name => 'sibling'),
+            websocket('/socket/{room}' => $capture->(
+                'ws', 'tenant.socket', { tenant => 'acme', room => 'lobby' },
+            ), name => 'socket'),
+            sse('/events/{channel}' => $capture->(
+                'sse', 'tenant.events', { tenant => 'acme', channel => 'news' },
+            ), name => 'events'),
+        ], namespace => 'tenant'),
+    ])->to_app;
+
+    _run_compiled($app,
+        path      => '/tenants/acme/show/7',
+        raw_path  => '/proxy/tenants/acme/show/7',
+        root_path => '/proxy',
+        scheme    => 'https',
+        headers   => [['host', 'public.example:8443']],
+    );
+    _run_compiled($app,
+        type      => 'websocket',
+        path      => '/tenants/acme/socket/lobby',
+        raw_path  => '/proxy/tenants/acme/socket/lobby',
+        root_path => '/proxy',
+        scheme    => 'wss',
+        headers   => [['host', 'public.example:8443']],
+    );
+    _run_compiled($app,
+        type      => 'sse',
+        path      => '/tenants/acme/events/news',
+        raw_path  => '/proxy/tenants/acme/events/news',
+        root_path => '/proxy',
+        scheme    => 'https',
+        headers   => [['host', 'public.example:8443']],
+    );
+
+    is(\@seen, [
+        {
+            label           => 'http',
+            scope_root_path => '/proxy/tenants/acme',
+            frame_root_path => '/proxy',
+            own_path        => '/proxy/tenants/acme/show/7?via=http',
+            own_url         => 'https://public.example:8443/proxy/tenants/acme/show/7?via=http',
+            sibling_path    => '/proxy/tenants/acme/sibling/8?via=http',
+            sibling_url     => 'https://public.example:8443/proxy/tenants/acme/sibling/8?via=http',
+        },
+        {
+            label           => 'ws',
+            scope_root_path => '/proxy/tenants/acme',
+            frame_root_path => '/proxy',
+            own_path        => '/proxy/tenants/acme/socket/lobby?via=ws',
+            own_url         => 'wss://public.example:8443/proxy/tenants/acme/socket/lobby?via=ws',
+            sibling_path    => '/proxy/tenants/acme/sibling/8?via=ws',
+            sibling_url     => 'https://public.example:8443/proxy/tenants/acme/sibling/8?via=ws',
+        },
+        {
+            label           => 'sse',
+            scope_root_path => '/proxy/tenants/acme',
+            frame_root_path => '/proxy',
+            own_path        => '/proxy/tenants/acme/events/news?via=sse',
+            own_url         => 'https://public.example:8443/proxy/tenants/acme/events/news?via=sse',
+            sibling_path    => '/proxy/tenants/acme/sibling/8?via=sse',
+            sibling_url     => 'https://public.example:8443/proxy/tenants/acme/sibling/8?via=sse',
+        },
+    ], 'inline mount prefixes appear once and sibling targets use the same router boundary');
+};
+
+subtest 'a separately compiled child records and uses its own router boundary' => sub {
+    my @seen;
+    my $child = router(routes => [
+        mount('/spaces/{space}', routes => [
+            route('/items/{id}' => sub {
+                my ($context) = @_;
+                my $frames = $context->scope->{'pagi.routing'}{frames};
+                push @seen, {
+                    scope_root_paths => [map { $_->{root_path} } @$frames],
+                    current_scope    => $context->scope->{root_path},
+                    item_path        => $context->path_for(
+                        'item', { space => 'blue', id => 9 }, { q => 'two words' },
+                    ),
+                    sibling_url     => $context->url_for(
+                        'sibling', { space => 'blue', id => 10 }, { q => 'two words' },
+                    ),
+                };
+                return $context->text('child');
+            }, name => 'item'),
+            route('/siblings/{id}' => sub { return $_[0]->text('sibling') },
+                name => 'sibling'),
+        ]),
+    ])->to_app;
+    my $parent = router(routes => [
+        mount('/service' => $child),
+    ])->to_app;
+
+    _run_compiled($parent,
+        path      => '/service/spaces/blue/items/9',
+        raw_path  => '/proxy/service/spaces/blue/items/9',
+        root_path => '/proxy',
+        scheme    => 'https',
+        headers   => [['host', 'public.example']],
+    );
+
+    is(\@seen, [{
+        scope_root_paths => ['/proxy', '/proxy/service'],
+        current_scope    => '/proxy/service/spaces/blue',
+        item_path        => '/proxy/service/spaces/blue/items/9?q=two%20words',
+        sibling_url      => 'https://public.example/proxy/service/spaces/blue/siblings/10?q=two%20words',
+    }], 'the child frame excludes its parent application mount and its own inline prefix');
+};
+
+subtest 'compiled routers reject a non-scalar current root_path boundary' => sub {
+    my $app = route('/inside' => sub { return $_[0]->text('inside') },
+        name => 'inside')->to_app;
+
+    like(
+        dies {
+            _run_compiled($app,
+                path      => '/inside',
+                raw_path  => '/inside',
+                root_path => [],
+            );
+        },
+        qr/\Ascope root_path must be a string/,
+        'an invalid current boundary is rejected before a routing frame is published',
+    );
 };
 
 subtest 'Context paths add root_path only at the application boundary' => sub {
