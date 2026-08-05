@@ -6,6 +6,8 @@ use Future;
 
 use lib 'lib';
 use PAGI::Context;
+use PAGI::Middleware::ReverseProxy;
+use PAGI::Middleware::TrustedHosts;
 use PAGI::Routing qw(mount route router sse websocket);
 use PAGI::Routing::Resolver;
 
@@ -427,6 +429,73 @@ subtest 'url_for uses validated Host and only absent Host permits server fallbac
         qr/\Ascope server cannot provide an authority/,
         'url_for croaks when neither Host nor server can supply authority',
     );
+};
+
+subtest 'documented HTTP proxy and Host middleware order feeds routing URL generation' => sub {
+    my $routing = router(routes => [
+        route('/external' => sub {
+            my ($context) = @_;
+            return $context->text($context->url_for('external'));
+        }, name => 'external'),
+    ]);
+    my $trusted = PAGI::Middleware::TrustedHosts->new(
+        hosts => ['public.example:8443'],
+    );
+    my $proxy = PAGI::Middleware::ReverseProxy->new(
+        trusted_proxies => ['127.0.0.1'],
+    );
+    my $app = $proxy->wrap($trusted->wrap($routing->to_app));
+
+    my $events = _run_compiled(
+        $app,
+        path     => '/external',
+        raw_path => '/external',
+        client   => ['127.0.0.1', 12345],
+        server   => ['internal.example', 5000],
+        headers  => [
+            ['host', 'internal.example'],
+            ['x-forwarded-proto', 'https'],
+            ['x-forwarded-host', 'public.example:8443'],
+        ],
+    );
+
+    is($events->[0]{status}, 200,
+        'TrustedHosts accepts the external authority installed by ReverseProxy');
+    is($events->[1]{body}, 'https://public.example:8443/external',
+        'url_for consumes the proxy-normalized scheme and validated authority');
+
+    my $missing_calls = 0;
+    my $missing_routing = router(routes => [
+        route('/missing' => sub {
+            my ($context) = @_;
+            ++$missing_calls;
+            return $context->text($context->url_for('missing'));
+        }, name => 'missing'),
+    ]);
+    my $allow_empty = PAGI::Middleware::TrustedHosts->new(
+        hosts       => ['public.example'],
+        allow_empty => 1,
+    );
+    my $missing_app = $proxy->wrap(
+        $allow_empty->wrap($missing_routing->to_app),
+    );
+
+    like(
+        dies {
+            _run_compiled(
+                $missing_app,
+                path     => '/missing',
+                raw_path => '/missing',
+                client   => ['127.0.0.1', 12345],
+                server   => undef,
+                headers  => [],
+            );
+        },
+        qr/\Ascope server cannot provide an authority/,
+        'a composed stack still exposes missing authority at the url_for boundary',
+    );
+    is($missing_calls, 1,
+        'allow_empty Host policy lets routing enforce absolute-URL authority');
 };
 
 subtest 'url_for maps the request scheme according to the named route kind' => sub {
