@@ -172,6 +172,44 @@ subtest 'reverse rendering validates complete ancestry and escapes path and quer
     );
 };
 
+subtest 'namespaces prefix only leaves with declared names' => sub {
+    my $single = router(routes => [
+        mount('/api', routes => [
+            route('/health' => sub { }),
+        ], namespace => 'api'),
+    ]);
+    is($single->named_routes, {}, 'one namespaced unnamed leaf is absent from named_routes');
+    is($single->route_named('api'), undef, 'a namespace alone is not a route name');
+
+    is(
+        dies {
+            router(routes => [
+                mount('/api', routes => [
+                    route('/one' => sub { }),
+                    route('/two' => sub { }),
+                ], namespace => 'api'),
+            ]);
+        },
+        undef,
+        'multiple namespaced unnamed siblings do not collide during construction',
+    );
+
+    my $named_child = route('/users' => sub { }, name => 'users');
+    my $named = router(routes => [
+        mount('/api', routes => [$named_child], namespace => 'api'),
+    ]);
+    is(
+        [sort keys %{$named->named_routes}],
+        ['api.users'],
+        'an existing child name still receives the namespace prefix',
+    );
+    is(
+        refaddr($named->route_named('api.users')),
+        refaddr($named_child),
+        'the namespaced entry still preserves the named child identity',
+    );
+};
+
 subtest 'effective names must be unique across direct and mounted declarations' => sub {
     like(
         dies {

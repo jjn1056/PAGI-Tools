@@ -59,8 +59,9 @@ sub _visit {
         my ($names, $constraints) = _extend_parameters(
             $outer_names, $outer_constraints, $node, $effective_path,
         );
-        my $effective_name = _join_name($name_prefix, $node->name);
-        next unless length $effective_name;
+        my $declared_name = $node->name;
+        next unless defined $declared_name && length $declared_name;
+        my $effective_name = _join_name($name_prefix, $declared_name);
 
         my $pattern = PAGI::Routing::Pattern->new(
             path => $effective_path,
