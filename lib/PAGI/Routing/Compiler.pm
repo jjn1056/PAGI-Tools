@@ -7,12 +7,10 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
 use PAGI::Context;
+use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
 use PAGI::Utils ();
-
-my $HEAD_BOUNDARY_SCOPE_KEY = "\0PAGI::Routing::Compiler::head_boundary";
-my $HEAD_BOUNDARY_MARKER = sub { return };
 
 sub compile {
     my ($class, $description) = @_;
@@ -72,28 +70,13 @@ sub _compile_router {
         croak "unsupported PAGI scope type '$type'"
             unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
 
-        my $is_head = $type eq 'http'
-            && ($scope->{method} // '') eq 'HEAD';
-        my $owns_head_boundary = $is_head
-            && !$class->_has_head_boundary($scope);
-        my $routing_scope = $class->_routing_scope($scope, $resolver);
-        $routing_scope->{$HEAD_BOUNDARY_SCOPE_KEY} = $HEAD_BOUNDARY_MARKER
-            if $owns_head_boundary;
-
-        my $wire_send = $owns_head_boundary
-            ? $class->_head_wire_send($send)
-            : $send;
+        my ($head_scope, $wire_send)
+            = PAGI::Routing::HeadBoundary->prepare($scope, $send);
+        my $routing_scope = $class->_routing_scope($head_scope, $resolver);
 
         await $app->($routing_scope, $receive, $wire_send);
         return;
     };
-}
-
-sub _has_head_boundary {
-    my ($class, $scope) = @_;
-    my $candidate = $scope->{$HEAD_BOUNDARY_SCOPE_KEY};
-    return ref($candidate)
-        && refaddr($candidate) == refaddr($HEAD_BOUNDARY_MARKER);
 }
 
 sub _compile_dispatcher {
@@ -265,33 +248,6 @@ sub _compile_protocol_leaf {
         $route->middleware,
         $app,
     );
-}
-
-sub _head_wire_send {
-    my ($class, $send) = @_;
-    my $terminal_sent = 0;
-
-    return sub {
-        my ($event) = @_;
-        my $type = $event->{type} // '';
-
-        return Future->done
-            if $type eq 'http.response.trailers';
-
-        if ($type eq 'http.response.body') {
-            return Future->done
-                if $terminal_sent || $event->{more};
-
-            $terminal_sent = 1;
-            return $send->({
-                type => 'http.response.body',
-                body => '',
-                more => 0,
-            });
-        }
-
-        return $send->($event);
-    };
 }
 
 sub _compile_http_leaf {
