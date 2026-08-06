@@ -152,4 +152,38 @@ subtest 'Blogs owns local links, handler 404, catchall, and 405' => sub {
     });
 };
 
+subtest 'Person owns local routes and mounts Blogs as an application' => sub {
+    my $app = _app_with_data([
+        mount('/person' => 'MyApp::Person'),
+    ]);
+
+    PAGI::Test::Client->run($app, sub {
+        my ($client) = @_;
+
+        my $list = $client->get('/person');
+        is($list->status, 200, 'person collection responds');
+        like($list->text, qr{<h1>People</h1>},
+            'person collection renders its page');
+        like($list->text, qr{href="/person/1"},
+            'local path_for generates the mounted person detail path');
+
+        my $detail = $client->get('/person/1');
+        is($detail->status, 200, 'person detail responds');
+        like($detail->text, qr{<h1>Ada Lovelace</h1>},
+            'person detail renders fixture content');
+        like($detail->text, qr{href="/person/1/blog"},
+            'cross-component Blogs link uses the application URL contract');
+
+        my $missing = $client->get('/person/999');
+        is($missing->status, 404, 'unknown numeric person is a handler 404');
+        like($missing->text, qr{<h1>Person not found</h1>},
+            'unknown numeric person uses the Person handler response');
+
+        my $blogs = $client->get('/person/1/blog');
+        is($blogs->status, 200, 'opaque Blogs child is reachable');
+        like($blogs->text, qr{<h1>Blogs by Ada Lovelace</h1>},
+            'Blogs receives the inherited person path parameter');
+    });
+};
+
 done_testing;
