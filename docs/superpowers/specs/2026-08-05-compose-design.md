@@ -356,8 +356,8 @@ scope according to the PAGI middleware specification. In particular:
 
 At the outer application boundary, compose records whether the original
 server-provided lifespan scope contains a valid state hashref and, when it
-does, records that reference's identity under an unforgeable private marker on
-a shallow scope clone. The inner lifespan driver validates that provenance
+does, records that reference's identity under an opaque private marker on a
+shallow scope clone. The inner lifespan driver validates that provenance
 after middleware has run. Ordinary shallow-cloning middleware preserves both
 the private marker and the state reference.
 
