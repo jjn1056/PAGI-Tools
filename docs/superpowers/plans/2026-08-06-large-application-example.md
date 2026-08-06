@@ -4,7 +4,7 @@
 
 **Goal:** Build a runnable, server-rendered modular application example whose Root, Person, and Blogs packages are opaque PAGI components, and document the concrete composition gaps exposed by using only today's PAGI::Tools APIs.
 
-**Architecture:** `MyApp::Root->to_app` is the only entry point and the only Compose boundary. Root initializes a read-only fixture repository through lifespan state, mounts Person by class name, and owns static files plus a final explicit catchall; Person and Blogs each compile their own declarative router. Local named links use Context `path_for`, while a small application-owned URL module supplies cross-component links until opaque mounts can participate in reverse routing.
+**Architecture:** `MyApp::Root->to_app` is the only entry point and the only Compose boundary. Root initializes a read-only fixture repository through lifespan state, mounts Person by class name, and owns static files plus a final explicit catchall; Person and Blogs each compile their own declarative router. Local named links use Context `path_for`, a small application-owned URL module supplies cross-component links, and one application-owned View helper renders the shared HTML document shell.
 
 **Tech Stack:** Perl 5.18-compatible source, PAGI::Compose, PAGI::Routing, PAGI::App::File, PAGI::Context::HTTP response helpers, PAGI::Test::Client, Future/Future::AsyncAwait as existing transitive runtime facilities, Test2::V0, POD/Markdown documentation, and Dist::Zilla; no new dependency.
 
@@ -19,7 +19,7 @@
 - Use same-router `$c->path_for` for Person-list-to-Person-detail and Blogs-list-to-Blog-detail links. Use `MyApp::URL` only when a link crosses an opaque component boundary.
 - Keep emitted 404 responses final. The example records today's child generated 404 for a routing NONE but does not simulate bubbling by buffering, response inspection, middleware, or status-code reinterpretation.
 - Use the callback form of `PAGI::Test::Client->run` for integration and lifespan verification. Do not add a custom protocol harness or start a live server in tests.
-- Keep HTML fixture-driven and do not echo wildcard input. Add no template engine or application base class.
+- Keep HTML fixture-driven and do not echo wildcard input. Use only `MyApp::View->document($title, $body)` for the shared document shell; add no template engine or application base class.
 - Use test-driven development for executable behavior: add a focused red assertion, confirm the expected failure, add the smallest implementation, then run the focused test green.
 - Stage only files named by the current task. Never use `git add -A`, and never stage `.cpan-testers-fix-report.md`, `.csrf-helper-brief.md`, or `.csrf-helper-report.md`; they are unrelated user files.
 - After every task commit, complete the execution workflow's review gate and update the task ledger with actual commit SHAs, exact commands, real test counts, and review evidence. Never record estimated counts.
@@ -31,6 +31,7 @@
 | `examples/15-large-application/app.pl` | Minimal loader ending in `MyApp::Root->to_app` |
 | `examples/15-large-application/lib/MyApp/Data.pm` | Read-only people/blog fixture repository |
 | `examples/15-large-application/lib/MyApp/URL.pm` | Cross-component path workaround with ID validation |
+| `examples/15-large-application/lib/MyApp/View.pm` | Shared application-local HTML document shell |
 | `examples/15-large-application/lib/MyApp/Person/Blogs.pm` | Opaque Blogs router component and local HTML outcomes |
 | `examples/15-large-application/lib/MyApp/Person.pm` | Opaque Person router component and Blogs mount |
 | `examples/15-large-application/lib/MyApp/Root.pm` | Compose root, lifespan, home, mounts, and root catchall |
@@ -100,17 +101,19 @@ diagnosing whether the failure is pre-existing.
 
 ---
 
-### Task 1: Add the Fixture Repository and Cross-Component URL Workaround
+### Task 1: Add the Data, URL, and View Support Modules
 
 **Files:**
 - Create: `examples/15-large-application/lib/MyApp/Data.pm`
 - Create: `examples/15-large-application/lib/MyApp/URL.pm`
+- Create: `examples/15-large-application/lib/MyApp/View.pm`
 - Create: `t/integration-large-application.t`
 
 **Interfaces:**
 - Produces `MyApp::Data->new`.
 - Produces `people() -> arrayref`, `person($person_id) -> hashref|undef`, `blogs_for($person_id) -> arrayref|undef`, and `blog($person_id, $blog_id) -> hashref|undef`.
 - Produces class methods `MyApp::URL->people`, `->person($person_id)`, `->blogs($person_id)`, and `->blog($person_id, $blog_id)`.
+- Produces `MyApp::View->document($title, $body) -> HTML string`, the only shared document-shell renderer.
 - All returned fixture structures are defensive copies; URL identifiers accept only defined non-reference decimal strings.
 
 - [ ] **Step 1: Write failing support-module tests**
@@ -126,6 +129,7 @@ use lib "$Bin/../examples/15-large-application/lib";
 
 use MyApp::Data;
 use MyApp::URL;
+use MyApp::View;
 
 subtest 'fixture repository exposes defensive people and blog records' => sub {
     my $data = MyApp::Data->new;
@@ -200,6 +204,14 @@ subtest 'application URL helpers own cross-component paths' => sub {
     );
 };
 
+subtest 'application View owns the shared HTML document shell' => sub {
+    my $html = MyApp::View->document('Fixture title', '    <h1>Body</h1>');
+    like($html, qr{<!doctype html>}, 'document declares HTML');
+    like($html, qr{<title>Fixture title</title>}, 'document uses its title');
+    like($html, qr{href="/static/app.css"}, 'document links shared CSS');
+    like($html, qr{    <h1>Body</h1>}, 'document includes owned body markup');
+};
+
 done_testing;
 ```
 
@@ -209,8 +221,8 @@ done_testing;
 /bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lv t/integration-large-application.t'
 ```
 
-Expected: FAIL during compilation because `MyApp/Data.pm` and
-`MyApp/URL.pm` do not exist.
+Expected: FAIL during compilation because the three support modules do not
+exist.
 
 - [ ] **Step 3: Implement the read-only fixture repository**
 
@@ -361,7 +373,40 @@ sub blog {
 1;
 ```
 
-- [ ] **Step 5: Run the support tests green**
+- [ ] **Step 5: Implement the shared document shell**
+
+Create `examples/15-large-application/lib/MyApp/View.pm`:
+
+```perl
+package MyApp::View;
+
+use strict;
+use warnings;
+
+sub document {
+    my ($class, $title, $body) = @_;
+    return <<"HTML";
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>$title</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <main class="page">
+$body
+  </main>
+</body>
+</html>
+HTML
+}
+
+1;
+```
+
+- [ ] **Step 6: Run the support tests green**
 
 ```bash
 /bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lv t/integration-large-application.t'
@@ -369,13 +414,13 @@ sub blog {
 
 Expected: PASS.
 
-- [ ] **Step 6: Inspect and commit Task 1**
+- [ ] **Step 7: Inspect and commit Task 1**
 
 ```bash
 git diff --check
-git diff -- examples/15-large-application/lib/MyApp/Data.pm examples/15-large-application/lib/MyApp/URL.pm t/integration-large-application.t
-git add examples/15-large-application/lib/MyApp/Data.pm examples/15-large-application/lib/MyApp/URL.pm t/integration-large-application.t
-git commit -m "examples: add modular application data and URLs"
+git diff -- examples/15-large-application/lib/MyApp/Data.pm examples/15-large-application/lib/MyApp/URL.pm examples/15-large-application/lib/MyApp/View.pm t/integration-large-application.t
+git add examples/15-large-application/lib/MyApp/Data.pm examples/15-large-application/lib/MyApp/URL.pm examples/15-large-application/lib/MyApp/View.pm t/integration-large-application.t
+git commit -m "examples: add modular application support modules"
 ```
 
 Update Task 1's ledger row with the commit SHA, focused command/count, and
@@ -496,26 +541,7 @@ use strict;
 use warnings;
 use PAGI::Routing qw(router route);
 use MyApp::URL ();
-
-sub _document {
-    my ($title, $body) = @_;
-    return <<"HTML";
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>$title</title>
-  <link rel="stylesheet" href="/static/app.css">
-</head>
-<body>
-  <main class="page">
-$body
-  </main>
-</body>
-</html>
-HTML
-}
+use MyApp::View ();
 
 sub list_blogs {
     my ($c) = @_;
@@ -525,7 +551,7 @@ sub list_blogs {
 
     unless ($person) {
         return $c->html(
-            _document(
+            MyApp::View->document(
                 'Blogs not found',
                 '    <h1>Blogs not found</h1>'
                     . "\n    <p>The requested person does not exist.</p>",
@@ -546,7 +572,7 @@ sub list_blogs {
         : '      <li>No posts yet.</li>';
     my $person_path = MyApp::URL->person($person_id);
 
-    return $c->html(_document(
+    return $c->html(MyApp::View->document(
         "Blogs by $person->{name}",
         <<"BODY",
     <nav><a href="/">Home</a> / <a href="$person_path">$person->{name}</a></nav>
@@ -568,7 +594,7 @@ sub show_blog {
     unless ($blog) {
         my $blogs_path = MyApp::URL->blogs($person_id);
         return $c->html(
-            _document(
+            MyApp::View->document(
                 'Blog not found',
                 qq{    <nav><a href="$blogs_path">Blogs</a></nav>}
                     . "\n    <h1>Blog not found</h1>"
@@ -580,7 +606,7 @@ sub show_blog {
 
     my $blogs_path = MyApp::URL->blogs($person_id);
     my $person_path = MyApp::URL->person($person_id);
-    return $c->html(_document(
+    return $c->html(MyApp::View->document(
         $blog->{title},
         <<"BODY",
     <nav><a href="/">Home</a> / <a href="$person_path">Person</a> / <a href="$blogs_path">Blogs</a></nav>
@@ -597,7 +623,7 @@ sub blogs_not_found {
     my $person_id = $c->path_param('person_id');
     my $blogs_path = MyApp::URL->blogs($person_id);
     return $c->html(
-        _document(
+        MyApp::View->document(
             'Blogs section not found',
             qq{    <nav><a href="$blogs_path">Blogs</a></nav>}
                 . "\n    <h1>Blogs section not found</h1>"
@@ -730,26 +756,7 @@ use strict;
 use warnings;
 use PAGI::Routing qw(router route mount);
 use MyApp::URL ();
-
-sub _document {
-    my ($title, $body) = @_;
-    return <<"HTML";
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>$title</title>
-  <link rel="stylesheet" href="/static/app.css">
-</head>
-<body>
-  <main class="page">
-$body
-  </main>
-</body>
-</html>
-HTML
-}
+use MyApp::View ();
 
 sub list_people {
     my ($c) = @_;
@@ -763,7 +770,7 @@ sub list_people {
     }
 
     my $items = join("\n", @items);
-    return $c->html(_document(
+    return $c->html(MyApp::View->document(
         'People',
         <<"BODY",
     <nav><a href="/">Home</a></nav>
@@ -783,7 +790,7 @@ sub show_person {
     unless ($person) {
         my $people_path = MyApp::URL->people;
         return $c->html(
-            _document(
+            MyApp::View->document(
                 'Person not found',
                 qq{    <nav><a href="$people_path">People</a></nav>}
                     . "\n    <h1>Person not found</h1>"
@@ -795,7 +802,7 @@ sub show_person {
 
     my $people_path = MyApp::URL->people;
     my $blogs_path = MyApp::URL->blogs($person_id);
-    return $c->html(_document(
+    return $c->html(MyApp::View->document(
         $person->{name},
         <<"BODY",
     <nav><a href="/">Home</a> / <a href="$people_path">People</a></nav>
@@ -1015,6 +1022,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Routing qw(route mount);
 use MyApp::Data;
 use MyApp::URL ();
+use MyApp::View ();
 
 my $STATIC_ROOT = File::Spec->catdir(
     dirname(__FILE__),
@@ -1022,26 +1030,6 @@ my $STATIC_ROOT = File::Spec->catdir(
     '..',
     'static',
 );
-
-sub _document {
-    my ($title, $body) = @_;
-    return <<"HTML";
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>$title</title>
-  <link rel="stylesheet" href="/static/app.css">
-</head>
-<body>
-  <main class="page">
-$body
-  </main>
-</body>
-</html>
-HTML
-}
 
 sub startup {
     my ($state, $scope) = @_;
@@ -1059,7 +1047,7 @@ sub home {
     my ($c) = @_;
     my $count = scalar @{$c->state->{data}->people};
     my $people_path = MyApp::URL->people;
-    return $c->html(_document(
+    return $c->html(MyApp::View->document(
         'My PAGI People',
         <<"BODY",
     <h1>My PAGI People</h1>
@@ -1072,7 +1060,7 @@ BODY
 sub not_found {
     my ($c) = @_;
     return $c->html(
-        _document(
+        MyApp::View->document(
             'Root page not found',
             '    <h1>Root page not found</h1>'
                 . "\n    <p>No application route matched this path.</p>",
@@ -1266,6 +1254,10 @@ route array through `router` and then `to_app`. The repetition is visible, but t
 small components do not justify a base class, role, or new core constructor.
 This remains an observation rather than a proposed PAGI::Tools feature.
 
+The application-local `MyApp::View` helper already removes unrelated HTML
+document-shell duplication, so this observation is specifically about
+component construction.
+
 If larger applications reveal repeated lifecycle, middleware, configuration,
 or inspection contracts in addition to this small wrapper, a higher-order
 framework built on PAGI::Tools may be the right place to address them.
@@ -1319,6 +1311,7 @@ lib/MyApp/
 ├── Data.pm
 ├── Root.pm
 ├── URL.pm
+├── View.pm
 ├── Person.pm
 └── Person/
     └── Blogs.pm
@@ -1333,6 +1326,8 @@ lib/MyApp/
 - `MyApp::Data` is created during startup and shared through
   `$c->state->{data}`.
 - `MyApp::URL` centralizes links that cross opaque component boundaries.
+- `MyApp::View` renders the shared HTML document shell without introducing a
+  template engine.
 
 ## Routes
 
@@ -1406,6 +1401,10 @@ Do not change the requirements or symlink note around that list.
 
 ```bash
 /bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && perl -Ilib -Iexamples/15-large-application/lib -c examples/15-large-application/lib/MyApp/URL.pm'
+```
+
+```bash
+/bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && perl -Ilib -Iexamples/15-large-application/lib -c examples/15-large-application/lib/MyApp/View.pm'
 ```
 
 ```bash

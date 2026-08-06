@@ -81,6 +81,7 @@ examples/15-large-application/
         ├── Data.pm
         ├── Root.pm
         ├── URL.pm
+        ├── View.pm
         ├── Person.pm
         └── Person/
             └── Blogs.pm
@@ -225,6 +226,20 @@ rather than being interpolated into paths. This module intentionally duplicates
 the application's mount structure; `GAPS.md` identifies that duplication as
 evidence for cross-component reverse routing.
 
+### 5.7 `MyApp::View`
+
+View is a small application-owned rendering helper:
+
+```perl
+MyApp::View->document($title, $body);
+```
+
+It owns only the shared HTML document shell, including metadata and the
+stylesheet link. Root, Person, and Blogs continue to own their page-specific
+body markup. View does not parse templates, escape arbitrary input, or add a
+PAGI::Tools abstraction; fixture text and body markup remain controlled by this
+example.
+
 ## 6. URL tree
 
 ```text
@@ -263,10 +278,11 @@ request handlers depend on the Root-provided `state->{data}` service contract.
 
 ## 8. HTML and link generation
 
-Pages are deliberately small server-rendered HTML documents with a shared
-stylesheet. No external template dependency is introduced. Fixture values are
-application-controlled; handlers do not echo unmatched wildcard input into
-HTML.
+Pages are deliberately small server-rendered HTML documents created through
+`MyApp::View->document` and a shared stylesheet. The helper prevents three
+verbatim copies of the document shell without introducing an external template
+dependency. Fixture values are application-controlled; handlers do not echo
+unmatched wildcard input into HTML.
 
 Links demonstrate both the working local mechanism and the current gap:
 
@@ -353,7 +369,8 @@ The repeated imports, route construction, and `router(...)->to_app` wrapper in
 Person and Blogs are recorded as an observation. It is promoted to a proposed
 framework gap only after the completed example demonstrates enough weight to
 justify a helper. This work package introduces no base class or constructor
-shortcut.
+shortcut. The application-local View helper removes unrelated HTML document
+shell duplication from that evaluation.
 
 The planned server `--lib`/`--module`/`-e` loader is listed as deferred external
 work, not as a PAGI::Tools composition gap.
