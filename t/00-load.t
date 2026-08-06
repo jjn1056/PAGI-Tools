@@ -5,6 +5,7 @@ use Test2::V0;
 # Public entry points that must always load
 my @core_modules = qw(
     PAGI::Tools
+    PAGI::Compose
     PAGI::Authority
     PAGI::Routing
     PAGI::Routing::Router
