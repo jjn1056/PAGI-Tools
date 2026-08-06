@@ -70,6 +70,31 @@ sub _wrap {
     return $wrapped;
 }
 
+sub _normalize_descriptors {
+    my ($class, $entries, $error_prefix) = @_;
+    $error_prefix = 'middleware' unless defined $error_prefix;
+
+    croak "$error_prefix must be an arrayref"
+        unless ref($entries) eq 'ARRAY';
+
+    my @normalized;
+    for my $entry (@$entries) {
+        if (ref($entry) eq 'CODE') {
+            push @normalized, PAGI::Routing::Middleware->new($entry);
+            next;
+        }
+        if (blessed($entry)
+                && $entry->isa('PAGI::Routing::Middleware')) {
+            push @normalized, $entry;
+            next;
+        }
+        croak "$error_prefix must contain PAGI::Routing::Middleware "
+            . 'descriptions or coderef factories';
+    }
+
+    return \@normalized;
+}
+
 sub _wrap_descriptors {
     my ($class, $descriptors, $inner_app) = @_;
 
