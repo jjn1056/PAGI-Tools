@@ -281,8 +281,9 @@ I/O. It:
    scope types to the target.
 3. Wraps that dispatcher in the declared application middleware, in list
    order.
-4. Returns a final native PAGI coderef that establishes the shared HEAD wire
-   boundary before invoking the middleware stack.
+4. Returns a final native PAGI coderef that records server-provided lifespan
+   state provenance and establishes the shared HEAD wire boundary before
+   invoking the middleware stack.
 
 Any target-coercion, class-loading, middleware-factory, or middleware-wrap
 failure aborts `to_app` synchronously. The returned application does not retry
@@ -353,10 +354,20 @@ scope according to the PAGI middleware specification. In particular:
 - Middleware exceptions are not reclassified as callback failures by
   `compose`; they follow ordinary PAGI middleware exception behavior.
 
-The lifespan state-support check occurs in the inner compose driver after all
-outer middleware scope transformations. Middleware can therefore supply a
-valid `state` hashref. Performing the check before the middleware stack would
-incorrectly reject that supported composition.
+At the outer application boundary, compose records whether the original
+server-provided lifespan scope contains a valid state hashref and, when it
+does, records that reference's identity under an unforgeable private marker on
+a shallow scope clone. The inner lifespan driver validates that provenance
+after middleware has run. Ordinary shallow-cloning middleware preserves both
+the private marker and the state reference.
+
+Middleware may mutate the server-provided state hash, but it may not fabricate
+state when the server omitted it or replace the state reference. Adding or
+replacing the key would create a disconnected hash the server will not
+shallow-copy into requests. Dropping the private marker is likewise invalid;
+middleware must preserve unknown scope keys when cloning. A middleware that
+fully owns lifespan without calling inward remains responsible for its own
+state behavior and never reaches this validation.
 
 ## 11. Lifespan callback contract
 
@@ -391,8 +402,14 @@ does not inject or copy state into request scopes.
 
 When a `lifespan` option is configured, the high-level compose contract
 requires state support. On `lifespan.startup`, after application middleware,
-the driver verifies that `scope->{state}` is an unblessed hashref. If it is
-missing or invalid, the driver does not call either configured callback. It
+the driver verifies all of the following:
+
+- the original server scope supplied an unblessed state hashref;
+- the private provenance marker survived middleware scope cloning; and
+- the current `scope->{state}` is the identical hashref supplied by the
+  server.
+
+If any check fails, the driver does not call either configured callback. It
 sends:
 
 ```perl
@@ -591,7 +608,9 @@ Tests must cover at least:
 - proof that the inner target never receives lifespan;
 - no-hook lifespan success without a state key;
 - configured-lifespan startup failure when state is missing or malformed;
-- proof that middleware may inject state before that validation;
+- proof that middleware cannot fabricate missing state or replace the
+  server-provided state reference;
+- proof that ordinary middleware scope cloning preserves state provenance;
 - synchronous and Future-backed startup/shutdown callbacks;
 - callback argument identity for state and middleware-adjusted scope;
 - startup and shutdown callback failure events and messages;
