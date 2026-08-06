@@ -94,10 +94,11 @@ to their original immutable leaves; C<route_named($name)> returns one such leaf
 or undef. C<path_for> renders an application-relative named path without
 request state or protocol I/O.
 
-C<middleware>, C<desc>, C<not_found>, and C<method_not_allowed> return the
-declaration values; collection accessors copy their top-level containers.
-Leaf/mount-only accessors such as C<name>, C<path>, C<target>, C<methods>, and
-C<constraints> return undef.
+C<middleware> returns a fresh arrayref of normalized
+C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
+identity. C<desc>, C<not_found>, and C<method_not_allowed> return declaration
+values. Leaf/mount-only accessors such as C<name>, C<path>, C<target>,
+C<methods>, and C<constraints> return undef.
 
 =head1 METHODS
 

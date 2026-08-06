@@ -186,7 +186,7 @@ have no C<&{}> overload; call C<to_app> explicitly.
 
     router(
         routes                 => \@nodes,
-        middleware             => \@descriptors,
+        middleware             => \@middleware_entries,
         not_found              => $handler,
         method_not_allowed     => $handler,
         desc                   => $text,

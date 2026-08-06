@@ -119,9 +119,11 @@ no events. Collection and hash accessors return shallow copies.
 =head1 ACCESSORS
 
 C<kind>, C<path>, C<parameters>, C<namespace>, C<desc>, C<target>, C<is_raw>,
-C<routes>, C<constraints>, and C<middleware> return declaration values. C<name>
-and C<methods> return undef for a mount. C<routes> returns a shallow copy for
-an inline mount and undef for an opaque application mount.
+C<routes>, and C<constraints> return declaration values. C<middleware> returns
+a fresh arrayref of normalized C<PAGI::Routing::Middleware> descriptions;
+explicit descriptions retain their identity. C<name> and C<methods> return
+undef for a mount. C<routes> returns a shallow copy for an inline mount and
+undef for an opaque application mount.
 
 =head1 METHODS
 

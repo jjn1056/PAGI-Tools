@@ -164,8 +164,10 @@ hash accessors return shallow copies.
 =head1 ACCESSORS
 
 C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<target>, C<is_raw>,
-C<methods>, C<constraints>, and C<middleware> return the corresponding
-declaration values. C<namespace> and C<routes> return undef for a leaf route.
+C<methods>, and C<constraints> return the corresponding declaration values.
+C<middleware> returns a fresh arrayref of normalized
+C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
+identity. C<namespace> and C<routes> return undef for a leaf route.
 HTTP C<methods> are normalized at construction; GET includes HEAD. Constraint
 values are returned as declared and validate decoded captures only during a
 request match or reverse render.
