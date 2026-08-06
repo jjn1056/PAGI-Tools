@@ -69,6 +69,32 @@ Response values, use the additive declarative API instead:
 
     my $app = $routing->to_app;
 
+For a small deployed root, the optional composer can put declarative routes,
+application-wide middleware, and lifecycle callbacks in one immutable
+description:
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Routing qw(route middleware);
+
+    my $app = compose(
+        routes => [route('/' => \&home)],
+        middleware => [middleware('RequestId')],
+        lifespan => {
+            startup => sub {
+                my ($state, $scope) = @_;
+                $state->{ready} = 1;
+            },
+            shutdown => sub {
+                my ($state, $scope) = @_;
+                delete $state->{ready};
+            },
+        },
+    )->to_app;
+
+L<PAGI::Compose> is an optional application-root composer, not a base class or
+a replacement router. Build an explicit router and pass it through C<app> when
+router-specific configuration or inspection is needed.
+
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
 behavior. Its request-aware URLs consume normalized scope data; the shipped
@@ -107,6 +133,9 @@ processing and ergonomics
 =item * L<PAGI::Routing> - immutable declarative route trees and Context
 handlers; an alternative to, not a replacement for, L<PAGI::App::Router>
 
+=item * L<PAGI::Compose> - optional immutable application-root composition of
+one request target, application middleware, and explicit lifecycle callbacks
+
 =item * L<PAGI::Test::Client> and friends - in-process test utilities for
 PAGI applications
 
@@ -129,8 +158,8 @@ protocol specification lives in the C<PAGI> distribution.
 
 L<PAGI::Tutorial> (the protocol tutorial, in the C<PAGI> distribution),
 L<PAGI::Tools::Tutorial> (this distribution's helpers guide),
-L<PAGI::Tools::Cookbook> (this distribution's recipes), L<PAGI::Routing>,
-L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, L<PAGI::Spec>,
+L<PAGI::Tools::Cookbook> (this distribution's recipes), L<PAGI::Compose>,
+L<PAGI::Routing>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, L<PAGI::Spec>,
 L<PAGI::Server::Runner> - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
 

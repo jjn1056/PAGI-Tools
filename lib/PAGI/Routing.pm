@@ -506,8 +506,12 @@ downstream top-level additions.
 
 Unmatched SSE routes emit an SSE HTTP-decline 404. Unmatched WebSockets use the
 HTTP-denial extension when advertised and otherwise close before acceptance.
-Lifespan scopes are ignored; wrap the routing object with L<PAGI::Lifespan>.
-Unknown scope types croak.
+Routing itself ignores lifespan scopes. At the deployed application root, use
+L<PAGI::Compose> to combine the routing object, application middleware, and
+startup/shutdown callbacks. L<PAGI::Lifespan> remains the lower-level wrapper
+for native applications and its existing hook-registration behavior. Do not
+put two independent lifespan consumers around one root. Unknown scope types
+croak.
 
 Construction and compilation errors are reported early where possible.
 Request-time dispatch, constraint, raw-application, and middleware exceptions
@@ -542,7 +546,7 @@ method priority.
 =head1 SEE ALSO
 
 L<PAGI::Tools::Cookbook>, L<PAGI::Context>, L<PAGI::Authority>,
-L<PAGI::Middleware::Helpers>, L<PAGI::App::Router>,
+L<PAGI::Compose>, L<PAGI::Middleware::Helpers>, L<PAGI::App::Router>,
 L<PAGI::Endpoint::Router>
 
 =cut

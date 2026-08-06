@@ -55,3 +55,28 @@ sub _wire_send {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+PAGI::Routing::HeadBoundary - Internal shared HTTP HEAD wire boundary
+
+=head1 DESCRIPTION
+
+This internal utility is shared by declarative routing and L<PAGI::Compose>.
+It is not application API.
+
+=head2 prepare
+
+    my ($inner_scope, $wire_send) =
+        PAGI::Routing::HeadBoundary->prepare($scope, $send);
+
+For HTTP HEAD, C<prepare> returns a shallow scope clone and a send adapter that
+suppresses response bodies and trailers at the final wire boundary. For other
+scopes it returns the original arguments. An idempotent private scope marker
+prevents nested compatible compilers from installing a second boundary.
+Callers and middleware must preserve unknown scope keys; the marker's key and
+token are deliberately not public API.
+
+=cut

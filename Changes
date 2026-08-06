@@ -1,6 +1,13 @@
 # Revision history for PAGI-Tools
 
 0.002003
+  - New PAGI::Compose is an optional immutable application-root description
+    combining either declarative routes or one existing PAGI component with
+    application-wide pure event middleware and explicit startup/shutdown
+    callbacks. It owns lifespan without delegating it, requires server-provided
+    state when callbacks are configured, normalizes immediate/Future callback
+    completion, and shares routing's outermost HEAD wire boundary so all
+    middleware sees the complete representation before suppression.
   - New PAGI::Routing provides an immutable, declaration-ordered route tree as
     an alternative to PAGI::App::Router. Normal HTTP handlers receive one
     PAGI::Context and return a PAGI::Response; explicit raw routes retain native

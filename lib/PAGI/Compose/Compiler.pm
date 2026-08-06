@@ -153,3 +153,22 @@ async sub _run_lifespan {
 }
 
 1;
+
+__END__
+
+=head1 NAME
+
+PAGI::Compose::Compiler - Internal compiler for PAGI::Compose
+
+=head1 DESCRIPTION
+
+This module is the internal compilation engine used by
+L<PAGI::Compose/to_app>. It is not a public constructor; applications should
+create a L<PAGI::Compose> description and compile that description instead.
+
+Each compilation builds a target, middleware graph, dispatcher, and final HEAD
+wire boundary. All request/lifespan phase, callback, server-state proof, and
+HEAD-send state is local to one application invocation. None is retained on
+the Compose description or shared between concurrent scopes.
+
+=cut

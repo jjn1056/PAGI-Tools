@@ -111,7 +111,66 @@ C<raw>. See L<PAGI::Routing> for the complete lifecycle and
 L<PAGI::Tools::Cookbook> for mounted, raw, protocol, reverse-routing, and
 metadata recipes.
 
-=head2 2.2 PAGI::App::Router - Basic Routing
+=head2 2.2 PAGI::Compose - Application Root
+
+L<PAGI::Compose> is the optional next layer when one deployed root should own
+the route target, application-wide middleware, and startup/shutdown callbacks:
+
+  use PAGI::Compose qw(compose);
+  use PAGI::Routing qw(router route middleware);
+
+  my @nodes = (
+      route('/' => \&home),
+  );
+
+  my $app = compose(
+      routes => \@nodes,
+      middleware => [
+          middleware('RequestId'),
+      ],
+      lifespan => {
+          startup => sub {
+              my ($state, $scope) = @_;
+              $state->{db} = connect_db();
+          },
+          shutdown => sub {
+              my ($state, $scope) = @_;
+              $state->{db}->disconnect;
+          },
+      },
+  )->to_app;
+
+The server owns C<$state> and shallow-copies it into request scopes. Compose
+does not invent state, so a server without lifespan-state support receives a
+clear startup failure whenever callbacks are configured. Plain and
+Future-backed callbacks are both accepted.
+
+C<routes> is the compact form. When an existing router or application already
+owns the request policy, pass it through C<app> instead:
+
+  my $routing = router(
+      routes => \@nodes,
+      middleware => [middleware('RouterMetrics')],
+      not_found => \&not_found,
+  );
+
+  my $app = compose(
+      app => $routing,
+      middleware => [middleware('RequestId')],
+      lifespan => { startup => \&startup },
+  )->to_app;
+
+The router middleware sees only scopes and outcomes owned by that router.
+Compose middleware is application-wide: it surrounds routing, lifespan, HTTP,
+WebSocket, SSE, and extension scopes. The first listed middleware is outermost.
+Only the deployed root runs lifecycle callbacks; mounting or nesting a Compose
+description retains request dispatch but does not run that inner lifecycle.
+
+C<compose(...)> returns an immutable description. The final C<to_app> compiles
+the native three-channel PAGI coderef once. Compose is not a base class and it
+does not duplicate router fallbacks or reverse-routing methods.
+
+=head2 2.3 PAGI::App::Router - Basic Routing
 
 L<PAGI::App::Router> provides lightweight functional routing:
 
@@ -154,7 +213,7 @@ L<PAGI::App::Router> provides lightweight functional routing:
 For advanced routing patterns (nested routers, route-level middleware,
 class-based routing), see L<PAGI::Tools::Cookbook>.
 
-=head2 2.3 Choosing a Router
+=head2 2.4 Choosing a Router
 
 The three APIs are alternatives at different abstraction boundaries:
 

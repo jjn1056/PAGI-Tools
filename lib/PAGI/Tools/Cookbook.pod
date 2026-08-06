@@ -393,20 +393,45 @@ the current request value.
 
 =head2 Lifespan Around Declarative Routing
 
-Routing deliberately ignores lifespan scopes. Compose lifecycle policy around
-the immutable object; L<PAGI::Lifespan> uses C<PAGI::Utils::to_app> and compiles
-it once:
+Routing deliberately ignores lifespan scopes. Put lifecycle policy at the
+deployed application root with L<PAGI::Compose>:
+
+  use Future::AsyncAwait;
+  use PAGI::Compose qw(compose);
+
+  my $app = compose(
+      app => $routing,
+      lifespan => {
+        startup => async sub {
+          my ($state, $scope) = @_;
+          $state->{db} = await connect_db();
+        },
+      },
+  )->to_app;
+
+The server owns C<$state> and makes it visible to later request scopes. Compose
+fails startup clearly if callbacks are configured but the server does not
+provide valid state. It consumes lifespan itself, so do not put a second
+lifespan consumer around the same deployed root.
+
+For a hand-built native PAGI application, L<PAGI::Lifespan> remains the
+low-level wrapper form:
 
   use PAGI::Lifespan;
-  use Future::AsyncAwait;
 
   my $app = PAGI::Lifespan->wrap(
-      $routing,
-      startup => async sub {
-          my ($state) = @_;
-          $state->{db} = await connect_db();
-      },
+      $native_app,
+      startup => \&startup,
   );
+
+At the raw event level, L<PAGI::Utils/handle_lifespan> can drive a lifespan
+scope directly:
+
+  use PAGI::Utils qw(handle_lifespan);
+
+  return await handle_lifespan($scope, $receive, $send,
+      startup => \&startup,
+  ) if $scope->{type} eq 'lifespan';
 
 =head2 Path Parameters and Wildcards
 
@@ -875,9 +900,31 @@ you store in C<< $self->state >> is visible to every handler.
 Note: C<$self-E<gt>state> is per-worker in multi-worker mode. For shared state, use an external store (Redis, database, etc.).
 
 For B<asynchronous> startup and shutdown hooks -- running code on the
-C<lifespan.startup> and C<lifespan.shutdown> protocol events -- wrap the app
-with L<PAGI::Lifespan>, which runs C<startup>/C<shutdown> callbacks around the
-application:
+C<lifespan.startup> and C<lifespan.shutdown> protocol events -- make Compose
+the application root:
+
+  use PAGI::Compose qw(compose);
+
+  my $app = compose(
+      app => MyApp->to_app,
+      lifespan => {
+          startup  => async sub ($state, $scope) {
+              $state->{db} = DBI->connect('dbi:SQLite:dbname=app.db');
+          },
+          shutdown => async sub ($state, $scope) {
+              $state->{db}->disconnect if $state->{db};
+          },
+      },
+  )->to_app;
+
+Immediate values and Future-backed callback completion are both accepted. The
+state hash is supplied and propagated to request scopes by the server; Compose
+does not create a private substitute.
+
+=head4 Compatibility/low-level: PAGI::Lifespan
+
+L<PAGI::Lifespan> remains available when its existing hook-registration form
+is specifically required or when composing a hand-built native application:
 
   use PAGI::Lifespan;
 

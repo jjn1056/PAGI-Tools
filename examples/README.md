@@ -33,15 +33,16 @@ raw PAGI protocol details that belong alongside the server implementation.
 4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
 5. `app-01-file` - static file serving with `PAGI::App::File`
 6. `background-tasks` - running background work from within a PAGI app
-7. `declarative-routing` - immutable `PAGI::Routing` tree with package handlers, an inline mount, route middleware, custom fallbacks, and reverse URLs
-8. `endpoint-demo` - high-level HTTP endpoint with `PAGI::Endpoint::HTTP`
-9. `endpoint-router-demo` - composing routes with `PAGI::Endpoint::Router`
-10. `full-demo` - kitchen-sink demo combining multiple toolkit features
-11. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
-12. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
-13. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
-14. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
-15. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently
+7. `compose` - optional application root combining declarative routes, request-ID middleware, server-owned lifecycle state, automatic HEAD, and verified shutdown
+8. `declarative-routing` - immutable `PAGI::Routing` tree with package handlers, an inline mount, route middleware, custom fallbacks, and reverse URLs
+9. `endpoint-demo` - high-level HTTP endpoint with `PAGI::Endpoint::HTTP`
+10. `endpoint-router-demo` - composing routes with `PAGI::Endpoint::Router`
+11. `full-demo` - kitchen-sink demo combining multiple toolkit features
+12. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
+13. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
+14. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
+15. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
+16. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently
 
 **Note on `websocket-chat-v2/public`:** this directory is a symlink to
 `10-chat-showcase/public`. It works in git checkouts but is omitted from the

@@ -56,6 +56,32 @@ Response values, use the additive declarative API instead:
 
     my $app = $routing->to_app;
 
+For a small deployed root, the optional composer can put declarative routes,
+application-wide middleware, and lifecycle callbacks in one immutable
+description:
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Routing qw(route middleware);
+
+    my $app = compose(
+        routes => [route('/' => \&home)],
+        middleware => [middleware('RequestId')],
+        lifespan => {
+            startup => sub {
+                my ($state, $scope) = @_;
+                $state->{ready} = 1;
+            },
+            shutdown => sub {
+                my ($state, $scope) = @_;
+                delete $state->{ready};
+            },
+        },
+    )->to_app;
+
+[PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) is an optional application-root composer, not a base class or
+a replacement router. Build an explicit router and pass it through `app` when
+router-specific configuration or inspection is needed.
+
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
 behavior. Its request-aware URLs consume normalized scope data; the shipped
@@ -87,6 +113,8 @@ framework
 processing and ergonomics
 - [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting) - immutable declarative route trees and Context
 handlers; an alternative to, not a replacement for, [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter)
+- [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) - optional immutable application-root composition of
+one request target, application middleware, and explicit lifecycle callbacks
 - [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and friends - in-process test utilities for
 PAGI applications
 - [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils) - composition and lifespan helpers; its
@@ -106,8 +134,8 @@ protocol specification lives in the `PAGI` distribution.
 
 [PAGI::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATutorial) (the protocol tutorial, in the `PAGI` distribution),
 [PAGI::Tools::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ATutorial) (this distribution's helpers guide),
-[PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook) (this distribution's recipes), [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting),
-[PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
+[PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook) (this distribution's recipes), [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose),
+[PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
 [PAGI::Server::Runner](https://metacpan.org/pod/PAGI%3A%3AServer%3A%3ARunner) - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
 
