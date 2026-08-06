@@ -34,6 +34,11 @@ use PAGI::Routing qw(:ALL);
     sub to_app { $_[0]->{app} }
 }
 
+{
+    package BareListConfiguredObject;
+    sub wrap { return $_[1] }
+}
+
 subtest 'exports are opt-in and tag-specific' => sub {
     for my $name (qw(router route websocket sse mount middleware)) {
         ok(!NoImports->can($name), "no default $name export");
@@ -235,6 +240,46 @@ subtest 'descriptions have no coderef overload and defer compilation' => sub {
     }
 };
 
+subtest 'every routing middleware position normalizes bare factories' => sub {
+    my $handler = sub { };
+    my $factory = sub { return $_[0] };
+    my $explicit = middleware('Configured', enabled => 1);
+    my $input = [$factory, $explicit, $factory];
+
+    my @nodes = (
+        route('/http' => $handler, middleware => $input),
+        websocket('/socket' => $handler, middleware => [$factory]),
+        sse('/events' => $handler, middleware => [$factory]),
+        mount('/opaque' => sub { }, middleware => [$factory]),
+        mount('/inline', routes => [], middleware => [$factory]),
+        router(routes => [], middleware => [$factory]),
+    );
+
+    for my $node (@nodes) {
+        isa_ok($node->middleware->[0], 'PAGI::Routing::Middleware');
+        is(refaddr($node->middleware->[0]->factory), refaddr($factory),
+            ref($node) . ' retains bare factory identity');
+    }
+
+    my $route_middleware = $nodes[0]->middleware;
+    is(refaddr($route_middleware->[1]), refaddr($explicit),
+        'mixed explicit description is preserved by identity');
+    isnt(refaddr($route_middleware->[0]), refaddr($route_middleware->[2]),
+        'repeated bare route entries receive distinct descriptions');
+    is(
+        [map {
+            ref($_->factory) eq 'CODE' ? 'bare' : $_->factory
+        } @$route_middleware],
+        ['bare', 'Configured', 'bare'],
+        'mixed list preserves declaration order',
+    );
+
+    push @$input, middleware('InputMutation');
+    is(scalar @{$nodes[0]->middleware}, 3, 'constructor copied mixed input');
+    push @{$nodes[0]->middleware}, middleware('AccessorMutation');
+    is(scalar @{$nodes[0]->middleware}, 3, 'accessor returns a fresh array');
+};
+
 subtest 'constructors reject invalid declarations' => sub {
     my $handler = sub { };
     my $child_router = router(routes => []);
@@ -264,7 +309,14 @@ subtest 'constructors reject invalid declarations' => sub {
         'router route lists reject a nested Router rather than accepting an inert node';
     like dies { router(not_found => 'not a handler') }, qr/not_found must be a coderef/, 'router fallback handlers must be coderefs';
     like dies { route '/bad-middleware' => $handler, middleware => 'nope' }, qr/middleware must be an arrayref/, 'middleware must be an arrayref';
-    like dies { route '/bare-middleware' => $handler, middleware => [$handler] }, qr/middleware must contain PAGI::Routing::Middleware descriptors/, 'middleware entries must be descriptors';
+    my $configured = bless {}, 'BareListConfiguredObject';
+    for my $invalid ('GZip', [], {}, $configured) {
+        like dies {
+            route '/invalid-middleware' => $handler,
+                middleware => [$invalid]
+        }, qr/descriptions or coderef factories/,
+            'direct middleware entries stay intentionally narrow';
+    }
     like dies { middleware([]) }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an unblessed arrayref';
     like dies { middleware({}) }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an unblessed hashref';
     like dies { middleware('') }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an empty class name';

@@ -3,7 +3,7 @@ package PAGI::Routing::Route;
 use strict;
 use warnings;
 use Carp qw(croak);
-use Scalar::Util qw(blessed);
+use PAGI::Routing::Middleware ();
 use PAGI::Routing::Pattern ();
 
 sub new {
@@ -39,7 +39,10 @@ sub new {
     _validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     _validate_text('name', $opts{name}, 1) if exists $opts{name};
     _validate_constraints($opts{constraints}) if $kind eq 'route' && exists $opts{constraints};
-    _validate_middleware($opts{middleware}) if exists $opts{middleware};
+    my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+        exists $opts{middleware} ? $opts{middleware} : [],
+        'middleware',
+    );
 
     if ($kind ne 'route' && exists $opts{methods}) {
         my %kind_name = (websocket => 'WebSocket', sse => 'SSE');
@@ -65,7 +68,7 @@ sub new {
         desc        => $opts{desc},
         methods     => $methods,
         _has_constraints => $has_constraints,
-        middleware  => exists $opts{middleware} ? [ @{$opts{middleware}} ] : [],
+        middleware  => $middleware,
     }, $class;
 }
 
@@ -79,16 +82,6 @@ sub _validate_constraints {
     my ($constraints) = @_;
     croak 'constraints must be a hashref'
         unless ref($constraints) eq 'HASH';
-}
-
-sub _validate_middleware {
-    my ($middleware) = @_;
-    croak 'middleware must be an arrayref'
-        unless ref($middleware) eq 'ARRAY';
-    for my $entry (@$middleware) {
-        croak 'middleware must contain PAGI::Routing::Middleware descriptors'
-            unless blessed($entry) && $entry->isa('PAGI::Routing::Middleware');
-    }
 }
 
 sub _normalize_methods {

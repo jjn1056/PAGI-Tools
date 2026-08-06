@@ -5,6 +5,7 @@ use warnings;
 use Carp qw(croak);
 use PAGI::Routing::Route ();
 use PAGI::Routing::Mount ();
+use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
 
 sub new {
@@ -19,7 +20,10 @@ sub new {
 
     my $routes = exists $opts{routes} ? $opts{routes} : [];
     PAGI::Routing::Mount::_validate_routes($routes);
-    PAGI::Routing::Route::_validate_middleware($opts{middleware}) if exists $opts{middleware};
+    my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+        exists $opts{middleware} ? $opts{middleware} : [],
+        'middleware',
+    );
     PAGI::Routing::Route::_validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     for my $name (qw(not_found method_not_allowed)) {
         croak "$name must be a coderef"
@@ -33,7 +37,7 @@ sub new {
         kind       => 'router',
         routes     => \@routes,
         _resolver  => $resolver,
-        middleware => exists $opts{middleware} ? [ @{$opts{middleware}} ] : [],
+        middleware => $middleware,
         desc       => $opts{desc},
         not_found  => $opts{not_found},
         method_not_allowed => $opts{method_not_allowed},

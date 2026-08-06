@@ -5,6 +5,7 @@ use warnings;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
 use PAGI::Routing::Route ();
+use PAGI::Routing::Middleware ();
 use PAGI::Routing::Pattern ();
 
 sub new {
@@ -31,7 +32,10 @@ sub new {
     PAGI::Routing::Route::_validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     PAGI::Routing::Route::_validate_text('namespace', $opts{namespace}, 1) if exists $opts{namespace};
     PAGI::Routing::Route::_validate_constraints($opts{constraints}) if exists $opts{constraints};
-    PAGI::Routing::Route::_validate_middleware($opts{middleware}) if exists $opts{middleware};
+    my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+        exists $opts{middleware} ? $opts{middleware} : [],
+        'middleware',
+    );
 
     if ($has_routes) {
         _validate_routes($opts{routes});
@@ -53,7 +57,7 @@ sub new {
         namespace   => $opts{namespace},
         desc        => $opts{desc},
         _has_constraints => $has_constraints,
-        middleware  => exists $opts{middleware} ? [ @{$opts{middleware}} ] : [],
+        middleware  => $middleware,
     }, $class;
 }
 
