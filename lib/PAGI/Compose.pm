@@ -113,9 +113,14 @@ PAGI::Compose - Immutable application-root composition
     use PAGI::Compose qw(compose);
     use PAGI::Routing qw(router route middleware);
 
+    my $logging = sub {
+        my ($app) = @_;
+        return $app;
+    };
+
     my $app = compose(
         routes => [route('/' => \&home)],
-        middleware => [middleware('RequestId')],
+        middleware => [$logging, middleware('RequestId', header => 'X-Request-ID')],
         lifespan => {
             startup => sub { my ($state, $scope) = @_; $state->{ready} = 1 },
             shutdown => sub { my ($state, $scope) = @_; delete $state->{ready} },
@@ -159,6 +164,7 @@ Bare coderefs have deliberately different meanings according to position:
   ------------------------------   -------------------------------   --------------------------
   route('/x' => $code)             ($context)                        Context handler
   compose(app => $code)            ($scope, $receive, $send)         native PAGI app
+  middleware => [$code]            ($inner_app), at compile time     normalized middleware factory
   middleware($code)                ($inner_app), at compile time     middleware factory
 
 =head2 routes
@@ -198,11 +204,18 @@ It never receives the lifespan scope owned by Compose.
 
 =head2 middleware
 
-    middleware => [middleware('RequestId'), middleware('ErrorHandler')]
+    my $logging = sub {
+        my ($app) = @_;
+        return $app;
+    };
 
-C<middleware> is optional and defaults to an empty arrayref. Every entry must
-be a L<PAGI::Routing::Middleware> descriptor returned by C<middleware(...)>;
-the list is shallow-copied. This is application middleware, not router
+    middleware => [$logging, middleware('RequestId', header => 'X-Request-ID')]
+
+C<middleware> is optional and defaults to an empty arrayref. Each entry is
+either a bare factory coderef such as C<$logging>, or a
+L<PAGI::Routing::Middleware> description returned by C<middleware(...)> such
+as C<middleware('RequestId', header =E<gt> 'X-Request-ID')>. The list is
+shallow-copied and bare factories are normalized at construction. This is application middleware, not router
 middleware. It surrounds generated routing outcomes and sees HTTP, WebSocket,
 SSE, lifespan, and application-defined extension scopes. Protocol-specific
 middleware must pass unrelated scope types through.
@@ -225,7 +238,9 @@ callback is an error. The hash is shallow-copied.
 
 C<routes> returns a shallow arrayref copy in routes mode and C<undef> in app
 mode. C<app> returns the original component by identity in app mode and
-C<undef> in routes mode. C<middleware> returns a shallow arrayref copy.
+C<undef> in routes mode. C<middleware> returns a shallow arrayref copy whose
+entries are homogeneous L<PAGI::Routing::Middleware> descriptions: bare
+factories were normalized and explicit descriptions retain their identity.
 C<lifespan> returns a shallow hashref copy or C<undef>.
 
 The source object stores configuration only. It never stores compiled

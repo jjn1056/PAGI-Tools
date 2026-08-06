@@ -106,8 +106,11 @@ Response exactly once.
 GET includes HEAD automatically. Paths are exact, with no slash redirect or
 automatic OPTIONS. Inline mounts are structural; positional mounts are opaque
 applications that own a prefix. Pure route/mount/router middleware is described
-with C<middleware(...)>. Native three-channel endpoints remain explicit with
-C<raw>. See L<PAGI::Routing> for the complete lifecycle and
+by a bare factory in its C<middleware> list, such as
+C<< middleware =E<gt> [$factory] >>; constructors normalize it to an inspectable
+description. C<middleware(...)> remains the explicit form for configured
+classes, configured objects, reuse, or inspection before attachment. Native
+three-channel endpoints remain explicit with C<raw>. See L<PAGI::Routing> for the complete lifecycle and
 L<PAGI::Tools::Cookbook> for mounted, raw, protocol, reverse-routing, and
 metadata recipes.
 

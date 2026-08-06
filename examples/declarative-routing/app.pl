@@ -3,11 +3,11 @@ use warnings;
 use File::Basename qw(dirname);
 use lib dirname(__FILE__) . '/lib';
 use Future::AsyncAwait;
-use PAGI::Routing qw(:ALL);
+use PAGI::Routing qw(:routes);
 use PAGI::Middleware::Helpers qw(wrap_send);
 use MyApp::Routes::Home ();
 
-my $home_header = middleware(sub {
+my $home_header = sub {
     my ($app) = @_;
 
     return async sub {
@@ -28,7 +28,7 @@ my $home_header = middleware(sub {
 
         await $app->($scope, $receive, $wrapped_send);
     };
-});
+};
 
 my $routing = router(
     desc => 'Declarative routing example',

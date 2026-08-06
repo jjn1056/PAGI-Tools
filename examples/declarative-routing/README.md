@@ -7,7 +7,7 @@ ordinary shape without turning the example into a framework:
   qualified coderefs;
 - an inline `/api` mount with the `api` route-name namespace;
 - a numeric path constraint;
-- one pure route middleware descriptor;
+- one bare pure route middleware factory, normalized to an inspectable description;
 - custom 404 and 405 handlers;
 - named `path_for` and request-aware `url_for` generation; and
 - a final `$routing->to_app` expression, so `app.pl` evaluates to the native

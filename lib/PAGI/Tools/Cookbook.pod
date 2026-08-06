@@ -102,8 +102,7 @@ C</api/>.
 
 =head2 Declarative Middleware Placement and Helpers
 
-Middleware descriptors are pure app-to-app PAGI wrappers. The complete order
-is:
+Middleware entries are pure app-to-app PAGI wrappers. The complete order is:
 
   router middleware
     -> mount middleware
@@ -113,15 +112,15 @@ is:
 
 Scope rewriting and match metadata happen before the matching mount/route
 wrapper. Mount middleware can therefore read dynamic mount captures. The first
-descriptor in each list is outermost.
+entry in each list is outermost.
 
 Use L<PAGI::Middleware::Helpers> to keep channel ownership visible:
 
   use Future::AsyncAwait;
   use PAGI::Middleware::Helpers qw(clone_scope wrap_send wrap_receive);
-  use PAGI::Routing qw(middleware);
+  use PAGI::Routing qw(:routes :middleware);
 
-  my $descriptor = middleware(sub {
+  my $factory = sub {
       my ($app) = @_;
 
       return async sub {
@@ -151,13 +150,23 @@ Use L<PAGI::Middleware::Helpers> to keep channel ownership visible:
 
           await $app->($child, $in, $out);
       };
-  });
+  };
+
+  my $routing = router(
+      routes => [
+          route('/' => \&home, middleware => [$factory]),
+      ],
+      # Explicit configured-class description remains useful beside the bare factory.
+      middleware => [middleware('RequestId', header => 'X-Request-ID')],
+  );
 
 C<wrap_send> and C<wrap_receive> never delegate automatically. An interceptor
 may short-circuit, replace, expand, filter, or synthesize events. Return or
 await the downstream Future when completion, failure, and backpressure must
 remain attached. Factory execution happens once during C<to_app>; returned
-wrappers run per request.
+wrappers run per request. Use the bare factory for the low-boilerplate inline
+form; keep C<middleware(...)> when an explicit configured-class description is
+useful.
 
 =head2 Negotiated 404 and 405 Responses
 

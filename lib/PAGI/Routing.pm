@@ -53,10 +53,15 @@ PAGI::Routing - Immutable declarative routing with Context handlers
 
 =head1 SYNOPSIS
 
-    use PAGI::Routing qw(:ALL);
+    use PAGI::Routing qw(:routes :middleware);
 
     use Future::AsyncAwait;
     use MyApp::Routes::Home ();
+
+    my $logging = sub {
+        my ($app) = @_;
+        return $app;
+    };
 
     my $routing = router(
         routes => [
@@ -77,7 +82,10 @@ PAGI::Routing - Immutable declarative routing with Context handlers
                 namespace => 'api',
             ),
         ],
-        middleware => [middleware('PAGI::Middleware::GZip')],
+        middleware => [
+            $logging,
+            middleware('RequestId', header => 'X-Request-ID'),
+        ],
     );
 
     my $app = $routing->to_app;
@@ -133,7 +141,8 @@ inspect signatures or evaluate package-method strings.
     sse('/x' => $code)           ($c)                           inert; completion awaited
     route('/x', raw => $code)    ($scope, $receive, $send)      inert
     mount('/x' => $code)         ($scope, $receive, $send)      inert
-    middleware($code)            ($inner_app), at compile time  PAGI app coderef
+    middleware => [$code]        ($inner_app), at to_app         PAGI app coderef
+    middleware($code)            ($inner_app), at compile time  middleware description
 
 =over 4
 
@@ -151,6 +160,11 @@ C<($scope, $receive, $send)> and own protocol events.
 =item * C<< mount('/x' =E<gt> $code) >> is a native PAGI application or
 component accepted by L<PAGI::Utils/to_app>. It receives a rewritten child
 scope after its prefix matches.
+
+=item * C<< middleware =E<gt> [$code] >> accepts a bare synchronous
+compile-time factory. The enclosing middleware list calls it with
+C<($inner_app)> at C<to_app> and it must return another native app coderef
+immediately.
 
 =item * C<middleware($code)> is a synchronous compile-time factory. It
 receives the inner native app and must return another native app coderef
@@ -212,14 +226,20 @@ selector and therefore immediately follows the path.
     middleware($configured_object)
     middleware($class, %config)
 
-Creates a middleware description for use in a routing object's C<middleware>
-array. A target may be a synchronous factory coderef, an object with C<wrap>,
-or a class name plus constructor configuration. Simple class names resolve
-under C<PAGI::Middleware::>; C<^MyApp::Middleware> selects a fully qualified
-caller-owned class.
+Creates an explicit middleware description for use in a routing object's
+C<middleware> array. A target may be a synchronous factory coderef, an object
+with C<wrap>, or a class name plus constructor configuration. Simple class
+names resolve under C<PAGI::Middleware::>; C<^MyApp::Middleware> selects a
+fully qualified caller-owned class.
 
 Configuration is accepted only for class targets. Coderef factories capture
 options in their closure, and objects are already configured.
+
+A middleware list accepts two entry shapes: a bare factory coderef or an
+explicit C<middleware(...)> description. Constructors normalize bare factories
+when they build their immutable descriptions. The C<middleware> accessors on
+routers, routes, and mounts expose descriptions only, never bare factories;
+an explicit description keeps its identity.
 
 The distribution deliberately provides no C<get>, C<post>, C<delete>, or
 C<any> constructors. Common handler names would collide with C<get>/C<post>,
@@ -379,7 +399,7 @@ All middleware here is pure PAGI app-to-app event middleware. At compile time,
 a factory maps one native app to another. At request time the wrapper receives
 only C<($scope, $receive, $send)>. There is no four-argument C<$next> form.
 
-The first descriptor listed is outermost. Placement is:
+The first entry listed is outermost. Placement is:
 
     router middleware
       -> mount middleware

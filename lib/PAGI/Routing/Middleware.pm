@@ -137,13 +137,26 @@ __END__
 
 =head1 NAME
 
-PAGI::Routing::Middleware - Immutable declarative middleware description
+PAGI::Routing::Middleware - Normalized immutable declarative middleware description
 
 =head1 SYNOPSIS
 
     my $logging = PAGI::Routing::Middleware->new(
         'PAGI::Middleware::AccessLog', format => 'combined',
     );
+
+=head1 DESCRIPTION
+
+This class is the normalized immutable description stored by declarative
+routers, routes, mounts, and Compose. A middleware list may contain a bare
+factory coderef, which its enclosing constructor normalizes to this class, or
+an explicit description made with C<middleware(...)> or C<new>.
+
+C<middleware($factory)> is optional inside a list when the factory needs no
+separate identity or configuration. It remains the explicit form for a class
+and its configuration, a configured object, deliberate descriptor reuse, and
+inspection before attachment. Accessors return these normalized descriptions,
+not bare factory entries.
 
 =head1 METHODS
 
@@ -181,7 +194,7 @@ and nested short names receive that prefix, while a leading C<^> selects a
 caller-owned fully qualified class. Resolution happens once for each compiled
 wrapper, never once per request.
 
-When a descriptor list is folded, the first descriptor listed is the outermost
+When a descriptor list is folded, the first entry listed is the outermost
 wrapper. Compilation itself performs no protocol I/O. Only the app coderef
 returned by the wrapper runs at request time; that app owns whether it calls
 downstream and which receive/send events it awaits or emits.
