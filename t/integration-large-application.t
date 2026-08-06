@@ -6,6 +6,7 @@ use lib "$Bin/../examples/15-large-application/lib";
 
 use MyApp::Data;
 use MyApp::URL;
+use MyApp::Root ();
 use MyApp::View;
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(mount);
@@ -184,6 +185,111 @@ subtest 'Person owns local routes and mounts Blogs as an application' => sub {
         like($blogs->text, qr{<h1>Blogs by Ada Lovelace</h1>},
             'Blogs receives the inherited person path parameter');
     });
+};
+
+subtest 'Root composes lifespan, components, navigation, and outcomes' => sub {
+    my $direct_app = MyApp::Root->to_app;
+    is(ref($direct_app), 'CODE', 'Root class compiles to a PAGI app');
+
+    my $app_file = "$Bin/../examples/15-large-application/app.pl";
+    my $app = do $app_file;
+    my $load_error = $@ || $!;
+    ok(!$load_error, 'minimal app.pl loads cleanly') or diag($load_error);
+    is(ref($app), 'CODE', 'app.pl returns Root compiled as a PAGI app');
+
+    my $state;
+    PAGI::Test::Client->run($app, sub {
+        my ($client) = @_;
+        $state = $client->state;
+        isa_ok($state->{data}, 'MyApp::Data');
+
+        my $home = $client->get('/');
+        is($home->status, 200, 'Root home responds');
+        like($home->text, qr{<h1>My PAGI People</h1>},
+            'Root home renders its page');
+        like($home->text, qr{href="/person"},
+            'Root-to-Person link uses MyApp::URL');
+
+        my $people = $client->get('/person');
+        is($people->status, 200, 'Person collection is mounted');
+        like($people->text, qr{href="/person/1"},
+            'Person local named route produces a working link');
+
+        my $person = $client->get('/person/1');
+        is($person->status, 200, 'Person detail is reachable');
+        like($person->text, qr{href="/person/1/blog"},
+            'Person-to-Blogs cross-component link works');
+
+        my $blogs = $client->get('/person/1/blog');
+        is($blogs->status, 200, 'Blogs collection is mounted');
+        like($blogs->text, qr{href="/person/1/blog/101"},
+            'Blogs local named route produces a working link');
+
+        my $blog = $client->get('/person/1/blog/101');
+        is($blog->status, 200, 'Blog detail is reachable');
+        like($blog->text, qr{href="/person/1"},
+            'Blogs-to-Person cross-component link works');
+
+        my $person_missing = $client->get('/person/999');
+        is($person_missing->status, 404,
+            'matched missing person is a local handler 404');
+        like($person_missing->text, qr{<h1>Person not found</h1>},
+            'Person handler 404 remains untouched');
+
+        my $blog_missing = $client->get('/person/1/blog/999');
+        is($blog_missing->status, 404,
+            'matched missing blog is a local handler 404');
+        like($blog_missing->text, qr{<h1>Blog not found</h1>},
+            'Blogs handler 404 remains untouched');
+
+        my $blogs_catchall = $client->get('/person/1/blog/not/a/route');
+        is($blogs_catchall->status, 404,
+            'Blogs explicit catchall owns deeper paths');
+        like($blogs_catchall->text,
+            qr{<h1>Blogs section not found</h1>},
+            'Blogs catchall body remains local');
+
+        my $root_missing = $client->get('/outside');
+        is($root_missing->status, 404, 'Root catchall handles root miss');
+        like($root_missing->text, qr{<h1>Root page not found</h1>},
+            'Root catchall is an ordinary branded route');
+
+        my $child_none = $client->get('/person/1/unmatched');
+        is($child_none->status, 404,
+            'current opaque Person mount owns its routing NONE');
+        is($child_none->text, 'Not Found',
+            'GAP-02 evidence: generated child 404 cannot bubble to Root');
+
+        my $wrong_method = $client->post('/person/1/blog/101');
+        is($wrong_method->status, 405, 'child PARTIAL remains final');
+        is($wrong_method->header('Allow'), 'GET, HEAD',
+            'child 405 carries the normalized Allow header');
+
+        my $css = $client->get('/static/app.css');
+        is($css->status, 200, 'static stylesheet is mounted');
+        is($css->header('Content-Type'), 'text/css',
+            'file app selects the CSS media type');
+        like($css->text, qr/\.page\s*\{/,
+            'mounted stylesheet contains its recognizable page rule');
+
+        my $static_missing = $client->get('/static/missing.css');
+        is($static_missing->status, 404,
+            'missing static asset remains owned by the file app');
+        unlike($static_missing->text, qr{<h1>Root page not found</h1>},
+            'native application 404 is not reinterpreted as Root decline');
+
+        my $head = $client->head('/person/1');
+        is($head->status, 200, 'automatic HEAD reaches Person GET');
+        is($head->content, '', 'HEAD suppresses the HTML body');
+        is(
+            $head->header('Content-Length'),
+            $person->header('Content-Length'),
+            'HEAD preserves GET-equivalent Content-Length',
+        );
+    });
+
+    ok(!exists $state->{data},
+        'Root shutdown removes Data from the same server state');
 };
 
 done_testing;
