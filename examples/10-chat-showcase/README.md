@@ -32,6 +32,24 @@ perl -Ilib -Iexamples/10-chat-showcase/lib bin/pagi-server \
 
 ## Architecture
 
+The deployed application root is `PAGI::Compose`, while the mutable
+`PAGI::App::Router` remains deliberately in place for this showcase's existing
+HTTP, WebSocket, SSE, and static route declarations:
+
+```text
+PAGI::Compose
+  -> application-wide logging middleware
+    -> PAGI::App::Router
+      -> HTTP / WebSocket / SSE handlers
+```
+
+Configured startup and shutdown callbacks require server lifespan state
+support. Application middleware receives the lifespan scope and events as well
+as request protocols, so the logging middleware records both lifecycle and
+request dispatch. The bare `middleware => [\&with_logging]` factory shorthand
+is normalized into an inspectable immutable middleware description when the
+Compose root is constructed.
+
 ```
 examples/10-chat-showcase/
 ├── app.pl                    # Main PAGI application (routing + middleware)

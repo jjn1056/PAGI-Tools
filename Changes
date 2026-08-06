@@ -1,6 +1,8 @@
 # Revision history for PAGI-Tools
 
 0.002003
+  - Compose now accepts the additive bare-factory shorthand across all immutable
+    declarative lists; the chat showcase uses it at its Compose application root.
   - New PAGI::Compose is an optional immutable application-root description
     combining either declarative routes or one existing PAGI component with
     application-wide pure event middleware and explicit startup/shutdown

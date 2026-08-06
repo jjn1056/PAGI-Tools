@@ -22,7 +22,7 @@ use File::Basename qw(dirname);
 use lib dirname(__FILE__) . '/lib';
 
 use PAGI::App::Router;
-use PAGI::Lifespan;
+use PAGI::Compose qw(compose);
 
 use ChatApp::State qw(get_stats);
 use ChatApp::HTTP;
@@ -78,28 +78,25 @@ $router->websocket('/ws/chat' => $ws_handler);
 $router->sse('/events'        => $sse_handler);
 $router->mount('/'            => $http_handler);
 
-# The router ignores lifespan events, so wrap it with PAGI::Lifespan to run
-# the application's startup/shutdown hooks.
-my $lifespan = PAGI::Lifespan->new(
-    startup => async sub {
-        say STDERR "[lifespan] Application starting up...";
+compose(
+    app => $router,
+    middleware => [\&with_logging],
+    lifespan => {
+        startup => async sub {
+            say STDERR "[lifespan] Application starting up...";
 
-        # Default rooms are created on module load
-        my $stats = get_stats();
-        say STDERR "[lifespan] Initialized with $stats->{rooms_count} default rooms";
+            # Default rooms are created on module load
+            my $stats = get_stats();
+            say STDERR "[lifespan] Initialized with $stats->{rooms_count} default rooms";
+        },
+        shutdown => async sub {
+            say STDERR "[lifespan] Application shutting down...";
+
+            my $stats = get_stats();
+            say STDERR "[lifespan] Final stats: $stats->{users_online} users, $stats->{messages_total} messages";
+        },
     },
-    shutdown => async sub {
-        say STDERR "[lifespan] Application shutting down...";
-
-        my $stats = get_stats();
-        say STDERR "[lifespan] Final stats: $stats->{users_online} users, $stats->{messages_total} messages";
-    },
-    app => $router->to_app,
-);
-
-my $app = with_logging($lifespan->to_app);
-
-$app;
+)->to_app;
 
 __END__
 

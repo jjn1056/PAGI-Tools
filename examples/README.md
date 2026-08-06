@@ -28,7 +28,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 ## Example List
 
 1. `09-psgi-bridge` - wraps a PSGI app for PAGI use (via `PAGI::App::WrapPSGI`)
-2. `10-chat-showcase` - WebSocket chat demo with multiple clients
+2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging and a mutable HTTP/WebSocket/SSE target router
 3. `13-contact-form` - form parsing and file uploads
 4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
 5. `app-01-file` - static file serving with `PAGI::App::File`
