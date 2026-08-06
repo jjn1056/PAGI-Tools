@@ -2,6 +2,7 @@ package MyApp::Person;
 
 use strict;
 use warnings;
+use utf8;
 use PAGI::Routing qw(router route mount);
 use MyApp::URL ();
 use MyApp::View ();

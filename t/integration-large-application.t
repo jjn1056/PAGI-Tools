@@ -167,6 +167,11 @@ subtest 'Person owns local routes and mounts Blogs as an application' => sub {
             'person collection renders its page');
         like($list->text, qr{href="/person/1"},
             'local path_for generates the mounted person detail path');
+        like(
+            $list->text,
+            qr{Ada Lovelace</a> \x{2014} Mathematician},
+            'person list decodes the em dash separator correctly',
+        );
 
         my $detail = $client->get('/person/1');
         is($detail->status, 200, 'person detail responds');
