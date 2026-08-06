@@ -7,6 +7,28 @@ use lib "$Bin/../examples/15-large-application/lib";
 use MyApp::Data;
 use MyApp::URL;
 use MyApp::View;
+use PAGI::Compose qw(compose);
+use PAGI::Routing qw(mount);
+use PAGI::Test::Client;
+
+sub _app_with_data {
+    my ($routes) = @_;
+    return compose(
+        routes => $routes,
+        lifespan => {
+            startup => sub {
+                my ($state, $scope) = @_;
+                $state->{data} = MyApp::Data->new;
+                return;
+            },
+            shutdown => sub {
+                my ($state, $scope) = @_;
+                delete $state->{data};
+                return;
+            },
+        },
+    )->to_app;
+}
 
 subtest 'fixture repository exposes defensive people and blog records' => sub {
     my $data = MyApp::Data->new;
@@ -87,6 +109,47 @@ subtest 'application View owns the shared HTML document shell' => sub {
     like($html, qr{<title>Fixture title</title>}, 'document uses its title');
     like($html, qr{href="/static/app.css"}, 'document links shared CSS');
     like($html, qr{    <h1>Body</h1>}, 'document includes owned body markup');
+};
+
+subtest 'Blogs owns local links, handler 404, catchall, and 405' => sub {
+    my $app = _app_with_data([
+        mount('/person/{person_id}/blog' => 'MyApp::Person::Blogs',
+            constraints => { person_id => qr/\d+/ },
+        ),
+    ]);
+
+    PAGI::Test::Client->run($app, sub {
+        my ($client) = @_;
+
+        my $list = $client->get('/person/1/blog');
+        is($list->status, 200, 'blog collection responds');
+        like($list->text, qr{<h1>Blogs by Ada Lovelace</h1>},
+            'blog collection identifies the inherited person');
+        like($list->text, qr{href="/person/1/blog/101"},
+            'local path_for generates the mounted blog detail path');
+
+        my $detail = $client->get('/person/1/blog/101');
+        is($detail->status, 200, 'blog detail responds');
+        like($detail->text, qr{<h1>Notes on the Analytical Engine</h1>},
+            'blog detail renders fixture content');
+        like($detail->text, qr{href="/person/1"},
+            'cross-component person link uses the application URL contract');
+
+        my $missing = $client->get('/person/1/blog/999');
+        is($missing->status, 404, 'unknown numeric blog is a handler 404');
+        like($missing->text, qr{<h1>Blog not found</h1>},
+            'unknown numeric blog uses the Blogs handler response');
+
+        my $caught = $client->get('/person/1/blog/not/a/route');
+        is($caught->status, 404, 'deeper unknown blog path is caught');
+        like($caught->text, qr{<h1>Blogs section not found</h1>},
+            'explicit Blogs catchall owns the deeper path');
+
+        my $wrong_method = $client->post('/person/1/blog/101');
+        is($wrong_method->status, 405, 'Blogs owns wrong-method outcome');
+        is($wrong_method->header('Allow'), 'GET, HEAD',
+            'Blogs 405 retains normalized Allow');
+    });
 };
 
 done_testing;
