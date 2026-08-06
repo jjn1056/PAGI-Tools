@@ -1,7 +1,7 @@
 # PAGI Compose
 
 **Date:** 2026-08-05
-**Status:** Draft — interactively approved, pending written review
+**Status:** Approved
 **Scope:** An optional Starlette-inspired top-level composition object for one
 PAGI request target, application-wide middleware, and lifespan callbacks
 
