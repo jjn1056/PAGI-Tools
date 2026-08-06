@@ -31,18 +31,19 @@ raw PAGI protocol details that belong alongside the server implementation.
 2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging and a mutable HTTP/WebSocket/SSE target router
 3. `13-contact-form` - form parsing and file uploads
 4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
-5. `app-01-file` - static file serving with `PAGI::App::File`
-6. `background-tasks` - running background work from within a PAGI app
-7. `compose` - optional application root combining declarative routes, request-ID middleware, server-owned lifecycle state, automatic HEAD, and verified shutdown
-8. `declarative-routing` - immutable `PAGI::Routing` tree with package handlers, an inline mount, route middleware, custom fallbacks, and reverse URLs
-9. `endpoint-demo` - high-level HTTP endpoint with `PAGI::Endpoint::HTTP`
-10. `endpoint-router-demo` - composing routes with `PAGI::Endpoint::Router`
-11. `full-demo` - kitchen-sink demo combining multiple toolkit features
-12. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
-13. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
-14. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
-15. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
-16. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently
+5. `15-large-application` - Compose-rooted modular HTML application with opaque Person/Blogs components, lifespan data, working links, and an evidence-backed gaps ledger
+6. `app-01-file` - static file serving with `PAGI::App::File`
+7. `background-tasks` - running background work from within a PAGI app
+8. `compose` - optional application root combining declarative routes, request-ID middleware, server-owned lifecycle state, automatic HEAD, and verified shutdown
+9. `declarative-routing` - immutable `PAGI::Routing` tree with package handlers, an inline mount, route middleware, custom fallbacks, and reverse URLs
+10. `endpoint-demo` - high-level HTTP endpoint with `PAGI::Endpoint::HTTP`
+11. `endpoint-router-demo` - composing routes with `PAGI::Endpoint::Router`
+12. `full-demo` - kitchen-sink demo combining multiple toolkit features
+13. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
+14. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
+15. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
+16. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
+17. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently
 
 **Note on `websocket-chat-v2/public`:** this directory is a symlink to
 `10-chat-showcase/public`. It works in git checkouts but is omitted from the
