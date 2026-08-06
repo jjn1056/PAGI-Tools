@@ -5,6 +5,7 @@ use warnings;
 use Carp qw(croak);
 use Exporter 'import';
 use Scalar::Util qw(blessed);
+use PAGI::Routing::Middleware ();
 use PAGI::Routing::Router ();
 
 our @EXPORT_OK = qw(compose);
@@ -38,8 +39,10 @@ sub new {
         _validate_app_shape($opts{app});
     }
 
-    my $middleware = exists $opts{middleware} ? $opts{middleware} : [];
-    _validate_middleware($middleware);
+    my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+        exists $opts{middleware} ? $opts{middleware} : [],
+        'compose middleware',
+    );
     my $lifespan = exists $opts{lifespan}
         ? _validate_lifespan($opts{lifespan})
         : undef;
@@ -47,7 +50,7 @@ sub new {
     return bless {
         routes     => $routes,
         app        => $has_app ? $opts{app} : undef,
-        middleware => [@$middleware],
+        middleware => $middleware,
         lifespan   => $lifespan,
     }, $class;
 }
@@ -58,17 +61,6 @@ sub _validate_app_shape {
     return if ref($app) eq 'CODE' || blessed($app);
     return if !ref($app) && $app =~ /\A[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/;
     croak 'compose app must be a coderef, object, or class name';
-}
-
-sub _validate_middleware {
-    my ($middleware) = @_;
-    croak 'compose middleware must be an arrayref'
-        unless ref($middleware) eq 'ARRAY';
-    for my $entry (@$middleware) {
-        croak 'compose middleware must contain PAGI::Routing::Middleware descriptors'
-            unless blessed($entry)
-                && $entry->isa('PAGI::Routing::Middleware');
-    }
 }
 
 sub _validate_lifespan {

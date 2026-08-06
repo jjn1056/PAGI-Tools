@@ -36,10 +36,11 @@ like($lowercase_error, qr/Can't continue after import errors/, 'lowercase tag is
 like($lowercase_stderr, qr/"all" is not defined/, 'diagnostic names the invalid tag');
 
 my $leaf = route('/' => sub { return $_[0]->text('home') });
-my $mw = middleware(sub { my ($app) = @_; return $app });
+my $factory = sub { my ($inner) = @_; return $inner };
+my $mw = middleware(sub { my ($inner) = @_; return $inner });
 my $startup = sub { return };
 my $routes = [$leaf];
-my $middleware = [$mw];
+my $middleware = [$factory, $mw, $factory];
 my $lifespan = { startup => $startup };
 my $composition = compose(
     routes => $routes,
@@ -50,7 +51,14 @@ my $composition = compose(
 isa_ok($composition, 'PAGI::Compose');
 is($composition->routes, [$leaf], 'routes accessor returns declared nodes');
 is($composition->app, undef, 'app is absent in routes mode');
-is($composition->middleware, [$mw], 'middleware accessor returns descriptors');
+my $stored = $composition->middleware;
+isa_ok($stored->[0], 'PAGI::Routing::Middleware');
+is(refaddr($stored->[0]->factory), refaddr($factory),
+    'bare factory identity is retained');
+is(refaddr($stored->[1]), refaddr($mw),
+    'explicit description identity is retained');
+isnt(refaddr($stored->[0]), refaddr($stored->[2]),
+    'repeated bare occurrences receive distinct descriptions');
 is(refaddr($composition->lifespan->{startup}), refaddr($startup), 'callback identity is retained');
 ok(!overload::Method($composition, '&{}'), 'composition has no coderef overload');
 
@@ -61,7 +69,8 @@ push @{$composition->routes}, $leaf;
 push @{$composition->middleware}, $mw;
 $composition->lifespan->{shutdown} = sub { return };
 is($composition->routes, [$leaf], 'routes are defensively copied');
-is($composition->middleware, [$mw], 'middleware is defensively copied');
+is(scalar @{$composition->middleware}, 3,
+    'normalized middleware input and accessor arrays are defensively copied');
 is([sort keys %{$composition->lifespan}], ['startup'], 'lifespan hash is defensively copied');
 
 my $app = sub { return };
@@ -72,6 +81,13 @@ is(refaddr($function_form->app), refaddr($app), 'functional form retains app ide
 is($object_form->routes, undef, 'routes are absent in app mode');
 is($object_form->middleware, [], 'middleware defaults empty');
 is($object_form->lifespan, undef, 'lifespan defaults absent');
+
+{
+    package ComposeConfiguredMiddleware;
+    sub wrap { return $_[1] }
+}
+
+my $bare_configured = bless {}, 'ComposeConfiguredMiddleware';
 
 my @invalid = (
     ['odd options', [routes => [], 'dangling'], qr/key\/value pairs/],
@@ -84,7 +100,18 @@ my @invalid = (
     ['routes not array', [routes => {}], qr/routes must contain PAGI::Routing nodes/],
     ['invalid route member', [routes => [{}]], qr/routes must contain PAGI::Routing nodes/],
     ['middleware not array', [routes => [], middleware => {}], qr/middleware must be an arrayref/],
-    ['invalid middleware member', [routes => [], middleware => [sub { }]], qr/PAGI::Routing::Middleware/],
+    ['invalid middleware class string',
+        [routes => [], middleware => ['RequestId']],
+        qr/descriptions or coderef factories/],
+    ['invalid middleware array',
+        [routes => [], middleware => [[]]],
+        qr/descriptions or coderef factories/],
+    ['invalid middleware hash',
+        [routes => [], middleware => [{}]],
+        qr/descriptions or coderef factories/],
+    ['invalid bare configured middleware object',
+        [routes => [], middleware => [$bare_configured]],
+        qr/descriptions or coderef factories/],
     ['lifespan not hash', [routes => [], lifespan => []], qr/lifespan must be a hashref/],
     ['empty lifespan', [routes => [], lifespan => {}], qr/startup or shutdown/],
     ['unknown lifespan key', [routes => [], lifespan => { start => sub { } }], qr/unknown lifespan option 'start'/],

@@ -10,9 +10,9 @@ use ComposeTest qw(scope run_scope);
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(route middleware);
 
-sub tracing_middleware {
+sub tracing_factory {
     my ($name, $trace) = @_;
-    return middleware(sub {
+    return sub {
         my ($inner) = @_;
         return async sub {
             my ($scope, $receive, $send) = @_;
@@ -22,12 +22,11 @@ sub tracing_middleware {
                 push @$trace, "$name send " . ($event->{type} // '');
                 return $send->($event);
             };
-            my $returned = $inner->($scope, $receive, $wrapped_send);
-            await Future->wrap($returned);
+            await Future->wrap($inner->($scope, $receive, $wrapped_send));
             push @$trace, "$name after " . ($scope->{type} // '');
             return;
         };
-    });
+    };
 }
 
 subtest 'first listed middleware is outermost for requests and lifespan' => sub {
@@ -40,8 +39,8 @@ subtest 'first listed middleware is outermost for requests and lifespan' => sub 
     my $app = compose(
         app => $target,
         middleware => [
-            tracing_middleware('outer', \@trace),
-            tracing_middleware('inner', \@trace),
+            tracing_factory('outer', \@trace),
+            middleware(tracing_factory('inner', \@trace)),
         ],
     )->to_app;
 
@@ -68,14 +67,14 @@ subtest 'first listed middleware is outermost for requests and lifespan' => sub 
 subtest 'application middleware sees every delegated protocol and generated routing outcomes' => sub {
     my @scope_types;
     my @target_types;
-    my $observer = middleware(sub {
+    my $observer = sub {
         my ($inner) = @_;
         return sub {
             my ($scope, $receive, $send) = @_;
             push @scope_types, $scope->{type};
             return $inner->($scope, $receive, $send);
         };
-    });
+    };
     my $app = compose(
         app => sub { push @target_types, $_[0]->{type}; return },
         middleware => [$observer],
@@ -86,7 +85,7 @@ subtest 'application middleware sees every delegated protocol and generated rout
     is(\@target_types, \@scope_types, 'middleware passes every type to the target');
 
     my @statuses;
-    my $outcome_observer = middleware(sub {
+    my $outcome_observer = sub {
         my ($inner) = @_;
         return sub {
             my ($scope, $receive, $send) = @_;
@@ -98,7 +97,7 @@ subtest 'application middleware sees every delegated protocol and generated rout
             };
             return $inner->($scope, $receive, $wrapped_send);
         };
-    });
+    };
     my $routing_app = compose(
         routes => [route('/present' => sub { return $_[0]->text('present') })],
         middleware => [$outcome_observer],
@@ -110,13 +109,13 @@ subtest 'application middleware sees every delegated protocol and generated rout
 subtest 'ordinary shallow cloning preserves state proof and changes visible scope' => sub {
     my $state = {};
     my @seen;
-    my $clone = middleware(sub {
+    my $clone = sub {
         my ($inner) = @_;
         return sub {
             my ($scope, $receive, $send) = @_;
             return $inner->({ %$scope, worker => 'wrapped' }, $receive, $send);
         };
-    });
+    };
     my $app = compose(
         app => sub {
             my ($scope) = @_;
@@ -236,31 +235,38 @@ subtest 'middleware exception is not converted into startup.failed' => sub {
     is(\@events, [], 'Compose emits no callback failure event');
 };
 
-subtest 'each to_app builds fresh middleware instances' => sub {
+subtest 'each to_app builds fresh bare middleware instances' => sub {
     my $factory_calls = 0;
-    my $descriptor = middleware(sub {
+    my $factory = sub {
         my ($inner) = @_;
         ++$factory_calls;
         return $inner;
-    });
-    my $composition = compose(app => sub { return }, middleware => [$descriptor]);
+    };
+    my $composition = compose(app => sub { return }, middleware => [$factory]);
     my $one = $composition->to_app;
     my $two = $composition->to_app;
     is($factory_calls, 2, 'factory runs once for each compiled graph');
 
     my $throwing = compose(
         app => sub { return },
-        middleware => [middleware(sub { die "factory exploded\n" })],
+        middleware => [sub { die "factory exploded\n" }],
     );
     like(dies { $throwing->to_app }, qr/factory exploded/,
-        'factory failure aborts to_app synchronously');
+        'bare factory failure aborts to_app synchronously');
 
     my $invalid = compose(
         app => sub { return },
-        middleware => [middleware(sub { return 'not an app' })],
+        middleware => [sub { return 'not an app' }],
     );
     like(dies { $invalid->to_app }, qr/must return PAGI app coderef/,
-        'invalid wrapper result aborts compilation');
+        'invalid bare wrapper result aborts compilation');
+
+    my $async = compose(
+        app => sub { return },
+        middleware => [sub { return Future->done(sub { }) }],
+    );
+    like(dies { $async->to_app }, qr/must return PAGI app coderef.*Future/,
+        'an accidentally async bare factory remains invalid');
 };
 
 done_testing;
