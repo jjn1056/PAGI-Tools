@@ -6,6 +6,7 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
+use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Router ();
 use PAGI::Utils ();
@@ -39,8 +40,10 @@ sub compile {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
-        my $inner_scope = $class->_prepare_lifespan_scope($scope);
-        my $returned = $app->($inner_scope, $receive, $send);
+        my $provenance_scope = $class->_prepare_lifespan_scope($scope);
+        my ($inner_scope, $wire_send)
+            = PAGI::Routing::HeadBoundary->prepare($provenance_scope, $send);
+        my $returned = $app->($inner_scope, $receive, $wire_send);
         await Future->wrap($returned);
         return;
     };
