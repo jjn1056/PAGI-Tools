@@ -142,7 +142,7 @@ inspect signatures or evaluate package-method strings.
     route('/x', raw => $code)    ($scope, $receive, $send)      inert
     mount('/x' => $code)         ($scope, $receive, $send)      inert
     middleware => [$code]        ($inner_app), at to_app         PAGI app coderef
-    middleware($code)            ($inner_app), at compile time  middleware description
+    middleware($code)            ($inner_app), at compile time  PAGI app coderef
 
 =over 4
 
