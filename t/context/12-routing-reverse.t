@@ -194,6 +194,23 @@ subtest 'Context reverse methods share operation-specific argument failures' => 
     }
 };
 
+subtest 'Context terminal navigation always denotes a namespace' => sub {
+    my $resolver = _resolver(
+        route('/show' => sub { }, name => 'show'),
+    );
+    my $context = _context('http', $resolver);
+
+    for my $operation (qw(path_for url_for)) {
+        for my $reference ('show/.', 'show/child/..') {
+            like(
+                dies { $context->$operation($reference) },
+                qr/\A\Q$operation route reference '$reference' resolves to a logical namespace, not a route\E/,
+                "$operation rejects terminal navigation landing on a leaf for $reference",
+            );
+        }
+    }
+};
+
 subtest 'all built-in Context subclasses inherit routing reverse methods' => sub {
     my $resolver = _resolver(
         route('/page' => sub { }, name => 'page'),

@@ -187,6 +187,10 @@ subtest 'Router path_for normalizes exact logical references without decoding' =
         ['bare dot-dot', '..', qr/traverses above the Router root/],
         ['normalized namespace', 'group/..', qr/resolves to a logical namespace, not a route/],
         ['namespace only', 'group', qr/resolves to a logical namespace, not a route/],
+        ['terminal dot on a leaf', 'show/.',
+            qr/\Apath_for route reference 'show\/\.' resolves to a logical namespace, not a route/],
+        ['terminal dot-dot on a leaf', 'show/child/..',
+            qr/\Apath_for route reference 'show\/child\/\.\.' resolves to a logical namespace, not a route/],
         ['unknown exact target', 'missing/show', qr/unknown route name 'missing\/show'/],
     );
 

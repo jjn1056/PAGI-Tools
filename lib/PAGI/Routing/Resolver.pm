@@ -290,12 +290,12 @@ sub url_for_scope {
 sub _render_reverse {
     my ($self, $operation, $reference, $base_segments, @reverse_args) = @_;
     my $arguments = _parse_reverse_arguments($operation, @reverse_args);
-    my ($canonical, $was_absolute) = _normalize_reference(
+    my ($canonical, $was_absolute, $ended_with_navigation) = _normalize_reference(
         $operation, $reference, $base_segments,
     );
 
     croak "$operation route reference '$reference' resolves to a logical namespace, not a route"
-        if $self->{namespaces}{$canonical};
+        if $ended_with_navigation || $self->{namespaces}{$canonical};
     my $record = $self->{by_name}{$canonical};
     croak "$operation unknown route name '$reference'" unless $record;
 
@@ -397,6 +397,8 @@ sub _normalize_reference {
     my @segments = $was_absolute ? () : @$base_segments;
     my $spelling = $was_absolute ? substr($reference, 1) : $reference;
     my @input = length($spelling) ? split(m{/}, $spelling, -1) : ();
+    my $ended_with_navigation = @input
+        && ($input[-1] eq '.' || $input[-1] eq '..') ? 1 : 0;
 
     for my $segment (@input) {
         croak "$operation route reference '$reference' contains an empty logical segment"
@@ -411,7 +413,7 @@ sub _normalize_reference {
         push @segments, $segment;
     }
 
-    return (_canonical_address(\@segments), $was_absolute);
+    return (_canonical_address(\@segments), $was_absolute, $ended_with_navigation);
 }
 
 sub _join_root_path {
