@@ -97,6 +97,9 @@ sub _visit_nodes {
                 $outer_names, $outer_constraints, $node, $effective_path,
             );
             my $logical_namespace = _logical_namespace($address_segments);
+            my @child_segments = @$address_segments;
+            push @child_segments, $node->namespace
+                if defined $node->namespace && length $node->namespace;
             $self->{metadata_by_location}{$location_key} = {
                 match => {
                     kind  => 'mount',
@@ -114,13 +117,10 @@ sub _visit_nodes {
                 source => $node,
                 constraints => { %$constraints },
                 location => [@location],
+                logical_namespace => _logical_namespace(\@child_segments),
             };
 
             next if $node->is_raw;
-
-            my @child_segments = @$address_segments;
-            push @child_segments, $node->namespace
-                if defined $node->namespace && length $node->namespace;
 
             if (defined $node->router) {
                 $self->_visit_router(
@@ -172,6 +172,7 @@ sub _visit_nodes {
             source => $node,
             constraints => { %$constraints },
             location => [@location],
+            logical_namespace => $logical_namespace,
         };
 
         next unless defined $effective_name;
@@ -212,6 +213,7 @@ sub _metadata_for_location {
         match  => { %{$record->{match}} },
         mount  => defined $record->{mount} ? { %{$record->{mount}} } : undef,
         is_raw => $record->{is_raw},
+        logical_namespace => $record->{logical_namespace},
     };
 }
 
@@ -258,11 +260,44 @@ sub path_for {
     return $rendered->{path};
 }
 
+sub reverse_for_context {
+    my ($self, $operation, $scope, $reference, $root_path,
+        $logical_namespace, $captures, @reverse_args) = @_;
+
+    croak 'Context reverse operation must be path_for or url_for'
+        unless defined $operation && !ref($operation)
+            && ($operation eq 'path_for' || $operation eq 'url_for');
+    croak "$operation requires a canonical logical namespace"
+        unless _is_canonical_namespace($logical_namespace);
+    croak "$operation requires a capture hash"
+        unless ref($captures) eq 'HASH';
+
+    my @base_segments = $logical_namespace eq '/'
+        ? ()
+        : split(m{/}, substr($logical_namespace, 1), -1);
+    my $rendered = $self->_render_reverse_from_context(
+        $operation,
+        $reference,
+        \@base_segments,
+        $captures,
+        @reverse_args,
+    );
+
+    return _join_root_path($root_path, $rendered->{path})
+        if $operation eq 'path_for';
+    return _url_for_rendered_scope($scope, $root_path, $rendered);
+}
+
 sub url_for_scope {
     my ($self, $scope, $reference, $root_path, @reverse_args) = @_;
     my $rendered = $self->_render_reverse(
         'url_for', $reference, [], @reverse_args,
     );
+    return _url_for_rendered_scope($scope, $root_path, $rendered);
+}
+
+sub _url_for_rendered_scope {
+    my ($scope, $root_path, $rendered) = @_;
     my $kind = $rendered->{record}{kind};
     my $scope_scheme = defined $scope->{scheme} ? $scope->{scheme} : 'http';
     croak 'unsupported URL scheme'
@@ -299,6 +334,43 @@ sub _render_reverse {
     my $record = $self->{by_name}{$canonical};
     croak "$operation unknown route name '$reference'" unless $record;
 
+    return $self->_render_resolved_reverse(
+        $arguments, $record, $canonical, $was_absolute,
+    );
+}
+
+sub _render_reverse_from_context {
+    my ($self, $operation, $reference, $base_segments, $captures,
+        @reverse_args) = @_;
+    my $arguments = _parse_reverse_arguments($operation, @reverse_args);
+    my ($canonical, $was_absolute, $ended_with_navigation) = _normalize_reference(
+        $operation, $reference, $base_segments,
+    );
+
+    croak "$operation route reference '$reference' resolves to a logical namespace, not a route"
+        if $ended_with_navigation || $self->{namespaces}{$canonical};
+    my $record = $self->{by_name}{$canonical};
+    croak "$operation unknown route name '$reference'" unless $record;
+
+    if (!$was_absolute) {
+        my %inherited;
+        for my $name (@{$record->{pattern}->parameters}) {
+            $inherited{$name} = $captures->{$name}
+                if exists $captures->{$name};
+        }
+        $arguments->{params} = {
+            %inherited,
+            %{$arguments->{params}},
+        };
+    }
+
+    return $self->_render_resolved_reverse(
+        $arguments, $record, $canonical, $was_absolute,
+    );
+}
+
+sub _render_resolved_reverse {
+    my ($self, $arguments, $record, $canonical, $was_absolute) = @_;
     my $path = $record->{pattern}->render($arguments->{params}, $canonical);
     my @pairs;
     for my $key (sort keys %{$arguments->{query}}) {
@@ -414,6 +486,22 @@ sub _normalize_reference {
     }
 
     return (_canonical_address(\@segments), $was_absolute, $ended_with_navigation);
+}
+
+sub _is_canonical_namespace {
+    my ($namespace) = @_;
+    return 0 unless defined $namespace && !ref($namespace);
+    return 1 if $namespace eq '/';
+    return 0 unless length($namespace) > 1
+        && substr($namespace, 0, 1) eq '/'
+        && substr($namespace, -1) ne '/';
+
+    my @segments = split(m{/}, substr($namespace, 1), -1);
+    for my $segment (@segments) {
+        return 0 unless length $segment;
+        return 0 if $segment eq '.' || $segment eq '..';
+    }
+    return 1;
 }
 
 sub _join_root_path {
@@ -538,5 +626,16 @@ search, absolute retry, prefix folding, or dotted hierarchy. C<named_routes>
 returns a defensive hashref, while C<route_named>
 preserves the original leaf identity and C<route_kind> returns the immutable
 indexed kind.
+
+C<reverse_for_context> is the Context-only request-aware entry point. It
+parses one reverse argument list, resolves one exact target from the frame's
+canonical C<logical_namespace>, and renders that resolved record once. Only
+relative spellings select target-required keys from the frame's capture
+snapshot before explicit params are overlaid. Absolute Context references and
+all public Router calls remain inheritance-free. Query and fragment values are
+never read from captures. The existing Pattern renderer remains responsible
+for missing, extra, scalar, and constraint validation. URL mode adds the
+request scheme and L<PAGI::Authority> only after target resolution; neither
+mode performs protocol I/O.
 
 =cut

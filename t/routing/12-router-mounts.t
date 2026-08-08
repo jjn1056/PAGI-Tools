@@ -326,6 +326,45 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
         'composition preserves child-local reverse routing');
 };
 
+subtest 'relative child links follow the active Router placement without mutating the child' => sub {
+    my @seen;
+    my $child = router(routes => [
+        route('/{person_id}' => sub {
+            my ($c) = @_;
+            my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
+            push @seen, {
+                path => $c->path_for('show'),
+                namespace => $frame->{logical_namespace},
+                captures => { %{$frame->{captures}} },
+            };
+            return $c->text('person');
+        }, name => 'show'),
+    ]);
+    my $outer = router(routes => [
+        mount('/authors', router => $child, namespace => 'authors'),
+        mount('/editors', router => $child, namespace => 'editors'),
+    ]);
+    my $app = $outer->to_app;
+
+    run_app($app, path => '/authors/42', raw_path => '/authors/42');
+    run_app($app, path => '/editors/42', raw_path => '/editors/42');
+
+    is(\@seen, [
+        {
+            path => '/authors/42',
+            namespace => '/authors',
+            captures => { person_id => 42 },
+        },
+        {
+            path => '/editors/42',
+            namespace => '/editors',
+            captures => { person_id => 42 },
+        },
+    ], 'one child handler resolves through the request-local active placement');
+    is($child->path_for('show', { person_id => 42 }), '/42',
+        'the reused child Router remains local and contains neither parent prefix');
+};
+
 subtest 'Router mounts share the one outer HEAD edge and root mounts consume nothing' => sub {
     my @seen_scopes;
     my $child = router(

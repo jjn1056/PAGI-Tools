@@ -60,6 +60,9 @@ sub snapshot {
         frames_id    => refaddr($container->{frames}),
         frame_id     => refaddr($frame),
         mounts_id    => refaddr($frame->{mounts}),
+        captures_id  => refaddr($frame->{captures}),
+        logical_namespace => $frame->{logical_namespace},
+        captures     => { %{$frame->{captures}} },
         mounts       => [map { +{%$_} } @{$frame->{mounts}}],
         match        => defined $frame->{match} ? {%{$frame->{match}}} : undef,
     };
@@ -141,6 +144,8 @@ subtest 'metadata is installed before middleware and records effective mounted l
     );
     is($observations[0]{mounts}, [], 'router middleware initially sees no mount selections');
     is($observations[0]{match}, undef, 'router middleware initially sees no leaf match');
+    is([$observations[0]{logical_namespace}, $observations[0]{captures}],
+        ['/', {}], 'a new API frame starts at the root with a fresh empty snapshot');
     is($observations[1]{mounts}, [
         {
             path => '/tenants/{tenant}',
@@ -148,6 +153,9 @@ subtest 'metadata is installed before middleware and records effective mounted l
             desc => 'Tenant boundary',
         },
     ], 'outer mount metadata is installed before its middleware');
+    is([$observations[1]{logical_namespace}, $observations[1]{captures}],
+        ['/tenant', { tenant => 'acme' }],
+        'the named outer mount advances namespace and snapshots its capture');
     is($observations[2]{mounts}, [
         {
             path => '/tenants/{tenant}',
@@ -160,6 +168,9 @@ subtest 'metadata is installed before middleware and records effective mounted l
             desc => undef,
         },
     ], 'nested mount descriptors preserve declaration order and undefined fields');
+    is([$observations[2]{logical_namespace}, $observations[2]{captures}],
+        ['/tenant', { tenant => 'acme' }],
+        'an unnamed inline mount retains namespace and replaces the prefix snapshot');
     is($observations[3]{match}, {
         kind => 'route',
         route => '/tenants/{tenant}/api/users/{id}',
@@ -167,6 +178,15 @@ subtest 'metadata is installed before middleware and records effective mounted l
         logical_namespace => '/tenant',
         desc => 'Show one user',
     }, 'effective leaf metadata is installed before route middleware');
+    is([$observations[3]{logical_namespace}, $observations[3]{captures}],
+        ['/tenant', { tenant => 'acme', id => 42 }],
+        'the FULL leaf replaces state with its namespace and all effective captures');
+    isnt($observations[0]{captures_id}, $observations[1]{captures_id},
+        'the first mount replaces the root capture hash');
+    isnt($observations[1]{captures_id}, $observations[2]{captures_id},
+        'the nested mount replaces the outer capture hash');
+    isnt($observations[2]{captures_id}, $observations[3]{captures_id},
+        'the FULL leaf replaces the mount capture hash');
     is($observations[4]{match}, $observations[3]{match}, 'the handler sees the same effective match');
     is($observations[-1]{match}, $observations[3]{match}, 'outer middleware sees the final match after downstream');
 
@@ -190,6 +210,8 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
     run_scope($generated_app, scope(path => '/missing', raw_path => '/missing'));
     is($generated[-1]{mounts}, [], 'a root generated 404 has no mount chain');
     is($generated[-1]{match}, undef, 'a root generated 404 has no match');
+    is([$generated[-1]{logical_namespace}, $generated[-1]{captures}],
+        ['/', {}], 'a root generated 404 retains the root namespace and empty snapshot');
 
     @generated = ();
     run_scope($generated_app, scope(
@@ -199,6 +221,8 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
     is($generated[-1]{mounts}, [{ path => '/api', namespace => undef, desc => undef }],
         'an inline child 404 retains the selected mount chain');
     is($generated[-1]{match}, undef, 'an inline child 404 has no leaf match');
+    is([$generated[-1]{logical_namespace}, $generated[-1]{captures}],
+        ['/', {}], 'an unnamed inline child 404 retains its owning prefix state');
 
     @generated = ();
     run_scope($generated_app, scope(
@@ -209,6 +233,8 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
     is($generated[-1]{mounts}, [{ path => '/api', namespace => undef, desc => undef }],
         'an inline child 405 retains the selected mount chain');
     is($generated[-1]{match}, undef, 'a partial route does not publish a leaf match');
+    is([$generated[-1]{logical_namespace}, $generated[-1]{captures}],
+        ['/', {}], 'a PARTIAL leaf does not replace generated 405 state');
 
     my $handler_calls = 0;
     my @short_circuit;
@@ -342,9 +368,11 @@ subtest 'separately compiled routers append frames without overwriting legacy me
 subtest 'supported ancestry composes while foreign routing values form fresh boundaries' => sub {
     my $ancestor_resolver = PAGI::Routing::Resolver->new(routes => []);
     my $ancestor_frame = {
-        resolver => $ancestor_resolver,
-        mounts => [{ path => '/outer', namespace => undef, desc => undef }],
-        match => { kind => 'mount', route => '/outer' },
+        resolver          => $ancestor_resolver,
+        logical_namespace => '/',
+        captures          => {},
+        mounts            => [{ path => '/outer', namespace => undef, desc => undef }],
+        match             => { kind => 'mount', route => '/outer' },
     };
     my $ancestor_frames = [$ancestor_frame];
     my $ancestor_container = { version => 1, frames => $ancestor_frames };
@@ -396,9 +424,31 @@ subtest 'supported ancestry composes while foreign routing values form fresh bou
             version => 1,
             frames => [{
                 resolver => $ancestor_resolver,
+                logical_namespace => '/',
+                captures => {},
                 mounts => [],
                 match => undef,
                 root_path => [],
+            }],
+        }],
+        ['malformed prior namespace', {
+            version => 1,
+            frames => [{
+                resolver => $ancestor_resolver,
+                logical_namespace => 'relative',
+                captures => {},
+                mounts => [],
+                match => undef,
+            }],
+        }],
+        ['malformed prior captures', {
+            version => 1,
+            frames => [{
+                resolver => $ancestor_resolver,
+                logical_namespace => '/',
+                captures => [],
+                mounts => [],
+                match => undef,
             }],
         }],
     );
@@ -420,6 +470,60 @@ subtest 'supported ancestry composes while foreign routing values form fresh bou
         is(refaddr($request_scope->{'pagi.routing'}), $foreign_id, "$label retains incoming reference identity")
             if ref($foreign);
     }
+};
+
+subtest 'matched capture snapshots do not alias mutable scope path parameters' => sub {
+    my @seen;
+    my $mutate_prefix_params = middleware(sub {
+        my ($inner) = @_;
+        return sub {
+            my ($request_scope) = @_;
+            $request_scope->{path_params}{account_id} = 'middleware-mutated';
+            return $inner->(@_);
+        };
+    });
+    my $app = router(routes => [
+        mount('/api/{account_id}', routes => [
+            route('/items/{item_id}' => sub {
+                my ($c) = @_;
+                my $frame = current_frame($c->scope);
+                my $original_scope_params = $c->scope->{path_params};
+                push @seen, {
+                    frame_id => refaddr($frame),
+                    scope_params_id => refaddr($original_scope_params),
+                    captures_id => refaddr($frame->{captures}),
+                    namespace => $frame->{logical_namespace},
+                    captures_before => { %{$frame->{captures}} },
+                };
+
+                $original_scope_params->{account_id} = 'mutated';
+                $original_scope_params->{item_id} = 'mutated';
+                $c->scope->{path_params} = {
+                    account_id => 'replaced',
+                    item_id => 'replaced',
+                };
+
+                $seen[-1]{captures_after} = { %{$frame->{captures}} };
+                $seen[-1]{link_after} = $c->path_for('show');
+                return $c->text('snapshot');
+            }, name => 'show'),
+        ], namespace => 'api', middleware => [$mutate_prefix_params]),
+    ])->to_app;
+
+    run_scope($app, scope(
+        path => '/api/acme/items/7',
+        raw_path => '/api/acme/items/7',
+    ));
+
+    isnt($seen[0]{captures_id}, $seen[0]{scope_params_id},
+        'the frame capture snapshot is a distinct hash from scope path_params');
+    is($seen[0]{namespace}, '/api', 'the full leaf records its containing namespace');
+    is($seen[0]{captures_before}, { account_id => 'acme', item_id => 7 },
+        'the full leaf snapshot includes all effective captures');
+    is($seen[0]{captures_after}, $seen[0]{captures_before},
+        'mutating and replacing scope path_params leaves the snapshot unchanged');
+    is($seen[0]{link_after}, '/api/acme/items/7',
+        'relative generation continues to use the immutable request snapshot');
 };
 
 subtest 'compiled middleware state follows documented ownership boundaries' => sub {
@@ -566,6 +670,15 @@ subtest 'concurrent requests isolate frames, matches, parameters, and generated 
         'concurrent requests have distinct mount arrays');
     isnt(refaddr($first_frame->{match}), refaddr($second_frame->{match}),
         'concurrent requests have distinct match records');
+    isnt(refaddr($first_frame->{captures}), refaddr($second_frame->{captures}),
+        'concurrent requests have distinct capture snapshots');
+    is([$first_frame->{logical_namespace}, $second_frame->{logical_namespace}],
+        ['/', '/'], 'concurrent requests retain their own current namespaces');
+    is([$first_frame->{captures}{id}, $second_frame->{captures}{id}],
+        ['one', 'two'], 'concurrent frames retain distinct capture values');
+    is([$contexts[0]->path_for('show'), $contexts[1]->path_for('show')],
+        ['/api/items/one', '/api/items/two'],
+        'concurrent Context links use only their own request captures');
     is(refaddr($first_frame->{resolver}), refaddr($second_frame->{resolver}),
         'concurrent requests share only the immutable compiled resolver');
     is($first_frame->{match}{route}, '/api/items/{id}', 'the first match uses the effective mounted pattern');

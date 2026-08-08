@@ -329,8 +329,11 @@ the forms cannot be mixed. Explicit C<undef> omits the fragment, while an empty
 fragment emits a terminal C<#>. Query pairs are sorted and UTF-8 component
 encoded; the fragment is encoded as one component after the query.
 
-An initial slash makes a reference absolute; otherwise it resolves from the
-current Router root. C<.> and C<..> components normalize exactly, dots inside
+An initial slash makes a reference absolute and inherits no path values.
+Otherwise it resolves from the request's current containing logical namespace
+and inherits only captured keys required by the exact target. Explicit params
+override inherited values. Router-object reverse calls remain rooted and
+inherit nothing. C<.> and C<..> components normalize exactly, dots inside
 a component remain literal, and reference text is never URI-decoded. Empty
 components, repeated or trailing separators, traversal above root,
 namespace-only results, and unknown exact targets fail without ancestor search
@@ -340,10 +343,12 @@ protocol events.
 The compatible version-1 frame shape is:
 
     {
-        resolver  => $resolver,
-        root_path => '/deployment-prefix', # optional additive field
-        mounts    => [],
-        match     => undef,
+        resolver          => $resolver,
+        root_path         => '/deployment-prefix', # optional additive field
+        logical_namespace => '/account/user',
+        captures          => { account_id => 7, user_id => 42 },
+        mounts            => [],
+        match             => undef,
     }
 
 C<root_path> is a validated scalar captured at each compiled-router boundary.
@@ -362,6 +367,11 @@ back to C<< scope->{server} >>. Code that deliberately needs the raw
 last-value header behavior may use C<< $ctx->header('host') >>; reverse routing
 does not use that escape hatch.
 
+The routing frame is compiled read-only metadata. Direct mutation of its
+private C<logical_namespace> or C<captures> working values is an unsupported
+jailbreak. Capture inheritance is a URL-construction convenience, not an
+authorization decision; handlers must authorize every target normally.
+
 For HTTP deployments, the shipped middleware should be ordered from outermost
 to innermost as:
 
@@ -377,13 +387,20 @@ separate planned compatibility change, not behavior supplied by routing.
 =cut
 
 sub path_for {
-    my ($self, @args) = @_;
+    my ($self, $reference, @reverse_args) = @_;
     my $frame = $self->_routing_frame('path_for');
-    my $path = $frame->{resolver}->path_for(@args);
     my $root_path = exists $frame->{root_path}
         ? $frame->{root_path}
         : $self->{scope}{root_path};
-    return _join_root_path($root_path, $path);
+    return $frame->{resolver}->reverse_for_context(
+        'path_for',
+        $self->{scope},
+        $reference,
+        $root_path,
+        $frame->{logical_namespace},
+        $frame->{captures},
+        @reverse_args,
+    );
 }
 
 sub url_for {
@@ -392,10 +409,13 @@ sub url_for {
     my $root_path = exists $frame->{root_path}
         ? $frame->{root_path}
         : $self->{scope}{root_path};
-    return $frame->{resolver}->url_for_scope(
+    return $frame->{resolver}->reverse_for_context(
+        'url_for',
         $self->{scope},
         $reference,
         $root_path,
+        $frame->{logical_namespace},
+        $frame->{captures},
         @reverse_args,
     );
 }
@@ -415,6 +435,11 @@ sub _routing_frame {
             $valid = 0, last unless ref($frame) eq 'HASH'
                 && blessed($frame->{resolver})
                 && $frame->{resolver}->can('path_for')
+                && $frame->{resolver}->can('reverse_for_context')
+                && PAGI::Routing::Resolver::_is_canonical_namespace(
+                    $frame->{logical_namespace},
+                )
+                && ref($frame->{captures}) eq 'HASH'
                 && ref($frame->{mounts}) eq 'ARRAY'
                 && (!defined $frame->{match} || ref($frame->{match}) eq 'HASH')
                 && (!exists $frame->{root_path}
@@ -423,9 +448,6 @@ sub _routing_frame {
     }
 
     my $frame = $valid ? $container->{frames}[-1] : undef;
-    my $resolver = $frame ? $frame->{resolver} : undef;
-    $valid = 0 if $operation eq 'url_for'
-        && (!$resolver || !$resolver->can('url_for_scope'));
 
     croak "$operation requires a PAGI::Routing resolver in scope" unless $valid;
     return $frame;

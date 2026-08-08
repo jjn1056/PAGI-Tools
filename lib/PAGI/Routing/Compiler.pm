@@ -9,6 +9,7 @@ use Scalar::Util qw(blessed refaddr);
 use PAGI::Context;
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
+use PAGI::Routing::Resolver ();
 use PAGI::Utils ();
 
 sub compile {
@@ -397,7 +398,9 @@ sub _select_http {
             my $match = $mount->_pattern->match_mount($path);
             next unless defined $match;
 
-            $class->_record_mount_match($scope, $entry->{metadata});
+            $class->_record_mount_match(
+                $scope, $entry->{metadata}, $match->{captures},
+            );
 
             return {
                 kind  => 'full',
@@ -417,7 +420,9 @@ sub _select_http {
             : grep { $_ eq $method } @$methods;
 
         if ($method_matches) {
-            $class->_record_leaf_match($scope, $entry->{metadata});
+            $class->_record_leaf_match(
+                $scope, $entry->{metadata}, $captures,
+            );
             my %path_params = (
                 %{ref($scope->{path_params}) eq 'HASH' ? $scope->{path_params} : {}},
                 %$captures,
@@ -456,7 +461,9 @@ sub _select_protocol {
             my $match = $mount->_pattern->match_mount($path);
             next unless defined $match;
 
-            $class->_record_mount_match($scope, $entry->{metadata});
+            $class->_record_mount_match(
+                $scope, $entry->{metadata}, $match->{captures},
+            );
 
             return {
                 kind  => 'full',
@@ -470,7 +477,9 @@ sub _select_protocol {
         my $captures = $route->_pattern->match_route($path);
         next unless defined $captures;
 
-        $class->_record_leaf_match($scope, $entry->{metadata});
+        $class->_record_leaf_match(
+            $scope, $entry->{metadata}, $captures,
+        );
 
         my %path_params = (
             %{ref($scope->{path_params}) eq 'HASH' ? $scope->{path_params} : {}},
@@ -502,10 +511,12 @@ sub _routing_scope {
     }
 
     my $frame = {
-        resolver  => $resolver,
-        root_path => $root_path,
-        mounts    => [],
-        match     => undef,
+        resolver          => $resolver,
+        root_path         => $root_path,
+        logical_namespace => '/',
+        captures          => {},
+        mounts            => [],
+        match             => undef,
     };
     my @frames = (@ancestor_frames, $frame);
     my $container = {
@@ -532,6 +543,10 @@ sub _compatible_routing_container {
         return 0 unless ref($frame) eq 'HASH';
         return 0 unless blessed($frame->{resolver})
             && $frame->{resolver}->can('path_for');
+        return 0 unless PAGI::Routing::Resolver::_is_canonical_namespace(
+            $frame->{logical_namespace},
+        );
+        return 0 unless ref($frame->{captures}) eq 'HASH';
         return 0 unless ref($frame->{mounts}) eq 'ARRAY';
         return 0 if defined $frame->{match}
             && ref($frame->{match}) ne 'HASH';
@@ -554,10 +569,17 @@ sub _current_routing_frame {
 }
 
 sub _record_mount_match {
-    my ($class, $scope, $metadata) = @_;
+    my ($class, $scope, $metadata, $captures) = @_;
     return unless ref($metadata) eq 'HASH';
     my $frame = $class->_current_routing_frame($scope);
     return unless $frame;
+
+    my %effective_captures = (
+        %{ref($frame->{captures}) eq 'HASH' ? $frame->{captures} : {}},
+        %{ref($captures) eq 'HASH' ? $captures : {}},
+    );
+    $frame->{logical_namespace} = $metadata->{logical_namespace};
+    $frame->{captures} = { %effective_captures };
 
     if ($metadata->{is_raw}) {
         $frame->{match} = { %{$metadata->{match}} };
@@ -569,11 +591,17 @@ sub _record_mount_match {
 }
 
 sub _record_leaf_match {
-    my ($class, $scope, $metadata) = @_;
+    my ($class, $scope, $metadata, $captures) = @_;
     return unless ref($metadata) eq 'HASH';
     my $frame = $class->_current_routing_frame($scope);
     return unless $frame;
     $frame->{match} = { %{$metadata->{match}} };
+    $frame->{logical_namespace} = $metadata->{logical_namespace};
+    my %effective_captures = (
+        %{ref($frame->{captures}) eq 'HASH' ? $frame->{captures} : {}},
+        %{ref($captures) eq 'HASH' ? $captures : {}},
+    );
+    $frame->{captures} = { %effective_captures };
     return;
 }
 
@@ -658,6 +686,14 @@ incompatible boundary: the new shallow child scope receives a fresh version-1
 container and ignores foreign ancestry rather than croaking or mutating it.
 Each frame captures the compiled router's entry C<root_path>; Context reverse
 routing uses that field and falls back only for legacy/manual v1 frames that
-omit it.
+omit it. Every API-created frame also begins with canonical
+C<logical_namespace> C</> and a fresh empty C<captures> hash. Entering an
+inline or Router mount replaces both values with that placement's namespace
+and a fresh snapshot of consumed effective-prefix captures. A FULL leaf
+replaces them with its containing namespace and complete effective captures.
+PARTIAL candidates never publish leaf state, so generated 404 and 405 handlers
+retain only the namespace and prefix snapshot owned by their selected mount
+ancestry. The capture hash is never aliased to C<< scope->{path_params} >> and
+no mutable frame state is shared between requests.
 
 =cut

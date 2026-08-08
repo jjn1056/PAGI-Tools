@@ -18,11 +18,14 @@ sub _resolver {
 }
 
 sub _frame {
-    my ($resolver) = @_;
+    my ($resolver, %changes) = @_;
     return {
-        resolver => $resolver,
-        mounts   => [],
-        match    => undef,
+        resolver          => $resolver,
+        logical_namespace => '/',
+        captures          => {},
+        mounts            => [],
+        match             => undef,
+        %changes,
     };
 }
 
@@ -89,6 +92,160 @@ subtest 'Context selects the last resolver from a valid routing frame stack' => 
         $context->url_for('/selected', { id => 7 }),
         'http://example.test/edge/child/7',
         'the last frame also supplies Context absolute URLs',
+    );
+};
+
+subtest 'compiled Context references resolve exactly from the matched containing namespace' => sub {
+    my (@show_results, @catchall_results);
+    my $routing;
+    $routing = router(routes => [
+        route('/' => sub { return $_[0]->text('home') }, name => 'home'),
+        mount('/person', routes => [
+            route('/{person_id}' => sub { return $_[0]->text('person') },
+                name => 'show'),
+            mount('/{person_id}/blog', routes => [
+                route('/' => sub { return $_[0]->text('blogs') }, name => 'index'),
+                route('/{blog_id}' => sub {
+                    my ($c) = @_;
+                    my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
+                    push @show_results, {
+                        namespace        => $frame->{logical_namespace},
+                        captures         => { %{$frame->{captures}} },
+                        show             => $c->path_for('show'),
+                        index            => $c->path_for('index'),
+                        parent_show      => $c->path_for('../show'),
+                        dot_show         => $c->path_for('./show'),
+                        interior_show    => $c->path_for('x/../show'),
+                        override         => $c->path_for('show', { blog_id => 8 }),
+                        absolute_home    => $c->path_for('/home'),
+                        relative_home    => $c->path_for('../../home'),
+                        absolute_show    => $c->path_for(
+                            '/person/blog/show',
+                            { person_id => 42, blog_id => 9 },
+                        ),
+                        with_suffixes    => $c->url_for(
+                            'show',
+                            query    => { view => 'full' },
+                            fragment => 'comments',
+                        ),
+                    };
+
+                    my @failures = (
+                        ['unknown relative', 'missing', qr/unknown route name 'missing'/],
+                        ['no overlap folding', 'person/show', qr/unknown route name 'person\/show'/],
+                        ['above root', '../../../home', qr/traverses above the Router root/],
+                        ['bare current namespace', '.', qr/resolves to a logical namespace/],
+                        ['bare parent namespace', '..', qr/resolves to a logical namespace/],
+                        ['repeated slash', 'show//child', qr/contains an empty logical segment/],
+                        ['trailing slash', 'show/', qr/contains an empty logical segment/],
+                    );
+                    for my $failure (@failures) {
+                        my ($label, $reference, $message) = @$failure;
+                        like(dies { $c->path_for($reference) }, $message, $label);
+                    }
+                    like(
+                        dies { $c->path_for('/person/blog/show') },
+                        qr/missing path parameter 'person_id'/,
+                        'absolute Context references inherit no captures',
+                    );
+                    like(
+                        dies { $routing->path_for('/person/blog/show') },
+                        qr/missing path parameter 'person_id'/,
+                        'Router-object reverse calls inherit no request captures',
+                    );
+                    like(
+                        dies { $c->path_for('index', { extra => 1 }) },
+                        qr/unexpected path parameter 'extra'/,
+                        'explicit parameters not required by the target still fail',
+                    );
+                    like(
+                        dies { $c->path_for('show', { blog_id => 'bad' }) },
+                        qr/path parameter 'blog_id' failed constraint/,
+                        'constraints run after explicit values replace inherited captures',
+                    );
+                    return $c->text('show');
+                },
+                    name => 'show',
+                    constraints => { blog_id => qr/\A\d+\z/ },
+                ),
+                route('/*rest' => sub {
+                    my ($c) = @_;
+                    my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
+                    push @catchall_results, {
+                        namespace => $frame->{logical_namespace},
+                        captures  => { %{$frame->{captures}} },
+                        index     => $c->path_for('index'),
+                    };
+                    return $c->text('catchall');
+                }),
+            ], namespace => 'blog'),
+        ], namespace => 'person'),
+    ]);
+    my $app = $routing->to_app;
+
+    _run_compiled($app,
+        path => '/person/42/blog/7',
+        raw_path => '/person/42/blog/7',
+        scheme => 'https',
+    );
+    _run_compiled($app,
+        path => '/person/42/blog/missing/path',
+        raw_path => '/person/42/blog/missing/path',
+    );
+
+    is(\@show_results, [{
+        namespace     => '/person/blog',
+        captures      => { person_id => 42, blog_id => 7 },
+        show          => '/person/42/blog/7',
+        index         => '/person/42/blog/',
+        parent_show   => '/person/42',
+        dot_show      => '/person/42/blog/7',
+        interior_show => '/person/42/blog/7',
+        override      => '/person/42/blog/8',
+        absolute_home => '/',
+        relative_home => '/',
+        absolute_show => '/person/42/blog/9',
+        with_suffixes => 'https://example.test/person/42/blog/7?view=full#comments',
+    }], 'relative Context generation uses the exact active namespace and target captures');
+    is(\@catchall_results, [{
+        namespace => '/person/blog',
+        captures => { person_id => 42, rest => 'missing/path' },
+        index => '/person/42/blog/',
+    }], 'an unnamed catchall keeps its containing namespace and filters its wildcard capture');
+};
+
+subtest 'Context inheritance selects only target path keys and never invents suffixes' => sub {
+    my $resolver = _resolver(
+        route('/target/{required}' => sub { }, name => 'target'),
+    );
+    my $context = PAGI::Context->new({
+        type      => 'http',
+        headers   => [['host', 'example.test']],
+        scheme    => 'http',
+        root_path => '',
+        'pagi.routing' => {
+            version => 1,
+            frames  => [_frame($resolver,
+                logical_namespace => '/',
+                captures => {
+                    required => 'kept',
+                    query    => 'must-not-appear',
+                    fragment => 'must-not-appear',
+                    unused   => 'must-not-be-an-extra-param',
+                },
+            )],
+        },
+    }, sub { }, sub { });
+
+    is(
+        $context->path_for('target'),
+        '/target/kept',
+        'only target-required path keys are inherited and query/fragment stay absent',
+    );
+    is(
+        $context->path_for('target', { required => 'explicit' }),
+        '/target/explicit',
+        'explicit path parameters override inherited values',
     );
 };
 
@@ -257,10 +414,50 @@ subtest 'missing and malformed routing metadata fail at the Context boundary' =>
             version => 1,
             frames  => [{
                 resolver  => $resolver,
+                logical_namespace => '/',
+                captures  => {},
                 mounts    => [],
                 match     => undef,
                 root_path => [],
             }],
+        }],
+        ['last frame lacks a logical namespace', {
+            version => 1,
+            frames  => [{
+                resolver => $resolver,
+                captures => {},
+                mounts   => [],
+                match    => undef,
+            }],
+        }],
+        ['last frame has a non-scalar logical namespace', {
+            version => 1,
+            frames  => [_frame($resolver, logical_namespace => [])],
+        }],
+        ['last frame has a relative logical namespace', {
+            version => 1,
+            frames  => [_frame($resolver, logical_namespace => 'person')],
+        }],
+        ['last frame has a trailing-slash logical namespace', {
+            version => 1,
+            frames  => [_frame($resolver, logical_namespace => '/person/')],
+        }],
+        ['last frame has a navigation logical namespace', {
+            version => 1,
+            frames  => [_frame($resolver, logical_namespace => '/person/../blog')],
+        }],
+        ['last frame lacks captures', {
+            version => 1,
+            frames  => [{
+                resolver          => $resolver,
+                logical_namespace => '/',
+                mounts            => [],
+                match             => undef,
+            }],
+        }],
+        ['last frame has malformed captures', {
+            version => 1,
+            frames  => [_frame($resolver, captures => [])],
         }],
     );
 

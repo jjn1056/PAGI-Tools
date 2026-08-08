@@ -119,6 +119,70 @@ subtest 'custom generated handlers receive the seeded Context response' => sub {
     is(response_body($not_allowed), 'custom method', 'the custom method body is emitted');
 };
 
+subtest 'mounted child generated handlers retain only the owning prefix placement' => sub {
+    my @seen;
+    my $capture_generated = sub {
+        my ($label) = @_;
+        return sub {
+            my ($c) = @_;
+            my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
+            push @seen, {
+                label      => $label,
+                namespace  => $frame->{logical_namespace},
+                captures   => { %{$frame->{captures}} },
+                local_path => $c->path_for('index'),
+            };
+            return $c->text("child $label");
+        };
+    };
+    my $child = router(
+        routes => [
+            route('/' => sub { return $_[0]->text('index') }, name => 'index'),
+            route('/entry/{get_id}' => sub { return $_[0]->text('get') },
+                methods => 'GET', constraints => { get_id => qr/\A[a-z]+\z/ }),
+            route('/entry/{post_id}' => sub { return $_[0]->text('post') },
+                methods => 'POST', constraints => { post_id => qr/\A[a-z]+\z/ }),
+            route('/entry/{put_id}' => sub { return $_[0]->text('put') },
+                methods => 'PUT', constraints => { put_id => qr/\A[a-z]+\z/ }),
+        ],
+        not_found => $capture_generated->('404'),
+        method_not_allowed => $capture_generated->('405'),
+    );
+    my $app = router(routes => [
+        mount('/people/{person_id}', router => $child, namespace => 'people'),
+    ])->to_app;
+
+    my $missing = run_app(
+        $app,
+        method => 'GET',
+        path => '/people/42/missing',
+    );
+    my $partial = run_app(
+        $app,
+        method => 'PATCH',
+        path => '/people/42/entry/value',
+    );
+
+    is(response_start($missing)->{status}, 404, 'the child generated 404 remains selected');
+    is(response_start($partial)->{status}, 405, 'the child generated 405 remains selected');
+    is(response_header($partial, 'Allow'), 'GET, HEAD, POST, PUT',
+        'all matching PARTIAL leaves still contribute methods');
+    is(\@seen, [
+        {
+            label => '404',
+            namespace => '/people',
+            captures => { person_id => 42 },
+            local_path => '/people/42/',
+        },
+        {
+            label => '405',
+            namespace => '/people',
+            captures => { person_id => 42 },
+            local_path => '/people/42/',
+        },
+    ], 'generated handlers use the owning mount snapshot and no PARTIAL leaf capture');
+};
+
 subtest 'the final 405 response receives Allow without overriding application policy' => sub {
     my $detached = simple_router(
         method_not_allowed => sub {
