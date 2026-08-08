@@ -148,11 +148,12 @@ C</api/>.
 
 Middleware entries are pure app-to-app PAGI wrappers. The complete order is:
 
-  router middleware
-    -> mount middleware
-      -> separately compiled child-router middleware
-        -> route middleware
-          -> handler
+  outer Router middleware
+    -> Router-mount middleware
+      -> child Router middleware
+        -> inline-mount middleware
+          -> route middleware
+            -> handler
 
 Scope rewriting and match metadata happen before the matching mount/route
 wrapper. Mount middleware can therefore read dynamic mount captures. The first
@@ -459,8 +460,8 @@ this exact C<match> before route middleware:
   {
       kind              => 'route', # or websocket / sse
       route             => '/tenants/{tenant_id}/users/{user_id}',
-      name              => '/tenant/user/show', # absolute or undef
-      logical_namespace => '/tenant/user',
+      name              => '/tenant/show', # absolute or undef
+      logical_namespace => '/tenant',
       desc              => 'Display one tenant user', # declared or undef
   }
 

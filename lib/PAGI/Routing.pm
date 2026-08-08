@@ -601,8 +601,8 @@ outer-to-inner match order. The exact C<match> record for a selected leaf is:
     {
         kind              => 'route', # or websocket / sse
         route             => '/tenants/{tenant_id}/users/{user_id}',
-        name              => '/tenant/user/show',
-        logical_namespace => '/tenant/user',
+        name              => '/tenant/show',
+        logical_namespace => '/tenant',
         desc              => 'Display one tenant user',
     }
 
