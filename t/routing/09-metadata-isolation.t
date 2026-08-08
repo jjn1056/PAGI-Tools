@@ -365,6 +365,47 @@ subtest 'separately compiled routers append frames without overwriting legacy me
         'parent middleware retains its terminal frame after the child completes');
 };
 
+subtest 'a path-only ancestor resolver forms an incompatible routing boundary' => sub {
+    my $path_only = bless {}, 'Local::PathOnlyResolver';
+    my $foreign_frame = {
+        resolver          => $path_only,
+        logical_namespace => '/',
+        captures          => {},
+        mounts            => [],
+        match             => undef,
+    };
+    my $foreign_container = {
+        version => 1,
+        frames => [$foreign_frame],
+    };
+    my @seen;
+    my $app = route('/inside' => sub {
+        my ($c) = @_;
+        push @seen, {
+            scope => $c->scope,
+            reverse_path => $c->path_for('inside'),
+        };
+        return $c->text('inside');
+    }, name => 'inside')->to_app;
+    my $incoming = scope(
+        path => '/inside',
+        raw_path => '/inside',
+        'pagi.routing' => $foreign_container,
+    );
+
+    my $events = run_scope($app, $incoming);
+    my $fresh = $seen[0]{scope}{'pagi.routing'};
+    is(scalar @{$fresh->{frames}}, 1,
+        'the path-only resolver ancestry is excluded from the fresh v1 container');
+    isnt(refaddr($fresh->{frames}[0]{resolver}), refaddr($path_only),
+        'the new current frame uses the compiled Router resolver');
+    is($seen[0]{reverse_path}, '/inside',
+        'Context reverse generation works from the new current frame');
+    is(response_body($events), 'inside', 'dispatch completes through the fresh boundary');
+    is(refaddr($incoming->{'pagi.routing'}), refaddr($foreign_container),
+        'the incompatible incoming container remains untouched');
+};
+
 subtest 'supported ancestry composes while foreign routing values form fresh boundaries' => sub {
     my $ancestor_resolver = PAGI::Routing::Resolver->new(routes => []);
     my $ancestor_frame = {
@@ -825,6 +866,12 @@ subtest 'WebSocket and SSE leaves publish protocol-specific effective metadata' 
         desc => 'Event stream',
     }, 'SSE selection publishes its protocol kind and effective name');
 };
+
+{
+    package Local::PathOnlyResolver;
+
+    sub path_for { return '/legacy' }
+}
 
 {
     package Local::SharedMiddleware;

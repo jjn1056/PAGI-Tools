@@ -542,7 +542,8 @@ sub _compatible_routing_container {
     for my $frame (@{$container->{frames}}) {
         return 0 unless ref($frame) eq 'HASH';
         return 0 unless blessed($frame->{resolver})
-            && $frame->{resolver}->can('path_for');
+            && $frame->{resolver}->can('path_for')
+            && $frame->{resolver}->can('reverse_for_context');
         return 0 unless PAGI::Routing::Resolver::_is_canonical_namespace(
             $frame->{logical_namespace},
         );
