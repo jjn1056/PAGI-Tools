@@ -148,7 +148,11 @@ search, fuzzy fallback, dotted hierarchy, or overlapping-prefix folding.
 
 Query pairs are sorted and each UTF-8 key/value is percent-encoded as a URI
 component. A fragment is encoded once as one component and follows the query.
-C<path_for> only returns a string and performs no protocol I/O.
+C<path_for> returns a string or croaks and performs no protocol I/O. It does
+not redirect or mutate a response. It inherits no request captures. Inside a
+handler, use L<PAGI::Context/path_for> so relative generation can select the
+active placement of a reused child Router. Capture inheritance there is only
+URL-construction convenience, never authorization.
 
 =head2 to_app
 

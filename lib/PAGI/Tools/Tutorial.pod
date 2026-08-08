@@ -104,13 +104,42 @@ declaration order, constructs C<$c>, awaits the handler, and emits its returned
 Response exactly once.
 
 GET includes HEAD automatically. Paths are exact, with no slash redirect or
-automatic OPTIONS. Inline mounts are structural; positional mounts are opaque
-applications that own a prefix. Pure route/mount/router middleware is described
-by a bare factory in its C<middleware> list, such as
+automatic OPTIONS. Mounts have three contracts:
+
+  mount('/api', routes => \@nodes, namespace => 'api')
+  mount('/people', router => $people, namespace => 'person')
+  mount('/static' => $static_app)
+
+The first is an inline structural subtree. The second keeps a separately
+configured Router as an inspectable child and requires a namespace. The third
+is an opaque application prefix. Passing a Router positionally still chooses
+opacity; C<< mount('/x' => $router) >> is not shorthand for the named
+C<< router => $router >> form.
+After a Router-mount prefix matches, the child owns its 404/405 as well as its
+full match. Parent no-match bubbling is deferred.
+
+Route names and namespaces are local segments; slash constructs absolute
+logical addresses such as C</api/user>. Context reverse calls may resolve from
+the active namespace and inherit only target-required captures:
+
+  $c->path_for('user');
+  $c->url_for('user', { id => 42 }, { tab => 'profile' }, 'details');
+  $c->url_for('user',
+      query    => { tab => 'profile' },
+      fragment => 'details',
+  );
+
+Absolute Context references and Router-object calls inherit nothing. URL
+generation is not authorization. Reverse helpers return strings or croak; they
+send no protocol events or redirects.
+
+Pure route/mount/router middleware is described by a bare factory in its
+C<middleware> list, such as
 C<< middleware =E<gt> [$factory] >>; constructors normalize it to an inspectable
 description. C<middleware(...)> remains the explicit form for configured
 classes, configured objects, reuse, or inspection before attachment. Native
-three-channel endpoints remain explicit with C<raw>. See L<PAGI::Routing> for the complete lifecycle and
+three-channel endpoints remain explicit with C<raw>. See L<PAGI::Routing> for
+the complete lifecycle and
 L<PAGI::Tools::Cookbook> for mounted, raw, protocol, reverse-routing, and
 metadata recipes.
 

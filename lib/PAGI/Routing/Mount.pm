@@ -168,6 +168,12 @@ Synchronously compiles this mount through a fresh complete one-node router on
 every call. It emits no events. When the returned app is later invoked and the
 prefix matches, dispatch creates a request-local shallow child scope, merges
 captures, rewrites C<path>/C<root_path>, and then calls mount middleware and
-the child. C<raw_path> remains unchanged.
+the child. C<raw_path> remains unchanged. A root mount consumes no prefix and
+leaves C<path>, C<root_path>, and C<raw_path> unchanged.
+
+An explicit Router target remains a child dispatch boundary: after the prefix
+matches, that Router owns full, partial, and no-match results, including its
+generated 404/405 handlers and protocol outcomes. The parent does not resume
+scanning or union methods. Cooperative no-match bubbling is deferred.
 
 =cut

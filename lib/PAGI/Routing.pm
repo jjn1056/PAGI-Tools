@@ -214,11 +214,29 @@ explicit string C<*>; it defaults to GET. WebSocket and SSE routes reject it.
 
     mount('/prefix' => $app, %options)
     mount('/prefix', routes => \@nodes, %options)
+    mount('/prefix', router => $router, namespace => 'segment', %options)
 
-The first form is an opaque application mount. The second is an inline
-declarative subtree and may add a dot C<namespace>. Both accept C<desc>,
-C<constraints>, and C<middleware>. In the inline form C<routes> is the form
-selector and therefore immediately follows the path.
+The three mutually exclusive forms are:
+
+    Form                    Visibility                  Namespace
+    ----------------------  --------------------------  ------------------------
+    '/x' => $app            opaque application          forbidden
+    '/x', routes => [...]   inline structural subtree  optional local segment
+    '/x', router => $r      inspectable Router child    required local segment
+
+All accept C<desc>, C<constraints>, and C<middleware>. C<routes> and C<router>
+are named selectors and may appear anywhere in a well-formed option list.
+C<router> accepts only a blessed L<PAGI::Routing::Router> object. Names and
+namespaces are nonempty scalar logical segments: they may not contain C</> or
+equal C<.> or C<..>. A dot in C<v1.1> is literal, not hierarchy.
+
+Passing a Router positionally selects the opaque application contract; the
+compiler never guesses intent from its class:
+
+    mount('/opaque' => $child_router)
+    mount('/known', router => $child_router, namespace => 'known')
+
+The first hides all child names. It is not shorthand for the second.
 
 =head2 middleware
 
@@ -248,8 +266,10 @@ and application-defined methods uniformly.
 
 =head1 COMPILATION AND REQUEST LIFECYCLE
 
-C<< $routing->to_app >> validates and resolves native components, middleware
-classes/factories, effective names, and match structures synchronously. Each
+C<< $routing->to_app >> resolves native components, middleware
+classes/factories, and executable match structures synchronously. Router
+construction has already validated composed logical addresses, parameters,
+and Router ancestry. Each
 call builds a fresh wrapper graph; it does not mutate or cache on the source
 description. Call it once for each intended application instance, retain the
 coderef, and reuse that app for requests.
@@ -348,6 +368,8 @@ Captured values are decoded, unsanitized input. Values such as C<..>, repeated
 separators, and backslashes must never be concatenated with a document root.
 File code must canonicalize, enforce containment at a component boundary, and
 choose an explicit symlink policy; route matching is not filesystem security.
+Prefer L<PAGI::App::File> or L<PAGI::Middleware::Static> to using a wildcard
+capture as a filesystem path.
 
 =head1 GENERATED OUTCOMES AND CATCH-ALLS
 
@@ -371,13 +393,30 @@ deliberately.
 
 =head1 MOUNTS
 
-An inline mount is part of one known tree and inherits fallback handlers. An
-application mount is opaque and owns every selected HTTP, WebSocket, and SSE
-outcome. After a non-root prefix matches, the child scope receives the
-remainder in C<path>, the actual decoded prefix appended to C<root_path>, and
-merged captures in C<path_params>; C<raw_path> remains the original wire path.
-An exact prefix produces child path C</>. A root mount consumes nothing and
-leaves C<path>, C<root_path>, and C<raw_path> unchanged.
+An inline mount is part of its containing Router and inherits that Router's
+fallback handlers. A C<< router => $child >> mount is visible to inspection
+and reverse routing, but remains a real dispatch boundary. Once its prefix
+matches, the child owns FULL, PARTIAL, and NONE: its middleware and generated
+404/405 handlers run, and the parent neither resumes sibling scanning nor
+unions Allow methods. Cooperative no-match bubbling remains deferred work.
+
+A positional application mount is opaque and owns every selected HTTP,
+WebSocket, and SSE outcome. Discovery stops there even if the target object is
+a Router. A raw route is different again:
+
+    route('/files/*path', raw => $app)
+    mount('/files' => $app)
+
+The raw route is one HTTP leaf: it participates in methods, automatic HEAD,
+partial matching, and named reverse routing, and keeps the routed path. The
+mount is a protocol-capable prefix owner with an implicit remainder, no method
+filter, rewritten child scope, and no inspectable child names.
+
+After a non-root mount prefix matches, the child scope receives the remainder
+in C<path>, the actual decoded prefix appended to C<root_path>, and merged
+captures in C<path_params>; C<raw_path> remains the original wire path. An
+exact prefix produces child path C</>. A root inline, Router, or opaque mount
+consumes no prefix and leaves C<path>, C<root_path>, and C<raw_path> unchanged.
 
 The decoded C<root_path> and consumed prefix are joined with exactly one slash
 at their boundary; existing internal slashes are not normalized.
@@ -385,13 +424,6 @@ at their boundary; existing internal slashes are not normalized.
 C<mount('/api')> accepts both C</api> and C</api/> at the mount boundary and
 does not redirect. This deliberately differs from Starlette's default trailing
 slash behavior.
-
-A raw route and application mount both accept native apps, but select them
-differently. C<< route('/files/*path', raw =E<gt> $app) >> is an HTTP leaf: it
-participates in methods, automatic HEAD, partial matching, and named reverse
-routing, and keeps the routed path. C<< mount('/files' =E<gt> $app) >> is a
-protocol-capable prefix owner with an implicit remainder, no method filter,
-rewritten child scope, and no inspectable child names.
 
 =head1 MIDDLEWARE
 
@@ -403,31 +435,108 @@ The first entry listed is outermost. Placement is:
 
     router middleware
       -> mount middleware
-        -> separately compiled child-router middleware
-          -> route middleware
-            -> handler adapter
+        -> child Router middleware
+          -> inline-mount middleware
+            -> route middleware
+              -> handler adapter
 
 Route middleware runs only after a full route match. Scope rewriting and
 matched-route metadata are installed before the matching mount/route wrapper.
+Generated child 404/405 responses cross the child Router, Router-mount, and
+outer Router middleware but no route middleware. The one outermost
+L<PAGI::Routing::HeadBoundary> removes the final HEAD body, including sendfile
+events, only after every Router/mount/route middleware has observed the
+unsuppressed GET representation. WebSocket and SSE retain their existing
+protocol ownership; Router mounts do not adapt their events.
 See L<PAGI::Middleware::Helpers> for small channel wrappers that keep this
 contract explicit.
 
 =head1 REVERSE ROUTING AND INSPECTION
 
-Names are optional. An inline mount's optional C<namespace> prefixes lookup
-names with dots but is independent of its URL prefix. An unnamed mount leaves
-child names unprefixed. Effective names must be unique; collisions identify
-both paths and ask for a namespace.
+Every route C<name> and mount C<namespace> is one local logical segment. Slash
+is the only hierarchy separator. For example:
 
-    $routing->path_for('api.user', { id => 42 }, { tab => 'profile' });
-    $c->path_for('api.user', { id => 42 });
-    $c->url_for('api.user',  { id => 42 });
+    mount('/people/{person_id}',
+        router    => $people,
+        namespace => 'person',
+    )
 
-Router C<path_for> is request-independent. Context C<path_for> adds the
-compiled-router entry C<root_path>; C<url_for> also selects HTTP(S) or WS(S)
-from the route kind and uses L<PAGI::Authority> for a validated Host or server
-fallback. Duplicate or malformed Host fields never fall back. Routing does not
-parse Forwarded or X-Forwarded headers.
+and a child C<< route('/{item_id}' =E<gt> ..., name =E<gt> 'show') >> publish
+C</person/show>. Logical addresses and URL paths are independent. An unnamed
+inline mount contributes no address segment; every Router mount requires one;
+opaque mounts expose no child addresses.
+
+The composed resolver visits direct routes, inline subtrees, and explicit
+Router children. Named leaves must have unique absolute addresses. It croaks
+during Router construction when two leaves claim one address (naming both
+effective URL patterns), when a path parameter repeats along one effective
+ancestry (including a known opaque prefix), or when a pathological Router
+subclass creates a cycle (naming its URL and logical mount ancestry). Sibling
+branches may reuse a parameter name or child Router.
+
+References use exact filesystem-like normalization:
+
+    /person/blog/show   absolute from this resolver root
+    show                relative to the current containing namespace
+    blog/show           child of that namespace
+    ./show              same namespace
+    ../show             parent namespace
+    blog/../show        normalized left to right
+
+Empty or repeated segments, trailing slashes, traversal above root, unknown
+exact addresses, and results ending at a namespace rather than a named leaf
+croak. Resolution never searches ancestors, retries an absolute spelling, or
+folds overlapping prefixes. References are not URI-decoded. A dot within one
+segment, such as C<v1.1>, stays literal.
+
+For a named leaf, the current containing namespace is its absolute address
+without the final local name. An unnamed leaf, including a catch-all, uses the
+namespace contributed by its enclosing known mounts. A generated 404/405 uses
+the owning Router placement and captures only prefixes actually consumed; it
+does not borrow an arbitrary partial leaf.
+
+All reverse helpers accept compact and named argument forms:
+
+    $routing->path_for('/person/show', { person_id => 42 });
+    $c->path_for('show', { person_id => 42 }, { tab => 'profile' });
+    $c->url_for('show', {}, {}, 'details');
+    $c->url_for('show',
+        query    => { tab => 'profile' },
+        fragment => 'details',
+    );
+
+Compact order is C<(\%params, \%query, $fragment)>; empty hashrefs are
+placeholders when a component is skipped. In the named form C<params>,
+C<query>, and C<fragment> are optional and order-independent. A first trailing
+hashref selects compact form; a first trailing defined plain scalar selects
+named form. The forms cannot be mixed. Params and query must be hashrefs, and
+a fragment is a plain scalar or undef. Query keys are sorted and all query and
+fragment components are UTF-8 percent-encoded. Output order is path, query,
+then fragment.
+
+Router C<path_for> starts at that Router's local root, inherits no request
+captures, and cannot know an external placement. Context C<path_for> uses the
+active request placement and adds the compiled-router entry C<root_path>
+exactly once. A relative Context reference inherits only captured keys needed
+by the target; explicit params override them. Absolute Context references
+inherit nothing. Query and fragment values never inherit.
+
+The same immutable child Router may be mounted at several paths and
+namespaces. It stores no parent placement. Context follows the active
+request-local placement; calling the child Router's own C<path_for> still
+returns its local path. Each placement and each C<to_app> call receives a
+fresh compiled middleware graph.
+
+Inheritance constructs a URL; it does not authorize the target. A captured
+tenant, account, or user identifier says nothing about whether the current
+principal may access it. Handlers must authorize normally.
+
+C<url_for> selects HTTP(S) or WS(S) from the route kind and uses
+L<PAGI::Authority> for a validated Host or server fallback. Duplicate or
+malformed Host fields never fall back. Routing does not parse Forwarded or
+X-Forwarded headers. Reverse helpers return strings or croak. They perform no
+receive/send calls, emit no protocol events, do not redirect, and do not mutate
+a response.
 
 Scope C<root_path> is decoded Unicode. Context reverse routing percent-encodes
 it component-wise while preserving slashes, then joins it to the resolver's
@@ -446,12 +555,13 @@ The immutable tree is the public inspection surface:
 
     my $direct = $routing->routes;
     my $named  = $routing->named_routes;
-    my $node   = $routing->route_named('api.user');
+    my $node   = $routing->route_named('/person/show');
 
-C<routes> contains only direct children in declaration order. Recursively call
-C<routes> on inline mounts. Application mounts are opaque. Collection
-accessors return shallow copies. C<desc> is a human note with no matching or
-schema behavior.
+C<routes> contains only direct children in declaration order. C<named_routes>
+maps canonical absolute addresses to original leaves, and C<route_named>
+resolves from the Router root. Explicit Router mounts are traversed; positional
+applications are opaque. Collection accessors return shallow copies. C<desc>
+is a human note with no matching or schema behavior.
 
 =head1 MATCHED-ROUTE SCOPE CONVENTION
 
@@ -461,19 +571,23 @@ C<pagi.router> key untouched. The value is a read-only, versioned convention:
     {
         version => 1,
         frames  => [{
-            resolver  => $resolver,
-            root_path => '/proxy', # optional additive v1 field
-            mounts    => [],
-            match     => undef,
+            resolver          => $resolver,
+            root_path         => '/proxy', # optional additive v1 field
+            logical_namespace => '/',
+            captures          => {},       # private reverse-routing snapshot
+            mounts            => [],
+            match             => undef,
         }],
     }
 
-Each compiled router installs a fresh request-local frame before router
-middleware. C<root_path> records that router's entry boundary so inline mount
+Each compiled router installs a fresh request-local frame before Router
+middleware. C<root_path> records that router's entry boundary so known mount
 prefixes are not added twice during reverse generation. Older/manual v1 frames
 may omit it, in which case Context reverse routing falls back to the current
-scope C<root_path>. Inline mounts append records to C<mounts>. The exact public
-record for one matched inline mount is:
+scope C<root_path>. C<logical_namespace> is the active containing namespace;
+C<captures> is a fresh, unaliased working snapshot used only for relative
+Context reverse routing. Inline and Router mounts append this public record to
+C<mounts>:
 
     {
         path      => '/tenants/{tenant_id}', # declared mount path
@@ -481,40 +595,46 @@ record for one matched inline mount is:
         desc      => 'Tenant routes',         # declared value or undef
     }
 
-All three keys are present. Nested inline mounts append these records in
+All three keys are present. Nested known mounts append these records in
 outer-to-inner match order. The exact C<match> record for a selected leaf is:
 
     {
-        kind  => 'route', # or websocket / sse
-        route => '/tenants/{tenant_id}/users/{user_id}',
-        name  => 'tenant.user.show',
-        desc  => 'Display one tenant user',
+        kind              => 'route', # or websocket / sse
+        route             => '/tenants/{tenant_id}/users/{user_id}',
+        name              => '/tenant/user/show',
+        logical_namespace => '/tenant/user',
+        desc              => 'Display one tenant user',
     }
 
 C<route> is the complete effective mounted route. C<name> is the complete
-effective namespaced name, or undef for an unnamed leaf. C<desc> is that
-leaf's declared description, or undef.
+absolute logical address, or undef for an unnamed leaf.
+C<logical_namespace> is available even when C<name> is undef. The declaration
+object's C<< Route->name >> remains only its local final segment, such as
+C<show>; matched metadata C<name> is absolute. C<desc> is that leaf's declared
+description, or undef.
 
-A selected opaque application mount uses the same four C<match> keys:
+A selected opaque application mount uses the same match shape:
 
     {
-        kind  => 'mount',
-        route => '/admin/{tenant_id}', # complete effective mount path
-        name  => undef,
-        desc  => 'Tenant admin app',   # declared value or undef
+        kind              => 'mount',
+        route             => '/admin/{tenant_id}', # complete effective mount path
+        name              => undef,
+        logical_namespace => '/',
+        desc              => 'Tenant admin app',   # declared value or undef
     }
 
 The opaque mount does not append an entry for itself to C<mounts>; its terminal
 C<match> is the only record it adds. Generated 404/405 outcomes leave C<match>
-undefined.
+undefined while retaining the namespace and consumed-prefix capture snapshot
+of their owning placement.
 
-Compatible nested v1 routers copy the frame list and append a child frame.
+Explicit Router mounts share their containing resolver frame. A separately
+compiled Router reached through an opaque application mount appends a
+compatible child frame, and Context selects the innermost compatible frame.
 Opaque, malformed, or newer C<pagi.routing> data is an incompatible boundary:
 the child router creates a fresh v1 container, ignores foreign ancestry, and
-does not croak. The incoming scope and foreign value are not mutated. This
-lets independent extensions coexist without pretending their schemas are
-compatible. Additive compatible fields, such as frame C<root_path>, retain
-version 1.
+does not croak. The incoming scope and foreign value are not mutated. Additive
+compatible fields, such as frame C<root_path>, retain version 1.
 
 The current frame is shared only through the router's request-local shallow
 scope clones, allowing router/mount middleware to inspect the final match after

@@ -1,6 +1,10 @@
 # Revision history for PAGI-Tools
 
 0.002003
+  - PAGI::Routing adds explicit routing-aware Router mounts, composed slash
+    logical addresses, and request-local relative Context links. Reverse
+    routing now accepts compact or named path-parameter, query, and fragment
+    arguments while opaque positional application mounts remain opaque.
   - All immutable declarative middleware lists now accept the additive
     bare-factory shorthand; the chat showcase uses it at its Compose application root.
   - New PAGI::Compose is an optional immutable application-root description

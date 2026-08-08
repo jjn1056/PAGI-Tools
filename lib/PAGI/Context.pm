@@ -338,7 +338,8 @@ a component remain literal, and reference text is never URI-decoded. Empty
 components, repeated or trailing separators, traversal above root,
 namespace-only results, and unknown exact targets fail without ancestor search
 or fuzzy fallback. These methods perform no receive/send calls and emit no
-protocol events.
+protocol events. They return strings or croak; they do not redirect or mutate
+a response.
 
 The compatible version-1 frame shape is:
 

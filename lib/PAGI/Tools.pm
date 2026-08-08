@@ -69,6 +69,14 @@ Response values, use the additive declarative API instead:
 
     my $app = $routing->to_app;
 
+Declarative routing distinguishes inline C<< routes => [...] >>, inspectable
+C<< router => $child >> mounts with a required namespace, and positional opaque
+application mounts. Named routes compose into slash addresses such as
+C</person/show>; request Contexts can generate relative links from the active
+placement, with compact or named path/query/fragment arguments. These helpers
+return strings or croak, perform no protocol I/O, and do not replace normal
+authorization checks.
+
 For a small deployed root, the optional composer can put declarative routes,
 application-wide middleware, and lifecycle callbacks in one immutable
 description:

@@ -663,6 +663,10 @@ middleware. The containing Resolver supplies placement-specific effective
 metadata without mutating the child description or invoking the child's public
 C<to_app> boundary.
 
+This ownership is final after a matching Router-mount prefix. Cooperative
+no-match bubbling remains deferred. A root Router mount consumes no prefix and
+leaves C<path> and C<root_path> unchanged.
+
 The executable nesting order is outer Router middleware, Router-mount
 middleware, child Router middleware, any selected inline-mount middleware,
 route middleware, and handler. Mount middleware therefore also surrounds the

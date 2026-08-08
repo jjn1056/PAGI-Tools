@@ -54,10 +54,10 @@ guessing:
 The final expression is the native PAGI app. Compile once for the application
 instance; do not call C<to_app> inside a request.
 
-=head2 Inline and Application Mounts
+=head2 Inline, Router, and Application Mounts
 
-The C<routes> form is structural. Its names, fallbacks, and reverse paths are
-known to the parent:
+The C<routes> form is structural. Its names and reverse paths are known to the
+parent, and it uses the containing Router's fallback handlers:
 
   mount('/tenants/{tenant_id}',
       routes => [
@@ -73,10 +73,44 @@ C<path_params>. The child C<path> is C</users/42>, C<root_path> contains the
 actual C</tenants/acme> prefix, and C<raw_path> remains the original wire path.
 Reverse routing supplies both captures:
 
-  $c->path_for('tenant.user', {
+  $c->path_for('/tenant/user', {
       tenant_id => 'acme',
       user_id   => 42,
   });
+
+Use the explicit C<router> form for a separately configured modular Router:
+
+  package MyApp::People;
+  use PAGI::Routing qw(router route);
+
+  sub routing {
+      return router(routes => [
+          route('/' => \&index, name => 'index'),
+          route('/{person_id}' => \&show, name => 'show'),
+      ], desc => 'People routes');
+  }
+
+  package MyApp::Root;
+  use PAGI::Routing qw(router route mount);
+  use MyApp::People ();
+
+  sub routing {
+      my $people = MyApp::People->routing;
+      return router(routes => [
+          route('/' => \&home, name => 'home'),
+          mount('/people',
+              router    => $people,
+              namespace => 'person',
+          ),
+      ]);
+  }
+
+The root resolver publishes C</home>, C</person/index>, and
+C</person/show>. The child Router keeps only its local descriptions; inside a
+request, Context uses the active placement for relative calls such as
+C<< $c->path_for('show') >>. After C</people> matches, the child Router owns its
+full, partial, and no-match results, including its generated 404/405. The root
+does not resume scanning. Cooperative no-match bubbling remains deferred.
 
 The positional form is an opaque application mount:
 
@@ -85,6 +119,16 @@ The positional form is an opaque application mount:
 Once its prefix matches, it owns the outcome. Its 404/405 cannot resume parent
 scanning, it applies no HTTP method filter, and its child names are not visible
 to the parent.
+
+Passing a Router positionally chooses that same opaque contract:
+
+  mount('/opaque' => $people)                         # opaque application
+  mount('/known', router => $people, namespace => 'person') # inspectable child
+
+C<< mount('/opaque' => $people) >> is not shorthand for the named
+C<< router => $people >> form.
+Opaque mounts reject C<namespace>; inline mounts may omit it; Router mounts
+require one local logical segment.
 
 A raw route is different again:
 
@@ -262,8 +306,9 @@ handler.
 C<*path> captures decoded values including C<..>, repeated separators, and
 backslashes. Never concatenate that value with a filesystem root. Canonicalize
 the candidate, verify containment at a path-component boundary, and decide how
-symlinks are handled. Prefer a dedicated static/file component whose
-containment policy you have verified.
+symlinks are handled. Prefer L<PAGI::App::File> or
+L<PAGI::Middleware::Static> to treating a wildcard capture as a filesystem
+path.
 
 =head2 Normal, Raw, WebSocket, and SSE Handler Lifecycles
 
@@ -313,21 +358,56 @@ protocol events. Their resolved return values are inert.
 
 =head2 Names, Reverse URLs, and Inspection
 
-Mount namespaces are optional and affect lookup names, not paths:
+Names and namespaces are local logical segments; slash alone forms hierarchy.
+Inline namespaces are optional, while explicit Router mounts require one:
 
   my $routing = router(routes => [
       mount('/api/v1', routes => $shared, namespace => 'v1'),
       mount('/api/v2', routes => $shared, namespace => 'v2'),
   ]);
 
-  $routing->path_for('v1.user', { id => 42 });
-  $c->path_for('v2.user', { id => 42 });
-  $c->url_for('v2.user',  { id => 42 });
+  $routing->path_for('/v1/user', { id => 42 });
+  $c->path_for('/v2/user', { id => 42 });
+  $c->url_for('/v2/user',  { id => 42 });
 
-An unnamed mount leaves child names unprefixed. Duplicate effective names
-croak with both paths and namespace guidance. Router C<path_for> has no request
-prefix; Context C<path_for> includes the compiled-router entry C<root_path>.
-C<url_for> adds a scheme and authority validated by L<PAGI::Authority>.
+An unnamed inline mount leaves child addresses unprefixed. A dot such as
+C<v1.1> remains literal within one segment. Duplicate absolute addresses,
+duplicate parameters along one effective pattern, and defensive Router cycles
+croak during Router construction.
+
+Relative Context references start at the current containing namespace and use
+exact C<.>/C<..> normalization:
+
+  # Current address: /person/blog/show; captures person_id=42, blog_id=7
+  $c->path_for('index');                    # inherits person_id
+  $c->path_for('../show');                  # parent namespace
+  $c->path_for('show', { blog_id => 8 });  # explicit value wins
+  $c->path_for('/person/blog/show', {
+      person_id => 9,
+      blog_id   => 3,
+  });                                      # absolute: no inheritance
+
+Relative calls inherit only captures required by the target. Absolute Context
+references and all Router-object calls inherit nothing. Inheritance constructs
+a URL; it does not authorize the resource. Handlers must still enforce access.
+
+Compact reverse arguments are C<(\%params, \%query, $fragment)>. Use empty
+hashrefs as placeholders when skipping a component, or use named arguments:
+
+  $c->url_for('show', { blog_id => 8 }, { view => 'full' }, 'comments');
+  $c->url_for('show',
+      query    => { view => 'full' },
+      fragment => 'comments',
+  );
+
+Query keys are sorted; query and fragment components are UTF-8 encoded. The
+forms cannot be mixed. All reverse helpers return strings or croak. They emit
+no events, send no redirect, and do not mutate a response.
+
+Router C<path_for> has no request prefix or placement. Context C<path_for>
+uses the active placement and includes the compiled-router entry C<root_path>
+exactly once. C<url_for> adds a scheme and authority validated by
+L<PAGI::Authority>.
 
 For HTTP behind a trusted proxy, wrap outer-to-inner:
 
@@ -341,9 +421,10 @@ Inspect direct children and named leaves without mutating the tree:
 
   my $children = $routing->routes;
   my $named    = $routing->named_routes;
-  my $leaf     = $routing->route_named('v2.user');
+  my $leaf     = $routing->route_named('/v2/user');
 
-Recurse into inline C<< $mount->routes >>; application mounts are opaque.
+C<named_routes> maps absolute addresses to their original leaves. Explicit
+Router mounts are inspected recursively; positional applications are opaque.
 C<desc> is a human note for listings and tools.
 
 =head2 Matched-Route Metadata
@@ -354,14 +435,17 @@ router middleware:
   $scope->{'pagi.routing'} = {
       version => 1,
       frames  => [{
-          resolver  => $resolver,
-          root_path => '/proxy', # optional additive v1 field
-          mounts    => [],
-          match     => undef,
+          resolver          => $resolver,
+          root_path         => '/proxy', # optional additive v1 field
+          logical_namespace => '/',
+          captures          => {},       # private reverse-routing snapshot
+          mounts            => [],
+          match             => undef,
       }],
   };
 
-An inline mount appends this exact record before its middleware runs:
+A known inline or Router mount appends this exact record before its middleware
+runs:
 
   {
       path      => '/tenants/{tenant_id}', # declared mount path
@@ -373,21 +457,29 @@ All keys are present; nested records are outer-to-inner. A selected leaf sets
 this exact C<match> before route middleware:
 
   {
-      kind  => 'route', # or websocket / sse
-      route => '/tenants/{tenant_id}/users/{user_id}', # effective route
-      name  => 'tenant.user.show',                     # effective or undef
-      desc  => 'Display one tenant user',              # declared or undef
+      kind              => 'route', # or websocket / sse
+      route             => '/tenants/{tenant_id}/users/{user_id}',
+      name              => '/tenant/user/show', # absolute or undef
+      logical_namespace => '/tenant/user',
+      desc              => 'Display one tenant user', # declared or undef
   }
+
+C<< Route->name >> is the declaration-local final segment, such as C<show>;
+matched C<name> is the composed absolute address. C<logical_namespace> remains
+available for unnamed leaves.
 
 An opaque application mount instead sets terminal C<match> with
 C<kind =E<gt> 'mount'>, its complete effective mount path in C<route>,
-C<name =E<gt> undef>, and its declared C<desc> or undef. It does not append an
-inline C<mounts> record for itself. A generated 404/405 leaves C<match>
+C<name =E<gt> undef>, its containing C<logical_namespace>, and its declared
+C<desc> or undef. It does not append a C<mounts> record for itself. A generated
+404/405 leaves C<match>
 undefined. See L<PAGI::Routing/MATCHED-ROUTE SCOPE CONVENTION> for the complete
 public schema.
 
-A separately compiled compatible router appends a frame, so child middleware
-can inspect ancestry while the parent keeps its terminal mount record.
+An explicit Router mount shares the containing frame. A separately compiled
+compatible Router reached through an opaque mount appends a frame, so child
+middleware can inspect ancestry while the parent keeps its terminal mount
+record.
 
 The frame is shared through request-local shallow scopes: router/mount
 middleware can inspect the final match after awaiting downstream. Middleware

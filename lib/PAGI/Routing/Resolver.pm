@@ -613,7 +613,8 @@ C<https://example.test/items/7?q=two%20words#details> for HTTP/SSE and
 C<wss://example.test/socket/7?q=two%20words#details> for WebSocket. Neither
 reverse method invokes receive/send callbacks or emits protocol events. The decoded Unicode boundary
 is escaped component-wise before it is joined to the already escaped generated
-path. Matched leaf metadata includes its effective URL pattern, canonical
+path. Both return a string or croak; neither redirects or mutates a response.
+Matched leaf metadata includes its effective URL pattern, canonical
 address, containing logical namespace, kind, and description. Placement
 records retain the source leaf, mount data, composed constraints, and defensive
 location information. References beginning with C</> are absolute; other
@@ -637,5 +638,8 @@ never read from captures. The existing Pattern renderer remains responsible
 for missing, extra, scalar, and constraint validation. URL mode adds the
 request scheme and L<PAGI::Authority> only after target resolution; neither
 mode performs protocol I/O.
+
+Relative capture inheritance is a URL-construction convenience. It does not
+authorize the generated target; handlers remain responsible for access checks.
 
 =cut
