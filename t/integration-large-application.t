@@ -38,6 +38,15 @@ sub _follow_link {
     };
 }
 
+sub _source_text {
+    my ($path) = @_;
+    open my $fh, '<', $path or die "cannot open $path: $!\n";
+    local $/;
+    my $source = <$fh>;
+    close $fh or die "cannot close $path: $!\n";
+    return $source;
+}
+
 subtest 'fixture repository exposes defensive people and blog records' => sub {
     my $data = MyApp::Data->new;
 
@@ -182,6 +191,35 @@ subtest 'legacy URL helper is absent' => sub {
     ok(!-e $url_module, 'the legacy URL helper file is no longer present');
 };
 
+subtest 'component handlers keep application hrefs behind Context reverse calls' => sub {
+    my $component_root = "$Bin/../examples/15-large-application/lib/MyApp";
+    my @components = (
+        ['Root', "$component_root/Root.pm", 0],
+        ['Person', "$component_root/Person.pm", 0],
+        ['Blogs', "$component_root/Person/Blogs.pm", 1],
+    );
+
+    for my $component (@components) {
+        my ($label, $path, $uses_url_for) = @$component;
+        my $source = _source_text($path);
+        unlike(
+            $source,
+            qr{href\s*=\s*["'](?:/|https?://)},
+            "$label handlers contain no literal application href",
+        );
+        like(
+            $source,
+            qr{\$c->path_for\s*\(},
+            "$label handlers generate paths through Context",
+        );
+        like(
+            $source,
+            qr{\$c->url_for\s*\(},
+            "$label handlers generate absolute URLs through Context",
+        ) if $uses_url_for;
+    }
+};
+
 subtest 'application View owns the shared HTML document shell' => sub {
     my $html = MyApp::View->document('Fixture title', '    <h1>Body</h1>');
     like($html, qr{<!doctype html>}, 'document declares HTML');
@@ -191,6 +229,7 @@ subtest 'application View owns the shared HTML document shell' => sub {
 };
 
 subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
+    my $routing = MyApp::Root->routing;
     my $direct_app = MyApp::Root->to_app;
     is(ref($direct_app), 'CODE', 'Root class compiles to a PAGI app');
 
@@ -206,20 +245,40 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         $state = $client->state;
         isa_ok($state->{data}, 'MyApp::Data');
 
-        my $home = $client->get('/');
+        my ($ada) = grep {
+            $_->{name} eq 'Ada Lovelace'
+        } @{$state->{data}->people};
+        my ($first_blog) = @{$state->{data}->blogs_for($ada->{id})};
+        my $home_target = '/';
+
+        my $people_path = $routing->path_for('/person/index');
+        my $person_path = $routing->path_for(
+            '/person/show', { person_id => $ada->{id} },
+        );
+        my $blogs_path = $routing->path_for(
+            '/person/blog/index', { person_id => $ada->{id} },
+        );
+        my $blog_path = $routing->path_for(
+            '/person/blog/show', {
+                person_id => $ada->{id},
+                blog_id   => $first_blog->{id},
+            },
+        );
+
+        my $home = $client->get($home_target);
         is($home->status, 200, 'Root home responds');
         like($home->text, qr{<h1>My PAGI People</h1>},
             'Root home renders startup-backed fixture data');
 
         my $people_link = _follow_link($client, $home, 'Browse people');
-        is($people_link->{href}, '/person/',
+        is($people_link->{href}, $people_path,
             'Root renders the canonical Person index path');
         my $people = $people_link->{response};
         is($people->status, 200, 'Root-to-Person generated link is followed');
         like($people->text, qr{<h1>People</h1>},
             'followed Person index renders its page');
-        my $person_link = _follow_link($client, $people, 'Ada Lovelace');
-        is($person_link->{href}, '/person/1',
+        my $person_link = _follow_link($client, $people, $ada->{name});
+        is($person_link->{href}, $person_path,
             'Person renders Ada detail with its relative route name');
         my $person = $person_link->{response};
         is($person->status, 200, 'Person index-to-detail link is followed');
@@ -227,7 +286,7 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
             'followed Person detail renders fixture content');
 
         my $blogs_link = _follow_link($client, $person, 'Read blogs');
-        is($blogs_link->{href}, '/person/1/blog/',
+        is($blogs_link->{href}, $blogs_path,
             'Person renders the inherited Blogs index path');
         my $blogs = $blogs_link->{response};
         is($blogs->status, 200, 'Person-to-Blogs generated link is followed');
@@ -235,9 +294,9 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
             'followed Blogs index renders its page');
 
         my $blog_link = _follow_link(
-            $client, $blogs, 'Notes on the Analytical Engine',
+            $client, $blogs, $first_blog->{title},
         );
-        is($blog_link->{href}, '/person/1/blog/101',
+        is($blog_link->{href}, $blog_path,
             'Blogs renders detail with inherited person_id and explicit blog_id');
         my $blog = $blog_link->{response};
         is($blog->status, 200, 'Blogs index-to-detail link is followed');
@@ -245,32 +304,49 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
             'followed Blog detail renders fixture content');
 
         my $home_link = _follow_link($client, $blog, 'Home');
-        is($home_link->{href}, '/',
+        is($home_link->{target}, $home_target,
             'Blog detail renders its graph-wide Root link');
         is($home_link->{response}->status, 200,
             'Blog-to-Root generated link is followed');
 
         my $back_person = _follow_link($client, $blog, 'Person');
-        is($back_person->{href}, '/person/1',
+        is($back_person->{target}, $person_link->{target},
             'Blog detail renders its relative Person link');
         is($back_person->{response}->status, 200,
             'Blog-to-Person generated link is followed');
 
         my $back_blogs = _follow_link($client, $blog, 'Blogs');
-        is($back_blogs->{href}, '/person/1/blog/',
+        is($back_blogs->{target}, $blogs_link->{target},
             'Blog detail renders its relative Blogs link');
         is($back_blogs->{response}->status, 200,
             'Blog-to-Blogs generated link is followed');
 
         my $comments = _follow_link($client, $blog, 'Comments view');
+        my $comments_href = 'http://testserver' . $routing->path_for(
+            '/person/blog/show',
+            params => {
+                person_id => $ada->{id},
+                blog_id   => $first_blog->{id},
+            },
+            query    => { view => 'full' },
+            fragment => 'comments',
+        );
+        my $comments_target = $routing->path_for(
+            '/person/blog/show',
+            params => {
+                person_id => $ada->{id},
+                blog_id   => $first_blog->{id},
+            },
+            query => { view => 'full' },
+        );
         is(
             $comments->{href},
-            'http://testserver/person/1/blog/101?view=full#comments',
+            $comments_href,
             'url_for preserves absolute authority, query, and fragment in HTML',
         );
         is(
             $comments->{target},
-            '/person/1/blog/101?view=full',
+            $comments_target,
             'the follower removes only test authority and fragment',
         );
         is($comments->{response}->status, 200,
