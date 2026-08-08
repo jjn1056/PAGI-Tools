@@ -9,7 +9,6 @@ use Scalar::Util qw(blessed refaddr);
 use PAGI::Context;
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
-use PAGI::Routing::Resolver ();
 use PAGI::Utils ();
 
 sub compile {
@@ -33,6 +32,29 @@ sub compile {
 sub _compile_router {
     my ($class, $router) = @_;
 
+    my $resolver = $router->_resolver;
+    my $app = $class->_compile_router_body($router, $resolver, []);
+
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $type = $scope->{type} // 'http';
+        return if $type eq 'lifespan';
+        croak "unsupported PAGI scope type '$type'"
+            unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
+
+        my ($head_scope, $wire_send)
+            = PAGI::Routing::HeadBoundary->prepare($scope, $send);
+        my $routing_scope = $class->_routing_scope($head_scope, $resolver);
+
+        my $returned = $app->($routing_scope, $receive, $wire_send);
+        await Future->wrap($returned);
+        return;
+    };
+}
+
+sub _compile_router_body {
+    my ($class, $router, $resolver, $location_prefix) = @_;
+
     my $not_found_handler = $router->not_found || sub {
         my ($context) = @_;
         return $context->text('Not Found');
@@ -49,34 +71,18 @@ sub _compile_router {
         $method_not_allowed_handler,
         405,
     );
-    my $resolver = PAGI::Routing::Resolver->new(routes => $router->routes);
     my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
         $not_found,
         $method_not_allowed,
         $resolver,
-        [],
+        $location_prefix,
     );
 
-    my $app = PAGI::Routing::Middleware->_wrap_descriptors(
+    return PAGI::Routing::Middleware->_wrap_descriptors(
         $router->middleware,
         $dispatcher,
     );
-
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-        my $type = $scope->{type} // 'http';
-        return if $type eq 'lifespan';
-        croak "unsupported PAGI scope type '$type'"
-            unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
-
-        my ($head_scope, $wire_send)
-            = PAGI::Routing::HeadBoundary->prepare($scope, $send);
-        my $routing_scope = $class->_routing_scope($head_scope, $resolver);
-
-        await $app->($routing_scope, $receive, $wire_send);
-        return;
-    };
 }
 
 sub _compile_dispatcher {
@@ -115,6 +121,13 @@ sub _compile_dispatcher {
                 await Future->wrap($returned);
                 return;
             };
+        }
+        elsif (defined $node->router) {
+            $mounted_app = $class->_compile_router_body(
+                $node->router,
+                $resolver,
+                \@location,
+            );
         }
         else {
             $mounted_app = $class->_compile_dispatcher(
@@ -181,17 +194,19 @@ sub _compile_dispatcher {
                 $allow,
                 $provenance,
             );
-            await $method_not_allowed->(
+            my $returned = $method_not_allowed->(
                 $scope,
                 $receive,
                 $generated_send,
                 $allow,
                 $provenance,
             );
+            await Future->wrap($returned);
             return;
         }
 
-        await $not_found->($scope, $receive, $send);
+        my $returned = $not_found->($scope, $receive, $send);
+        await Future->wrap($returned);
         return;
     };
 }
@@ -603,19 +618,39 @@ PAGI::Routing::Compiler - Internal declarative routing compiler
 
 =head1 DESCRIPTION
 
-Compiles declarative HTTP routing descriptions into fresh application graphs.
-Full decisions invoke their selected leaf or declaration-ordered mount, while
+Compiles declarative routing descriptions into fresh application graphs. Full
+decisions invoke their selected leaf or declaration-ordered mount, while
 partial and none decisions are rendered through the normal handler adapter as
 generated 405 and 404 responses. Inline mounts inherit those handlers with a
 fresh local Allow set. Application mounts remain opaque after their prefix
 matches. Generated response and Allow state remain request-local.
 
+An explicit C<< router => $child >> mount is transparent to composed route
+inspection but is a child dispatch boundary at runtime. Once its prefix
+matches, the child Router owns its full, partial, none, WebSocket, and SSE
+outcomes; the parent neither resumes scanning nor unions its Allow methods.
+The child contributes its own generated handlers, dispatcher, and Router
+middleware. The containing Resolver supplies placement-specific effective
+metadata without mutating the child description or invoking the child's public
+C<to_app> boundary.
+
+The executable nesting order is outer Router middleware, Router-mount
+middleware, child Router middleware, any selected inline-mount middleware,
+route middleware, and handler. Mount middleware therefore also surrounds the
+child's generated and protocol-miss outcomes. Each placement is compiled
+independently, and each public compilation constructs another fresh set of
+middleware wrappers.
+
 C<compile> is a synchronous build-time boundary: it resolves middleware,
 native components, match entries, and fallback adapters but starts no request
 and emits no events. It returns a native async PAGI coderef. Invocation of that
-coderef installs a fresh request-local C<pagi.routing> frame, matches the
-request, awaits the selected handler/application, and emits or forwards the
-appropriate protocol events.
+coderef installs exactly one fresh request-local C<pagi.routing> frame and one
+outermost HEAD wire boundary. Mounted Router bodies share that frame and HEAD
+owner, so all middleware sees the complete downstream match and the
+unsuppressed GET representation before HEAD body and sendfile suppression at
+the edge. The compiler matches the request, adapts synchronous and
+Future-backed completions, and emits or forwards the appropriate protocol
+events.
 
 Compatible version-1 routing metadata contributes ancestor frames. Opaque,
 malformed, or newer metadata is preserved on the incoming scope as an
