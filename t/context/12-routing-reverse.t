@@ -81,12 +81,12 @@ subtest 'Context selects the last resolver from a valid routing frame stack' => 
     );
 
     is(
-        $context->path_for('selected', { id => 7 }),
+        $context->path_for('/selected', { id => 7 }),
         '/edge/child/7',
         'the last frame supplies Context reverse paths',
     );
     is(
-        $context->url_for('selected', { id => 7 }),
+        $context->url_for('/selected', { id => 7 }),
         'http://example.test/edge/child/7',
         'the last frame also supplies Context absolute URLs',
     );
@@ -105,9 +105,9 @@ subtest 'all built-in Context subclasses inherit routing reverse methods' => sub
         my ($type, $class) = @$case;
         my $context = _context($type, $resolver);
         isa_ok($context, $class);
-        is($context->path_for('page'), '/page', "$class inherits path_for");
+        is($context->path_for('/page'), '/page', "$class inherits path_for");
         is(
-            $context->url_for('page'),
+            $context->url_for('/page'),
             'http://example.test/page',
             "$class inherits url_for",
         );
@@ -156,12 +156,12 @@ subtest 'missing and malformed routing metadata fail at the Context boundary' =>
         my $context = PAGI::Context->new(\%scope, sub { }, sub { });
 
         like(
-            dies { $context->path_for('page') },
+            dies { $context->path_for('/page') },
             qr/\Apath_for requires a PAGI::Routing resolver in scope/,
             "$label is rejected by path_for",
         );
         like(
-            dies { $context->url_for('page') },
+            dies { $context->url_for('/page') },
             qr/\Aurl_for requires a PAGI::Routing resolver in scope/,
             "$label is rejected by url_for",
         );
@@ -190,12 +190,12 @@ subtest 'compiled inline mounts reverse from the router boundary across protocol
                     { via => $label },
                 ),
                 sibling_path    => $context->path_for(
-                    'tenant.sibling',
+                    '/tenant/sibling',
                     { tenant => 'acme', id => 8 },
                     { via => $label },
                 ),
                 sibling_url     => $context->url_for(
-                    'tenant.sibling',
+                    '/tenant/sibling',
                     { tenant => 'acme', id => 8 },
                     { via => $label },
                 ),
@@ -208,15 +208,15 @@ subtest 'compiled inline mounts reverse from the router boundary across protocol
     my $app = router(routes => [
         mount('/tenants/{tenant}', routes => [
             route('/show/{id}' => $capture->(
-                'http', 'tenant.show', { tenant => 'acme', id => 7 },
+                'http', '/tenant/show', { tenant => 'acme', id => 7 },
             ), name => 'show'),
             route('/sibling/{id}' => sub { return $_[0]->text('sibling') },
                 name => 'sibling'),
             websocket('/socket/{room}' => $capture->(
-                'ws', 'tenant.socket', { tenant => 'acme', room => 'lobby' },
+                'ws', '/tenant/socket', { tenant => 'acme', room => 'lobby' },
             ), name => 'socket'),
             sse('/events/{channel}' => $capture->(
-                'sse', 'tenant.events', { tenant => 'acme', channel => 'news' },
+                'sse', '/tenant/events', { tenant => 'acme', channel => 'news' },
             ), name => 'events'),
         ], namespace => 'tenant'),
     ])->to_app;
@@ -287,10 +287,10 @@ subtest 'a separately compiled child records and uses its own router boundary' =
                     scope_root_paths => [map { $_->{root_path} } @$frames],
                     current_scope    => $context->scope->{root_path},
                     item_path        => $context->path_for(
-                        'item', { space => 'blue', id => 9 }, { q => 'two words' },
+                        '/item', { space => 'blue', id => 9 }, { q => 'two words' },
                     ),
                     sibling_url     => $context->url_for(
-                        'sibling', { space => 'blue', id => 10 }, { q => 'two words' },
+                        '/sibling', { space => 'blue', id => 10 }, { q => 'two words' },
                     ),
                 };
                 return $context->text('child');
@@ -345,36 +345,36 @@ subtest 'Context paths add root_path only at the application boundary' => sub {
     my $resolver = PAGI::Routing::Resolver->new(routes => $routing->routes);
 
     is(
-        _context('http', $resolver)->path_for('item', { id => 'one' }),
+        _context('http', $resolver)->path_for('/item', { id => 'one' }),
         '/items/one',
         'an empty root_path leaves the application path unchanged',
     );
     is(
         _context('http', $resolver, root_path => '/proxy/')
-            ->path_for('item', { id => 'one' }, { q => 'two words' }),
+            ->path_for('/item', { id => 'one' }, { q => 'two words' }),
         '/proxy/items/one?q=two%20words',
         'one boundary slash is removed while the generated query is retained',
     );
     is(
         _context('http', $resolver, root_path => '/')
-            ->path_for('item', { id => 'one' }),
+            ->path_for('/item', { id => 'one' }),
         '/items/one',
         'a root-only deployment prefix does not duplicate the leading slash',
     );
     is(
         _context('http', $resolver, root_path => '/proxy/')
-            ->path_for('root'),
+            ->path_for('/root'),
         '/proxy/',
         'an application root keeps one terminal boundary slash',
     );
     is(
         _context('http', $resolver, root_path => '/proxy/')
-            ->path_for('double'),
+            ->path_for('/double'),
         '/proxy//double/',
         'joining the boundary does not normalize route-internal slashes',
     );
     is(
-        $routing->path_for('item', { id => 'one' }, { q => 'two words' }),
+        $routing->path_for('/item', { id => 'one' }, { q => 'two words' }),
         '/items/one?q=two%20words',
         'router path_for remains request-independent',
     );
@@ -391,12 +391,12 @@ subtest 'Context URI-encodes decoded root_path without re-encoding generated pat
     );
 
     is(
-        $context->path_for('item', { id => 'a b%' }, { q => "caf\x{e9} %" }),
+        $context->path_for('/item', { id => 'a b%' }, { q => "caf\x{e9} %" }),
         '/proxy%20space/50%25/caf%C3%A9/items/a%20b%25?q=caf%C3%A9%20%25',
         'path_for encodes the decoded prefix component-wise and preserves the generated query',
     );
     is(
-        $context->url_for('item', { id => 'a b%' }, { q => "caf\x{e9} %" }),
+        $context->url_for('/item', { id => 'a b%' }, { q => "caf\x{e9} %" }),
         'https://public.example/proxy%20space/50%25/caf%C3%A9/items/a%20b%25?q=caf%C3%A9%20%25',
         'url_for emits the same single-encoded path after the authority',
     );
@@ -412,10 +412,10 @@ subtest 'a dynamic application mount keeps scope paths decoded and reverses from
                 scope_root_path => $context->scope->{root_path},
                 frame_root_path => $frames->[-1]{root_path},
                 path => $context->path_for(
-                    'item', { id => 'a b%' }, { q => "caf\x{e9} %" },
+                    '/item', { id => 'a b%' }, { q => "caf\x{e9} %" },
                 ),
                 url => $context->url_for(
-                    'item', { id => 'a b%' }, { q => "caf\x{e9} %" },
+                    '/item', { id => 'a b%' }, { q => "caf\x{e9} %" },
                 ),
             };
             return $context->text('child');
@@ -453,7 +453,7 @@ subtest 'url_for uses validated Host and only absent Host permits server fallbac
             scheme  => 'https',
             headers => [['host', 'public.example:8443']],
             server  => ['internal.example', 9000],
-        )->url_for('page'),
+        )->url_for('/page'),
         'https://public.example:8443/page',
         'a validated Host with an explicit port wins over server',
     );
@@ -462,7 +462,7 @@ subtest 'url_for uses validated Host and only absent Host permits server fallbac
             scheme  => 'https',
             headers => [],
             server  => ['fallback.example', 9443],
-        )->url_for('page'),
+        )->url_for('/page'),
         'https://fallback.example:9443/page',
         'server supplies authority only when Host is absent',
     );
@@ -472,7 +472,7 @@ subtest 'url_for uses validated Host and only absent Host permits server fallbac
             _context('http', $resolver,
                 headers => [['host', 'bad host']],
                 server  => ['fallback.example', 80],
-            )->url_for('page');
+            )->url_for('/page');
         },
         qr/\Ainvalid authority/,
         'a malformed Host failure propagates without server fallback',
@@ -482,7 +482,7 @@ subtest 'url_for uses validated Host and only absent Host permits server fallbac
             _context('http', $resolver,
                 headers => [['host', 'one.example'], ['Host', 'two.example']],
                 server  => ['fallback.example', 80],
-            )->url_for('page');
+            )->url_for('/page');
         },
         qr/\AHost header must occur at most once/,
         'a duplicate Host failure propagates without server fallback',
@@ -490,7 +490,7 @@ subtest 'url_for uses validated Host and only absent Host permits server fallbac
     like(
         dies {
             _context('http', $resolver, headers => [], server => undef)
-                ->url_for('page');
+                ->url_for('/page');
         },
         qr/\Ascope server cannot provide an authority/,
         'url_for croaks when neither Host nor server can supply authority',
@@ -501,7 +501,7 @@ subtest 'documented HTTP proxy and Host middleware order feeds routing URL gener
     my $routing = router(routes => [
         route('/external' => sub {
             my ($context) = @_;
-            return $context->text($context->url_for('external'));
+            return $context->text($context->url_for('/external'));
         }, name => 'external'),
     ]);
     my $trusted = PAGI::Middleware::TrustedHosts->new(
@@ -535,7 +535,7 @@ subtest 'documented HTTP proxy and Host middleware order feeds routing URL gener
         route('/missing' => sub {
             my ($context) = @_;
             ++$missing_calls;
-            return $context->text($context->url_for('missing'));
+            return $context->text($context->url_for('/missing'));
         }, name => 'missing'),
     ]);
     my $allow_empty = PAGI::Middleware::TrustedHosts->new(
@@ -572,25 +572,25 @@ subtest 'url_for maps the request scheme according to the named route kind' => s
     );
 
     my @cases = (
-        ['http target keeps http',             'page',   'http',
+        ['http target keeps http',             '/page',   'http',
             'http://example.test/page'],
-        ['http target keeps https',            'page',   'https',
+        ['http target keeps https',            '/page',   'https',
             'https://example.test/page'],
-        ['http target maps ws to http',        'page',   'ws',
+        ['http target maps ws to http',        '/page',   'ws',
             'http://example.test/page'],
-        ['http target maps wss to https',      'page',   'wss',
+        ['http target maps wss to https',      '/page',   'wss',
             'https://example.test/page'],
-        ['SSE target maps ws to http',         'events', 'ws',
+        ['SSE target maps ws to http',         '/events', 'ws',
             'http://example.test/events'],
-        ['SSE target maps wss to https',       'events', 'wss',
+        ['SSE target maps wss to https',       '/events', 'wss',
             'https://example.test/events'],
-        ['WebSocket target maps http to ws',   'socket', 'http',
+        ['WebSocket target maps http to ws',   '/socket', 'http',
             'ws://example.test/socket'],
-        ['WebSocket target maps https to wss', 'socket', 'https',
+        ['WebSocket target maps https to wss', '/socket', 'https',
             'wss://example.test/socket'],
-        ['WebSocket target keeps ws',          'socket', 'ws',
+        ['WebSocket target keeps ws',          '/socket', 'ws',
             'ws://example.test/socket'],
-        ['WebSocket target keeps wss',         'socket', 'wss',
+        ['WebSocket target keeps wss',         '/socket', 'wss',
             'wss://example.test/socket'],
     );
 
@@ -606,12 +606,12 @@ subtest 'url_for maps the request scheme according to the named route kind' => s
     my $missing_scheme = _context('http', $resolver);
     delete $missing_scheme->scope->{scheme};
     is(
-        $missing_scheme->url_for('page'),
+        $missing_scheme->url_for('/page'),
         'http://example.test/page',
         'a missing scheme defaults to http',
     );
     like(
-        dies { _context('http', $resolver, scheme => 'ftp')->url_for('page') },
+        dies { _context('http', $resolver, scheme => 'ftp')->url_for('/page') },
         qr/\Aunsupported URL scheme/,
         'an unsupported scheme croaks instead of inventing a mapping',
     );

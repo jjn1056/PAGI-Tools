@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Encode qw(encode FB_CROAK);
+use Scalar::Util qw(blessed refaddr);
 use PAGI::Authority ();
 use PAGI::Routing::Mount ();
 use PAGI::Routing::Pattern ();
@@ -13,13 +14,22 @@ sub new {
     croak 'resolver option list must be key/value pairs' if @args % 2;
     my %opts = @args;
 
-    my %allowed = map { $_ => 1 } qw(routes);
+    my %allowed = map { $_ => 1 } qw(router routes);
     for my $key (keys %opts) {
         croak "unknown resolver option '$key'" unless $allowed{$key};
     }
 
-    my $routes = exists $opts{routes} ? $opts{routes} : [];
-    PAGI::Routing::Mount::_validate_routes($routes);
+    croak 'resolver requires exactly one of router or routes'
+        unless (exists $opts{router}) + (exists $opts{routes}) == 1;
+
+    if (exists $opts{router}) {
+        croak 'resolver router must be a PAGI::Routing::Router'
+            unless blessed($opts{router})
+                && $opts{router}->isa('PAGI::Routing::Router');
+    }
+    else {
+        PAGI::Routing::Mount::_validate_routes($opts{routes});
+    }
 
     my $self = bless {
         records              => [],
@@ -27,13 +37,50 @@ sub new {
         metadata_by_location => {},
     }, $class;
 
-    $self->_visit($routes, '', '', [], {}, []);
+    if (exists $opts{router}) {
+        $self->_visit_router(
+            $opts{router}, '', [], [], {}, [], {},
+        );
+    }
+    else {
+        $self->_visit_nodes(
+            $opts{routes}, '', [], [], {}, [], {},
+        );
+    }
     return $self;
 }
 
-sub _visit {
-    my ($self, $nodes, $path_prefix, $name_prefix, $outer_names,
-        $outer_constraints, $location_prefix) = @_;
+sub _visit_router {
+    my ($self, $router, $path_prefix, $address_segments, $outer_names,
+        $outer_constraints, $location_prefix, $active_routers) = @_;
+
+    my $identity = refaddr($router);
+    if ($active_routers->{$identity}) {
+        croak "Router cycle at URL mount ancestry '"
+            . _published_path($path_prefix)
+            . "' and logical namespace ancestry '"
+            . _logical_namespace($address_segments) . "'";
+    }
+
+    $active_routers->{$identity} = 1;
+    my $routes = $router->routes;
+    PAGI::Routing::Mount::_validate_routes($routes);
+    $self->_visit_nodes(
+        $routes,
+        $path_prefix,
+        $address_segments,
+        $outer_names,
+        $outer_constraints,
+        $location_prefix,
+        $active_routers,
+    );
+    delete $active_routers->{$identity};
+    return;
+}
+
+sub _visit_nodes {
+    my ($self, $nodes, $path_prefix, $address_segments, $outer_names,
+        $outer_constraints, $location_prefix, $active_routers) = @_;
 
     for my $index (0 .. $#$nodes) {
         my $node = $nodes->[$index];
@@ -43,12 +90,16 @@ sub _visit {
         if ($node->isa('PAGI::Routing::Mount')) {
             my $mount_path = $node->path eq '/' ? '' : $node->path;
             my $effective_path = $path_prefix . $mount_path;
-            my $published_path = length $effective_path ? $effective_path : '/';
+            my ($names, $constraints) = _extend_parameters(
+                $outer_names, $outer_constraints, $node, $effective_path,
+            );
+            my $logical_namespace = _logical_namespace($address_segments);
             $self->{metadata_by_location}{$location_key} = {
                 match => {
                     kind  => 'mount',
-                    route => $published_path,
+                    route => _published_path($effective_path),
                     name  => undef,
+                    logical_namespace => $logical_namespace,
                     desc  => $node->desc,
                 },
                 mount => {
@@ -57,23 +108,39 @@ sub _visit {
                     desc      => $node->desc,
                 },
                 is_raw => $node->is_raw ? 1 : 0,
+                source => $node,
+                constraints => { %$constraints },
+                location => [@location],
             };
 
             next if $node->is_raw;
 
-            my ($names, $constraints) = _extend_parameters(
-                $outer_names, $outer_constraints, $node, $effective_path,
-            );
-            my $effective_namespace = _join_name($name_prefix, $node->namespace);
-            my $children = $node->routes;
-            $self->_visit(
-                $children,
-                $effective_path,
-                $effective_namespace,
-                $names,
-                $constraints,
-                \@location,
-            );
+            my @child_segments = @$address_segments;
+            push @child_segments, $node->namespace
+                if defined $node->namespace && length $node->namespace;
+
+            if (defined $node->router) {
+                $self->_visit_router(
+                    $node->router,
+                    $effective_path,
+                    \@child_segments,
+                    $names,
+                    $constraints,
+                    \@location,
+                    $active_routers,
+                );
+            }
+            else {
+                $self->_visit_nodes(
+                    $node->routes,
+                    $effective_path,
+                    \@child_segments,
+                    $names,
+                    $constraints,
+                    \@location,
+                    $active_routers,
+                );
+            }
             next;
         }
 
@@ -85,18 +152,23 @@ sub _visit {
         );
         my $declared_name = $node->name;
         my $effective_name = defined $declared_name && length $declared_name
-            ? _join_name($name_prefix, $declared_name)
+            ? _canonical_address([@$address_segments, $declared_name])
             : undef;
+        my $logical_namespace = _logical_namespace($address_segments);
 
         $self->{metadata_by_location}{$location_key} = {
             match => {
                 kind  => $node->kind,
                 route => $effective_path,
                 name  => $effective_name,
+                logical_namespace => $logical_namespace,
                 desc  => $node->desc,
             },
             mount  => undef,
             is_raw => 0,
+            source => $node,
+            constraints => { %$constraints },
+            location => [@location],
         };
 
         next unless defined $effective_name;
@@ -116,7 +188,7 @@ sub _visit {
         };
 
         if (my $previous = $self->{by_name}{$effective_name}) {
-            croak "duplicate effective route name '$effective_name' for effective paths "
+            croak "duplicate canonical route address '$effective_name' for effective paths "
                 . "'$previous->{path}' and '$effective_path'; add or change a namespace";
         }
 
@@ -160,11 +232,19 @@ sub _extend_parameters {
     return (\@names, \%constraints);
 }
 
-sub _join_name {
-    my ($prefix, $part) = @_;
-    return $prefix unless defined $part && length $part;
-    return $part unless defined $prefix && length $prefix;
-    return "$prefix.$part";
+sub _canonical_address {
+    my ($segments) = @_;
+    return '/' . join('/', @$segments);
+}
+
+sub _logical_namespace {
+    my ($segments) = @_;
+    return @$segments ? _canonical_address($segments) : '/';
+}
+
+sub _published_path {
+    my ($path) = @_;
+    return length $path ? $path : '/';
 }
 
 sub path_for {
@@ -172,7 +252,7 @@ sub path_for {
     croak 'route name must be a nonempty scalar'
         unless defined $name && !ref($name) && length $name;
 
-    my $record = $self->{by_name}{$name};
+    my $record = $self->{by_name}{_root_reference($name)};
     croak "unknown route name '$name'" unless $record;
 
     $path_params = {} unless defined $path_params;
@@ -253,13 +333,21 @@ sub named_routes {
 sub route_named {
     my ($self, $name) = @_;
     return unless defined $name && !ref($name);
+    $name = _root_reference($name);
     return exists $self->{by_name}{$name} ? $self->{by_name}{$name}{node} : undef;
 }
 
 sub route_kind {
     my ($self, $name) = @_;
     return unless defined $name && !ref($name);
+    $name = _root_reference($name);
     return exists $self->{by_name}{$name} ? $self->{by_name}{$name}{kind} : undef;
+}
+
+sub _root_reference {
+    my ($name) = @_;
+    return $name if !length($name) || substr($name, 0, 1) eq '/';
+    return "/$name";
 }
 
 1;
@@ -268,22 +356,39 @@ __END__
 
 =head1 NAME
 
-PAGI::Routing::Resolver - Effective names and reverse paths for declarative routing
+PAGI::Routing::Resolver - Composed slash addresses and reverse paths
 
 =head1 DESCRIPTION
 
-This internal routing value traverses only known inline mounts. It indexes
-named leaves by their effective dot-separated names, retains their original
-description objects for inspection, and renders application-relative paths.
-Application mounts remain opaque.
+This internal routing value traverses direct routes, inline mounts, and
+explicit C<< router => $router >> children. It indexes named leaves by
+canonical absolute slash addresses, retains each original leaf identity for
+inspection, and renders application-relative paths for the outer placement.
+Positional application mounts remain opaque, including positional Router
+targets.
 
-Construction validates/builds the effective name and path index once and does
-no request I/O. C<path_for> validates path/query values and returns a string.
+Construction validates/builds the effective address, path, constraint, and
+location index once and does no request I/O. Every known mount prefix is
+validated before opacity ends traversal. Duplicate canonical addresses report
+both effective paths, and a path parameter may occur only once along one
+ancestor-to-descendant effective path. Router identity is tracked only in the
+active ancestry, rejecting cycles while allowing sibling placement reuse.
+
+Child Router descriptions remain placement-free: traversal calls their
+C<routes> method and never reuses their local resolver as an outer placement
+resolver. C<path_for> validates path/query values and returns a string.
 C<url_for_scope> additionally reads one request scope, delegates authority to
 L<PAGI::Authority>, applies the compiled-router C<root_path> boundary, and
 returns an absolute string; it emits no events. The decoded Unicode boundary
 is escaped component-wise before it is joined to the already escaped generated
-path. C<named_routes> returns a defensive hashref, while C<route_named> and
-C<route_kind> return immutable indexed values.
+path. Matched leaf metadata includes its effective URL pattern, canonical
+address, containing logical namespace, kind, and description. Placement
+records retain the source leaf, mount data, composed constraints, and defensive
+location information. References beginning with C</> are absolute; bare and
+child-slash references resolve from the current Router root by adding one
+leading slash. Dots remain literal within one segment and never spell logical
+hierarchy. C<named_routes> returns a defensive hashref, while C<route_named>
+preserves the original leaf identity and C<route_kind> returns the immutable
+indexed kind.
 
 =cut

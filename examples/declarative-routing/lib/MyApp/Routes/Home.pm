@@ -15,8 +15,8 @@ async sub show_item {
 
     return $c->json({
         id   => $id,
-        path => $c->path_for('api.item', { id => $id }),
-        url  => $c->url_for('api.item', { id => $id }),
+        path => $c->path_for('/api/item', { id => $id }),
+        url  => $c->url_for('/api/item', { id => $id }),
     });
 }
 

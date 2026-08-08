@@ -27,33 +27,50 @@ use PAGI::Routing qw(router route websocket sse mount);
     }
 }
 
-subtest 'direct names render application paths and route kinds' => sub {
-    my $nodes = [
+{
+    package Local::CyclicRouter;
+    use parent 'PAGI::Routing::Router';
+
+    sub routes {
+        my ($self) = @_;
+        return [PAGI::Routing::Mount->new(
+            '/again', router => $self, namespace => 'loop',
+        )];
+    }
+}
+
+subtest 'direct slash addresses render application paths and route kinds' => sub {
+    my $routing = router(routes => [
         route('/health' => sub { }, name => 'health'),
         websocket('/socket/{room}' => sub { }, name => 'socket'),
         sse('/events/{channel}' => sub { }, name => 'events'),
-    ];
-    my $routing = router(routes => $nodes);
+        route('/version' => sub { }, name => 'v1.1'),
+    ]);
 
-    is($routing->path_for('health'), '/health', 'direct literal name renders without parameter hashes');
-    is($routing->path_for('socket', { room => 'general' }), '/socket/general', 'WebSocket name renders a path');
-    is($routing->path_for('events', { channel => 'news' }), '/events/news', 'SSE name renders a path');
-    require PAGI::Routing::Resolver;
-    my $resolver = PAGI::Routing::Resolver->new(routes => $nodes);
-    is($resolver->route_kind('health'), 'route', 'resolver retains the HTTP route kind');
-    is($resolver->route_kind('socket'), 'websocket', 'resolver retains the WebSocket route kind');
-    is($resolver->route_kind('events'), 'sse', 'resolver retains the SSE route kind');
-    is($resolver->route_kind('unknown'), undef, 'unknown route kind is undefined');
+    is($routing->path_for('/health'), '/health', 'direct address renders without parameter hashes');
+    is($routing->path_for('health'), '/health', 'a bare reference resolves from the Router root');
+    is($routing->path_for('/socket', { room => 'general' }), '/socket/general', 'WebSocket address renders a path');
+    is($routing->path_for('/events', { channel => 'news' }), '/events/news', 'SSE address renders a path');
+    is($routing->_resolver->route_kind('/health'), 'route', 'resolver retains the HTTP route kind');
+    is($routing->_resolver->route_kind('/socket'), 'websocket', 'resolver retains the WebSocket route kind');
+    is($routing->_resolver->route_kind('/events'), 'sse', 'resolver retains the SSE route kind');
+    is($routing->_resolver->route_kind('/unknown'), undef, 'unknown route kind is undefined');
+    is($routing->path_for('v1.1'), '/version', 'a dot remains literal in a root-relative segment');
+    is(
+        [sort keys %{$routing->named_routes}],
+        [qw(/events /health /socket /v1.1)],
+        'a dotted local name remains one literal address segment',
+    );
 };
 
-subtest 'inline paths and optional dot namespaces remain independent' => sub {
+subtest 'inline paths and slash namespaces remain independent' => sub {
     my $unnamed_mount = mount('/public', routes => [
-        route('/users/{id}' => sub { }, name => 'user.show'),
+        route('/users/{id}' => sub { }, name => 'show'),
     ]);
     my $nested_mount = mount('/tenants/{tenant_id}', routes => [
         mount('/admin', routes => [
-            route('/users/{user_id}' => sub { }, name => 'user.show'),
-        ], namespace => 'api.v2'),
+            route('/users/{user_id}' => sub { }, name => 'show'),
+        ], namespace => 'api'),
     ], namespace => 'tenant');
     my $root_mount = mount('/', routes => [
         route('/status/' => sub { }, name => 'status'),
@@ -66,36 +83,48 @@ subtest 'inline paths and optional dot namespaces remain independent' => sub {
     ]);
 
     is(
-        $routing->path_for('user.show', { id => 7 }),
+        $routing->path_for('/show', { id => 7 }),
         '/public/users/7',
-        'an unnamed mount leaves the child name unprefixed but contributes its path',
+        'an unnamed mount leaves the child address at root but contributes its path',
     );
     is(
-        $routing->path_for('tenant.api.v2.user.show', {
+        $routing->path_for('/tenant/api/show', {
             tenant_id => 'acme', user_id => 42,
         }),
         '/tenants/acme/admin/users/42',
-        'nested dot namespaces affect only the effective name and all mount paths affect the path',
+        'nested namespaces affect only the address and all mount paths affect the path',
     );
     is(
-        $routing->path_for('rooted.status'),
+        $routing->path_for('tenant/api/show', {
+            tenant_id => 'acme', user_id => 42,
+        }),
+        '/tenants/acme/admin/users/42',
+        'a child slash reference resolves from the Router root',
+    );
+    like(
+        dies { $routing->path_for('tenant.api.show') },
+        qr/unknown route name 'tenant\.api\.show'/,
+        'dots do not act as logical hierarchy separators',
+    );
+    is(
+        $routing->path_for('/rooted/status'),
         '/status/',
         'a root mount contributes no extra slash and a leaf trailing slash remains exact',
     );
     is(
-        $routing->path_for('exact.slashes'),
+        $routing->path_for('/exact/slashes'),
         '/prefix//double/',
         'concatenation does not normalize repeated or trailing route slashes',
     );
 };
 
-subtest 'reverse rendering validates complete ancestry and escapes path and query values' => sub {
+subtest 'reverse rendering validates complete ancestry and escapes values' => sub {
     my $type = Local::ReverseType->new('right');
     my $routing = router(routes => [
         mount('/accounts/{account}', routes => [
             route(
                 '/items/{item}' => sub { },
-                name => 'item.show',
+                name => 'show',
                 constraints => { item => $type },
             ),
             route('/files/*path' => sub { }, name => 'files'),
@@ -104,235 +133,263 @@ subtest 'reverse rendering validates complete ancestry and escapes path and quer
 
     is(
         $routing->path_for(
-            'account.item.show',
+            '/account/show',
             { account => "caf\x{e9} space", item => 'right' },
             { z => 'last', 'a key' => 'A&B', empty => undef },
         ),
         '/accounts/caf%C3%A9%20space/items/right?a%20key=A%26B&empty=&z=last',
-        'outer and leaf values render before a sorted escaped query with undefined as empty',
+        'outer and leaf values render before a sorted escaped query',
     );
     is(
-        $routing->path_for('account.files', {
+        $routing->path_for('/account/files', {
             account => 'main', path => '../private//read me/',
         }),
         '/accounts/main/files/../private//read%20me/',
-        'wildcard rendering preserves separators while escaping each component',
+        'wildcard rendering preserves separators while escaping components',
     );
 
     like(
-        dies { $routing->path_for('account.item.show', { item => 'right' }) },
-        qr/missing path parameter 'account'.*route 'account\.item\.show'/,
-        'missing outer parameter names the effective route',
+        dies { $routing->path_for('/account/show', { item => 'right' }) },
+        qr/missing path parameter 'account'.*route '\/account\/show'/,
+        'missing outer parameter names the canonical address',
     );
     like(
         dies {
-            $routing->path_for('account.item.show', {
+            $routing->path_for('/account/show', {
                 account => 'main', item => 'right', extra => 1,
             });
         },
-        qr/unexpected path parameter 'extra'.*route 'account\.item\.show'/,
-        'extra parameters name the effective route',
+        qr/unexpected path parameter 'extra'.*route '\/account\/show'/,
+        'extra parameters name the canonical address',
     );
     like(
         dies {
-            $routing->path_for('account.item.show', {
+            $routing->path_for('/account/show', {
                 account => 'main', item => 'wrong',
             });
         },
-        qr/path parameter 'item' failed constraint for route 'account\.item\.show': expected right, got wrong/,
-        'Type-compatible failures use get_message in a route-specific diagnostic',
+        qr/path parameter 'item' failed constraint for route '\/account\/show': expected right, got wrong/,
+        'constraint failures name the canonical address',
     );
     like(
-        dies { $routing->path_for('account.files', [], {}) },
-        qr/path parameters for route 'account\.files' must be a hashref/,
+        dies { $routing->path_for('/account/files', [], {}) },
+        qr/path parameters for route '\/account\/files' must be a hashref/,
         'path parameters must be a hashref',
     );
     like(
         dies {
             $routing->path_for(
-                'account.files', { account => 'main', path => 'file' }, [],
+                '/account/files', { account => 'main', path => 'file' }, [],
             );
         },
-        qr/query parameters for route 'account\.files' must be a hashref/,
+        qr/query parameters for route '\/account\/files' must be a hashref/,
         'query parameters must be a hashref',
     );
     like(
         dies {
             $routing->path_for(
-                'account.files', { account => 'main', path => 'file' }, { bad => [] },
+                '/account/files',
+                { account => 'main', path => 'file' },
+                { bad => [] },
             );
         },
         qr/query parameter 'bad' must be a scalar/,
         'query values reject references',
     );
     like(
-        dies { $routing->path_for('missing') },
-        qr/unknown route name 'missing'/,
-        'reverse generation croaks for an unknown route name',
+        dies { $routing->path_for('/missing') },
+        qr/unknown route name '\/missing'/,
+        'reverse generation croaks for an unknown address',
     );
 };
 
-subtest 'namespaces prefix only leaves with declared names' => sub {
-    my $single = router(routes => [
-        mount('/api', routes => [
-            route('/health' => sub { }),
-        ], namespace => 'api'),
-    ]);
-    is($single->named_routes, {}, 'one namespaced unnamed leaf is absent from named_routes');
-    is($single->route_named('api'), undef, 'a namespace alone is not a route name');
-
-    is(
-        dies {
-            router(routes => [
-                mount('/api', routes => [
-                    route('/one' => sub { }),
-                    route('/two' => sub { }),
-                ], namespace => 'api'),
-            ]);
-        },
-        undef,
-        'multiple namespaced unnamed siblings do not collide during construction',
-    );
-
-    my $named_child = route('/users' => sub { }, name => 'users');
-    my $named = router(routes => [
-        mount('/api', routes => [$named_child], namespace => 'api'),
-    ]);
-    is(
-        [sort keys %{$named->named_routes}],
-        ['api.users'],
-        'an existing child name still receives the namespace prefix',
-    );
-    is(
-        refaddr($named->route_named('api.users')),
-        refaddr($named_child),
-        'the namespaced entry still preserves the named child identity',
-    );
-};
-
-subtest 'effective names must be unique across direct and mounted declarations' => sub {
-    like(
-        dies {
-            router(routes => [
-                route('/one' => sub { }, name => 'same'),
-                route('/two' => sub { }, name => 'same'),
-            ]);
-        },
-        qr/duplicate effective route name 'same'.*'\/one'.*'\/two'.*add or change a namespace/,
-        'two direct duplicate names report both effective paths and namespace guidance',
-    );
-
-    like(
-        dies {
-            router(routes => [
-                mount('/v1', routes => [
-                    route('/child' => sub { }, name => 'show'),
-                ]),
-                mount('/v2', routes => [
-                    route('/child' => sub { }, name => 'show'),
-                ]),
-            ]);
-        },
-        qr/duplicate effective route name 'show'.*'\/v1\/child'.*'\/v2\/child'.*add or change a namespace/,
-        'unnamed mounts exposing one child name report both effective paths',
-    );
-
-    like(
-        dies {
-            router(routes => [
-                mount('/v1', routes => [
-                    route('/child' => sub { }, name => 'show'),
-                ], namespace => 'api'),
-                mount('/v2', routes => [
-                    route('/child' => sub { }, name => 'show'),
-                ], namespace => 'api'),
-            ]);
-        },
-        qr/duplicate effective route name 'api\.show'.*'\/v1\/child'.*'\/v2\/child'.*add or change a namespace/,
-        'equal namespaces report the colliding effective name and both paths',
-    );
-};
-
-subtest 'known inline ancestry must have unique path parameter names' => sub {
-    like(
-        dies {
-            router(routes => [
-                mount('/accounts/{id}', routes => [
-                    mount('/groups/{group}', routes => [
-                        route('/users/{id}' => sub { }, name => 'user.show'),
-                    ]),
-                ]),
-            ]);
-        },
-        qr/duplicate path parameter 'id'.*effective path '\/accounts\/\{id\}\/groups\/\{group\}\/users\/\{id\}'/,
-        'a leaf cannot reuse a path parameter declared by an inline mount ancestor',
-    );
-};
-
-subtest 'tree inspection is defensive while preserving source node identity' => sub {
-    my $direct = route('/health' => sub { }, name => 'health');
-    my $user = route('/users' => sub { }, name => 'users.index');
-    my $nested_leaf = websocket('/socket' => sub { }, name => 'socket');
-    my $nested = mount('/nested', routes => [$nested_leaf], namespace => 'inner');
-    my $inline = mount('/api', routes => [$user, $nested], namespace => 'api');
-
+subtest 'composed Router graph exposes placements and respects opacity' => sub {
     my $hidden = route('/secret' => sub { }, name => 'hidden');
-    my $application = router(routes => [$hidden]);
-    my $opaque = mount('/opaque' => $application);
-    my $routing = router(routes => [$direct, $inline, $opaque]);
+    my $hidden_router = router(routes => [$hidden]);
 
-    my $direct_children = $routing->routes;
+    my $blog_index = route('/' => sub { }, name => 'index');
+    my $blog_show = route('/{post_id}' => sub { }, name => 'show');
+    my $blog_archive = route('/archive' => sub { }, name => 'archive');
+    my $blogs = router(routes => [
+        $blog_index,
+        $blog_show,
+        mount('/legacy' => $hidden_router),
+        $blog_archive,
+    ]);
+
+    my $person_show = route('/profile' => sub { }, name => 'show');
+    my $notifications = route('/notifications' => sub { }, name => 'notifications');
+    my $person = router(routes => [
+        $person_show,
+        mount('/blogs', router => $blogs, namespace => 'blog'),
+        mount('/settings', routes => [$notifications], namespace => 'settings'),
+    ]);
+
+    my $health = route('/health' => sub { }, name => 'health');
+    my $root = router(routes => [
+        $health,
+        mount('/people/{person_id}', router => $person, namespace => 'person'),
+        mount('/opaque' => $hidden_router),
+    ]);
+
     is(
-        [ map { refaddr($_) } @$direct_children ],
-        [ map { refaddr($_) } ($direct, $inline, $opaque) ],
-        'router routes contains only direct children in declaration order',
+        [sort keys %{$root->named_routes}],
+        [qw(
+            /health
+            /person/blog/archive
+            /person/blog/index
+            /person/blog/show
+            /person/settings/notifications
+            /person/show
+        )],
+        'inspection exposes canonical absolute addresses across all known placements',
     );
-    pop @$direct_children;
-    push @$direct_children, $hidden;
     is(
-        [ map { refaddr($_) } @{$routing->routes} ],
-        [ map { refaddr($_) } ($direct, $inline, $opaque) ],
-        'mutating the returned root array does not affect later inspection',
+        {
+            '/health' => $root->path_for('/health'),
+            '/person/blog/archive' => $root->path_for(
+                '/person/blog/archive', { person_id => 7 },
+            ),
+            '/person/blog/index' => $root->path_for(
+                '/person/blog/index', { person_id => 7 },
+            ),
+            '/person/blog/show' => $root->path_for(
+                '/person/blog/show', { person_id => 7, post_id => 9 },
+            ),
+            '/person/settings/notifications' => $root->path_for(
+                '/person/settings/notifications', { person_id => 7 },
+            ),
+            '/person/show' => $root->path_for(
+                '/person/show', { person_id => 7 },
+            ),
+        },
+        {
+            '/health' => '/health',
+            '/person/blog/archive' => '/people/7/blogs/archive',
+            '/person/blog/index' => '/people/7/blogs/',
+            '/person/blog/show' => '/people/7/blogs/9',
+            '/person/settings/notifications' => '/people/7/settings/notifications',
+            '/person/show' => '/people/7/profile',
+        },
+        'each logical address resolves to its complete placement-specific effective path',
+    );
+    is(
+        refaddr($root->route_named('/person/blog/show')),
+        refaddr($blog_show),
+        'route_named preserves source leaf identity',
+    );
+    is($root->route_named('/person/blog/hidden'), undef,
+        'an opaque Router application inside a known Router is terminal only at that mount');
+    is($root->route_named('/hidden'), undef,
+        'a positional Router application mount remains entirely undiscoverable');
+    is(refaddr($root->route_named('/person/blog/archive')), refaddr($blog_archive),
+        'discovery resumes with siblings after an opaque terminal');
+
+    my $copy = $root->named_routes;
+    delete $copy->{'/health'};
+    $copy->{'/invented'} = $hidden;
+    is(refaddr($root->route_named('/health')), refaddr($health),
+        'mutating named_routes cannot remove an internal entry');
+    is($root->route_named('/invented'), undef,
+        'mutating named_routes cannot add an internal entry');
+};
+
+subtest 'canonical collisions report both placement paths' => sub {
+    my $child = router(routes => [
+        route('/two' => sub { }, name => 'show'),
+    ]);
+
+    like(
+        dies {
+            router(routes => [
+                mount('/inline', routes => [
+                    route('/one' => sub { }, name => 'show'),
+                ], namespace => 'person'),
+                mount('/router', router => $child, namespace => 'person'),
+            ]);
+        },
+        qr/duplicate canonical route address '\/person\/show'.*'\/inline\/one'.*'\/router\/two'/,
+        'inline and Router placements with one address report both effective paths',
+    );
+};
+
+subtest 'parameter validation follows one ancestry and precedes opacity' => sub {
+    my $repeated_child = router(routes => [
+        route('/articles/{id}' => sub { }, name => 'show'),
+    ]);
+    like(
+        dies {
+            router(routes => [
+                mount('/people/{id}',
+                    router => $repeated_child,
+                    namespace => 'person',
+                ),
+            ]);
+        },
+        qr/duplicate path parameter 'id'.*effective path '\/people\/\{id\}\/articles\/\{id\}'/,
+        'a Router-mounted leaf cannot reuse a prefix parameter',
     );
 
-    my $inline_children = $inline->routes;
-    is(
-        [ map { refaddr($_) } @$inline_children ],
-        [ map { refaddr($_) } ($user, $nested) ],
-        'inline mount routes exposes direct children recursively in order',
+    like(
+        dies {
+            router(routes => [
+                mount('/people/{id}', routes => [
+                    mount('/opaque/{id}' => sub { }),
+                ]),
+            ]);
+        },
+        qr/duplicate path parameter 'id'.*effective path '\/people\/\{id\}\/opaque\/\{id\}'/,
+        'an opaque mount validates its known prefix before traversal stops',
     );
-    shift @$inline_children;
-    is(
-        [ map { refaddr($_) } @{$inline->routes} ],
-        [ map { refaddr($_) } ($user, $nested) ],
-        'inline mount route arrays are defensive copies',
-    );
-    my $nested_children = $nested->routes;
-    pop @$nested_children;
-    is(
-        [ map { refaddr($_) } @{$nested->routes} ],
-        [ refaddr($nested_leaf) ],
-        'nested inline inspection remains defensive',
-    );
-    is($opaque->routes, undef, 'an application mount remains an opaque inspection leaf');
 
-    my $named = $routing->named_routes;
-    is(
-        [ sort keys %$named ],
-        [qw(api.inner.socket api.users.index health)],
-        'named route inspection includes effective inline names but no opaque application names',
-    );
-    is(refaddr($named->{health}), refaddr($direct), 'direct named route preserves original leaf identity');
-    is(refaddr($named->{'api.users.index'}), refaddr($user), 'mounted named route preserves original leaf identity');
-    is(refaddr($named->{'api.inner.socket'}), refaddr($nested_leaf), 'nested named route preserves original leaf identity');
-    is(refaddr($routing->route_named('api.users.index')), refaddr($user), 'route_named returns the original leaf');
-    is($routing->route_named('hidden'), undef, 'route_named cannot see inside an application mount');
-    is($routing->route_named('missing'), undef, 'route_named returns undef for an unknown name');
+    my $shared = router(routes => [
+        route('/people/{id}' => sub { }, name => 'show'),
+    ]);
+    my $reused = lives {
+        router(routes => [
+            mount('/authors', router => $shared, namespace => 'authors'),
+            mount('/editors', router => $shared, namespace => 'editors'),
+            mount('/groups/{id}', routes => [
+                route('/first' => sub { }, name => 'first'),
+            ], namespace => 'groups'),
+            mount('/teams/{id}', routes => [
+                route('/second' => sub { }, name => 'second'),
+            ], namespace => 'teams'),
+        ]);
+    };
+    is($reused, T(), 'sibling branches may reuse parameter names and Router identity');
+};
 
-    delete $named->{health};
-    $named->{invented} = $hidden;
-    is(refaddr($routing->route_named('health')), refaddr($direct), 'mutating named_routes cannot remove an internal entry');
-    is($routing->route_named('invented'), undef, 'mutating named_routes cannot add an internal entry');
+subtest 'Router cycles identify URL and logical namespace ancestry' => sub {
+    like(
+        dies { Local::CyclicRouter->new(routes => []) },
+        qr/Router cycle.*URL mount ancestry '\/again'.*logical namespace ancestry '\/loop'/,
+        'a Router identity already active in its ancestry is rejected defensively',
+    );
+};
+
+subtest 'unnamed leaves publish no address while named source identity is defensive' => sub {
+    my $unnamed = route('/health' => sub { });
+    my $named_leaf = route('/users' => sub { }, name => 'users');
+    my $routing = router(routes => [
+        mount('/api', routes => [$unnamed, $named_leaf], namespace => 'api'),
+    ]);
+
+    is(
+        [sort keys %{$routing->named_routes}],
+        ['/api/users'],
+        'only a declared local name publishes a canonical address',
+    );
+    is($routing->route_named('/api'), undef, 'a namespace alone is not a route address');
+    is(
+        refaddr($routing->route_named('/api/users')),
+        refaddr($named_leaf),
+        'the indexed route retains the source leaf identity',
+    );
+
+    my $children = $routing->routes;
+    pop @$children;
+    is(scalar @{$routing->routes}, 1, 'router route collections remain defensive copies');
 };
 
 done_testing;

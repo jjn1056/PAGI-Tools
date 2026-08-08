@@ -104,7 +104,7 @@ subtest 'metadata is installed before middleware and records effective mounted l
                                 push @observations, snapshot('handler', $c->scope);
                                 return $c->text('ok');
                             },
-                                name => 'users.show',
+                                name => 'show',
                                 desc => 'Show one user',
                                 middleware => [$route_middleware],
                             ),
@@ -163,7 +163,8 @@ subtest 'metadata is installed before middleware and records effective mounted l
     is($observations[3]{match}, {
         kind => 'route',
         route => '/tenants/{tenant}/api/users/{id}',
-        name => 'tenant.users.show',
+        name => '/tenant/show',
+        logical_namespace => '/tenant',
         desc => 'Show one user',
     }, 'effective leaf metadata is installed before route middleware');
     is($observations[4]{match}, $observations[3]{match}, 'the handler sees the same effective match');
@@ -237,7 +238,8 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
     is($short_circuit[0]{match}, {
         kind => 'route',
         route => '/short',
-        name => 'short',
+        name => '/short',
+        logical_namespace => '/',
         desc => 'Short-circuited route',
     }, 'selection publishes a leaf before route middleware can short-circuit');
 
@@ -268,6 +270,7 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
         kind => 'mount',
         route => '/api/assets',
         name => undef,
+        logical_namespace => '/api',
         desc => 'Opaque assets',
     }, 'a nested application mount publishes its complete terminal pattern before middleware');
     is($application_mount[0]{mounts}, [
@@ -284,7 +287,7 @@ subtest 'separately compiled routers append frames without overwriting legacy me
             my ($c) = @_;
             push @child_scopes, $c->scope;
             return $c->text('child');
-        }, name => 'items.show', desc => 'Child item'),
+        }, name => 'show', desc => 'Child item'),
     ])->to_app;
 
     my @parent_observations;
@@ -310,12 +313,14 @@ subtest 'separately compiled routers append frames without overwriting legacy me
         kind => 'mount',
         route => '/api',
         name => undef,
+        logical_namespace => '/',
         desc => 'Child application',
     }, 'the parent frame retains its terminal application-mount match');
     is($frames->[1]{match}, {
         kind => 'route',
         route => '/items/{id}',
-        name => 'items.show',
+        name => '/show',
+        logical_namespace => '/',
         desc => 'Child item',
     }, 'the child frame records its own application-relative route');
     is(
@@ -523,7 +528,7 @@ subtest 'concurrent requests isolate frames, matches, parameters, and generated 
                 my $gate = Future->new;
                 push @gates, $gate;
                 return $gate;
-            }, name => 'items.show'),
+            }, name => 'show'),
         ]),
     ])->to_app;
 
@@ -695,13 +700,15 @@ subtest 'WebSocket and SSE leaves publish protocol-specific effective metadata' 
     is($seen[0]{match}, {
         kind => 'websocket',
         route => '/api/socket/{room}',
-        name => 'api.socket',
+        name => '/api/socket',
+        logical_namespace => '/api',
         desc => 'Chat socket',
     }, 'WebSocket selection publishes its protocol kind and effective name');
     is($seen[1]{match}, {
         kind => 'sse',
         route => '/api/events/{stream}',
-        name => 'api.events',
+        name => '/api/events',
+        logical_namespace => '/api',
         desc => 'Event stream',
     }, 'SSE selection publishes its protocol kind and effective name');
 };
