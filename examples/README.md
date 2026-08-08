@@ -13,7 +13,7 @@ etc.) that live in this distribution.
   ```
   Then launch any example with:
   ```
-  pagi-server examples/<name>/app.pl --port 5000
+  pagi-server --app examples/<name>/app.pl --port 5000
   ```
 
 Examples assume you understand the core spec
@@ -31,7 +31,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging and a mutable HTTP/WebSocket/SSE target router
 3. `13-contact-form` - form parsing and file uploads
 4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
-5. `15-large-application` - Compose-rooted modular HTML application with opaque Person/Blogs components, lifespan data, working links, and an evidence-backed gaps ledger
+5. `15-large-application` - Compose-rooted modular HTML application with known Person/Blogs Router mounts, named cross-component links, an opaque static-file mount, lifespan data, and an evidence-backed gaps ledger
 6. `app-01-file` - static file serving with `PAGI::App::File`
 7. `background-tasks` - running background work from within a PAGI app
 8. `compose` - optional application root combining declarative routes, request-ID middleware, server-owned lifecycle state, automatic HEAD, and verified shutdown

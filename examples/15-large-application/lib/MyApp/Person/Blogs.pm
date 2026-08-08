@@ -3,7 +3,6 @@ package MyApp::Person::Blogs;
 use strict;
 use warnings;
 use PAGI::Routing qw(router route);
-use MyApp::URL ();
 use MyApp::View ();
 
 sub list_blogs {
@@ -16,34 +15,31 @@ sub list_blogs {
         return $c->html(
             MyApp::View->document(
                 'Blogs not found',
-                '    <h1>Blogs not found</h1>'
-                    . "\n    <p>The requested person does not exist.</p>",
+                '    <h1>Blogs not found</h1>',
             ),
             status => 404,
         );
     }
 
-    my $blogs = $data->blogs_for($person_id);
     my @items;
-    for my $blog (@$blogs) {
-        my $path = $c->path_for('show', { blog_id => $blog->{id} });
+    for my $blog (@{$data->blogs_for($person_id)}) {
+        # blog_id is explicit; person_id is inherited from the match.
+        my $path = $c->path_for('show', {
+            blog_id => $blog->{id},
+        });
         push @items,
             qq{      <li><a href="$path">$blog->{title}</a></li>};
     }
-    my $items = @items
-        ? join("\n", @items)
-        : '      <li>No posts yet.</li>';
-    my $person_path = MyApp::URL->person($person_id);
+
+    # ../show resolves from /person/blog to /person/show and inherits person_id.
+    my $person_path = $c->path_for('../show');
 
     return $c->html(MyApp::View->document(
         "Blogs by $person->{name}",
-        <<"BODY",
-    <nav><a href="/">Home</a> / <a href="$person_path">$person->{name}</a></nav>
-    <h1>Blogs by $person->{name}</h1>
-    <ul>
-$items
-    </ul>
-BODY
+        qq{    <a href="$person_path">$person->{name}</a>\n}
+            . "    <h1>Blogs</h1>\n    <ul>\n"
+            . join("\n", @items)
+            . "\n    </ul>",
     ));
 }
 
@@ -51,62 +47,74 @@ sub show_blog {
     my ($c) = @_;
     my $person_id = $c->path_param('person_id');
     my $blog_id = $c->path_param('blog_id');
-    my $data = $c->state->{data};
-    my $blog = $data->blog($person_id, $blog_id);
+    my $blog = $c->state->{data}->blog($person_id, $blog_id);
 
     unless ($blog) {
-        my $blogs_path = MyApp::URL->blogs($person_id);
+        my $blogs_path = $c->path_for('index');
         return $c->html(
             MyApp::View->document(
                 'Blog not found',
-                qq{    <nav><a href="$blogs_path">Blogs</a></nav>}
-                    . "\n    <h1>Blog not found</h1>"
-                    . "\n    <p>No blog has that identifier.</p>",
+                qq{    <a href="$blogs_path">Blogs</a>\n}
+                    . '    <h1>Blog not found</h1>',
             ),
             status => 404,
         );
     }
 
-    my $blogs_path = MyApp::URL->blogs($person_id);
-    my $person_path = MyApp::URL->person($person_id);
+    my $home_path = $c->path_for('/home');
+    my $person_path = $c->path_for('../show');
+    my $blogs_path = $c->path_for('index');
+    my $canonical = $c->url_for('show',
+        query    => { view => 'full' },
+        fragment => 'comments',
+    );
+
     return $c->html(MyApp::View->document(
         $blog->{title},
-        <<"BODY",
-    <nav><a href="/">Home</a> / <a href="$person_path">Person</a> / <a href="$blogs_path">Blogs</a></nav>
-    <article>
-      <h1>$blog->{title}</h1>
-      <p>$blog->{body}</p>
-    </article>
-BODY
+        qq{    <a href="$home_path">Home</a> / }
+            . qq{<a href="$person_path">Person</a> / }
+            . qq{<a href="$blogs_path">Blogs</a>\n}
+            . qq{    <article><h1>$blog->{title}</h1>}
+            . qq{<p>$blog->{body}</p></article>\n}
+            . qq{    <a href="$canonical">Comments view</a>},
     ));
 }
 
 sub blogs_not_found {
     my ($c) = @_;
-    my $person_id = $c->path_param('person_id');
-    my $blogs_path = MyApp::URL->blogs($person_id);
+
+    # The unnamed catchall still has /person/blog as its containing namespace.
+    my $blogs_path = $c->path_for('index');
     return $c->html(
         MyApp::View->document(
             'Blogs section not found',
-            qq{    <nav><a href="$blogs_path">Blogs</a></nav>}
-                . "\n    <h1>Blogs section not found</h1>"
-                . "\n    <p>No Blogs route matched this path.</p>",
+            qq{    <a href="$blogs_path">Blogs</a>\n}
+                . '    <h1>Blogs section not found</h1>',
         ),
         status => 404,
     );
 }
 
-sub to_app {
+sub routing {
+    my ($class) = @_;
+
     return router(
         routes => [
-            route('/' => \&list_blogs, name => 'index'),
+            route('/' => \&list_blogs,
+                name => 'index',
+                desc => 'List one person\'s blogs',
+            ),
             route('/{blog_id}' => \&show_blog,
                 name        => 'show',
+                desc        => 'Show one blog',
                 constraints => { blog_id => qr/\d+/ },
             ),
-            route('/*path' => \&blogs_not_found),
+            route('/*path' => \&blogs_not_found,
+                desc => 'Blogs-local catchall',
+            ),
         ],
-    )->to_app;
+        desc => 'Blog routes',
+    );
 }
 
 1;

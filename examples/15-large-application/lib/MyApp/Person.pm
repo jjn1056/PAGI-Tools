@@ -4,30 +4,26 @@ use strict;
 use warnings;
 use utf8;
 use PAGI::Routing qw(router route mount);
-use MyApp::URL ();
+use MyApp::Person::Blogs ();
 use MyApp::View ();
 
 sub list_people {
     my ($c) = @_;
-    my $people = $c->state->{data}->people;
     my @items;
 
-    for my $person (@$people) {
-        my $path = $c->path_for('show', { person_id => $person->{id} });
+    for my $person (@{$c->state->{data}->people}) {
+        my $path = $c->path_for('show', {
+            person_id => $person->{id},
+        });
         push @items,
-            qq{      <li><a href="$path">$person->{name}</a> — $person->{summary}</li>};
+            qq{      <li><a href="$path">$person->{name}</a></li>};
     }
 
-    my $items = join("\n", @items);
     return $c->html(MyApp::View->document(
         'People',
-        <<"BODY",
-    <nav><a href="/">Home</a></nav>
-    <h1>People</h1>
-    <ul>
-$items
-    </ul>
-BODY
+        "    <h1>People</h1>\n    <ul>\n"
+            . join("\n", @items)
+            . "\n    </ul>",
     ));
 }
 
@@ -37,44 +33,53 @@ sub show_person {
     my $person = $c->state->{data}->person($person_id);
 
     unless ($person) {
-        my $people_path = MyApp::URL->people;
+        my $people_path = $c->path_for('index');
         return $c->html(
             MyApp::View->document(
                 'Person not found',
-                qq{    <nav><a href="$people_path">People</a></nav>}
-                    . "\n    <h1>Person not found</h1>"
-                    . "\n    <p>No person has that identifier.</p>",
+                qq{    <a href="$people_path">People</a>\n}
+                    . '    <h1>Person not found</h1>',
             ),
             status => 404,
         );
     }
 
-    my $people_path = MyApp::URL->people;
-    my $blogs_path = MyApp::URL->blogs($person_id);
+    # Relative resolution finds /person/blog/index and inherits person_id.
+    my $blogs_path = $c->path_for('blog/index');
+    my $home_path = $c->path_for('/home');
+
     return $c->html(MyApp::View->document(
         $person->{name},
-        <<"BODY",
-    <nav><a href="/">Home</a> / <a href="$people_path">People</a></nav>
-    <h1>$person->{name}</h1>
-    <p>$person->{summary}</p>
-    <p><a href="$blogs_path">Read this person's blogs</a></p>
-BODY
+        qq{    <a href="$home_path">Home</a>\n}
+            . qq{    <h1>$person->{name}</h1>\n}
+            . qq{    <p>$person->{summary}</p>\n}
+            . qq{    <a href="$blogs_path">Read blogs</a>},
     ));
 }
 
-sub to_app {
+sub routing {
+    my ($class) = @_;
+
     return router(
         routes => [
-            route('/' => \&list_people, name => 'index'),
+            route('/' => \&list_people,
+                name => 'index',
+                desc => 'List people',
+            ),
             route('/{person_id}' => \&show_person,
                 name        => 'show',
+                desc        => 'Show one person',
                 constraints => { person_id => qr/\d+/ },
             ),
-            mount('/{person_id}/blog' => 'MyApp::Person::Blogs',
+            mount('/{person_id}/blog',
+                router      => MyApp::Person::Blogs->routing,
+                namespace   => 'blog',
+                desc        => 'Blogs for one person',
                 constraints => { person_id => qr/\d+/ },
             ),
         ],
-    )->to_app;
+        desc => 'Person routes',
+    );
 }
 
 1;
