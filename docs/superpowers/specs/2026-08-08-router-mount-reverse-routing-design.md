@@ -32,8 +32,9 @@ $c->path_for('/person/blog/show');
 ```
 
 This routing API has not been released. There is no compatibility alias or
-deprecation layer for dotted names or the old positional reverse-routing
-arguments. Tests, examples, and documentation change together.
+deprecation layer for dotted names. Reverse routing deliberately supports both
+the compact positional and self-documenting named forms specified below.
+Tests, examples, and documentation change together.
 
 Where this document conflicts with the names, namespaces, reverse-routing
 signatures, or opaque-mount discussion in the 2026-08-03 declarative-routing
@@ -78,8 +79,8 @@ containing routing graph."
 - Keep Router descriptions immutable and reusable at more than one placement.
 - Preserve child Router middleware, fallbacks, method decisions, and protocol
   behavior.
-- Support named `params`, `query`, and `fragment` options consistently in
-  `path_for` and `url_for`.
+- Support both compact positional values and named `params`, `query`, and
+  `fragment` options consistently in `path_for` and `url_for`.
 - Remove the `MyApp::URL` workaround from the large-application example.
 - Document the difference among inline routes, Router mounts, and opaque
   application mounts prominently.
@@ -392,21 +393,46 @@ has no current request placement.
 
 ## 9. Reverse-routing API
 
-The reverse-routing calls use named options only:
+`Router->path_for`, Context `path_for`, and Context `url_for` support the same
+two complete call shapes.
+
+### 9.1 Compact positional form
 
 ```perl
-$router->path_for($reference,
-    params   => \%path_params,
-    query    => \%query_params,
-    fragment => $fragment,
-);
+$c->url_for($reference);
+$c->url_for($reference, \%path_params);
+$c->url_for($reference, \%path_params, \%query_params);
+$c->url_for($reference, \%path_params, \%query_params, $fragment);
+```
 
-$c->path_for($reference,
-    params   => \%path_params,
-    query    => \%query_params,
-    fragment => $fragment,
-);
+The second and third arguments, when present, must be hashrefs. The fourth is
+a plain scalar fragment; it is not a scalar reference. Its position after two
+hashrefs makes its meaning unambiguous. Undef omits the fragment and an empty
+scalar produces a terminal `#`.
 
+Compact arguments cannot skip a position. A query without path parameters or
+a fragment without a query uses empty hashrefs as placeholders:
+
+```perl
+$c->url_for('search', {}, { q => 'routing' });
+$c->url_for('show', {}, {}, 'comments');
+```
+
+The compact form optimizes the frequent cases:
+
+```perl
+$c->url_for('show');
+$c->url_for('show', { blog_id => 8 });
+$c->url_for('show',
+    { blog_id => 8 },
+    { view => 'full' },
+    'comments',
+);
+```
+
+### 9.2 Self-documenting named form
+
+```perl
 $c->url_for($reference,
     params   => \%path_params,
     query    => \%query_params,
@@ -414,22 +440,39 @@ $c->url_for($reference,
 );
 ```
 
-All options are optional. Unknown options, an odd option list, non-hash
-`params` or `query`, or a reference-valued `fragment` fail with
-operation-specific diagnostics.
-
-The old positional forms are removed before release:
+All named options are optional and may appear in any order. This form is
+preferred when components are skipped or the extra labels improve clarity:
 
 ```perl
-# Removed
-$c->path_for('show', { id => 1 }, { page => 2 });
-
-# Canonical
-$c->path_for('show',
-    params => { id => 1 },
-    query  => { page => 2 },
+$c->url_for('show',
+    query    => { view => 'full' },
+    fragment => 'comments',
 );
 ```
+
+Unknown options, an odd option list, non-hash `params` or `query`, or a
+reference-valued `fragment` fail with operation-specific diagnostics.
+
+### 9.3 Form selection
+
+With no arguments after the route reference, the forms are equivalent. If the
+first trailing argument is a hashref, the parser selects the compact form. If
+it is a defined non-reference scalar, the parser selects the named form and
+treats it as an option key. Undef or any other reference type in that position
+fails; compact callers use an empty hashref rather than undef as a placeholder.
+
+Compact and named arguments cannot be mixed:
+
+```perl
+$c->url_for('show', { blog_id => 8 },
+    query => { view => 'full' },
+);
+# error: compact and named reverse-routing forms cannot be mixed
+```
+
+The same parser and validation rules apply to all three reverse-routing
+methods. Compact and named calls that supply the same values return identical
+strings.
 
 `path_for` returns an application path reference and may include a query and
 fragment. Context `path_for` also applies the selected routing frame's
@@ -479,7 +522,7 @@ $c->path_for('index');
 $c->path_for('../show');
 # /person/42
 
-$c->path_for('show', params => { blog_id => 8 });
+$c->path_for('show', { blog_id => 8 });
 # /person/42/blog/8
 
 $c->path_for('/person/blog/show');
@@ -554,7 +597,7 @@ The root resolver publishes `/authors/show` and `/editors/show`. A handler in
 the shared child uses request-local matched placement, so relative `show`
 stays under the active placement.
 
-Calling `$people->path_for('show', params => {...})` outside a request returns
+Calling `$people->path_for('show', {...})` outside a request returns
 the child's local `/...` path and cannot include `/authors` or `/editors`.
 Request handlers should use Context reverse routing when placement matters.
 
@@ -764,9 +807,9 @@ sub list_people {
     my @items;
 
     for my $person (@{$c->state->{data}->people}) {
-        my $path = $c->path_for('show',
-            params => { person_id => $person->{id} },
-        );
+        my $path = $c->path_for('show', {
+            person_id => $person->{id},
+        });
         push @items,
             qq{      <li><a href="$path">$person->{name}</a></li>};
     }
@@ -866,9 +909,9 @@ sub list_blogs {
     my @items;
     for my $blog (@{$data->blogs_for($person_id)}) {
         # blog_id is explicit; person_id is inherited from the match.
-        my $path = $c->path_for('show',
-            params => { blog_id => $blog->{id} },
-        );
+        my $path = $c->path_for('show', {
+            blog_id => $blog->{id},
+        });
         push @items,
             qq{      <li><a href="$path">$blog->{title}</a></li>};
     }
@@ -983,7 +1026,7 @@ For a request matched at `/person/42/blog/7`:
 $c->path_for('show');
 # /person/42/blog/7
 
-$c->path_for('show', params => { blog_id => 8 });
+$c->path_for('show', { blog_id => 8 });
 # /person/42/blog/8
 
 $c->path_for('index');
@@ -1004,9 +1047,10 @@ $c->path_for('../../../home');
 $c->path_for('/person/blog/show');
 # error: absolute references do not inherit person_id or blog_id
 
-$c->path_for('/person/blog/show',
-    params => { person_id => 9, blog_id => 3 },
-);
+$c->path_for('/person/blog/show', {
+    person_id => 9,
+    blog_id   => 3,
+});
 # /person/9/blog/3
 
 $c->url_for('show',
@@ -1033,11 +1077,13 @@ Add:
 - parameter inheritance and its authorization warning;
 - duplicate composed parameter diagnostics;
 - Router reuse and placement behavior;
-- query/fragment examples; and
+- compact and named reverse-routing forms, their selection rule, and
+  query/fragment examples; and
 - the Router boundary/no-bubbling rule.
 
-Replace every dotted effective-name example and every positional
-`path_for`/`url_for` example.
+Replace every dotted effective-name example. Reverse-routing documentation
+must show the compact form for common calls and the named form when skipping
+components or emphasizing their meaning.
 
 ### 15.2 Class POD
 
@@ -1048,7 +1094,7 @@ Update:
 - `PAGI::Routing::Router` with composed inspection and local-versus-mounted
   path generation;
 - `PAGI::Routing::Resolver` with slash addresses, recursive Router traversal,
-  and relative resolution;
+  relative resolution, and both reverse argument forms;
 - `PAGI::Context` with current namespace, inheritance, absolute behavior,
   query, fragment, and failure cases; and
 - routing metadata documentation with `name` and `logical_namespace`.
@@ -1124,9 +1170,13 @@ failure classes include:
 - missing required target parameter;
 - explicit extra target parameter;
 - constraint failure naming the target and parameter;
-- malformed `params` or `query`;
-- unknown reverse-routing option; and
-- reference-valued fragment.
+- compact reverse arguments with too many values, non-hash params/query, or a
+  reference-valued fragment;
+- named reverse arguments with an odd list, non-hash `params`/`query`, an
+  unknown option, or a reference-valued `fragment`;
+- undef or an unsupported reference type where the parser selects the reverse
+  argument form; and
+- any call that mixes compact and named reverse arguments.
 
 No failure silently falls back to another namespace or opaque ancestor.
 
@@ -1192,7 +1242,15 @@ No failure silently falls back to another namespace or opaque ancestor.
 - Context generation includes `root_path` exactly once.
 - HTTP/SSE and WebSocket schemes remain correct.
 - Query and fragment values are deterministically encoded.
-- The removed positional reverse API fails clearly.
+- Compact calls with zero through three trailing values and named calls
+  produce identical strings for identical inputs.
+- Compact query-only and fragment-only calls use empty hashref placeholders.
+- The compact fragment is a plain scalar; scalar references and other
+  reference types fail.
+- Undef and non-hash references fail as the first trailing argument; compact
+  placeholders are empty hashrefs.
+- Named keys may appear in any order, and mixed compact/named calls fail with
+  the documented diagnostic.
 
 ### 17.5 Parameter inheritance
 
@@ -1317,10 +1375,14 @@ Lifespan remains for runtime resources such as the example's data store.
 
 ### 18.13 Do named options add unnecessary boilerplate?
 
-They make the expanded API legible and remove positional ambiguity among path
-params, query params, and fragments. Typical inherited relative calls remain
-short: `$c->path_for('index')`. Explicit values become self-documenting where
-they matter.
+They would if they were mandatory on an operation used throughout handlers.
+The compact form keeps the common calls short, while the named form remains
+available when the caller skips components or values benefit from labels.
+
+The dual parser remains deterministic: a first trailing hashref selects
+compact form and a first trailing scalar selects named form. A plain fragment
+is safe because it can occur only after the compact params and query hashrefs.
+The implementation rejects mixed forms rather than trying to be clever.
 
 ### 18.14 Does `routing` duplicate `to_app` package boilerplate?
 
@@ -1356,7 +1418,8 @@ repository in one coherent pass:
   selector options are order-independent;
 - the structural-routes Router diagnostic recommends `router =>` rather than
   positional opaque mounting;
-- reverse-routing calls use named options;
+- reverse-routing calls support both compact positional and self-documenting
+  named forms, with no mixing;
 - all routing unit and integration tests are updated;
 - all POD examples are updated;
 - all examples are updated;
