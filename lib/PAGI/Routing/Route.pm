@@ -37,7 +37,7 @@ sub new {
     croak 'handler must be a coderef' unless $is_raw || ref($target) eq 'CODE';
 
     _validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
-    _validate_text('name', $opts{name}, 1) if exists $opts{name};
+    _validate_logical_segment('name', $opts{name}) if exists $opts{name};
     _validate_constraints($opts{constraints}) if $kind eq 'route' && exists $opts{constraints};
     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
         exists $opts{middleware} ? $opts{middleware} : [],
@@ -76,6 +76,13 @@ sub _validate_text {
     my ($label, $value, $required) = @_;
     my $message = $required ? "$label must be a nonempty string" : "$label must be a string";
     croak $message unless defined $value && !ref($value) && (!$required || length $value);
+}
+
+sub _validate_logical_segment {
+    my ($label, $value) = @_;
+    croak "$label must be one logical address segment"
+        unless defined $value && !ref($value) && length $value
+            && index($value, '/') < 0 && $value ne '.' && $value ne '..';
 }
 
 sub _validate_constraints {
@@ -154,7 +161,9 @@ PAGI::Routing::Route - Immutable declarative route description
 
 =head1 DESCRIPTION
 
-A route represents an HTTP, WebSocket, or SSE leaf. The ordinary target is a
+A route represents an HTTP, WebSocket, or SSE leaf. Its C<name>, when supplied,
+is one local logical address segment: it is nonempty, contains no slash, and
+is not C<.> or C<..>; dots are literal characters. The ordinary target is a
 coderef handler; C<raw> targets remain explicit applications for the compiler
 to coerce through L<PAGI::Utils/to_app>. Its path pattern is compiled during
 construction, and constructor validation performs no request I/O. The

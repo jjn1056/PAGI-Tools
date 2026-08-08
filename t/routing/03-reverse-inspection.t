@@ -278,7 +278,7 @@ subtest 'tree inspection is defensive while preserving source node identity' => 
 
     my $hidden = route('/secret' => sub { }, name => 'hidden');
     my $application = router(routes => [$hidden]);
-    my $opaque = mount('/opaque' => $application, namespace => 'ignored');
+    my $opaque = mount('/opaque' => $application);
     my $routing = router(routes => [$direct, $inline, $opaque]);
 
     my $direct_children = $routing->routes;
