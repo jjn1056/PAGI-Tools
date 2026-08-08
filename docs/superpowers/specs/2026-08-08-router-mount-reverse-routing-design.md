@@ -57,7 +57,8 @@ Consequently:
 - Root cannot generate a Person URL by route name.
 - Person cannot generate a Blogs URL by route name.
 - Blogs cannot generate a Person or Root URL by route name.
-- the example duplicates its routing structure in `MyApp::URL`.
+- the example duplicates its four cross-component mount paths in
+  `MyApp::URL`.
 
 The child packages already have the information the parent needs: each can
 return an immutable `PAGI::Routing::Router`. The missing operation is an
@@ -187,10 +188,17 @@ Zero targets, multiple target forms, an invalid Router object, or a missing
 Router namespace croak during construction with an error that names the
 invalid form.
 
-The argument parser can distinguish the forms without heuristics: a
-positional target plus options leaves an odd number of arguments after the
-path, while a named target form is an ordinary even option list. Option order
-does not change the result.
+This deliberately replaces the current documented rule that `routes` must
+immediately follow the path to select the inline form. The new parser uses the
+argument-list parity to distinguish a positional target plus options from a
+named option list, then requires exactly one named selector in the latter.
+`routes` or `router` may appear anywhere in a well-formed named option list;
+option order does not change the result.
+
+A malformed positional or named option tail croaks `mount option list must be
+key/value pairs`. The parser must detect that shape before constructing an
+option hash; it must not report an `unknown mount option` whose alleged option
+name is a stringified coderef or object.
 
 `PAGI::Routing::Mount` adds a `router` accessor. Exactly one of `target`,
 `routes`, or `router` is defined. Existing `is_raw` remains true only for the
@@ -275,9 +283,15 @@ A route reference is split on `/`.
 - `blog/show` starts at the current containing logical namespace.
 - `.` means the current logical namespace.
 - `..` means its parent.
+- `.` and `..` are legal at any segment position and are normalized from left
+  to right, so `./show` and `blog/../show` are valid references.
 - traversal above the resolver root croaks.
 - empty interior segments, repeated slashes, and trailing slashes croak.
-- `/` by itself names the resolver root, not a route, and therefore croaks.
+- Provided normalization stays within the resolver root, `/`, bare `.`, bare
+  `..`, and any reference whose input ends in `.` or `..` name the resulting
+  logical namespace rather than a route and therefore croak. For example,
+  `../..` from `/person/blog` resolves to the root namespace but does not name
+  a leaf. Bare `..` at the resolver root instead fails the above-root check.
 
 Resolution is exact. It does not fall back to an ancestor, search sibling
 namespaces, try a global spelling after a relative miss, or choose the nearest
@@ -401,7 +415,7 @@ $c->url_for($reference,
 ```
 
 All options are optional. Unknown options, an odd option list, non-hash
-`params` or `query`, or a reference-valued option fail with
+`params` or `query`, or a reference-valued `fragment` fail with
 operation-specific diagnostics.
 
 The old positional forms are removed before release:
@@ -444,8 +458,9 @@ parameters.
 For a relative reference, Context:
 
 1. resolves the target logical address;
-2. starts with the request-local capture snapshot recorded for the matched
-   route;
+2. starts with the routing frame's current request-local capture snapshot,
+   which contains complete effective leaf captures after FULL and only
+   consumed mount-prefix captures for a generated outcome without FULL;
 3. selects only keys required by the target pattern;
 4. overlays explicit `params`, with explicit values winning;
 5. rejects explicit keys not required by the target; and
@@ -548,9 +563,13 @@ reused Router receives fresh Router, mount, and route middleware instances.
 Runtime middleware state is not shared merely because the immutable Router
 description is shared.
 
-Recursive traversal tracks the active ancestor Router identities. Re-entering
-an active ancestor is a cycle and croaks with the logical and URL mount chain.
-Reusing the same Router in separate sibling branches is valid.
+Ordinary immutable Router instances form a DAG by construction: a Router mount
+can only receive an already constructed Router, so the public constructors
+cannot create a true cycle. Because `router =>` accepts Router subclasses and
+`routes` is a virtual method, recursive traversal still defensively tracks
+active ancestor identities. A pathological subclass that returns a mount of
+itself croaks with the logical and URL mount chain. Reusing the same Router in
+separate sibling branches remains valid.
 
 ## 13. Request metadata
 
@@ -580,6 +599,12 @@ At minimum, a matched leaf record exposes:
 available. The request-local parameter snapshot used by Context is not added
 as an advertised logging field; callers that need matched values already have
 `path_params`.
+
+The word `name` is intentionally relative at declaration time and absolute in
+matched metadata: `PAGI::Routing::Route->name` returns the declared local
+segment such as `show`, while the match record's `name` returns the composed
+address such as `/person/blog/show`. The match record's
+`logical_namespace` plus the declaration name explains that derivation.
 
 Each Router mount appends its declared path, namespace, and description to the
 frame's mount chain. Parent middleware can inspect the final child match after
@@ -1046,19 +1071,31 @@ Revise `examples/15-large-application` to match section 14:
 - explain that Root's catchall still cannot catch a child Router's generated
   NONE result.
 
-`GAPS.md` marks reverse routing across known Router mounts resolved, retains
-cooperative no-match bubbling as open, and keeps the possible `PAGI::App`
-base-class work deferred for reevaluation after this API lands.
+Update the example-local `examples/15-large-application/GAPS.md` as follows:
+
+- replace GAP-01's dotted `blogs.index` placement example with the composed
+  slash address `/person/blog/index`, mark the known-Router case resolved, and
+  distinguish remaining opaque application mounts;
+- retain GAP-02 as the open cooperative no-match-bubbling problem; and
+- revise GAP-03 to point to the separate
+  `2026-08-06-pagi-app-base-design.md`, which records the approved but deferred
+  base-class design. GAP-03 currently calls the repeated shell an observation,
+  not a proposal, so the update must not claim that `GAPS.md` already carried
+  the deferral.
 
 ### 15.4 Integration documentation and testing
 
 The example README keeps the real current launch command and labels the
 Plack-like `pagi-server --module ... -e ...` spelling as deferred.
 
-The integration test must use `PAGI::Test::Client->run` with lifespan enabled.
-It must follow rendered HTML links, not only compare isolated helper strings,
-so the example proves Root-to-Person, Person-to-Blogs, Blogs-to-Person, and
-Blogs-to-Root generation in the assembled application.
+The repo-root `t/integration-large-application.t` must continue to use
+`PAGI::Test::Client->run` with lifespan enabled. Today it issues hardcoded
+requests, regex-matches hardcoded `href` values in returned pages, and tests
+the `MyApp::URL` literals separately; it does not extract and follow a rendered
+link. The revised test must follow those links. This is a deliberate
+strengthening: it proves that the generated target and the assembled mount
+agree without duplicating the expected path in the test, across
+Root-to-Person, Person-to-Blogs, Blogs-to-Person, and Blogs-to-Root navigation.
 
 ## 16. Required errors
 
@@ -1066,13 +1103,19 @@ Diagnostics must identify enough context to fix the declaration. Required
 failure classes include:
 
 - mount has zero or multiple target forms;
+- mount has a malformed positional or named key/value tail;
+- a Router object appears directly inside structural `routes`, in which case
+  the diagnostic recommends
+  `mount('/prefix', router => $router, namespace => '...')` rather than the
+  old positional opaque form;
 - opaque application mount supplies `namespace`;
 - `router` target is not a `PAGI::Routing::Router`;
 - Router mount lacks a namespace;
 - name or namespace contains `/` or is `.`/`..`;
 - duplicate absolute logical address, with both effective URL patterns;
 - duplicate path parameter along an effective composed pattern;
-- Router cycle, with mount/address ancestry;
+- defensive Router-cycle detection for a subclass-supplied recursive route
+  graph, with mount/address ancestry;
 - malformed route reference;
 - traversal above resolver root;
 - unknown exact logical address;
@@ -1095,6 +1138,10 @@ No failure silently falls back to another namespace or opaque ancestor.
   accessor.
 - Every invalid combination of positional target, `routes`, and `router`
   fails.
+- Named `routes` and `router` selectors work in any option order, and malformed
+  positional or named tails produce the documented key/value diagnostic.
+- A Router object placed directly in structural `routes` is rejected with
+  guidance to use the named `router =>` mount form.
 - Opaque application mounts reject `namespace` rather than implying hidden
   route visibility.
 - Router targets require a `PAGI::Routing::Router` instance (or subclass) and
@@ -1113,8 +1160,9 @@ No failure silently falls back to another namespace or opaque ancestor.
   target can receive an overwritten capture.
 - An opaque mount hides all inner names.
 - A positional Router target remains opaque.
-- A Router cycle fails, while mounting one Router in two sibling placements
-  succeeds.
+- A local test subclass whose `routes` method returns a Router mount of the
+  same object exercises the defensive cycle guard; mounting one ordinary
+  Router in two sibling placements succeeds.
 
 ### 17.3 Dispatch ownership
 
@@ -1131,9 +1179,12 @@ No failure silently falls back to another namespace or opaque ancestor.
 
 ### 17.4 Reverse resolution
 
-- Absolute, bare, child, `.`, and `..` references resolve exactly.
+- Absolute, bare, child, and interior `.`/`..` references resolve exactly,
+  including `./show` and `blog/../show`.
 - Above-root, unknown, repeated-slash, empty-segment, and trailing-slash
   references fail.
+- `/`, bare `.`, bare `..`, and references ending at a namespace after
+  `.`/`..` normalization fail because they do not name a route leaf.
 - Unnamed catchalls retain their containing namespace.
 - Custom generated 404/405 handlers resolve from their owning Router
   namespace without borrowing captures from an arbitrary PARTIAL leaf.
@@ -1235,8 +1286,12 @@ reuse, concurrent requests, and fresh middleware compilation.
 
 ### 18.9 What if a Router contains itself?
 
-The resolver tracks active ancestor identities and fails a cycle. Identity
-seen in a completed sibling branch is not a cycle, so legitimate reuse works.
+The normal constructors cannot create that graph because every Router target
+already exists before its parent. The resolver nevertheless tracks active
+ancestor identities to defend against a Router subclass whose `routes` method
+fabricates a self-mount. The cycle test uses that explicit subclass pathology.
+Identity seen in a completed sibling branch is not a cycle, so legitimate
+reuse works.
 
 ### 18.10 What happens at an opaque child inside a known Router?
 
@@ -1297,6 +1352,10 @@ repository in one coherent pass:
 - effective route names become canonical slash addresses;
 - dotted namespace joins are removed;
 - opaque mounts no longer accept ignored namespaces;
+- `routes` no longer has to immediately follow the mount path; named mount
+  selector options are order-independent;
+- the structural-routes Router diagnostic recommends `router =>` rather than
+  positional opaque mounting;
 - reverse-routing calls use named options;
 - all routing unit and integration tests are updated;
 - all POD examples are updated;
