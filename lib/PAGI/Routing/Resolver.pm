@@ -34,6 +34,7 @@ sub new {
     my $self = bless {
         records              => [],
         by_name              => {},
+        namespaces           => { '/' => 1 },
         metadata_by_location => {},
     }, $class;
 
@@ -81,6 +82,8 @@ sub _visit_router {
 sub _visit_nodes {
     my ($self, $nodes, $path_prefix, $address_segments, $outer_names,
         $outer_constraints, $location_prefix, $active_routers) = @_;
+
+    $self->{namespaces}{_logical_namespace($address_segments)} = 1;
 
     for my $index (0 .. $#$nodes) {
         my $node = $nodes->[$index];
@@ -248,36 +251,19 @@ sub _published_path {
 }
 
 sub path_for {
-    my ($self, $name, $path_params, $query_params) = @_;
-    croak 'route name must be a nonempty scalar'
-        unless defined $name && !ref($name) && length $name;
-
-    my $record = $self->{by_name}{_root_reference($name)};
-    croak "unknown route name '$name'" unless $record;
-
-    $path_params = {} unless defined $path_params;
-    $query_params = {} unless defined $query_params;
-
-    my $path = $record->{pattern}->render($path_params, $name);
-    croak "query parameters for route '$name' must be a hashref"
-        unless ref($query_params) eq 'HASH';
-
-    my @pairs;
-    for my $key (sort keys %$query_params) {
-        my $value = $query_params->{$key};
-        croak "query parameter '$key' must be a scalar" if ref($value);
-        $value = '' unless defined $value;
-        push @pairs, _encode_component($key) . '=' . _encode_component($value);
-    }
-
-    return @pairs ? $path . '?' . join('&', @pairs) : $path;
+    my ($self, $reference, @reverse_args) = @_;
+    my $rendered = $self->_render_reverse(
+        'path_for', $reference, [], @reverse_args,
+    );
+    return $rendered->{path};
 }
 
 sub url_for_scope {
-    my ($self, $scope, $name, $path_params, $query_params, $root_path) = @_;
-    my $has_root_path = @_ >= 6;
-    my $path = $self->path_for($name, $path_params, $query_params);
-    my $kind = $self->route_kind($name);
+    my ($self, $scope, $reference, $root_path, @reverse_args) = @_;
+    my $rendered = $self->_render_reverse(
+        'url_for', $reference, [], @reverse_args,
+    );
+    my $kind = $rendered->{record}{kind};
     my $scope_scheme = defined $scope->{scheme} ? $scope->{scheme} : 'http';
     croak 'unsupported URL scheme'
         if ref($scope_scheme) || $scope_scheme !~ /\A(?:http|https|ws|wss)\z/;
@@ -297,18 +283,150 @@ sub url_for_scope {
     }
 
     my $authority = PAGI::Authority->from_scope($scope);
-    $root_path = $scope->{root_path} unless $has_root_path;
-    $path = _join_root_path($root_path, $path);
+    my $path = _join_root_path($root_path, $rendered->{path});
     return "$url_scheme://$authority$path";
+}
+
+sub _render_reverse {
+    my ($self, $operation, $reference, $base_segments, @reverse_args) = @_;
+    my $arguments = _parse_reverse_arguments($operation, @reverse_args);
+    my ($canonical, $was_absolute) = _normalize_reference(
+        $operation, $reference, $base_segments,
+    );
+
+    croak "$operation route reference '$reference' resolves to a logical namespace, not a route"
+        if $self->{namespaces}{$canonical};
+    my $record = $self->{by_name}{$canonical};
+    croak "$operation unknown route name '$reference'" unless $record;
+
+    my $path = $record->{pattern}->render($arguments->{params}, $canonical);
+    my @pairs;
+    for my $key (sort keys %{$arguments->{query}}) {
+        my $value = $arguments->{query}{$key};
+        croak "query parameter '$key' must be a scalar" if ref($value);
+        $value = '' unless defined $value;
+        push @pairs, _encode_component($key) . '=' . _encode_component($value);
+    }
+    $path .= '?' . join('&', @pairs) if @pairs;
+    $path .= '#' . _encode_component($arguments->{fragment})
+        if $arguments->{has_fragment};
+
+    return {
+        record       => $record,
+        canonical    => $canonical,
+        was_absolute => $was_absolute,
+        path          => $path,
+    };
+}
+
+sub _parse_reverse_arguments {
+    my ($operation, @args) = @_;
+    my $result = {
+        params       => {},
+        query        => {},
+        has_fragment => 0,
+        fragment     => undef,
+    };
+    return $result unless @args;
+
+    my %allowed = map { $_ => 1 } qw(params query fragment);
+    if (ref($args[0]) eq 'HASH') {
+        if (@args >= 3) {
+            for my $index (1 .. $#args - 1) {
+                next unless defined $args[$index] && !ref($args[$index]);
+                croak "$operation reverse-routing compact and named reverse-routing forms cannot be mixed"
+                    if $allowed{$args[$index]};
+            }
+        }
+        croak "$operation reverse-routing compact form accepts at most params, query, and fragment"
+            if @args > 3;
+        croak "$operation reverse-routing compact query must be a hashref"
+            if @args >= 2 && ref($args[1]) ne 'HASH';
+        croak "$operation reverse-routing compact fragment must be a plain scalar or undef"
+            if @args >= 3 && defined $args[2] && ref($args[2]);
+
+        $result->{params} = { %{$args[0]} };
+        $result->{query} = { %{$args[1]} } if @args >= 2;
+        if (@args >= 3 && defined $args[2]) {
+            $result->{has_fragment} = 1;
+            $result->{fragment} = $args[2];
+        }
+        return $result;
+    }
+
+    croak "$operation reverse-routing form selector must be a hashref or named option key"
+        unless defined $args[0] && !ref($args[0]);
+    croak "$operation reverse-routing named option list must contain key/value pairs"
+        if @args % 2;
+
+    my %options;
+    while (@args) {
+        my ($key, $value) = splice @args, 0, 2;
+        croak "$operation reverse-routing unknown named option 'reference'"
+            unless defined $key && !ref($key);
+        croak "$operation reverse-routing unknown named option '$key'"
+            unless $allowed{$key};
+        $options{$key} = $value;
+    }
+
+    croak "$operation reverse-routing named params must be a hashref"
+        if exists $options{params} && ref($options{params}) ne 'HASH';
+    croak "$operation reverse-routing named query must be a hashref"
+        if exists $options{query} && ref($options{query}) ne 'HASH';
+    croak "$operation reverse-routing named fragment must be a plain scalar or undef"
+        if exists $options{fragment}
+            && defined $options{fragment} && ref($options{fragment});
+
+    $result->{params} = { %{$options{params}} } if exists $options{params};
+    $result->{query} = { %{$options{query}} } if exists $options{query};
+    if (exists $options{fragment} && defined $options{fragment}) {
+        $result->{has_fragment} = 1;
+        $result->{fragment} = $options{fragment};
+    }
+    return $result;
+}
+
+sub _normalize_reference {
+    my ($operation, $reference, $base_segments) = @_;
+    croak "$operation route reference must be a nonempty scalar"
+        unless defined $reference && !ref($reference) && length $reference;
+    croak "$operation route reference base must be an arrayref"
+        unless ref($base_segments) eq 'ARRAY';
+
+    my $was_absolute = substr($reference, 0, 1) eq '/' ? 1 : 0;
+    my @segments = $was_absolute ? () : @$base_segments;
+    my $spelling = $was_absolute ? substr($reference, 1) : $reference;
+    my @input = length($spelling) ? split(m{/}, $spelling, -1) : ();
+
+    for my $segment (@input) {
+        croak "$operation route reference '$reference' contains an empty logical segment"
+            unless length $segment;
+        next if $segment eq '.';
+        if ($segment eq '..') {
+            croak "$operation route reference '$reference' traverses above the Router root"
+                unless @segments;
+            pop @segments;
+            next;
+        }
+        push @segments, $segment;
+    }
+
+    return (_canonical_address(\@segments), $was_absolute);
 }
 
 sub _join_root_path {
     my ($root_path, $path) = @_;
     $root_path = '' unless defined $root_path;
     $root_path = _encode_path($root_path);
+    my $suffix = '';
+    if ($path =~ /([?#])/) {
+        my $boundary = index($path, $1);
+        $suffix = substr($path, $boundary);
+        $path = substr($path, 0, $boundary);
+    }
     chop $root_path if length($root_path) && substr($root_path, -1) eq '/'
         && length($path) && substr($path, 0, 1) eq '/';
-    return $root_path . $path;
+    return $root_path . $path . $suffix;
 }
 
 sub _encode_path {
@@ -376,18 +494,46 @@ active ancestry, rejecting cycles while allowing sibling placement reuse.
 
 Child Router descriptions remain placement-free: traversal calls their
 C<routes> method and never reuses their local resolver as an outer placement
-resolver. C<path_for> validates path/query values and returns a string.
+resolver. Reverse arguments use one parser for Router C<path_for>, Context
+C<path_for>, and Context C<url_for>. The compact and named forms are:
+
+    path_for($reference, \%params, \%query, $fragment)
+    path_for($reference,
+        params => \%params, query => \%query, fragment => $fragment)
+
+No arguments means empty params/query and no fragment. A first trailing
+hashref selects compact form; a first trailing defined plain scalar selects
+named form. Other selectors fail, and compact and named forms cannot be mixed.
+Compact query-only and fragment-only calls retain empty placeholders:
+
+    path_for('/index', {}, { q => 'two words' })
+    path_for('/index', {}, {}, 'details')
+
+Explicit C<undef> omits a fragment, while an empty fragment emits a terminal
+C<#>. Params and query values are copied during parsing. Query keys are sorted
+and query components are UTF-8 percent-encoded; the fragment is UTF-8 encoded
+as one component after the query.
+
+C<path_for> validates values and returns an application-relative string.
 C<url_for_scope> additionally reads one request scope, delegates authority to
 L<PAGI::Authority>, applies the compiled-router C<root_path> boundary, and
-returns an absolute string; it emits no events. The decoded Unicode boundary
+returns an absolute string. It resolves the target once and maps the indexed
+route kind to the URL scheme; for example, suffix ordering is
+C<https://example.test/items/7?q=two%20words#details> for HTTP/SSE and
+C<wss://example.test/socket/7?q=two%20words#details> for WebSocket. Neither
+reverse method invokes receive/send callbacks or emits protocol events. The decoded Unicode boundary
 is escaped component-wise before it is joined to the already escaped generated
 path. Matched leaf metadata includes its effective URL pattern, canonical
 address, containing logical namespace, kind, and description. Placement
 records retain the source leaf, mount data, composed constraints, and defensive
-location information. References beginning with C</> are absolute; bare and
-child-slash references resolve from the current Router root by adding one
-leading slash. Dots remain literal within one segment and never spell logical
-hierarchy. C<named_routes> returns a defensive hashref, while C<route_named>
+location information. References beginning with C</> are absolute; other
+references resolve from an explicit logical base (the Router root for public
+Router reverse calls). Components C<.> and C<..> normalize left-to-right,
+while dots inside a component remain literal. Empty components, repeated or
+trailing separators, traversal above root, and namespace-only results fail.
+References are never URI-decoded and lookup is exact: there is no ancestor
+search, absolute retry, prefix folding, or dotted hierarchy. C<named_routes>
+returns a defensive hashref, while C<route_named>
 preserves the original leaf identity and C<route_kind> returns the immutable
 indexed kind.
 

@@ -295,15 +295,17 @@ sub path_param {
 =head2 Routing Reverse Methods
 
     my $path = $ctx->path_for(
-        'account.user.show',
+        '/account/user/show',
         { account_id => 7, user_id => 42 },
         { tab => 'profile' },
+        'details',
     );
 
     my $url = $ctx->url_for(
-        'account.user.show',
-        { account_id => 7, user_id => 42 },
-        { tab => 'profile' },
+        '/account/user/show',
+        params   => { account_id => 7, user_id => 42 },
+        query    => { tab => 'profile' },
+        fragment => 'details',
     );
 
 C<path_for> renders a named declarative route through the resolver in the last
@@ -313,8 +315,27 @@ prefixes already occur in the resolver's generated path, so the handler's
 later rewritten C<root_path> is not added a second time. C<url_for> uses the
 same resolver boundary and returns an absolute URL whose scheme follows the
 named route kind: HTTP and SSE targets use C<http> or C<https>, while WebSocket
-targets use C<ws> or C<wss>. Missing path and query hashes default to empty
-hashes. These methods perform no protocol I/O.
+targets use C<ws> or C<wss>. For example, query and fragment suffixes produce
+C<https://example.test/users/42?tab=profile#details> for HTTP/SSE targets and
+C<wss://example.test/socket/42?tab=profile#details> for WebSocket targets.
+
+Both methods accept the same compact C<(\%params, \%query, $fragment)> and
+named C<(params =E<gt> \%params, query =E<gt> \%query, fragment =E<gt>
+$fragment)> forms. No reverse arguments means empty params/query and no
+fragment. A first trailing hashref selects compact form; query-only and
+fragment-only calls require C<{}> placeholders. A first trailing defined plain
+scalar selects the order-independent named form. Other selectors fail, and
+the forms cannot be mixed. Explicit C<undef> omits the fragment, while an empty
+fragment emits a terminal C<#>. Query pairs are sorted and UTF-8 component
+encoded; the fragment is encoded as one component after the query.
+
+An initial slash makes a reference absolute; otherwise it resolves from the
+current Router root. C<.> and C<..> components normalize exactly, dots inside
+a component remain literal, and reference text is never URI-decoded. Empty
+components, repeated or trailing separators, traversal above root,
+namespace-only results, and unknown exact targets fail without ancestor search
+or fuzzy fallback. These methods perform no receive/send calls and emit no
+protocol events.
 
 The compatible version-1 frame shape is:
 
@@ -366,17 +387,16 @@ sub path_for {
 }
 
 sub url_for {
-    my ($self, $name, $path_params, $query_params) = @_;
+    my ($self, $reference, @reverse_args) = @_;
     my $frame = $self->_routing_frame('url_for');
     my $root_path = exists $frame->{root_path}
         ? $frame->{root_path}
         : $self->{scope}{root_path};
     return $frame->{resolver}->url_for_scope(
         $self->{scope},
-        $name,
-        $path_params,
-        $query_params,
+        $reference,
         $root_path,
+        @reverse_args,
     );
 }
 

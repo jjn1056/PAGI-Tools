@@ -63,6 +63,139 @@ subtest 'direct slash addresses render application paths and route kinds' => sub
     );
 };
 
+subtest 'Router path_for accepts equivalent compact and named reverse arguments' => sub {
+    my $routing = router(routes => [
+        route('/items/{id}' => sub { }, name => 'show'),
+        route('/items' => sub { }, name => 'index'),
+    ]);
+
+    my @cases = (
+        ['defaults', ['/index'], '/items'],
+        ['compact params', ['/show', { id => 7 }], '/items/7'],
+        ['compact query', ['/show', { id => 7 }, { q => 'two words' }],
+            '/items/7?q=two%20words'],
+        ['compact fragment', ['/show', { id => 7 }, { q => 'two words' }, 'details'],
+            '/items/7?q=two%20words#details'],
+        ['named full', ['/show', params => { id => 7 },
+            query => { q => 'two words' }, fragment => 'details'],
+            '/items/7?q=two%20words#details'],
+        ['compact query only', ['/index', {}, { q => 'two words' }],
+            '/items?q=two%20words'],
+        ['compact fragment only', ['/index', {}, {}, 'two words'],
+            '/items#two%20words'],
+        ['named reordered', ['/show', fragment => 'details',
+            params => { id => 7 }, query => { q => 'two words' }],
+            '/items/7?q=two%20words#details'],
+        ['named query first', ['/show', query => { q => 'two words' },
+            params => { id => 7 }], '/items/7?q=two%20words'],
+        ['compact undef fragment', ['/show', { id => 7 }, {}, undef], '/items/7'],
+        ['named undef fragment', ['/show', params => { id => 7 }, fragment => undef],
+            '/items/7'],
+        ['compact empty fragment', ['/show', { id => 7 }, {}, ''], '/items/7#'],
+        ['named empty fragment', ['/show', fragment => '', params => { id => 7 }],
+            '/items/7#'],
+        ['UTF-8 suffix ordering', ['/show', { id => 7 },
+            { z => 'last', a => "caf\x{e9}" }, "part / caf\x{e9}"],
+            '/items/7?a=caf%C3%A9&z=last#part%20%2F%20caf%C3%A9'],
+    );
+
+    for my $case (@cases) {
+        my ($label, $args, $expected) = @$case;
+        is($routing->path_for(@$args), $expected, $label);
+    }
+};
+
+subtest 'Router path_for rejects malformed and mixed reverse arguments' => sub {
+    my $routing = router(routes => [
+        route('/items/{id}' => sub { }, name => 'show'),
+    ]);
+    my $object = bless {}, 'Local::ReverseArgumentsObject';
+    my $scalar = 'value';
+
+    my @cases = (
+        ['too many compact values', ['/show', {}, {}, 'section', 'extra'],
+            qr/\Apath_for reverse-routing compact form accepts at most params, query, and fragment/],
+        ['compact params array', ['/show', []],
+            qr/\Apath_for reverse-routing form selector must be a hashref or named option key/],
+        ['compact query array', ['/show', {}, []],
+            qr/\Apath_for reverse-routing compact query must be a hashref/],
+        ['compact fragment array', ['/show', {}, {}, []],
+            qr/\Apath_for reverse-routing compact fragment must be a plain scalar or undef/],
+        ['compact fragment object', ['/show', {}, {}, $object],
+            qr/\Apath_for reverse-routing compact fragment must be a plain scalar or undef/],
+        ['compact fragment scalar ref', ['/show', {}, {}, \$scalar],
+            qr/\Apath_for reverse-routing compact fragment must be a plain scalar or undef/],
+        ['undef selector', ['/show', undef],
+            qr/\Apath_for reverse-routing form selector must be a hashref or named option key/],
+        ['array selector', ['/show', []],
+            qr/\Apath_for reverse-routing form selector must be a hashref or named option key/],
+        ['object selector', ['/show', $object],
+            qr/\Apath_for reverse-routing form selector must be a hashref or named option key/],
+        ['scalar-ref selector', ['/show', \$scalar],
+            qr/\Apath_for reverse-routing form selector must be a hashref or named option key/],
+        ['odd named list', ['/show', params => { id => 7 }, 'query'],
+            qr/\Apath_for reverse-routing named option list must contain key\/value pairs/],
+        ['unknown named key', ['/show', parameters => { id => 7 }],
+            qr/\Apath_for reverse-routing unknown named option 'parameters'/],
+        ['named params array', ['/show', params => []],
+            qr/\Apath_for reverse-routing named params must be a hashref/],
+        ['named query scalar', ['/show', query => 'bad'],
+            qr/\Apath_for reverse-routing named query must be a hashref/],
+        ['named fragment array', ['/show', fragment => []],
+            qr/\Apath_for reverse-routing named fragment must be a plain scalar or undef/],
+        ['named fragment object', ['/show', fragment => $object],
+            qr/\Apath_for reverse-routing named fragment must be a plain scalar or undef/],
+        ['named fragment scalar ref', ['/show', fragment => \$scalar],
+            qr/\Apath_for reverse-routing named fragment must be a plain scalar or undef/],
+        ['compact then named', ['/show', { id => 8 }, query => { view => 'full' }],
+            qr/compact and named reverse-routing forms cannot be mixed/],
+        ['compact placeholders then named', ['/show', {}, {}, fragment => 'details'],
+            qr/compact and named reverse-routing forms cannot be mixed/],
+    );
+
+    for my $case (@cases) {
+        my ($label, $args, $error) = @$case;
+        like(dies { $routing->path_for(@$args) }, $error, $label);
+    }
+};
+
+subtest 'Router path_for normalizes exact logical references without decoding' => sub {
+    my $routing = router(routes => [
+        route('/show' => sub { }, name => 'show'),
+        route('/encoded' => sub { }, name => '%2F'),
+        mount('/group', routes => [
+            route('/child' => sub { }, name => 'child'),
+        ], namespace => 'group'),
+    ]);
+
+    for my $reference (qw(/show show ./show group/../show)) {
+        is($routing->path_for($reference), '/show', "$reference resolves exactly to /show");
+    }
+    is($routing->path_for('group/child'), '/group/child',
+        'a child slash reference resolves from the Router root');
+    is($routing->path_for('%2F'), '/encoded',
+        'percent-encoded input remains one literal logical segment');
+
+    my @cases = (
+        ['repeated slash', 'group//child', qr/contains an empty logical segment/],
+        ['absolute repeated slash', '//show', qr/contains an empty logical segment/],
+        ['trailing slash', 'group/child/', qr/contains an empty logical segment/],
+        ['above-root traversal', '../show', qr/traverses above the Router root/],
+        ['absolute above-root traversal', '/../show', qr/traverses above the Router root/],
+        ['root only', '/', qr/resolves to a logical namespace, not a route/],
+        ['bare dot', '.', qr/resolves to a logical namespace, not a route/],
+        ['bare dot-dot', '..', qr/traverses above the Router root/],
+        ['normalized namespace', 'group/..', qr/resolves to a logical namespace, not a route/],
+        ['namespace only', 'group', qr/resolves to a logical namespace, not a route/],
+        ['unknown exact target', 'missing/show', qr/unknown route name 'missing\/show'/],
+    );
+
+    for my $case (@cases) {
+        my ($label, $reference, $error) = @$case;
+        like(dies { $routing->path_for($reference) }, $error, $label);
+    }
+};
+
 subtest 'inline paths and slash namespaces remain independent' => sub {
     my $unnamed_mount = mount('/public', routes => [
         route('/users/{id}' => sub { }, name => 'show'),
@@ -173,7 +306,7 @@ subtest 'reverse rendering validates complete ancestry and escapes values' => su
     );
     like(
         dies { $routing->path_for('/account/files', [], {}) },
-        qr/path parameters for route '\/account\/files' must be a hashref/,
+        qr/\Apath_for reverse-routing form selector must be a hashref or named option key/,
         'path parameters must be a hashref',
     );
     like(
@@ -182,7 +315,7 @@ subtest 'reverse rendering validates complete ancestry and escapes values' => su
                 '/account/files', { account => 'main', path => 'file' }, [],
             );
         },
-        qr/query parameters for route '\/account\/files' must be a hashref/,
+        qr/\Apath_for reverse-routing compact query must be a hashref/,
         'query parameters must be a hashref',
     );
     like(

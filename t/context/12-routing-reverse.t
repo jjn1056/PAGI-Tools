@@ -92,6 +92,108 @@ subtest 'Context selects the last resolver from a valid routing frame stack' => 
     );
 };
 
+subtest 'Context path_for and url_for share compact and named reverse arguments' => sub {
+    my $resolver = _resolver(
+        route('/items/{id}' => sub { }, name => 'show'),
+        route('/items' => sub { }, name => 'index'),
+    );
+    my ($receive_calls, $send_calls) = (0, 0);
+    my $context = PAGI::Context->new({
+        type      => 'http',
+        headers   => [['host', 'example.test']],
+        scheme    => 'https',
+        root_path => '/edge',
+        'pagi.routing' => {
+            version => 1,
+            frames  => [_frame($resolver)],
+        },
+    }, sub { ++$receive_calls }, sub { ++$send_calls });
+
+    my @cases = (
+        ['defaults', ['/index'], '/items'],
+        ['compact params', ['/show', { id => 7 }], '/items/7'],
+        ['compact query', ['/show', { id => 7 }, { q => 'two words' }],
+            '/items/7?q=two%20words'],
+        ['compact fragment', ['/show', { id => 7 }, { q => 'two words' }, 'details'],
+            '/items/7?q=two%20words#details'],
+        ['named full', ['/show', params => { id => 7 },
+            query => { q => 'two words' }, fragment => 'details'],
+            '/items/7?q=two%20words#details'],
+        ['compact query only', ['/index', {}, { q => 'two words' }],
+            '/items?q=two%20words'],
+        ['compact fragment only', ['/index', {}, {}, 'two words'],
+            '/items#two%20words'],
+        ['named reordered', ['/show', fragment => 'details',
+            query => { q => 'two words' }, params => { id => 7 }],
+            '/items/7?q=two%20words#details'],
+        ['named query first', ['/show', query => { q => 'two words' },
+            params => { id => 7 }], '/items/7?q=two%20words'],
+        ['compact undef fragment', ['/show', { id => 7 }, {}, undef], '/items/7'],
+        ['named undef fragment', ['/show', fragment => undef, params => { id => 7 }],
+            '/items/7'],
+        ['compact empty fragment', ['/show', { id => 7 }, {}, ''], '/items/7#'],
+        ['named empty fragment', ['/show', params => { id => 7 }, fragment => ''],
+            '/items/7#'],
+    );
+
+    for my $case (@cases) {
+        my ($label, $args, $suffix) = @$case;
+        is($context->path_for(@$args), "/edge$suffix", "path_for $label");
+        is($context->url_for(@$args), "https://example.test/edge$suffix",
+            "url_for $label");
+    }
+    is($receive_calls, 0, 'reverse routing performs no receive I/O');
+    is($send_calls, 0, 'reverse routing performs no send I/O');
+};
+
+subtest 'Context reverse methods share operation-specific argument failures' => sub {
+    my $resolver = _resolver(
+        route('/items/{id}' => sub { }, name => 'show'),
+    );
+    my $context = _context('http', $resolver);
+    my $object = bless {}, 'Local::ContextReverseArgumentsObject';
+    my $scalar = 'value';
+
+    my @cases = (
+        ['too many compact values', ['/show', {}, {}, 'section', 'extra'],
+            'compact form accepts at most params, query, and fragment'],
+        ['compact query array', ['/show', {}, []], 'compact query must be a hashref'],
+        ['compact fragment object', ['/show', {}, {}, $object],
+            'compact fragment must be a plain scalar or undef'],
+        ['undef selector', ['/show', undef],
+            'form selector must be a hashref or named option key'],
+        ['array selector', ['/show', []],
+            'form selector must be a hashref or named option key'],
+        ['object selector', ['/show', $object],
+            'form selector must be a hashref or named option key'],
+        ['scalar-ref selector', ['/show', \$scalar],
+            'form selector must be a hashref or named option key'],
+        ['odd named list', ['/show', params => { id => 7 }, 'query'],
+            'named option list must contain key/value pairs'],
+        ['unknown named key', ['/show', parameters => { id => 7 }],
+            "unknown named option 'parameters'"],
+        ['named params array', ['/show', params => []],
+            'named params must be a hashref'],
+        ['named query object', ['/show', query => $object],
+            'named query must be a hashref'],
+        ['named fragment scalar ref', ['/show', fragment => \$scalar],
+            'named fragment must be a plain scalar or undef'],
+        ['mixed forms', ['/show', { id => 8 }, query => { view => 'full' }],
+            'compact and named reverse-routing forms cannot be mixed'],
+    );
+
+    for my $operation (qw(path_for url_for)) {
+        for my $case (@cases) {
+            my ($label, $args, $message) = @$case;
+            like(
+                dies { $context->$operation(@$args) },
+                qr/\A\Q$operation reverse-routing $message\E/,
+                "$operation $label",
+            );
+        }
+    }
+};
+
 subtest 'all built-in Context subclasses inherit routing reverse methods' => sub {
     my $resolver = _resolver(
         route('/page' => sub { }, name => 'page'),

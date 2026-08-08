@@ -115,6 +115,41 @@ C<methods>, and C<constraints> return undef.
 
 =head1 METHODS
 
+=head2 path_for
+
+    my $path = $router->path_for(
+        '/account/show',
+        { account_id => 7 },
+        { tab => 'two words' },
+        'details',
+    );
+
+    my $same = $router->path_for(
+        '/account/show',
+        params   => { account_id => 7 },
+        query    => { tab => 'two words' },
+        fragment => 'details',
+    );
+
+The compact form accepts params, query, and fragment in that order. Its first
+trailing hashref selects compact form, and C<{}> placeholders are required for
+query-only or fragment-only calls. A first trailing defined plain scalar
+selects the order-independent named form with C<params>, C<query>, and
+C<fragment>. Other selectors fail, and the forms cannot be mixed. Params and
+query must be hashrefs. A fragment is a plain scalar or C<undef>; C<undef>
+omits it and an empty string emits a terminal C<#>.
+
+An initial C</> makes a reference absolute; otherwise it starts at this
+Router's root. C<.> and C<..> components normalize exactly, dots within a
+component remain literal, and references are never URI-decoded. Empty
+components, repeated or trailing separators, above-root traversal,
+namespace-only results, and unknown exact targets fail. There is no ancestor
+search, fuzzy fallback, dotted hierarchy, or overlapping-prefix folding.
+
+Query pairs are sorted and each UTF-8 key/value is percent-encoded as a URI
+component. A fragment is encoded once as one component and follows the query.
+C<path_for> only returns a string and performs no protocol I/O.
+
 =head2 to_app
 
 Synchronously compiles and returns a fresh PAGI application graph through
