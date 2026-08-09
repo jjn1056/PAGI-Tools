@@ -4,13 +4,18 @@ use Test2::V0;
 use FindBin qw($Bin);
 use Scalar::Util qw(refaddr);
 use lib "$Bin/../examples/15-large-application/lib";
-
-use MyApp::Data;
-use MyApp::Person ();
-use MyApp::Person::Blogs ();
-use MyApp::Root ();
-use MyApp::View;
 use PAGI::Test::Client;
+
+if ($] < 5.040) {
+    plan skip_all => 'examples/15-large-application requires Perl 5.40';
+    exit 0;
+}
+
+require MyApp::Data;
+require MyApp::Person;
+require MyApp::Person::Blogs;
+require MyApp::Root;
+require MyApp::View;
 
 sub _link_target {
     my ($response, $label) = @_;
@@ -46,6 +51,47 @@ sub _source_text {
     close $fh or die "cannot close $path: $!\n";
     return $source;
 }
+
+subtest 'example sources require Perl 5.40 and use signatures' => sub {
+    my $root = "$Bin/../examples/15-large-application";
+    my @sources = (
+        "$root/app.pl",
+        "$root/lib/MyApp/Data.pm",
+        "$root/lib/MyApp/Root.pm",
+        "$root/lib/MyApp/Person.pm",
+        "$root/lib/MyApp/Person/Blogs.pm",
+        "$root/lib/MyApp/View.pm",
+    );
+
+    for my $path (@sources) {
+        my $source = _source_text($path);
+        like($source, qr/^use v5[.]40;/m, "$path declares the example minimum");
+        unlike($source, qr/my\s*\([^;]*\)\s*=\s*\@_\s*;/,
+            "$path contains no legacy argument unpacking");
+    }
+
+    my $data = _source_text("$root/lib/MyApp/Data.pm");
+    my $root_app = _source_text("$root/lib/MyApp/Root.pm");
+    my $person = _source_text("$root/lib/MyApp/Person.pm");
+    my $blogs = _source_text("$root/lib/MyApp/Person/Blogs.pm");
+    my $view = _source_text("$root/lib/MyApp/View.pm");
+
+    like($data, qr/sub new\(\$class\)/, 'Data constructor uses a signature');
+    like($root_app, qr/sub routing\(\$class\)/, 'Root routing uses a signature');
+    like($person, qr/sub show_person\(\$c\)/, 'Person handler uses a signature');
+    like($blogs, qr/sub show_blog\(\$c\)/, 'Blogs handler uses a signature');
+    like($view, qr/sub document\(\$class, \$title, \$body\)/,
+        'View document helper uses a signature');
+
+    like($person, qr/use Types::Standard qw\(Int\)/,
+        'Person imports the Type::Tiny Int provider');
+    is(() = $person =~ /\{person_id:&Int\}/g, 2,
+        'Person uses &Int on its detail and Blogs mount parameters');
+    like($blogs, qr/use Types::Standard qw\(Int\)/,
+        'Blogs imports the Type::Tiny Int provider');
+    is(() = $blogs =~ /\{blog_id:&Int\}/g, 1,
+        'Blogs uses &Int on its detail parameter');
+};
 
 subtest 'fixture repository exposes defensive people and blog records' => sub {
     my $data = MyApp::Data->new;
@@ -121,6 +167,9 @@ subtest 'component routing publishes the canonical composed address map' => sub 
             '/person/show' => $root->path_for(
                 '/person/show', { person_id => 2 },
             ),
+            '/person/show-negative' => $root->path_for(
+                '/person/show', { person_id => -1 },
+            ),
             '/person/blog/index' => $root->path_for(
                 '/person/blog/index', { person_id => 2 },
             ),
@@ -132,6 +181,7 @@ subtest 'component routing publishes the canonical composed address map' => sub 
             '/home' => '/',
             '/person/index' => '/person/',
             '/person/show' => '/person/2',
+            '/person/show-negative' => '/person/-1',
             '/person/blog/index' => '/person/2/blog/',
             '/person/blog/show' => '/person/2/blog/201',
         },
@@ -362,6 +412,20 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
             'matched missing person is a local handler 404');
         like($person_missing->text, qr{<h1>Person not found</h1>},
             'Person handler 404 remains untouched');
+
+        my $negative_person = $client->get('/person/-1');
+        is($negative_person->status, 404,
+            'signed Int routes a negative person identifier to the handler');
+        like($negative_person->text, qr{<h1>Person not found</h1>},
+            'negative person identifiers receive the branded handler-owned 404');
+
+        my $noninteger_person = $client->get('/person/not-an-integer');
+        is($noninteger_person->status, 404,
+            'a noninteger person identifier does not reach the typed leaf');
+        is($noninteger_person->text, 'Not Found',
+            'a noninteger person identifier keeps the child Router generated 404');
+        unlike($noninteger_person->text, qr{<h1>Person not found</h1>},
+            'the generated noninteger response is not the branded handler 404');
 
         my $blog_missing = $client->get('/person/1/blog/999');
         is($blog_missing->status, 404,

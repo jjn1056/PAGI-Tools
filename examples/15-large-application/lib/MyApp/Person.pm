@@ -1,14 +1,14 @@
 package MyApp::Person;
 
-use strict;
+use v5.40;
 use warnings;
 use utf8;
+use Types::Standard qw(Int);
 use PAGI::Routing qw(router route mount);
 use MyApp::Person::Blogs ();
 use MyApp::View ();
 
-sub list_people {
-    my ($c) = @_;
+sub list_people($c) {
     my @items;
 
     for my $person (@{$c->state->{data}->people}) {
@@ -27,8 +27,7 @@ sub list_people {
     ));
 }
 
-sub show_person {
-    my ($c) = @_;
+sub show_person($c) {
     my $person_id = $c->path_param('person_id');
     my $person = $c->state->{data}->person($person_id);
 
@@ -57,25 +56,21 @@ sub show_person {
     ));
 }
 
-sub routing {
-    my ($class) = @_;
-
+sub routing($class) {
     return router(
         routes => [
             route('/' => \&list_people,
                 name => 'index',
                 desc => 'List people',
             ),
-            route('/{person_id}' => \&show_person,
-                name        => 'show',
-                desc        => 'Show one person',
-                constraints => { person_id => qr/\d+/ },
+            route('/{person_id:&Int}' => \&show_person,
+                name => 'show',
+                desc => 'Show one person',
             ),
-            mount('/{person_id}/blog',
-                router      => MyApp::Person::Blogs->routing,
-                namespace   => 'blog',
-                desc        => 'Blogs for one person',
-                constraints => { person_id => qr/\d+/ },
+            mount('/{person_id:&Int}/blog',
+                router    => MyApp::Person::Blogs->routing,
+                namespace => 'blog',
+                desc      => 'Blogs for one person',
             ),
         ],
         desc => 'Person routes',
