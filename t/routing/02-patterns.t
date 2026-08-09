@@ -32,6 +32,97 @@ use PAGI::Routing qw(route mount);
     sub seen { [ @{$_[0]->{seen}} ] }
 }
 
+{
+    package Local::ConstraintProviders;
+
+    our %CALLS;
+    our %ARGS;
+
+    sub reset {
+        %CALLS = ();
+        %ARGS = ();
+    }
+
+    sub _record {
+        my ($name, @args) = @_;
+        $CALLS{$name}++;
+        $ARGS{$name} = [@args];
+    }
+
+    sub Digits {
+        _record('Digits', @_);
+        return qr/\d+/;
+    }
+
+    sub Even {
+        _record('Even', @_);
+        return sub { return $_[0] =~ /\A\d+\z/ && $_[0] % 2 == 0 };
+    }
+
+    sub Typed {
+        _record('Typed', @_);
+        return Local::RoutingType->new('typed');
+    }
+
+    sub Twice {
+        _record('Twice', @_);
+        return qr/[a-z]+/;
+    }
+
+    sub Throws {
+        _record('Throws', @_);
+        die "provider exploded\n";
+    }
+
+    sub Async {
+        _record('Async', @_);
+        return Future->done(qr/\d+/);
+    }
+
+    sub ScalarResult { _record('ScalarResult', @_); return 'digits' }
+    sub ArrayResult  { _record('ArrayResult',  @_); return [] }
+    sub HashResult   { _record('HashResult',   @_); return {} }
+    sub ScalarRefResult {
+        _record('ScalarRefResult', @_);
+        my $value = 'digits';
+        return \$value;
+    }
+    sub InvalidBlessed {
+        _record('InvalidBlessed', @_);
+        return bless {}, 'Local::ProviderWithoutCheck';
+    }
+}
+
+{
+    package Local::ExistingProviderPackage;
+    our $Marker = 1;
+}
+
+{
+    package Local::ProviderParent;
+    sub Inherited { return qr/parent/ }
+}
+
+{
+    package Local::ProviderChild;
+    our @ISA = ('Local::ProviderParent');
+}
+
+{
+    package Local::ProviderAutoload;
+    our $AUTOLOAD;
+    sub AUTOLOAD { return qr/autoloaded/ }
+    sub DESTROY { }
+}
+
+{
+    package Local::ProviderNonCode;
+    our $Value = 'not code';
+}
+
+sub MainDigits { return qr/\d+/ }
+sub Int { return qr/\d+/ }
+
 subtest 'literal and parameter routes are exact over decoded paths' => sub {
     my $literal = PAGI::Routing::Pattern->new(
         path => '/users', mode => 'route', constraints => {},
@@ -589,6 +680,302 @@ subtest 'a private pre-normalized channel drives matching and rendering' => sub 
         qr/pre-normalized predicate records cannot be combined with constraints/,
         'private records cannot double-apply public constraints',
     );
+};
+
+subtest 'inline providers normalize each accepted result shape once' => sub {
+    Local::ConstraintProviders::reset();
+
+    my $digits = PAGI::Routing::Pattern->new(
+        path => '/digits/{id:&Digits}', mode => 'route', constraints => {},
+        declaration_package => 'Local::ConstraintProviders',
+    );
+    my $even = PAGI::Routing::Pattern->new(
+        path => '/even/{id:&Even}', mode => 'route', constraints => {},
+        declaration_package => 'Local::ConstraintProviders',
+    );
+    my $typed = PAGI::Routing::Pattern->new(
+        path => '/typed/{id:&Typed}', mode => 'route', constraints => {},
+        declaration_package => 'Local::ConstraintProviders',
+    );
+    my $qualified = PAGI::Routing::Pattern->new(
+        path => '/qualified/{id:&Local::ConstraintProviders::Digits}',
+        mode => 'route', constraints => {},
+        declaration_package => 'Local::ExistingProviderPackage',
+    );
+    my $direct_caller = PAGI::Routing::Pattern->new(
+        path => '/main/{id:&MainDigits}', mode => 'route', constraints => {},
+    );
+
+    is(
+        \%Local::ConstraintProviders::CALLS,
+        { Digits => 2, Even => 1, Typed => 1 },
+        'each provider occurrence runs once during source construction',
+    );
+    is($Local::ConstraintProviders::ARGS{Digits}, [],
+        'a regex provider receives no arguments');
+    is($Local::ConstraintProviders::ARGS{Even}, [],
+        'a predicate provider receives no arguments');
+    is($Local::ConstraintProviders::ARGS{Typed}, [],
+        'a check-object provider receives no arguments');
+
+    is($digits->match_route('/digits/42'), { id => '42' },
+        'a regex provider accepts a complete decoded value');
+    ok(!defined $digits->match_route('/digits/42x'),
+        'a regex provider rejects a partial value');
+    is($even->match_route('/even/24'), { id => '24' },
+        'a returned predicate accepts its decoded value');
+    ok(!defined $even->match_route('/even/25'),
+        'a returned predicate rejects its decoded value');
+    is($typed->match_route('/typed/typed'), { id => 'typed' },
+        'a returned check object accepts its decoded value');
+    ok(!defined $typed->match_route('/typed/other'),
+        'a returned check object rejects its decoded value');
+    is($qualified->render({ id => 7 }, '/qualified'), '/qualified/7',
+        'a fully qualified provider participates in reverse rendering');
+    is($direct_caller->render({ id => 8 }, '/main'), '/main/8',
+        'direct Pattern construction defaults lookup to its direct caller');
+    like(
+        dies { $typed->render({ id => 'wrong' }, '/typed') },
+        qr/path parameter 'id' failed constraint for route '\/typed': expected typed, got wrong/,
+        'a provider-returned check object retains its failure explanation',
+    );
+    like(
+        dies { $even->render({ id => 25 }, '/even') },
+        qr/path parameter 'id' failed constraint for route '\/even'/,
+        'a provider-returned predicate rejects reverse values',
+    );
+    is(
+        \%Local::ConstraintProviders::CALLS,
+        { Digits => 2, Even => 1, Typed => 1 },
+        'matching and rendering never invoke providers again',
+    );
+
+    my $twice = PAGI::Routing::Pattern->new(
+        path => '/twice/{first:&Twice}/{second:&Twice}',
+        mode => 'route', constraints => {},
+        declaration_package => 'Local::ConstraintProviders',
+    );
+    is($Local::ConstraintProviders::CALLS{Twice}, 2,
+        'two provider occurrences in one source Pattern run independently');
+    is(
+        $twice->render({ first => 'one', second => 'two' }, '/twice'),
+        '/twice/one/two',
+        'both independently normalized occurrences render',
+    );
+    is($Local::ConstraintProviders::CALLS{Twice}, 2,
+        'rendering two occurrences does not re-run their provider');
+
+    my @explicit_calls;
+    my $combined = PAGI::Routing::Pattern->new(
+        path => '/combined/{id:&Digits}', mode => 'route',
+        declaration_package => 'Local::ConstraintProviders',
+        constraints => {
+            id => sub {
+                push @explicit_calls, $_[0];
+                return $_[0] < 100;
+            },
+        },
+    );
+    ok(!defined $combined->match_route('/combined/not-digits'),
+        'the inline provider predicate may reject before the explicit predicate');
+    is(\@explicit_calls, [],
+        'an explicit predicate is skipped after inline provider rejection');
+    is($combined->match_route('/combined/42'), { id => '42' },
+        'inline provider and explicit predicates may both accept');
+    ok(!defined $combined->match_route('/combined/123'),
+        'the explicit predicate may reject after provider acceptance');
+    is(\@explicit_calls, ['42', '123'],
+        'provider-backed inline then explicit ordering is stable');
+};
+
+subtest 'leading ampersand reserves provider intent with explicit regex escapes' => sub {
+    my @invalid = (
+        ['lowercase terminal', '&int'],
+        ['trailing whitespace', '&Int '],
+        ['regex character class', '&[A-Z]+'],
+        ['regex alternation', '&Foo|Bar'],
+        ['regex wildcard', '&Foo.*'],
+        ['lowercase qualified terminal', '&Foo::lower'],
+        ['empty package component', '&Foo::::Bar'],
+        ['Unicode terminal lookalike', "&\x{212A}nt"],
+    );
+
+    for my $case (@invalid) {
+        my ($label, $source) = @$case;
+        my $error = dies {
+            PAGI::Routing::Pattern->new(
+                path => "/bad/{value:$source}", mode => 'route', constraints => {},
+                declaration_package => 'Local::ConstraintProviders',
+            );
+        };
+        like($error, qr/invalid inline constraint provider '\Q$source\E'/,
+            "$label names the invalid provider source");
+        like($error, qr/parameter 'value'/,
+            "$label names the constrained parameter");
+        like($error, qr/capitalized package function/,
+            "$label explains the provider grammar");
+        like($error, qr/\[&\]/,
+            "$label points to the literal ampersand escape");
+    }
+
+    my $literal_name = PAGI::Routing::Pattern->new(
+        path => '/literal/{value:[&]Int}', mode => 'route', constraints => {},
+    );
+    is($literal_name->match_route('/literal/&Int'), { value => '&Int' },
+        '[&] keeps a leading ampersand in an inline regex');
+
+    my $literal_class = PAGI::Routing::Pattern->new(
+        path => '/literal/{value:[&][A-Z]+}', mode => 'route', constraints => {},
+    );
+    is($literal_class->match_route('/literal/&ABC'), { value => '&ABC' },
+        '[&] composes with the rest of an inline regex');
+
+    my $literal_escape = PAGI::Routing::Pattern->new(
+        path => '/literal/{value:\&Int}', mode => 'route', constraints => {},
+    );
+    is($literal_escape->match_route('/literal/&Int'), { value => '&Int' },
+        'a preserved backslash keeps ampersand in regex syntax');
+
+    my $double_quoted = PAGI::Routing::Pattern->new(
+        path => "/provider/{value:\&Int}", mode => 'route', constraints => {},
+    );
+    is($double_quoted->match_route('/provider/42'), { value => '42' },
+        'a double-quoted backslash is removed before provider parsing');
+};
+
+subtest 'provider lookup is exact non-loading and non-autovivifying' => sub {
+    no strict 'refs';
+    my $local_stash = *{$main::{'Local::'}}{HASH};
+    ok(!exists $local_stash->{'NeverLoadedProvider::'},
+        'the missing qualified package stash starts absent');
+
+    my $missing_package = dies {
+        PAGI::Routing::Pattern->new(
+            path => '/missing/{id:&Local::NeverLoadedProvider::Thing}',
+            mode => 'route', constraints => {},
+            declaration_package => 'Local::ConstraintProviders',
+        );
+    };
+    like(
+        $missing_package,
+        qr/provider '&Local::NeverLoadedProvider::Thing'.*parameter 'id'.*package 'Local::NeverLoadedProvider' has no existing symbol table.*load the defining module/s,
+        'a qualified missing package gets the distinct load guidance',
+    );
+    ok(!exists $local_stash->{'NeverLoadedProvider::'},
+        'a missing qualified package probe does not create its stash');
+
+    my $existing_stash = *{$local_stash->{'ExistingProviderPackage::'}}{HASH};
+    ok(!exists $existing_stash->{Missing},
+        'the missing terminal provider glob starts absent');
+    like(
+        dies {
+            PAGI::Routing::Pattern->new(
+                path => '/missing/{id:&Local::ExistingProviderPackage::Missing}',
+                mode => 'route', constraints => {},
+                declaration_package => 'Local::ConstraintProviders',
+            );
+        },
+        qr/provider '&Local::ExistingProviderPackage::Missing'.*parameter 'id'.*not defined in package 'Local::ExistingProviderPackage'/s,
+        'an existing qualified package reports its missing CODE slot',
+    );
+    ok(!exists $existing_stash->{Missing},
+        'a missing provider CODE probe does not create its terminal glob');
+
+    like(
+        dies {
+            PAGI::Routing::Pattern->new(
+                path => '/missing/{id:&Missing}', mode => 'route', constraints => {},
+                declaration_package => 'Local::ExistingProviderPackage',
+            );
+        },
+        qr/provider '&Missing'.*parameter 'id'.*not defined in package 'Local::ExistingProviderPackage'/s,
+        'an unqualified miss names its declaration package',
+    );
+    like(
+        dies {
+            PAGI::Routing::Pattern->new(
+                path => '/inherited/{id:&Inherited}', mode => 'route', constraints => {},
+                declaration_package => 'Local::ProviderChild',
+            );
+        },
+        qr/provider '&Inherited'.*not defined in package 'Local::ProviderChild'/s,
+        'provider lookup does not admit inherited methods',
+    );
+    like(
+        dies {
+            PAGI::Routing::Pattern->new(
+                path => '/autoload/{id:&Generated}', mode => 'route', constraints => {},
+                declaration_package => 'Local::ProviderAutoload',
+            );
+        },
+        qr/provider '&Generated'.*not defined in package 'Local::ProviderAutoload'/s,
+        'provider lookup does not invoke AUTOLOAD',
+    );
+    like(
+        dies {
+            PAGI::Routing::Pattern->new(
+                path => '/non-code/{id:&Value}', mode => 'route', constraints => {},
+                declaration_package => 'Local::ProviderNonCode',
+            );
+        },
+        qr/provider '&Value'.*not defined in package 'Local::ProviderNonCode'/s,
+        'a non-CODE symbol does not resolve as a provider',
+    );
+
+    like(
+        dies {
+            PAGI::Routing::Pattern->new(
+                path => '/throw/{id:&Throws}', mode => 'route', constraints => {},
+                declaration_package => 'Local::ConstraintProviders',
+            );
+        },
+        qr/provider '&Throws'.*parameter 'id'.*failed in package 'Local::ConstraintProviders': provider exploded/s,
+        'provider exceptions retain detail beneath construction context',
+    );
+    like(
+        dies {
+            PAGI::Routing::Pattern->new(
+                path => '/async/{id:&Async}', mode => 'route', constraints => {},
+                declaration_package => 'Local::ConstraintProviders',
+            );
+        },
+        qr/provider '&Async'.*parameter 'id'.*returned a Future/s,
+        'a provider Future gets a distinct synchronous construction error',
+    );
+
+    for my $name (qw(ScalarResult ArrayResult HashResult ScalarRefResult InvalidBlessed)) {
+        like(
+            dies {
+                PAGI::Routing::Pattern->new(
+                    path => "/invalid/{id:&$name}", mode => 'route', constraints => {},
+                    declaration_package => 'Local::ConstraintProviders',
+                );
+            },
+            qr/provider '&\Q$name\E'.*parameter 'id'.*must return a Regexp, coderef, or check object/s,
+            "$name rejects an invalid provider result shape",
+        );
+    }
+
+    my @bad_packages = (
+        undef,
+        '',
+        [],
+        '1Local',
+        'Local::::Bad',
+        'Local::Bad-Name',
+    );
+    for my $package (@bad_packages) {
+        like(
+            dies {
+                PAGI::Routing::Pattern->new(
+                    path => '/plain', mode => 'route', constraints => {},
+                    declaration_package => $package,
+                );
+            },
+            qr/declaration_package must be a Perl package name/,
+            'an invalid explicit declaration package is rejected',
+        );
+    }
 };
 
 subtest 'rendering encodes components and validates exact unencoded parameters' => sub {
