@@ -8,8 +8,10 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::App::Router;
 use PAGI::Response;
-use PAGI::Routing qw(route middleware);
+use PAGI::Routing qw(router route middleware);
 use PAGI::Routing::Compiler;
+
+sub HttpProvider { return qr/accepted/ }
 
 sub channels {
     my @events;
@@ -155,6 +157,51 @@ subtest 'raw HTTP leaves are coerced once and retain ownership of all channels' 
         [qw(http.response.start http.response.body)],
         'raw app emits its own response events',
     );
+};
+
+subtest 'provider constraints select normal and raw HTTP leaves before invocation' => sub {
+    my (@normal, @raw);
+    my $app = router(routes => [
+        route('/normal/{id:&HttpProvider}' => sub {
+            my ($c) = @_;
+            push @normal, $c->path_param('id');
+            return $c->text('provider ' . $c->path_param('id'));
+        }),
+        route('/normal/rejected' => sub {
+            return $_[0]->text('continued');
+        }),
+        route('/raw/{id:&HttpProvider}', raw => sub {
+            my ($request_scope, $receive, $send) = @_;
+            push @raw, $request_scope->{path_params}{id};
+            $send->({
+                type => 'http.response.start', status => 204, headers => [],
+            })->get;
+            $send->({
+                type => 'http.response.body', body => '', more => 0,
+            })->get;
+            return Future->done;
+        }),
+    ])->to_app;
+
+    my $run = sub {
+        my ($path) = @_;
+        my ($receive, $send, $events) = channels();
+        $app->(scope(path => $path), $receive, $send)->get;
+        return $events;
+    };
+
+    is(response_body($run->('/normal/accepted')), 'provider accepted',
+        'an accepted provider capture reaches a normal HTTP handler unchanged');
+    is(response_body($run->('/normal/rejected')), 'continued',
+        'a rejected provider route lets declaration-order scanning continue');
+    is($run->('/raw/accepted')->[0]{status}, 204,
+        'an accepted provider capture selects the raw HTTP application');
+    is($run->('/raw/rejected')->[0]{status}, 404,
+        'a rejected raw provider route produces the existing generated outcome');
+    is(\@normal, ['accepted'],
+        'the constrained normal handler runs only for its accepted capture');
+    is(\@raw, ['accepted'],
+        'the raw application is never invoked for a rejected capture');
 };
 
 subtest 'invalid normal returns retain the shared diagnostic' => sub {

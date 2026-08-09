@@ -40,6 +40,13 @@ use PAGI::Routing qw(:ALL);
 }
 
 {
+    package Local::ProtocolConstraint;
+    sub new { return bless { expected => $_[1] }, $_[0] }
+    sub check { return $_[1] eq $_[0]{expected} }
+    sub get_message { return "expected $_[0]{expected}, got $_[1]" }
+}
+
+{
     package Local::FactoryDeclaration;
     use PAGI::Routing qw(router route websocket sse mount);
     use PAGI::Routing::Route ();
@@ -276,9 +283,27 @@ subtest 'raw and protocol-specific route descriptions' => sub {
     my $raw_component = route '/component', raw => $component;
     is(refaddr($raw_component->target), refaddr($component), 'raw component identity is retained for compiler coercion');
 
-    my $websocket = websocket '/socket' => sub { };
+    my $ws_regex = qr/ws/;
+    my $ws_code = sub { return $_[0] eq 'code' };
+    my $ws_object = Local::ProtocolConstraint->new('object');
+    my $ws_constraints = {
+        regex => $ws_regex,
+        code => $ws_code,
+        object => $ws_object,
+    };
+    my $websocket = websocket '/socket/{regex}/{code}/{object}' => sub { },
+        constraints => $ws_constraints;
     my $raw_websocket = websocket '/raw-socket', raw => $app;
-    my $sse = sse '/events' => sub { };
+    my $sse_regex = qr/sse/;
+    my $sse_code = sub { return $_[0] eq 'stream' };
+    my $sse_object = Local::ProtocolConstraint->new('event');
+    my $sse_constraints = {
+        regex => $sse_regex,
+        code => $sse_code,
+        object => $sse_object,
+    };
+    my $sse = sse '/events/{regex}/{code}/{object}' => sub { },
+        constraints => $sse_constraints;
     my $raw_sse = sse '/raw-events', raw => $app;
     is($websocket->kind, 'websocket', 'WebSocket kind');
     is($sse->kind, 'sse', 'SSE kind');
@@ -287,7 +312,44 @@ subtest 'raw and protocol-specific route descriptions' => sub {
     ok(!$sse->is_raw, 'normal SSE route is not raw');
     ok($raw_sse->is_raw, 'raw SSE route is raw');
     is($websocket->methods, undef, 'WebSocket has no methods');
-    is($sse->constraints, undef, 'SSE has no constraints');
+    is(refaddr($websocket->constraints->{regex}), refaddr($ws_regex),
+        'WebSocket retains a declared regex constraint');
+    is(refaddr($websocket->constraints->{code}), refaddr($ws_code),
+        'WebSocket retains a declared coderef constraint');
+    is(refaddr($websocket->constraints->{object}), refaddr($ws_object),
+        'WebSocket retains a declared check object');
+    is($websocket->_pattern->match_route('/socket/ws/code/object'),
+        { regex => 'ws', code => 'code', object => 'object' },
+        'WebSocket applies all explicit constraint shapes');
+    ok(!defined $websocket->_pattern->match_route('/socket/ws/no/object'),
+        'WebSocket rejects a failed explicit constraint');
+
+    is(refaddr($sse->constraints->{regex}), refaddr($sse_regex),
+        'SSE retains a declared regex constraint');
+    is(refaddr($sse->constraints->{code}), refaddr($sse_code),
+        'SSE retains a declared coderef constraint');
+    is(refaddr($sse->constraints->{object}), refaddr($sse_object),
+        'SSE retains a declared check object');
+    is($sse->_pattern->match_route('/events/sse/stream/event'),
+        { regex => 'sse', code => 'stream', object => 'event' },
+        'SSE applies all explicit constraint shapes');
+    ok(!defined $sse->_pattern->match_route('/events/sse/stream/no'),
+        'SSE rejects a failed explicit constraint');
+
+    $ws_constraints->{regex} = qr/changed/;
+    $sse_constraints->{regex} = qr/changed/;
+    my $returned_ws_constraints = $websocket->constraints;
+    my $returned_sse_constraints = $sse->constraints;
+    $returned_ws_constraints->{code} = sub { 0 };
+    $returned_sse_constraints->{code} = sub { 0 };
+    is(refaddr($websocket->constraints->{regex}), refaddr($ws_regex),
+        'WebSocket copies the input constraint hash');
+    is(refaddr($websocket->constraints->{code}), refaddr($ws_code),
+        'WebSocket returns a defensive constraint hash');
+    is(refaddr($sse->constraints->{regex}), refaddr($sse_regex),
+        'SSE copies the input constraint hash');
+    is(refaddr($sse->constraints->{code}), refaddr($sse_code),
+        'SSE returns a defensive constraint hash');
 };
 
 subtest 'mount and router descriptions copy their collections' => sub {
@@ -492,7 +554,6 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/separator' => $handler, methods => 'GET POST' }, qr/methods must be a method string, arrayref, or '\*'/, 'methods reject separators';
     like dies { websocket '/socket' => $handler, methods => 'GET' }, qr/WebSocket routes do not accept methods/, 'WebSocket rejects methods';
     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
-    like dies { websocket '/socket' => $handler, constraints => {} }, qr/unknown route option/, 'WebSocket rejects HTTP constraints';
     like dies { route '/not-code' => 'not a handler' }, qr/handler must be a coderef/, 'normal route handler must be a coderef';
     like dies { route '/not-component' => TestRoutingApp->new($handler) }, qr/handler must be a coderef/, 'normal route does not coerce component targets';
     like dies { mount '/missing' }, qr/mount requires exactly one of target, routes, or router/, 'mount requires one selector';

@@ -33,8 +33,7 @@ sub _new_from {
     my %opts = @args;
     croak 'route requires exactly one of handler or raw' if exists $opts{raw};
 
-    my %allowed = map { $_ => 1 } qw(name desc middleware methods);
-    $allowed{constraints} = 1 if $kind eq 'route';
+    my %allowed = map { $_ => 1 } qw(name desc middleware methods constraints);
     for my $key (keys %opts) {
         croak "unknown route option '$key'" unless $allowed{$key};
     }
@@ -44,7 +43,7 @@ sub _new_from {
 
     _validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     _validate_logical_segment('name', $opts{name}) if exists $opts{name};
-    _validate_constraints($opts{constraints}) if $kind eq 'route' && exists $opts{constraints};
+    _validate_constraints($opts{constraints}) if exists $opts{constraints};
     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
         exists $opts{middleware} ? $opts{middleware} : [],
         'middleware',
@@ -58,7 +57,7 @@ sub _new_from {
     my $methods = $kind eq 'route'
         ? _normalize_methods(exists $opts{methods} ? $opts{methods} : 'GET')
         : undef;
-    my $has_constraints = $kind eq 'route' && exists $opts{constraints};
+    my $has_constraints = exists $opts{constraints};
     my $pattern = PAGI::Routing::Pattern->new(
         path => $path,
         mode => 'route',
@@ -191,8 +190,9 @@ C<middleware> returns a fresh arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
 identity. C<namespace> and C<routes> return undef for a leaf route.
 HTTP C<methods> are normalized at construction; GET includes HEAD. Constraint
-values are returned as declared and validate decoded captures only during a
-request match or reverse render.
+values are accepted by HTTP, WebSocket, and SSE leaves, returned as declared,
+and validate decoded captures only during a request match or reverse render.
+Only HTTP routes accept C<methods>.
 
 =head1 METHODS
 

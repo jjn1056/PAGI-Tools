@@ -9,6 +9,8 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::Routing qw(router route mount middleware);
 
+sub MountProvider { return qr/accepted/ }
+
 sub scope {
     my (%changes) = @_;
     return {
@@ -229,6 +231,62 @@ subtest 'trailing declarations, dynamic prefixes, and nested mounts use actual c
         },
         'nested mounts append actual decoded prefixes while mount and leaf captures override unknown incoming collisions',
     );
+};
+
+subtest 'provider constraints select every mount form before middleware or target invocation' => sub {
+    my (@middleware_seen, @inline_seen, @router_seen, @opaque_seen);
+    my $selected_mount = middleware(sub {
+        my ($inner) = @_;
+        return sub {
+            push @middleware_seen, $_[0]{root_path};
+            return $inner->(@_);
+        };
+    });
+    my $known = router(routes => [
+        route('/leaf' => sub {
+            push @router_seen, $_[0]->path_param('id');
+            return $_[0]->text('known ' . $_[0]->path_param('id'));
+        }),
+    ]);
+    my $app = router(routes => [
+        mount('/inline-provider/{id:&MountProvider}', routes => [
+            route('/leaf' => sub {
+                push @inline_seen, $_[0]->path_param('id');
+                return $_[0]->text('inline ' . $_[0]->path_param('id'));
+            }),
+        ], middleware => [$selected_mount]),
+        mount('/router-provider/{id:&MountProvider}',
+            router => $known, namespace => 'known',
+            middleware => [$selected_mount]),
+        mount('/opaque-provider/{id:&MountProvider}' => async sub {
+            push @opaque_seen, $_[0]{path_params}{id};
+            await response_app('opaque ' . $_[0]{path_params}{id})->(@_);
+        }, middleware => [$selected_mount]),
+    ])->to_app;
+
+    my @accepted = (
+        ['/inline-provider/accepted/leaf', 'inline accepted'],
+        ['/router-provider/accepted/leaf', 'known accepted'],
+        ['/opaque-provider/accepted/leaf', 'opaque accepted'],
+    );
+    for my $case (@accepted) {
+        my ($path, $body) = @$case;
+        is(response_body(run_app($app, path => $path, raw_path => $path)), $body,
+            "$path selects its constrained mount");
+    }
+
+    for my $prefix (qw(inline-provider router-provider opaque-provider)) {
+        my $path = "/$prefix/rejected/leaf";
+        my $events = run_app($app, path => $path, raw_path => $path);
+        is(response_start($events)->{status}, 404,
+            "$prefix provider rejection retains the generated no-match outcome");
+    }
+
+    is(\@inline_seen, ['accepted'], 'inline child runs only for the accepted prefix');
+    is(\@router_seen, ['accepted'], 'Router child runs only for the accepted prefix');
+    is(\@opaque_seen, ['accepted'], 'opaque target runs only for the accepted prefix');
+    is(scalar @middleware_seen, 3,
+        'mount middleware runs only for the three selected prefixes');
 };
 
 subtest 'a root mount consumes nothing and leaves path arithmetic unchanged' => sub {
