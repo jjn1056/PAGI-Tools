@@ -17,23 +17,27 @@ sub router {
 }
 
 sub route {
+    my $declaration_package = caller;
     require PAGI::Routing::Route;
-    return PAGI::Routing::Route->new('route', @_);
+    return PAGI::Routing::Route->_new_from($declaration_package, 'route', @_);
 }
 
 sub websocket {
+    my $declaration_package = caller;
     require PAGI::Routing::Route;
-    return PAGI::Routing::Route->new('websocket', @_);
+    return PAGI::Routing::Route->_new_from($declaration_package, 'websocket', @_);
 }
 
 sub sse {
+    my $declaration_package = caller;
     require PAGI::Routing::Route;
-    return PAGI::Routing::Route->new('sse', @_);
+    return PAGI::Routing::Route->_new_from($declaration_package, 'sse', @_);
 }
 
 sub mount {
+    my $declaration_package = caller;
     require PAGI::Routing::Mount;
-    return PAGI::Routing::Mount->new(@_);
+    return PAGI::Routing::Mount->_new_from($declaration_package, @_);
 }
 
 sub middleware {
@@ -179,6 +183,11 @@ Load handlers from packages normally and pass a fully qualified coderef:
 
 There is no string evaluation or bound-method loader. Routing objects also
 have no C<&{}> overload; call C<to_app> explicitly.
+
+Inline constraint providers are resolved in the package that directly calls
+the constructor. A re-exported constructor therefore uses the consuming
+package, while a wrapper sub or role method uses the package in which that
+wrapper or method was defined.
 
 =head1 CONSTRUCTORS
 

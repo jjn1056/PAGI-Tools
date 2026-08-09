@@ -39,6 +39,95 @@ use PAGI::Routing qw(:ALL);
     sub wrap { return $_[1] }
 }
 
+{
+    package Local::FactoryDeclaration;
+    use PAGI::Routing qw(router route websocket sse mount);
+    use PAGI::Routing::Route ();
+    use PAGI::Routing::Mount ();
+
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/factory/ }
+
+    sub http { return route('/http/{id:&Owned}' => sub { }) }
+    sub raw_http { return route('/raw/{id:&Owned}', raw => sub { }) }
+    sub socket { return websocket('/socket/{id:&Owned}' => sub { }) }
+    sub events { return sse('/events/{id:&Owned}' => sub { }) }
+    sub inline_mount {
+        return mount('/inline/{id:&Owned}', routes => []);
+    }
+    sub router_mount {
+        return mount('/known/{id:&Owned}',
+            router => router(routes => []), namespace => 'known');
+    }
+    sub opaque_mount {
+        return mount('/opaque/{id:&Owned}' => sub { });
+    }
+    sub direct_route {
+        return PAGI::Routing::Route->new(
+            'route', '/direct/{id:&Owned}' => sub { },
+        );
+    }
+    sub direct_mount {
+        return PAGI::Routing::Mount->new(
+            '/direct-mount/{id:&Owned}', routes => [],
+        );
+    }
+}
+
+{
+    package Local::RoutingReexport;
+    use Exporter 'import';
+    use PAGI::Routing qw(route);
+    our @EXPORT_OK;
+    BEGIN { @EXPORT_OK = qw(route) }
+}
+
+{
+    package Local::ReexportConsumer;
+    BEGIN { Local::RoutingReexport->import('route') }
+
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/consumer/ }
+    sub build { return route('/reexport/{id:&Owned}' => sub { }) }
+}
+
+{
+    package Local::RoutingWrapper;
+    use PAGI::Routing qw(route);
+
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/wrapper/ }
+    sub build { return route('/wrapper/{id:&Owned}' => sub { }) }
+}
+
+{
+    package Local::WrapperConsumer;
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/consumer/ }
+    sub build { return Local::RoutingWrapper::build() }
+}
+
+{
+    package Local::RoutingRole;
+    use PAGI::Routing qw(route);
+
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/role/ }
+    sub routing { return route('/role/{id:&Owned}' => sub { }) }
+}
+
+{
+    package Local::RoleConsumer;
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/consumer/ }
+    BEGIN { *routing = \&Local::RoutingRole::routing }
+}
+
+{
+    package Local::DescriptorCarrier;
+    sub carry { return $_[0] }
+}
+
 subtest 'exports are opt-in and tag-specific' => sub {
     for my $name (qw(router route websocket sse mount middleware)) {
         ok(!NoImports->can($name), "no default $name export");
@@ -60,6 +149,78 @@ subtest 'exports are opt-in and tag-specific' => sub {
         qr/Can't continue after import errors/, 'lowercase all is rejected';
     like $stderr, qr/"all" is not defined in %PAGI::Routing::EXPORT_TAGS/,
         'lowercase all diagnostic is captured';
+};
+
+subtest 'public constructors retain their direct declaration package' => sub {
+    $Local::FactoryDeclaration::CALLS = 0;
+    my @leaves = (
+        [Local::FactoryDeclaration::http(), '/http/factory'],
+        [Local::FactoryDeclaration::raw_http(), '/raw/factory'],
+        [Local::FactoryDeclaration::socket(), '/socket/factory'],
+        [Local::FactoryDeclaration::events(), '/events/factory'],
+        [Local::FactoryDeclaration::direct_route(), '/direct/factory'],
+    );
+    my @mounts = (
+        [Local::FactoryDeclaration::inline_mount(), '/inline/factory/tail'],
+        [Local::FactoryDeclaration::router_mount(), '/known/factory/tail'],
+        [Local::FactoryDeclaration::opaque_mount(), '/opaque/factory/tail'],
+        [Local::FactoryDeclaration::direct_mount(), '/direct-mount/factory/tail'],
+    );
+
+    for my $case (@leaves) {
+        my ($node, $path) = @$case;
+        is($node->_pattern->match_route($path), { id => 'factory' },
+            ref($node) . ' resolves &Owned in its direct declaration package');
+        ok(!defined $node->_pattern->match_route($path =~ s/factory/other/r),
+            ref($node) . ' does not rebind &Owned elsewhere');
+    }
+    for my $case (@mounts) {
+        my ($node, $path) = @$case;
+        is($node->_pattern->match_mount($path)->{captures}, { id => 'factory' },
+            ref($node) . ' mount resolves &Owned in its direct declaration package');
+        ok(!defined $node->_pattern->match_mount($path =~ s/factory/other/r),
+            ref($node) . ' mount rejects values outside that package predicate');
+    }
+    is($Local::FactoryDeclaration::CALLS, 9,
+        'each public or direct descriptor constructor invokes its provider once');
+
+    $Local::ReexportConsumer::CALLS = 0;
+    my $reexported = Local::ReexportConsumer::build();
+    is($reexported->_pattern->match_route('/reexport/consumer'), { id => 'consumer' },
+        'an ordinary re-export leaves the consuming package as direct caller');
+    is($Local::ReexportConsumer::CALLS, 1,
+        'the consumer-owned provider ran once through a re-export');
+
+    $Local::RoutingWrapper::CALLS = 0;
+    $Local::WrapperConsumer::CALLS = 0;
+    my $wrapped = Local::WrapperConsumer::build();
+    is($wrapped->_pattern->match_route('/wrapper/wrapper'), { id => 'wrapper' },
+        'a real wrapper becomes the declaration-package boundary');
+    ok(!defined $wrapped->_pattern->match_route('/wrapper/consumer'),
+        'a wrapper does not search outward for the consumer provider');
+    is($Local::RoutingWrapper::CALLS, 1, 'the wrapper provider ran once');
+    is($Local::WrapperConsumer::CALLS, 0, 'the wrapper consumer provider never ran');
+
+    $Local::RoutingRole::CALLS = 0;
+    $Local::RoleConsumer::CALLS = 0;
+    my $role_route = Local::RoleConsumer->routing;
+    is($role_route->_pattern->match_route('/role/role'), { id => 'role' },
+        'a role-defined call expression keeps the role declaration package');
+    ok(!defined $role_route->_pattern->match_route('/role/consumer'),
+        'invoking a role method on a class does not rebind its provider');
+    is($Local::RoutingRole::CALLS, 1, 'the role provider ran once');
+    is($Local::RoleConsumer::CALLS, 0, 'the consuming-class provider never ran');
+
+    my $built = Local::FactoryDeclaration::http();
+    my $calls_after_build = $Local::FactoryDeclaration::CALLS;
+    my $carried = Local::DescriptorCarrier::carry($built);
+    my $routing = router(routes => [$carried]);
+    is(refaddr($routing->routes->[0]), refaddr($built),
+        'another package and Router preserve the completed descriptor identity');
+    is($Local::FactoryDeclaration::CALLS, $calls_after_build,
+        'placing an unnamed completed descriptor in a Router does not re-resolve it');
+    is($routing->routes->[0]->_pattern->match_route('/http/factory'),
+        { id => 'factory' }, 'the placed descriptor retains its source predicate');
 };
 
 subtest 'route descriptions preserve target identity and normalize HTTP methods' => sub {

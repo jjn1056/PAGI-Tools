@@ -7,7 +7,13 @@ use PAGI::Routing::Middleware ();
 use PAGI::Routing::Pattern ();
 
 sub new {
-    my ($class, $kind, @args) = @_;
+    my ($class, @args) = @_;
+    my $declaration_package = caller;
+    return $class->_new_from($declaration_package, @args);
+}
+
+sub _new_from {
+    my ($class, $declaration_package, $kind, @args) = @_;
     my $path = shift @args;
 
     croak 'route path must be a string' unless defined $path && !ref($path);
@@ -57,6 +63,7 @@ sub new {
         path => $path,
         mode => 'route',
         constraints => $has_constraints ? $opts{constraints} : {},
+        declaration_package => $declaration_package,
     );
 
     return bless {
@@ -169,6 +176,12 @@ to coerce through L<PAGI::Utils/to_app>. Its path pattern is compiled during
 construction, and constructor validation performs no request I/O. The
 description never stores a request match or handler result. Collection and
 hash accessors return shallow copies.
+
+An inline provider such as C<{id:&Int}> is resolved in the package that
+directly called C<route>, C<websocket>, C<sse>, or C<new>. Re-exporting a
+constructor preserves the consuming package as that caller; wrapping it in
+another sub makes the wrapper package the declaration package. A constructor
+called from a role method likewise resolves providers in the role package.
 
 =head1 ACCESSORS
 
