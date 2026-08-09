@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-09
 
-**Status:** Revised after written-spec review; awaiting final approval
+**Status:** Approved
 
 ## 1. Decision
 
