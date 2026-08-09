@@ -283,10 +283,19 @@ C<middleware> list, inside that HEAD boundary.
 
 All constraints receive one decoded scalar and validate without coercion:
 
-  route('/regex/{id}' => \&show,
-      constraints => { id => qr/\d+/ },
+  # Short path-local regex.
+  route('/regex/{id:\d+}' => \&show);
+
+  # Reusable named semantic constraint.
+  use Types::Standard qw(Int);
+  route('/typed/{id:&Int}' => \&show);
+
+  # Explicit reusable object chosen while building the route.
+  route('/object/{id}' => \&show,
+      constraints => { id => Int },
   );
 
+  # Explicit per-value predicate.
   route('/predicate/{slug}' => \&show,
       constraints => { slug => sub {
           my ($value) = @_;
@@ -294,15 +303,37 @@ All constraints receive one decoded scalar and validate without coercion:
       } },
   );
 
-  route('/typed/{id}' => \&show,
-      constraints => { id => $type_tiny_compatible_object },
-  );
+The object form needs C<check($value)> and may provide
+C<get_message($value)>; Type::Tiny is not a hard runtime dependency. C<Int>
+accepts signed integers and PAGI retains the original string. A narrower local
+provider can close over it:
 
-The final object needs C<check($value)> and may provide
-C<get_message($value)>; Type::Tiny is not a hard dependency. Regex and inline
+  sub PersonId {
+      my $int = Int;
+      return sub {
+          my ($value) = @_;
+          return $int->check($value) && $value > 0;
+      };
+  }
+
+  route('/people/{id:&PersonId}' => \&show);
+
+An unescaped inline source beginning with C<&> is always provider intent and
+must end in a capitalized package-function name. Use C<[&]Int> for a literal
+leading ampersand. The alternative C<\&Int> requires a single-quoted Perl
+path; C<< "\&Int" >> loses the backslash and requests the provider. Providers
+run once with no arguments during source construction and return a regex,
+predicate, or check object. The returned predicate, not the provider factory,
+runs during matching and reverse routing.
+
+Unqualified providers resolve as exact CODE slots in the package directly
+calling the routing constructor; qualified packages must already be loaded.
+There is no inherited method lookup, C<AUTOLOAD>, module loading, registry
+fallback, or regex fallback after provider intent. Regex and inline
 C<{id:\d+}> constraints are anchored over the complete value. Predicates must
 be synchronous; database/resource checks belong in selected middleware or the
-handler.
+handler. The same rules select normal/raw HTTP, WebSocket, SSE, and all mount
+forms, and C<path_for>/C<url_for> enforce them for named routes.
 
 C<*path> captures decoded values including C<..>, repeated separators, and
 backslashes. Never concatenate that value with a filesystem root. Canonicalize

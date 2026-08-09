@@ -4,6 +4,10 @@ This example structures a larger PAGI::Tools application as an inspectable
 Router graph. All application behavior lives under `lib/`; `app.pl` only loads
 `MyApp::Root` and returns `MyApp::Root->to_app`.
 
+This example requires Perl 5.40+ and Type::Tiny. Those are example/test
+requirements: the PAGI::Tools distribution itself still supports Perl 5.18
+and does not depend on Type::Tiny at runtime.
+
 ## Run it
 
 From the PAGI-Tools checkout, use the currently shipped file loader:
@@ -68,9 +72,29 @@ matched `person_id` or `blog_id`; graph-wide links such as Home use absolute
 addresses such as `/home`. The two distinct parameter names avoid collisions
 in the composed path.
 
+Person and Blog identifiers demonstrate inline constraint providers:
+
+```perl
+use Types::Standard qw(Int);
+
+route('/{person_id:&Int}' => \&show_person, name => 'show');
+route('/{blog_id:&Int}'   => \&show_blog,   name => 'show');
+```
+
+`&Int` means “call the imported `Int` package function once while constructing
+this source route, then retain its Type::Tiny check object as the path
+predicate.” Matching and reverse routing validate but never convert values;
+handlers still receive the original decoded scalar. `Types::Standard::Int`
+accepts a leading minus sign, so it is intentionally broader than the old
+`qr/\d+/` declaration. An application requiring positive database identifiers
+would normally expose a narrower local provider such as `&PersonId`.
+
 ## Outcomes worth trying
 
 - `/person/999` is a Person handler-owned 404.
+- `/person/-1` matches `&Int` and is also a Person handler-owned 404.
+- `/person/not-an-integer` fails `&Int` and remains the Person Router's plain
+  generated 404.
 - `/person/1/blog/999` is a Blogs handler-owned 404.
 - `/person/1/blog/not/a/route` is handled by Blogs' explicit catchall.
 - `/outside` is handled by Root's ordinary explicit catchall.
@@ -496,7 +520,8 @@ The comparison highlights a few deliberate differences:
   Context lookup may inherit matched parameters, which enables calls such as
   `path_for('show')` and `path_for('../show')`.
 - Starlette's `int` converter both validates and converts the value to a
-  Python integer. PAGI constraints validate without coercing the decoded
-  scalar.
+  Python integer. PAGI's `&Int` provider obtains a Type::Tiny constraint once
+  during route construction; it validates without coercing the decoded scalar
+  and accepts signed integers such as `-1`.
 - Starlette adds query parameters and a fragment by transforming the returned
   URL object. PAGI accepts query and fragment values directly in `url_for`.

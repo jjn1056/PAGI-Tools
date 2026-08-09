@@ -163,6 +163,10 @@ consuming package as that caller; wrapping it in another sub makes the wrapper
 package the declaration package. A constructor called from a role method
 likewise resolves providers in the role package.
 
+Provider-backed and explicit prefix constraints run before mount middleware or
+the inline, Router, or opaque target is selected. Named descendants reuse the
+same normalized prefix predicates during reverse routing.
+
 =head1 ACCESSORS
 
 C<kind>, C<path>, C<parameters>, C<namespace>, C<desc>, C<target>, C<router>,

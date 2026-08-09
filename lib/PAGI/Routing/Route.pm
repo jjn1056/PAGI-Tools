@@ -192,7 +192,9 @@ identity. C<namespace> and C<routes> return undef for a leaf route.
 HTTP C<methods> are normalized at construction; GET includes HEAD. Constraint
 values are accepted by HTTP, WebSocket, and SSE leaves, returned as declared,
 and validate decoded captures only during a request match or reverse render.
-Only HTTP routes accept C<methods>.
+Only HTTP routes accept C<methods>. An inline provider and explicit constraint
+may target the same parameter; the inline predicate runs first and both must
+pass before the normal or raw target is selected.
 
 =head1 METHODS
 

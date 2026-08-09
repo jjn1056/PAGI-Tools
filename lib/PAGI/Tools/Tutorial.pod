@@ -103,6 +103,33 @@ instance and retain the returned coderef. At request time routing matches in
 declaration order, constructs C<$c>, awaits the handler, and emits its returned
 Response exactly once.
 
+Reusable semantic constraints can sit beside a parameter. An imported
+Type::Tiny type is an ordinary zero-argument provider function:
+
+  use Types::Standard qw(Int);
+
+  route('/users/{id:&Int}' => \&user, name => 'user');
+
+PAGI calls C<Int> while constructing the route and later validates without
+coercing the captured string. Type::Tiny is optional for applications; it is
+not a PAGI::Tools runtime dependency. A package-local provider can give an
+application rule its own name and semantics:
+
+  sub PersonId {
+      my $int = Int;
+      return sub {
+          my ($value) = @_;
+          return $int->check($value) && $value > 0;
+      };
+  }
+
+  route('/people/{id:&PersonId}' => \&person, name => 'person');
+
+Use a short inline regex for a short path-local rule and the explicit
+C<constraints> hash for dynamic, subclass-dependent, or complex rules. See
+L<PAGI::Routing/Path parameters, wildcards, and constraints> for provider
+lookup, escaping, and reverse-routing behavior.
+
 GET includes HEAD automatically. Paths are exact, with no slash redirect or
 automatic OPTIONS. Mounts have three contracts:
 

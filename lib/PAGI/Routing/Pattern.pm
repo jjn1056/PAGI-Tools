@@ -612,7 +612,9 @@ object. C<[&]> is the canonical regex spelling for a literal leading
 ampersand. Provider functions never run during matching or rendering.
 
 All accepted constraint shapes become private C<check> coderefs with optional
-failure explainers. Defensive copies of those records let composed reverse
+failure explainers, once per constraint occurrence during source Pattern
+construction. When one parameter has both an inline and explicit constraint,
+their records run in that order. Defensive copies of those records let composed reverse
 patterns retain the source predicates without recompiling inline syntax or
 renormalizing explicit constraints. Public C<constraints> continues to
 describe only the explicit constructor option.

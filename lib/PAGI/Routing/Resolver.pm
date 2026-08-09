@@ -643,9 +643,9 @@ Matched leaf metadata includes its effective URL pattern, canonical
 address, containing logical namespace, kind, and description. Placement
 records retain the source leaf, mount data, composed predicate records, and
 defensive location information. Those private predicate records are not
-included in public match metadata. References beginning with C</> are absolute; other
-references resolve from an explicit logical base (the Router root for public
-Router reverse calls). Components C<.> and C<..> normalize left-to-right,
+included in public match metadata. References beginning with C</> are
+absolute; other references resolve from an explicit logical base (the Router
+root for public Router reverse calls). Components C<.> and C<..> normalize left-to-right,
 while dots inside a component remain literal. Empty components, repeated or
 trailing separators, traversal above root, and namespace-only results fail.
 References are never URI-decoded and lookup is exact: there is no ancestor
