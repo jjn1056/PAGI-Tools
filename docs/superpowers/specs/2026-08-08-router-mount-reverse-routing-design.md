@@ -653,8 +653,8 @@ Each Router mount appends its declared path, namespace, and description to the
 frame's mount chain. Parent middleware can inspect the final child match after
 awaiting downstream because the frame is shared only within that request.
 
-No resolver, mount array, match hash, or capture snapshot may be shared across
-concurrent requests.
+No mount array, match hash, or capture snapshot may be shared across concurrent
+requests. Requests through one compiled app may share its immutable Resolver.
 
 ## 14. Full modular application
 
