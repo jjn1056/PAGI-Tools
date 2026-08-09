@@ -200,6 +200,51 @@ subtest 'Router path_for normalizes exact logical references without decoding' =
     }
 };
 
+subtest 'route_named inspects normalized root references without throwing' => sub {
+    my $show = route('/show' => sub { }, name => 'show');
+    my $routing = router(routes => [
+        $show,
+        mount('/group', routes => [
+            route('/child' => sub { }, name => 'child'),
+        ], namespace => 'group'),
+    ]);
+
+    is(
+        refaddr($routing->route_named('./show')),
+        refaddr($show),
+        'a current-directory reference preserves the original leaf identity',
+    );
+    is(
+        refaddr($routing->route_named('group/../show')),
+        refaddr($show),
+        'interior navigation resolves from the Router root',
+    );
+
+    my $scalar = 'show';
+    my @misses = (
+        ['unknown address', 'missing'],
+        ['namespace only', 'group'],
+        ['terminal dot', 'show/.'],
+        ['terminal dot-dot', 'show/child/..'],
+        ['repeated separator', 'group//child'],
+        ['trailing separator', 'group/child/'],
+        ['above-root traversal', '../show'],
+        ['undef input', undef],
+        ['arrayref input', []],
+        ['scalar-ref input', \$scalar],
+    );
+
+    for my $case (@misses) {
+        my ($label, $reference) = @$case;
+        my $result = 'not-called';
+        my $lived = lives {
+            $result = $routing->route_named($reference);
+        };
+        is($lived, T(), "$label does not throw");
+        is($result, undef, "$label returns undef");
+    }
+};
+
 subtest 'inline paths and slash namespaces remain independent' => sub {
     my $unnamed_mount = mount('/public', routes => [
         route('/users/{id}' => sub { }, name => 'show'),

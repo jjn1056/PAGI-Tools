@@ -539,9 +539,18 @@ sub named_routes {
 }
 
 sub route_named {
-    my ($self, $name) = @_;
-    return unless defined $name && !ref($name);
-    $name = _root_reference($name);
+    my ($self, $reference) = @_;
+    my ($name, $was_absolute, $ended_with_navigation);
+    {
+        local $@;
+        return unless eval {
+            ($name, $was_absolute, $ended_with_navigation)
+                = _normalize_reference('route_named', $reference, []);
+            1;
+        };
+    }
+
+    return if $ended_with_navigation || $self->{namespaces}{$name};
     return exists $self->{by_name}{$name} ? $self->{by_name}{$name}{node} : undef;
 }
 
