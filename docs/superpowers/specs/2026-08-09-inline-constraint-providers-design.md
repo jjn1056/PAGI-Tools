@@ -143,6 +143,11 @@ scalar and then percent-encodes that same value.
 
 - Add a global or Router-local type registry.
 - Integrate directly with `Type::Registry`.
+- Add a missing-provider fallback hook such as `FIND_ROUTER_CONSTRAINT`.
+  Registries can install or export ordinary provider CODE slots under the
+  current contract; an exact, non-inherited package hook remains available
+  for a later registry design if concrete use warrants the second lookup
+  path.
 - Add Starlette-style converters that replace captured strings with integers,
   UUID objects, dates, or other values.
 - Add builtin symbolic constraints such as `int`, `uuid`, or `path`.
