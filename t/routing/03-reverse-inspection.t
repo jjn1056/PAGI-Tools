@@ -245,6 +245,56 @@ subtest 'route_named inspects normalized root references without throwing' => su
     }
 };
 
+subtest 'an exact named leaf takes precedence over its namespace address' => sub {
+    my $api = route('/direct-api' => sub { }, name => 'api');
+    my $api_x = route('/x' => sub { }, name => 'x');
+    my $routing = router(routes => [
+        $api,
+        mount('/nested-api', routes => [$api_x], namespace => 'api'),
+        mount('/group', routes => [
+            route('/x' => sub { }, name => 'x'),
+        ], namespace => 'group'),
+    ]);
+
+    is(
+        [sort keys %{$routing->named_routes}],
+        [qw(/api /api/x /group/x)],
+        'inspection publishes a leaf and descendants at the same address',
+    );
+    is(refaddr($routing->route_named('/api')), refaddr($api),
+        'route_named preserves the exact leaf identity at a namespace address');
+
+    my ($absolute, $relative, $descendant);
+    is(lives { $absolute = $routing->path_for('/api') }, T(),
+        'an absolute exact-leaf lookup does not fail as namespace-only');
+    is($absolute, '/direct-api',
+        'an absolute reference selects the exact leaf before the namespace');
+    is(lives { $relative = $routing->path_for('api') }, T(),
+        'a relative exact-leaf lookup does not fail as namespace-only');
+    is($relative, '/direct-api',
+        'a root-relative reference selects the exact leaf before the namespace');
+    is(lives { $descendant = $routing->path_for('/api/x') }, T(),
+        'a namespace descendant lookup remains available');
+    is($descendant, '/nested-api/x',
+        'a descendant below the shared namespace remains resolvable');
+
+    like(
+        dies { $routing->path_for('/group') },
+        qr/resolves to a logical namespace, not a route/,
+        'a namespace without an exact leaf still fails',
+    );
+    like(
+        dies { $routing->path_for('api/.') },
+        qr/resolves to a logical namespace, not a route/,
+        'terminal dot remains namespace-only even when normalization lands on a leaf',
+    );
+    like(
+        dies { $routing->path_for('api/child/..') },
+        qr/resolves to a logical namespace, not a route/,
+        'terminal dot-dot remains namespace-only even when normalization lands on a leaf',
+    );
+};
+
 subtest 'inline paths and slash namespaces remain independent' => sub {
     my $unnamed_mount = mount('/public', routes => [
         route('/users/{id}' => sub { }, name => 'show'),

@@ -214,6 +214,72 @@ subtest 'compiled Context references resolve exactly from the matched containing
     }], 'an unnamed catchall keeps its containing namespace and filters its wildcard capture');
 };
 
+subtest 'Context prefers an exact leaf that shares a namespace address' => sub {
+    my $api = route('/direct-api' => sub { }, name => 'api');
+    my $resolver = _resolver(
+        $api,
+        mount('/nested-api', routes => [
+            route('/x' => sub { }, name => 'x'),
+        ], namespace => 'api'),
+        mount('/group', routes => [
+            route('/x' => sub { }, name => 'x'),
+        ], namespace => 'group'),
+    );
+    my $root = _context('http', $resolver);
+    my $nested = PAGI::Context->new({
+        type      => 'http',
+        headers   => [['host', 'example.test']],
+        scheme    => 'http',
+        root_path => '',
+        'pagi.routing' => {
+            version => 1,
+            frames => [_frame(
+                $resolver,
+                logical_namespace => '/api',
+            )],
+        },
+    }, sub { }, sub { });
+
+    my ($absolute, $root_relative, $parent_relative, $absolute_child,
+        $relative_child);
+    is(lives { $absolute = $root->path_for('/api') }, T(),
+        'Context absolute exact-leaf lookup does not fail as namespace-only');
+    is($absolute, '/direct-api',
+        'Context absolute lookup selects the exact leaf');
+    is(lives { $root_relative = $root->path_for('api') }, T(),
+        'Context root-relative exact-leaf lookup does not fail as namespace-only');
+    is($root_relative, '/direct-api',
+        'Context relative lookup selects the exact leaf from root');
+    is(lives { $parent_relative = $nested->path_for('../api') }, T(),
+        'Context parent-relative exact-leaf lookup does not fail as namespace-only');
+    is($parent_relative, '/direct-api',
+        'Context relative parent lookup selects the exact leaf from a child namespace');
+    is(lives { $absolute_child = $root->path_for('/api/x') }, T(),
+        'Context absolute descendant lookup remains available');
+    is($absolute_child, '/nested-api/x',
+        'Context still resolves a descendant below the shared namespace');
+    is(lives { $relative_child = $nested->path_for('x') }, T(),
+        'Context relative descendant lookup remains available');
+    is($relative_child, '/nested-api/x',
+        'Context keeps local descendant lookup in the shared namespace');
+
+    like(
+        dies { $root->path_for('/group') },
+        qr/resolves to a logical namespace, not a route/,
+        'Context still rejects a namespace without an exact leaf',
+    );
+    like(
+        dies { $root->path_for('api/.') },
+        qr/resolves to a logical namespace, not a route/,
+        'Context terminal dot remains namespace-only at a leaf address',
+    );
+    like(
+        dies { $root->path_for('api/child/..') },
+        qr/resolves to a logical namespace, not a route/,
+        'Context terminal dot-dot remains namespace-only at a leaf address',
+    );
+};
+
 subtest 'Context inheritance selects only target path keys and never invents suffixes' => sub {
     my $resolver = _resolver(
         route('/target/{required}' => sub { }, name => 'target'),

@@ -330,8 +330,10 @@ sub _render_reverse {
     );
 
     croak "$operation route reference '$reference' resolves to a logical namespace, not a route"
-        if $ended_with_navigation || $self->{namespaces}{$canonical};
+        if $ended_with_navigation;
     my $record = $self->{by_name}{$canonical};
+    croak "$operation route reference '$reference' resolves to a logical namespace, not a route"
+        if !$record && $self->{namespaces}{$canonical};
     croak "$operation unknown route name '$reference'" unless $record;
 
     return $self->_render_resolved_reverse(
@@ -348,8 +350,10 @@ sub _render_reverse_from_context {
     );
 
     croak "$operation route reference '$reference' resolves to a logical namespace, not a route"
-        if $ended_with_navigation || $self->{namespaces}{$canonical};
+        if $ended_with_navigation;
     my $record = $self->{by_name}{$canonical};
+    croak "$operation route reference '$reference' resolves to a logical namespace, not a route"
+        if !$record && $self->{namespaces}{$canonical};
     croak "$operation unknown route name '$reference'" unless $record;
 
     if (!$was_absolute) {
@@ -550,7 +554,7 @@ sub route_named {
         };
     }
 
-    return if $ended_with_navigation || $self->{namespaces}{$name};
+    return if $ended_with_navigation;
     return exists $self->{by_name}{$name} ? $self->{by_name}{$name}{node} : undef;
 }
 
