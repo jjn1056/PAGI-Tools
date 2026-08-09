@@ -82,8 +82,9 @@ route('/{blog_id:&Int}'   => \&show_blog,   name => 'show');
 ```
 
 `&Int` means “call the imported `Int` package function once while constructing
-this source route, then retain its Type::Tiny check object as the path
-predicate.” Matching and reverse routing validate but never convert values;
+this source route, then normalize its returned Type::Tiny object into a
+predicate closure that retains and calls the object.” Matching and reverse
+routing validate but never convert values;
 handlers still receive the original decoded scalar. `Types::Standard::Int`
 accepts a leading minus sign, so it is intentionally broader than the old
 `qr/\d+/` declaration. An application requiring positive database identifiers
