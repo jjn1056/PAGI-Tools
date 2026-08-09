@@ -12,6 +12,15 @@ use PAGI::Middleware::TrustedHosts;
 use PAGI::Routing qw(mount route router sse websocket);
 use PAGI::Routing::Resolver;
 
+{
+    package Local::ContextReverseProvider;
+    our $CALLS = 0;
+    sub Account {
+        ++$CALLS;
+        return qr/acme/;
+    }
+}
+
 sub _resolver {
     my (@routes) = @_;
     return PAGI::Routing::Resolver->new(routes => \@routes);
@@ -656,6 +665,74 @@ subtest 'compiled inline mounts reverse from the router boundary across protocol
             sibling_url     => 'https://public.example:8443/proxy/tenants/acme/sibling/8?via=sse',
         },
     ], 'inline mount prefixes appear once and sibling targets use the same router boundary');
+};
+
+subtest 'Context reverse generation inherits captures and applies each composed predicate once' => sub {
+    $Local::ContextReverseProvider::CALLS = 0;
+    my $explicit_calls = 0;
+    my @seen;
+    my $app = router(routes => [
+        mount('/accounts/{account:&Local::ContextReverseProvider::Account}',
+            routes => [
+                route('/items/{item}' => sub {
+                    my ($context) = @_;
+                    $explicit_calls = 0;
+                    my $path = $context->path_for('show', { item => 'good' });
+                    my $after_path = $explicit_calls;
+                    my $url = $context->url_for(
+                        'show',
+                        { item => 'good' },
+                        { q => 'two words' },
+                        'details',
+                    );
+                    my $after_url = $explicit_calls;
+                    my $invalid = dies {
+                        $context->url_for('show', { item => 'bad' });
+                    };
+                    push @seen, {
+                        path       => $path,
+                        url        => $url,
+                        after_path => $after_path,
+                        after_url  => $after_url,
+                        after_bad  => $explicit_calls,
+                        invalid    => $invalid,
+                    };
+                    return $context->text('reverse');
+                },
+                    name => 'show',
+                    constraints => {
+                        item => sub {
+                            ++$explicit_calls;
+                            return $_[0] eq 'good';
+                        },
+                    },
+                ),
+            ],
+            namespace => 'account',
+        ),
+    ])->to_app;
+
+    my $events = _run_compiled($app,
+        path      => '/accounts/acme/items/good',
+        raw_path  => '/edge/accounts/acme/items/good',
+        root_path => '/edge',
+        scheme    => 'https',
+        headers   => [['host', 'public.example']],
+    );
+
+    is($seen[0]{path}, '/edge/accounts/acme/items/good',
+        'relative path_for inherits the valid mount capture');
+    is($seen[0]{url},
+        'https://public.example/edge/accounts/acme/items/good?q=two%20words#details',
+        'url_for validates the leaf and appends query and fragment');
+    is([$seen[0]{after_path}, $seen[0]{after_url}, $seen[0]{after_bad}],
+        [1, 2, 3],
+        'each successful or failed render applies the explicit leaf predicate exactly once');
+    like($seen[0]{invalid}, qr/path parameter 'item' failed constraint/,
+        'url_for rejects an invalid explicit leaf value');
+    is($Local::ContextReverseProvider::CALLS, 1,
+        'Context dispatch and reverse generation do not reinvoke the mount provider');
+    is($events->[0]{status}, 200, 'the provider-backed request still completes normally');
 };
 
 subtest 'a separately compiled child records and uses its own router boundary' => sub {
