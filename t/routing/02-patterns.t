@@ -452,6 +452,145 @@ subtest 'constraints are anchored synchronous validators and never coercions' =>
     );
 };
 
+subtest 'constraints normalize to defensive predicate records' => sub {
+    my $predicate = sub { return $_[0] eq 'predicate' };
+    my $type = Local::RoutingType->new('typed');
+    my $pattern = PAGI::Routing::Pattern->new(
+        path => '/normalized/{inline:\d+}/{predicate}/{typed}/{free}',
+        mode => 'route',
+        constraints => {
+            predicate => $predicate,
+            typed     => $type,
+        },
+    );
+
+    my $records = $pattern->_predicate_records;
+    is(
+        [sort keys %$records],
+        [qw(free inline predicate typed)],
+        'every declared parameter has one predicate-record array',
+    );
+    is(ref($records->{inline}), 'ARRAY', 'inline regex records are an array');
+    is(ref($records->{inline}[0]{check}), 'CODE',
+        'inline regex normalizes to a check coderef');
+    ok(!exists $records->{inline}[0]{explain},
+        'inline regex has no failure explainer');
+    is(
+        refaddr($records->{predicate}[0]{check}),
+        refaddr($predicate),
+        'an explicit predicate keeps its coderef identity',
+    );
+    is(ref($records->{typed}[0]{check}), 'CODE',
+        'a check object normalizes to a check coderef');
+    is(ref($records->{typed}[0]{explain}), 'CODE',
+        'a check object get_message normalizes to an explainer coderef');
+    is($records->{free}, [], 'an unconstrained parameter has an empty record array');
+
+    $records->{inline}[0]{check} = sub { return 0 };
+    push @{$records->{predicate}}, { check => sub { return 0 } };
+    delete $records->{typed}[0]{explain};
+    my $fresh = $pattern->_predicate_records;
+    is(ref($fresh->{inline}[0]{check}), 'CODE',
+        'a later record read still has its compiled inline check');
+    is(
+        refaddr($fresh->{predicate}[0]{check}),
+        refaddr($predicate),
+        'mutating returned arrays does not change stored predicate identity',
+    );
+    is(ref($fresh->{typed}[0]{explain}), 'CODE',
+        'mutating a returned record does not remove its stored explainer');
+    is(
+        $pattern->match_route('/normalized/42/predicate/typed/anything'),
+        {
+            inline    => '42',
+            predicate => 'predicate',
+            typed     => 'typed',
+            free      => 'anything',
+        },
+        'mutating returned predicate records cannot change matching',
+    );
+};
+
+subtest 'a private pre-normalized channel drives matching and rendering' => sub {
+    my $check = sub { return $_[0] eq 'kept' };
+    my $explain = sub { return "expected kept, got $_[0]" };
+    my $declared = {
+        id => [{ check => $check, explain => $explain }],
+    };
+    my $composed = PAGI::Routing::Pattern->new(
+        path               => '/items/{id}',
+        mode               => 'route',
+        constraints        => {},
+        _predicate_records => $declared,
+    );
+
+    $declared->{id}[0]{check} = sub { return 0 };
+    is($composed->match_route('/items/kept'), { id => 'kept' },
+        'constructor defensively copies private record containers');
+    ok(!defined $composed->match_route('/items/lost'),
+        'a false pre-normalized predicate makes request matching fail');
+    is($composed->render({ id => 'kept' }, '/show'), '/items/kept',
+        'a true pre-normalized predicate permits reverse rendering');
+    like(
+        dies { $composed->render({ id => 'lost' }, '/show') },
+        qr/path parameter 'id' failed constraint for route '\/show': expected kept, got lost/,
+        'a pre-normalized explainer augments reverse failure context',
+    );
+
+    my $uncompiled_inline = PAGI::Routing::Pattern->new(
+        path               => '/items/{id:(}',
+        mode               => 'route',
+        constraints        => {},
+        _predicate_records => { id => [{ check => $check }] },
+    );
+    is($uncompiled_inline->match_route('/items/kept'), { id => 'kept' },
+        'private records prevent recompiling inline constraint source');
+
+    my @invalid = (
+        ['top-level shape', [], qr/_predicate_records must be a hashref/],
+        ['parameter records shape', { id => {} },
+            qr/predicate records for 'id' must be an arrayref/],
+        ['missing check', { id => [{}] },
+            qr/predicate record for 'id' requires a check coderef/],
+        ['non-code check', { id => [{ check => 'yes' }] },
+            qr/predicate record for 'id' requires a check coderef/],
+        ['non-code explain', { id => [{ check => $check, explain => 'why' }] },
+            qr/predicate record for 'id' explain must be a coderef/],
+        ['unknown record field', { id => [{ check => $check, other => 1 }] },
+            qr/predicate record for 'id' has unknown field 'other'/],
+        ['unknown parameter', { id => [], extra => [] },
+            qr/predicate records contain unknown path parameter 'extra'/],
+        ['missing parameter', {},
+            qr/predicate records are missing path parameter 'id'/],
+    );
+
+    for my $case (@invalid) {
+        my ($label, $records, $error) = @$case;
+        like(
+            dies {
+                PAGI::Routing::Pattern->new(
+                    path => '/items/{id}', mode => 'route', constraints => {},
+                    _predicate_records => $records,
+                );
+            },
+            $error,
+            "$label is rejected by the private constructor channel",
+        );
+    }
+
+    like(
+        dies {
+            PAGI::Routing::Pattern->new(
+                path => '/items/{id}', mode => 'route',
+                constraints => { id => qr/kept/ },
+                _predicate_records => { id => [{ check => $check }] },
+            );
+        },
+        qr/pre-normalized predicate records cannot be combined with constraints/,
+        'private records cannot double-apply public constraints',
+    );
+};
+
 subtest 'rendering encodes components and validates exact unencoded parameters' => sub {
     my $literal = PAGI::Routing::Pattern->new(
         path => "/caf\x{e9} space/%", mode => 'route', constraints => {},
