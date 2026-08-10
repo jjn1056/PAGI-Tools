@@ -164,8 +164,8 @@ Bare coderefs have deliberately different meanings according to position:
   ------------------------------   -------------------------------   --------------------------
   route('/x' => $code)             ($context)                        Context handler
   compose(app => $code)            ($scope, $receive, $send)         native PAGI app
-  middleware => [$code]            ($inner_app), at compile time     normalized middleware factory
-  middleware($code)                ($inner_app), at compile time     middleware factory
+  middleware => [$entry]           ($inner_app), at compile time     normalized middleware description
+  middleware($target, %config)     ($inner_app), at compile time     middleware description
 
 =head2 routes
 
@@ -209,16 +209,25 @@ It never receives the lifespan scope owned by Compose.
         return $app;
     };
 
-    middleware => [$logging, middleware('RequestId', header => 'X-Request-ID')]
+    middleware => [
+        'RequestId',
+        $logging,
+        $configured_object,
+        middleware('RequestId', header => 'X-Request-ID'),
+    ]
 
 C<middleware> is optional and defaults to an empty arrayref. Each entry is
-either a bare factory coderef such as C<$logging>, or a
-L<PAGI::Routing::Middleware> description returned by C<middleware(...)> such
-as C<middleware('RequestId', header =E<gt> 'X-Request-ID')>. The list is
-shallow-copied and bare factories are normalized at construction. This is application middleware, not router
-middleware. It surrounds generated routing outcomes and sees HTTP, WebSocket,
-SSE, lifespan, and application-defined extension scopes. Protocol-specific
-middleware must pass unrelated scope types through.
+a class name such as C<'RequestId'>, a bare factory coderef such as
+C<$logging>, a configured object with C<wrap>, or a
+L<PAGI::Routing::Middleware> description returned by C<middleware(...)>.
+The list is shallow-copied and all four forms are normalized to descriptions
+at construction; this phase does not load classes, construct objects, call
+C<wrap>, or perform protocol I/O. C<middleware($class, %config)> is required
+only for configured classes and remains useful for explicit reuse or
+inspection. This is application middleware, not router middleware. It
+surrounds generated routing outcomes and sees HTTP, WebSocket, SSE, lifespan,
+and application-defined extension scopes. Protocol-specific middleware must
+pass unrelated scope types through.
 
 For router-only middleware, use C<< compose(app => router(...)) >>.
 
@@ -248,12 +257,13 @@ middleware, lifecycle phase, request scope, server state, or response events.
 
 =head1 COMPILATION AND MIDDLEWARE ORDER
 
-C<to_app> synchronously compiles the target and fresh middleware instances,
-then returns one native PAGI coderef. It performs no request or lifecycle I/O.
-Target loading, middleware construction, and wrapping failures therefore occur
-at C<to_app>. Calling C<to_app> again builds an independent middleware graph
-and recompiles component objects, although lexical state deliberately captured
-by user coderefs remains ordinary shared Perl state.
+C<to_app> is the second phase: it synchronously compiles the target and fresh
+middleware instances after constructor-time normalization, then returns one
+native PAGI coderef. It performs no request or lifecycle I/O. Target loading,
+middleware construction, and wrapping failures therefore occur at C<to_app>.
+Calling C<to_app> again builds an independent middleware graph and recompiles
+component objects, although lexical state deliberately captured by user
+coderefs remains ordinary shared Perl state.
 
 The first listed middleware is outermost:
 

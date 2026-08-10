@@ -145,8 +145,8 @@ inspect signatures or evaluate package-method strings.
     sse('/x' => $code)           ($c)                           inert; completion awaited
     route('/x', raw => $code)    ($scope, $receive, $send)      inert
     mount('/x' => $code)         ($scope, $receive, $send)      inert
-    middleware => [$code]        ($inner_app), at to_app         PAGI app coderef
-    middleware($code)            ($inner_app), at compile time  PAGI app coderef
+    middleware => [$entry]       ($inner_app), at to_app         PAGI app coderef
+    middleware($target, %config) ($inner_app), at compile time    PAGI app coderef
 
 =over 4
 
@@ -165,14 +165,18 @@ C<($scope, $receive, $send)> and own protocol events.
 component accepted by L<PAGI::Utils/to_app>. It receives a rewritten child
 scope after its prefix matches.
 
-=item * C<< middleware =E<gt> [$code] >> accepts a bare synchronous
-compile-time factory. The enclosing middleware list calls it with
-C<($inner_app)> at C<to_app> and it must return another native app coderef
-immediately.
 
-=item * C<middleware($code)> is a synchronous compile-time factory. It
-receives the inner native app and must return another native app coderef
-immediately.
+=item * A C<middleware> list accepts four forms per occurrence: a class name,
+a bare synchronous factory coderef, a configured object with C<wrap>, or an
+explicit C<middleware(...)> description. Construction normalizes them to
+descriptions without loading classes, constructing objects, calling C<wrap>,
+or performing protocol I/O.
+
+=item * Compilation at C<to_app> resolves those descriptions. A factory or
+object receives C<($inner_app)> directly or through C<wrap>; a class is loaded
+and constructed, then wrapped. Each must return another native app coderef
+immediately. C<middleware($class, %config)> is required only for configured
+classes and is also useful for explicit reuse or inspection.
 
 =back
 
@@ -263,11 +267,14 @@ fully qualified caller-owned class.
 Configuration is accepted only for class targets. Coderef factories capture
 options in their closure, and objects are already configured.
 
-A middleware list accepts two entry shapes: a bare factory coderef or an
-explicit C<middleware(...)> description. Constructors normalize bare factories
-when they build their immutable descriptions. The C<middleware> accessors on
-routers, routes, and mounts expose descriptions only, never bare factories;
-an explicit description keeps its identity.
+A middleware list accepts four entry shapes: a class name, a bare factory
+coderef, a configured object with C<wrap>, or an explicit
+C<middleware(...)> description. Constructors normalize all four at description
+construction, without performing protocol I/O. The C<middleware> accessors on
+routers, routes, and mounts expose descriptions only; explicit descriptions
+keep their identity while each bare occurrence receives a fresh description.
+C<middleware($class, %config)> is required only for configured classes and is
+otherwise useful for explicit reuse or inspection.
 
 The distribution deliberately provides no C<get>, C<post>, C<delete>, or
 C<any> constructors. Common handler names would collide with C<get>/C<post>,

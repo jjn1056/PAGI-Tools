@@ -10,6 +10,17 @@ use ComposeTest qw(scope run_scope);
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(route middleware);
 
+{
+    package ComposeDirectMiddleware;
+    sub new { return bless { wraps => 0 }, $_[0] }
+    sub wraps { return $_[0]->{wraps} }
+    sub wrap {
+        my ($self, $inner) = @_;
+        ++$self->{wraps};
+        return $inner;
+    }
+}
+
 sub tracing_factory {
     my ($name, $trace) = @_;
     return sub {
@@ -242,10 +253,16 @@ subtest 'each to_app builds fresh bare middleware instances' => sub {
         ++$factory_calls;
         return $inner;
     };
-    my $composition = compose(app => sub { return }, middleware => [$factory]);
+    my $object = ComposeDirectMiddleware->new;
+    my $composition = compose(app => sub { return }, middleware => [$factory, $object]);
+    is($object->wraps, 0, 'direct object is not wrapped during normalization');
     my $one = $composition->to_app;
     my $two = $composition->to_app;
     is($factory_calls, 2, 'factory runs once for each compiled graph');
+    is($object->wraps, 2, 'direct object wraps once for each compiled graph');
+    run_scope($one, scope(type => 'example'));
+    run_scope($two, scope(type => 'example'));
+    is($object->wraps, 2, 'requests do not rerun direct object wrapping');
 
     my $throwing = compose(
         app => sub { return },

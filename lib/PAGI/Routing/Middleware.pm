@@ -78,18 +78,31 @@ sub _normalize_descriptors {
         unless ref($entries) eq 'ARRAY';
 
     my @normalized;
-    for my $entry (@$entries) {
+    for my $index (0 .. $#$entries) {
+        my $entry = $entries->[$index];
         if (ref($entry) eq 'CODE') {
-            push @normalized, PAGI::Routing::Middleware->new($entry);
-            next;
+            push @normalized, $class->new($entry);
         }
-        if (blessed($entry)
-                && $entry->isa('PAGI::Routing::Middleware')) {
+        elsif (blessed($entry) && $entry->isa($class)) {
             push @normalized, $entry;
-            next;
         }
-        croak "$error_prefix must contain PAGI::Routing::Middleware "
-            . 'descriptions or coderef factories';
+        elsif (blessed($entry) && $entry->can('wrap')) {
+            push @normalized, $class->new($entry);
+        }
+        elsif (!ref($entry) && defined($entry) && length($entry)) {
+            my $description = eval { $class->new($entry) };
+            if ($@) {
+                my $error = $@;
+                chomp $error;
+                croak "$error_prefix entry $index must be a middleware class name, "
+                    . "coderef factory, object with wrap, or middleware description: $error";
+            }
+            push @normalized, $description;
+        }
+        else {
+            croak "$error_prefix entry $index must be a middleware class name, "
+                . 'coderef factory, object with wrap, or middleware description';
+        }
     }
 
     return \@normalized;
@@ -148,15 +161,16 @@ PAGI::Routing::Middleware - Normalized immutable declarative middleware descript
 =head1 DESCRIPTION
 
 This class is the normalized immutable description stored by declarative
-routers, routes, mounts, and Compose. A middleware list may contain a bare
-factory coderef, which its enclosing constructor normalizes to this class, or
-an explicit description made with C<middleware(...)> or C<new>.
+routers, routes, mounts, and Compose. Each middleware-list occurrence may be
+a class name, a bare factory coderef, a configured object with C<wrap>, or an
+explicit description made with C<middleware(...)> or C<new>. Enclosing
+constructors normalize every occurrence to this class without loading a
+class, constructing an object, calling C<wrap>, or performing protocol I/O.
 
-C<middleware($factory)> is optional inside a list when the factory needs no
-separate identity or configuration. It remains the explicit form for a class
-and its configuration, a configured object, deliberate descriptor reuse, and
-inspection before attachment. Accessors return these normalized descriptions,
-not bare factory entries.
+C<middleware($target, %config)> is required only when a class needs
+constructor configuration. It also remains useful for deliberate descriptor
+reuse and inspection before attachment. Accessors return these normalized
+descriptions, not bare entries.
 
 =head1 METHODS
 
@@ -184,10 +198,11 @@ Returns a shallow copy of the configuration hash.
 =head1 COMPILATION
 
 Middleware descriptions are resolved synchronously while a routing application
-is compiled. A factory coderef receives the inner application and must return
-an application coderef immediately. A configured object is reused by identity
-and receives C<< ->wrap($inner_app) >>. A class name is loaded, instantiated
-with the stored configuration, and then wrapped.
+is compiled. Normalization is the first phase and stores only descriptions;
+compilation is the second phase. A factory coderef receives the inner
+application and must return an application coderef immediately. A configured
+object is reused by identity and receives C<< ->wrap($inner_app) >>. A class
+name is loaded, instantiated with the stored configuration, and then wrapped.
 
 Names beginning with C<PAGI::Middleware::> are already fully qualified. Simple
 and nested short names receive that prefix, while a leading C<^> selects a

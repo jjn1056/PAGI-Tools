@@ -84,7 +84,7 @@ subtest 'declarative lists normalize bare factories to descriptions' => sub {
     is(scalar @$normalized, 4, 'later input mutation is invisible');
 };
 
-subtest 'normalization accepts only descriptions and coderef factories' => sub {
+subtest 'normalization accepts all four entry forms and rejects invalid entries' => sub {
     is(
         PAGI::Routing::Middleware->_normalize_descriptors([], 'middleware'),
         [],
@@ -98,8 +98,25 @@ subtest 'normalization accepts only descriptions and coderef factories' => sub {
         'caller prefix is retained for a non-array value',
     );
 
+    my $factory = sub { return $_[0] };
     my $configured = bless {}, 'DescriptorConfiguredObject';
-    for my $invalid ('GZip', [], {}, 42, $configured) {
+    my $explicit = middleware('Configured');
+    my $normalized = PAGI::Routing::Middleware->_normalize_descriptors(
+        ['GZip', $factory, $configured, $explicit],
+        'middleware',
+    );
+    is($normalized->[0]->factory, 'GZip', 'direct class name becomes a description');
+    is(refaddr($normalized->[1]->factory), refaddr($factory),
+        'direct factory retains identity');
+    is(refaddr($normalized->[2]->factory), refaddr($configured),
+        'direct wrapping object retains identity');
+    is(refaddr($normalized->[3]), refaddr($explicit),
+        'explicit description retains identity');
+
+    my $object_without_wrap = bless {}, 'DescriptorNoWrap';
+    for my $invalid (42, [], {}, \do { my $value = 'reference' }, '',
+            'not-a-package', $object_without_wrap,
+            { header => 'X-Request-ID' }) {
         like(
             dies {
                 PAGI::Routing::Middleware->_normalize_descriptors(
@@ -107,8 +124,8 @@ subtest 'normalization accepts only descriptions and coderef factories' => sub {
                     'middleware',
                 )
             },
-            qr/middleware must contain PAGI::Routing::Middleware descriptions or coderef factories/,
-            'unsupported direct entry is rejected',
+            qr/middleware entry 0 must be a middleware class name/,
+            'invalid direct entry reports its list index',
         );
     }
 };
