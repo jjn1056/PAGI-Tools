@@ -54,7 +54,6 @@ sub target     { undef }
 sub is_raw     { undef }
 sub methods    { undef }
 sub constraints { undef }
-sub namespace  { undef }
 sub not_found { $_[0]->{not_found} }
 sub method_not_allowed { $_[0]->{method_not_allowed} }
 sub _resolver     { $_[0]->{_resolver} }
@@ -86,7 +85,7 @@ The root routing description. Construction validates its direct node list,
 fallback handlers, middleware descriptors, descriptions, canonical slash
 addresses, and every inspectable inline or Router-mount ancestry. A Router
 description remains placement-free: mounting it never writes a parent path or
-namespace onto the child. This is compile-time configuration only; the object
+local name onto the child. This is compile-time configuration only; the object
 stores no request scope, match, or response state.
 
 =head1 ACCESSORS

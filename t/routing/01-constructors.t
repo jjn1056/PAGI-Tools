@@ -64,7 +64,7 @@ use PAGI::Routing qw(:ALL);
     }
     sub router_mount {
         return mount('/known/{id:&Owned}',
-            router => router(routes => []), namespace => 'known');
+            router => router(routes => []), name      => 'known');
     }
     sub opaque_mount {
         return mount('/opaque/{id:&Owned}' => sub { });
@@ -251,7 +251,7 @@ subtest 'route descriptions preserve target identity and normalize HTTP methods'
     is(refaddr($node->constraints->{host}), refaddr($host_constraint), 'route constraints retain declared checker');
     is($node->middleware, [$mw], 'route middleware descriptors');
     ok(!$node->is_raw, 'normal route is not raw');
-    is($node->namespace, undef, 'namespace is inapplicable to route');
+    ok(!$node->can('namespace'), 'public namespace accessor is removed from Route');
     is($node->routes, undef, 'routes are inapplicable to route');
 
     $methods->[0] = 'DELETE';
@@ -361,13 +361,13 @@ subtest 'mount and router descriptions copy their collections' => sub {
     my $mount_middleware = middleware('Mount');
     my $mount_middleware_input = [$mount_middleware];
     my $inline = mount '/api/{tenant}', routes => $children,
-        namespace => 'API', desc => '', constraints => $constraints,
+        name      => 'API', desc => '', constraints => $constraints,
         middleware => $mount_middleware_input;
     isa_ok($inline, 'PAGI::Routing::Mount');
     is($inline->kind, 'mount', 'mount kind');
     is($inline->path, '/api/{tenant}', 'mount path');
-    is($inline->name, undef, 'name is inapplicable to mount');
-    is($inline->namespace, 'API', 'mount namespace');
+    is($inline->name, 'API', 'inline mount exposes its local name');
+    ok(!$inline->can('namespace'), 'public namespace accessor is removed from Mount');
     is($inline->desc, '', 'mount empty description');
     is($inline->routes, [$leaf], 'inline mount routes');
     is(refaddr($inline->constraints->{tenant}), refaddr($tenant_constraint), 'mount constraints retain declared checker');
@@ -402,36 +402,36 @@ subtest 'mount and router descriptions copy their collections' => sub {
     ]);
     my $known = mount('/known',
         desc      => 'Known child',
-        namespace => 'known',
+        name      => 'known',
         router    => $child,
     );
     is(refaddr($known->router), refaddr($child), 'Router target is preserved');
     is($known->target, undef, 'Router mount has no opaque target');
     is($known->routes, undef, 'Router mount has no inline routes');
-    is($known->namespace, 'known', 'Router mount namespace');
+    is($known->name, 'known', 'Router mount exposes its local name');
     ok(!$known->is_raw, 'Router mount is inspectable');
 
     my $routes_first = mount('/routes-first',
-        routes => [$leaf], desc => 'Routes first', namespace => 'first',
+        routes => [$leaf], desc => 'Routes first', name      => 'first',
     );
     my $routes_middle = mount('/routes-middle',
-        desc => 'Routes middle', routes => [$leaf], namespace => 'middle',
+        desc => 'Routes middle', routes => [$leaf], name      => 'middle',
     );
     my $routes_last = mount('/routes-last',
-        desc => 'Routes last', namespace => 'last', routes => [$leaf],
+        desc => 'Routes last', name      => 'last', routes => [$leaf],
     );
     is($routes_first->routes, [$leaf], 'inline routes selector may come first');
     is($routes_middle->routes, [$leaf], 'inline routes selector may come between options');
     is($routes_last->routes, [$leaf], 'inline routes selector may come last');
 
     my $router_first = mount('/router-first',
-        router => $child, desc => 'Router first', namespace => 'router-first',
+        router => $child, desc => 'Router first', name      => 'router-first',
     );
     my $router_middle = mount('/router-middle',
-        desc => 'Router middle', router => $child, namespace => 'router-middle',
+        desc => 'Router middle', router => $child, name      => 'router-middle',
     );
     my $router_last = mount('/router-last',
-        desc => 'Router last', namespace => 'router-last', router => $child,
+        desc => 'Router last', name      => 'router-last', router => $child,
     );
     is(refaddr($router_first->router), refaddr($child), 'Router selector may come first');
     is(refaddr($router_middle->router), refaddr($child), 'Router selector may come between options');
@@ -468,7 +468,7 @@ subtest 'mount and router descriptions copy their collections' => sub {
     is($router->is_raw, undef, 'raw status is inapplicable to router');
     is($router->methods, undef, 'methods are inapplicable to router');
     is($router->constraints, undef, 'constraints are inapplicable to router');
-    is($router->namespace, undef, 'namespace is inapplicable to router');
+    ok(!$router->can('namespace'), 'public namespace accessor is removed from Router');
     is(refaddr($router->not_found), refaddr($not_found), 'router retains not-found handler identity');
     is(refaddr($router->method_not_allowed), refaddr($method_not_allowed), 'router retains method-not-allowed handler identity');
 };
@@ -558,15 +558,16 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/not-component' => TestRoutingApp->new($handler) }, qr/handler must be a coderef/, 'normal route does not coerce component targets';
     like dies { mount '/missing' }, qr/mount requires exactly one of target, routes, or router/, 'mount requires one selector';
     like dies { mount '/both' => $handler, routes => [] }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects target plus routes';
-    like dies { mount '/target-router' => $handler, router => $child_router, namespace => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects target plus router';
-    like dies { mount '/routes-router', routes => [], router => $child_router, namespace => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects routes plus router';
-    like dies { mount '/all' => $handler, routes => [], router => $child_router, namespace => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects all selectors';
+    like dies { mount '/target-router' => $handler, router => $child_router, name      => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects target plus router';
+    like dies { mount '/routes-router', routes => [], router => $child_router, name      => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects routes plus router';
+    like dies { mount '/all' => $handler, routes => [], router => $child_router, name      => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects all selectors';
     like dies { mount '/undefined-target', undef }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects an undefined target';
     like dies { mount '/undefined-mixed', undef, routes => [] }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects undefined target plus routes';
-    like dies { mount '/unblessed-router', router => [], namespace => 'bad' }, qr/router mount target must be a PAGI::Routing::Router/, 'router selector rejects an unblessed target';
-    like dies { mount '/bad-router', router => TestRoutingApp->new($handler), namespace => 'bad' }, qr/router mount target must be a PAGI::Routing::Router/, 'router selector rejects a non-Router object';
-    like dies { mount '/missing-router-namespace', router => $child_router }, qr/router mount requires a namespace/, 'router selector requires namespace';
-    like dies { mount '/opaque-namespace' => $handler, namespace => 'opaque' }, qr/opaque application mounts do not accept namespace/, 'opaque mount rejects namespace';
+    like dies { mount '/unblessed-router', router => [], name      => 'bad' }, qr/router mount target must be a PAGI::Routing::Router/, 'router selector rejects an unblessed target';
+    like dies { mount '/bad-router', router => TestRoutingApp->new($handler), name      => 'bad' }, qr/router mount target must be a PAGI::Routing::Router/, 'router selector rejects a non-Router object';
+    like dies { mount('/x', router => $child_router) }, qr/router mount requires a name/, 'router selector requires a name';
+    like dies { mount('/x' => $handler, name => 'x') }, qr/opaque application mounts do not accept name/, 'opaque mount rejects name';
+    like dies { mount('/old-namespace', routes => [], namespace => 'old') }, qr/unknown mount option 'namespace'/, 'legacy namespace option is rejected';
     like dies { mount('/malformed-pos-code', $handler, 'desc') }, qr/mount option list must be key\/value pairs/, 'malformed positional coderef tail is diagnosed before hash construction';
     like dies { mount('/malformed-pos-object', TestRoutingApp->new($handler), 'desc') }, qr/mount option list must be key\/value pairs/, 'malformed positional object tail is diagnosed before hash construction';
     like dies { mount('/malformed-named', routes => [], 'desc') }, qr/mount option list must be key\/value pairs/, 'malformed named tail is diagnosed before hash construction';
@@ -574,10 +575,10 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { mount '/bad-node', routes => [bless {}, 'Elsewhere'] }, qr/routes must contain PAGI::Routing nodes/, 'mount routes contain only nodes';
     like dies { router(routes => 'nope') }, qr/routes must contain PAGI::Routing nodes/, 'router routes must be an arrayref';
     like dies { mount '/nested-router', routes => [$child_router] },
-        qr/mount\('\/prefix', router => \$router, namespace => '\.\.\.'\)/,
+        qr/mount\('\/prefix', router => \$router, name => '\.\.\.'\)/,
         'inline mount routes reject a nested Router with application-mount guidance';
     like dies { router(routes => [$child_router]) },
-        qr/mount\('\/prefix', router => \$router, namespace => '\.\.\.'\)/,
+        qr/mount\('\/prefix', router => \$router, name => '\.\.\.'\)/,
         'router route lists reject a nested Router rather than accepting an inert node';
     my $opaque_router = mount('/opaque' => $child_router);
     is(refaddr($opaque_router->target), refaddr($child_router), 'positional Router remains an opaque application target');
@@ -585,13 +586,13 @@ subtest 'constructors reject invalid declarations' => sub {
     ok($opaque_router->is_raw, 'positional Router remains raw');
     like dies { router(not_found => 'not a handler') }, qr/not_found must be a coderef/, 'router fallback handlers must be coderefs';
     like dies { route '/bad-middleware' => $handler, middleware => 'nope' }, qr/middleware must be an arrayref/, 'middleware must be an arrayref';
-    my $configured = bless {}, 'BareListConfiguredObject';
-    for my $invalid ('GZip', [], {}, $configured) {
+    my $not_middleware = bless {}, 'NotMiddlewareObject';
+    for my $invalid ([], {}, $not_middleware) {
         like dies {
             route '/invalid-middleware' => $handler,
                 middleware => [$invalid]
-        }, qr/descriptions or coderef factories/,
-            'direct middleware entries stay intentionally narrow';
+        }, qr/middleware class name, coderef factory, object with wrap, or middleware description/,
+            'direct middleware entries reject values outside the four supported forms';
     }
     like dies { middleware([]) }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an unblessed arrayref';
     like dies { middleware({}) }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an unblessed hashref';
@@ -599,11 +600,11 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/bad-desc' => $handler, desc => {} }, qr/desc must be a string/, 'descriptions cannot be references';
     for my $valid (qw(show v1.1)) {
         is(route('/valid-name' => $handler, name => $valid)->name, $valid, "route name '$valid' is one logical segment");
-        is(mount('/valid-namespace', routes => [], namespace => $valid)->namespace, $valid, "mount namespace '$valid' is one logical segment");
+        is(mount('/valid-name', routes => [], name => $valid)->name, $valid, "mount name '$valid' is one logical segment");
     }
     for my $invalid ('/', '.', '..', 'person/show', '', []) {
         like dies { route '/bad-name' => $handler, name => $invalid }, qr/name must be one logical address segment/, 'route names require one logical segment';
-        like dies { mount '/bad-namespace', routes => [], namespace => $invalid }, qr/namespace must be one logical address segment/, 'mount namespaces require one logical segment';
+        like dies { mount '/bad-name', routes => [], name => $invalid }, qr/name must be one logical address segment/, 'mount names require one logical segment';
     }
     is(route('/desc-slash' => $handler, desc => '/')->desc, '/', 'route descriptions retain ordinary text validation');
     is(mount('/desc-dot', routes => [], desc => 'person/show')->desc, 'person/show', 'mount descriptions retain ordinary text validation');

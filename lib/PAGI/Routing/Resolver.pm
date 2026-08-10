@@ -98,8 +98,8 @@ sub _visit_nodes {
             );
             my $logical_namespace = _logical_namespace($address_segments);
             my @child_segments = @$address_segments;
-            push @child_segments, $node->namespace
-                if defined $node->namespace && length $node->namespace;
+            push @child_segments, $node->name
+                if defined $node->name && length $node->name;
             $self->{metadata_by_location}{$location_key} = {
                 match => {
                     kind  => 'mount',
@@ -109,9 +109,9 @@ sub _visit_nodes {
                     desc  => $node->desc,
                 },
                 mount => {
-                    path      => $node->path,
-                    namespace => $node->namespace,
-                    desc      => $node->desc,
+                    path => $node->path,
+                    name => $node->name,
+                    desc => $node->desc,
                 },
                 is_raw => $node->is_raw ? 1 : 0,
                 source => $node,
@@ -194,7 +194,7 @@ sub _visit_nodes {
 
         if (my $previous = $self->{by_name}{$effective_name}) {
             croak "duplicate canonical route address '$effective_name' for effective paths "
-                . "'$previous->{path}' and '$effective_path'; add or change a namespace";
+                . "'$previous->{path}' and '$effective_path'; add or change a local mount name";
         }
 
         push @{$self->{records}}, $record;

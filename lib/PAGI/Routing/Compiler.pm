@@ -693,11 +693,11 @@ Each frame captures the compiled router's entry C<root_path>; Context reverse
 routing uses that field and falls back only for legacy/manual v1 frames that
 omit it. Every API-created frame also begins with canonical
 C<logical_namespace> C</> and a fresh empty C<captures> hash. Entering an
-inline or Router mount replaces both values with that placement's namespace
+inline or Router mount replaces both values with that placement's logical namespace
 and a fresh snapshot of consumed effective-prefix captures. A FULL leaf
-replaces them with its containing namespace and complete effective captures.
+replaces them with its containing logical namespace and complete effective captures.
 PARTIAL candidates never publish leaf state, so generated 404 and 405 handlers
-retain only the namespace and prefix snapshot owned by their selected mount
+retain only the logical namespace and prefix snapshot owned by their selected mount
 ancestry. The capture hash is never aliased to C<< scope->{path_params} >> and
 no mutable frame state is shared between requests.
 

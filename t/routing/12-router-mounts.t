@@ -156,7 +156,7 @@ subtest 'a Router mount transfers HTTP ownership to child outcomes' => sub {
             push @parent_calls, 'earlier partial';
             return $_[0]->text('parent PATCH');
         }, methods => 'PATCH'),
-        mount('/api', router => $child, namespace => 'child'),
+        mount('/api', router => $child, name      => 'child'),
         route('/api/item' => sub {
             push @parent_calls, 'later full item';
             return $_[0]->text('parent PUT');
@@ -218,7 +218,7 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
                     push @metadata, snapshot_frame($c->scope);
                     return $c->text($c->scope->{'router-mount.build'});
                 }, name => 'item', middleware => [tracing_middleware('route', \@trace)]),
-            ], namespace => 'inline', middleware => [tracing_middleware('inline mount', \@trace)]),
+            ], name      => 'inline', middleware => [tracing_middleware('inline mount', \@trace)]),
         ],
         not_found => sub {
             push @trace, 'child 404';
@@ -242,11 +242,13 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
             after_metadata_middleware(\@after_metadata),
         ],
         routes => [
-            mount('/left', router => $child, namespace => 'left',
+            mount('/left', router => $child, name      => 'left',
                 desc => 'Left child', middleware => [tracing_middleware('Router mount', \@trace)]),
-            mount('/right', router => $child, namespace => 'right'),
+            mount('/right', router => $child, name      => 'right'),
         ],
     );
+    is($outer->routes->[0]->name, 'left',
+        'a Mount declaration retains its local placement name');
     my $first_app = $outer->to_app;
     my $second_app = $outer->to_app;
     is($builds, 4, 'two placements in each outer compilation build four fresh child wrappers');
@@ -264,15 +266,15 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
     is($metadata[-1], {
         frame_count => 1,
         mounts => [
-            { path => '/left', namespace => 'left', desc => 'Left child' },
-            { path => '/inline', namespace => 'inline', desc => undef },
+            { path => '/left', name      => 'left', desc => 'Left child' },
+            { path => '/inline', name      => 'inline', desc => undef },
         ],
         match => {
             kind => 'route', route => '/left/inline/item',
             name => '/left/inline/item', logical_namespace => '/left/inline',
             desc => undef,
         },
-    }, 'the child leaf publishes composed metadata in the one root routing frame');
+    }, 'the child leaf publishes its absolute match name in the one root routing frame');
     is($after_metadata[-1], $metadata[-1],
         'outer Router middleware sees the complete child match after downstream');
 
@@ -293,7 +295,7 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
     is($after_metadata[-1], {
         frame_count => 1,
         mounts => [
-            { path => '/left', namespace => 'left', desc => 'Left child' },
+            { path => '/left', name      => 'left', desc => 'Left child' },
         ],
         match => undef,
     }, 'outer middleware sees the Router placement after a child-generated 404');
@@ -310,8 +312,8 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
     is($after_metadata[-1], {
         frame_count => 1,
         mounts => [
-            { path => '/left', namespace => 'left', desc => 'Left child' },
-            { path => '/inline', namespace => 'inline', desc => undef },
+            { path => '/left', name      => 'left', desc => 'Left child' },
+            { path => '/inline', name      => 'inline', desc => undef },
         ],
         match => undef,
     }, 'outer middleware sees the complete ancestry after a child-generated 405');
@@ -334,15 +336,15 @@ subtest 'relative child links follow the active Router placement without mutatin
             my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
             push @seen, {
                 path => $c->path_for('show'),
-                namespace => $frame->{logical_namespace},
+                name      => $frame->{logical_namespace},
                 captures => { %{$frame->{captures}} },
             };
             return $c->text('person');
         }, name => 'show'),
     ]);
     my $outer = router(routes => [
-        mount('/authors', router => $child, namespace => 'authors'),
-        mount('/editors', router => $child, namespace => 'editors'),
+        mount('/authors', router => $child, name      => 'authors'),
+        mount('/editors', router => $child, name      => 'editors'),
     ]);
     my $app = $outer->to_app;
 
@@ -352,12 +354,12 @@ subtest 'relative child links follow the active Router placement without mutatin
     is(\@seen, [
         {
             path => '/authors/42',
-            namespace => '/authors',
+            name      => '/authors',
             captures => { person_id => 42 },
         },
         {
             path => '/editors/42',
-            namespace => '/editors',
+            name      => '/editors',
             captures => { person_id => 42 },
         },
     ], 'one child handler resolves through the request-local active placement');
@@ -392,7 +394,7 @@ subtest 'Router mounts share the one outer HEAD edge and root mounts consume not
         ],
     );
     my $app = router(routes => [
-        mount('/api', router => $child, namespace => 'api',
+        mount('/api', router => $child, name      => 'api',
             middleware => [body_header_middleware('X-Mount-Bytes')]),
     ])->to_app;
 
@@ -435,7 +437,7 @@ subtest 'Router mounts share the one outer HEAD edge and root mounts consume not
                 push @root_scope, [@{$c->scope}{qw(path root_path)}];
                 return $c->text('root child');
             }),
-        ]), namespace => 'root'),
+        ]), name      => 'root'),
     ])->to_app;
     is(response_body(run_app(
         $root, path => '/item', root_path => '/edge', raw_path => '/edge/item',
@@ -466,7 +468,7 @@ subtest 'Router mounts own WebSocket and SSE success and miss outcomes' => sub {
     );
     my @parent_protocol_calls;
     my $app = router(routes => [
-        mount('/api', router => $child, namespace => 'api'),
+        mount('/api', router => $child, name      => 'api'),
         websocket('/api/missing' => sub {
             push @parent_protocol_calls, 'parent websocket';
             return Future->done;

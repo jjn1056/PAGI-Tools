@@ -141,7 +141,6 @@ sub is_raw      { $_[0]->{is_raw} }
 sub methods     { ref($_[0]->{methods}) eq 'ARRAY' ? [ @{$_[0]->{methods}} ] : $_[0]->{methods} }
 sub constraints { $_[0]->{_has_constraints} ? $_[0]->{_pattern}->constraints : undef }
 sub middleware  { [ @{$_[0]->{middleware}} ] }
-sub namespace   { undef }
 sub routes      { undef }
 sub _pattern    { $_[0]->{_pattern} }
 
@@ -188,7 +187,7 @@ C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<target>, C<is_raw>,
 C<methods>, and C<constraints> return the corresponding declaration values.
 C<middleware> returns a fresh arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
-identity. C<namespace> and C<routes> return undef for a leaf route.
+identity. C<routes> returns undef for a leaf route.
 HTTP C<methods> are normalized at construction; GET includes HEAD. Constraint
 values are accepted by HTTP, WebSocket, and SSE leaves, returned as declared,
 and validate decoded captures only during a request match or reverse render.

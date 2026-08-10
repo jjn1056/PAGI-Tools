@@ -121,7 +121,7 @@ subtest 'metadata is installed before middleware and records effective mounted l
                         middleware => [$inner_mount_middleware],
                     ),
                 ],
-                namespace => 'tenant',
+                name      => 'tenant',
                 desc => 'Tenant boundary',
                 middleware => [$outer_mount_middleware],
             ),
@@ -155,7 +155,7 @@ subtest 'metadata is installed before middleware and records effective mounted l
     is($observations[1]{mounts}, [
         {
             path => '/tenants/{tenant}',
-            namespace => 'tenant',
+            name      => 'tenant',
             desc => 'Tenant boundary',
         },
     ], 'outer mount metadata is installed before its middleware');
@@ -165,12 +165,12 @@ subtest 'metadata is installed before middleware and records effective mounted l
     is($observations[2]{mounts}, [
         {
             path => '/tenants/{tenant}',
-            namespace => 'tenant',
+            name      => 'tenant',
             desc => 'Tenant boundary',
         },
         {
             path => '/api',
-            namespace => undef,
+            name      => undef,
             desc => undef,
         },
     ], 'nested mount descriptors preserve declaration order and undefined fields');
@@ -224,7 +224,7 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
         path => '/api/missing',
         raw_path => '/api/missing',
     ));
-    is($generated[-1]{mounts}, [{ path => '/api', namespace => undef, desc => undef }],
+    is($generated[-1]{mounts}, [{ path => '/api', name      => undef, desc => undef }],
         'an inline child 404 retains the selected mount chain');
     is($generated[-1]{match}, undef, 'an inline child 404 has no leaf match');
     is([$generated[-1]{logical_namespace}, $generated[-1]{captures}],
@@ -236,7 +236,7 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
         path => '/api/items',
         raw_path => '/api/items',
     ));
-    is($generated[-1]{mounts}, [{ path => '/api', namespace => undef, desc => undef }],
+    is($generated[-1]{mounts}, [{ path => '/api', name      => undef, desc => undef }],
         'an inline child 405 retains the selected mount chain');
     is($generated[-1]{match}, undef, 'a partial route does not publish a leaf match');
     is([$generated[-1]{logical_namespace}, $generated[-1]{captures}],
@@ -292,7 +292,7 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
                 desc => 'Opaque assets',
                 middleware => [observing_middleware('application mount', \@application_mount)],
             ),
-        ], namespace => 'api', desc => 'API boundary'),
+        ], name      => 'api', desc => 'API boundary'),
     ])->to_app;
     run_scope($mounted_app, scope(
         path => '/api/assets/logo.svg',
@@ -306,7 +306,7 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
         desc => 'Opaque assets',
     }, 'a nested application mount publishes its complete terminal pattern before middleware');
     is($application_mount[0]{mounts}, [
-        { path => '/api', namespace => 'api', desc => 'API boundary' },
+        { path => '/api', name      => 'api', desc => 'API boundary' },
     ], 'an opaque terminal mount retains inline ancestry without adding itself as a descriptor');
     is($application_mount[1]{match}, $application_mount[0]{match},
         'the mounted application receives the terminal parent match');
@@ -418,7 +418,7 @@ subtest 'supported ancestry composes while foreign routing values form fresh bou
         resolver          => $ancestor_resolver,
         logical_namespace => '/',
         captures          => {},
-        mounts            => [{ path => '/outer', namespace => undef, desc => undef }],
+        mounts            => [{ path => '/outer', name      => undef, desc => undef }],
         match             => { kind => 'mount', route => '/outer' },
     };
     my $ancestor_frames = [$ancestor_frame];
@@ -539,7 +539,7 @@ subtest 'matched capture snapshots do not alias mutable scope path parameters' =
                     frame_id => refaddr($frame),
                     scope_params_id => refaddr($original_scope_params),
                     captures_id => refaddr($frame->{captures}),
-                    namespace => $frame->{logical_namespace},
+                    name      => $frame->{logical_namespace},
                     captures_before => { %{$frame->{captures}} },
                 };
 
@@ -554,7 +554,7 @@ subtest 'matched capture snapshots do not alias mutable scope path parameters' =
                 $seen[-1]{link_after} = $c->path_for('show');
                 return $c->text('snapshot');
             }, name => 'show'),
-        ], namespace => 'api', middleware => [$mutate_prefix_params]),
+        ], name      => 'api', middleware => [$mutate_prefix_params]),
     ])->to_app;
 
     run_scope($app, scope(
@@ -564,7 +564,7 @@ subtest 'matched capture snapshots do not alias mutable scope path parameters' =
 
     isnt($seen[0]{captures_id}, $seen[0]{scope_params_id},
         'the frame capture snapshot is a distinct hash from scope path_params');
-    is($seen[0]{namespace}, '/api', 'the full leaf records its containing namespace');
+    is($seen[0]{name}, '/api', 'the full leaf records its containing namespace');
     is($seen[0]{captures_before}, { account_id => 'acme', item_id => 7 },
         'the full leaf snapshot includes all effective captures');
     is($seen[0]{captures_after}, $seen[0]{captures_before},
@@ -848,7 +848,7 @@ subtest 'WebSocket and SSE leaves publish protocol-specific effective metadata' 
                 push @seen, snapshot('sse', $c->scope);
                 return Future->done;
             }, name => 'events', desc => 'Event stream'),
-        ], namespace => 'api'),
+        ], name      => 'api'),
     ])->to_app;
 
     run_scope($app, scope(

@@ -203,11 +203,11 @@ subtest 'component routing publishes the canonical composed address map' => sub 
         defined $_->name && $_->name eq 'home'
     } @{$root->routes};
     my ($person_mount) = grep {
-        defined $_->namespace && $_->namespace eq 'person'
+        defined $_->name && $_->name eq 'person'
     } @{$root->routes};
     my $mounted_person = $person_mount->router;
     my ($blog_mount) = grep {
-        defined $_->namespace && $_->namespace eq 'blog'
+        defined $_->name && $_->name eq 'blog'
     } @{$mounted_person->routes};
     my $mounted_blogs = $blog_mount->router;
 

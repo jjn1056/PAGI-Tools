@@ -60,7 +60,7 @@ sub routing($class) {
             )),
             mount('/person',
                 router    => MyApp::Person->routing,
-                namespace => 'person',
+                name      => 'person',
                 desc      => 'People section',
             ),
             route('/*path' => \&not_found,

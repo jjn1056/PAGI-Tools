@@ -62,13 +62,13 @@ use PAGI::Routing qw(router route websocket sse mount);
 
     sub inline {
         return mount('/inline/{tenant:&Tenant}',
-            routes => [$_[0]], namespace => 'inline');
+            routes => [$_[0]], name      => 'inline');
     }
 
     sub known {
         my ($prefix, $router, $namespace) = @_;
         return mount($prefix . '/{tenant:&Tenant}',
-            router => $router, namespace => $namespace);
+            router => $router, name      => $namespace);
     }
 }
 
@@ -79,7 +79,7 @@ use PAGI::Routing qw(router route websocket sse mount);
     sub routes {
         my ($self) = @_;
         return [PAGI::Routing::Mount->new(
-            '/again', router => $self, namespace => 'loop',
+            '/again', router => $self, name      => 'loop',
         )];
     }
 }
@@ -210,7 +210,7 @@ subtest 'Router path_for normalizes exact logical references without decoding' =
         route('/encoded' => sub { }, name => '%2F'),
         mount('/group', routes => [
             route('/child' => sub { }, name => 'child'),
-        ], namespace => 'group'),
+        ], name      => 'group'),
     ]);
 
     for my $reference (qw(/show show ./show group/../show)) {
@@ -251,7 +251,7 @@ subtest 'route_named inspects normalized root references without throwing' => su
         $show,
         mount('/group', routes => [
             route('/child' => sub { }, name => 'child'),
-        ], namespace => 'group'),
+        ], name      => 'group'),
     ]);
 
     is(
@@ -295,10 +295,10 @@ subtest 'an exact named leaf takes precedence over its namespace address' => sub
     my $api_x = route('/x' => sub { }, name => 'x');
     my $routing = router(routes => [
         $api,
-        mount('/nested-api', routes => [$api_x], namespace => 'api'),
+        mount('/nested-api', routes => [$api_x], name      => 'api'),
         mount('/group', routes => [
             route('/x' => sub { }, name => 'x'),
-        ], namespace => 'group'),
+        ], name      => 'group'),
     ]);
 
     is(
@@ -347,14 +347,14 @@ subtest 'inline paths and slash namespaces remain independent' => sub {
     my $nested_mount = mount('/tenants/{tenant_id}', routes => [
         mount('/admin', routes => [
             route('/users/{user_id}' => sub { }, name => 'show'),
-        ], namespace => 'api'),
-    ], namespace => 'tenant');
+        ], name      => 'api'),
+    ], name      => 'tenant');
     my $root_mount = mount('/', routes => [
         route('/status/' => sub { }, name => 'status'),
-    ], namespace => 'rooted');
+    ], name      => 'rooted');
     my $exact_mount = mount('/prefix', routes => [
         route('//double/' => sub { }, name => 'slashes'),
-    ], namespace => 'exact');
+    ], name      => 'exact');
     my $routing = router(routes => [
         $unnamed_mount, $nested_mount, $root_mount, $exact_mount,
     ]);
@@ -405,7 +405,7 @@ subtest 'reverse rendering validates complete ancestry and escapes values' => su
                 constraints => { item => $type },
             ),
             route('/files/*path' => sub { }, name => 'files'),
-        ], namespace => 'account'),
+        ], name      => 'account'),
     ]);
 
     is(
@@ -559,7 +559,7 @@ subtest 'reverse constraints cover protocol leaves, inline regexes, and signed v
             constraints => { id => $stream_type }),
         mount('/groups/{group:[a-z]+}', routes => [
             route('/items/{item:\\d+}' => sub { }, name => 'item'),
-        ], namespace => 'group'),
+        ], name      => 'group'),
     ]);
 
     is($Local::ReverseLeafProvider::SIGNED_CALLS, 1,
@@ -613,14 +613,14 @@ subtest 'composed Router graph exposes placements and respects opacity' => sub {
     my $notifications = route('/notifications' => sub { }, name => 'notifications');
     my $person = router(routes => [
         $person_show,
-        mount('/blogs', router => $blogs, namespace => 'blog'),
-        mount('/settings', routes => [$notifications], namespace => 'settings'),
+        mount('/blogs', router => $blogs, name      => 'blog'),
+        mount('/settings', routes => [$notifications], name      => 'settings'),
     ]);
 
     my $health = route('/health' => sub { }, name => 'health');
     my $root = router(routes => [
         $health,
-        mount('/people/{person_id}', router => $person, namespace => 'person'),
+        mount('/people/{person_id}', router => $person, name      => 'person'),
         mount('/opaque' => $hidden_router),
     ]);
 
@@ -696,8 +696,8 @@ subtest 'canonical collisions report both placement paths' => sub {
             router(routes => [
                 mount('/inline', routes => [
                     route('/one' => sub { }, name => 'show'),
-                ], namespace => 'person'),
-                mount('/router', router => $child, namespace => 'person'),
+                ], name      => 'person'),
+                mount('/router', router => $child, name      => 'person'),
             ]);
         },
         qr/duplicate canonical route address '\/person\/show'.*'\/inline\/one'.*'\/router\/two'/,
@@ -714,7 +714,7 @@ subtest 'parameter validation follows one ancestry and precedes opacity' => sub 
             router(routes => [
                 mount('/people/{id}',
                     router => $repeated_child,
-                    namespace => 'person',
+                    name      => 'person',
                 ),
             ]);
         },
@@ -739,14 +739,14 @@ subtest 'parameter validation follows one ancestry and precedes opacity' => sub 
     ]);
     my $reused = lives {
         router(routes => [
-            mount('/authors', router => $shared, namespace => 'authors'),
-            mount('/editors', router => $shared, namespace => 'editors'),
+            mount('/authors', router => $shared, name      => 'authors'),
+            mount('/editors', router => $shared, name      => 'editors'),
             mount('/groups/{id}', routes => [
                 route('/first' => sub { }, name => 'first'),
-            ], namespace => 'groups'),
+            ], name      => 'groups'),
             mount('/teams/{id}', routes => [
                 route('/second' => sub { }, name => 'second'),
-            ], namespace => 'teams'),
+            ], name      => 'teams'),
         ]);
     };
     is($reused, T(), 'sibling branches may reuse parameter names and Router identity');
@@ -764,7 +764,7 @@ subtest 'unnamed leaves publish no address while named source identity is defens
     my $unnamed = route('/health' => sub { });
     my $named_leaf = route('/users' => sub { }, name => 'users');
     my $routing = router(routes => [
-        mount('/api', routes => [$unnamed, $named_leaf], namespace => 'api'),
+        mount('/api', routes => [$unnamed, $named_leaf], name      => 'api'),
     ]);
 
     is(

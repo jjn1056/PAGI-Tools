@@ -6,13 +6,13 @@ work that remains deferred for opaque applications or routing outcomes.
 ## GAP-01: Known-Router reverse discovery is resolved; opaque apps remain terminal
 
 **Desired behavior:** A parent assigns each known Router placement a stable
-namespace, and application code addresses named leaves below that placement.
+name, and application code addresses named leaves below that placement.
 For example, the Blogs index has the composed logical address
-`/person/blog/index`. Placement namespaces, not package names, identify the
+`/person/blog/index`. Placement names, not package names, identify the
 route because one Router may be reused at multiple placements.
 
 **Shipped behavior:** The explicit
-`mount('/prefix', router => $router, namespace => '...')` form is inspected by
+`mount('/prefix', router => $router, name => '...')` form is inspected by
 the containing resolver. Root therefore discovers the complete five-address
 graph and Context can reverse between Root, Person, and Blogs from the active
 request namespace. A positional application mount remains opaque: traversal

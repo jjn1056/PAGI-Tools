@@ -69,7 +69,7 @@ sub routing($class) {
             ),
             mount('/{person_id:&Int}/blog',
                 router    => MyApp::Person::Blogs->routing,
-                namespace => 'blog',
+                name      => 'blog',
                 desc      => 'Blogs for one person',
             ),
         ],

@@ -25,23 +25,23 @@ sub _new_from {
         unless $has_target + $has_routes + $has_router == 1
             && (!$has_target || defined $target);
 
-    my %allowed = map { $_ => 1 } qw(routes router namespace desc constraints middleware);
+    my %allowed = map { $_ => 1 } qw(routes router name desc constraints middleware);
     for my $key (keys %$opts) {
         croak "unknown mount option '$key'" unless $allowed{$key};
     }
 
-    croak 'opaque application mounts do not accept namespace'
-        if $has_target && exists $opts->{namespace};
+    croak 'opaque application mounts do not accept name'
+        if $has_target && exists $opts->{name};
     if ($has_router) {
         croak 'router mount target must be a PAGI::Routing::Router'
             unless blessed($opts->{router})
                 && $opts->{router}->isa('PAGI::Routing::Router');
-        croak 'router mount requires a namespace'
-            unless exists $opts->{namespace};
+        croak 'router mount requires a name'
+            unless exists $opts->{name};
     }
 
     PAGI::Routing::Route::_validate_text('desc', $opts->{desc}, 0) if exists $opts->{desc};
-    PAGI::Routing::Route::_validate_logical_segment('namespace', $opts->{namespace}) if exists $opts->{namespace};
+    PAGI::Routing::Route::_validate_logical_segment('name', $opts->{name}) if exists $opts->{name};
     PAGI::Routing::Route::_validate_constraints($opts->{constraints}) if exists $opts->{constraints};
     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
         exists $opts->{middleware} ? $opts->{middleware} : [],
@@ -67,7 +67,7 @@ sub _new_from {
         router      => $has_router ? $opts->{router} : undef,
         is_raw      => $has_target ? 1 : 0,
         routes      => $has_routes ? [ @{$opts->{routes}} ] : undef,
-        namespace   => $opts->{namespace},
+        name        => $opts->{name},
         desc        => $opts->{desc},
         _has_constraints => $has_constraints,
         middleware  => $middleware,
@@ -97,7 +97,7 @@ sub _validate_routes {
     croak 'routes must contain PAGI::Routing nodes' unless ref($routes) eq 'ARRAY';
     for my $node (@$routes) {
         croak 'PAGI::Routing::Router objects cannot appear in structural routes; '
-            . "mount('/prefix', router => \$router, namespace => '...')"
+            . "mount('/prefix', router => \$router, name => '...')"
             if blessed($node) && $node->isa('PAGI::Routing::Router');
         croak 'routes must contain PAGI::Routing nodes'
             unless blessed($node)
@@ -109,8 +109,7 @@ sub _validate_routes {
 sub kind        { $_[0]->{kind} }
 sub path        { $_[0]->{_pattern}->path }
 sub parameters  { $_[0]->{_pattern}->parameters }
-sub name        { undef }
-sub namespace   { $_[0]->{namespace} }
+sub name        { $_[0]->{name} }
 sub desc        { $_[0]->{desc} }
 sub target      { $_[0]->{target} }
 sub router      { $_[0]->{router} }
@@ -141,7 +140,7 @@ PAGI::Routing::Mount - Immutable declarative mount description
     my $opaque = PAGI::Routing::Mount->new('/api', $app);
     my $inline = PAGI::Routing::Mount->new('/api', routes => \@nodes);
     my $known = PAGI::Routing::Mount->new(
-        '/api', router => $router, namespace => 'api',
+        '/api', router => $router, name => 'api',
     );
 
 =head1 DESCRIPTION
@@ -151,9 +150,9 @@ inline C<routes> array of routing nodes, or an explicit C<router> target.
 Application targets remain intact until the compiler converts them through
 L<PAGI::Utils/to_app>. A positional C<PAGI::Routing::Router> is deliberately
 still an opaque application target; use C<< router => $router >> together with
-a namespace to declare an inspectable Router mount. Inline mounts may omit a
-namespace; opaque application mounts may not supply one; Router mounts require
-a nonempty namespace. Its normalized prefix pattern is compiled during
+a local name to declare an inspectable Router mount. Inline mounts may omit a
+name; opaque application mounts may not supply one; Router mounts require a
+nonempty name. Its normalized prefix pattern is compiled during
 construction. Constructor work validates/builds configuration only and emits
 no events. Collection and hash accessors return shallow copies.
 
@@ -169,12 +168,12 @@ same normalized prefix predicates during reverse routing.
 
 =head1 ACCESSORS
 
-C<kind>, C<path>, C<parameters>, C<namespace>, C<desc>, C<target>, C<router>,
+C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<target>, C<router>,
 C<is_raw>, C<routes>, and C<constraints> return declaration values. Exactly one
 of C<target>, C<router>, and C<routes> is defined. C<middleware> returns
 a fresh arrayref of normalized C<PAGI::Routing::Middleware> descriptions;
-explicit descriptions retain their identity. C<name> and C<methods> return
-undef for a mount. C<routes> returns a shallow copy for an inline mount and
+explicit descriptions retain their identity. C<methods> returns undef for a
+mount. C<routes> returns a shallow copy for an inline mount and
 undef otherwise. C<is_raw> is true only for an opaque application mount.
 
 =head1 METHODS

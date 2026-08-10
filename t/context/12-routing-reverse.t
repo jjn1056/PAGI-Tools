@@ -118,7 +118,7 @@ subtest 'compiled Context references resolve exactly from the matched containing
                     my ($c) = @_;
                     my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
                     push @show_results, {
-                        namespace        => $frame->{logical_namespace},
+                        name      => $frame->{logical_namespace},
                         captures         => { %{$frame->{captures}} },
                         show             => $c->path_for('show'),
                         index            => $c->path_for('index'),
@@ -181,14 +181,14 @@ subtest 'compiled Context references resolve exactly from the matched containing
                     my ($c) = @_;
                     my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
                     push @catchall_results, {
-                        namespace => $frame->{logical_namespace},
+                        name      => $frame->{logical_namespace},
                         captures  => { %{$frame->{captures}} },
                         index     => $c->path_for('index'),
                     };
                     return $c->text('catchall');
                 }),
-            ], namespace => 'blog'),
-        ], namespace => 'person'),
+            ], name      => 'blog'),
+        ], name      => 'person'),
     ]);
     my $app = $routing->to_app;
 
@@ -203,7 +203,7 @@ subtest 'compiled Context references resolve exactly from the matched containing
     );
 
     is(\@show_results, [{
-        namespace     => '/person/blog',
+        name      => '/person/blog',
         captures      => { person_id => 42, blog_id => 7 },
         show          => '/person/42/blog/7',
         index         => '/person/42/blog/',
@@ -217,7 +217,7 @@ subtest 'compiled Context references resolve exactly from the matched containing
         with_suffixes => 'https://example.test/person/42/blog/7?view=full#comments',
     }], 'relative Context generation uses the exact active namespace and target captures');
     is(\@catchall_results, [{
-        namespace => '/person/blog',
+        name      => '/person/blog',
         captures => { person_id => 42, rest => 'missing/path' },
         index => '/person/42/blog/',
     }], 'an unnamed catchall keeps its containing namespace and filters its wildcard capture');
@@ -229,10 +229,10 @@ subtest 'Context prefers an exact leaf that shares a namespace address' => sub {
         $api,
         mount('/nested-api', routes => [
             route('/x' => sub { }, name => 'x'),
-        ], namespace => 'api'),
+        ], name      => 'api'),
         mount('/group', routes => [
             route('/x' => sub { }, name => 'x'),
-        ], namespace => 'group'),
+        ], name      => 'group'),
     );
     my $root = _context('http', $resolver);
     my $nested = PAGI::Context->new({
@@ -609,7 +609,7 @@ subtest 'compiled inline mounts reverse from the router boundary across protocol
             sse('/events/{channel}' => $capture->(
                 'sse', '/tenant/events', { tenant => 'acme', channel => 'news' },
             ), name => 'events'),
-        ], namespace => 'tenant'),
+        ], name      => 'tenant'),
     ])->to_app;
 
     _run_compiled($app,
@@ -708,7 +708,7 @@ subtest 'Context reverse generation inherits captures and applies each composed 
                     },
                 ),
             ],
-            namespace => 'account',
+            name      => 'account',
         ),
     ])->to_app;
 

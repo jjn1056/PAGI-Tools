@@ -256,7 +256,7 @@ subtest 'provider constraints select every mount form before middleware or targe
             }),
         ], middleware => [$selected_mount]),
         mount('/router-provider/{id:&MountProvider}',
-            router => $known, namespace => 'known',
+            router => $known, name => 'known',
             middleware => [$selected_mount]),
         mount('/opaque-provider/{id:&MountProvider}' => async sub {
             push @opaque_seen, $_[0]{path_params}{id};

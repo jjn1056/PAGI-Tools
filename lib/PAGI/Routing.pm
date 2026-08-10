@@ -83,7 +83,7 @@ PAGI::Routing - Immutable declarative routing with Context handlers
                         constraints => { id => qr/\d+/ },
                     ),
                 ],
-                namespace => 'api',
+                name => 'api',
             ),
         ],
         middleware => [
@@ -228,11 +228,11 @@ inline and explicit path constraints as HTTP routes.
 
     mount('/prefix' => $app, %options)
     mount('/prefix', routes => \@nodes, %options)
-    mount('/prefix', router => $router, namespace => 'segment', %options)
+    mount('/prefix', router => $router, name => 'segment', %options)
 
 The three mutually exclusive forms are:
 
-    Form                    Visibility                  Namespace
+    Form                    Visibility                  Name
     ----------------------  --------------------------  ------------------------
     '/x' => $app            opaque application          forbidden
     '/x', routes => [...]   inline structural subtree  optional local segment
@@ -240,15 +240,15 @@ The three mutually exclusive forms are:
 
 All accept C<desc>, C<constraints>, and C<middleware>. C<routes> and C<router>
 are named selectors and may appear anywhere in a well-formed option list.
-C<router> accepts only a blessed L<PAGI::Routing::Router> object. Names and
-namespaces are nonempty scalar logical segments: they may not contain C</> or
+C<router> accepts only a blessed L<PAGI::Routing::Router> object. Names are
+nonempty scalar logical segments: they may not contain C</> or
 equal C<.> or C<..>. A dot in C<v1.1> is literal, not hierarchy.
 
 Passing a Router positionally selects the opaque application contract; the
 compiler never guesses intent from its class:
 
     mount('/opaque' => $child_router)
-    mount('/known', router => $child_router, namespace => 'known')
+    mount('/known', router => $child_router, name => 'known')
 
 The first hides all child names. It is not shorthand for the second.
 
@@ -568,12 +568,12 @@ contract explicit.
 
 =head1 REVERSE ROUTING AND INSPECTION
 
-Every route C<name> and mount C<namespace> is one local logical segment. Slash
+Every route and mount C<name> is one local logical segment. Slash
 is the only hierarchy separator. For example:
 
     mount('/people/{person_id}',
         router    => $people,
-        namespace => 'person',
+        name      => 'person',
     )
 
 and a child C<< route('/{item_id}' =E<gt> ..., name =E<gt> 'show') >> publish
@@ -637,7 +637,7 @@ by the target; explicit params override them. Absolute Context references
 inherit nothing. Query and fragment values never inherit.
 
 The same immutable child Router may be mounted at several paths and
-namespaces. It stores no parent placement. Context follows the active
+names. It stores no parent placement. Context follows the active
 request-local placement; calling the child Router's own C<path_for> still
 returns its local path. Each placement and each C<to_app> call receives a
 fresh compiled middleware graph.
@@ -706,7 +706,7 @@ C<mounts>:
 
     {
         path      => '/tenants/{tenant_id}', # declared mount path
-        namespace => 'tenant',               # declared value or undef
+        name      => 'tenant',                # declared value or undef
         desc      => 'Tenant routes',         # declared value or undef
     }
 

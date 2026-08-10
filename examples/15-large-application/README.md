@@ -43,8 +43,8 @@ lib/MyApp/
   description.
 - `MyApp::Root` is the one Compose boundary. Its `to_app()` composes
   `MyApp::Root->routing` with startup and shutdown callbacks.
-- Root mounts Person with `router =>` and namespace `person`; Person mounts
-  Blogs with `router =>` and namespace `blog`. These known Router mounts form
+- Root mounts Person with `router =>` and name `person`; Person mounts
+  Blogs with `router =>` and name `blog`. These known Router mounts form
   one inspectable reverse-routing graph.
 - Root mounts `PAGI::App::File` positionally at `/static`. That mount stays an
   opaque application boundary: the resolver knows its prefix but does not
@@ -56,7 +56,7 @@ lib/MyApp/
 ## Named address map
 
 Logical route addresses are stable names for the composed graph, not URL
-paths. The mount namespaces contribute `person` and `blog`:
+paths. The mount names contribute `person` and `blog`:
 
 | Logical address | URL pattern | Source package |
 |---|---|---|

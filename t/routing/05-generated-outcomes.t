@@ -128,7 +128,7 @@ subtest 'mounted child generated handlers retain only the owning prefix placemen
             my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
             push @seen, {
                 label      => $label,
-                namespace  => $frame->{logical_namespace},
+                name      => $frame->{logical_namespace},
                 captures   => { %{$frame->{captures}} },
                 local_path => $c->path_for('index'),
             };
@@ -149,7 +149,7 @@ subtest 'mounted child generated handlers retain only the owning prefix placemen
         method_not_allowed => $capture_generated->('405'),
     );
     my $app = router(routes => [
-        mount('/people/{person_id}', router => $child, namespace => 'people'),
+        mount('/people/{person_id}', router => $child, name      => 'people'),
     ])->to_app;
 
     my $missing = run_app(
@@ -170,13 +170,13 @@ subtest 'mounted child generated handlers retain only the owning prefix placemen
     is(\@seen, [
         {
             label => '404',
-            namespace => '/people',
+            name      => '/people',
             captures => { person_id => 42 },
             local_path => '/people/42/',
         },
         {
             label => '405',
-            namespace => '/people',
+            name      => '/people',
             captures => { person_id => 42 },
             local_path => '/people/42/',
         },
