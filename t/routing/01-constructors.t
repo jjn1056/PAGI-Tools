@@ -39,6 +39,102 @@ use PAGI::Routing qw(:ALL);
     sub wrap { return $_[1] }
 }
 
+{
+    package Local::ProtocolConstraint;
+    sub new { return bless { expected => $_[1] }, $_[0] }
+    sub check { return $_[1] eq $_[0]{expected} }
+    sub get_message { return "expected $_[0]{expected}, got $_[1]" }
+}
+
+{
+    package Local::FactoryDeclaration;
+    use PAGI::Routing qw(router route websocket sse mount);
+    use PAGI::Routing::Route ();
+    use PAGI::Routing::Mount ();
+
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/factory/ }
+
+    sub http { return route('/http/{id:&Owned}' => sub { }) }
+    sub raw_http { return route('/raw/{id:&Owned}', raw => sub { }) }
+    sub socket { return websocket('/socket/{id:&Owned}' => sub { }) }
+    sub events { return sse('/events/{id:&Owned}' => sub { }) }
+    sub inline_mount {
+        return mount('/inline/{id:&Owned}', routes => []);
+    }
+    sub router_mount {
+        return mount('/known/{id:&Owned}',
+            router => router(routes => []), namespace => 'known');
+    }
+    sub opaque_mount {
+        return mount('/opaque/{id:&Owned}' => sub { });
+    }
+    sub direct_route {
+        return PAGI::Routing::Route->new(
+            'route', '/direct/{id:&Owned}' => sub { },
+        );
+    }
+    sub direct_mount {
+        return PAGI::Routing::Mount->new(
+            '/direct-mount/{id:&Owned}', routes => [],
+        );
+    }
+}
+
+{
+    package Local::RoutingReexport;
+    use Exporter 'import';
+    use PAGI::Routing qw(route);
+    our @EXPORT_OK;
+    BEGIN { @EXPORT_OK = qw(route) }
+}
+
+{
+    package Local::ReexportConsumer;
+    BEGIN { Local::RoutingReexport->import('route') }
+
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/consumer/ }
+    sub build { return route('/reexport/{id:&Owned}' => sub { }) }
+}
+
+{
+    package Local::RoutingWrapper;
+    use PAGI::Routing qw(route);
+
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/wrapper/ }
+    sub build { return route('/wrapper/{id:&Owned}' => sub { }) }
+}
+
+{
+    package Local::WrapperConsumer;
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/consumer/ }
+    sub build { return Local::RoutingWrapper::build() }
+}
+
+{
+    package Local::RoutingRole;
+    use PAGI::Routing qw(route);
+
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/role/ }
+    sub routing { return route('/role/{id:&Owned}' => sub { }) }
+}
+
+{
+    package Local::RoleConsumer;
+    our $CALLS = 0;
+    sub Owned { $CALLS++; return qr/consumer/ }
+    BEGIN { *routing = \&Local::RoutingRole::routing }
+}
+
+{
+    package Local::DescriptorCarrier;
+    sub carry { return $_[0] }
+}
+
 subtest 'exports are opt-in and tag-specific' => sub {
     for my $name (qw(router route websocket sse mount middleware)) {
         ok(!NoImports->can($name), "no default $name export");
@@ -60,6 +156,78 @@ subtest 'exports are opt-in and tag-specific' => sub {
         qr/Can't continue after import errors/, 'lowercase all is rejected';
     like $stderr, qr/"all" is not defined in %PAGI::Routing::EXPORT_TAGS/,
         'lowercase all diagnostic is captured';
+};
+
+subtest 'public constructors retain their direct declaration package' => sub {
+    $Local::FactoryDeclaration::CALLS = 0;
+    my @leaves = (
+        [Local::FactoryDeclaration::http(), '/http/factory'],
+        [Local::FactoryDeclaration::raw_http(), '/raw/factory'],
+        [Local::FactoryDeclaration::socket(), '/socket/factory'],
+        [Local::FactoryDeclaration::events(), '/events/factory'],
+        [Local::FactoryDeclaration::direct_route(), '/direct/factory'],
+    );
+    my @mounts = (
+        [Local::FactoryDeclaration::inline_mount(), '/inline/factory/tail'],
+        [Local::FactoryDeclaration::router_mount(), '/known/factory/tail'],
+        [Local::FactoryDeclaration::opaque_mount(), '/opaque/factory/tail'],
+        [Local::FactoryDeclaration::direct_mount(), '/direct-mount/factory/tail'],
+    );
+
+    for my $case (@leaves) {
+        my ($node, $path) = @$case;
+        is($node->_pattern->match_route($path), { id => 'factory' },
+            ref($node) . ' resolves &Owned in its direct declaration package');
+        ok(!defined $node->_pattern->match_route($path =~ s/factory/other/r),
+            ref($node) . ' does not rebind &Owned elsewhere');
+    }
+    for my $case (@mounts) {
+        my ($node, $path) = @$case;
+        is($node->_pattern->match_mount($path)->{captures}, { id => 'factory' },
+            ref($node) . ' mount resolves &Owned in its direct declaration package');
+        ok(!defined $node->_pattern->match_mount($path =~ s/factory/other/r),
+            ref($node) . ' mount rejects values outside that package predicate');
+    }
+    is($Local::FactoryDeclaration::CALLS, 9,
+        'each public or direct descriptor constructor invokes its provider once');
+
+    $Local::ReexportConsumer::CALLS = 0;
+    my $reexported = Local::ReexportConsumer::build();
+    is($reexported->_pattern->match_route('/reexport/consumer'), { id => 'consumer' },
+        'an ordinary re-export leaves the consuming package as direct caller');
+    is($Local::ReexportConsumer::CALLS, 1,
+        'the consumer-owned provider ran once through a re-export');
+
+    $Local::RoutingWrapper::CALLS = 0;
+    $Local::WrapperConsumer::CALLS = 0;
+    my $wrapped = Local::WrapperConsumer::build();
+    is($wrapped->_pattern->match_route('/wrapper/wrapper'), { id => 'wrapper' },
+        'a real wrapper becomes the declaration-package boundary');
+    ok(!defined $wrapped->_pattern->match_route('/wrapper/consumer'),
+        'a wrapper does not search outward for the consumer provider');
+    is($Local::RoutingWrapper::CALLS, 1, 'the wrapper provider ran once');
+    is($Local::WrapperConsumer::CALLS, 0, 'the wrapper consumer provider never ran');
+
+    $Local::RoutingRole::CALLS = 0;
+    $Local::RoleConsumer::CALLS = 0;
+    my $role_route = Local::RoleConsumer->routing;
+    is($role_route->_pattern->match_route('/role/role'), { id => 'role' },
+        'a role-defined call expression keeps the role declaration package');
+    ok(!defined $role_route->_pattern->match_route('/role/consumer'),
+        'invoking a role method on a class does not rebind its provider');
+    is($Local::RoutingRole::CALLS, 1, 'the role provider ran once');
+    is($Local::RoleConsumer::CALLS, 0, 'the consuming-class provider never ran');
+
+    my $built = Local::FactoryDeclaration::http();
+    my $calls_after_build = $Local::FactoryDeclaration::CALLS;
+    my $carried = Local::DescriptorCarrier::carry($built);
+    my $routing = router(routes => [$carried]);
+    is(refaddr($routing->routes->[0]), refaddr($built),
+        'another package and Router preserve the completed descriptor identity');
+    is($Local::FactoryDeclaration::CALLS, $calls_after_build,
+        'placing an unnamed completed descriptor in a Router does not re-resolve it');
+    is($routing->routes->[0]->_pattern->match_route('/http/factory'),
+        { id => 'factory' }, 'the placed descriptor retains its source predicate');
 };
 
 subtest 'route descriptions preserve target identity and normalize HTTP methods' => sub {
@@ -115,9 +283,27 @@ subtest 'raw and protocol-specific route descriptions' => sub {
     my $raw_component = route '/component', raw => $component;
     is(refaddr($raw_component->target), refaddr($component), 'raw component identity is retained for compiler coercion');
 
-    my $websocket = websocket '/socket' => sub { };
+    my $ws_regex = qr/ws/;
+    my $ws_code = sub { return $_[0] eq 'code' };
+    my $ws_object = Local::ProtocolConstraint->new('object');
+    my $ws_constraints = {
+        regex => $ws_regex,
+        code => $ws_code,
+        object => $ws_object,
+    };
+    my $websocket = websocket '/socket/{regex}/{code}/{object}' => sub { },
+        constraints => $ws_constraints;
     my $raw_websocket = websocket '/raw-socket', raw => $app;
-    my $sse = sse '/events' => sub { };
+    my $sse_regex = qr/sse/;
+    my $sse_code = sub { return $_[0] eq 'stream' };
+    my $sse_object = Local::ProtocolConstraint->new('event');
+    my $sse_constraints = {
+        regex => $sse_regex,
+        code => $sse_code,
+        object => $sse_object,
+    };
+    my $sse = sse '/events/{regex}/{code}/{object}' => sub { },
+        constraints => $sse_constraints;
     my $raw_sse = sse '/raw-events', raw => $app;
     is($websocket->kind, 'websocket', 'WebSocket kind');
     is($sse->kind, 'sse', 'SSE kind');
@@ -126,7 +312,44 @@ subtest 'raw and protocol-specific route descriptions' => sub {
     ok(!$sse->is_raw, 'normal SSE route is not raw');
     ok($raw_sse->is_raw, 'raw SSE route is raw');
     is($websocket->methods, undef, 'WebSocket has no methods');
-    is($sse->constraints, undef, 'SSE has no constraints');
+    is(refaddr($websocket->constraints->{regex}), refaddr($ws_regex),
+        'WebSocket retains a declared regex constraint');
+    is(refaddr($websocket->constraints->{code}), refaddr($ws_code),
+        'WebSocket retains a declared coderef constraint');
+    is(refaddr($websocket->constraints->{object}), refaddr($ws_object),
+        'WebSocket retains a declared check object');
+    is($websocket->_pattern->match_route('/socket/ws/code/object'),
+        { regex => 'ws', code => 'code', object => 'object' },
+        'WebSocket applies all explicit constraint shapes');
+    ok(!defined $websocket->_pattern->match_route('/socket/ws/no/object'),
+        'WebSocket rejects a failed explicit constraint');
+
+    is(refaddr($sse->constraints->{regex}), refaddr($sse_regex),
+        'SSE retains a declared regex constraint');
+    is(refaddr($sse->constraints->{code}), refaddr($sse_code),
+        'SSE retains a declared coderef constraint');
+    is(refaddr($sse->constraints->{object}), refaddr($sse_object),
+        'SSE retains a declared check object');
+    is($sse->_pattern->match_route('/events/sse/stream/event'),
+        { regex => 'sse', code => 'stream', object => 'event' },
+        'SSE applies all explicit constraint shapes');
+    ok(!defined $sse->_pattern->match_route('/events/sse/stream/no'),
+        'SSE rejects a failed explicit constraint');
+
+    $ws_constraints->{regex} = qr/changed/;
+    $sse_constraints->{regex} = qr/changed/;
+    my $returned_ws_constraints = $websocket->constraints;
+    my $returned_sse_constraints = $sse->constraints;
+    $returned_ws_constraints->{code} = sub { 0 };
+    $returned_sse_constraints->{code} = sub { 0 };
+    is(refaddr($websocket->constraints->{regex}), refaddr($ws_regex),
+        'WebSocket copies the input constraint hash');
+    is(refaddr($websocket->constraints->{code}), refaddr($ws_code),
+        'WebSocket returns a defensive constraint hash');
+    is(refaddr($sse->constraints->{regex}), refaddr($sse_regex),
+        'SSE copies the input constraint hash');
+    is(refaddr($sse->constraints->{code}), refaddr($sse_code),
+        'SSE returns a defensive constraint hash');
 };
 
 subtest 'mount and router descriptions copy their collections' => sub {
@@ -331,7 +554,6 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/separator' => $handler, methods => 'GET POST' }, qr/methods must be a method string, arrayref, or '\*'/, 'methods reject separators';
     like dies { websocket '/socket' => $handler, methods => 'GET' }, qr/WebSocket routes do not accept methods/, 'WebSocket rejects methods';
     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
-    like dies { websocket '/socket' => $handler, constraints => {} }, qr/unknown route option/, 'WebSocket rejects HTTP constraints';
     like dies { route '/not-code' => 'not a handler' }, qr/handler must be a coderef/, 'normal route handler must be a coderef';
     like dies { route '/not-component' => TestRoutingApp->new($handler) }, qr/handler must be a coderef/, 'normal route does not coerce component targets';
     like dies { mount '/missing' }, qr/mount requires exactly one of target, routes, or router/, 'mount requires one selector';

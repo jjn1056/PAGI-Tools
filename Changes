@@ -1,6 +1,20 @@
 # Revision history for PAGI-Tools
 
 0.002003
+  - PAGI::Routing inline paths now accept zero-argument constraint providers
+    such as `{id:&Int}`. Providers use exact declaration-package or qualified
+    CODE-slot lookup, run once per source occurrence during construction, and
+    may return a regex, predicate, or check object. Every unescaped leading `&`
+    is reserved for this syntax; constraints remain synchronous validation and
+    never coerce values.
+  - Declarative HTTP, WebSocket, and SSE leaves now share the explicit
+    `constraints` option. Composed reverse routing preserves the exact
+    normalized predicates from leaf and mount source Patterns, so `path_for`
+    and `url_for` neither re-resolve providers nor apply explicit constraints
+    twice.
+  - The large modular application example now requires Perl 5.40, uses
+    signatures, and demonstrates `Types::Standard::Int` providers. Type::Tiny
+    is a test/example prerequisite only, not a PAGI::Tools runtime dependency.
   - PAGI::Routing adds explicit routing-aware Router mounts, composed slash
     logical addresses, and request-local relative Context links. Reverse
     routing now accepts compact or named path-parameter, query, and fragment

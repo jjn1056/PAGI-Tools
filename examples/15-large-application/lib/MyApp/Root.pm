@@ -1,6 +1,6 @@
 package MyApp::Root;
 
-use strict;
+use v5.40;
 use warnings;
 use File::Basename qw(dirname);
 use File::Spec;
@@ -15,20 +15,17 @@ my $STATIC_ROOT = File::Spec->catdir(
     dirname(__FILE__), '..', '..', 'static',
 );
 
-sub startup {
-    my ($state, $scope) = @_;
+sub startup($state, $scope) {
     $state->{data} = MyApp::Data->new;
     return;
 }
 
-sub shutdown {
-    my ($state, $scope) = @_;
+sub shutdown($state, $scope) {
     delete $state->{data};
     return;
 }
 
-sub home {
-    my ($c) = @_;
+sub home($c) {
     my $people_path = $c->path_for('/person/index');
     my $count = scalar @{$c->state->{data}->people};
 
@@ -40,8 +37,7 @@ sub home {
     ));
 }
 
-sub not_found {
-    my ($c) = @_;
+sub not_found($c) {
     return $c->html(
         MyApp::View->document(
             'Root page not found',
@@ -52,9 +48,7 @@ sub not_found {
     );
 }
 
-sub routing {
-    my ($class) = @_;
-
+sub routing($class) {
     return router(
         routes => [
             route('/' => \&home,
@@ -77,9 +71,7 @@ sub routing {
     );
 }
 
-sub to_app {
-    my ($class) = @_;
-
+sub to_app($class) {
     return compose(
         app      => $class->routing,
         lifespan => {

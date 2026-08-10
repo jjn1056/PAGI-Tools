@@ -9,7 +9,13 @@ use PAGI::Routing::Middleware ();
 use PAGI::Routing::Pattern ();
 
 sub new {
-    my ($class, $path, @args) = @_;
+    my ($class, @args) = @_;
+    my $declaration_package = caller;
+    return $class->_new_from($declaration_package, @args);
+}
+
+sub _new_from {
+    my ($class, $declaration_package, $path, @args) = @_;
     croak 'mount path must be a string' unless defined $path && !ref($path);
 
     my ($has_target, $target, $opts) = _parse_arguments(@args);
@@ -51,6 +57,7 @@ sub new {
         path => $path,
         mode => 'mount',
         constraints => $has_constraints ? $opts->{constraints} : {},
+        declaration_package => $declaration_package,
     );
 
     return bless {
@@ -149,6 +156,16 @@ namespace; opaque application mounts may not supply one; Router mounts require
 a nonempty namespace. Its normalized prefix pattern is compiled during
 construction. Constructor work validates/builds configuration only and emits
 no events. Collection and hash accessors return shallow copies.
+
+An inline provider such as C<{id:&Int}> is resolved in the package that
+directly called C<mount> or C<new>. Re-exporting C<mount> preserves the
+consuming package as that caller; wrapping it in another sub makes the wrapper
+package the declaration package. A constructor called from a role method
+likewise resolves providers in the role package.
+
+Provider-backed and explicit prefix constraints run before mount middleware or
+the inline, Router, or opaque target is selected. Named descendants reuse the
+same normalized prefix predicates during reverse routing.
 
 =head1 ACCESSORS
 

@@ -1,12 +1,12 @@
 package MyApp::Person::Blogs;
 
-use strict;
+use v5.40;
 use warnings;
+use Types::Standard qw(Int);
 use PAGI::Routing qw(router route);
 use MyApp::View ();
 
-sub list_blogs {
-    my ($c) = @_;
+sub list_blogs($c) {
     my $person_id = $c->path_param('person_id');
     my $data = $c->state->{data};
     my $person = $data->person($person_id);
@@ -43,8 +43,7 @@ sub list_blogs {
     ));
 }
 
-sub show_blog {
-    my ($c) = @_;
+sub show_blog($c) {
     my $person_id = $c->path_param('person_id');
     my $blog_id = $c->path_param('blog_id');
     my $blog = $c->state->{data}->blog($person_id, $blog_id);
@@ -80,9 +79,7 @@ sub show_blog {
     ));
 }
 
-sub blogs_not_found {
-    my ($c) = @_;
-
+sub blogs_not_found($c) {
     # The unnamed catchall still has /person/blog as its containing namespace.
     my $blogs_path = $c->path_for('index');
     return $c->html(
@@ -95,19 +92,16 @@ sub blogs_not_found {
     );
 }
 
-sub routing {
-    my ($class) = @_;
-
+sub routing($class) {
     return router(
         routes => [
             route('/' => \&list_blogs,
                 name => 'index',
                 desc => 'List one person\'s blogs',
             ),
-            route('/{blog_id}' => \&show_blog,
-                name        => 'show',
-                desc        => 'Show one blog',
-                constraints => { blog_id => qr/\d+/ },
+            route('/{blog_id:&Int}' => \&show_blog,
+                name => 'show',
+                desc => 'Show one blog',
             ),
             route('/*path' => \&blogs_not_found,
                 desc => 'Blogs-local catchall',

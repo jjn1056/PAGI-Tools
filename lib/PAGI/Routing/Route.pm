@@ -7,7 +7,13 @@ use PAGI::Routing::Middleware ();
 use PAGI::Routing::Pattern ();
 
 sub new {
-    my ($class, $kind, @args) = @_;
+    my ($class, @args) = @_;
+    my $declaration_package = caller;
+    return $class->_new_from($declaration_package, @args);
+}
+
+sub _new_from {
+    my ($class, $declaration_package, $kind, @args) = @_;
     my $path = shift @args;
 
     croak 'route path must be a string' unless defined $path && !ref($path);
@@ -27,8 +33,7 @@ sub new {
     my %opts = @args;
     croak 'route requires exactly one of handler or raw' if exists $opts{raw};
 
-    my %allowed = map { $_ => 1 } qw(name desc middleware methods);
-    $allowed{constraints} = 1 if $kind eq 'route';
+    my %allowed = map { $_ => 1 } qw(name desc middleware methods constraints);
     for my $key (keys %opts) {
         croak "unknown route option '$key'" unless $allowed{$key};
     }
@@ -38,7 +43,7 @@ sub new {
 
     _validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     _validate_logical_segment('name', $opts{name}) if exists $opts{name};
-    _validate_constraints($opts{constraints}) if $kind eq 'route' && exists $opts{constraints};
+    _validate_constraints($opts{constraints}) if exists $opts{constraints};
     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
         exists $opts{middleware} ? $opts{middleware} : [],
         'middleware',
@@ -52,11 +57,12 @@ sub new {
     my $methods = $kind eq 'route'
         ? _normalize_methods(exists $opts{methods} ? $opts{methods} : 'GET')
         : undef;
-    my $has_constraints = $kind eq 'route' && exists $opts{constraints};
+    my $has_constraints = exists $opts{constraints};
     my $pattern = PAGI::Routing::Pattern->new(
         path => $path,
         mode => 'route',
         constraints => $has_constraints ? $opts{constraints} : {},
+        declaration_package => $declaration_package,
     );
 
     return bless {
@@ -170,6 +176,12 @@ construction, and constructor validation performs no request I/O. The
 description never stores a request match or handler result. Collection and
 hash accessors return shallow copies.
 
+An inline provider such as C<{id:&Int}> is resolved in the package that
+directly called C<route>, C<websocket>, C<sse>, or C<new>. Re-exporting a
+constructor preserves the consuming package as that caller; wrapping it in
+another sub makes the wrapper package the declaration package. A constructor
+called from a role method likewise resolves providers in the role package.
+
 =head1 ACCESSORS
 
 C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<target>, C<is_raw>,
@@ -178,8 +190,11 @@ C<middleware> returns a fresh arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
 identity. C<namespace> and C<routes> return undef for a leaf route.
 HTTP C<methods> are normalized at construction; GET includes HEAD. Constraint
-values are returned as declared and validate decoded captures only during a
-request match or reverse render.
+values are accepted by HTTP, WebSocket, and SSE leaves, returned as declared,
+and validate decoded captures only during a request match or reverse render.
+Only HTTP routes accept C<methods>. An inline provider and explicit constraint
+may target the same parameter; the inline predicate runs first and both must
+pass before the normal or raw target is selected.
 
 =head1 METHODS
 

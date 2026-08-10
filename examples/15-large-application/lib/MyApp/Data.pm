@@ -1,6 +1,6 @@
 package MyApp::Data;
 
-use strict;
+use v5.40;
 use warnings;
 
 my $PEOPLE = [
@@ -47,9 +47,7 @@ my $BLOGS = {
     '3' => [],
 };
 
-sub new {
-    my ($class) = @_;
-
+sub new($class) {
     my %people = map { $_->{id} => +{%$_} } @$PEOPLE;
     my %blogs = map {
         my $person_id = $_;
@@ -63,29 +61,25 @@ sub new {
     }, $class;
 }
 
-sub people {
-    my ($self) = @_;
+sub people($self) {
     return [
         map { +{%{$self->{people}{$_}}} }
         @{$self->{people_order}}
     ];
 }
 
-sub person {
-    my ($self, $person_id) = @_;
+sub person($self, $person_id) {
     my $person = $self->{people}{$person_id};
     return defined $person ? +{%$person} : undef;
 }
 
-sub blogs_for {
-    my ($self, $person_id) = @_;
+sub blogs_for($self, $person_id) {
     return undef unless exists $self->{people}{$person_id};
     my $blogs = $self->{blogs}{$person_id} || [];
     return [map { +{%$_} } @$blogs];
 }
 
-sub blog {
-    my ($self, $person_id, $blog_id) = @_;
+sub blog($self, $person_id, $blog_id) {
     return undef unless exists $self->{people}{$person_id};
     my ($blog) = grep {
         $_->{id} eq $blog_id

@@ -28,6 +28,51 @@ use PAGI::Routing qw(router route websocket sse mount);
 }
 
 {
+    package Local::ReverseLeafProvider;
+    use PAGI::Routing qw(route);
+
+    our $CALLS = 0;
+    our $SIGNED_CALLS = 0;
+
+    sub Item {
+        ++$CALLS;
+        return Local::ReverseType->new('leaf');
+    }
+
+    sub Signed {
+        ++$SIGNED_CALLS;
+        return qr/-?\d+/;
+    }
+
+    sub leaf {
+        return route('/items/{item:&Item}' => sub { }, name => 'show');
+    }
+}
+
+{
+    package Local::ReverseMountProvider;
+    use PAGI::Routing qw(mount);
+
+    our $CALLS = 0;
+
+    sub Tenant {
+        ++$CALLS;
+        return qr/outer/;
+    }
+
+    sub inline {
+        return mount('/inline/{tenant:&Tenant}',
+            routes => [$_[0]], namespace => 'inline');
+    }
+
+    sub known {
+        my ($prefix, $router, $namespace) = @_;
+        return mount($prefix . '/{tenant:&Tenant}',
+            router => $router, namespace => $namespace);
+    }
+}
+
+{
     package Local::CyclicRouter;
     use parent 'PAGI::Routing::Router';
 
@@ -433,6 +478,121 @@ subtest 'reverse rendering validates complete ancestry and escapes values' => su
         qr/unknown route name '\/missing'/,
         'reverse generation croaks for an unknown address',
     );
+};
+
+subtest 'composed reverse routes retain source providers and exact predicates' => sub {
+    $Local::ReverseLeafProvider::CALLS = 0;
+    $Local::ReverseMountProvider::CALLS = 0;
+
+    my $inline_leaf = Local::ReverseLeafProvider::leaf();
+    my $shared_leaf = Local::ReverseLeafProvider::leaf();
+    my $shared = router(routes => [$shared_leaf]);
+    my $inline_mount = Local::ReverseMountProvider::inline($inline_leaf);
+    my $left_mount = Local::ReverseMountProvider::known('/left', $shared, 'left');
+    my $right_mount = Local::ReverseMountProvider::known('/right', $shared, 'right');
+    my $routing = router(routes => [
+        $inline_mount,
+        $left_mount,
+        $right_mount,
+    ]);
+
+    is($Local::ReverseLeafProvider::CALLS, 2,
+        'each declared leaf provider occurrence runs once despite repeated placement');
+    is($Local::ReverseMountProvider::CALLS, 3,
+        'each declared mount provider occurrence runs once');
+
+    my $source_leaf_records = $shared_leaf->_pattern->_predicate_records;
+    my $source_mount_records = $left_mount->_pattern->_predicate_records;
+    my $effective_records = $routing->_resolver->{by_name}{'/left/show'}{pattern}
+        ->_predicate_records;
+    is(refaddr($effective_records->{item}[0]{check}),
+        refaddr($source_leaf_records->{item}[0]{check}),
+        'effective composition preserves the source leaf check identity');
+    is(refaddr($effective_records->{tenant}[0]{check}),
+        refaddr($source_mount_records->{tenant}[0]{check}),
+        'effective composition preserves the source mount check identity');
+    isnt(refaddr($effective_records->{item}[0]),
+        refaddr($source_leaf_records->{item}[0]),
+        'effective composition copies private predicate record containers');
+
+    is($routing->path_for('/inline/show', { tenant => 'outer', item => 'leaf' }),
+        '/inline/outer/items/leaf',
+        'inline composition renders with both source predicates');
+    is($routing->path_for('/left/show', { tenant => 'outer', item => 'leaf' }),
+        '/left/outer/items/leaf',
+        'the first known Router placement renders with both source predicates');
+    is($routing->path_for('/right/show', { tenant => 'outer', item => 'leaf' }),
+        '/right/outer/items/leaf',
+        'reusing the child Router produces an independent canonical placement');
+
+    like(
+        dies {
+            $routing->path_for('/inline/show', {
+                tenant => 'wrong', item => 'leaf',
+            });
+        },
+        qr/path parameter 'tenant' failed constraint for route '\/inline\/show'/,
+        'the composed mount predicate rejects an invalid outer value',
+    );
+    like(
+        dies {
+            $routing->path_for('/left/show', {
+                tenant => 'outer', item => 'wrong',
+            });
+        },
+        qr/path parameter 'item' failed constraint for route '\/left\/show': expected leaf, got wrong/,
+        'the source check object keeps its detailed diagnostic after composition',
+    );
+    is($Local::ReverseLeafProvider::CALLS, 2,
+        'reverse rendering never reinvokes a leaf provider');
+    is($Local::ReverseMountProvider::CALLS, 3,
+        'reverse rendering never reinvokes a mount provider');
+};
+
+subtest 'reverse constraints cover protocol leaves, inline regexes, and signed values' => sub {
+    $Local::ReverseLeafProvider::SIGNED_CALLS = 0;
+    my $stream_type = Local::ReverseType->new('event');
+    my $routing = router(routes => [
+        websocket('/socket/{id:&Local::ReverseLeafProvider::Signed}' => sub { },
+            name => 'socket'),
+        sse('/events/{id}' => sub { }, name => 'events',
+            constraints => { id => $stream_type }),
+        mount('/groups/{group:[a-z]+}', routes => [
+            route('/items/{item:\\d+}' => sub { }, name => 'item'),
+        ], namespace => 'group'),
+    ]);
+
+    is($Local::ReverseLeafProvider::SIGNED_CALLS, 1,
+        'the qualified signed provider runs once at source construction');
+    is($routing->path_for('/socket', { id => -1 }), '/socket/-1',
+        'a provider-backed negative integer renders without coercion');
+    is($routing->path_for('/events', { id => 'event' }), '/events/event',
+        'a named SSE route enforces and renders its explicit constraint');
+    is($routing->path_for('/group/item', { group => 'staff', item => 42 }),
+        '/groups/staff/items/42',
+        'inline regex predicates survive mount and leaf composition');
+    like(dies { $routing->path_for('/socket', { id => 'not-int' }) },
+        qr/path parameter 'id' failed constraint for route '\/socket'/,
+        'the named WebSocket provider rejects an invalid reverse value');
+    like(dies { $routing->path_for('/events', { id => 'wrong' }) },
+        qr/expected event, got wrong/,
+        'the named SSE check object preserves its diagnostic');
+    like(
+        dies {
+            $routing->path_for('/group/item', { group => '123', item => 42 });
+        },
+        qr/path parameter 'group' failed constraint/,
+        'an inline mount regex rejects an invalid reverse value',
+    );
+    like(
+        dies {
+            $routing->path_for('/group/item', { group => 'staff', item => 'x' });
+        },
+        qr/path parameter 'item' failed constraint/,
+        'an inline leaf regex rejects an invalid reverse value',
+    );
+    is($Local::ReverseLeafProvider::SIGNED_CALLS, 1,
+        'protocol reverse rendering does not reinvoke its provider');
 };
 
 subtest 'composed Router graph exposes placements and respects opacity' => sub {

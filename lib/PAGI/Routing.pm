@@ -17,23 +17,27 @@ sub router {
 }
 
 sub route {
+    my $declaration_package = caller;
     require PAGI::Routing::Route;
-    return PAGI::Routing::Route->new('route', @_);
+    return PAGI::Routing::Route->_new_from($declaration_package, 'route', @_);
 }
 
 sub websocket {
+    my $declaration_package = caller;
     require PAGI::Routing::Route;
-    return PAGI::Routing::Route->new('websocket', @_);
+    return PAGI::Routing::Route->_new_from($declaration_package, 'websocket', @_);
 }
 
 sub sse {
+    my $declaration_package = caller;
     require PAGI::Routing::Route;
-    return PAGI::Routing::Route->new('sse', @_);
+    return PAGI::Routing::Route->_new_from($declaration_package, 'sse', @_);
 }
 
 sub mount {
+    my $declaration_package = caller;
     require PAGI::Routing::Mount;
-    return PAGI::Routing::Mount->new(@_);
+    return PAGI::Routing::Mount->_new_from($declaration_package, @_);
 }
 
 sub middleware {
@@ -180,6 +184,11 @@ Load handlers from packages normally and pass a fully qualified coderef:
 There is no string evaluation or bound-method loader. Routing objects also
 have no C<&{}> overload; call C<to_app> explicitly.
 
+Inline constraint providers are resolved in the package that directly calls
+the constructor. A re-exported constructor therefore uses the consuming
+package, while a wrapper sub or role method uses the package in which that
+wrapper or method was defined.
+
 =head1 CONSTRUCTORS
 
 =head2 router
@@ -206,9 +215,10 @@ return plain-text 404 and 405 responses.
     sse('/path' => $handler, %options)
     sse('/path', raw => $app, %options)
 
-All leaves accept C<name>, C<desc>, and C<middleware>. HTTP routes also accept
-C<methods> and C<constraints>. C<methods> is one token, an arrayref, or the
-explicit string C<*>; it defaults to GET. WebSocket and SSE routes reject it.
+All leaves accept C<name>, C<desc>, C<middleware>, and C<constraints>.
+C<methods> is HTTP-only: one token, an arrayref, or the explicit string C<*>;
+it defaults to GET. WebSocket and SSE routes reject C<methods> but use the same
+inline and explicit path constraints as HTTP routes.
 
 =head2 mount
 
@@ -340,23 +350,121 @@ middleware in the router list when using router-owned HEAD behavior.
 =head2 Path parameters, wildcards, and constraints
 
 Canonical parameters use C<{name}>. The familiar C<:name> and inline
-C<{name:pattern}> forms are accepted, but explicit Perl constraints are
-clearer:
+C<{name:pattern}> forms are also accepted. Choose the constraint spelling that
+keeps a declaration legible:
 
+    # A short, path-local regex.
+    route('/users/{id:\d+}' => \&show);
+
+    # A reusable semantic constraint beside the parameter.
+    use Types::Standard qw(Int);
+    route('/users/{id:&Int}' => \&show);
+
+    # A reusable object selected while constructing the route.
     route('/users/{id}' => \&show,
-        constraints => { id => qr/\d+/ },
+        constraints => { id => Int },
     );
 
-A constraint may be an anchored Perl regex, a synchronous unary predicate, or
-a Type::Tiny-compatible object with C<check> and optional C<get_message>.
+    # A dynamic or declaration-local predicate.
+    route('/users/{id}' => \&show,
+        constraints => { id => sub { my ($value) = @_; ... } },
+    );
+
+Use an explicit C<constraints> hash for dynamically constructed,
+subclass-dependent, or syntactically complex rules. Its value may be a Perl
+regex, a synchronous unary predicate, or a Type::Tiny-compatible object with
+C<check> and optional C<get_message>. Every leaf protocol and every mount form
+uses the same path grammar and constraint behavior; only HTTP routes accept
+C<methods>. An inline and explicit constraint may target the same parameter;
+both must pass, inline first.
+
+=head3 Inline constraint providers
+
+An inline source beginning with an unescaped C<&> declares a provider, not a
+regex. The complete source must be C<&> followed by an optional Perl package
+prefix and a terminal function name beginning with ASCII C<A> through C<Z>:
+
+    '/{id:&Int}'
+    '/{id:&PersonId}'
+    '/{id:&MyApp::Types::PersonId}'
+
+Lowercase terminal names, whitespace, expressions, arguments, methods, and
+partial regex/provider mixtures are invalid and croak during construction.
+The entire unescaped-leading-C<&> space is reserved so spellings such as
+C<&int>, C<&Int >, C<&[A-Z]+>, and C<&Foo::lower> never silently fall back to
+regexes.
+
+To match a literal leading ampersand, use the canonical regex spelling
+C<[&]Int> or C<[&][A-Z]+>. A backslashed alternative works only when the Perl
+string preserves it:
+
+    route('/{value:[&]Int}' => \&show);  # recommended
+    route('/{value:\&Int}'  => \&show);  # single-quoted string
+
+In a double-quoted Perl string, C<< "\&Int" >> becomes C<&Int> and therefore
+requests the provider.
+
+An unqualified provider resolves to the exact symbol-table CODE slot in the
+package that directly called C<route>, C<websocket>, C<sse>, or C<mount>.
+An ordinary Exporter alias leaves the consuming package as the caller. A real
+wrapper sub and a role-defined method make their own defining package the
+declaration boundary; invoking such code through a subclass does not rebind
+it. Use a fully qualified spelling when reusable declarations must name an
+external provider exactly.
+
+Qualified packages must already be loaded. Lookup never searches C<@ISA>,
+dispatches methods, invokes C<AUTOLOAD>, loads a module, consults
+C<Type::Registry>, evaluates the spelling, or falls back after a miss.
+
+Construction invokes each provider occurrence once with no arguments or
+invocant. It must return a regex, predicate coderef, or blessed C<check>
+object; an exception, Future, or other value fails construction. If a provider
+returns a coderef, that returned coderef is the per-value predicate: the
+provider itself is not passed path values and never runs during matching,
+C<path_for>, or C<url_for>. Providers should therefore be deterministic and
+free of request-specific side effects.
+
+All three returned shapes and all explicit constraints normalize once to a
+private predicate coderef with an optional error explainer. Composed inline or
+Router mounts preserve those exact predicates rather than reparsing paths,
+calling providers again, or applying explicit constraints twice.
+
+=head3 Validation semantics and Type::Tiny
+
 Regexes and inline patterns match the complete decoded value with C<\A> and
 C<\z>. Predicates receive only that scalar. Constraints validate but never
-coerce; false means no match, exceptions propagate, and a Future is rejected.
+coerce; false means no match, exceptions propagate, and a Future predicate is
+rejected. Matching, C<path_for>, and C<url_for> enforce the same normalized
+predicates for HTTP, WebSocket, and SSE names.
+
+C<Types::Standard> works without a registry because an imported function such
+as C<Int> returns a C<check>-compatible object when called with no arguments.
+Its own semantics apply: C<Int> accepts a leading minus sign, and PAGI still
+passes the original decoded string to the handler. Applications needing a
+positive identifier can expose a local capitalized zero-argument provider:
+
+    sub PersonId {
+        my $int = Int;
+        return sub {
+            my ($value) = @_;
+            return $int->check($value) && $value > 0;
+        };
+    }
+
+    route('/people/{id:&PersonId}' => \&show);
+
+Type::Tiny is not a PAGI::Tools runtime dependency.
 
 Inline patterns support ordinary regex comments C<(?#...)>, but their route
 tokenizer is intentionally not a complete Perl regex parser. Put complex
 patterns, especially extended-mode comments, in the explicit
 C<constraints =E<gt> { name =E<gt> qr/.../ }> form.
+
+Inline provider references are specific to this declarative
+L<PAGI::Routing> API. L<PAGI::App::Router> retains its existing
+C<{name:pattern}> grammar, where the C<&Int> text is regex syntax matching a
+literal ampersand spelling. Translate constraints explicitly when moving a
+declaration between the two routers.
 
 A wildcard is one terminal whole segment:
 

@@ -10,6 +10,12 @@ use Scalar::Util qw(refaddr);
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::Resolver;
 
+our $CONCURRENT_PROVIDER_CALLS = 0;
+sub ConcurrentId {
+    ++$CONCURRENT_PROVIDER_CALLS;
+    return qr/(?:one|two)/;
+}
+
 sub scope {
     my (%changes) = @_;
     return {
@@ -665,9 +671,10 @@ subtest 'compiled middleware state follows documented ownership boundaries' => s
 
 subtest 'concurrent requests isolate frames, matches, parameters, and generated response state' => sub {
     my (@contexts, @gates);
+    $CONCURRENT_PROVIDER_CALLS = 0;
     my $app = router(routes => [
         mount('/api', routes => [
-            route('/items/{id}' => sub {
+            route('/items/{id:&ConcurrentId}' => sub {
                 my ($c) = @_;
                 push @contexts, $c;
                 my $gate = Future->new;
@@ -676,6 +683,8 @@ subtest 'concurrent requests isolate frames, matches, parameters, and generated 
             }, name => 'show'),
         ]),
     ])->to_app;
+    is($CONCURRENT_PROVIDER_CALLS, 1,
+        'the concurrent provider is resolved once while constructing its source Pattern');
 
     my (@first_events, @second_events);
     my $first = $app->(
@@ -720,10 +729,14 @@ subtest 'concurrent requests isolate frames, matches, parameters, and generated 
     is([$contexts[0]->path_for('show'), $contexts[1]->path_for('show')],
         ['/api/items/one', '/api/items/two'],
         'concurrent Context links use only their own request captures');
+    is($CONCURRENT_PROVIDER_CALLS, 1,
+        'concurrent matching and reverse generation reuse the normalized provider predicate');
     is(refaddr($first_frame->{resolver}), refaddr($second_frame->{resolver}),
         'concurrent requests share only the immutable compiled resolver');
-    is($first_frame->{match}{route}, '/api/items/{id}', 'the first match uses the effective mounted pattern');
-    is($second_frame->{match}{route}, '/api/items/{id}', 'the second match uses the same immutable effective pattern');
+    is($first_frame->{match}{route}, '/api/items/{id:&ConcurrentId}',
+        'the first match uses the effective provider-backed mounted pattern');
+    is($second_frame->{match}{route}, '/api/items/{id:&ConcurrentId}',
+        'the second match uses the same immutable provider-backed pattern');
     push @{$first_frame->{mounts}}, { path => '/consumer-only' };
     $first_frame->{match}{consumer_marker} = 'first';
     is(scalar @{$second_frame->{mounts}}, 1, 'a first-request mount update is absent from the second request');

@@ -1,10 +1,9 @@
 package MyApp::View;
 
-use strict;
+use v5.40;
 use warnings;
 
-sub document {
-    my ($class, $title, $body) = @_;
+sub document($class, $title, $body) {
     return <<"HTML";
 <!doctype html>
 <html lang="en">

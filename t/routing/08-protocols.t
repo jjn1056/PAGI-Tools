@@ -9,6 +9,15 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::Routing qw(router route websocket sse mount middleware);
 
+sub ProtocolProvider { return qr/accepted/ }
+
+{
+    package Local::ProtocolPathCheck;
+    sub new { return bless { expected => $_[1] }, $_[0] }
+    sub check { return $_[1] eq $_[0]{expected} }
+    sub get_message { return "expected $_[0]{expected}, got $_[1]" }
+}
+
 sub scope {
     my (%changes) = @_;
     return {
@@ -178,6 +187,70 @@ subtest 'raw HTTP, WebSocket, and SSE leaves own their exact matched channels' =
         'raw WebSocket leaf owns WebSocket emission');
     is($event_sets[2], [{ type => 'sse.close' }],
         'raw SSE leaf owns SSE emission and its Future result is inert');
+};
+
+subtest 'normal and raw protocols apply inline providers and explicit constraints before invocation' => sub {
+    my (@normal_ws, @raw_ws, @normal_sse, @raw_sse);
+    my $app = router(routes => [
+        websocket('/provider-ws/{id:&ProtocolProvider}' => async sub {
+            push @normal_ws, $_[0]->path_param('id');
+            await $_[0]->close(1000, 'normal provider');
+        }),
+        websocket('/predicate-ws/{id}', raw => sub {
+            my ($request_scope, $receive, $send) = @_;
+            push @raw_ws, $request_scope->{path_params}{id};
+            $send->({
+                type => 'websocket.close', code => 1001, reason => 'raw predicate',
+            })->get;
+            return Future->done;
+        }, name => 'predicate-ws',
+            constraints => { id => Local::ProtocolPathCheck->new('accepted') }),
+        sse('/predicate-sse/{id}' => async sub {
+            push @normal_sse, $_[0]->path_param('id');
+            await $_[0]->close;
+        }, name => 'predicate-sse',
+            constraints => { id => sub { return $_[0] eq 'accepted' } }),
+        sse('/provider-sse/{id:&ProtocolProvider}', raw => sub {
+            my ($request_scope, $receive, $send) = @_;
+            push @raw_sse, $request_scope->{path_params}{id};
+            $send->({ type => 'sse.close' })->get;
+            return Future->done;
+        }),
+    ])->to_app;
+
+    is(run_scope($app, scope(type => 'websocket', path => '/provider-ws/accepted')),
+        [{ type => 'websocket.close', code => 1000, reason => 'normal provider' }],
+        'normal WebSocket dispatch accepts an inline provider capture');
+    is(run_scope($app, scope(type => 'websocket', path => '/predicate-ws/accepted')),
+        [{ type => 'websocket.close', code => 1001, reason => 'raw predicate' }],
+        'raw WebSocket dispatch accepts an explicit check object');
+    is(run_scope($app, scope(type => 'sse', path => '/predicate-sse/accepted')),
+        [{ type => 'sse.close' }],
+        'normal SSE dispatch accepts an explicit predicate');
+    is(run_scope($app, scope(type => 'sse', path => '/provider-sse/accepted')),
+        [{ type => 'sse.close' }],
+        'raw SSE dispatch accepts an inline provider capture');
+
+    for my $path (qw(/provider-ws/rejected /predicate-ws/rejected)) {
+        my $events = run_scope($app, scope(
+            type => 'websocket', path => $path,
+            extensions => { 'websocket.http.response' => {} },
+        ));
+        is($events->[0]{type}, 'websocket.http.response.start',
+            "$path rejection uses the existing WebSocket denial family");
+        is($events->[0]{status}, 404, "$path rejection is a denial 404");
+    }
+    for my $path (qw(/predicate-sse/rejected /provider-sse/rejected)) {
+        my $events = run_scope($app, scope(type => 'sse', path => $path));
+        is($events->[0]{type}, 'sse.http.response.start',
+            "$path rejection uses the existing SSE decline family");
+        is($events->[0]{status}, 404, "$path rejection is a decline 404");
+    }
+
+    is(\@normal_ws, ['accepted'], 'normal WebSocket handler runs only after acceptance');
+    is(\@raw_ws, ['accepted'], 'raw WebSocket app runs only after acceptance');
+    is(\@normal_sse, ['accepted'], 'normal SSE handler runs only after acceptance');
+    is(\@raw_sse, ['accepted'], 'raw SSE app runs only after acceptance');
 };
 
 subtest 'protocol adapters await pending completion and propagate failures' => sub {

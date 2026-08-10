@@ -53,7 +53,7 @@ sub new {
 
 sub _visit_router {
     my ($self, $router, $path_prefix, $address_segments, $outer_names,
-        $outer_constraints, $location_prefix, $active_routers) = @_;
+        $outer_predicates, $location_prefix, $active_routers) = @_;
 
     my $identity = refaddr($router);
     if ($active_routers->{$identity}) {
@@ -71,7 +71,7 @@ sub _visit_router {
         $path_prefix,
         $address_segments,
         $outer_names,
-        $outer_constraints,
+        $outer_predicates,
         $location_prefix,
         $active_routers,
     );
@@ -81,7 +81,7 @@ sub _visit_router {
 
 sub _visit_nodes {
     my ($self, $nodes, $path_prefix, $address_segments, $outer_names,
-        $outer_constraints, $location_prefix, $active_routers) = @_;
+        $outer_predicates, $location_prefix, $active_routers) = @_;
 
     $self->{namespaces}{_logical_namespace($address_segments)} = 1;
 
@@ -93,8 +93,8 @@ sub _visit_nodes {
         if ($node->isa('PAGI::Routing::Mount')) {
             my $mount_path = $node->path eq '/' ? '' : $node->path;
             my $effective_path = $path_prefix . $mount_path;
-            my ($names, $constraints) = _extend_parameters(
-                $outer_names, $outer_constraints, $node, $effective_path,
+            my ($names, $predicates) = _extend_parameters(
+                $outer_names, $outer_predicates, $node, $effective_path,
             );
             my $logical_namespace = _logical_namespace($address_segments);
             my @child_segments = @$address_segments;
@@ -115,7 +115,7 @@ sub _visit_nodes {
                 },
                 is_raw => $node->is_raw ? 1 : 0,
                 source => $node,
-                constraints => { %$constraints },
+                predicate_records => _copy_predicate_records($predicates),
                 location => [@location],
                 logical_namespace => _logical_namespace(\@child_segments),
             };
@@ -128,7 +128,7 @@ sub _visit_nodes {
                     $effective_path,
                     \@child_segments,
                     $names,
-                    $constraints,
+                    $predicates,
                     \@location,
                     $active_routers,
                 );
@@ -139,7 +139,7 @@ sub _visit_nodes {
                     $effective_path,
                     \@child_segments,
                     $names,
-                    $constraints,
+                    $predicates,
                     \@location,
                     $active_routers,
                 );
@@ -150,8 +150,8 @@ sub _visit_nodes {
         next unless $node->isa('PAGI::Routing::Route');
 
         my $effective_path = $path_prefix . $node->path;
-        my ($names, $constraints) = _extend_parameters(
-            $outer_names, $outer_constraints, $node, $effective_path,
+        my ($names, $predicates) = _extend_parameters(
+            $outer_names, $outer_predicates, $node, $effective_path,
         );
         my $declared_name = $node->name;
         my $effective_name = defined $declared_name && length $declared_name
@@ -170,7 +170,7 @@ sub _visit_nodes {
             mount  => undef,
             is_raw => 0,
             source => $node,
-            constraints => { %$constraints },
+            predicate_records => _copy_predicate_records($predicates),
             location => [@location],
             logical_namespace => $logical_namespace,
         };
@@ -178,9 +178,10 @@ sub _visit_nodes {
         next unless defined $effective_name;
 
         my $pattern = PAGI::Routing::Pattern->new(
-            path => $effective_path,
-            mode => 'route',
-            constraints => $constraints,
+            path               => $effective_path,
+            mode               => 'route',
+            constraints        => {},
+            _predicate_records => $predicates,
         );
         my $record = {
             name    => $effective_name,
@@ -218,23 +219,30 @@ sub _metadata_for_location {
 }
 
 sub _extend_parameters {
-    my ($outer_names, $outer_constraints, $node, $effective_path) = @_;
+    my ($outer_names, $outer_predicates, $node, $effective_path) = @_;
     my @names = @$outer_names;
     my %seen = map { $_ => 1 } @names;
+    my $predicates = _copy_predicate_records($outer_predicates);
+    my $local = $node->_pattern->_predicate_records;
 
     for my $name (@{$node->parameters}) {
         croak "duplicate path parameter '$name' in effective path '$effective_path'"
             if $seen{$name}++;
         push @names, $name;
+        $predicates->{$name} = [map { +{%$_} } @{$local->{$name}}];
     }
 
-    my %constraints = %$outer_constraints;
-    my $local_constraints = $node->constraints;
-    if (defined $local_constraints) {
-        @constraints{keys %$local_constraints} = values %$local_constraints;
-    }
+    return (\@names, $predicates);
+}
 
-    return (\@names, \%constraints);
+sub _copy_predicate_records {
+    my ($records) = @_;
+    return {
+        map {
+            my $name = $_;
+            $name => [map { +{%$_} } @{$records->{$name}}]
+        } keys %$records
+    };
 }
 
 sub _canonical_address {
@@ -588,8 +596,12 @@ inspection, and renders application-relative paths for the outer placement.
 Positional application mounts remain opaque, including positional Router
 targets.
 
-Construction validates/builds the effective address, path, constraint, and
-location index once and does no request I/O. Every known mount prefix is
+Construction validates/builds the effective address, path, predicate, and
+location index once and does no request I/O. Each source Pattern's normalized
+predicate records are copied through its ancestry while retaining the original
+check and explanation coderefs. Effective named-route Patterns install those
+records directly; they do not reparse inline syntax, reinvoke providers, or
+renormalize explicit constraints. Every known mount prefix is
 validated before opacity ends traversal. Duplicate canonical addresses report
 both effective paths, and a path parameter may occur only once along one
 ancestor-to-descendant effective path. Router identity is tracked only in the
@@ -629,10 +641,11 @@ is escaped component-wise before it is joined to the already escaped generated
 path. Both return a string or croak; neither redirects or mutates a response.
 Matched leaf metadata includes its effective URL pattern, canonical
 address, containing logical namespace, kind, and description. Placement
-records retain the source leaf, mount data, composed constraints, and defensive
-location information. References beginning with C</> are absolute; other
-references resolve from an explicit logical base (the Router root for public
-Router reverse calls). Components C<.> and C<..> normalize left-to-right,
+records retain the source leaf, mount data, composed predicate records, and
+defensive location information. Those private predicate records are not
+included in public match metadata. References beginning with C</> are
+absolute; other references resolve from an explicit logical base (the Router
+root for public Router reverse calls). Components C<.> and C<..> normalize left-to-right,
 while dots inside a component remain literal. Empty components, repeated or
 trailing separators, traversal above root, and namespace-only results fail.
 References are never URI-decoded and lookup is exact: there is no ancestor
