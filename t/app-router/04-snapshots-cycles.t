@@ -75,6 +75,32 @@ subtest 'snapshots are immutable, root-local, and fresh' => sub {
         'the later snapshot dispatches its own immutable declaration set');
 };
 
+subtest 'mutable frontends cannot enter snapshots through opaque or raw targets' => sub {
+    my $parent = PAGI::App::Router::Builder->new;
+    return unless router_methods_exist($parent);
+    $parent->get('/safe' => handler('safe'))->name('safe');
+
+    my $opaque_child = PAGI::App::Router::Builder->new;
+    $opaque_child->get('/before' => handler('opaque before'));
+    like(dies { $parent->mount('/opaque' => $opaque_child) },
+        qr/mutable router frontend.*opaque mount.*router =>.*coderef/i,
+        'an opaque Builder child is rejected in favor of a known mount or compiled app');
+
+    my $raw_child = PAGI::App::Router::Builder->new;
+    $raw_child->get('/before' => handler('raw before'));
+    like(dies { $parent->get('/raw', raw => $raw_child) },
+        qr/mutable router frontend.*raw.*coderef/i,
+        'a raw Builder target is rejected in favor of an explicitly compiled app');
+
+    my $snapshot = $parent->to_router;
+    $opaque_child->get('/after' => handler('opaque after'));
+    $raw_child->get('/after' => handler('raw after'));
+    is([map { $_->path } @{$snapshot->routes}], ['/safe'],
+        'rejected mutable targets cannot expose later mutation through a snapshot');
+    is([map { $_->{path} } @{$parent->_declarations}], ['/safe'],
+        'rejected mutable targets never enter the parent declaration array');
+};
+
 subtest 'sibling mutable reuse shares identity only inside one snapshot' => sub {
     my $child = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($child);
@@ -145,6 +171,35 @@ subtest 'active mutable revisits report the placement chain and clean up' => sub
     my $recovered = $retry_materializer->materialize($flaky, '<retry>');
     ok($recovered->isa('PAGI::Routing::Router'),
         'the same failed mutable identity can be retried after cleanup');
+};
+
+subtest 'a failed root rolls back completed descendants before retry' => sub {
+    my $child = PAGI::App::Router::Builder->new;
+    return unless router_methods_exist($child);
+    $child->get('/before' => handler('before'));
+
+    my $fails_late = Local::FailOnceBuilder->new;
+    $fails_late->get('/eventual' => handler('eventual'));
+    my $root = PAGI::App::Router::Builder->new;
+    $root->mount('/child', router => $child)->name('child');
+    $root->mount('/late', router => $fails_late)->name('late');
+
+    require PAGI::App::Router::Materializer;
+    my $materializer = PAGI::App::Router::Materializer->new;
+    like(dies { $materializer->materialize($root, '<root>') },
+        qr/first materialization failure/,
+        'the root fails only after its first child completed');
+    is($materializer->{completed}, {},
+        'a failed root operation rolls back child identities it completed');
+
+    $child->get('/after' => handler('after'));
+    my $retry = $materializer->materialize($root, '<retry>');
+    my $retried_child = $retry->routes->[0]->router;
+    is([map { $_->path } @{$retried_child->routes}], ['/before', '/after'],
+        'retry rematerializes the child and observes mutation after the failed attempt');
+    is(refaddr($retry->routes->[0]->router),
+        refaddr($materializer->materialize($child, '<completed-child>')),
+        'the successful retry still retains completed identity reuse');
 };
 
 {

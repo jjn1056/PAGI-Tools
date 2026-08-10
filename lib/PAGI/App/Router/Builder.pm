@@ -151,6 +151,7 @@ sub mount {
         croak 'opaque mount target must be a coderef or object with to_app'
             unless ref($args[0]) eq 'CODE'
                 || (blessed($args[0]) && $args[0]->can('to_app'));
+        _reject_mutable_frontend_target($args[0], 'opaque mount');
         ($is_raw, $target) = (1, $args[0]);
     }
     elsif (@args == 2 && defined $args[0] && !ref($args[0])
@@ -199,6 +200,7 @@ sub _add_route_from {
         shift @args;
         croak 'raw target must be defined' unless @args && defined $args[0];
         $target = shift @args;
+        _reject_mutable_frontend_target($target, 'raw route');
         $is_raw = 1;
     }
     else {
@@ -412,6 +414,17 @@ sub _validate_router_target {
     croak 'router target must be an immutable Router, App Router, or Endpoint Router';
 }
 
+sub _reject_mutable_frontend_target {
+    my ($target, $position) = @_;
+    return unless blessed($target)
+        && ($target->isa('PAGI::App::Router::Builder')
+            || $target->isa('PAGI::App::Router')
+            || $target->isa('PAGI::Endpoint::Router'));
+
+    croak "mutable router frontend cannot be used as a $position target; "
+        . 'use router => or an explicitly compiled app coderef';
+}
+
 sub _copy_record {
     my ($record) = @_;
     my %copy = %$record;
@@ -451,9 +464,12 @@ request state, or emit protocol events.
 
 Middleware is normalized when a declaration is recorded. Normal targets are
 Context handlers; a native three-channel application must be supplied through
-the explicit C<raw> tag. Each C<to_router> call uses a fresh root-local
-Materializer, so later Builder mutations cannot alter an existing snapshot.
-C<to_app> compiles one such retained snapshot. The public
-C<PAGI::App::Router> facade is layered on this core.
+the explicit C<raw> tag. Mutable router frontends are accepted only through a
+known C<< router => >> mount, never as opaque or raw targets; callers that need
+an opaque application boundary must compile the frontend explicitly first.
+Each C<to_router> call uses a fresh root-local Materializer, so later Builder
+mutations cannot alter an existing snapshot. C<to_app> compiles one such
+retained snapshot. The public C<PAGI::App::Router> facade is layered on this
+core.
 
 =cut

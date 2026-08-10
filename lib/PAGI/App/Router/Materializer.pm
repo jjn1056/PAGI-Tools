@@ -11,6 +11,7 @@ sub new {
         active     => {},
         completed  => {},
         placements => [],
+        completion_frames => [],
     }, $class;
 }
 
@@ -33,6 +34,7 @@ sub materialize {
     croak $self->_cycle_message($placement)
         if $self->{active}{$id};
 
+    push @{$self->{completion_frames}}, [];
     $self->{active}{$id} = 1;
     push @{$self->{placements}}, $placement;
     my ($router, $error);
@@ -43,11 +45,35 @@ sub materialize {
     }
     pop @{$self->{placements}};
     delete $self->{active}{$id};
-    die $error if length $error;
-    croak 'mutable router frontend did not materialize a PAGI::Routing::Router'
-        unless blessed($router)
-            && $router->isa('PAGI::Routing::Router');
-    return $self->{completed}{$id} = $router;
+    if (length $error) {
+        $self->_rollback_completion_frame;
+        die $error;
+    }
+    unless (blessed($router)
+            && $router->isa('PAGI::Routing::Router')) {
+        $self->_rollback_completion_frame;
+        croak 'mutable router frontend did not materialize a PAGI::Routing::Router';
+    }
+
+    $self->{completed}{$id} = $router;
+    push @{$self->{completion_frames}[-1]}, $id;
+    $self->_commit_completion_frame;
+    return $router;
+}
+
+sub _rollback_completion_frame {
+    my ($self) = @_;
+    my $created = pop @{$self->{completion_frames}};
+    delete @{$self->{completed}}{@$created} if @$created;
+    return;
+}
+
+sub _commit_completion_frame {
+    my ($self) = @_;
+    my $created = pop @{$self->{completion_frames}};
+    push @{$self->{completion_frames}[-1]}, @$created
+        if @{$self->{completion_frames}};
+    return;
 }
 
 sub _cycle_message {
@@ -73,8 +99,10 @@ PAGI::App::Router::Materializer - Root-local mutable routing snapshot materializ
 This private helper owns active ancestry and completed mutable frontend
 identities for one root snapshot operation. Immutable Routers pass through by
 identity. A completed mutable frontend is reused by sibling placements, while
-an active revisit fails with its declaration placement chain. All state is
-discarded with the Materializer after the snapshot is built and never enters a
-routing description or request scope.
+an active revisit fails with its declaration placement chain. Completed
+identities first created beneath a failed materialization are rolled back;
+identities completed before that operation remain reusable. All state is
+discarded with the Materializer after the snapshot is built and never enters
+a routing description or request scope.
 
 =cut
