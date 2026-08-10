@@ -342,19 +342,22 @@ The old `as` method is removed.
 `constraints` applies to the last pattern-bearing declaration and uses the
 same constraint forms and normalization as the functional API.
 
-The builder also exposes the necessary `auto_head` modifier for a GET route:
+The shared automatic-HEAD convention remains declaration-ordered. A custom
+HEAD handler must be declared before its GET route:
 
 ```perl
-$r->get('/expensive' => \&expensive_get)->auto_head(0);
 $r->head('/expensive' => \&cheap_head);
+$r->get('/expensive' => \&expensive_get);
 ```
 
-The shared Router validation continues to reject `auto_head => 0` unless a
-sibling HEAD route for the same effective path exists at the same routing
-level.
+For HEAD, the explicit route is the first FULL match. For GET, that route is a
+PARTIAL and scanning continues to the GET route. Reversing the declarations
+lets the GET route's automatic HEAD support win. App Router does not add an
+`auto_head` option or associate the two declarations specially.
 
-Calling a modifier without a compatible preceding declaration is a synchronous
-error that names both the modifier and the required declaration kind.
+Calling `name`, `desc`, or `constraints` without a compatible preceding
+declaration is a synchronous error that names both the modifier and the
+required declaration kind.
 
 ## 8. Groups and mounts
 
@@ -1047,8 +1050,8 @@ Diagnostics distinguish:
 - invalid middleware entry and its position;
 - an Endpoint handler method that does not exist;
 - an Endpoint adapter method that does not exist;
-- applying `name`, `desc`, `constraints`, or `auto_head` without a compatible
-  last declaration;
+- applying `name`, `desc`, or `constraints` without a compatible last
+  declaration;
 - naming an opaque mount;
 - passing an unsupported object to `router =>`;
 - a mutable frontend cycle, with placement ancestry;
