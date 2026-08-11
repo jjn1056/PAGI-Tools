@@ -43,6 +43,9 @@ subtest 'the example exposes explicit Endpoint objects without Endpoint state' =
 };
 
 subtest 'the nested demo exercises the complete Endpoint design' => sub {
+    local $ENV{PAGI_HOME};
+    delete $ENV{PAGI_HOME};
+
     my $events = MyApp::API::Events->new;
     my $api    = MyApp::API->new(events => $events);
     my $main   = MyApp::Main->new(api => $api);
