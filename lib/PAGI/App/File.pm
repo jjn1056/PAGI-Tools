@@ -3,6 +3,7 @@ package PAGI::App::File;
 use strict;
 use warnings;
 use Future::AsyncAwait;
+use Carp qw(croak);
 use Digest::MD5 qw(md5_hex);
 use File::Spec;
 use Cwd ();  # For realpath
@@ -18,6 +19,9 @@ PAGI::App::File - Serve static files
     my $app = PAGI::App::File->new(
         root => '/var/www/static',
     )->to_app;
+
+    my $files = PAGI::App::File->app_path('static');
+    my $app   = PAGI::App::File->app_path('static')->to_app;
 
 =head1 DESCRIPTION
 
@@ -85,6 +89,30 @@ our %MIME_TYPES = (
     mp4  => 'video/mp4',
     webm => 'video/webm',
 );
+
+sub import {
+    my $class = shift;
+    my ($package, $source) = caller;
+
+    require PAGI::Utils;
+    PAGI::Utils::_remember_app_path_origin($package, $source);
+    return;
+}
+
+sub app_path {
+    my ($class, @components) = @_;
+    croak 'PAGI::App::File->app_path is a class constructor '
+        . 'and requires a class invocant'
+        if ref($class);
+
+    my ($package, $source) = caller;
+    require PAGI::Utils;
+    my $root = PAGI::Utils::_app_path_from_origin(
+        $package, $source, @components,
+    );
+
+    return $class->new(root => $root);
+}
 
 sub new {
     my ($class, %args) = @_;
@@ -282,6 +310,28 @@ async sub _send_error {
 1;
 
 __END__
+
+=head1 CONSTRUCTORS
+
+=head2 app_path
+
+    my $files = PAGI::App::File->app_path('static');
+    my $app   = PAGI::App::File->app_path('static')->to_app;
+
+Returns a C<PAGI::App::File> component object rooted at the application path
+formed from its logical path components. It is a class-only constructor and
+preserves subclasses, so C<< MyApp::Files->app_path('static') >> returns a
+C<MyApp::Files> object. With no path components it selects the application
+home. All arguments are path components; use C<< ->new(root =E<gt> ...) >>
+when advanced file-app options are required.
+
+Its C<PAGI_HOME> precedence and path-component semantics are shared with
+L<PAGI::Utils/app_path>. Each ordinary C<use PAGI::App::File> records that
+file's caller origin so relative module sources remain anchored if the process
+later changes directory. C<use PAGI::App::File ()> and C<require
+PAGI::App::File> do not record that origin; use C<PAGI_HOME> as the explicit
+escape hatch in those cases. The origin registrar and resolver are unsupported
+internals.
 
 =head1 CONFIGURATION
 

@@ -14,15 +14,20 @@ our @EXPORT_OK = qw(handle_lifespan to_app is_response app_path);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 our %APP_PATH_SOURCE;
 
+sub _remember_app_path_origin {
+    my ($package, $source) = @_;
+    return unless defined $package && !ref($package);
+    return unless defined $source && !ref($source) && length($source);
+
+    $APP_PATH_SOURCE{join("\0", $package, $source)} =
+        File::Spec->canonpath(File::Spec->rel2abs($source));
+    return;
+}
+
 sub import {
     my $class = shift;
     my ($package, $source) = caller;
-
-    if (defined $package && !ref($package)
-        && defined $source && !ref($source) && length $source) {
-        $APP_PATH_SOURCE{join("\0", $package, $source)} =
-            File::Spec->canonpath(File::Spec->rel2abs($source));
-    }
+    _remember_app_path_origin($package, $source);
 
     local $Exporter::ExportLevel = 1;
     return Exporter::import($class, @_);
