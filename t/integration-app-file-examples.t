@@ -18,7 +18,7 @@ my @cases = (
         name  => 'endpoint demo',
         file  => "$Bin/../examples/endpoint-demo/app.pl",
         title => qr/PAGI Endpoint Demo/,
-        shape => qr{mount\('/'\s*=>\s*PAGI::App::File->app_path\('public'\)},
+        shape => qr{mount\('/'\s*=>\s*PAGI::App::File->app_path\('public'\)\s*\)},
     },
     {
         name  => 'SSE dashboard',
