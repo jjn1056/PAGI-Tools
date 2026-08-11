@@ -2,8 +2,8 @@ use strict;
 use warnings;
 use Test2::V0;
 
-# Public entry points that must always load
-my @core_modules = qw(
+# Modules covered for loadability: public entry points and selected internals
+my @load_modules = qw(
     PAGI::Tools
     PAGI::Compose
     PAGI::Compose::Compiler
@@ -45,7 +45,7 @@ my @core_modules = qw(
     PAGI::Test::Response
 );
 
-for my $module (@core_modules) {
+for my $module (@load_modules) {
     my $file = $module;
     $file =~ s{::}{/}g;
     $file .= '.pm';

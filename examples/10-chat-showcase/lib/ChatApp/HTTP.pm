@@ -231,13 +231,14 @@ ChatApp::HTTP - HTTP request handler for the chat application
 # DESCRIPTION
 
 Handles HTTP requests including static file serving and API endpoints.
-Uses PAGI::App::Router for declarative API routing with parameter capture.
+Uses the mutable PAGI::App::Router verb-method builder for API routing and
+shared Pattern capture.
 
 ## API Endpoints
 
 - **GET /api/rooms** - Returns list of all rooms with user counts.
-- **GET /api/room/:name/history** - Returns message history for a room. The `:name` parameter is captured by the router and available in `$scope->{path_params}{name}`.
-- **GET /api/room/:name/users** - Returns list of users in a room.
+- **GET /api/room/{name}/history** - Returns message history for a room. The `{name}` path parameter is captured by the router and available in `$scope->{path_params}{name}`.
+- **GET /api/room/{name}/users** - Returns list of users in a room.
 - **GET /api/stats** - Returns server statistics.
 
 # SEE ALSO

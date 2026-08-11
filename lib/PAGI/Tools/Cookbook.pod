@@ -1076,7 +1076,10 @@ local name.
 This root keeps Endpoint configuration in ordinary object fields, request
 state in Compose lifespan state, and every declaration inspectable:
 
+  # lib/MyApp/People.pm
   package MyApp::People;
+  use strict;
+  use warnings;
   use parent 'PAGI::Endpoint::Router';
   use Future::AsyncAwait;
 
@@ -1107,9 +1110,15 @@ state in Compose lifespan state, and every declaration inspectable:
       );
   }
 
+  1;
+
+  # lib/MyApp.pm
   package MyApp;
+  use strict;
+  use warnings;
   use parent 'PAGI::Endpoint::Router';
   use Future::AsyncAwait;
+  use MyApp::People;
 
   sub new {
       my ($class, %args) = @_;
@@ -1180,7 +1189,12 @@ state in Compose lifespan state, and every declaration inspectable:
       await send_native_download($scope, $receive, $send);
   }
 
+  1;
+
+  # app.pl
   package main;
+  use strict;
+  use warnings;
   use PAGI::App::File;
   use PAGI::Compose qw(compose);
   use MyApp;

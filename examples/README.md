@@ -13,7 +13,8 @@ handlers are always marked `raw`.
 
 ## Requirements
 
-- Perl 5.18+ with `Future::AsyncAwait`
+- Perl 5.18+ with `Future::AsyncAwait` for the distribution and most examples;
+  `15-large-application` deliberately requires Perl 5.40+ for signatures
 - A PAGI server to run examples against:
   ```
   cpanm PAGI::Server
@@ -38,7 +39,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging and a mutable HTTP/WebSocket/SSE target router
 3. `13-contact-form` - form parsing and file uploads
 4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
-5. `15-large-application` - Compose-rooted modular HTML application with known Person/Blogs Router mounts, named cross-component links, an opaque static-file mount, lifespan data, and an evidence-backed gaps ledger
+5. `15-large-application` - Perl 5.40+ Compose-rooted modular HTML application with known Person/Blogs Router mounts, named cross-component links, an opaque static-file mount, lifespan data, and an evidence-backed gaps ledger
 6. `app-01-file` - static file serving with `PAGI::App::File`
 7. `background-tasks` - running background work from within a PAGI app
 8. `compose` - optional application root combining declarative routes, request-ID middleware, server-owned lifecycle state, automatic HEAD, and verified shutdown

@@ -140,7 +140,7 @@ Serves the chat frontend (index.html)
 
 Lists all chat rooms with user counts
 
-=item GET /api/room/:name/history
+=item GET /api/room/{name}/history
 
 Gets message history for a room
 
