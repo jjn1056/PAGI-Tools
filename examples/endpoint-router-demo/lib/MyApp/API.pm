@@ -38,14 +38,10 @@ sub require_demo_token {
         return await $inner->($scope, $receive, $send)
             if ($c->request->header('x-demo-token') // '') eq 'demo-token';
 
-        await $send->({
-            type => 'http.response.start', status => 401,
-            headers => [['content-type', 'text/plain']],
-        });
-        await $send->({
-            type => 'http.response.body', body => 'demo token required', more => 0,
-        });
-        return;
+        return await $c->text(
+            'demo token required',
+            status => 401,
+        )->respond($send);
     };
 }
 
@@ -67,7 +63,7 @@ async sub show {
     my ($self, $c) = @_;
     $c->state->{metrics}{requests}++;
 
-    my $user_id = $c->request->path_param('user_id');
+    my $user_id = $c->path_param('user_id');
     my ($user) = grep { $_->{id} == $user_id } @USERS;
     return $c->html("<h1>$user->{name}</h1>") if $user;
     return $c->text('User not found', status => 404);

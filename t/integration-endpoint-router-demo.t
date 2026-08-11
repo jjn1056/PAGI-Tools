@@ -59,6 +59,10 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
         my ($api_index_path) = $home->text =~ qr{href="(/api/index)"};
         my $denied = $client->get($api_index_path);
         is($denied->status, 401, 'API middleware rejects a missing demo token');
+        is($denied->text, 'demo token required',
+            'API middleware returns the documented denial body');
+        is($denied->content_type, 'text/plain; charset=utf-8',
+            'API middleware denial uses the Context text response');
 
         my $index = $client->get($api_index_path,
             headers => { 'X-Demo-Token' => 'demo-token' });
