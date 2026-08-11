@@ -6,8 +6,6 @@ use Future::AsyncAwait;
 
 use MyApp::API;
 use PAGI::App::File;
-use File::Basename qw(dirname);
-use File::Spec;
 
 sub new {
     my ($class, %args) = @_;
@@ -22,8 +20,7 @@ sub routes {
     $r->mount('/api', router => $self->{api})->name('api');
     $r->websocket('/status' => 'status_socket')->name('status_socket');
 
-    my $root = File::Spec->catdir(dirname(__FILE__), '..', '..', 'public');
-    $r->mount('/', PAGI::App::File->new(root => $root));
+    $r->mount('/', PAGI::App::File->app_path('public'));
 }
 
 async sub home {

@@ -1,7 +1,6 @@
 package MyApp::Root;
 
 use v5.40;
-use warnings;
 use PAGI::App::File;
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(router route mount);

@@ -1,7 +1,6 @@
 package MyApp::Person;
 
 use v5.40;
-use warnings;
 use utf8;
 use Types::Standard qw(Int);
 use PAGI::Routing qw(router route mount);

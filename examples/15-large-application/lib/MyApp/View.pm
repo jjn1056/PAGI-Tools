@@ -1,7 +1,6 @@
 package MyApp::View;
 
 use v5.40;
-use warnings;
 
 sub document($class, $title, $body) {
     return <<"HTML";

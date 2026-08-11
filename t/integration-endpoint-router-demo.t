@@ -12,6 +12,27 @@ use MyApp::Main;
 use MyApp::API;
 use MyApp::API::Events;
 
+sub source_text {
+    my ($path) = @_;
+    open my $fh, '<', $path or die "cannot open $path: $!\n";
+    local $/;
+    my $source = <$fh>;
+    close $fh or die "cannot close $path: $!\n";
+    return $source;
+}
+
+subtest 'Main mounts its application-relative public component' => sub {
+    my $path = "$Bin/../examples/endpoint-router-demo/lib/MyApp/Main.pm";
+    my $source = source_text($path);
+    like($source,
+        qr{mount\('/'\s*,\s*PAGI::App::File->app_path\('public'\)\)},
+        'module-layout Router mounts the returned component');
+    unlike($source, qr/PAGI::App::File->app_path\('public'\)->to_app/,
+        'module passes the component to the Router without compiling it');
+    unlike($source, qr/PAGI::App::File->new\s*\(|File::Basename|File::Spec/,
+        'module contains no manual static-root arithmetic');
+};
+
 subtest 'the example exposes explicit Endpoint objects without Endpoint state' => sub {
     for my $class (qw(MyApp::Main MyApp::API MyApp::API::Events)) {
         ok($class->can('new'), "$class constructs an object");
@@ -55,6 +76,10 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
         my $home = $client->get('/');
         is($home->status, 200, 'home responds through Main');
         like($home->text, qr{href="(/api/index)"}, 'home generates the API link');
+
+        my $static = $client->get('/index.html');
+        is($static->status, 200, 'mounted public file responds');
+        like($static->text, qr/Static file served!/, 'public file comes from the example root');
 
         my ($api_index_path) = $home->text =~ qr{href="(/api/index)"};
         my $denied = $client->get($api_index_path);

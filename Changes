@@ -3,8 +3,9 @@
 0.002003
   - PAGI::App::File adds the class-only `app_path` constructor, which derives
     a static root from each importing caller's application home. In development
-    it prints each valid candidate path to STDOUT. The large modular and
-    root-level file examples now use this constructor.
+    it prints each valid candidate path to STDOUT. All example applications
+    using PAGI::App::File now use this constructor. The Perl 5.40 large
+    application relies on its version declaration for strictures and warnings.
   - BREAKING: PAGI::App::Router and PAGI::Endpoint::Router are now mutable and
     method-oriented frontends over the immutable PAGI::Routing engine. The old
     App matcher, native-by-default route handlers, route-first/mount-fallback

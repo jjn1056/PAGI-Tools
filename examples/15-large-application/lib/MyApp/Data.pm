@@ -1,7 +1,6 @@
 package MyApp::Data;
 
 use v5.40;
-use warnings;
 
 my $PEOPLE = [
     {

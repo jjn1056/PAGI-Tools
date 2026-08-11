@@ -1,7 +1,6 @@
 package MyApp::Person::Blogs;
 
 use v5.40;
-use warnings;
 use Types::Standard qw(Int);
 use PAGI::Routing qw(router route);
 use MyApp::View ();

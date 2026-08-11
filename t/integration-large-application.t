@@ -69,6 +69,8 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
     for my $path (@sources) {
         my $source = _source_text($path);
         like($source, qr/^use v5[.]40;/m, "$path declares the example minimum");
+        unlike($source, qr/^use warnings;/m,
+            "$path relies on the Perl 5.40 warning bundle");
         unlike($source, qr/my\s*\([^;]*\)\s*=\s*\@_\s*;/,
             "$path contains no legacy argument unpacking");
     }

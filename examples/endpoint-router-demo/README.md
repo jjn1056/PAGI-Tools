@@ -49,6 +49,15 @@ its local name, `$c->path_for('show', { user_id => 1 })`, for `/api/show/1`.
 `Main` owns the home page, static-file mount, and root `/status` WebSocket.
 `API` owns the protected HTTP pages. `Events` owns `/api/events/stream`.
 
+`Main` mounts its static files with:
+
+```perl
+$r->mount('/', PAGI::App::File->app_path('public'));
+```
+
+Because `MyApp::Main` lives under `lib/MyApp/Main.pm`, the constructor resolves
+`public` from the example root.
+
 ## Middleware and protocol code
 
 `API` attaches its method factory at declaration time:
