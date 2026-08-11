@@ -1140,7 +1140,9 @@ state in Compose lifespan state, and every declaration inspectable:
       ] => 'admin')->name('admin');
       $r->websocket('/ws/{room}' => 'chat')->name('chat');
       $r->sse('/events' => 'events')->name('events');
-      $r->get('/download', raw => $self->app_as('download'));
+
+      # app_as exposes a local native method at an opaque app boundary.
+      $r->mount('/download' => $self->app_as('download'));
 
       # Prefix owners follow written order; the static catch-all stays last.
       $r->mount('/' => [$self->{access_factory}] => $self->{static});
@@ -1159,10 +1161,31 @@ state in Compose lifespan state, and every declaration inspectable:
       my ($self, $inner_app) = @_;
       return async sub {
           my ($scope, $receive, $send) = @_;
-          return await authorized($scope)
-              ? $inner_app->($scope, $receive, $send)
-              : deny($send);
+          return await $self->deny($send)
+              unless $self->authorized($scope);
+          return await $inner_app->($scope, $receive, $send);
       };
+  }
+
+  sub authorized {
+      my ($self, $scope) = @_;
+      for my $header (@{$scope->{headers} // []}) {
+          next unless lc($header->[0]) eq 'authorization';
+          return $header->[1] eq 'Bearer example-token';
+      }
+      return 0;
+  }
+
+  async sub deny {
+      my ($self, $send) = @_;
+      await $send->({
+          type    => 'http.response.start',
+          status  => 401,
+          headers => [['content-type', 'text/plain']],
+      });
+      await $send->({
+          type => 'http.response.body', body => 'Unauthorized', more => 0,
+      });
   }
 
   sub admin {
@@ -1186,18 +1209,77 @@ state in Compose lifespan state, and every declaration inspectable:
 
   async sub download {
       my ($self, $scope, $receive, $send) = @_;
-      await send_native_download($scope, $receive, $send);
+      await $send->({
+          type    => 'http.response.start',
+          status  => 200,
+          headers => [['content-type', 'application/octet-stream']],
+      });
+      await $send->({
+          type => 'http.response.body', body => "example download\n", more => 0,
+      });
   }
 
   1;
 
   # app.pl
+  package Local::Repository;
+  use strict;
+  use warnings;
+
+  sub new {
+      return bless {
+          people => [
+              { id => 1, name => 'Ada' },
+              { id => 2, name => 'Grace' },
+          ],
+      }, shift;
+  }
+
+  sub all {
+      my ($self) = @_;
+      return map { +{%$_} } @{$self->{people}};
+  }
+
+  sub find {
+      my ($self, $id) = @_;
+      my ($person) = grep { $_->{id} == $id } @{$self->{people}};
+      return defined $person ? {%$person} : undef;
+  }
+
+  package Local::Database;
+  use strict;
+  use warnings;
+
+  sub new        { return bless { connected => 1 }, shift }
+  sub ping       { return $_[0]{connected} }
+  sub disconnect { $_[0]{connected} = 0; return }
+
   package main;
   use strict;
   use warnings;
+  use Future::AsyncAwait;
   use PAGI::App::File;
   use PAGI::Compose qw(compose);
   use MyApp;
+
+  my $repository = Local::Repository->new;
+
+  my $access_factory = sub {
+      my ($inner_app) = @_;
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+          return await $inner_app->($scope, $receive, $send);
+      };
+  };
+
+  my $application_logging = sub {
+      my ($inner_app) = @_;
+      return async sub {
+          my ($scope, $receive, $send) = @_;
+          warn 'request scope: ' . ($scope->{type} // 'unknown') . "\n";
+          return await $inner_app->($scope, $receive, $send);
+      };
+  };
 
   my $endpoint = MyApp->new(
       repository     => $repository,
@@ -1206,25 +1288,28 @@ state in Compose lifespan state, and every declaration inspectable:
   );
 
   my $snapshot = $endpoint->to_router;
-  my $app = compose(
+  compose(
       app => $snapshot,
       middleware => [$application_logging],
       lifespan => {
           startup => async sub {
               my ($state, $scope) = @_;
               $state->{started_at} = time;
-              $state->{db} = await connect_database();
+              $state->{db} = Local::Database->new;
           },
           shutdown => async sub {
               my ($state, $scope) = @_;
-              await $state->{db}->disconnect;
+              $state->{db}->disconnect;
           },
       },
   )->to_app;
 
-  $app;
+This is a mechanically complete composition skeleton: the in-process
+C<Local::Repository> and C<Local::Database> stand-ins make every dependency
+explicit, but a deployed application would replace them with its own durable
+repository and lifecycle-managed database implementation.
 
-Here Endpoint C<routes> methods build a fresh immutable snapshot; middleware
+Endpoint C<routes> methods build a fresh immutable snapshot; middleware
 factories and C<wrap> adapters run when that snapshot is compiled; and their
 returned native apps run once per request. The complete Compose root owns
 application middleware plus lifecycle, while the server owns state identity.
@@ -1233,7 +1318,8 @@ child resolves below C</people>, while C<people/index> at root resolves through
 the named child. The root/static mount is deliberately last because written
 order determines ownership.
 
-Run the final C<$app> with C<pagi-server app.pl --port 5000>.
+Run the application returned by F<app.pl> with
+C<pagi-server app.pl --port 5000>.
 
 See C<examples/endpoint-router-demo/> for more examples.
 
