@@ -23,6 +23,14 @@ PAGI::App::File - Serve static files
     my $files = PAGI::App::File->app_path('static');
     my $app   = PAGI::App::File->app_path('static')->to_app;
 
+The component can be mounted directly in a declarative router:
+
+    use PAGI::Routing qw(router mount);
+
+    my $routing = router(routes => [
+        mount('/static' => PAGI::App::File->app_path('static')),
+    ]);
+
 =head1 DESCRIPTION
 
 PAGI::App::File serves static files from a configured root directory.
@@ -353,12 +361,15 @@ whether the candidate is a readable file. For example:
 
     PAGI::App::File: attempting /Project-MyApp/static/css/app.css
 
-Both existing and missing candidates are reported. Rejected methods and paths
-are silent, as are all other C<PAGI_ENV> values. ASCII control bytes in the
-displayed path are escaped as C<\xNN>, so every diagnostic remains one physical
-line. The record shows the lexical candidate rather than a resolved symlink
-path, can disclose absolute paths, is not access logging, and never changes a
-response or file event.
+Both existing and missing candidates are reported. Requests rejected before a
+candidate is built, including unsupported methods, null bytes, traversal
+components, and hidden components, are silent. A later realpath or symlink
+containment check can still reject a request after its in-root lexical
+candidate has been reported. All other C<PAGI_ENV> values are silent. ASCII
+control bytes in the displayed path are escaped as C<\xNN>, so every diagnostic
+remains one physical line. The record shows the lexical candidate rather than a
+resolved symlink path, can disclose absolute paths, is not access logging, and
+never changes a response or file event.
 
 =head1 CONFIGURATION
 

@@ -143,8 +143,13 @@ ok(!Local::IgnoredAppFileImport->can('imaginary_export'),
 my $one_static = Cwd::realpath(File::Spec->catdir(
     $Bin, 'app-file-fixtures', 'one', 'static',
 ));
-my $file_component = TestApps::AppFile::One->files;
-my $client = PAGI::Test::Client->new(app => $file_component);
+my ($file_component, $client);
+{
+    local $ENV{PAGI_HOME};
+    delete $ENV{PAGI_HOME};
+    $file_component = TestApps::AppFile::One->files;
+    $client = PAGI::Test::Client->new(app => $file_component);
+}
 
 subtest 'development logs final existing, missing, index, and HEAD candidates' => sub {
     local $ENV{PAGI_ENV} = 'development';
@@ -218,18 +223,69 @@ subtest 'requests rejected before filesystem service stay silent' => sub {
     }
 };
 
-subtest 'diagnostic escapes controls without changing the native candidate' => sub {
+subtest 'diagnostic escapes every accepted ASCII control byte' => sub {
     local $ENV{PAGI_ENV} = 'development';
-    my $path = "/bad\nname";
-    my ($events, $stdout, $stderr) = capture_output(sub {
-        return run_native($file_component, 'GET', $path);
-    });
+    my @cases = (
+        [0x01, '\\x01'], [0x02, '\\x02'], [0x03, '\\x03'],
+        [0x04, '\\x04'], [0x05, '\\x05'], [0x06, '\\x06'],
+        [0x07, '\\x07'], [0x08, '\\x08'], [0x09, '\\x09'],
+        [0x0a, '\\x0A'], [0x0b, '\\x0B'], [0x0c, '\\x0C'],
+        [0x0d, '\\x0D'], [0x0e, '\\x0E'], [0x0f, '\\x0F'],
+        [0x10, '\\x10'], [0x11, '\\x11'], [0x12, '\\x12'],
+        [0x13, '\\x13'], [0x14, '\\x14'], [0x15, '\\x15'],
+        [0x16, '\\x16'], [0x17, '\\x17'], [0x18, '\\x18'],
+        [0x19, '\\x19'], [0x1a, '\\x1A'], [0x1b, '\\x1B'],
+        [0x1c, '\\x1C'], [0x1d, '\\x1D'], [0x1e, '\\x1E'],
+        [0x1f, '\\x1F'], [0x7f, '\\x7F'],
+    );
 
-    is($events->[0]{status}, 404, 'control-bearing missing path stays a 404');
-    is($stdout, 'PAGI::App::File: attempting '
-        . File::Spec->catfile($one_static, 'bad') . '\\x0Aname' . "\n",
-        'newline is visible text inside one physical record');
-    is($stderr, '', 'escaped diagnostic remains STDOUT-only');
+    for my $case (@cases) {
+        my ($ordinal, $escaped) = @$case;
+        my $path = '/bad' . chr($ordinal) . 'name';
+        my ($events, $stdout, $stderr) = capture_output(sub {
+            return run_native($file_component, 'GET', $path);
+        });
+
+        is($events->[0]{status}, 404,
+            sprintf('0x%02X-bearing missing path stays a 404', $ordinal));
+        is($stdout, 'PAGI::App::File: attempting '
+            . File::Spec->catfile($one_static, 'bad') . $escaped . "name\n",
+            sprintf('0x%02X is escaped inside one physical record', $ordinal));
+        is($stderr, '', sprintf('0x%02X diagnostic remains STDOUT-only', $ordinal));
+    }
+};
+
+subtest 'symlink rejection logs only the in-root lexical candidate' => sub {
+    my $sandbox = tempdir(CLEANUP => 1);
+    my $root = File::Spec->catdir($sandbox, 'root');
+    mkdir $root or die "cannot create test root $root: $!";
+
+    my $outside = File::Spec->catfile($sandbox, 'external-secret.txt');
+    open my $external_file, '>', $outside
+        or die "cannot create external target $outside: $!";
+    print {$external_file} "external secret\n";
+    close $external_file or die "cannot close external target $outside: $!";
+
+    my $link = File::Spec->catfile($root, 'escape.txt');
+    my $linked = eval { symlink($outside, $link) };
+    unless ($linked) {
+        my $reason = $@ || $! || 'symlink creation returned false';
+        plan skip_all => "symlink creation unavailable: $reason";
+    }
+
+    my $component = PAGI::App::File->new(root => $root);
+    local $ENV{PAGI_ENV} = 'development';
+    my ($events, $stdout, $stderr) = capture_output(sub {
+        return run_native($component, 'GET', '/escape.txt');
+    });
+    my $lexical = File::Spec->catfile(Cwd::realpath($root), 'escape.txt');
+
+    is($events->[0]{status}, 403, 'escaping symlink is rejected');
+    is($stdout, "PAGI::App::File: attempting $lexical\n",
+        'one record names the in-root lexical candidate');
+    unlike($stdout, qr/\Q$outside\E/,
+        'diagnostic does not disclose the resolved external target');
+    is($stderr, '', 'symlink diagnostic remains STDOUT-only');
 };
 
 subtest 'development output does not rewrite a served file event' => sub {
