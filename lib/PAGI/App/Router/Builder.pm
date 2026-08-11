@@ -201,6 +201,8 @@ sub _add_route_from {
         croak 'raw target must be defined' unless @args && defined $args[0];
         $target = shift @args;
         _reject_mutable_frontend_target($target, 'raw route');
+        croak 'raw target must be an explicitly compiled coderef'
+            unless ref($target) eq 'CODE';
         $is_raw = 1;
     }
     else {

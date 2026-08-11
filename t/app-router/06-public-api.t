@@ -51,6 +51,23 @@ subtest 'the public class is only the mutable Builder facade' => sub {
     );
 };
 
+subtest 'raw package names are rejected before declaration or loading' => sub {
+    for my $leaf (qw(get websocket sse)) {
+        my $router = PAGI::App::Router->new;
+        delete $INC{'TestRoutes/Admin.pm'};
+
+        like(
+            dies { $router->$leaf('/blocked', raw => 'TestRoutes::Admin') },
+            qr/raw target must be an explicitly compiled coderef/,
+            "$leaf rejects a raw package name at declaration time",
+        );
+        ok(!exists $INC{'TestRoutes/Admin.pm'},
+            "$leaf does not load the rejected package");
+        is($router->_declarations, [],
+            "$leaf does not retain a rejected raw declaration");
+    }
+};
+
 subtest 'direct routes, structural groups, and both mount forms materialize in written order' => sub {
     my $people = PAGI::App::Router->new;
     $people->get('/{id}' => context_handler())->name('show');

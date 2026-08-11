@@ -525,15 +525,38 @@ subtest 'partial decisions preserve first-seen method order without sharing arra
     );
 };
 
-subtest 'PAGI::App::Router retains its existing alphabetical Allow behavior' => sub {
-    my $legacy = PAGI::App::Router->new;
-    $legacy->post('/ordered' => sub { return Future->done });
-    $legacy->get('/ordered' => sub { return Future->done });
-    my $app = $legacy->to_app;
-    my ($receive, $send, $events) = channels();
+subtest 'PAGI::App::Router Allow values retain first-seen declaration order' => sub {
+    my @cases = (
+        [
+            'POST declared before GET',
+            sub {
+                my ($router) = @_;
+                $router->post('/ordered' => sub { return Future->done });
+                $router->get('/ordered' => sub { return Future->done });
+            },
+            'POST, GET, HEAD',
+        ],
+        [
+            'GET declared before POST',
+            sub {
+                my ($router) = @_;
+                $router->get('/ordered' => sub { return Future->done });
+                $router->post('/ordered' => sub { return Future->done });
+            },
+            'GET, HEAD, POST',
+        ],
+    );
 
-    $app->(scope(method => 'TRACE', path => '/ordered'), $receive, $send)->get;
-    is(allow_header($events), 'GET, POST', 'legacy router still sorts its deduplicated Allow set alphabetically');
+    for my $case (@cases) {
+        my ($label, $declare, $want) = @$case;
+        my $router = PAGI::App::Router->new;
+        $declare->($router);
+        my $app = $router->to_app;
+        my ($receive, $send, $events) = channels();
+
+        $app->(scope(method => 'TRACE', path => '/ordered'), $receive, $send)->get;
+        is(allow_header($events), $want, "$label controls the Allow order");
+    }
 };
 
 subtest 'route middleware is compiled once and executes only after full selection' => sub {
