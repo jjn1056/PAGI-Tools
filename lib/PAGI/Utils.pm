@@ -2,14 +2,112 @@ package PAGI::Utils;
 
 use strict;
 use warnings;
-use Exporter 'import';
+use Exporter ();
 use Future::AsyncAwait;
 use Carp qw(croak);
+use File::Basename qw(basename dirname);
+use File::Spec;
 use Scalar::Util qw(blessed);
 use PAGI::Lifespan;
 
-our @EXPORT_OK = qw(handle_lifespan to_app is_response);
+our @EXPORT_OK = qw(handle_lifespan to_app is_response app_path);
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
+our %APP_PATH_SOURCE;
+
+sub import {
+    my $class = shift;
+    my ($package, $source) = caller;
+
+    if (defined $package && !ref($package)
+        && defined $source && !ref($source) && length $source) {
+        $APP_PATH_SOURCE{join("\0", $package, $source)} =
+            File::Spec->canonpath(File::Spec->rel2abs($source));
+    }
+
+    local $Exporter::ExportLevel = 1;
+    return Exporter::import($class, @_);
+}
+
+sub app_path {
+    my ($package, $source) = caller;
+    return _app_path_from_origin($package, $source, @_);
+}
+
+sub _same_path_component {
+    my ($left, $right) = @_;
+    return 0 unless defined $left && defined $right;
+    return lc($left) eq lc($right) if File::Spec->case_tolerant;
+    return $left eq $right;
+}
+
+sub _home_from_origin {
+    my ($package, $source) = @_;
+
+    croak "app_path cannot determine an application home; set PAGI_HOME"
+        unless defined $source && !ref($source) && length $source;
+
+    my $absolute = $APP_PATH_SOURCE{join("\0", $package, $source)};
+    $absolute = File::Spec->canonpath(File::Spec->rel2abs($source))
+        unless defined $absolute;
+    my (undef, $directories, $filename) = File::Spec->splitpath($absolute);
+    my @source_dirs = File::Spec->splitdir($directories);
+    pop @source_dirs while @source_dirs && $source_dirs[-1] eq '';
+
+    my @package_parts = defined($package) && !ref($package)
+        ? split(/::/, $package)
+        : ();
+    my $module_file = @package_parts ? pop(@package_parts) . '.pm' : '';
+    my $matches = length($module_file)
+        && _same_path_component($filename, $module_file)
+        && @source_dirs >= @package_parts;
+
+    if ($matches) {
+        for my $offset (1 .. scalar @package_parts) {
+            unless (_same_path_component(
+                $source_dirs[-$offset], $package_parts[-$offset]
+            )) {
+                $matches = 0;
+                last;
+            }
+        }
+    }
+
+    my $home = dirname($absolute);
+    if ($matches) {
+        $home = dirname($home) for @package_parts;
+        $home = dirname($home)
+            if _same_path_component(basename($home), 'lib');
+        $home = dirname($home)
+            if _same_path_component(basename($home), 'blib');
+    }
+
+    return $home;
+}
+
+sub _app_path_from_origin {
+    my ($package, $source, @components) = @_;
+
+    for my $index (0 .. $#components) {
+        my $component = $components[$index];
+        my $position = $index + 1;
+        croak "app_path component $position must be a defined, nonempty, "
+            . "non-reference relative path component"
+            unless defined $component && !ref($component) && length $component;
+        croak "app_path component $position must be relative, not absolute"
+            if File::Spec->file_name_is_absolute($component);
+        my ($volume) = File::Spec->splitpath($component);
+        croak "app_path component $position must not specify a volume"
+            if defined $volume && length $volume;
+    }
+
+    my $home = defined($ENV{PAGI_HOME}) && length($ENV{PAGI_HOME})
+        ? $ENV{PAGI_HOME}
+        : _home_from_origin($package, $source);
+    $home = File::Spec->canonpath(File::Spec->rel2abs($home));
+
+    return $home unless @components;
+    return File::Spec->canonpath(File::Spec->catfile($home, @components));
+}
 
 # True if $x is a PAGI response value: a blessed object that can respond($send).
 # The single source of truth for the "did the handler return a response?" check
@@ -83,7 +181,39 @@ PAGI::Utils - Shared utility helpers for PAGI
         shutdown => async sub { my ($state) = @_; ... },
     ) if $scope->{type} eq 'lifespan';
 
+    use PAGI::Utils qw(app_path);
+
+    my $home       = app_path();
+    my $static     = app_path('static');
+    my $stylesheet = app_path('static', 'css', 'app.css');
+
 =head1 FUNCTIONS
+
+=head2 app_path
+
+    use PAGI::Utils qw(app_path);
+
+    my $home = app_path();
+    my $file = app_path('static', 'css', 'app.css');
+
+Returns an absolute, platform-canonical string rooted at the application home.
+C<PAGI_HOME>, when defined and nonempty, has first precedence; relative values
+are resolved from the current working directory. Otherwise, a direct call from
+a conventional C<lib/Package.pm> source uses the directory above C<lib>, and a
+C<blib/lib/Package.pm> source uses the directory above C<blib>. A caller whose
+source filename does not exactly match its package suffix falls back to the
+source directory. An empty C<PAGI_HOME> is treated as unset.
+
+Pass one logical, relative path component per argument for portable paths.
+Undefined, empty, reference-valued, absolute, and separately volumed components
+croak. Wrapper functions are caller-sensitive: call C<app_path> directly from
+the application module, or have a wrapper arrange to call
+C<_app_path_from_origin> with the intended package and source.
+
+The helper does not check whether a path exists, create it, resolve symlinks, or
+provide a sandbox guarantee. Root-level C<use lib> configuration remains a
+separate bootstrap concern; C<app_path> derives paths only after the caller has
+already been loaded.
 
 =head2 handle_lifespan
 
