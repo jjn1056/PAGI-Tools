@@ -54,6 +54,14 @@ C<method_not_allowed>. The two generated-outcome handlers are ordinary HTTP
 Context handlers. Their cached Response is seeded with status 404 or 405; the
 405 response also begins with the selected C<Allow> value.
 
+=head1 MIGRATING
+
+This release intentionally replaces the previous App Router declaration,
+handler, ordering, middleware, naming, and inspection contracts without a
+compatibility layer. See the
+L<standalone router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>
+in the source distribution for executable before-and-after migrations.
+
 =head1 DECLARATIONS
 
 =head2 HTTP routes

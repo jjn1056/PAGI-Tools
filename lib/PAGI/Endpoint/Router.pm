@@ -132,6 +132,14 @@ handler names to one ordinary Perl object. It does not match requests, build
 Contexts for compiled routes, adapt Responses, load handler packages, inject
 state, or maintain a separate middleware chain.
 
+=head1 MIGRATING
+
+This release intentionally replaces the previous Endpoint handler,
+middleware, state, Context, nesting, and naming contracts without a
+compatibility layer. See the
+L<standalone router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>
+in the source distribution for executable before-and-after migrations.
+
 =head1 CONSTRUCTION AND LIFECYCLE
 
 =head2 new
