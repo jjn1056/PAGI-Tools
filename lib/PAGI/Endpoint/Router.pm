@@ -103,6 +103,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
             $self->{configured_middleware},
             middleware('Session', cookie_name => 'sid'),
         ] => 'show')->name('show');
+        $r->get('/download', raw => $self->app_as('download'));
         $r->websocket('/chat/{room}' => 'chat')->name('chat');
         $r->sse('/events' => 'events')->name('events');
         $r->mount('/admin' => $self->app_as('admin_app'));
@@ -210,6 +211,26 @@ WebSocket and SSE handlers use their Context operations and may complete
 immediately or through a Future. All response validation and protocol events
 belong to the shared compiler.
 
+=head1 RAW LEAVES
+
+Endpoint accepts the same explicit native leaf grammar as App Router, after
+the optional positional middleware array:
+
+    $r->get('/raw-http' => [
+        $self->middleware_as('audit'),
+    ], raw => $native_http_app);
+    $r->websocket('/raw-ws', raw => $native_ws_app);
+    $r->sse('/raw-events', raw => $native_sse_app);
+
+The C<raw> marker and native application coderef pass unchanged to the shared
+App builder. The target receives exactly C<($scope, $receive, $send)> and owns
+its protocol events; route middleware still wraps that native application.
+Malformed raw declarations fail synchronously with raw-target diagnostics.
+
+An ordinary method-name target continues to bind C<($endpoint, $context)>.
+An ordinary handler coderef continues to pass through unchanged and receive
+one Context. Neither form becomes raw without the explicit marker.
+
 =head1 MIDDLEWARE
 
 Every router, group, mount, and route middleware array uses the universal four
@@ -247,11 +268,15 @@ immediately. Constructing the helper performs no protocol I/O.
 =head2 app_as
 
     my $app = $endpoint->app_as('native_app');
+    $r->get('/download', raw => $endpoint->app_as('native_app'));
+    $r->mount('/legacy' => $endpoint->app_as('native_app'));
 
 Validates the method and returns a native application closure. When invoked,
 the method receives C<($endpoint, $scope, $receive, $send)>. The helper is
-useful at opaque mount or composition boundaries and does no work merely by
-being constructed.
+useful as the target of an exact raw leaf, an opaque mount, or another native
+composition boundary, and does no work merely by being constructed. A raw
+leaf remains method-aware and keeps its matched path; an opaque mount owns and
+rewrites a matched prefix.
 
 =head1 CONTEXT AND STATE
 

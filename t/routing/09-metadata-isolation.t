@@ -539,7 +539,7 @@ subtest 'matched capture snapshots do not alias mutable scope path parameters' =
                     frame_id => refaddr($frame),
                     scope_params_id => refaddr($original_scope_params),
                     captures_id => refaddr($frame->{captures}),
-                    name      => $frame->{logical_namespace},
+                    logical_namespace => $frame->{logical_namespace},
                     captures_before => { %{$frame->{captures}} },
                 };
 
@@ -564,7 +564,8 @@ subtest 'matched capture snapshots do not alias mutable scope path parameters' =
 
     isnt($seen[0]{captures_id}, $seen[0]{scope_params_id},
         'the frame capture snapshot is a distinct hash from scope path_params');
-    is($seen[0]{name}, '/api', 'the full leaf records its containing namespace');
+    is($seen[0]{logical_namespace}, '/api',
+        'the full leaf records its containing namespace');
     is($seen[0]{captures_before}, { account_id => 'acme', item_id => 7 },
         'the full leaf snapshot includes all effective captures');
     is($seen[0]{captures_after}, $seen[0]{captures_before},

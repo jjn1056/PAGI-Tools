@@ -127,10 +127,10 @@ subtest 'mounted child generated handlers retain only the owning prefix placemen
             my ($c) = @_;
             my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
             push @seen, {
-                label      => $label,
-                name      => $frame->{logical_namespace},
-                captures   => { %{$frame->{captures}} },
-                local_path => $c->path_for('index'),
+                label             => $label,
+                logical_namespace => $frame->{logical_namespace},
+                captures          => { %{$frame->{captures}} },
+                local_path        => $c->path_for('index'),
             };
             return $c->text("child $label");
         };
@@ -169,16 +169,16 @@ subtest 'mounted child generated handlers retain only the owning prefix placemen
         'all matching PARTIAL leaves still contribute methods');
     is(\@seen, [
         {
-            label => '404',
-            name      => '/people',
-            captures => { person_id => 42 },
-            local_path => '/people/42/',
+            label             => '404',
+            logical_namespace => '/people',
+            captures          => { person_id => 42 },
+            local_path        => '/people/42/',
         },
         {
-            label => '405',
-            name      => '/people',
-            captures => { person_id => 42 },
-            local_path => '/people/42/',
+            label             => '405',
+            logical_namespace => '/people',
+            captures          => { person_id => 42 },
+            local_path        => '/people/42/',
         },
     ], 'generated handlers use the owning mount snapshot and no PARTIAL leaf capture');
 };

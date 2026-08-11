@@ -335,9 +335,9 @@ subtest 'relative child links follow the active Router placement without mutatin
             my ($c) = @_;
             my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
             push @seen, {
-                path => $c->path_for('show'),
-                name      => $frame->{logical_namespace},
-                captures => { %{$frame->{captures}} },
+                path              => $c->path_for('show'),
+                logical_namespace => $frame->{logical_namespace},
+                captures          => { %{$frame->{captures}} },
             };
             return $c->text('person');
         }, name => 'show'),
@@ -353,14 +353,14 @@ subtest 'relative child links follow the active Router placement without mutatin
 
     is(\@seen, [
         {
-            path => '/authors/42',
-            name      => '/authors',
-            captures => { person_id => 42 },
+            path              => '/authors/42',
+            logical_namespace => '/authors',
+            captures          => { person_id => 42 },
         },
         {
-            path => '/editors/42',
-            name      => '/editors',
-            captures => { person_id => 42 },
+            path              => '/editors/42',
+            logical_namespace => '/editors',
+            captures          => { person_id => 42 },
         },
     ], 'one child handler resolves through the request-local active placement');
     is($child->path_for('show', { person_id => 42 }), '/42',

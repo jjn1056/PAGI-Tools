@@ -9,7 +9,7 @@ use lib 'lib', 't/lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Endpoint::Router ();
-use PAGI::Routing qw(middleware route router);
+use PAGI::Routing qw(middleware mount route router sse websocket);
 
 sub scope {
     my (%change) = @_;
@@ -50,6 +50,191 @@ sub response_body {
     return join '', map { defined $_->{body} ? $_->{body} : '' }
         grep { (defined $_->{type} ? $_->{type} : '') eq 'http.response.body' }
         @$events;
+}
+
+sub response_status {
+    my ($events) = @_;
+    my ($start) = grep {
+        (defined $_->{type} ? $_->{type} : '') eq 'http.response.start'
+    } @$events;
+    return defined $start ? $start->{status} : undef;
+}
+
+sub response_header {
+    my ($events, $name) = @_;
+    my ($start) = grep {
+        (defined $_->{type} ? $_->{type} : '') eq 'http.response.start'
+    } @$events;
+    return unless $start;
+    for my $pair (@{$start->{headers}}) {
+        return $pair->[1] if lc($pair->[0]) eq lc($name);
+    }
+    return;
+}
+
+sub routing_match_projection {
+    my ($context) = @_;
+    my $frame = $context->scope->{'pagi.routing'}{frames}[-1];
+    return {
+        logical_namespace => $frame->{logical_namespace},
+        captures => { %{$frame->{captures}} },
+        mounts => [map {
+            +{ path => $_->{path}, name => $_->{name}, desc => $_->{desc} }
+        } @{$frame->{mounts}}],
+        match => {
+            kind => $frame->{match}{kind},
+            route => $frame->{match}{route},
+            name => $frame->{match}{name},
+            logical_namespace => $frame->{match}{logical_namespace},
+        },
+    };
+}
+
+sub representative_handlers {
+    my ($seen) = @_;
+    return {
+        post => sub {
+            my ($context) = @_;
+            return $context->text('post ' . $context->path_param('id'));
+        },
+        get => sub {
+            my ($context) = @_;
+            push @$seen, {
+                label => 'get',
+                request_method => $context->request->method,
+                routing => routing_match_projection($context),
+            };
+            return $context->response->status(207)
+                ->text('get ' . $context->path_param('id'));
+        },
+        mounted => sub {
+            my ($context) = @_;
+            push @$seen, {
+                label => 'mounted',
+                routing => routing_match_projection($context),
+            };
+            return $context->text(join ':',
+                $context->path_param('tenant'),
+                $context->path_param('child_id'));
+        },
+        websocket => sub {
+            my ($context) = @_;
+            push @$seen, {
+                label => 'websocket',
+                routing => routing_match_projection($context),
+            };
+            return $context->close(1000, 'representative');
+        },
+        sse => sub {
+            my ($context) = @_;
+            push @$seen, {
+                label => 'sse',
+                routing => routing_match_projection($context),
+            };
+            return $context->close;
+        },
+    };
+}
+
+sub build_functional_representative {
+    my ($seen) = @_;
+    my $handler = representative_handlers($seen);
+    my $child = router(
+        desc => 'Child routes',
+        routes => [
+            route('/detail/{child_id}' => $handler->{mounted},
+                name => 'detail', desc => 'Mounted detail'),
+        ],
+    );
+    return router(
+        desc => 'Representative routes',
+        routes => [
+            route('/resource/{id}' => $handler->{post},
+                methods => 'POST', name => 'post_resource',
+                desc => 'POST resource'),
+            route('/resource/{id}' => $handler->{get},
+                methods => 'GET', name => 'get_resource',
+                desc => 'GET resource'),
+            mount('/api/{tenant}', router => $child,
+                name => 'api', desc => 'API boundary'),
+            websocket('/socket/{room}' => $handler->{websocket},
+                name => 'socket', desc => 'Socket route'),
+            sse('/events/{stream}' => $handler->{sse},
+                name => 'events', desc => 'Event route'),
+        ],
+    );
+}
+
+sub build_app_representative {
+    my ($seen) = @_;
+    my $handler = representative_handlers($seen);
+    my $child = PAGI::App::Router->new(desc => 'Child routes');
+    $child->get('/detail/{child_id}' => $handler->{mounted})
+        ->name('detail')->desc('Mounted detail');
+
+    my $builder = PAGI::App::Router->new(desc => 'Representative routes');
+    $builder->post('/resource/{id}' => $handler->{post})
+        ->name('post_resource')->desc('POST resource');
+    $builder->get('/resource/{id}' => $handler->{get})
+        ->name('get_resource')->desc('GET resource');
+    $builder->mount('/api/{tenant}', router => $child)
+        ->name('api')->desc('API boundary');
+    $builder->websocket('/socket/{room}' => $handler->{websocket})
+        ->name('socket')->desc('Socket route');
+    $builder->sse('/events/{stream}' => $handler->{sse})
+        ->name('events')->desc('Event route');
+    return $builder->to_router;
+}
+
+sub immutable_router_projection;
+
+sub immutable_node_projection {
+    my ($node) = @_;
+    my $projection = {
+        kind => $node->kind,
+        path => $node->path,
+        name => $node->name,
+        desc => $node->desc,
+        methods => $node->methods,
+        is_raw => $node->is_raw ? 1 : 0,
+    };
+    my $child = $node->can('router') ? $node->router : undef;
+    $projection->{router} = immutable_router_projection($child)
+        if defined $child;
+    return $projection;
+}
+
+sub immutable_router_projection {
+    my ($routing) = @_;
+    return {
+        desc => $routing->desc,
+        routes => [map { immutable_node_projection($_) } @{$routing->routes}],
+    };
+}
+
+sub exercise_representative {
+    my ($routing, $seen) = @_;
+    my $app = $routing->to_app;
+    my $full = run_scope($app, scope(path => '/resource/7'));
+    my $partial = run_scope($app, scope(
+        method => 'DELETE', path => '/resource/7'));
+    my $head = run_scope($app, scope(
+        method => 'HEAD', path => '/resource/7'));
+    my $mounted = run_scope($app, scope(
+        path => '/api/acme/detail/9'));
+    my $socket = run_scope($app, scope(
+        type => 'websocket', method => undef, path => '/socket/lobby'));
+    my $events = run_scope($app, scope(
+        type => 'sse', method => undef, path => '/events/news'));
+    return {
+        full => [response_status($full), response_body($full)],
+        partial => [response_status($partial), response_header($partial, 'Allow')],
+        head => [response_status($head), response_body($head)],
+        mounted => [response_status($mounted), response_body($mounted)],
+        websocket => $socket,
+        sse => $events,
+        seen => $seen,
+    };
 }
 
 sub native_app {
@@ -162,20 +347,132 @@ sub channel_probe {
 
 my @migration_cases = (
     {
-        name => 'three public frontends materialize one routing model',
+        name => 'functional and App frontends describe and run one routing model',
         run  => sub {
-            my $immutable = router(routes => [
-                route('/direct' => sub { return $_[0]->text('direct') }),
-            ]);
-            my $builder = PAGI::App::Router->new;
-            $builder->get('/builder' => sub { return $_[0]->text('builder') });
-            my $endpoint = Local::UpgradeEndpoint->new;
+            my (@functional_seen, @app_seen);
+            my $functional = build_functional_representative(\@functional_seen);
+            my $app = build_app_representative(\@app_seen);
+            my $expected_projection = {
+                desc => 'Representative routes',
+                routes => [
+                    {
+                        kind => 'route', path => '/resource/{id}',
+                        name => 'post_resource', desc => 'POST resource',
+                        methods => ['POST'], is_raw => 0,
+                    },
+                    {
+                        kind => 'route', path => '/resource/{id}',
+                        name => 'get_resource', desc => 'GET resource',
+                        methods => ['GET', 'HEAD'], is_raw => 0,
+                    },
+                    {
+                        kind => 'mount', path => '/api/{tenant}', name => 'api',
+                        desc => 'API boundary', methods => undef, is_raw => 0,
+                        router => {
+                            desc => 'Child routes',
+                            routes => [{
+                                kind => 'route', path => '/detail/{child_id}',
+                                name => 'detail', desc => 'Mounted detail',
+                                methods => ['GET', 'HEAD'], is_raw => 0,
+                            }],
+                        },
+                    },
+                    {
+                        kind => 'websocket', path => '/socket/{room}',
+                        name => 'socket', desc => 'Socket route',
+                        methods => undef, is_raw => 0,
+                    },
+                    {
+                        kind => 'sse', path => '/events/{stream}',
+                        name => 'events', desc => 'Event route',
+                        methods => undef, is_raw => 0,
+                    },
+                ],
+            };
             is([
-                ref($immutable),
-                ref($builder->to_router),
-                ref($endpoint->to_router),
-            ], [('PAGI::Routing::Router') x 3],
-                'functional, closure, and method frontends share Router snapshots');
+                immutable_router_projection($functional),
+                immutable_router_projection($app),
+            ], [$expected_projection, $expected_projection],
+                'both frontends expose the same ordered public immutable-node projection');
+
+            my $expected_behavior = {
+                full => [207, 'get 7'],
+                partial => [405, 'POST, GET, HEAD'],
+                head => [207, ''],
+                mounted => [200, 'acme:9'],
+                websocket => [{
+                    type => 'websocket.close', code => 1000,
+                    reason => 'representative',
+                }],
+                sse => [{ type => 'sse.close' }],
+                seen => [
+                    {
+                        label => 'get', request_method => 'GET',
+                        routing => {
+                            logical_namespace => '/', captures => { id => 7 },
+                            mounts => [],
+                            match => {
+                                kind => 'route', route => '/resource/{id}',
+                                name => '/get_resource', logical_namespace => '/',
+                            },
+                        },
+                    },
+                    {
+                        label => 'get', request_method => 'HEAD',
+                        routing => {
+                            logical_namespace => '/', captures => { id => 7 },
+                            mounts => [],
+                            match => {
+                                kind => 'route', route => '/resource/{id}',
+                                name => '/get_resource', logical_namespace => '/',
+                            },
+                        },
+                    },
+                    {
+                        label => 'mounted',
+                        routing => {
+                            logical_namespace => '/api',
+                            captures => { tenant => 'acme', child_id => 9 },
+                            mounts => [{
+                                path => '/api/{tenant}', name => 'api',
+                                desc => 'API boundary',
+                            }],
+                            match => {
+                                kind => 'route',
+                                route => '/api/{tenant}/detail/{child_id}',
+                                name => '/api/detail', logical_namespace => '/api',
+                            },
+                        },
+                    },
+                    {
+                        label => 'websocket',
+                        routing => {
+                            logical_namespace => '/', captures => { room => 'lobby' },
+                            mounts => [],
+                            match => {
+                                kind => 'websocket', route => '/socket/{room}',
+                                name => '/socket', logical_namespace => '/',
+                            },
+                        },
+                    },
+                    {
+                        label => 'sse',
+                        routing => {
+                            logical_namespace => '/', captures => { stream => 'news' },
+                            mounts => [],
+                            match => {
+                                kind => 'sse', route => '/events/{stream}',
+                                name => '/events', logical_namespace => '/',
+                            },
+                        },
+                    },
+                ],
+            };
+            is([
+                exercise_representative($functional, \@functional_seen),
+                exercise_representative($app, \@app_seen),
+            ], [$expected_behavior, $expected_behavior],
+                'both frontends share FULL, PARTIAL/405, automatic HEAD, mount, protocol, and metadata behavior');
         },
     },
     {

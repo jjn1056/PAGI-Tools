@@ -174,12 +174,14 @@ subtest 'last declaration modifiers update only the latest compatible route' => 
     is($records->[1]{constraints}, undef, 'later declarations do not inherit constraints');
 
     my $empty = PAGI::App::Router::Builder->new;
-    like dies { $empty->name('missing') }, qr/name called without a preceding compatible route/,
+    like dies { $empty->name('missing') },
+        qr/name called without a preceding compatible declaration/,
         'name requires a preceding compatible declaration';
-    like dies { $empty->desc('missing') }, qr/desc called without a preceding compatible route/,
+    like dies { $empty->desc('missing') },
+        qr/desc called without a preceding compatible declaration/,
         'desc requires a preceding compatible declaration';
     like dies { $empty->constraints(id => qr/.+/) },
-        qr/constraints called without a preceding compatible route/,
+        qr/constraints called without a preceding compatible declaration/,
         'constraints requires a preceding compatible declaration';
     like dies { $builder->name('with/slash') }, qr/name must be one logical address segment/,
         'name uses shared logical segment validation';

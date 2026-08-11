@@ -292,7 +292,10 @@ sub constraints {
 sub _last_record_for {
     my ($self, $modifier) = @_;
     my $record = $self->{declarations}[-1];
-    croak "$modifier called without a preceding compatible route"
+    croak 'opaque mounts cannot be named'
+        if $record && $modifier eq 'name'
+            && $record->{node_kind} eq 'mount' && $record->{is_raw};
+    croak "$modifier called without a preceding compatible declaration"
         unless $record
             && (($record->{node_kind} eq 'route'
                 || $record->{node_kind} eq 'websocket'

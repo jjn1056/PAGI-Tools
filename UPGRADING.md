@@ -95,6 +95,18 @@ $r->sse('/events', raw => $native_event_app);
 Why: `raw` makes it visible that the target receives
 `($scope, $receive, $send)` and emits its own protocol events.
 
+Endpoint uses the same grammar, including after positional middleware. Use
+`app_as` only when the native target is a local Endpoint method:
+
+```perl
+$r->get('/download' => [$self->middleware_as('audit')],
+    raw => $self->app_as('download'));
+```
+
+The raw coderef is otherwise preserved rather than rebound. Ordinary Endpoint
+method names still receive `($self, $c)`, and ordinary handler coderefs still
+receive `($c)`.
+
 ## Generic `route` is path-first
 
 **Before (removed):** the generic form put the HTTP method before the path.

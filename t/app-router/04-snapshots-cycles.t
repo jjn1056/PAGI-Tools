@@ -53,6 +53,29 @@ sub router_methods_exist {
     }
 }
 
+{
+    package Local::SharedStateMiddleware;
+
+    sub new {
+        my ($class, $state) = @_;
+        return bless {
+            state => $state, wrappers => [], inner_ids => [], state_ids => [],
+        }, $class;
+    }
+
+    sub wrap {
+        my ($self, $inner) = @_;
+        push @{$self->{inner_ids}}, Scalar::Util::refaddr($inner);
+        my $wrapper = sub {
+            ++$self->{state}{requests};
+            push @{$self->{state_ids}}, Scalar::Util::refaddr($self->{state});
+            return $inner->(@_);
+        };
+        push @{$self->{wrappers}}, $wrapper;
+        return $wrapper;
+    }
+}
+
 subtest 'snapshots are immutable, root-local, and fresh' => sub {
     my $builder = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($builder);
@@ -224,6 +247,35 @@ subtest 'to_app materializes once and compiles the retained snapshot' => sub {
     is($client->get('/item')->text, 'item', 'the retained snapshot serves existing routes');
     is($client->get('/late')->status, 404,
         'the compiled app does not observe Builder mutation after to_app');
+};
+
+subtest 'two to_app calls compile fresh wrappers around caller-owned shared state' => sub {
+    my $state = { requests => 0 };
+    my $middleware = Local::SharedStateMiddleware->new($state);
+    my $builder = PAGI::App::Router::Builder->new(
+        middleware => [$middleware],
+    );
+    $builder->get('/item' => handler('item'));
+
+    my $first = $builder->to_app;
+    my $second = $builder->to_app;
+    isnt(refaddr($first), refaddr($second),
+        'separate to_app calls return distinct compiled root applications');
+    is(scalar @{$middleware->{wrappers}}, 2,
+        'the configured middleware object wraps once per compilation');
+    isnt(refaddr($middleware->{wrappers}[0]), refaddr($middleware->{wrappers}[1]),
+        'each compilation receives a fresh middleware wrapper closure');
+    isnt($middleware->{inner_ids}[0], $middleware->{inner_ids}[1],
+        'each wrapper encloses a fresh downstream compiled graph');
+
+    is(PAGI::Test::Client->new(app => $first)->get('/item')->text, 'item',
+        'the first compiled graph dispatches');
+    is(PAGI::Test::Client->new(app => $second)->get('/item')->text, 'item',
+        'the second compiled graph dispatches');
+    is($state->{requests}, 2,
+        'both fresh graphs intentionally update the caller-owned state');
+    is($middleware->{state_ids}, [(refaddr($state)) x 2],
+        'both wrappers retain the exact caller-owned state reference');
 };
 
 subtest 'one compiled app isolates two in-flight reused-child requests' => sub {

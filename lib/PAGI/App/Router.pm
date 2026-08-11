@@ -32,6 +32,7 @@ PAGI::App::Router - Mutable frontend for the shared immutable PAGI router
 =head1 SYNOPSIS
 
     use PAGI::App::Router;
+    use PAGI::Routing qw(middleware);
 
     my $r = PAGI::App::Router->new;
     $r->head('/report' => \&head_report);
@@ -223,11 +224,7 @@ C<to_app> per request.
 
 =head1 INSPECTION AND REVERSE ROUTING
 
-=head2 named_routes
-
-=head2 route_named
-
-=head2 path_for
+=head2 named_routes, route_named, and path_for
 
 These convenience methods delegate through a fresh C<to_router> snapshot on
 every call. They therefore repeat materialization and validation; immutable

@@ -29,6 +29,139 @@ sub run_scope {
 }
 
 {
+    package Local::RawEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+
+    sub new {
+        my ($class) = @_;
+        my $self = bless { seen => [] }, $class;
+        $self->{targets} = {
+            http => sub { return $self->_raw('http', @_) },
+            websocket => sub { return $self->_raw('websocket', @_) },
+            sse => sub { return $self->_raw('sse', @_) },
+        };
+        $self->{closure} = sub {
+            my ($context) = @_;
+            return $context->text('closure');
+        };
+        return $self;
+    }
+
+    sub routes {
+        my ($self, $r) = @_;
+        for my $kind (qw(http websocket sse)) {
+            my $method = $kind eq 'http' ? 'get' : $kind;
+            $r->$method("/raw-$kind/{id}" => [
+                $self->middleware_as('mark_raw'),
+            ], raw => $self->{targets}{$kind});
+        }
+        $r->get('/method' => 'method_handler');
+        $r->get('/closure' => $self->{closure});
+    }
+
+    sub mark_raw {
+        my ($self, $inner) = @_;
+        return sub {
+            my ($scope, $receive, $send) = @_;
+            my $copy = { %$scope, endpoint_raw_middleware => 1 };
+            return $inner->($copy, $receive, $send);
+        };
+    }
+
+    sub _raw {
+        my ($self, $kind, $scope, $receive, $send) = @_;
+        push @{$self->{seen}}, {
+            kind => $kind,
+            type => $scope->{type},
+            id => $scope->{path_params}{id},
+            middleware => $scope->{endpoint_raw_middleware},
+        };
+        return $send->({
+            type => 'http.response.start', status => 200, headers => [],
+        })->then(sub {
+            return $send->({
+                type => 'http.response.body', body => 'raw http', more => 0,
+            });
+        }) if $kind eq 'http';
+        return $send->({
+            type => 'websocket.close', code => 1000, reason => 'raw websocket',
+        }) if $kind eq 'websocket';
+        return $send->({ type => 'sse.close' });
+    }
+
+    sub method_handler {
+        my ($self, $context) = @_;
+        return $context->text('method');
+    }
+}
+
+{
+    package Local::MalformedRawEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+    sub new { return bless { mode => $_[1] }, $_[0] }
+    sub routes {
+        my ($self, $r) = @_;
+        return $r->get('/bad', raw => undef) if $self->{mode} eq 'undefined';
+        return $r->websocket('/bad', raw => 'native')
+            if $self->{mode} eq 'noncoderef';
+        return $r->sse('/bad', 'raw') if $self->{mode} eq 'missing';
+    }
+}
+
+subtest 'Endpoint raw leaves preserve native targets and middleware for every protocol' => sub {
+    my $endpoint = Local::RawEndpoint->new;
+    my $routing = $endpoint->to_router;
+    my $nodes = $routing->routes;
+
+    is([map { $_->is_raw ? 1 : 0 } @$nodes], [1, 1, 1, 0, 0],
+        'only the three explicitly tagged declarations are raw leaves');
+    is([map { refaddr($nodes->[$_]->target) } 0 .. 2],
+        [map { refaddr($endpoint->{targets}{$_}) } qw(http websocket sse)],
+        'Endpoint forwards every native raw coderef unchanged');
+    is(refaddr($nodes->[4]->target), refaddr($endpoint->{closure}),
+        'an ordinary handler coderef remains unchanged');
+
+    my $app = $routing->to_app;
+    is(run_scope($app, scope(path => '/raw-http/11', raw_path => '/raw-http/11')), [
+        { type => 'http.response.start', status => 200, headers => [] },
+        { type => 'http.response.body', body => 'raw http', more => 0 },
+    ], 'raw HTTP receives native channels through Endpoint middleware');
+    is(run_scope($app, scope(
+        type => 'websocket', path => '/raw-websocket/22',
+        raw_path => '/raw-websocket/22',
+    )), [{
+        type => 'websocket.close', code => 1000, reason => 'raw websocket',
+    }], 'raw WebSocket receives native channels through Endpoint middleware');
+    is(run_scope($app, scope(
+        type => 'sse', path => '/raw-sse/33', raw_path => '/raw-sse/33',
+    )), [{ type => 'sse.close' }],
+        'raw SSE receives native channels through Endpoint middleware');
+    is($endpoint->{seen}, [
+        { kind => 'http', type => 'http', id => 11, middleware => 1 },
+        { kind => 'websocket', type => 'websocket', id => 22, middleware => 1 },
+        { kind => 'sse', type => 'sse', id => 33, middleware => 1 },
+    ], 'each raw leaf sees captures and the middleware-cloned scope');
+
+    my $client = PAGI::Test::Client->new(app => $app);
+    is($client->get('/method')->text, 'method',
+        'an ordinary method name keeps Endpoint binding semantics');
+    is($client->get('/closure')->text, 'closure',
+        'an ordinary handler coderef keeps Context binding semantics');
+};
+
+subtest 'Endpoint rejects malformed raw leaf declarations clearly' => sub {
+    like(dies { Local::MalformedRawEndpoint->new('undefined')->to_router },
+        qr/raw target must be defined/,
+        'an explicit raw marker requires a defined target');
+    like(dies { Local::MalformedRawEndpoint->new('noncoderef')->to_router },
+        qr/raw target must be an explicitly compiled coderef/,
+        'an explicit raw marker requires a native app coderef');
+    like(dies { Local::MalformedRawEndpoint->new('missing')->to_router },
+        qr/raw target must be defined/,
+        'a raw marker without a following target is rejected as malformed raw syntax');
+};
+
+{
     package Local::TreeEndpoint;
     use parent 'PAGI::Endpoint::Router';
 
@@ -268,7 +401,10 @@ subtest 'two Endpoint objects report a materialization cycle' => sub {
     }
     sub routes {
         my ($self, $r) = @_;
-        if ($self->{mode} eq 'group') {
+        if ($self->{mode} eq 'leaf') {
+            $r->get('/provider/{leaf:&Int}' => 'provider_leaf')->name('leaf');
+        }
+        elsif ($self->{mode} eq 'group') {
             $r->group('/group/{group:&Int}' => sub {
                 $_[0]->get('/leaf' => 'group_leaf')->name('leaf');
             })->name('group');
@@ -282,7 +418,21 @@ subtest 'two Endpoint objects report a materialization cycle' => sub {
         my ($self, $c) = @_;
         return $c->text('group ' . $c->path_param('group'));
     }
+    sub provider_leaf {
+        my ($self, $c) = @_;
+        return $c->text('leaf ' . $c->path_param('leaf'));
+    }
 }
+
+subtest 'a leaf resolves its inline provider in the Endpoint package' => sub {
+    my $endpoint = Local::ProviderEndpoint->new(mode => 'leaf');
+    my $client = PAGI::Test::Client->new(app => $endpoint->to_app);
+
+    is($client->get('/provider/56')->text, 'leaf 56',
+        'an unqualified leaf provider resolves in the Endpoint package');
+    is($client->get('/provider/no')->status, 404,
+        'the Endpoint leaf provider rejects a nonmatching capture');
+};
 
 subtest 'a group prefix resolves its provider in the Endpoint package' => sub {
     my $endpoint = Local::ProviderEndpoint->new(mode => 'group');

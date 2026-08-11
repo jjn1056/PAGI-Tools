@@ -79,7 +79,7 @@ subtest 'groups and mounts retain structural shape and strict target grammar' =>
     $builder->mount('/assets/{bucket}' => $opaque)
         ->desc('opaque assets')->constraints(bucket => qr/[a-z]+/);
     like(dies { $builder->name('assets') },
-        qr/name called without a preceding compatible route|opaque.*name/i,
+        qr/opaque mounts cannot be named/,
         'an opaque mount cannot be named');
 
     my $immutable = PAGI::Routing::Router->new(routes => []);

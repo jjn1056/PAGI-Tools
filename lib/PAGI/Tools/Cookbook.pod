@@ -983,8 +983,9 @@ class, configured object, and explicit description forms. The first entry is
 outermost, and this same contract works for HTTP, WebSocket, and SSE.
 
 Use C<< $self->app_as('native_method') >> when a local method should receive
-C<($self, $scope, $receive, $send)> behind an opaque mount or other native app
-boundary. It is not an ordinary route handler adapter.
+C<($self, $scope, $receive, $send)>. Supply it after C<raw> for an exact,
+method-aware leaf, or positionally for an opaque prefix mount. It is not an
+ordinary route handler adapter.
 
 =head3 Mounting Sub-Routers
 
@@ -1141,8 +1142,8 @@ state in Compose lifespan state, and every declaration inspectable:
       $r->websocket('/ws/{room}' => 'chat')->name('chat');
       $r->sse('/events' => 'events')->name('events');
 
-      # app_as exposes a local native method at an opaque app boundary.
-      $r->mount('/download' => $self->app_as('download'));
+      # app_as exposes a local native method as one exact raw HTTP leaf.
+      $r->get('/download', raw => $self->app_as('download'));
 
       # Prefix owners follow written order; the static catch-all stays last.
       $r->mount('/' => [$self->{access_factory}] => $self->{static});

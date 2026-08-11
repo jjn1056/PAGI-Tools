@@ -87,6 +87,14 @@ sub _add_route_from {
     my $middleware = [];
     $middleware = shift @args if ref($args[0]) eq 'ARRAY';
     croak 'route requires a target' unless @args;
+
+    if (defined $args[0] && !ref($args[0]) && $args[0] eq 'raw') {
+        $self->{builder}->_add_route_from(
+            $caller, $kind, $methods, $path, $middleware, @args,
+        );
+        return $self;
+    }
+
     my $handler = shift @args;
 
     my $target;

@@ -118,7 +118,7 @@ subtest 'compiled Context references resolve exactly from the matched containing
                     my ($c) = @_;
                     my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
                     push @show_results, {
-                        name      => $frame->{logical_namespace},
+                        logical_namespace => $frame->{logical_namespace},
                         captures         => { %{$frame->{captures}} },
                         show             => $c->path_for('show'),
                         index            => $c->path_for('index'),
@@ -181,9 +181,9 @@ subtest 'compiled Context references resolve exactly from the matched containing
                     my ($c) = @_;
                     my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
                     push @catchall_results, {
-                        name      => $frame->{logical_namespace},
-                        captures  => { %{$frame->{captures}} },
-                        index     => $c->path_for('index'),
+                        logical_namespace => $frame->{logical_namespace},
+                        captures          => { %{$frame->{captures}} },
+                        index             => $c->path_for('index'),
                     };
                     return $c->text('catchall');
                 }),
@@ -203,7 +203,7 @@ subtest 'compiled Context references resolve exactly from the matched containing
     );
 
     is(\@show_results, [{
-        name      => '/person/blog',
+        logical_namespace => '/person/blog',
         captures      => { person_id => 42, blog_id => 7 },
         show          => '/person/42/blog/7',
         index         => '/person/42/blog/',
@@ -217,9 +217,9 @@ subtest 'compiled Context references resolve exactly from the matched containing
         with_suffixes => 'https://example.test/person/42/blog/7?view=full#comments',
     }], 'relative Context generation uses the exact active namespace and target captures');
     is(\@catchall_results, [{
-        name      => '/person/blog',
-        captures => { person_id => 42, rest => 'missing/path' },
-        index => '/person/42/blog/',
+        logical_namespace => '/person/blog',
+        captures          => { person_id => 42, rest => 'missing/path' },
+        index             => '/person/42/blog/',
     }], 'an unnamed catchall keeps its containing namespace and filters its wildcard capture');
 };
 
