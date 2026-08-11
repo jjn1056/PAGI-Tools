@@ -1,182 +1,150 @@
+#!/usr/bin/env perl
 use strict;
 use warnings;
 use Test2::V0;
+use Scalar::Util qw(refaddr);
 
+use lib 'lib';
 use PAGI::App::Router;
 
-subtest 'basic named routes' => sub {
+sub handler { return sub { return $_[0]->text('ok') } }
+
+subtest 'public names are local segments and inspection uses slash addresses' => sub {
     my $router = PAGI::App::Router->new;
+    $router->get('/users' => handler())->name('list');
+    $router->get('/users/{id}' => handler())->name('show');
+    $router->post('/users' => handler())->name('create');
 
-    my $handler = sub { };
-
-    $router->get('/users' => $handler)->name('users.list');
-    $router->get('/users/:id' => $handler)->name('users.get');
-    $router->post('/users' => $handler)->name('users.create');
-
-    # Check named routes exist
-    my $routes = $router->named_routes;
-    ok exists $routes->{'users.list'}, 'users.list exists';
-    ok exists $routes->{'users.get'}, 'users.get exists';
-    ok exists $routes->{'users.create'}, 'users.create exists';
-
-    # Basic uri_for
-    is $router->uri_for('users.list'), '/users', 'uri_for users.list';
-    is $router->uri_for('users.get', { id => 42 }), '/users/42', 'uri_for users.get with id';
-    is $router->uri_for('users.create'), '/users', 'uri_for users.create';
+    is([sort keys %{$router->named_routes}], ['/create', '/list', '/show'],
+        'root names are canonical absolute slash addresses');
+    is($router->path_for('/list'), '/users', 'a static name renders its path');
+    is($router->path_for('/show', { id => 42 }), '/users/42',
+        'a parameterized name renders its capture');
+    is($router->path_for('/create'), '/users',
+        'method siblings may render the same path under distinct names');
+    ok(!$router->can('uri_for'), 'uri_for is removed rather than aliased');
+    ok(!$router->can('as'), 'as is removed rather than aliased');
 };
 
-subtest 'uri_for with query params' => sub {
+subtest 'path_for renders sorted query and one escaped fragment' => sub {
     my $router = PAGI::App::Router->new;
+    $router->get('/search/{term}' => handler())->name('search');
 
-    $router->get('/users' => sub {})->name('users.list');
-    $router->get('/users/:id' => sub {})->name('users.get');
-
-    # Query params only
-    is $router->uri_for('users.list', {}, { page => 2, limit => 10 }),
-        '/users?limit=10&page=2',
-        'query params sorted alphabetically';
-
-    # Path and query params
-    is $router->uri_for('users.get', { id => 5 }, { format => 'json' }),
-        '/users/5?format=json',
-        'path and query params';
+    is(
+        $router->path_for(
+            '/search',
+            { term => 'two words' },
+            { page => 2, 'a key' => 'A&B' },
+            'result details',
+        ),
+        '/search/two%20words?a%20key=A%26B&page=2#result%20details',
+        'path, query, and fragment use shared component encoding',
+    );
+    is(
+        $router->path_for('/search',
+            params => { term => 'perl' },
+            fragment => ''),
+        '/search/perl#',
+        'named reverse arguments and an empty fragment are supported',
+    );
 };
 
-subtest 'uri_for with special characters' => sub {
+subtest 'reverse errors use the immutable Resolver contract' => sub {
     my $router = PAGI::App::Router->new;
+    $router->get('/users/{id}' => handler())->name('show');
 
-    $router->get('/search' => sub {})->name('search');
-
-    is $router->uri_for('search', {}, { q => 'hello world' }),
-        '/search?q=hello%20world',
-        'space encoded';
-
-    is $router->uri_for('search', {}, { q => 'foo&bar' }),
-        '/search?q=foo%26bar',
-        'ampersand encoded';
+    like(dies { $router->path_for('/missing') },
+        qr/unknown route name '\/missing'/, 'unknown exact address fails');
+    like(dies { $router->path_for('/show') },
+        qr/missing path parameter 'id'/, 'missing path parameter fails');
+    like(dies { $router->path_for('/show', { id => 1, extra => 2 }) },
+        qr/unexpected path parameter 'extra'/, 'extra path parameter fails');
+    is($router->route_named('/missing'), undef,
+        'route_named returns undef for an unknown exact address');
 };
 
-subtest 'uri_for errors' => sub {
+subtest 'name validates the preceding declaration and local segment' => sub {
     my $router = PAGI::App::Router->new;
+    like(dies { $router->name('missing') },
+        qr/name called without a preceding compatible route/,
+        'name requires a preceding compatible declaration');
+    $router->get('/test' => handler());
+    like(dies { $router->name('') },
+        qr/name must be one logical address segment/, 'empty name fails');
 
-    $router->get('/users/:id' => sub {})->name('users.get');
-
-    # Unknown route
-    like dies { $router->uri_for('unknown.route') },
-        qr/Unknown route name/,
-        'croak on unknown route';
-
-    # Missing required param
-    like dies { $router->uri_for('users.get', {}) },
-        qr/Missing required path parameter 'id'/,
-        'croak on missing path param';
+    my $dotted = PAGI::App::Router->new;
+    $dotted->get('/test' => handler())->name('users.show');
+    is($dotted->path_for('/users.show'), '/test',
+        'a dotted local name remains one literal address component');
+    like(dies { $dotted->path_for('/users/show') }, qr/unknown route name/,
+        'a dot never acts as a hierarchy separator');
+    my $slashed = PAGI::App::Router->new;
+    $slashed->get('/test' => handler());
+    like(dies { $slashed->name('users/show') },
+        qr/name must be one logical address segment/,
+        'composed slash addresses are derived rather than declared locally');
 };
 
-subtest 'name() errors' => sub {
+subtest 'WebSocket, SSE, wildcard, and generic routes reverse uniformly' => sub {
     my $router = PAGI::App::Router->new;
+    $router->websocket('/ws/{room}' => sub { })->name('socket');
+    $router->sse('/events/{channel}' => sub { })->name('events');
+    $router->get('/files/*path' => handler())->name('files');
+    $router->any('/health' => handler())->name('health');
+    $router->route('/items/{id:\d+}' => handler(), methods => ['GET', 'PUT'])
+        ->name('item');
 
-    # name() without route
-    like dies { $router->name('foo') },
-        qr/name\(\) called without a preceding route/,
-        'croak when no route to name';
-
-    # Empty name
-    $router->get('/test' => sub {});
-    like dies { $router->name('') },
-        qr/Route name required/,
-        'croak on empty name';
+    is($router->path_for('/socket', { room => 'general' }), '/ws/general',
+        'WebSocket route reverses');
+    is($router->path_for('/events', { channel => 'news' }), '/events/news',
+        'SSE route reverses');
+    is($router->path_for('/files', { path => 'docs/read me.txt' }),
+        '/files/docs/read%20me.txt', 'wildcard components reverse independently');
+    is($router->path_for('/health'), '/health', 'any route reverses');
+    is($router->path_for('/item', { id => 5 }), '/items/5',
+        'generic route applies an inline constraint');
+    like(dies { $router->path_for('/item', { id => 'five' }) },
+        qr/failed constraint/, 'reverse constraint failure is reported');
 };
 
-subtest 'websocket and sse named routes' => sub {
-    my $router = PAGI::App::Router->new;
-
-    $router->websocket('/ws/:room' => sub {})->name('ws.room');
-    $router->sse('/events/:channel' => sub {})->name('sse.channel');
-
-    is $router->uri_for('ws.room', { room => 'general' }),
-        '/ws/general',
-        'websocket route uri_for';
-
-    is $router->uri_for('sse.channel', { channel => 'news' }),
-        '/events/news',
-        'sse route uri_for';
-};
-
-subtest 'mounted routers with namespace' => sub {
-    my $api = PAGI::App::Router->new;
-    $api->get('/users' => sub {})->name('users.list');
-    $api->get('/users/:id' => sub {})->name('users.get');
-
-    my $main = PAGI::App::Router->new;
-    $main->get('/' => sub {})->name('home');
-    $main->mount('/api/v1' => $api)->as('api');
-
-    # Main routes
-    is $main->uri_for('home'), '/', 'main route works';
-
-    # Namespaced routes include mount prefix
-    is $main->uri_for('api.users.list'), '/api/v1/users', 'mounted route with prefix';
-    is $main->uri_for('api.users.get', { id => 42 }), '/api/v1/users/42', 'mounted route with param';
-};
-
-subtest 'nested mounts' => sub {
+subtest 'known mounts compose nested names without copying them' => sub {
     my $users = PAGI::App::Router->new;
-    $users->get('/' => sub {})->name('list');
-    $users->get('/:id' => sub {})->name('get');
+    $users->get('/' => handler())->name('list');
+    $users->get('/{id}' => handler())->name('show');
 
     my $api = PAGI::App::Router->new;
-    $api->mount('/users' => $users)->as('users');
+    $api->mount('/users', router => $users)->name('users');
 
     my $main = PAGI::App::Router->new;
-    $main->mount('/api' => $api)->as('api');
+    $main->get('/' => handler())->name('home');
+    $main->mount('/api', router => $api)->name('api');
 
-    is $main->uri_for('api.users.list'), '/api/users/', 'nested mount list';
-    is $main->uri_for('api.users.get', { id => 1 }), '/api/users/1', 'nested mount with param';
+    is([sort keys %{$main->named_routes}], [
+        '/api/users/list', '/api/users/show', '/home',
+    ], 'known mount placement names compose recursively');
+    is($main->path_for('/home'), '/', 'root route remains available');
+    is($main->path_for('/api/users/list'), '/api/users/',
+        'nested root leaf keeps its trailing slash');
+    is($main->path_for('/api/users/show', { id => 7 }), '/api/users/7',
+        'nested parameter path includes every mount prefix');
+
+    my $snapshot = $main->to_router;
+    my $first = $snapshot->route_named('/api/users/show');
+    is(refaddr($first), refaddr($snapshot->route_named('/api/users/show')),
+        'a retained snapshot preserves leaf identity');
+    isnt(refaddr($main->route_named('/api/users/show')),
+        refaddr($main->route_named('/api/users/show')),
+        'builder convenience inspection rematerializes identities');
 };
 
-subtest 'as() errors' => sub {
+subtest 'opaque mounts never publish or accept namespace names' => sub {
+    my $opaque = sub { return Future->done };
     my $router = PAGI::App::Router->new;
-
-    # as() without mount
-    like dies { $router->as('foo') },
-        qr/as\(\) called without a preceding mount/,
-        'croak when no mount';
-
-    # as() with app coderef (not router)
-    $router->mount('/api' => sub {});
-    like dies { $router->as('api') },
-        qr/as\(\) requires mounting a router object/,
-        'croak when mounting coderef';
-};
-
-subtest 'wildcard routes' => sub {
-    my $router = PAGI::App::Router->new;
-
-    $router->get('/files/*path' => sub {})->name('files');
-
-    is $router->uri_for('files', { path => 'docs/readme.txt' }),
-        '/files/docs/readme.txt',
-        'wildcard param substituted';
-};
-
-subtest 'any() route with name' => sub {
-    my $router = PAGI::App::Router->new;
-
-    $router->any('/health' => sub {})->name('health');
-    $router->any('/items/{id:\d+}' => sub {}, method => ['GET', 'PUT'])->name('items.detail');
-
-    is $router->uri_for('health'), '/health', 'any() route uri_for works';
-    is $router->uri_for('items.detail', { id => 5 }), '/items/5', 'any() with constraint uri_for works';
-};
-
-subtest 'uri_for with brace syntax' => sub {
-    my $router = PAGI::App::Router->new;
-
-    $router->get('/users/{id}' => sub {})->name('users.get');
-    $router->get('/posts/{slug:[a-z0-9-]+}' => sub {})->name('posts.get');
-
-    is $router->uri_for('users.get', { id => 42 }), '/users/42', 'uri_for with {name} syntax';
-    is $router->uri_for('posts.get', { slug => 'hello-world' }), '/posts/hello-world', 'uri_for with {name:pattern} syntax';
+    $router->mount('/legacy' => $opaque);
+    like(dies { $router->name('legacy') },
+        qr/name called without a preceding compatible route/,
+        'an opaque mount cannot be named');
+    is($router->named_routes, {}, 'opaque target contributes no names');
 };
 
 done_testing;

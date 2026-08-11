@@ -113,10 +113,10 @@ sub handler {
     my $router = PAGI::App::Router->new;
 
     # API routes
-    $router->get('/api/rooms' => _rooms_handler());
-    $router->get('/api/room/:name/history' => _room_history_handler());
-    $router->get('/api/room/:name/users' => _room_users_handler());
-    $router->get('/api/stats' => _stats_handler());
+    $router->get('/api/rooms', raw => _rooms_handler());
+    $router->get('/api/room/{name}/history', raw => _room_history_handler());
+    $router->get('/api/room/{name}/users', raw => _room_users_handler());
+    $router->get('/api/stats', raw => _stats_handler());
 
     my $api_app = $router->to_app;
 

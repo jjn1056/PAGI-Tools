@@ -145,7 +145,7 @@ sub quick_sync_task {
 my $router = PAGI::App::Router->new;
 
 # Index page
-$router->get('/' => async sub {
+$router->get('/', raw => async sub {
     my ($scope, $receive, $send) = @_;
     my $res = PAGI::Response->new($scope);
 
@@ -188,7 +188,7 @@ HTML
 });
 
 # GOOD: Fire-and-forget async I/O
-$router->get('/async' => async sub {
+$router->get('/async', raw => async sub {
     my ($scope, $receive, $send) = @_;
     my $res = PAGI::Response->new($scope);
 
@@ -207,7 +207,7 @@ $router->get('/async' => async sub {
 });
 
 # GOOD: CPU-bound work in subprocess
-$router->get('/blocking' => async sub {
+$router->get('/blocking', raw => async sub {
     my ($scope, $receive, $send) = @_;
     my $res = PAGI::Response->new($scope);
 
@@ -223,7 +223,7 @@ $router->get('/blocking' => async sub {
 });
 
 # Real-world example: User signup with background tasks
-$router->post('/signup' => async sub {
+$router->post('/signup', raw => async sub {
     my ($scope, $receive, $send) = @_;
     my $req = PAGI::Request->new($scope, $receive);
     my $res = $req->response;

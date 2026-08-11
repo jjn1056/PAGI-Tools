@@ -127,18 +127,9 @@ subtest 'pod-style usage with Test::Client' => sub {
     my @order;
 
     my $router = PAGI::App::Router->new;
-    $router->get('/' => async sub {
-        my ($scope, $receive, $send) = @_;
-        await $send->({
-            type    => 'http.response.start',
-            status  => 200,
-            headers => [],
-        });
-        await $send->({
-            type => 'http.response.body',
-            body => 'ok',
-            more => 0,
-        });
+    $router->get('/' => sub {
+        my ($c) = @_;
+        return $c->text('ok');
     });
     my $router_app = $router->to_app;
 
@@ -166,18 +157,9 @@ subtest 'handle_lifespan in inner app with outer hooks' => sub {
     my @order;
 
     my $router = PAGI::App::Router->new;
-    $router->get('/' => async sub {
-        my ($scope, $receive, $send) = @_;
-        await $send->({
-            type    => 'http.response.start',
-            status  => 200,
-            headers => [],
-        });
-        await $send->({
-            type => 'http.response.body',
-            body => 'ok',
-            more => 0,
-        });
+    $router->get('/' => sub {
+        my ($c) = @_;
+        return $c->text('ok');
     });
     my $router_app = $router->to_app;
 

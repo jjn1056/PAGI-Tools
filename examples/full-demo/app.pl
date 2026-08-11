@@ -29,7 +29,7 @@ my $router = PAGI::App::Router->new;
 # ============================================================================
 
 # Hello World endpoint
-$router->get('/' => async sub {
+$router->get('/', raw => async sub {
     my ($scope, $receive, $send) = @_;
 
     await $send->({
@@ -45,7 +45,7 @@ $router->get('/' => async sub {
 })->name('hello');
 
 # POST Echo - echoes back the request body
-$router->post('/echo' => async sub {
+$router->post('/echo', raw => async sub {
     my ($scope, $receive, $send) = @_;
 
     # Find content-type from request headers (array of pairs)
@@ -82,7 +82,7 @@ $router->post('/echo' => async sub {
 })->name('echo');
 
 # HTTP Streaming - sends chunks with delays
-$router->get('/stream' => async sub {
+$router->get('/stream', raw => async sub {
     my ($scope, $receive, $send) = @_;
 
     # Access shared state from lifespan
@@ -117,7 +117,7 @@ $router->get('/stream' => async sub {
 # WebSocket Route
 # ============================================================================
 
-$router->websocket('/ws/echo' => async sub {
+$router->websocket('/ws/echo', raw => async sub {
     my ($scope, $receive, $send) = @_;
 
     # Wait for connect event
@@ -155,7 +155,7 @@ $router->websocket('/ws/echo' => async sub {
 # SSE Route
 # ============================================================================
 
-$router->sse('/events' => async sub {
+$router->sse('/events', raw => async sub {
     my ($scope, $receive, $send) = @_;
 
     # Start SSE stream

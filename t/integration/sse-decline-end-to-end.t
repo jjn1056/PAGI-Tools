@@ -2,7 +2,6 @@ use strict;
 use warnings;
 use Test2::V0;
 use IO::Async::Loop;
-use Future::AsyncAwait;
 use FindBin;
 use lib "$FindBin::Bin/../../lib";
 
@@ -73,9 +72,9 @@ sub sse_get {
 subtest 'unmatched SSE route returns a real HTTP 404 over the real server' => sub {
     my $router = PAGI::App::Router->new;
     # An SSE route exists, but the request targets a different path.
-    $router->sse('/events' => async sub {
-        my ($scope, $receive, $send) = @_;
-        await $send->({ type => 'sse.start', status => 200 });
+    $router->sse('/events' => sub {
+        my ($c) = @_;
+        return $c->start(status => 200);
     });
 
     my $server = create_server($router->to_app);

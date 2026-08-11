@@ -1,748 +1,266 @@
+#!/usr/bin/env perl
 use strict;
 use warnings;
-
 use Test2::V0;
-use Future::AsyncAwait;
-use FindBin;
-use lib "$FindBin::Bin/lib";
+use Future;
 
+use lib 'lib';
 use PAGI::App::Router;
 
-# Helper to capture response
-sub mock_send {
-    my @sent;
-    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    return ($send, \@sent);
+sub channels {
+    my @events;
+    my $receive = sub {
+        return Future->done({ type => 'http.request', body => '', more => 0 });
+    };
+    my $send = sub {
+        push @events, $_[0];
+        return Future->done;
+    };
+    return ($receive, $send, \@events);
 }
 
-# Helper to create a simple app that records it was called
-sub make_handler {
-    my ($name, $capture) = @_;
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-        push @$capture, { name => $name, scope => $scope } if $capture;
-        await $send->({
-            type => 'http.response.start',
-            status => 200,
-            headers => [['content-type', 'text/plain']],
-        });
-        await $send->({
-            type => 'http.response.body',
-            body => $name,
-            more => 0,
-        });
+sub run_scope {
+    my ($app, %scope) = @_;
+    my ($receive, $send, $events) = channels();
+    $app->({
+        type => 'http',
+        method => 'GET',
+        path => '/',
+        headers => [],
+        %scope,
+    }, $receive, $send)->get;
+    return $events;
+}
+
+sub response_body {
+    my ($events) = @_;
+    return join '', map { $_->{body} // '' }
+        grep { ($_->{type} // '') eq 'http.response.body' } @$events;
+}
+
+sub response_header {
+    my ($events, $name) = @_;
+    my ($start) = grep { ($_->{type} // '') eq 'http.response.start' } @$events;
+    return unless $start;
+    for my $pair (@{$start->{headers} // []}) {
+        return $pair->[1] if lc($pair->[0]) eq lc($name);
+    }
+    return;
+}
+
+sub handler {
+    my ($label, $calls) = @_;
+    return sub {
+        my ($c) = @_;
+        push @$calls, {
+            label => $label,
+            scope => $c->scope,
+            params => $c->path_params,
+        } if $calls;
+        return $c->text($label);
     };
 }
 
-subtest 'basic routing' => sub {
+subtest 'ordinary HTTP routing uses Context handlers and shared path grammar' => sub {
     my @calls;
     my $router = PAGI::App::Router->new;
-    $router->get('/users' => make_handler('list_users', \@calls));
-    $router->get('/users/:id' => make_handler('get_user', \@calls));
-    $router->post('/users' => make_handler('create_user', \@calls));
-
+    $router->get('/users' => handler('list', \@calls));
+    $router->get('/users/{id}' => handler('show', \@calls));
+    $router->post('/users' => handler('create', \@calls));
+    $router->get('/files/*path' => handler('file', \@calls));
     my $app = $router->to_app;
 
-    # GET /users
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/users' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'GET /users - status 200';
-    is $sent->[1]{body}, 'list_users', 'GET /users - correct handler';
-
-    # GET /users/42
+    is(response_body(run_scope($app, path => '/users')), 'list',
+        'a static route dispatches');
     @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/users/42' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'GET /users/42 - status 200';
-    is $sent->[1]{body}, 'get_user', 'GET /users/42 - correct handler';
-    is $calls[0]{scope}{path_params}{id}, '42', 'captured :id param';
-
-    # POST /users
-    ($send, $sent) = mock_send();
-    $app->({ method => 'POST', path => '/users' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'POST /users - status 200';
-    is $sent->[1]{body}, 'create_user', 'POST /users - correct handler';
-};
-
-subtest '404 not found' => sub {
-    my $router = PAGI::App::Router->new;
-    $router->get('/home' => make_handler('home'));
-    my $app = $router->to_app;
-
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/nonexistent' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'unmatched path returns 404';
-};
-
-subtest '405 method not allowed' => sub {
-    my $router = PAGI::App::Router->new;
-    $router->get('/resource' => make_handler('get_resource'));
-    $router->post('/resource' => make_handler('create_resource'));
-    my $app = $router->to_app;
-
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'DELETE', path => '/resource' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 405, 'wrong method returns 405';
-
-    my %headers = map { $_->[0] => $_->[1] } @{$sent->[0]{headers}};
-    like $headers{allow}, qr/GET/, 'Allow header includes GET';
-    like $headers{allow}, qr/POST/, 'Allow header includes POST';
-};
-
-subtest 'wildcard parameter' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->get('/files/*path' => make_handler('serve_file', \@calls));
-    my $app = $router->to_app;
-
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/files/docs/readme.txt' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'wildcard matched';
-    is $calls[0]{scope}{path_params}{path}, 'docs/readme.txt', 'wildcard captured rest of path';
-};
-
-subtest 'mount basic' => sub {
-    my @calls;
-
-    # API sub-router
-    my $api = PAGI::App::Router->new;
-    $api->get('/users' => make_handler('api_users', \@calls));
-    $api->get('/users/:id' => make_handler('api_user', \@calls));
-
-    # Main router
-    my $main = PAGI::App::Router->new;
-    $main->get('/' => make_handler('home', \@calls));
-    $main->mount('/api' => $api->to_app);
-
-    my $app = $main->to_app;
-
-    # GET / - regular route
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'home', 'root path works';
-
-    # GET /api/users - mounted route
+    is(response_body(run_scope($app, path => '/users/42')), 'show',
+        'a brace parameter route dispatches');
+    is($calls[0]{params}, { id => 42 }, 'the Context exposes captured parameters');
+    is(response_body(run_scope($app, method => 'POST', path => '/users')), 'create',
+        'method siblings share a path');
     @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/api/users' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'api_users', 'mounted /api/users works';
-    is $calls[0]{scope}{path}, '/users', 'mounted app sees stripped path';
-    is $calls[0]{scope}{root_path}, '/api', 'mounted app has root_path set';
+    is(response_body(run_scope($app, path => '/files/docs/readme.txt')), 'file',
+        'the terminal wildcard route dispatches');
+    is($calls[0]{params}, { path => 'docs/readme.txt' },
+        'the wildcard preserves its remaining path');
 
-    # GET /api/users/42 - mounted route with params
-    @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/api/users/42' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'api_user', 'mounted /api/users/:id works';
-    is $calls[0]{scope}{path}, '/users/42', 'path stripped correctly';
-    is $calls[0]{scope}{path_params}{id}, '42', 'params captured in mounted router';
+    my $missing = run_scope($app, path => '/missing');
+    is([$missing->[0]{status}, response_body($missing)], [404, 'Not Found'],
+        'an unknown path receives the shared generated 404');
+    my $wrong = run_scope($app, method => 'DELETE', path => '/users');
+    is([$wrong->[0]{status}, response_header($wrong, 'Allow')],
+        [405, 'GET, HEAD, POST'],
+        'PARTIAL siblings produce the first-seen shared Allow value');
 };
 
-subtest 'mount exact prefix match' => sub {
-    my @calls;
-
-    my $api = PAGI::App::Router->new;
-    $api->get('/' => make_handler('api_root', \@calls));
-
-    my $main = PAGI::App::Router->new;
-    $main->mount('/api' => $api->to_app);
-
-    my $app = $main->to_app;
-
-    # GET /api (exact prefix, no trailing path)
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/api' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'api_root', '/api matches mounted root';
-    is $calls[0]{scope}{path}, '/', 'path becomes /';
-};
-
-subtest 'mount longer prefix priority' => sub {
-    my @calls;
-
-    my $api_v1 = PAGI::App::Router->new;
-    $api_v1->get('/info' => make_handler('v1_info', \@calls));
-
-    my $api_v2 = PAGI::App::Router->new;
-    $api_v2->get('/info' => make_handler('v2_info', \@calls));
-
-    my $main = PAGI::App::Router->new;
-    $main->mount('/api' => $api_v1->to_app);
-    $main->mount('/api/v2' => $api_v2->to_app);  # Longer prefix
-
-    my $app = $main->to_app;
-
-    # GET /api/v2/info should match /api/v2 mount, not /api
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/api/v2/info' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'v2_info', 'longer prefix /api/v2 matches first';
-
-    # GET /api/info should match /api mount
-    @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/api/info' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'v1_info', '/api matches when /api/v2 does not';
-};
-
-subtest 'mount preserves existing root_path' => sub {
-    my @calls;
-
-    my $inner = PAGI::App::Router->new;
-    $inner->get('/data' => make_handler('inner_data', \@calls));
-
-    my $main = PAGI::App::Router->new;
-    $main->mount('/nested' => $inner->to_app);
-
-    my $app = $main->to_app;
-
-    # Simulate already having a root_path (e.g., from outer mount)
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/nested/data', root_path => '/outer' }, sub { Future->done }, $send)->get;
-    is $calls[0]{scope}{root_path}, '/outer/nested', 'root_path is appended, not replaced';
-};
-
-subtest 'mount 404 falls through' => sub {
-    my $api = PAGI::App::Router->new;
-    $api->get('/users' => make_handler('users'));
-
-    my $main = PAGI::App::Router->new;
-    $main->mount('/api' => $api->to_app);
-
-    my $app = $main->to_app;
-
-    # /other doesn't match /api mount, so falls to main router's 404
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/other' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'unmatched path outside mount returns 404';
-};
-
-subtest 'mount with any PAGI app' => sub {
-    # Mount can take any PAGI app, not just routers
-    my $static_app = async sub {
-        my ($scope, $receive, $send) = @_;
-        await $send->({
-            type => 'http.response.start',
-            status => 200,
-            headers => [['content-type', 'text/plain']],
-        });
-        await $send->({
-            type => 'http.response.body',
-            body => "Static: $scope->{path}",
-            more => 0,
-        });
-    };
-
-    my $main = PAGI::App::Router->new;
-    $main->mount('/static' => $static_app);
-
-    my $app = $main->to_app;
-
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/static/css/style.css' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'Static: /css/style.css', 'any PAGI app can be mounted';
-};
-
-subtest 'websocket route basic' => sub {
+subtest 'literal paths and constraints use the shared Pattern implementation' => sub {
     my @calls;
     my $router = PAGI::App::Router->new;
-    $router->websocket('/ws/echo' => make_handler('ws_echo', \@calls));
+    $router->get('/api/v1.0/report[2024]' => handler('literal', \@calls));
+    $router->get('/people/{id:\d+}' => handler('number', \@calls));
+    $router->get('/people/{name:[A-Za-z]+}' => handler('name', \@calls));
+    $router->get('/posts/{slug}' => handler('post', \@calls))
+        ->constraints(slug => qr/\A[a-z0-9-]+\z/);
     my $app = $router->to_app;
 
-    # WebSocket request to /ws/echo
-    my ($send, $sent) = mock_send();
-    $app->({ type => 'websocket', path => '/ws/echo' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'websocket route matched';
-    is $sent->[1]{body}, 'ws_echo', 'websocket handler called';
+    is(response_body(run_scope($app, path => '/api/v1.0/report[2024]')), 'literal',
+        'regex metacharacters remain literal path text');
+    is(run_scope($app, path => '/api/v1X0/report[2024]')->[0]{status}, 404,
+        'a literal dot is not a wildcard');
+    is(response_body(run_scope($app, path => '/people/42')), 'number',
+        'an inline numeric constraint selects its route');
+    is(response_body(run_scope($app, path => '/people/Alice')), 'name',
+        'constraint failure continues to a later declaration');
+    is(run_scope($app, path => '/people/a1')->[0]{status}, 404,
+        'failure of every inline constraint is NONE');
+    is(response_body(run_scope($app, path => '/posts/first-post')), 'post',
+        'a chained constraint accepts an exact value');
+    is(run_scope($app, path => '/posts/BAD')->[0]{status}, 404,
+        'a chained constraint rejects before handler invocation');
+
+    like(dies { PAGI::App::Router->new->constraints(id => qr/.+/) },
+        qr/constraints called without a preceding compatible route/,
+        'constraints requires a compatible declaration');
+    like(dies {
+        my $bad = PAGI::App::Router->new;
+        $bad->get('/bad/{id}' => handler('bad'))
+            ->constraints(id => 'not a constraint');
+        $bad->to_router;
+    }, qr/constraint 'id' must be/, 'invalid constraint values use shared validation');
 };
 
-subtest 'sse route basic' => sub {
-    my @calls;
+subtest 'any and generic route declarations replace the old method option' => sub {
     my $router = PAGI::App::Router->new;
-    $router->sse('/events' => make_handler('sse_events', \@calls));
-    my $app = $router->to_app;
-
-    # SSE request to /events
-    my ($send, $sent) = mock_send();
-    $app->({ type => 'sse', path => '/events' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'sse route matched';
-    is $sent->[1]{body}, 'sse_events', 'sse handler called';
-};
-
-subtest 'websocket route with params' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->websocket('/ws/chat/:room' => make_handler('ws_chat', \@calls));
-    my $app = $router->to_app;
-
-    my ($send, $sent) = mock_send();
-    $app->({ type => 'websocket', path => '/ws/chat/general' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'websocket with param matched';
-    is $calls[0]{scope}{path_params}{room}, 'general', 'captured :room param';
-};
-
-subtest 'sse route with params' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->sse('/events/:channel' => make_handler('sse_channel', \@calls));
-    my $app = $router->to_app;
-
-    my ($send, $sent) = mock_send();
-    $app->({ type => 'sse', path => '/events/notifications' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'sse with param matched';
-    is $calls[0]{scope}{path_params}{channel}, 'notifications', 'captured :channel param';
-};
-
-subtest 'mixed protocol routing' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-
-    # HTTP routes
-    $router->get('/api/messages' => make_handler('http_get', \@calls));
-    $router->post('/api/messages' => make_handler('http_post', \@calls));
-
-    # WebSocket route
-    $router->websocket('/ws/echo' => make_handler('ws_echo', \@calls));
-
-    # SSE route
-    $router->sse('/events' => make_handler('sse_events', \@calls));
-
-    my $app = $router->to_app;
-
-    # Test HTTP GET
-    my ($send, $sent) = mock_send();
-    $app->({ type => 'http', method => 'GET', path => '/api/messages' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'http_get', 'HTTP GET works';
-
-    # Test HTTP POST
-    ($send, $sent) = mock_send();
-    $app->({ type => 'http', method => 'POST', path => '/api/messages' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'http_post', 'HTTP POST works';
-
-    # Test WebSocket
-    ($send, $sent) = mock_send();
-    $app->({ type => 'websocket', path => '/ws/echo' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'ws_echo', 'WebSocket works';
-
-    # Test SSE
-    ($send, $sent) = mock_send();
-    $app->({ type => 'sse', path => '/events' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'sse_events', 'SSE works';
-
-    # Test 404 for unmatched websocket path
-    ($send, $sent) = mock_send();
-    $app->({
-        type       => 'websocket',
-        path       => '/ws/unknown',
-        extensions => { 'websocket.http.response' => {} },
-    }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'unmatched websocket returns 404';
-
-    # Test lifespan is ignored
-    ($send, $sent) = mock_send();
-    $app->({ type => 'lifespan', path => '/' }, sub { Future->done }, $send)->get;
-    is scalar(@$sent), 0, 'lifespan events are ignored';
-};
-
-subtest 'regex metacharacters in literal paths' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->get('/api/v1.0/users' => make_handler('v1_users', \@calls));
-    $router->get('/files/report[2024]' => make_handler('report', \@calls));
-    $router->get('/search' => make_handler('search', \@calls));
-
-    my $app = $router->to_app;
-
-    # Dot in path should match literally, not as regex "any char"
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/api/v1.0/users' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'literal dot in path matches';
-    is $sent->[1]{body}, 'v1_users', 'correct handler for dotted path';
-
-    # /api/v1X0/users should NOT match (dot is not "any char")
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/api/v1X0/users' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'dot does not match arbitrary char';
-
-    # Brackets in path should match literally
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/files/report[2024]' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'literal brackets in path match';
-    is $sent->[1]{body}, 'report', 'correct handler for bracketed path';
-};
-
-subtest 'path parameter syntax variants' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->get('/users/{id}' => make_handler('brace_user', \@calls));
-    $router->get('/items/:item_id/reviews/:review_id' => make_handler('review', \@calls));
-
-    my $app = $router->to_app;
-
-    # {name} syntax (brace-style, unconstrained)
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/users/99' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, '{id} syntax matched';
-    is $calls[0]{scope}{path_params}{id}, '99', '{id} captured param';
-
-    # Multiple params with colon syntax
-    @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/items/5/reviews/10' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'multiple params matched';
-    is $calls[0]{scope}{path_params}{item_id}, '5', 'first param captured';
-    is $calls[0]{scope}{path_params}{review_id}, '10', 'second param captured';
-};
-
-subtest 'inline constraints {name:pattern}' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->get('/users/{id:\d+}' => make_handler('user_by_id', \@calls));
-    $router->get('/users/{name:[a-zA-Z]+}' => make_handler('user_by_name', \@calls));
-
-    my $app = $router->to_app;
-
-    # Numeric id matches first route
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/users/42' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'numeric id matches constrained route';
-    is $sent->[1]{body}, 'user_by_id', 'correct handler for numeric id';
-    is $calls[0]{scope}{path_params}{id}, '42', 'id param captured';
-
-    # Alpha name matches second route
-    @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/users/alice' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'alpha name matches constrained route';
-    is $sent->[1]{body}, 'user_by_name', 'correct handler for alpha name';
-    is $calls[0]{scope}{path_params}{name}, 'alice', 'name param captured';
-
-    # Mixed alphanumeric matches neither — 404
-    @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/users/bob123' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'mixed value matches no constrained route';
-};
-
-subtest 'chained constraints() method' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->get('/posts/:id' => make_handler('post', \@calls))
-        ->constraints(id => qr/^\d+$/);
-
-    my $app = $router->to_app;
-
-    # Numeric id matches
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/posts/7' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'numeric id matches with chained constraint';
-    is $calls[0]{scope}{path_params}{id}, '7', 'param captured';
-
-    # Non-numeric id does not match — 404
-    @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/posts/latest' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'non-numeric id rejected by chained constraint';
-};
-
-subtest 'constraints on websocket and sse routes' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->websocket('/ws/{room:\w+}' => make_handler('ws', \@calls));
-    $router->sse('/events/:channel' => make_handler('sse', \@calls))
-        ->constraints(channel => qr/^[a-z]+$/);
-
-    my $app = $router->to_app;
-
-    # WebSocket with inline constraint
-    my ($send, $sent) = mock_send();
-    $app->({ type => 'websocket', path => '/ws/lobby' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'websocket inline constraint matches';
-
-    # WebSocket fails constraint
-    ($send, $sent) = mock_send();
-    $app->({
-        type       => 'websocket',
-        path       => '/ws/lobby!!',
-        extensions => { 'websocket.http.response' => {} },
-    }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'websocket inline constraint rejects';
-
-    # SSE with chained constraint
-    @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ type => 'sse', path => '/events/news' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'sse chained constraint matches';
-
-    # SSE fails chained constraint
-    ($send, $sent) = mock_send();
-    $app->({ type => 'sse', path => '/events/NEWS123' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'sse chained constraint rejects';
-};
-
-subtest 'constraints error handling' => sub {
-    my $router = PAGI::App::Router->new;
-
-    # constraints() without preceding route
-    like dies { $router->constraints(id => qr/\d+/) },
-        qr/constraints\(\) called without a preceding route/,
-        'croak when no route to constrain';
-
-    # Non-regex constraint value
-    $router->get('/test/:id' => sub {});
-    like dies { $router->constraints(id => 'not_a_regex') },
-        qr/must be a Regexp/,
-        'croak on non-Regexp constraint';
-};
-
-subtest 'constraints with 405 interaction' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->get('/items/{id:\d+}' => make_handler('get_item', \@calls));
-    $router->delete('/items/{id:\d+}' => make_handler('delete_item', \@calls));
-
-    my $app = $router->to_app;
-
-    # PUT /items/5 — path matches but method doesn't, should be 405
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'PUT', path => '/items/5' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 405, 'constrained route gives 405 on wrong method';
-    my %headers = map { $_->[0] => $_->[1] } @{$sent->[0]{headers}};
-    like $headers{allow}, qr/DELETE/, 'Allow includes DELETE';
-    like $headers{allow}, qr/GET/, 'Allow includes GET';
-
-    # PUT /items/abc — constraint fails, no path match at all, should be 404
-    ($send, $sent) = mock_send();
-    $app->({ method => 'PUT', path => '/items/abc' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'failed constraint gives 404 not 405';
-};
-
-subtest 'any() wildcard matches all methods' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->any('/health' => make_handler('health', \@calls));
-
+    $router->any('/health' => handler('health'));
+    $router->route('/resource' => handler('resource'), methods => ['GET', 'POST']);
     my $app = $router->to_app;
 
     for my $method (qw(GET POST PUT DELETE PATCH HEAD OPTIONS)) {
-        @calls = ();
-        my ($send, $sent) = mock_send();
-        $app->({ method => $method, path => '/health' }, sub { Future->done }, $send)->get;
-        is $sent->[0]{status}, 200, "any() matches $method";
+        is(run_scope($app, method => $method, path => '/health')->[0]{status}, 200,
+            "any dispatches $method");
     }
+    is(response_body(run_scope($app, method => 'POST', path => '/resource')),
+        'resource', 'generic route accepts an explicit method list');
+    my $wrong = run_scope($app, method => 'DELETE', path => '/resource');
+    is([$wrong->[0]{status}, response_header($wrong, 'Allow')],
+        [405, 'GET, HEAD, POST'], 'generic methods drive the 405 result');
+    like(dies {
+        PAGI::App::Router->new->any('/old' => handler('old'), method => ['GET']);
+    }, qr/unknown route option 'method'/, 'the old any method option is not retained');
 };
 
-subtest 'any() with explicit method list' => sub {
+subtest 'opaque and routing-aware mounts remain distinct' => sub {
     my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->any('/resource' => make_handler('resource', \@calls), method => ['GET', 'POST']);
+    my $child = PAGI::App::Router->new;
+    $child->get('/users/{id}' => handler('child', \@calls))->name('show');
 
-    my $app = $router->to_app;
-
-    # GET matches
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/resource' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'any([GET,POST]) matches GET';
-
-    # POST matches
-    ($send, $sent) = mock_send();
-    $app->({ method => 'POST', path => '/resource' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'any([GET,POST]) matches POST';
-
-    # DELETE does not match — should be 405
-    ($send, $sent) = mock_send();
-    $app->({ method => 'DELETE', path => '/resource' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 405, 'any([GET,POST]) gives 405 for DELETE';
-    my %headers = map { $_->[0] => $_->[1] } @{$sent->[0]{headers}};
-    like $headers{allow}, qr/GET/, 'Allow includes GET';
-    like $headers{allow}, qr/POST/, 'Allow includes POST';
-};
-
-subtest 'any() with params and constraints' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-    $router->any('/items/{id:\d+}' => make_handler('item', \@calls));
-
-    my $app = $router->to_app;
-
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'PATCH', path => '/items/42' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'any() with constraint matches';
-    is $calls[0]{scope}{path_params}{id}, '42', 'param captured';
-};
-
-subtest 'any() with middleware' => sub {
-    my @calls;
-    my $mw = sub {
-        my ($app) = @_;
-        async sub {
-            my ($scope, $receive, $send) = @_;
-            $scope->{mw_ran} = 1;
-            await $app->($scope, $receive, $send);
-        };
+    my $opaque = sub {
+        my ($scope, $receive, $send) = @_;
+        push @calls, { label => 'opaque', scope => $scope };
+        $send->({ type => 'http.response.start', status => 200, headers => [] })->get;
+        $send->({ type => 'http.response.body', body => 'opaque', more => 0 })->get;
+        return Future->done;
     };
 
     my $router = PAGI::App::Router->new;
-    $router->any('/mw-test' => [$mw] => make_handler('mw_handler', \@calls));
-
+    $router->mount('/people', router => $child)->name('people');
+    $router->mount('/assets' => $opaque);
     my $app = $router->to_app;
 
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/mw-test' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'any() with middleware works';
-    is $calls[0]{scope}{mw_ran}, 1, 'middleware executed';
-};
+    is(response_body(run_scope($app, path => '/people/users/7')), 'child',
+        'a routing-aware mount dispatches its immutable child');
+    is($calls[0]{scope}{path}, '/users/7', 'the mount rewrites the child path');
+    is($calls[0]{scope}{root_path}, '/people', 'the mount extends root_path');
+    is($router->path_for('/people/show', { id => 7 }), '/people/users/7',
+        'a routing-aware mount exposes child names');
 
-subtest 'combined features integration' => sub {
-    my @calls;
-    my $router = PAGI::App::Router->new;
-
-    # Feature #1: Regex escaping with Feature #2: constraints
-    $router->get('/api/v2.0/users/{id:\d+}' => make_handler('v2_user', \@calls));
-
-    # Feature #2: Chained constraints with Feature #3: any()
-    $router->any('/articles/:slug' => make_handler('article', \@calls), method => ['GET', 'PUT'])
-        ->constraints(slug => qr/^[a-z0-9-]+$/);
-
-    # Feature #3: Wildcard any() with Feature #1: escaped path
-    $router->any('/status(check)' => make_handler('status', \@calls));
-
-    my $app = $router->to_app;
-
-    # v2.0 with dots + constraint
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/api/v2.0/users/99' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'dotted path + constraint match';
-    is $calls[0]{scope}{path_params}{id}, '99', 'param captured';
-
-    # v2.0 + failed constraint
     @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/api/v2.0/users/abc' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'dotted path + failed constraint = 404';
+    is(response_body(run_scope($app, path => '/assets/css/site.css')), 'opaque',
+        'an opaque mount owns the matching prefix');
+    is($calls[0]{scope}{path}, '/css/site.css', 'opaque mount receives a stripped path');
+    is($router->route_named('/assets/hidden'), undef,
+        'opaque internals are not inspectable');
 
-    # any() + chained constraint — valid slug, allowed method
-    @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/articles/my-first-post' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'any() + chained constraint match';
-
-    # any() + chained constraint — valid slug, disallowed method
-    ($send, $sent) = mock_send();
-    $app->({ method => 'DELETE', path => '/articles/my-first-post' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 405, 'any() + chained constraint 405 on wrong method';
-
-    # any() + chained constraint — invalid slug
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/articles/BAD SLUG!' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 404, 'any() + failed chained constraint = 404';
-
-    # Escaped parens in path
-    @calls = ();
-    ($send, $sent) = mock_send();
-    $app->({ method => 'POST', path => '/status(check)' }, sub { Future->done }, $send)->get;
-    is $sent->[0]{status}, 200, 'escaped parens in path match';
+    like(dies { PAGI::App::Router->new->mount('/bad' => $child) },
+        qr/mutable router frontend cannot be used as a opaque mount target/,
+        'mutable frontends require router => at known boundaries');
+    like(dies { PAGI::App::Router->new->mount('/bad' => 'TestRoutes::Admin') },
+        qr/opaque mount target must be a coderef or object with to_app/,
+        'mounts do not load package-name strings');
 };
 
-subtest 'internal: chained constraints stored separately' => sub {
-    my $router = PAGI::App::Router->new;
-    $router->get('/users/{id:\d+}' => sub {})
-        ->constraints(id => qr/^\d+$/);
-
-    my $route = $router->{routes}[0];
-    ok $route->{constraints}, 'has inline constraints';
-    ok $route->{_user_constraints}, 'has separate user constraints';
-    is scalar @{$route->{constraints}}, 1, 'one inline constraint';
-    is scalar @{$route->{_user_constraints}}, 1, 'one user constraint';
-};
-
-subtest 'mount string form (auto-require + to_app)' => sub {
-    my $router = PAGI::App::Router->new;
-    $router->mount('/admin' => 'TestRoutes::Admin');
-
-    my $app = $router->to_app;
-
-    # Dashboard route
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/admin/' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'admin_dashboard', 'stringy mount routes to dashboard';
-
-    # Settings route
-    ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/admin/settings' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'admin_settings', 'stringy mount routes to settings';
-};
-
-subtest 'mount string form with middleware' => sub {
-    my $mw_called = 0;
-    my $mw = sub {
-        my ($app) = @_;
-        async sub {
+subtest 'written mount order replaces longest-prefix sorting' => sub {
+    my $native = sub {
+        my ($label) = @_;
+        return sub {
             my ($scope, $receive, $send) = @_;
-            $mw_called = 1;
-            await $app->($scope, $receive, $send);
+            $send->({ type => 'http.response.start', status => 200, headers => [] })->get;
+            $send->({ type => 'http.response.body', body => $label, more => 0 })->get;
+            return Future->done;
         };
     };
 
-    my $router = PAGI::App::Router->new;
-    $router->mount('/admin' => [$mw] => 'TestRoutes::Admin');
+    my $broad_first = PAGI::App::Router->new;
+    $broad_first->mount('/api' => $native->('broad'));
+    $broad_first->mount('/api/v2' => $native->('specific'));
+    is(response_body(run_scope($broad_first->to_app, path => '/api/v2/info')),
+        'broad', 'an earlier broad mount owns before a longer prefix');
 
-    my $app = $router->to_app;
-
-    my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/admin/' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'admin_dashboard', 'stringy mount with middleware routes correctly';
-    ok $mw_called, 'middleware was executed';
+    my $specific_first = PAGI::App::Router->new;
+    $specific_first->mount('/api/v2' => $native->('specific'));
+    $specific_first->mount('/api' => $native->('broad'));
+    is(response_body(run_scope($specific_first->to_app, path => '/api/v2/info')),
+        'specific', 'putting the specific mount first changes ownership');
 };
 
-subtest 'mount string form error handling' => sub {
+subtest 'normal WebSocket and SSE declarations receive protocol Contexts' => sub {
+    my @seen;
     my $router = PAGI::App::Router->new;
-
-    # Bad package name
-    like dies { $router->mount('/bad' => 'NoSuch::Package::AtAll') },
-        qr/Failed to load/,
-        'croak on bad package';
-
-    # Package without to_app
-    like dies { $router->mount('/bad' => 'strict') },
-        qr/does not have a to_app\(\) method/,
-        'croak when package lacks to_app';
-};
-
-subtest 'router coerces mount and route targets' => sub {
-    require TestApps::Component;
-
-    my $router = PAGI::App::Router->new;
-    $router->mount('/c' => TestApps::Component->new(body => 'mounted-component'));
-    $router->get('/direct' => TestApps::Component->new(body => 'route-component'));
+    $router->websocket('/ws/{room}' => sub {
+        my ($c) = @_;
+        push @seen, [ref($c), $c->path_param('room')];
+        return Future->done;
+    });
+    $router->sse('/events/{channel}' => sub {
+        my ($c) = @_;
+        push @seen, [ref($c), $c->path_param('channel')];
+        return Future->done;
+    });
     my $app = $router->to_app;
 
-    my ($send, $sent) = mock_send();
-    $app->({ type => 'http', method => 'GET', path => '/c/anything' },
-        sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'mounted-component', 'mount target coerced';
+    run_scope($app, type => 'websocket', method => undef, path => '/ws/lobby');
+    run_scope($app, type => 'sse', method => undef, path => '/events/news');
+    is(\@seen, [
+        ['PAGI::Context::WebSocket', 'lobby'],
+        ['PAGI::Context::SSE', 'news'],
+    ], 'protocol-specific Contexts receive shared captures');
 
-    ($send, $sent) = mock_send();
-    $app->({ type => 'http', method => 'GET', path => '/direct' },
-        sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'route-component', 'route target coerced';
-
-    my $router_s = PAGI::App::Router->new;
-    $router_s->get('/s' => 'TestApps::Component');
-    my $app_s = $router_s->to_app;
-    ($send, $sent) = mock_send();
-    $app_s->({ type => 'http', method => 'GET', path => '/s' },
-        sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'component', 'class-name string route target coerced';
+    my $miss = run_scope(
+        $app,
+        type => 'websocket',
+        method => undef,
+        path => '/ws/missing/extra',
+        extensions => { 'websocket.http.response' => {} },
+    );
+    is($miss->[0]{status}, 404, 'an unmatched protocol route uses the shared decline');
+    is(run_scope($app, type => 'lifespan'), [], 'compiled routing ignores lifespan');
 };
 
-subtest 'dispatch returns the matched HTTP handler return value' => sub {
+subtest 'immutable inspection replaces private public route arrays' => sub {
     my $router = PAGI::App::Router->new;
-    $router->get('/v' => async sub { return 'THE-VALUE' });
-    my $app = $router->to_app;
+    $router->get('/users/{id:\d+}' => handler('user'))
+        ->name('user')
+        ->constraints(id => qr/\A\d+\z/);
+    my $snapshot = $router->to_router;
+    my $route = $snapshot->route_named('/user');
 
-    my $ret = $app->({ type => 'http', method => 'GET', path => '/v' },
-                     sub { Future->done }, sub { Future->done })->get;
-
-    is $ret, 'THE-VALUE', 'matched route return value propagates to the caller';
+    is([$route->kind, $route->path, $route->name, $route->methods],
+        ['route', '/users/{id:\d+}', 'user', ['GET', 'HEAD']],
+        'the immutable route exposes normalized public metadata');
+    is($snapshot->path_for('/user', { id => 9 }), '/users/9',
+        'inspection and reverse routing use the same immutable constraint');
+    like(dies { $snapshot->path_for('/user', { id => 'nine' }) },
+        qr/failed constraint/, 'reverse routing rejects an invalid value');
 };
 
 done_testing;

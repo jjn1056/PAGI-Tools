@@ -2,7 +2,7 @@ use strict;
 use warnings;
 
 use Test2::V0;
-use Future::AsyncAwait;
+use Future;
 
 use PAGI::App::Router;
 
@@ -73,25 +73,24 @@ subtest 'unmatched WebSocket route without denial extension -> portable close' =
         'close before accept asks the server for the spec-defined bare 403';
 };
 
-subtest 'custom not_found handler is still delegated to on every scope' => sub {
+subtest 'custom not_found is an ordinary HTTP generated-response handler' => sub {
     my @seen;
-    my $not_found = async sub {
-        my ($scope, $receive, $send) = @_;
-        push @seen, $scope->{type} // 'http';
+    my $not_found = sub {
+        my ($c) = @_;
+        push @seen, [ref($c), scalar @_];
+        return $c->text('custom missing');
     };
     my $router = PAGI::App::Router->new(not_found => $not_found);
     my $app = $router->to_app;
 
-    for my $scope ({ method => 'GET', path => '/x' },
-                   { type => 'sse', path => '/x' },
-                   { type => 'websocket', path => '/x' }) {
-        my ($send, $sent) = mock_send();
-        $app->($scope, sub { Future->done }, $send)->get;
-        is scalar(@$sent), 0, "not_found suppresses the default decline ($scope->{type})"
-            if defined $scope->{type};
-    }
+    my ($send, $sent) = mock_send();
+    $app->({ type => 'http', method => 'GET', path => '/x', headers => [] },
+        sub { Future->done }, $send)->get;
 
-    is \@seen, ['http', 'sse', 'websocket'], 'not_found invoked for all three scopes';
+    is([$sent->[0]{status}, $sent->[1]{body}], [404, 'custom missing'],
+        'the seeded custom HTTP response is emitted');
+    is(\@seen, [['PAGI::Context::HTTP', 1]],
+        'the generated handler receives one HTTP Context');
 };
 
 done_testing;

@@ -74,8 +74,8 @@ sub with_logging {
 # endpoints are first-class routes; everything else (static files and the
 # REST API) is mounted at the root, where ChatApp::HTTP handles it.
 my $router = PAGI::App::Router->new;
-$router->websocket('/ws/chat' => $ws_handler);
-$router->sse('/events'        => $sse_handler);
+$router->websocket('/ws/chat', raw => $ws_handler);
+$router->sse('/events', raw => $sse_handler);
 $router->mount('/'            => $http_handler);
 
 compose(

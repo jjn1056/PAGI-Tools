@@ -2,316 +2,150 @@
 use strict;
 use warnings;
 use Test2::V0;
-use Future::AsyncAwait;
 use Future;
-use PAGI::Stash;
 
-# Load the modules
-require PAGI::Endpoint::Router;
-require PAGI::Context;
+use lib 'lib';
+use PAGI::App::Router;
 
-subtest 'context_class defaults to PAGI::Context' => sub {
-    my $router = PAGI::Endpoint::Router->new;
-    is($router->context_class, 'PAGI::Context', 'default context class');
+sub run_scope {
+    my ($app, %scope) = @_;
+    my @events;
+    my $receive = sub {
+        return Future->done({ type => 'http.request', body => '', more => 0 });
+    };
+    my $send = sub {
+        push @events, $_[0];
+        return Future->done;
+    };
+    $app->({
+        type => 'http', method => 'GET', path => '/', headers => [], %scope,
+    }, $receive, $send)->get;
+    return \@events;
+}
+
+sub body {
+    my ($events) = @_;
+    return join '', map { $_->{body} // '' }
+        grep { ($_->{type} // '') eq 'http.response.body' } @$events;
+}
+
+subtest 'App Router HTTP handlers receive one Context' => sub {
+    my @seen;
+    my $router = PAGI::App::Router->new;
+    $router->get('/hello' => sub {
+        my ($c) = @_;
+        push @seen, [ref($c), scalar @_];
+        return $c->text('Hello!');
+    });
+    $router->get('/users/{id}' => sub {
+        my ($c) = @_;
+        push @seen, [ref($c), scalar @_, $c->request->path_param('id')];
+        return $c->json({ id => $c->path_param('id') });
+    });
+    my $app = $router->to_app;
+
+    is(body(run_scope($app, path => '/hello')), 'Hello!',
+        'HTTP Context returns an immediate Response');
+    like(body(run_scope($app, path => '/users/42')), qr/"id"\s*:\s*"?42"?/,
+        'request and Context see the shared capture');
+    is(\@seen, [
+        ['PAGI::Context::HTTP', 1],
+        ['PAGI::Context::HTTP', 1, 42],
+    ], 'ordinary HTTP handlers never receive native channels');
 };
 
-subtest 'HTTP handler receives $ctx' => sub {
-    {
-        package TestCtx::HTTP;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        sub routes {
-            my ($self, $r) = @_;
-            $r->get('/hello' => 'say_hello');
-            $r->get('/users/:id' => 'get_user');
-        }
-
-        async sub say_hello {
-            my ($self, $ctx) = @_;
-            die "Expected PAGI::Context::HTTP"
-                unless $ctx->isa('PAGI::Context::HTTP');
-            return $ctx->response->text('Hello!');
-        }
-
-        async sub get_user {
-            my ($self, $ctx) = @_;
-            my $id = $ctx->request->path_param('id');
-            return $ctx->response->json({ id => $id });
-        }
-    }
-
-    my $app = TestCtx::HTTP->to_app;
-
-    # Test /hello
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
-
-        await $app->(
-            { type => 'http', method => 'GET', path => '/hello', headers => [] },
-            $receive, $send,
+subtest 'App Router WebSocket and SSE handlers receive their Context subclasses' => sub {
+    my @seen;
+    my $router = PAGI::App::Router->new;
+    $router->websocket('/ws/echo/{room}' => sub {
+        my ($c) = @_;
+        push @seen, [ref($c), scalar @_, $c->websocket->path_param('room')];
+        $c->accept->get;
+        return $c->close(1000, 'done');
+    });
+    $router->sse('/events/{channel}' => sub {
+        my ($c) = @_;
+        push @seen, [ref($c), scalar @_, $c->sse->path_param('channel')];
+        return $c->send_event(
+            event => 'connected', data => { channel => $c->path_param('channel') },
         );
+    });
+    my $app = $router->to_app;
 
-        is($sent[0]{status}, 200, '/hello returns 200');
-        is($sent[1]{body}, 'Hello!', '/hello returns Hello!');
-    })->()->get;
-
-    # Test /users/:id
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
-
-        await $app->(
-            { type => 'http', method => 'GET', path => '/users/42', headers => [] },
-            $receive, $send,
-        );
-
-        is($sent[0]{status}, 200, '/users/42 returns 200');
-        like($sent[1]{body}, qr/"id".*"42"/, 'body contains user id');
-    })->()->get;
+    my $ws = run_scope($app,
+        type => 'websocket', method => undef, path => '/ws/echo/test-room');
+    my $sse = run_scope($app,
+        type => 'sse', method => undef, path => '/events/news');
+    is([map { $_->{type} } @$ws], ['websocket.accept', 'websocket.close'],
+        'WebSocket Context owns protocol events');
+    ok((grep { ($_->{type} // '') eq 'sse.send' } @$sse),
+        'SSE Context owns protocol events');
+    is(\@seen, [
+        ['PAGI::Context::WebSocket', 1, 'test-room'],
+        ['PAGI::Context::SSE', 1, 'news'],
+    ], 'protocol handlers receive exactly one typed Context');
 };
 
-subtest 'WebSocket handler receives $ctx' => sub {
-    {
-        package TestCtx::WS;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
+subtest 'native middleware can add Context-visible state' => sub {
+    my @seen;
+    my $middleware = sub {
+        my ($inner) = @_;
+        return sub {
+            my ($scope, $receive, $send) = @_;
+            $scope->{state}{db} = 'connected';
+            $scope->{'pagi.stash'}{user} = { id => 1 };
+            return $inner->($scope, $receive, $send);
+        };
+    };
+    my $router = PAGI::App::Router->new;
+    $router->get('/protected' => [$middleware] => sub {
+        my ($c) = @_;
+        push @seen, [
+            $c->state->{db},
+            $c->stash->get('user')->{id},
+            $c->header('authorization'),
+        ];
+        return $c->json({ user_id => $c->stash->get('user')->{id} });
+    });
 
-        sub routes {
-            my ($self, $r) = @_;
-            $r->websocket('/ws/echo/:room' => 'echo_handler');
-        }
-
-        async sub echo_handler {
-            my ($self, $ctx) = @_;
-            die "Expected PAGI::Context::WebSocket"
-                unless $ctx->isa('PAGI::Context::WebSocket');
-
-            my $ws = $ctx->websocket;
-            my $room = $ws->path_param('room');
-            die "Expected room param" unless $room eq 'test-room';
-
-            await $ws->accept;
-        }
-    }
-
-    my $app = TestCtx::WS->to_app;
-
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'websocket.disconnect' }) };
-
-        await $app->(
-            { type => 'websocket', path => '/ws/echo/test-room', headers => [] },
-            $receive, $send,
-        );
-
-        is($sent[0]{type}, 'websocket.accept', 'WebSocket was accepted');
-    })->()->get;
+    my $events = run_scope(
+        $router->to_app,
+        path => '/protected',
+        state => {},
+        headers => [['authorization', 'Bearer valid']],
+    );
+    like(body($events), qr/"user_id"\s*:\s*1/,
+        'Context handler returns state derived from middleware');
+    is(\@seen, [['connected', 1, 'Bearer valid']],
+        'Context exposes state, stash, and headers from its routed scope');
 };
 
-subtest 'SSE handler receives $ctx' => sub {
-    {
-        package TestCtx::SSE;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        sub routes {
-            my ($self, $r) = @_;
-            $r->sse('/events/:channel' => 'events_handler');
-        }
-
-        async sub events_handler {
-            my ($self, $ctx) = @_;
-            die "Expected PAGI::Context::SSE"
-                unless $ctx->isa('PAGI::Context::SSE');
-
-            my $sse = $ctx->sse;
-            my $channel = $sse->path_param('channel');
-            die "Expected channel param" unless $channel eq 'news';
-
-            await $sse->send_event(event => 'connected', data => { channel => $channel });
-        }
-    }
-
-    my $app = TestCtx::SSE->to_app;
-
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'sse.disconnect' }) };
-
-        await $app->(
-            { type => 'sse', path => '/events/news', headers => [] },
-            $receive, $send,
-        );
-
-        ok(scalar @sent > 0, 'SSE sent events');
-    })->()->get;
-};
-
-subtest 'middleware receives $ctx' => sub {
-    {
-        package TestCtx::Middleware;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        our $auth_called = 0;
-        our $handler_saw_user;
-
-        sub routes {
-            my ($self, $r) = @_;
-            $r->get('/protected' => ['require_auth'] => 'protected_handler');
-        }
-
-        async sub require_auth {
-            my ($self, $ctx, $next) = @_;
-            $auth_called = 1;
-
-            my $token = $ctx->header('authorization');
-            if ($token && $token eq 'Bearer valid') {
-                $ctx->stash->set(user => { id => 1 });
-                return await $next->();
-            } else {
-                return $ctx->response->status(401)->json({ error => 'Unauthorized' });
-            }
-        }
-
-        async sub protected_handler {
-            my ($self, $ctx) = @_;
-            $handler_saw_user = $ctx->stash->get('user');
-            return $ctx->response->json({ user_id => $handler_saw_user->{id} });
-        }
-    }
-
-    my $app = TestCtx::Middleware->to_app;
-
-    # Without auth
-    (async sub {
-        my @sent;
-        $TestCtx::Middleware::auth_called = 0;
-
-        await $app->(
-            { type => 'http', method => 'GET', path => '/protected', headers => [] },
-            sub { Future->done({ type => 'http.request', body => '' }) },
-            sub { push @sent, $_[0]; Future->done },
-        );
-
-        ok($TestCtx::Middleware::auth_called, 'auth middleware called');
-        is($sent[0]{status}, 401, 'returns 401 without auth');
-    })->()->get;
-
-    # With auth
-    (async sub {
-        my @sent;
-        $TestCtx::Middleware::auth_called = 0;
-
-        await $app->(
-            {
-                type    => 'http',
-                method  => 'GET',
-                path    => '/protected',
-                headers => [['authorization', 'Bearer valid']],
-            },
-            sub { Future->done({ type => 'http.request', body => '' }) },
-            sub { push @sent, $_[0]; Future->done },
-        );
-
-        is($sent[0]{status}, 200, 'returns 200 with auth');
-        is($TestCtx::Middleware::handler_saw_user->{id}, 1, 'handler sees user from middleware');
-    })->()->get;
-};
-
-subtest 'state accessible via context' => sub {
-    {
-        package TestCtx::State;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        our $state_value;
-
-        sub routes {
-            my ($self, $r) = @_;
-            $self->state->{db} = 'connected';
-            $r->get('/test' => 'test_handler');
-        }
-
-        async sub test_handler {
-            my ($self, $ctx) = @_;
-            $state_value = $ctx->state->{db};
-            return $ctx->response->text('ok');
-        }
-    }
-
-    my $app = TestCtx::State->to_app;
-
-    (async sub {
-        my @sent;
-        await $app->(
-            { type => 'http', method => 'GET', path => '/test', headers => [] },
-            sub { Future->done({ type => 'http.request', body => '' }) },
-            sub { push @sent, $_[0]; Future->done },
-        );
-
-        is($TestCtx::State::state_value, 'connected', 'state accessible via $ctx->state');
-    })->()->get;
-};
-
-subtest 'custom context_class' => sub {
-    {
-        package TestCustomCtx::Context;
-        our @ISA = ('PAGI::Context');
-
-        sub _type_map {
-            my ($class) = @_;
-            return {
-                %{ $class->SUPER::_type_map },
-                http => 'TestCustomCtx::Context::HTTP',
+subtest 'routing metadata enables relative Context reverse routing' => sub {
+    my @seen;
+    my $router = PAGI::App::Router->new;
+    $router->group('/people/{person_id}' => sub {
+        my ($people) = @_;
+        $people->get('/profile' => sub {
+            my ($c) = @_;
+            my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
+            push @seen, {
+                path => $c->path_for('show'),
+                name => $frame->{match}{name},
+                namespace => $frame->{logical_namespace},
+                has_old => exists $c->scope->{'pagi.router'} ? 1 : 0,
             };
-        }
+            return $c->text($seen[-1]{path});
+        })->name('show');
+    })->name('people');
 
-        package TestCustomCtx::Context::HTTP;
-        our @ISA = ('PAGI::Context::HTTP');
-
-        sub custom_method { 'custom' }
-
-        package TestCustomCtx::App;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        our $custom_method_result;
-
-        sub context_class { 'TestCustomCtx::Context' }
-
-        sub routes {
-            my ($self, $r) = @_;
-            $r->get('/test' => 'test_handler');
-        }
-
-        async sub test_handler {
-            my ($self, $ctx) = @_;
-            $custom_method_result = $ctx->custom_method;
-            return $ctx->response->text('ok');
-        }
-    }
-
-    my $app = TestCustomCtx::App->to_app;
-
-    (async sub {
-        my @sent;
-        await $app->(
-            { type => 'http', method => 'GET', path => '/test', headers => [] },
-            sub { Future->done({ type => 'http.request', body => '' }) },
-            sub { push @sent, $_[0]; Future->done },
-        );
-
-        is($TestCustomCtx::App::custom_method_result, 'custom',
-           'custom context_class used');
-    })->()->get;
+    is(body(run_scope($router->to_app, path => '/people/7/profile')),
+        '/people/7/profile', 'relative link inherits the active capture');
+    is(\@seen, [{
+        path => '/people/7/profile',
+        name => '/people/show',
+        namespace => '/people',
+        has_old => 0,
+    }], 'Context consumes shared pagi.routing metadata only');
 };
 
 done_testing;
