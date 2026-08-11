@@ -207,8 +207,16 @@ source directory. An empty C<PAGI_HOME> is treated as unset.
 Pass one logical, relative path component per argument for portable paths.
 Undefined, empty, reference-valued, absolute, and separately volumed components
 croak. Wrapper functions are caller-sensitive: call C<app_path> directly from
-the application module, or have a wrapper arrange to call
-C<_app_path_from_origin> with the intended package and source.
+the application module. If a wrapper is required, localize C<PAGI_HOME> around
+its call to select the application home explicitly:
+
+    sub project_file {
+        local $ENV{PAGI_HOME} = $APPLICATION_HOME;
+        return app_path(@_);
+    }
+
+There is no public caller-override form; internal path helpers are not part of
+the supported application API.
 
 The helper does not check whether a path exists, create it, resolve symlinks, or
 provide a sandbox guarantee. Root-level C<use lib> configuration remains a
