@@ -4,87 +4,97 @@ use Test2::V0;
 use FindBin qw($Bin);
 use lib "$Bin/../examples/endpoint-router-demo/lib";
 use lib "$Bin/../lib";
-use Future::AsyncAwait;
 
+use PAGI::Compose qw(compose);
 use PAGI::Test::Client;
-use PAGI::Lifespan;
 
-# Load example app modules
-subtest 'example app modules load' => sub {
-    my $main_loaded = eval { require MyApp::Main; 1 };
-    ok($main_loaded, 'MyApp::Main loads') or diag $@;
+use MyApp::Main;
+use MyApp::API;
+use MyApp::API::Events;
 
-    my $api_loaded = eval { require MyApp::API; 1 };
-    ok($api_loaded, 'MyApp::API loads') or diag $@;
+subtest 'the example exposes explicit Endpoint objects without Endpoint state' => sub {
+    for my $class (qw(MyApp::Main MyApp::API MyApp::API::Events)) {
+        ok($class->can('new'), "$class constructs an object");
+        ok($class->can('routes'), "$class declares routes");
+        ok($class->can('to_router'), "$class materializes a Router");
+        ok(!$class->can('state'), "$class has no Endpoint state surface");
+    }
 };
 
-subtest 'MyApp::Main class structure' => sub {
-    ok(MyApp::Main->can('new'), 'has new');
-    ok(MyApp::Main->can('to_app'), 'has to_app');
-    ok(MyApp::Main->can('routes'), 'has routes');
-    ok(MyApp::Main->can('state'), 'has state');
-    ok(MyApp::Main->can('home'), 'has home handler');
-    ok(MyApp::Main->can('ws_echo'), 'has ws_echo handler');
-    ok(MyApp::Main->can('sse_metrics'), 'has sse_metrics handler');
-    # No longer has on_startup/on_shutdown - lifecycle handled by PAGI::Lifespan
-};
+subtest 'the nested demo exercises the complete Endpoint design' => sub {
+    my $events = MyApp::API::Events->new;
+    my $api    = MyApp::API->new(events => $events);
+    my $main   = MyApp::Main->new(api => $api);
+    my $router = $main->to_router;
 
-subtest 'app routes work with lifespan' => sub {
-    my $router = MyApp::Main->new;
+    isa_ok($router, 'PAGI::Routing::Router');
+    is([sort keys %{$router->named_routes}], [qw(
+        /api/events/stream /api/index /api/show /home /status_socket
+    )], 'nested local names form canonical absolute addresses');
 
-    my $app = PAGI::Lifespan->wrap(
-        $router->to_app,
-        startup => async sub {
-            my ($state) = @_;
-            # Populate state - injected into every request via $req->state
-            $state->{config} = {
-                app_name => 'Endpoint Router Demo',
-                version  => '1.0.0',
-            };
-            $state->{metrics} = {
-                requests  => 0,
-                ws_active => 0,
-            };
+    my $resource;
+    my $app = compose(
+        app => $router,
+        lifespan => {
+            startup => sub {
+                my ($state) = @_;
+                $resource = $state->{resource} = { name => 'demo-resource', open => 1 };
+                $state->{metrics} = { requests => 0, websocket_messages => 0 };
+            },
+            shutdown => sub {
+                my ($state) = @_;
+                $state->{resource}{open} = 0;
+                $state->{resource}{closed} = 1;
+            },
         },
-    );
+    )->to_app;
 
     PAGI::Test::Client->run($app, sub {
         my ($client) = @_;
 
-        subtest 'home page' => sub {
-            my $res = $client->get('/');
-            is($res->status, 200, '/ returns 200');
-            like($res->text, qr/Endpoint Router Demo/, 'body contains app name from state');
-        };
+        my $home = $client->get('/');
+        is($home->status, 200, 'home responds through Main');
+        like($home->text, qr{href="(/api/index)"}, 'home generates the API link');
 
-        subtest 'API info' => sub {
-            my $res = $client->get('/api/info');
-            is($res->status, 200, '/api/info returns 200');
-            like($res->text, qr/version/, 'body contains version');
-        };
+        my ($api_index_path) = $home->text =~ qr{href="(/api/index)"};
+        my $denied = $client->get($api_index_path);
+        is($denied->status, 401, 'API middleware rejects a missing demo token');
 
-        subtest 'API users list' => sub {
-            my $res = $client->get('/api/users');
-            is($res->status, 200, '/api/users returns 200');
-            like($res->text, qr/Alice|Bob/, 'body contains user names');
-        };
+        my $index = $client->get($api_index_path,
+            headers => { 'X-Demo-Token' => 'demo-token' });
+        is($index->status, 200, 'API index accepts the demo token');
+        like($index->text, qr{href="(/api/show/1)"}, 'API generates a local item link');
 
-        subtest 'WebSocket echo' => sub {
-            $client->websocket('/ws/echo', sub {
-                my ($ws) = @_;
-                my $msg = $ws->receive_json;
-                is($msg->{type}, 'connected', 'received connected message');
-            });
-        };
+        my ($show_path) = $index->text =~ qr{href="(/api/show/1)"};
+        my $show = $client->get($show_path,
+            headers => { 'X-Demo-Token' => 'demo-token' });
+        is($show->status, 200, 'generated API item link resolves');
+        like($show->text, qr/Alice/, 'item handler sees its typed path capture');
 
-        subtest 'SSE metrics' => sub {
-            $client->sse('/events/metrics', sub {
-                my ($sse) = @_;
-                my $event = $sse->receive_event;
-                is($event->{event}, 'connected', 'received connected event');
-            });
-        };
+        $client->websocket('/status', sub {
+            my ($ws) = @_;
+            is($ws->receive_json, { type => 'ready', resource => 'demo-resource' },
+                'root WebSocket reads lifespan state');
+            $ws->send_json({ ping => 'demo' });
+            is($ws->receive_json, { type => 'echo', data => { ping => 'demo' } },
+                'root WebSocket handles one message');
+        });
+
+        $client->sse('/api/events/stream', sub {
+            my ($sse) = @_;
+            my $event = $sse->receive_event;
+            is($event->{event}, 'ready', 'nested Events object starts SSE');
+            is($event->{data}, '{"resource":"demo-resource"}',
+                'nested SSE reads lifespan state');
+        });
+
+        my $missing = $client->get('/api/events/missing',
+            headers => { 'X-Demo-Token' => 'demo-token' });
+        is($missing->status, 404, 'unmatched nested path retains shared 404 behavior');
     });
+
+    is($resource, { name => 'demo-resource', open => 0, closed => 1 },
+        'shutdown closes the resource owned by lifespan state');
 };
 
 done_testing;

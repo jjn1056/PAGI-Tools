@@ -2,40 +2,28 @@
 use strict;
 use warnings;
 use lib 'lib';
-use Future::AsyncAwait;
-
-# Configure Future::IO for SSE->every() support
-# This must be done before using any Future::IO features
-use Future::IO::Impl::IOAsync;
 
 use MyApp::Main;
-use PAGI::Lifespan;
+use MyApp::API;
+use MyApp::API::Events;
+use PAGI::Compose qw(compose);
 
-my $router = MyApp::Main->new;
+my $events = MyApp::API::Events->new;
+my $api    = MyApp::API->new(events => $events);
+my $main   = MyApp::Main->new(api => $api);
 
-# Wrap with lifecycle management
-PAGI::Lifespan->wrap(
-    $router,
-    startup => async sub {
-        my ($state) = @_;
-        warn "MyApp starting up...\n";
-
-        # Populate state - this is injected into every request
-        # Access via $req->state, $ws->state, or $sse->state
-        $state->{config} = {
-            app_name => 'Endpoint Router Demo',
-            version  => '1.0.0',
-        };
-        $state->{metrics} = {
-            requests  => 0,
-            ws_active => 0,
-        };
-
-        warn "MyApp ready!\n";
+compose(
+    app => $main->to_router,
+    lifespan => {
+        startup => sub {
+            my ($state) = @_;
+            $state->{resource} = { name => 'demo-resource', open => 1 };
+            $state->{metrics} = { requests => 0, websocket_messages => 0 };
+        },
+        shutdown => sub {
+            my ($state) = @_;
+            $state->{resource}{open} = 0;
+            $state->{resource}{closed} = 1;
+        },
     },
-    shutdown => async sub {
-        my ($state) = @_;
-        warn "MyApp shutting down...\n";
-        # $state->{db}->disconnect if using database connections
-    },
-);
+)->to_app;
