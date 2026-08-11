@@ -2,601 +2,271 @@ package PAGI::Endpoint::Router;
 
 use strict;
 use warnings;
-
-use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
-use Module::Load qw(load);
-
 
 sub new {
-    my ($class, %args) = @_;
-    return bless {
-        _state => {},
-    }, $class;
+    my ($class, @args) = @_;
+    croak "$class->new accepts no arguments" if @args;
+    return bless {}, $class;
 }
 
-# Worker-local state (NOT shared across workers)
-sub state {
-    my ($self) = @_;
-    return $self->{_state};
+sub routes { return }
+
+sub to_router {
+    my ($invocant) = @_;
+    my $endpoint = _instance_for($invocant);
+    require PAGI::App::Router::Materializer;
+    my $materializer = PAGI::App::Router::Materializer->new;
+    return $materializer->materialize($endpoint, '<root>');
 }
-
-# Override in subclass to use a custom context class
-sub context_class { 'PAGI::Context' }
-
-# Override in subclass to define routes
-sub routes {
-    my ($self, $r) = @_;
-    # Default: no routes
-}
-
 
 sub to_app {
-    my ($class) = @_;
-
-    # Create instance that lives for app lifetime
-    my $instance = blessed($class) ? $class : $class->new;
-
-    # Build internal router
-    load('PAGI::App::Router');
-    my $internal_router = PAGI::App::Router->new;
-
-    # Let subclass define routes
-    $instance->_build_routes($internal_router);
-
-    my $app   = $internal_router->to_app;
-    my $state = $instance->{_state};
-
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-
-        # Inject instance state into scope (allows $ctx->state to work)
-        $scope->{state} //= $state;
-
-        # HTTP route apps respond at their own boundary (via _build_value_app).
-        # WS/SSE/mount/404/405 all handle their own sending.
-        await $app->($scope, $receive, $send);
-    };
+    my ($invocant) = @_;
+    my $endpoint = _instance_for($invocant);
+    return $endpoint->to_router->to_app;
 }
 
-sub _build_routes {
-    my ($self, $r) = @_;
-
-    # Create a wrapper router that intercepts route registration
-    my $wrapper = PAGI::Endpoint::Router::RouteBuilder->new($self, $r);
-    $self->routes($wrapper);
+sub _materialize_with {
+    my ($self, $materializer) = @_;
+    require PAGI::App::Router;
+    require PAGI::Endpoint::Router::Builder;
+    my $app_router = PAGI::App::Router->new;
+    my $facade = PAGI::Endpoint::Router::Builder->new($self, $app_router);
+    $self->routes($facade);
+    return $app_router->_materialize_with($materializer);
 }
 
-# Internal route builder that wraps handlers
-package PAGI::Endpoint::Router::RouteBuilder;
-
-use strict;
-use warnings;
-use Future::AsyncAwait;
-use Carp qw(croak);
-use PAGI::Utils qw(is_response);
-
-sub new {
-    my ($class, $endpoint, $router) = @_;
-    return bless {
-        endpoint => $endpoint,
-        router   => $router,
-    }, $class;
-}
-
-# HTTP methods
-sub get     { shift->_add_http_route('GET', @_) }
-sub post    { shift->_add_http_route('POST', @_) }
-sub put     { shift->_add_http_route('PUT', @_) }
-sub patch   { shift->_add_http_route('PATCH', @_) }
-sub delete  { shift->_add_http_route('DELETE', @_) }
-sub head    { shift->_add_http_route('HEAD', @_) }
-sub options { shift->_add_http_route('OPTIONS', @_) }
-
-sub _add_http_route {
-    my ($self, $method, $path, @rest) = @_;
-
-    my ($middleware, $handler) = $self->_parse_route_args(@rest);
-
-    my $app = $self->_build_value_app($middleware, $handler);
-
-    my $router_method = lc($method);
-    $self->{router}->$router_method($path, $app);
-
-    return $self;
-}
-
-sub _parse_route_args {
-    my ($self, @args) = @_;
-
-    if (@args == 2 && ref($args[0]) eq 'ARRAY') {
-        return ($args[0], $args[1]);
-    }
-    elsif (@args == 1) {
-        return ([], $args[0]);
-    }
-    else {
-        die "Invalid route arguments";
-    }
-}
-
-sub _build_value_app {
-    my ($self, $method_mw, $handler) = @_;
-
-    my $endpoint  = $self->{endpoint};
-    my $ctx_class = $endpoint->context_class;
-
-    my @mw = map { $self->_resolve_value_mw($_) } @$method_mw;   # async sub($ctx,$next)->Response
-    my $handler_code = $self->_resolve_handler($handler);         # async sub($ctx)->Response
-
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-
-        require PAGI::Context;
-        my $ctx = $ctx_class->new($scope, $receive, $send);
-
-        my $next = async sub { await $handler_code->($ctx) };
-        for my $m (reverse @mw) {
-            my $inner = $next;
-            $next = async sub { await $m->($ctx, $inner) };
-        }
-
-        await $ctx->respond(await $next->());
-    };
-}
-
-sub _resolve_handler {
-    my ($self, $handler) = @_;
-
-    my $endpoint = $self->{endpoint};
-
-    if (!ref($handler)) {
-        my $method = $endpoint->can($handler)
-            or die "No such method: $handler in " . ref($endpoint);
-        return async sub {
-            my ($ctx) = @_;
-            my $res = await $endpoint->$method($ctx);
-            croak "handler did not return a response"
-                unless is_response($res);
-            return $res;
-        };
-    }
-
-    return async sub {
-        my ($ctx) = @_;
-        my $res = await $handler->($ctx);
-        croak "handler did not return a response"
-            unless is_response($res);
-        return $res;
-    };
-}
-
-sub websocket {
-    my ($self, $path, @rest) = @_;
-
-    my ($middleware, $handler) = $self->_parse_route_args(@rest);
-
-    die "WebSocket routes do not support route-level middleware; "
-      . "apply event middleware at the mount or group level\n"
-        if @$middleware;
-
-    my $wrapped = $self->_wrap_websocket_handler($handler);
-
-    $self->{router}->websocket($path, $wrapped);
-
-    return $self;
-}
-
-sub _wrap_websocket_handler {
-    my ($self, $handler) = @_;
-
-    my $endpoint = $self->{endpoint};
-    my $context_class = $endpoint->context_class;
-
-    if (!ref($handler)) {
-        my $method_name = $handler;
-        my $method = $endpoint->can($method_name)
-            or die "No such method: $method_name";
-
-        return async sub {
-            my ($scope, $receive, $send) = @_;
-
-            require PAGI::Context;
-
-            my $ctx = $context_class->new($scope, $receive, $send);
-
-            await $endpoint->$method($ctx);
-        };
-    }
-
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-
-        require PAGI::Context;
-
-        my $ctx = $context_class->new($scope, $receive, $send);
-
-        await $handler->($ctx);
-    };
-}
-
-sub sse {
-    my ($self, $path, @rest) = @_;
-
-    my ($middleware, $handler) = $self->_parse_route_args(@rest);
-
-    die "SSE routes do not support route-level middleware; "
-      . "apply event middleware at the mount or group level\n"
-        if @$middleware;
-
-    my $wrapped = $self->_wrap_sse_handler($handler);
-
-    $self->{router}->sse($path, $wrapped);
-
-    return $self;
-}
-
-sub _wrap_sse_handler {
-    my ($self, $handler) = @_;
-
-    my $endpoint = $self->{endpoint};
-    my $context_class = $endpoint->context_class;
-
-    if (!ref($handler)) {
-        my $method_name = $handler;
-        my $method = $endpoint->can($method_name)
-            or die "No such method: $method_name";
-
-        return async sub {
-            my ($scope, $receive, $send) = @_;
-
-            require PAGI::Context;
-
-            my $ctx = $context_class->new($scope, $receive, $send);
-
-            await $endpoint->$method($ctx);
-        };
-    }
-
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-
-        require PAGI::Context;
-
-        my $ctx = $context_class->new($scope, $receive, $send);
-
-        await $handler->($ctx);
-    };
-}
-
-sub _resolve_value_mw {
-    my ($self, $mw) = @_;
-
-    my $endpoint = $self->{endpoint};
-
-    # String = endpoint method name → value-flow route middleware.
-    if (!ref($mw)) {
-        my $method = $endpoint->can($mw)
-            or die "No such middleware method: $mw";
-        return async sub {
-            my ($ctx, $next) = @_;
-            my $res = await $endpoint->$method($ctx, $next);
-            croak "route middleware '$mw' did not return a response"
-                unless is_response($res);
-            return $res;
-        };
-    }
-
-    # Coderefs/objects are standard (event) middleware: they belong at the
-    # outer layer (App::Router mount/group), not inside an Endpoint route's
-    # value-flow chain.
-    die "Standard middleware (coderef/object) belong at the mount or group "
-      . "level, not in an Endpoint route's middleware list; route middleware "
-      . "are value-flow endpoint methods that return a response.\n";
-}
-
-# Pass through mount to internal router
-sub mount {
-    my ($self, @args) = @_;
-    $self->{router}->mount(@args);
-    return $self;
-}
-
-# Pass through name() to internal router
-sub name {
+sub middleware_as {
     my ($self, $name) = @_;
-    $self->{router}->name($name);
-    return $self;
+    my $method = $self->_required_local_method($name, 'middleware');
+    return sub { return $method->($self, @_) };
 }
 
-# Pass through as() to internal router
-sub as {
-    my ($self, $namespace) = @_;
-    $self->{router}->as($namespace);
-    return $self;
+sub app_as {
+    my ($self, $name) = @_;
+    my $method = $self->_required_local_method($name, 'application');
+    return sub { return $method->($self, @_) };
 }
 
-# Pass through uri_for() to internal router
-sub uri_for {
-    my ($self, @args) = @_;
-    return $self->{router}->uri_for(@args);
+sub new_context {
+    my ($self, $scope, $receive, $send) = @_;
+    require PAGI::Context;
+    return PAGI::Context->new($scope, $receive, $send);
 }
 
-# Pass through named_routes() to internal router
-sub named_routes {
-    my ($self) = @_;
-    return $self->{router}->named_routes;
+sub _required_local_method {
+    my ($self, $name, $kind) = @_;
+    croak "$kind method name must be an unqualified name"
+        unless defined $name && !ref($name)
+            && $name =~ /\A[A-Za-z_]\w*\z/;
+    my $method = $self->can($name);
+    my $class = blessed($self) || $self;
+    croak qq{$class has no $kind method "$name"} unless $method;
+    return $method;
+}
+
+sub _instance_for {
+    my ($invocant) = @_;
+    return $invocant if blessed($invocant);
+    return $invocant->new;
 }
 
 1;
 
 __END__
 
+=encoding UTF-8
+
 =head1 NAME
 
-PAGI::Endpoint::Router - Class-based router with wrapped handlers
+PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 
 =head1 SYNOPSIS
 
-    package MyApp;
+    package MyApp::Endpoint;
     use parent 'PAGI::Endpoint::Router';
     use Future::AsyncAwait;
+    use PAGI::Routing qw(middleware);
+
+    sub new {
+        my ($class, %args) = @_;
+        die 'repository is required' unless $args{repository};
+        return bless { repository => $args{repository} }, $class;
+    }
 
     sub routes {
         my ($self, $r) = @_;
-
-        # Initialize state (or use PAGI::Lifespan wrapper for startup/shutdown)
-        $self->state->{db} = DBI->connect(...);
-        $self->state->{cache} = MyApp::Cache->new;
-
-        # HTTP routes with middleware
-        $r->get('/users' => ['require_auth'] => 'list_users');
-        $r->get('/users/:id' => 'get_user');
-
-        # WebSocket and SSE
-        $r->websocket('/ws/chat/:room' => 'chat_handler');
-        $r->sse('/events' => 'events_handler');
-
-        # Mount sub-routers
-        $r->mount('/api' => MyApp::API->to_app);
+        $r->get('/people/{id}' => [
+            'RequestId',
+            $self->middleware_as('authenticate'),
+            $self->{configured_middleware},
+            middleware('Session', cookie_name => 'sid'),
+        ] => 'show')->name('show');
+        $r->websocket('/chat/{room}' => 'chat')->name('chat');
+        $r->sse('/events' => 'events')->name('events');
+        $r->mount('/admin' => $self->app_as('admin_app'));
     }
 
-    # Middleware sets stash - visible to ALL downstream handlers
-    async sub require_auth {
-        my ($self, $ctx, $next) = @_;
-        my $user = verify_token($ctx->header('Authorization'));
-        $ctx->stash->set(user => $user);  # Flows to handler and subrouters!
-        return await $next->();
+    sub show {
+        my ($self, $c) = @_;
+        return $c->json($self->{repository}->find($c->path_param('id')));
     }
 
-    async sub list_users {
-        my ($self, $ctx) = @_;
-        my $db = $self->state->{db};                 # Worker state via $self
-        my $user = $ctx->stash->get('user');          # Set by middleware
-        my $users = $db->get_users;
-        return $ctx->json($users);
+    sub authenticate {
+        my ($self, $inner_app) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            return await $inner_app->($scope, $receive, $send);
+        };
     }
 
-    async sub get_user {
-        my ($self, $ctx) = @_;
-        my $id = $ctx->request->path_param('id');    # Route parameter
-        return $ctx->json({ id => $id });
-    }
-
-    async sub chat_handler {
-        my ($self, $ctx) = @_;
-        my $ws = $ctx->websocket;
-        await $ws->accept;
-        await $ws->keepalive(25);
-        await $ws->each_json(async sub {
-            my ($data) = @_;
-            await $ws->send_json({ echo => $data });
-        });
-    }
-
-    # Wrap with PAGI::Lifespan for startup/shutdown hooks
-    use PAGI::Lifespan;
-    my $app = PAGI::Lifespan->new(
-        startup => async sub ($state) {
-            $state->{db} = DBI->connect(...);
-        },
-        shutdown => async sub ($state) {
-            $state->{db}->disconnect;
-        },
-        app => MyApp->to_app,
-    )->to_app;
+    my $endpoint = MyApp::Endpoint->new(repository => $repository);
+    my $app = $endpoint->to_app;
 
 =head1 DESCRIPTION
 
-PAGI::Endpoint::Router provides a Starlette/Rails-style class-based approach
-to building PAGI applications. It combines:
+C<PAGI::Endpoint::Router> is the method-oriented mutable frontend over
+L<PAGI::App::Router> and the shared immutable routing compiler. It binds route
+handler names to one ordinary Perl object. It does not match requests, build
+Contexts for compiled routes, adapt Responses, load handler packages, inject
+state, or maintain a separate middleware chain.
 
-=over 4
+=head1 CONSTRUCTION AND LIFECYCLE
 
-=item * B<Method-based handlers> - Define handlers as class methods
+=head2 new
 
-=item * B<Context objects> - Handlers receive a L<PAGI::Context> with
-protocol-specific accessors (request/response, websocket, sse)
+The base constructor accepts no options and returns an empty blessed hash.
+Configured subclasses override C<new> with their own ordinary validation and
+accessors. Configuration is simply object data; Endpoint supplies no hidden
+state hash.
 
-=item * B<Middleware as methods> - Define middleware that can set L<PAGI::Stash>
-values visible to all downstream handlers
+=head2 to_router
 
-=item * B<Worker-local state> - C<$self-E<gt>state> hashref for storing resources
-like database connections, accessible via C<$ctx-E<gt>state>
+    my $snapshot = MyApp::Endpoint->to_router;
+    my $same_object_snapshot = $endpoint->to_router;
 
-=back
+A class call constructs exactly one instance with C<new>. An object call
+retains that exact object. Each call materializes a fresh immutable
+L<PAGI::Routing::Router> snapshot, so later changes to ordinary object fields
+do not alter an existing snapshot's declaration graph.
 
-For lifecycle management (startup/shutdown hooks), wrap your router with
-C<PAGI::Lifespan>. This separation allows routers to be freely composable
-without lifecycle conflicts.
+Nested Endpoint objects are mounted with the routing-aware form:
 
-=head1 STATE VS STASH
+    $r->mount('/people', router => $people_endpoint)->name('people');
 
-PAGI::Endpoint::Router provides two separate storage mechanisms with
-different scopes and lifetimes.
-
-=head2 state - Worker-Local Instance State
-
-    $self->state->{db} = $connection;
-
-The C<state> hashref is attached to the router instance. Use it for
-resources initialized in C<on_startup> like database connections,
-cache clients, or configuration.
-
-B<IMPORTANT: Worker Isolation>
-
-In a multi-worker or clustered deployment, each worker process has its
-own isolated copy of C<state>:
-
-    Master Process
-      fork() --> Worker 1 (own $self->state)
-             --> Worker 2 (own $self->state)
-             --> Worker 3 (own $self->state)
-
-Changes to C<state> in one worker do NOT affect other workers. For
-truly shared application state (counters, sessions, feature flags),
-use external storage:
-
-=over 4
-
-=item * B<Redis> - Fast in-memory shared state
-
-=item * B<Database> - Persistent shared state
-
-=item * B<Memcached> - Distributed caching
-
-=back
-
-=head2 Per-Request Shared State (PAGI::Stash)
-
-    $ctx->stash->set(user => $current_user);
-
-L<PAGI::Stash> provides per-request shared state that is accessible across
-all handlers, middleware, and subrouters processing the same request.
-
-    Middleware A
-        sets $ctx->stash->set(user => ...)
-            Middleware B
-                reads $ctx->stash->get('user')
-                    Subrouter Handler
-                        reads $ctx->stash->get('user')  <-- Still visible!
-
-This enables middleware to pass data downstream:
-
-    # Auth middleware
-    async sub require_auth {
-        my ($self, $ctx, $next) = @_;
-        my $user = verify_token($ctx->header('Authorization'));
-        $ctx->stash->set(user => $user);  # Available to ALL downstream
-        return await $next->();
-    }
-
-Route middleware are value-flow: C<$next-E<gt>()> returns the handler's
-L<PAGI::Response>, which the middleware may decorate (C<$res-E<gt>header(...)>),
-observe, or replace by returning a different response. A middleware must
-B<return> a response (its own, or the one from C<$next>); forgetting to return
-is a loud error. Standard event middleware (L<PAGI::Middleware> instances and factory coderefs of
-the form C<sub { my ($app) = @_; async sub { my ($scope, $receive, $send) = @_; ... } }>)
-are applied at the mount or group level, where they wrap the whole endpoint.
-
-    # Handler in subrouter - sees stash from parent middleware
-    async sub get_profile {
-        my ($self, $ctx) = @_;
-        my $user = $ctx->stash->get('user');  # Set by middleware above
-        return $ctx->json($user);
-    }
-
-=head1 HANDLER SIGNATURES
-
-All handlers receive a L<PAGI::Context> as the second argument.
-The context subclass depends on route type:
-
-    # HTTP routes: get, post, put, patch, delete, head, options
-    # MUST return a respond-able value (e.g. $ctx->json(...))
-    async sub handler { my ($self, $ctx) = @_; return $ctx->json(...) }
-    # $ctx isa PAGI::Context::HTTP
-    # $ctx->request, $ctx->response
-
-    # WebSocket routes (drive $ctx imperatively; return value ignored)
-    async sub handler { my ($self, $ctx) = @_; ... }
-    # $ctx isa PAGI::Context::WebSocket
-    # $ctx->websocket
-
-    # SSE routes (drive $ctx imperatively; return value ignored)
-    async sub handler { my ($self, $ctx) = @_; ... }
-    # $ctx isa PAGI::Context::SSE
-    # $ctx->sse
-
-    # Middleware
-    async sub middleware { my ($self, $ctx, $next) = @_; ... }
-
-=head1 METHODS
+All nested mutable frontends materialize in the same root operation. Reusing
+one object at sibling placements reuses one child Router identity within that
+snapshot while each Mount retains independent path, name, and metadata.
+Recursive Endpoint graphs fail with the shared placement-cycle diagnostic.
 
 =head2 to_app
 
-    my $app = MyRouter->to_app;
+Materializes one fresh snapshot and compiles it through the shared compiler.
+Retain the returned native PAGI application for its intended lifetime. A class
+call constructs one Endpoint instance; an object call keeps its receiver.
 
-Returns a PAGI application coderef. Creates a single instance that
-persists for the worker lifetime.
+=head1 ROUTE DECLARATIONS
 
-=head2 context_class
+C<routes($builder)> receives an Endpoint-aware facade over one public App
+Router. It provides C<get>, C<post>, C<put>, C<patch>, C<delete>, C<head>,
+C<options>, C<any>, C<route>, C<websocket>, C<sse>, C<group>, C<mount>, and the
+last-declaration modifiers C<name>, C<desc>, and C<constraints>. Declarations
+remain in exact first-seen order. Groups receive another Endpoint facade bound
+to the same object.
 
-    sub context_class { 'MyApp::Context' }
+The same snapshot and reverse-routing rules as L<PAGI::App::Router> apply.
+Names are local logical segments; nested names form canonical slash addresses.
+Context C<path_for> resolves relative to the active placement, while an
+absolute name starts with C</>.
 
-Returns the class name used to construct context objects for handlers.
-Defaults to C<'PAGI::Context'>. Override in a subclass to use a custom
-context class (must be a subclass of L<PAGI::Context>).
+=head1 HANDLERS
 
-=head2 state
+    $r->get('/method' => 'show');
+    $r->get('/closure' => sub {
+        my ($c) = @_;
+        return $c->text('closure');
+    });
 
-    $self->state->{db} = $connection;
+A plain unqualified string in handler position is validated with C<can> while
+the snapshot is built. The exact resulting method CODE is retained and later
+called as C<($endpoint, $context)>. Local, inherited, and role-installed or
+aliased methods therefore work. Missing methods and qualified strings are
+errors; handler strings never load packages.
 
-Returns the worker-local state hashref. Initialize resources in the
-C<routes> method or via C<PAGI::Lifespan> wrapper. Access via
-C<$self-E<gt>state> in handlers or C<$ctx-E<gt>state> in context objects.
+A handler coderef passes to the shared App Router unmodified. It receives only
+the ordinary protocol-specific Context and is never rebound to the Endpoint.
+HTTP handlers return an immediate Response or a Future resolving to one.
+WebSocket and SSE handlers use their Context operations and may complete
+immediately or through a Future. All response validation and protocol events
+belong to the shared compiler.
 
-B<Note:> This is NOT shared across workers. See L</STATE VS STASH>.
+=head1 MIDDLEWARE
 
-=head2 routes
+Every router, group, mount, and route middleware array uses the universal four
+forms:
 
-    sub routes {
-        my ($self, $r) = @_;
-        $r->get('/path' => 'handler_method');
-    }
+=over 4
 
-Override to define routes. The C<$r> parameter is a route builder.
+=item * a middleware class string;
 
-=head1 ROUTE BUILDER METHODS
+=item * a factory coderef;
 
-=head2 HTTP Methods
+=item * a configured object with C<wrap>;
 
-    $r->get($path => 'handler');
-    $r->get($path => ['middleware'] => 'handler');
-    $r->post($path => ...);
-    $r->put($path => ...);
-    $r->patch($path => ...);
-    $r->delete($path => ...);
-    $r->head($path => ...);
-    $r->options($path => ...);
+=item * a C<PAGI::Routing::Middleware> description, commonly built with
+C<middleware($class, %configuration)>.
 
-=head2 websocket
+=back
 
-    $r->websocket($path => 'handler');
+Descriptions normalize during declaration and resolve at app compilation.
+Factories and C<wrap> methods must return a native app coderef synchronously.
+The first item listed is outermost. The resulting native middleware controls
+whether it calls downstream, which scope it passes, and how it wraps
+C<receive> and C<send>. This contract is identical for HTTP, WebSocket, and
+SSE; there is no response-valued C<($context, $next)> Endpoint middleware.
 
-=head2 sse
+=head2 middleware_as
 
-    $r->sse($path => 'handler');
+    my $factory = $endpoint->middleware_as('authenticate');
 
-=head2 mount
+Validates an unqualified local, inherited, or role-installed method and
+returns a normal middleware factory closure. At compilation the method
+receives C<($endpoint, $inner_app)> and must return the wrapped native app
+immediately. Constructing the helper performs no protocol I/O.
 
-    $r->mount($prefix => $other_app);
+=head2 app_as
 
-Mount another PAGI app at a prefix. L<PAGI::Stash> data flows through to mounted apps.
+    my $app = $endpoint->app_as('native_app');
 
-=head1 SEE ALSO
+Validates the method and returns a native application closure. When invoked,
+the method receives C<($endpoint, $scope, $receive, $send)>. The helper is
+useful at opaque mount or composition boundaries and does no work merely by
+being constructed.
 
-L<PAGI::Context>, L<PAGI::Stash>, L<PAGI::App::Router>, L<PAGI::Request>,
-L<PAGI::Response>, L<PAGI::WebSocket>, L<PAGI::SSE>
+=head1 CONTEXT AND STATE
+
+=head2 new_context
+
+    my $c = $endpoint->new_context($scope, $receive, $send);
+
+This explicit convenience method calls C<PAGI::Context-E<gt>new> and therefore
+selects the built-in HTTP, WebSocket, or SSE subclass. It is not the routing
+compiler's Context factory. Overriding it affects only explicit calls to the
+helper, never compiled route dispatch.
+
+Endpoint object fields and request lifespan state are separate mechanisms.
+Use validated constructor fields for object configuration. C<$c-E<gt>state>
+reads the C<state> supplied in the server-owned request scope, including state
+prepared through L<PAGI::Compose> lifespan callbacks. Endpoint neither creates
+nor injects that key and has no C<state> or C<context_class> method.
+
+=head1 SNAPSHOTS AND ORDER
+
+Each C<to_router> returns a fresh immutable snapshot, and each C<to_app>
+compiles one retained snapshot. Matching, middleware folds, generated 404/405
+outcomes, first-seen C<Allow> order, route metadata, reverse resolution, and
+request-local scope cloning are exactly those documented by
+L<PAGI::App::Router>. Endpoint adds only method binding over that machinery.
 
 =cut

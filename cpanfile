@@ -21,10 +21,6 @@ requires 'HTTP::MultiPartParser', '0.02';
 # so the dependency is explicit.
 requires 'IO::Compress::Gzip';
 
-# Nested-namespace middleware class resolution (PAGI::Endpoint::Router). Core
-# since 5.9.4; declared explicitly.
-requires 'Module::Load';
-
 # Date parsing for PAGI::Middleware::ConditionalGet
 requires 'HTTP::Date', '6.06';
 

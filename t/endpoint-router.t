@@ -1,383 +1,345 @@
+#!/usr/bin/env perl
 use strict;
 use warnings;
 use Test2::V0;
-use Future::AsyncAwait;
-use PAGI::Stash;
+use Future;
+use Scalar::Util qw(refaddr);
 
-# Load the module
-my $loaded = eval { require PAGI::Endpoint::Router; 1 };
-ok($loaded, 'PAGI::Endpoint::Router loads') or diag $@;
+use lib 'lib';
+use PAGI::Endpoint::Router ();
+use PAGI::Test::Client ();
+use PAGI::Compose qw(compose);
 
-subtest 'basic class structure' => sub {
-    ok(PAGI::Endpoint::Router->can('new'), 'has new');
-    ok(PAGI::Endpoint::Router->can('to_app'), 'has to_app');
-    ok(PAGI::Endpoint::Router->can('state'), 'has state');
-    ok(PAGI::Endpoint::Router->can('routes'), 'has routes');
-};
+sub scope {
+    my (%changes) = @_;
+    return {
+        type => 'http', method => 'GET', path => '/', raw_path => '/',
+        root_path => '', path_params => {}, headers => [], %changes,
+    };
+}
 
-subtest 'state is a hashref' => sub {
-    my $router = PAGI::Endpoint::Router->new;
-    is(ref($router->state), 'HASH', 'state is hashref');
+sub channels {
+    my @events;
+    my $receive = sub { return Future->done({ type => 'unused.receive' }) };
+    my $send = sub { push @events, $_[0]; return Future->done };
+    return ($receive, $send, \@events);
+}
 
-    $router->state->{test} = 'value';
-    is($router->state->{test}, 'value', 'state persists values');
-};
+sub run_scope {
+    my ($app, $request_scope) = @_;
+    my ($receive, $send, $events) = channels();
+    $app->($request_scope, $receive, $send)->get;
+    return $events;
+}
 
-subtest 'to_app returns coderef' => sub {
-    my $app = PAGI::Endpoint::Router->to_app;
-    is(ref($app), 'CODE', 'to_app returns coderef');
-};
+{
+    package Local::BindingRole;
+    sub supplied {
+        my ($self, $c) = @_;
+        push @Local::BindingEndpoint::calls,
+            ['role', Scalar::Util::refaddr($self), scalar @_];
+        return $c->text('role');
+    }
+}
 
-subtest 'HTTP route with method handler' => sub {
-    # Create a test router subclass
-    {
-        package TestApp::HTTP;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
+{
+    package Local::BindingBase;
+    use parent 'PAGI::Endpoint::Router';
+    sub inherited {
+        my ($self, $c) = @_;
+        push @Local::BindingEndpoint::calls,
+            ['inherited', Scalar::Util::refaddr($self), scalar @_];
+        return $c->text('inherited');
+    }
+}
 
-        sub routes {
-            my ($self, $r) = @_;
-            $r->get('/hello' => 'say_hello');
-            $r->get('/users/:id' => 'get_user');
-        }
+{
+    package Local::BindingEndpoint;
+    use parent -norequire, 'Local::BindingBase';
+    our (@calls, $constructed, $coderef_arity, $coderef_context);
+    no warnings 'once';
+    *role_alias = \&Local::BindingRole::supplied;
 
-        async sub say_hello {
-            my ($self, $ctx) = @_;
-            return $ctx->response->text('Hello!');
-        }
-
-        async sub get_user {
-            my ($self, $ctx) = @_;
-            my $id = $ctx->request->path_param('id');
-            return $ctx->response->json({ id => $id });
-        }
+    sub new {
+        my ($class) = @_;
+        ++$constructed;
+        return bless { configured => 'class-instance' }, $class;
     }
 
-    my $app = TestApp::HTTP->to_app;
-
-    # Test /hello
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
-
-        my $scope = {
-            type   => 'http',
-            method => 'GET',
-            path   => '/hello',
-            headers => [],
-        };
-
-        await $app->($scope, $receive, $send);
-
-        is($sent[0]{status}, 200, '/hello returns 200');
-        is($sent[1]{body}, 'Hello!', '/hello returns Hello!');
-    })->()->get;
-
-    # Test /users/:id
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
-
-        my $scope = {
-            type   => 'http',
-            method => 'GET',
-            path   => '/users/42',
-            headers => [],
-        };
-
-        await $app->($scope, $receive, $send);
-
-        is($sent[0]{status}, 200, '/users/42 returns 200');
-        like($sent[1]{body}, qr/"id".*"42"/, 'body contains user id');
-    })->()->get;
-};
-
-subtest 'WebSocket route with method handler' => sub {
-    {
-        package TestApp::WS;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        sub routes {
-            my ($self, $r) = @_;
-            $r->websocket('/ws/echo/:room' => 'echo_handler');
-        }
-
-        async sub echo_handler {
-            my ($self, $ctx) = @_;
-
-            my $ws = $ctx->websocket;
-            die "Expected PAGI::WebSocket" unless $ws->isa('PAGI::WebSocket');
-
-            # Check route params work
-            my $room = $ws->path_param('room');
-            die "Expected room param" unless $room eq 'test-room';
-
-            await $ws->accept;
-        }
+    sub routes {
+        my ($self, $r) = @_;
+        $r->get('/sync' => 'sync_handler');
+        $r->get('/future' => 'future_handler');
+        $r->get('/inherited' => 'inherited');
+        $r->get('/role' => 'role_alias');
+        $r->get('/closure' => sub {
+            $coderef_arity = scalar @_;
+            $coderef_context = $_[0];
+            return $_[0]->text('closure');
+        });
+        $r->websocket('/socket' => 'socket_handler');
+        $r->sse('/events' => 'event_handler');
     }
 
-    my $app = TestApp::WS->to_app;
-
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'websocket.disconnect' }) };
-
-        my $scope = {
-            type    => 'websocket',
-            path    => '/ws/echo/test-room',
-            headers => [],
-        };
-
-        await $app->($scope, $receive, $send);
-
-        is($sent[0]{type}, 'websocket.accept', 'WebSocket was accepted');
-    })->()->get;
-};
-
-subtest 'SSE route with method handler' => sub {
-    {
-        package TestApp::SSE;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        sub routes {
-            my ($self, $r) = @_;
-            $r->sse('/events/:channel' => 'events_handler');
-        }
-
-        async sub events_handler {
-            my ($self, $ctx) = @_;
-
-            my $sse = $ctx->sse;
-            die "Expected PAGI::SSE" unless $sse->isa('PAGI::SSE');
-
-            my $channel = $sse->path_param('channel');
-            die "Expected channel param" unless $channel eq 'news';
-
-            await $sse->send_event(event => 'connected', data => { channel => $channel });
-        }
+    sub sync_handler {
+        my ($self, $c) = @_;
+        push @calls, ['sync', Scalar::Util::refaddr($self), scalar @_];
+        return $c->text($self->{configured});
     }
 
-    my $app = TestApp::SSE->to_app;
-
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'sse.disconnect' }) };
-
-        my $scope = {
-            type    => 'sse',
-            path    => '/events/news',
-            headers => [],
-        };
-
-        await $app->($scope, $receive, $send);
-
-        ok(scalar @sent > 0, 'SSE sent events');
-    })->()->get;
-};
-
-subtest 'state accessible in handlers' => sub {
-    {
-        package TestApp::State;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        our $state_value;
-        our $req_state_value;
-
-        sub routes {
-            my ($self, $r) = @_;
-            # Pre-populate state (normally done via PAGI::Lifespan startup)
-            $self->state->{db} = 'connected';
-            $r->get('/test' => 'test_handler');
-        }
-
-        async sub test_handler {
-            my ($self, $ctx) = @_;
-            # Access state via $self->state
-            $state_value = $self->state->{db};
-            # Also accessible via $ctx->state
-            $req_state_value = $ctx->state->{db};
-            return $ctx->response->text('ok');
-        }
+    sub future_handler {
+        my ($self, $c) = @_;
+        push @calls, ['future', Scalar::Util::refaddr($self), scalar @_];
+        return Future->done($c->text('future'));
     }
 
-    my $app = TestApp::State->to_app;
-
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
-
-        await $app->({ type => 'http', method => 'GET', path => '/test', headers => [] },
-                     $receive, $send);
-
-        is($TestApp::State::state_value, 'connected', 'state accessible via $self->state');
-        is($TestApp::State::req_state_value, 'connected', 'state accessible via $ctx->state');
-    })->()->get;
-};
-
-subtest 'middleware as method names' => sub {
-    {
-        package TestApp::Middleware;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        our $auth_called = 0;
-        our $log_called = 0;
-
-        sub routes {
-            my ($self, $r) = @_;
-            $r->get('/public' => 'public_handler');
-            $r->get('/protected' => ['require_auth'] => 'protected_handler');
-            $r->get('/logged' => ['log_request', 'require_auth'] => 'protected_handler');
-        }
-
-        async sub require_auth {
-            my ($self, $ctx, $next) = @_;
-            $auth_called = 1;
-
-            my $token = $ctx->header('authorization');
-            if ($token && $token eq 'Bearer valid') {
-                $ctx->stash->set(user => { id => 1 });
-                return await $next->();
-            } else {
-                return $ctx->response->status(401)->json({ error => 'Unauthorized' });
-            }
-        }
-
-        async sub log_request {
-            my ($self, $ctx, $next) = @_;
-            $log_called = 1;
-            return await $next->();
-        }
-
-        async sub public_handler {
-            my ($self, $ctx) = @_;
-            return $ctx->response->text('public');
-        }
-
-        async sub protected_handler {
-            my ($self, $ctx) = @_;
-            my $user = $ctx->stash->get('user');
-            return $ctx->response->json({ user_id => $user->{id} });
-        }
+    sub socket_handler {
+        my ($self, $c) = @_;
+        push @calls, ['websocket', Scalar::Util::refaddr($self), scalar @_];
+        return $c->close(1000, 'method');
     }
 
-    my $app = TestApp::Middleware->to_app;
+    sub event_handler {
+        my ($self, $c) = @_;
+        push @calls, ['sse', Scalar::Util::refaddr($self), scalar @_];
+        $c->start->get;
+        return $c->close;
+    }
+}
 
-    # Test public route (no middleware)
-    (async sub {
-        my @sent;
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
+{
+    package Local::ConfiguredEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+    sub new {
+        my ($class, %args) = @_;
+        die "label is required\n" unless defined $args{label};
+        return bless { label => $args{label} }, $class;
+    }
+    sub routes { $_[1]->get('/configured' => 'show') }
+    sub show {
+        my ($self, $c) = @_;
+        $self->{receiver} = Scalar::Util::refaddr($self);
+        return $c->text($self->{label});
+    }
+}
 
-        await $app->({ type => 'http', method => 'GET', path => '/public', headers => [] },
-                     $receive, $send);
+{
+    package Local::MissingHandler;
+    use parent 'PAGI::Endpoint::Router';
+    sub routes { $_[1]->get('/missing' => 'does_not_exist') }
+}
 
-        is($sent[1]{body}, 'public', 'public route works');
-    })->()->get;
+{
+    package Local::QualifiedHandler;
+    use parent 'PAGI::Endpoint::Router';
+    sub routes { $_[1]->get('/qualified' => 'Local::Other::handler') }
+}
 
-    # Test protected route without auth
-    (async sub {
-        my @sent;
-        $TestApp::Middleware::auth_called = 0;
+{
+    package Local::BadResponse;
+    use parent 'PAGI::Endpoint::Router';
+    sub routes { $_[1]->get('/bad' => 'bad') }
+    sub bad { return 'not a response' }
+}
 
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
-
-        await $app->({ type => 'http', method => 'GET', path => '/protected', headers => [] },
-                     $receive, $send);
-
-        ok($TestApp::Middleware::auth_called, 'auth middleware was called');
-        is($sent[0]{status}, 401, 'returns 401 without auth');
-    })->()->get;
-
-    # Test protected route with auth
-    (async sub {
-        my @sent;
-        $TestApp::Middleware::auth_called = 0;
-
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
-
-        await $app->({
-            type    => 'http',
-            method  => 'GET',
-            path    => '/protected',
-            headers => [['authorization', 'Bearer valid']],
-        }, $receive, $send);
-
-        is($sent[0]{status}, 200, 'returns 200 with auth');
-        like($sent[1]{body}, qr/"user_id"/, 'returns user data');
-    })->()->get;
-
-    # Test middleware chaining
-    (async sub {
-        my @sent;
-        $TestApp::Middleware::auth_called = 0;
-        $TestApp::Middleware::log_called = 0;
-
-        my $send = sub { push @sent, $_[0]; Future->done };
-        my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
-
-        await $app->({
-            type    => 'http',
-            method  => 'GET',
-            path    => '/logged',
-            headers => [['authorization', 'Bearer valid']],
-        }, $receive, $send);
-
-        ok($TestApp::Middleware::log_called, 'log middleware was called');
-        ok($TestApp::Middleware::auth_called, 'auth middleware was called');
-        is($sent[0]{status}, 200, 'handler was reached');
-    })->()->get;
-};
-
-subtest 'stash flows through middleware to handler' => sub {
-    {
-        package TestApp::StashFlow;
-        use parent 'PAGI::Endpoint::Router';
-        use Future::AsyncAwait;
-
-        our $handler_saw_user;
-
-        sub routes {
-            my ($self, $r) = @_;
-            $r->get('/test' => ['set_user'] => 'check_user');
-        }
-
-        async sub set_user {
-            my ($self, $ctx, $next) = @_;
-            $ctx->stash->set(user => 'alice');
-            return await $next->();
-        }
-
-        async sub check_user {
-            my ($self, $ctx) = @_;
-            $handler_saw_user = $ctx->stash->get('user');
-            return $ctx->response->text('ok');
-        }
+subtest 'the public surface is method-oriented and has no legacy machinery' => sub {
+    for my $method (qw(new routes to_router to_app middleware_as app_as new_context)) {
+        ok(PAGI::Endpoint::Router->can($method), "has $method");
+    }
+    for my $method (qw(state context_class _resolve_value_mw)) {
+        ok(!PAGI::Endpoint::Router->can($method), "has no legacy $method");
     }
 
-    my $app = TestApp::StashFlow->to_app;
+    my $base = PAGI::Endpoint::Router->new;
+    isa_ok($base, 'PAGI::Endpoint::Router');
+    is($base, {}, 'base new returns an empty instance');
+    like(dies { PAGI::Endpoint::Router->new(unused => 1) },
+        qr/new.*no (?:arguments|options)|accepts no/i,
+        'base new rejects silently discarded configuration');
+    isa_ok($base->to_router, 'PAGI::Routing::Router');
+    is(ref($base->to_app), 'CODE', 'an empty Endpoint compiles to an app');
+};
 
-    (async sub {
-        my @sent;
-        await $app->(
-            { type => 'http', method => 'GET', path => '/test', headers => [] },
-            sub { Future->done({ type => 'http.request', body => '' }) },
-            sub { push @sent, $_[0]; Future->done }
-        );
+subtest 'class compilation constructs once and binds exact method CODE values' => sub {
+    @Local::BindingEndpoint::calls = ();
+    $Local::BindingEndpoint::constructed = 0;
+    my $app = Local::BindingEndpoint->to_app;
+    is($Local::BindingEndpoint::constructed, 1,
+        'one Endpoint instance is constructed for a class compilation');
+    my $client = PAGI::Test::Client->new(app => $app);
+    is($client->get('/sync')->text, 'class-instance', 'synchronous method response');
+    is($client->get('/future')->text, 'future', 'Future method response');
+    is($client->get('/inherited')->text, 'inherited', 'inherited method response');
+    is($client->get('/role')->text, 'role', 'role-aliased method response');
+    is($client->get('/closure')->text, 'closure', 'coderef response');
 
-        is($TestApp::StashFlow::handler_saw_user, 'alice',
-           'handler sees stash set by middleware');
-    })->()->get;
+    my $receiver = $Local::BindingEndpoint::calls[0][1];
+    is([map { [$_->[0], $_->[2]] } @Local::BindingEndpoint::calls[0 .. 3]],
+        [['sync', 2], ['future', 2], ['inherited', 2], ['role', 2]],
+        'method handlers receive exactly self and Context');
+    is([map { $_->[1] } @Local::BindingEndpoint::calls[0 .. 3]],
+        [($receiver) x 4], 'local, inherited, and aliased handlers share one receiver');
+    is($Local::BindingEndpoint::coderef_arity, 1,
+        'handler coderef receives only the ordinary Context argument');
+    isa_ok($Local::BindingEndpoint::coderef_context, 'PAGI::Context::HTTP');
+
+    my $ws = run_scope($app, scope(type => 'websocket', path => '/socket',
+        raw_path => '/socket'));
+    my $sse = run_scope($app, scope(type => 'sse', path => '/events',
+        raw_path => '/events'));
+    is($ws, [{ type => 'websocket.close', code => 1000, reason => 'method' }],
+        'WebSocket method receives the shared compiler Context');
+    is($sse, [{ type => 'sse.start', status => 200 },
+              { type => 'sse.close' }],
+        'SSE method receives the shared compiler Context');
+    is([map { $_->[1] } @Local::BindingEndpoint::calls[-2, -1]],
+        [$receiver, $receiver], 'protocol methods retain the same Endpoint receiver');
+};
+
+subtest 'configured object calls retain object identity' => sub {
+    my $endpoint = Local::ConfiguredEndpoint->new(label => 'kept object');
+    my $identity = refaddr($endpoint);
+    isa_ok($endpoint->to_router, 'PAGI::Routing::Router');
+    my $response = PAGI::Test::Client->new(app => $endpoint->to_app)
+        ->get('/configured');
+    is($response->text, 'kept object', 'object configuration reaches its method');
+    is($endpoint->{receiver}, $identity, 'object compilation preserves exact identity');
+};
+
+subtest 'handler validation is early and HTTP response validation stays shared' => sub {
+    like(dies { Local::MissingHandler->to_router },
+        qr/Local::MissingHandler has no handler method "does_not_exist"/,
+        'missing handler fails while routes are materialized');
+    like(dies { Local::QualifiedHandler->to_router },
+        qr/handler method.*unqualified|unqualified.*handler method/i,
+        'a qualified string is not a method-handler escape hatch');
+
+    my $bad = Local::BadResponse->to_app;
+    like(dies {
+        run_scope($bad, scope(path => '/bad', raw_path => '/bad'));
+    }, qr/handler did not return a response/,
+        'shared HTTP adapter retains its response diagnostic');
+};
+
+{
+    package Local::HelperBase;
+    use parent 'PAGI::Endpoint::Router';
+    sub inherited_factory {
+        my ($self, $inner) = @_;
+        return sub { $self->{inherited_seen}++; return $inner->(@_) };
+    }
+}
+
+{
+    package Local::HelperEndpoint;
+    use parent -norequire, 'Local::HelperBase';
+    no warnings 'once';
+    *role_factory = sub {
+        my ($self, $inner) = @_;
+        return sub { $self->{role_seen}++; return $inner->(@_) };
+    };
+    sub native {
+        my ($self, $scope, $receive, $send) = @_;
+        $self->{native_arity} = scalar @_;
+        return $send->({ type => 'native.event', marker => $scope->{marker} });
+    }
+    sub new_context {
+        my $self = shift;
+        ++$self->{new_context_calls};
+        return $self->SUPER::new_context(@_);
+    }
+    sub routes {
+        my ($self, $r) = @_;
+        $r->get('/context' => sub {
+            $self->{compiled_context} = ref($_[0]);
+            return $_[0]->text('context');
+        });
+        $r->get('/state' => sub {
+            my ($c) = @_;
+            $self->{scope_has_state} = exists $c->scope->{state} ? 1 : 0;
+            $self->{request_state} = $c->state;
+            return $c->text('state');
+        });
+    }
+}
+
+subtest 'middleware_as and app_as are validated normal closure adapters' => sub {
+    my $endpoint = bless {}, 'Local::HelperEndpoint';
+    my ($receive, $send, $events) = channels();
+    my $factory = $endpoint->middleware_as('inherited_factory');
+    my $role_factory = $endpoint->middleware_as('role_factory');
+    my $native = $endpoint->app_as('native');
+    is([$endpoint->{inherited_seen}, $endpoint->{role_seen}, scalar @$events],
+        [undef, undef, 0], 'helper construction invokes no method and emits no events');
+
+    my $inner = sub { return 'immediate downstream' };
+    is($factory->($inner)->(scope(), $receive, $send), 'immediate downstream',
+        'inherited middleware method wraps an immediate downstream result');
+    is($role_factory->(sub { Future->done('future downstream') })
+            ->(scope(), $receive, $send)->get,
+        'future downstream', 'role-aliased middleware method preserves Future completion');
+
+    $native->(scope(marker => 'exact channels'), $receive, $send)->get;
+    is($events, [{ type => 'native.event', marker => 'exact channels' }],
+        'app_as returns the native application closure');
+    is($endpoint->{native_arity}, 4, 'native method receives self and three PAGI channels');
+
+    for my $case (
+        [middleware_as => 'missing'], [app_as => 'missing'],
+        [middleware_as => 'Local::Other::factory'], [app_as => 'Other::app'],
+    ) {
+        my ($helper, $name) = @$case;
+        like(dies { $endpoint->$helper($name) },
+            qr/(?:has no (?:middleware|application) method|method name must be an unqualified name)/i,
+            "$helper validates $name");
+    }
+};
+
+subtest 'new_context is explicit and is not the compiler Context factory' => sub {
+    my $endpoint = bless {}, 'Local::HelperEndpoint';
+    my ($receive, $send) = channels();
+    for my $case (
+        [http => 'PAGI::Context::HTTP'],
+        [websocket => 'PAGI::Context::WebSocket'],
+        [sse => 'PAGI::Context::SSE'],
+    ) {
+        my ($type, $class) = @$case;
+        my $context = $endpoint->new_context(scope(type => $type), $receive, $send);
+        isa_ok($context, $class);
+    }
+    is($endpoint->{new_context_calls}, 3, 'override applies to explicit helper calls');
+
+    PAGI::Test::Client->new(app => $endpoint->to_app)->get('/context');
+    is($endpoint->{compiled_context}, 'PAGI::Context::HTTP',
+        'compiled handler still receives the shared compiler Context');
+    is($endpoint->{new_context_calls}, 3,
+        'routing compilation and dispatch do not call the override');
+};
+
+subtest 'Endpoint seeds no state and Compose exposes server-owned lifespan state' => sub {
+    my $endpoint = bless {}, 'Local::HelperEndpoint';
+    my $plain_scope = scope(path => '/state', raw_path => '/state');
+    run_scope($endpoint->to_app, $plain_scope);
+    ok(!$endpoint->{scope_has_state}, 'Endpoint does not add state to a request scope');
+    is($plain_scope->{state}, undef, 'the caller scope remains without state');
+    is($endpoint->{request_state}, {}, 'Context supplies only its empty fallback');
+
+    my $state = {};
+    my $composed = compose(
+        app => $endpoint->to_app,
+        lifespan => { startup => sub { $_[0]{server_value} = 'ready' } },
+    )->to_app;
+    my @messages = ({ type => 'lifespan.startup' }, { type => 'lifespan.shutdown' });
+    $composed->(
+        scope(type => 'lifespan', state => $state),
+        sub { return Future->done(shift @messages) },
+        sub { return Future->done },
+    )->get;
+    run_scope($composed, scope(path => '/state', raw_path => '/state', state => $state));
+    is($endpoint->{request_state}{server_value}, 'ready',
+        'Context sees the server state populated through Compose lifespan');
+    is(refaddr($endpoint->{request_state}), refaddr($state),
+        'server-owned state identity is retained');
 };
 
 done_testing;
