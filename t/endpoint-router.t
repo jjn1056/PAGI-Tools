@@ -3,12 +3,16 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use File::Spec;
+use FindBin qw($Bin);
 use Scalar::Util qw(refaddr);
 
 use lib 'lib';
+use lib "$Bin/lib";
 use PAGI::Endpoint::Router ();
 use PAGI::Test::Client ();
 use PAGI::Compose qw(compose);
+use TestApps::AppPath::Endpoint ();
 
 sub scope {
     my (%changes) = @_;
@@ -142,8 +146,20 @@ sub run_scope {
     sub bad { return 'not a response' }
 }
 
+{
+    package Local::InlinePathEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+
+    sub resource_path {
+        my ($self, @components) = @_;
+        return $self->app_path(@components);
+    }
+}
+
 subtest 'the public surface is method-oriented and has no legacy machinery' => sub {
-    for my $method (qw(new routes to_router to_app middleware_as app_as new_context)) {
+    for my $method (qw(
+        new routes to_router to_app middleware_as app_as new_context app_path
+    )) {
         ok(PAGI::Endpoint::Router->can($method), "has $method");
     }
     for my $method (qw(state context_class _resolve_value_mw)) {
@@ -158,6 +174,38 @@ subtest 'the public surface is method-oriented and has no legacy machinery' => s
         'base new rejects silently discarded configuration');
     isa_ok($base->to_router, 'PAGI::Routing::Router');
     is(ref($base->to_app), 'CODE', 'an empty Endpoint compiles to an app');
+};
+
+subtest 'app_path delegates with the concrete Endpoint origin' => sub {
+    local $ENV{PAGI_HOME};
+    delete $ENV{PAGI_HOME};
+
+    my $expected_home = File::Spec->canonpath(File::Spec->rel2abs($Bin));
+    my $expected_static = File::Spec->canonpath(
+        File::Spec->catfile($expected_home, 'static')
+    );
+
+    is(TestApps::AppPath::Endpoint->app_path(), $expected_home,
+        'class helper resolves from the concrete t/lib module');
+    is(TestApps::AppPath::Endpoint->new->app_path('static'), $expected_static,
+        'object helper returns a platform-aware child path');
+    unlike(TestApps::AppPath::Endpoint->app_path(),
+        qr{PAGI.Tools\z},
+        'inherited implementation does not resolve from the base distribution');
+
+    my $inline = Local::InlinePathEndpoint->new;
+    is($inline->resource_path('static'), $expected_static,
+        'inline subclass falls back to the source of its method call');
+
+    my $override = File::Spec->catdir($Bin, 'configured-home');
+    local $ENV{PAGI_HOME} = $override;
+    is($inline->resource_path('static'),
+        File::Spec->canonpath(File::Spec->catfile(
+            File::Spec->rel2abs($override), 'static')),
+        'Endpoint helper honors the shared PAGI_HOME precedence');
+    like(dies { $inline->resource_path(undef) },
+        qr/app_path.*component 1.*relative/i,
+        'Endpoint helper uses shared component validation');
 };
 
 subtest 'class compilation constructs once and binds exact method CODE values' => sub {
