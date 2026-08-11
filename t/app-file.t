@@ -148,7 +148,10 @@ my ($file_component, $client);
     local $ENV{PAGI_HOME};
     delete $ENV{PAGI_HOME};
     $file_component = TestApps::AppFile::One->files;
-    $client = PAGI::Test::Client->new(app => $file_component);
+    $client = PAGI::Test::Client->new(
+        app => $file_component,
+        raise_app_exceptions => 1,
+    );
 }
 
 subtest 'development logs final existing, missing, index, and HEAD candidates' => sub {
@@ -193,34 +196,62 @@ subtest 'development logs final existing, missing, index, and HEAD candidates' =
     is($head_out, $existing_out, 'HEAD uses the same candidate diagnostic');
 };
 
-subtest 'only exact request-time development mode logs' => sub {
-    for my $mode (undef, '', 'production', 'none', 'Development') {
+subtest 'supported nondevelopment modes stay silent at request time' => sub {
+    for my $mode (undef, '', 'test', 'staging', 'production') {
         local $ENV{PAGI_ENV};
         defined $mode ? ($ENV{PAGI_ENV} = $mode) : delete $ENV{PAGI_ENV};
         my ($response, $stdout, $stderr) = capture_output(sub {
             return $client->get('/marker.txt');
         });
-        is($response->status, 200, "request succeeds for mode " . ($mode // 'unset'));
-        is($stdout, '', "STDOUT is silent for mode " . ($mode // 'unset'));
-        is($stderr, '', "STDERR is silent for mode " . ($mode // 'unset'));
+        my $label = defined $mode && length $mode ? $mode
+            : defined $mode ? 'empty' : 'unset';
+        is($response->status, 200, "request succeeds for $label");
+        is($stdout, '', "STDOUT is silent for $label");
+        is($stderr, '', "STDERR is silent for $label");
+    }
+};
+
+subtest 'invalid environments fail when diagnostics are consulted' => sub {
+    for my $mode ('Development', 'none') {
+        local $ENV{PAGI_ENV} = $mode;
+        like(
+            dies { capture_output(sub { $client->get('/marker.txt') }) },
+            qr/Invalid PAGI_ENV '\Q$mode\E'; expected one of: development, test, staging, production/,
+            "invalid [$mode] fails loudly",
+        );
     }
 };
 
 subtest 'requests rejected before filesystem service stay silent' => sub {
-    local $ENV{PAGI_ENV} = 'development';
-    for my $case (
-        ['POST', '/marker.txt', 405, 'unsupported method'],
-        ['GET', "/bad\0name", 400, 'null byte'],
-        ['GET', '/../secret', 403, 'traversal component'],
-        ['GET', '/.env', 403, 'hidden component'],
-    ) {
-        my ($method, $path, $status, $label) = @$case;
-        my ($events, $stdout) = capture_output(sub {
-            return run_native($file_component, $method, $path);
-        });
-        is($events->[0]{status}, $status, "$label keeps its response status");
-        is($stdout, '', "$label produces no file-attempt output");
+    for my $mode ('development', 'Development') {
+        local $ENV{PAGI_ENV} = $mode;
+        for my $case (
+            ['POST', '/marker.txt', 405, 'unsupported method'],
+            ['GET', "/bad\0name", 400, 'null byte'],
+            ['GET', '/../secret', 403, 'traversal component'],
+            ['GET', '/.env', 403, 'hidden component'],
+        ) {
+            my ($method, $path, $status, $label) = @$case;
+            my ($events, $stdout) = capture_output(sub {
+                return run_native($file_component, $method, $path);
+            });
+            is($events->[0]{status}, $status,
+                "$label keeps its response status for $mode");
+            is($stdout, '', "$label produces no file-attempt output for $mode");
+        }
     }
+};
+
+subtest 'development diagnostics use the shared environment predicate' => sub {
+    open my $source, '<', 'lib/PAGI/App/File.pm'
+        or die "cannot read App::File source: $!";
+    my $contents = do { local $/; <$source> };
+    close $source or die "cannot close App::File source: $!";
+
+    like($contents, qr/PAGI::Utils::is_development\(\)/,
+        'uses the fully-qualified development predicate');
+    unlike($contents, qr/\$ENV\{PAGI_ENV\}/,
+        'does not read PAGI_ENV directly');
 };
 
 subtest 'diagnostic escapes every accepted ASCII control byte' => sub {

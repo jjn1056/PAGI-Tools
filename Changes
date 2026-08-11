@@ -1,6 +1,10 @@
 # Revision history for PAGI-Tools
 
 0.002003
+  - PAGI::Utils now exports `pagi_env` and the four environment predicates
+    through `:env` and `:all`; unset or empty PAGI_ENV safely means production,
+    while invalid nonempty values croak. PAGI::App::File now uses
+    `is_development` at its existing request-time diagnostic boundary.
   - PAGI::App::File adds the class-only `app_path` constructor, which derives
     a static root from each importing caller's application home. In development
     it prints each valid candidate path to STDOUT. All example applications

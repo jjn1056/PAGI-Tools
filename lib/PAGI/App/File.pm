@@ -140,7 +140,8 @@ sub new {
 
 sub _development_file_attempt {
     my ($file_path) = @_;
-    return unless ($ENV{PAGI_ENV} // '') eq 'development';
+    require PAGI::Utils;
+    return unless PAGI::Utils::is_development();
 
     my $display = $file_path;
     $display =~ s/([\x00-\x1f\x7f])/sprintf('\\x%02X', ord($1))/ge;
@@ -355,21 +356,24 @@ internals.
 
 =head1 DEVELOPMENT DIAGNOSTICS
 
-When C<PAGI_ENV> is exactly C<development> at request time, this application
-writes one record to C<STDOUT> after index selection and before it checks
-whether the candidate is a readable file. For example:
+At request time, C<PAGI_ENV=development> makes this application write one
+record to C<STDOUT> after index selection and before it checks whether the
+candidate is a readable file. For example:
 
     PAGI::App::File: attempting /Project-MyApp/static/css/app.css
 
-Both existing and missing candidates are reported. Requests rejected before a
-candidate is built, including unsupported methods, null bytes, traversal
-components, and hidden components, are silent. A later realpath or symlink
+Both existing and missing candidates are reported. Unset, empty, C<test>,
+C<staging>, and C<production> values are silent. Any other nonempty value
+fails through L<PAGI::Utils/pagi_env>, so environment typos are not silently
+accepted. Requests rejected before this diagnostic boundary, including
+unsupported methods, null bytes, traversal components, and hidden components,
+do not inspect the environment and remain silent. A later realpath or symlink
 containment check can still reject a request after its in-root lexical
-candidate has been reported. All other C<PAGI_ENV> values are silent. ASCII
-control bytes in the displayed path are escaped as C<\xNN>, so every diagnostic
-remains one physical line. The record shows the lexical candidate rather than a
-resolved symlink path, can disclose absolute paths, is not access logging, and
-never changes a response or file event.
+candidate has been reported. ASCII control bytes in the displayed path are
+escaped as C<\xNN>, so every diagnostic remains one physical line. The record
+shows the lexical candidate rather than a resolved symlink path, can disclose
+absolute paths, is not access logging, and never changes a response or file
+event.
 
 =head1 CONFIGURATION
 

@@ -12,8 +12,11 @@ PAGI::App::File->app_path('static')->to_app;
 ```
 
 `PAGI_ENV=development` prints one `PAGI::App::File: attempting ...` line to
-STDOUT for each valid candidate. The line contains an absolute local path and
-is intentionally disabled in production.
+STDOUT for each valid candidate. The line contains an absolute local path.
+Unset or empty `PAGI_ENV`, plus `test`, `staging`, and `production`, are
+silent. Any other nonempty value is a typo and fails loudly through
+`PAGI::Utils::pagi_env` rather than being treated as a silent mode. Requests
+rejected before the diagnostic boundary do not inspect `PAGI_ENV`.
 
 ## Run
 
