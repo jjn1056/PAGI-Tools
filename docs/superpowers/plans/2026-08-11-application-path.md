@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a platform-aware `app_path` facility for functional and Endpoint applications, then use it to remove static-root path arithmetic from the canonical large application.
+**Goal:** Add a platform-aware `app_path` facility for functional and Endpoint applications, use it to remove static-root path arithmetic from the canonical large application, and finish by documenting immediate versus Future-backed request callables across the routing frontends.
 
-**Architecture:** `PAGI::Utils` owns one origin-aware detector and path builder. The exported `app_path(@components)` supplies its immediate caller as the origin; `PAGI::Endpoint::Router->app_path(@components)` supplies its concrete loaded class and delegates to the same internal engine. Both return ordinary absolute strings, honor `PAGI_HOME`, use core path modules, and perform no filesystem mutation or existence checks.
+**Architecture:** `PAGI::Utils` owns one origin-aware detector and path builder. The exported `app_path(@components)` supplies its immediate caller as the origin; `PAGI::Endpoint::Router->app_path(@components)` supplies its concrete loaded class and delegates to the same internal engine. Both return ordinary absolute strings, honor `PAGI_HOME`, use core path modules, and perform no filesystem mutation or existence checks. A final documentation-only task gives `PAGI::Routing` the canonical callable-completion contract and aligns the App Router, Endpoint Router, Tutorial, and Cookbook with it.
 
 **Tech Stack:** Perl 5.18-compatible library and test code, Perl 5.40+ large-example code, core `File::Spec` and `File::Basename`, `Exporter`, `Scalar::Util`, Test2::V0, PAGI::Endpoint::Router, PAGI::App::File, and PAGI::Test::Client. No new runtime dependency.
 
@@ -26,9 +26,12 @@
 - The Endpoint method must resolve from `ref($endpoint)` or its class invocant, not from `PAGI::Endpoint::Router.pm`. Use the concrete class's normal `%INC` entry first and the method caller source only for an inline class without an `%INC` entry.
 - Keep Endpoint `app_path` an explicit ordinary helper. Overriding it affects calls to that method only; routing compilation must not invoke it automatically.
 - Migrate only `examples/15-large-application`. Do not sweep other examples with existing path arithmetic.
+- Document one completion rule across the routing frontends: a request-time callable may complete immediately or return a Future. Use an ordinary `sub` for immediate work and `async sub` plus `await` when the callable must sequence asynchronous work. Never teach `$future->get` inside request handling.
+- Keep the three terminal contracts distinct: an HTTP Context handler resolves to a `PAGI::Response`; WebSocket/SSE Context handlers have inert resolved values after owning protocol work through `$c`; native `($scope, $receive, $send)` applications own event emission and have inert resolved values.
+- Keep middleware's two phases distinct: its factory or `wrap` method synchronously returns a native app coderef at compilation, while that returned request-time app may complete immediately or through a Future.
 - Use TDD for every behavior change: add the focused failing assertion, run it and record the expected failure, implement only that behavior, then rerun the focused gate.
 - Stage only the files named by the active task. Never use `git add .` or `git add -A`.
-- Run the repository-wide `prove -lr t` suite exactly once at the final reviewed HEAD. This repository has no double-run cleanup-fixture rule. If the final run exposes a defect and the code changes, record that evidence and run one replacement final gate at the corrected HEAD.
+- Run the repository-wide `prove -lr t` suite exactly once at the final reviewed HEAD in Task 5. This repository has no double-run cleanup-fixture rule. If the final run exposes a defect and the code changes, record that evidence and run one replacement final gate at the corrected HEAD.
 - Run Perl commands through the project Perl:
 
   ```bash
@@ -52,10 +55,11 @@ The workspace command must identify a directory ending in
 
 | Task | Status | Commit SHA | Focused verification | Full-suite verification | Review |
 |---|---|---|---|---|---|
-| 1 | pending | — | — | deferred to Task 4 | — |
-| 2 | pending | — | — | deferred to Task 4 | — |
-| 3 | pending | — | — | deferred to Task 4 | — |
-| 4 | pending | — | — | final gate | — |
+| 1 | pending | — | — | deferred to Task 5 | — |
+| 2 | pending | — | — | deferred to Task 5 | — |
+| 3 | pending | — | — | deferred to Task 5 | — |
+| 4 | pending | — | — | deferred to Task 5 | — |
+| 5 | pending | — | — | final gate | — |
 
 ## Deviations
 
@@ -96,6 +100,11 @@ is not a deviation.
 - `examples/15-large-application/lib/MyApp/Root.pm`: canonical `app_path('static')` usage.
 - `examples/15-large-application/README.md`: convention, override, and bootstrap explanation.
 - `t/integration-large-application.t`: source-shape regression plus existing real `/static/app.css` request.
+- `lib/PAGI/Routing.pm`: canonical callable-completion rule and distinct Context/raw/middleware contracts.
+- `lib/PAGI/App/Router.pm`: mutable-frontend handler and raw-app completion guidance.
+- `lib/PAGI/Endpoint/Router.pm`: method-handler, `app_as`, and `middleware_as` completion guidance.
+- `lib/PAGI/Tools/Tutorial.pod`: first-principles synchronous versus asynchronous examples for native apps and Context handlers.
+- `lib/PAGI/Tools/Cookbook.pod`: side-by-side recipes for immediate handlers, asynchronous database handlers, raw event owners, and middleware.
 
 ---
 
@@ -776,18 +785,268 @@ Record Task 3's SHA, evidence, and review result in the ledger.
 
 ---
 
-### Task 4: Final Contract and Repository Verification
+### Task 4: Document Immediate and Future-Backed Callables
+
+**Files:**
+
+- Create: `t/documentation-callable-completion.t`
+- Modify: `lib/PAGI/Routing.pm:136-181`
+- Modify: `lib/PAGI/Routing.pm:301-308`
+- Modify: `lib/PAGI/Routing.pm:543-567`
+- Modify: `lib/PAGI/App/Router.pm:69-121`
+- Modify: `lib/PAGI/App/Router.pm:160-189`
+- Modify: `lib/PAGI/Endpoint/Router.pm:193-279`
+- Modify: `lib/PAGI/Tools/Tutorial.pod:18-104`
+- Modify: `lib/PAGI/Tools/Tutorial.pod:628-675`
+- Modify: `lib/PAGI/Tools/Cookbook.pod:32-63`
+- Modify: `lib/PAGI/Tools/Cookbook.pod:353-397`
+- Modify: `lib/PAGI/Tools/Cookbook.pod:731-797`
+- Modify: `lib/PAGI/Tools/Cookbook.pod:939-988`
+
+**Interfaces:**
+
+- Consumes: the shipped `Future->wrap` adaptation behavior in `PAGI::Routing::Compiler`, the three routing frontends, native PAGI `($scope, $receive, $send)` applications, and synchronous middleware factories.
+- Produces: one consistent public explanation of when ordinary `sub`, direct Future return, and `async sub`/`await` are appropriate.
+- Guarantees: examples distinguish completion shape from ownership—Context HTTP handlers return Responses, WebSocket/SSE Context handlers own protocol operations through `$c`, native apps own wire events, and middleware factories synchronously return request-time apps.
+
+- [ ] **Step 1: Add a failing documentation-contract test**
+
+Create `t/documentation-callable-completion.t` using only Perl 5.18-compatible
+syntax and core file I/O:
+
+```perl
+use strict;
+use warnings;
+use Test2::V0;
+
+sub source_text {
+    my ($path) = @_;
+    open my $fh, '<', $path or die "cannot open $path: $!\n";
+    local $/;
+    my $source = <$fh>;
+    close $fh or die "cannot close $path: $!\n";
+    return $source;
+}
+
+my $routing  = source_text('lib/PAGI/Routing.pm');
+my $app      = source_text('lib/PAGI/App/Router.pm');
+my $endpoint = source_text('lib/PAGI/Endpoint/Router.pm');
+my $tutorial = source_text('lib/PAGI/Tools/Tutorial.pod');
+my $cookbook = source_text('lib/PAGI/Tools/Cookbook.pod');
+
+like($routing, qr/=head1 CALLABLE COMPLETION/,
+    'Routing owns the canonical completion contract');
+like($routing, qr/ordinary C<sub>.*C<async sub>.*C<await>/s,
+    'Routing explains when ordinary and async subs are appropriate');
+like($routing, qr/HTTP Context handler.*L<PAGI::Response>/s,
+    'Routing names the HTTP Context terminal value');
+like($routing, qr/native.*C<\(\$scope, \$receive, \$send\)>.*inert/s,
+    'Routing separates native event ownership from resolved values');
+like($routing, qr/factor(?:y|ies).*synchronously.*request-time.*Future/s,
+    'Routing separates middleware compilation and request completion');
+like($routing, qr/Never call.*C<<\s*->get\s*>>.*blocks the event loop/s,
+    'Routing explicitly rejects blocking Future waits');
+
+like($app, qr/=head2 Synchronous and asynchronous completion/,
+    'App Router documents both handler shapes');
+like($endpoint, qr/=head2 Synchronous and asynchronous completion/,
+    'Endpoint Router documents both method-handler shapes');
+like($endpoint, qr/C<middleware_as>.*synchronously.*request-time.*Future/s,
+    'Endpoint middleware helper keeps its two phases distinct');
+
+unlike($tutorial, qr/A PAGI application is an C<async> sub/,
+    'Tutorial no longer claims every native app must use async sub');
+like($tutorial, qr/sub home.*return \$c->html/s,
+    'Tutorial uses an ordinary sub for immediate handler work');
+like($tutorial, qr/async sub show_person.*await.*find_person/s,
+    'Tutorial uses async sub for asynchronous database work');
+
+like($cookbook, qr/=head3 Choosing ordinary sub or async sub/,
+    'Cookbook has an explicit callable-shape recipe');
+like($cookbook, qr/sub home.*async sub show/s,
+    'Endpoint recipe contrasts immediate and asynchronous methods');
+unlike($cookbook, qr/\$future->get\b/,
+    'Cookbook does not recommend blocking the request loop');
+
+done_testing;
+```
+
+The test intentionally checks public documentation contracts, not compiler
+implementation details or line numbers.
+
+- [ ] **Step 2: Run the documentation test and verify RED**
+
+Run:
+
+```bash
+/bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lv t/documentation-callable-completion.t'
+```
+
+Expected: assertions for the new canonical heading, frontend subsections,
+tutorial examples, and cookbook recipe fail; the test also exposes the
+tutorial's current overstatement that every PAGI app is an `async sub`.
+
+- [ ] **Step 3: Add the canonical completion contract to PAGI::Routing**
+
+Add `=head1 CALLABLE COMPLETION` after the constructor/code-position material
+and before the constructor reference. State all of the following explicitly:
+
+```text
+Request-time PAGI callables may complete immediately or return a Future.
+Use an ordinary sub when all work and the terminal value are immediately
+available. Use async sub and await when asynchronous database, network,
+receive, send, or cleanup operations must be sequenced. Returning an existing
+Future directly is valid when no additional sequencing is needed. Never call
+->get inside request handling; it blocks the event loop.
+```
+
+Include these contrasting HTTP Context handlers:
+
+```perl
+sub home {
+    my ($c) = @_;
+    return $c->html('<h1>Home</h1>');
+}
+
+async sub show_person {
+    my ($c) = @_;
+    my $person = await $database->find_person(
+        $c->path_param('person_id'),
+    );
+    return $c->json($person) if $person;
+    return $c->text('Person not found', status => 404);
+}
+```
+
+Then distinguish the terminal contracts:
+
+- an HTTP Context handler resolves to an `L<PAGI::Response>`, which Routing
+  validates and emits once;
+- WebSocket and SSE Context handlers perform protocol operations through `$c`,
+  and their resolved values are inert;
+- a native `($scope, $receive, $send)` app owns protocol events, may return a
+  single operation's Future directly, or may use `async sub`/`await` to
+  sequence several operations; its resolved value is inert; and
+- a middleware factory or `wrap` method runs synchronously at compilation and
+  must immediately return a native app coderef, while that request-time app may
+  complete immediately or through a Future.
+
+Cross-link the existing HTTP lifecycle and middleware sections to this new
+section. Preserve the existing rule that synchronous handlers run in the
+server's current execution context rather than a worker pool.
+
+- [ ] **Step 4: Align App Router and Endpoint Router POD**
+
+In `PAGI::App::Router`'s HTTP-routes section, add
+`=head2 Synchronous and asynchronous completion` with one ordinary handler and
+one asynchronous database handler. Explain that both are adapted by the shared
+compiler and must ultimately resolve to a Response. In its raw section, show
+that a native app may return one send/respond Future directly but needs
+`async sub`/`await` for ordered multiple events.
+
+In `PAGI::Endpoint::Router`'s handler section, add the same subsection using
+method signatures:
+
+```perl
+sub home {
+    my ($self, $c) = @_;
+    return $c->html('<h1>Home</h1>');
+}
+
+async sub show {
+    my ($self, $c) = @_;
+    my $person = await $self->{repository}->find(
+        $c->path_param('id'),
+    );
+    return $c->json($person);
+}
+```
+
+Clarify under `app_as` that its three-channel method follows the native
+request-time completion rule. Clarify under `middleware_as` that the adapted
+method is the synchronous factory; the native app it returns may itself be an
+ordinary or async coderef. Do not imply that `middleware_as` accepts an async
+factory returning a Future of an app.
+
+- [ ] **Step 5: Teach the rule from first principles in Tutorial and Cookbook**
+
+In Tutorial Part 1, replace “A PAGI application is an `async sub`” with “A
+PAGI application is a callable receiving `($scope, $receive, $send)`.” Explain
+that the two-event hello-world example is async because it sequences two sends,
+not because native apps are required to use `async sub`. Add a one-operation
+example that returns the Future directly:
+
+```perl
+sub text_app {
+    my ($scope, $receive, $send) = @_;
+    return PAGI::Response->text('Hello, world!')->respond($send);
+}
+```
+
+In Tutorial Part 2, make `home` an ordinary sub and add `async sub show_person`
+with an awaited asynchronous repository/database call. Explain that the router
+uses the same declarations for both and that each must resolve to a Response.
+In Tutorial Part 6, state that the middleware factory is synchronous while the
+returned wrapper app follows the immediate-or-Future request-time rule.
+
+In the Cookbook:
+
+- change the package-handler recipe's immediate `home` to an ordinary sub;
+- add `=head3 Choosing ordinary sub or async sub` beneath “Normal, Raw,
+  WebSocket, and SSE Handler Lifecycles,” with the same immediate-versus-async
+  decision and direct-Future-return option;
+- keep the raw two-send example async and explain why;
+- change the Endpoint `home` method to an ordinary sub while keeping the
+  repository-backed `show` method async; and
+- clarify the synchronous `middleware_as` factory versus its request-time
+  wrapper.
+
+Do not rewrite unrelated asynchronous examples that genuinely await protocol,
+lifespan, database, streaming, or middleware operations.
+
+- [ ] **Step 6: Run documentation GREEN and focused regression gates**
+
+Run:
+
+```bash
+/bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lv t/documentation-callable-completion.t t/endpoint-router.t t/integration-large-application.t'
+/bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && podchecker lib/PAGI/Routing.pm && podchecker lib/PAGI/App/Router.pm && podchecker lib/PAGI/Endpoint/Router.pm && podchecker lib/PAGI/Tools/Tutorial.pod && podchecker lib/PAGI/Tools/Cookbook.pod'
+git diff --check
+```
+
+Expected: the documentation contract and both routing/example regressions pass;
+all five POD files report syntax OK; no whitespace errors. Record exact counts.
+
+- [ ] **Step 7: Review and commit Task 4**
+
+Review every use of `async sub` changed by this task: it may become an ordinary
+sub only when the body performs no `await` and returns its terminal value or
+Future directly. Confirm the docs never conflate a middleware factory with the
+request-time app it returns. Stage only:
+
+```bash
+git add lib/PAGI/Routing.pm lib/PAGI/App/Router.pm \
+  lib/PAGI/Endpoint/Router.pm lib/PAGI/Tools/Tutorial.pod \
+  lib/PAGI/Tools/Cookbook.pod t/documentation-callable-completion.t
+git commit -m "docs: explain callable completion styles"
+```
+
+Record Task 4's SHA, test/POD evidence, and review result in the ledger.
+
+---
+
+### Task 5: Final Contract and Repository Verification
 
 **Files:**
 
 - Inspect: `docs/superpowers/specs/2026-08-11-application-path-design.md`
 - Inspect: `.superpowers/sdd/2026-08-11-application-path/progress.md`
-- Inspect: all files changed by Tasks 1-3
-- Modify only if verification finds a contract-preserving defect: the owning Task 1-3 files
+- Inspect: all files changed by Tasks 1-4
+- Modify only if verification finds a contract-preserving defect: the owning Task 1-4 files
 
 **Interfaces:**
 
-- Consumes: the three reviewed implementation commits and their ledger evidence.
+- Consumes: the four reviewed implementation/documentation commits and their ledger evidence.
 - Produces: one verified feature range with complete spec coverage, one repository-wide suite result, clean POD/syntax/diff checks, and no unresolved deviation.
 
 - [ ] **Step 1: Audit the diff and spec coverage before the expensive gate**
@@ -815,10 +1074,10 @@ Run:
 
 ```bash
 /bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && perl -Ilib -c lib/PAGI/Utils.pm && perl -Ilib -c lib/PAGI/Endpoint/Router.pm && podchecker lib/PAGI/Utils.pm && podchecker lib/PAGI/Endpoint/Router.pm'
-/bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lv t/utils-app-path.t t/endpoint-router.t t/integration-large-application.t'
+/bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lv t/utils-app-path.t t/endpoint-router.t t/integration-large-application.t t/documentation-callable-completion.t'
 ```
 
-Expected: syntax and POD checks succeed and all three focused feature tests pass.
+Expected: syntax and POD checks succeed and all four focused tests pass.
 Record exact counts and elapsed time.
 
 - [ ] **Step 3: Request a whole-feature review**
@@ -831,7 +1090,9 @@ through current HEAD. Require the reviewer to check:
 - absence of filesystem observation and security overclaims;
 - Endpoint concrete-class versus base-class origin;
 - function/Endpoint documentation agreement;
-- large-example bootstrap and static runtime behavior; and
+- large-example bootstrap and static runtime behavior;
+- immediate/Future completion guidance across Context handlers, native apps,
+  and middleware without recommending blocking waits; and
 - scope containment against the approved design.
 
 Fix ordinary in-scope defects in the owning task's files, rerun the affected
@@ -854,12 +1115,12 @@ why the earlier gate was superseded.
 
 - [ ] **Step 5: Close the ledger and report completion**
 
-Set all four task rows to `complete`; fill every SHA, focused evidence,
+Set all five task rows to `complete`; fill every SHA, focused evidence,
 full-suite evidence, and review cell; and ensure every deviation is either
 absent or has the user's recorded decision. Report:
 
 - the starting and final commit SHAs;
-- the three feature commits plus any correction commit;
+- the four feature/documentation commits plus any correction commit;
 - focused and full-suite results with actual counts;
 - the review result;
 - approved deviations, or `none`;
