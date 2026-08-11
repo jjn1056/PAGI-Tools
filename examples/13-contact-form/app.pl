@@ -10,11 +10,10 @@ use PAGI::Request;
 use PAGI::Response;
 use PAGI::App::File;
 
-my $PUBLIC_DIR = File::Spec->catdir(dirname(__FILE__), 'public');
 my $UPLOAD_DIR = File::Spec->catdir(dirname(__FILE__), 'uploads');
 
 # Static file server for public directory
-my $static_app = PAGI::App::File->new(root => $PUBLIC_DIR)->to_app;
+my $static_app = PAGI::App::File->app_path('public')->to_app;
 
 # Allowed MIME types for attachments
 my %ALLOWED_TYPES = (

@@ -52,6 +52,10 @@ so the App Router attaches them as explicit opaque mounts. The `/` static-file
 mount is last because the shared routing engine preserves written order and a
 matched mount prefix owns dispatch immediately.
 
+```perl
+$router->mount('/' => PAGI::App::File->app_path('public'));
+```
+
 ## Routes
 
 - `GET/POST /api/messages` - REST API

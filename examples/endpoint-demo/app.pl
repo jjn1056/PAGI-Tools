@@ -9,8 +9,6 @@
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use File::Basename qw(dirname);
-use File::Spec;
 use Time::HiRes qw(time);
 
 use PAGI::App::File;
@@ -190,8 +188,6 @@ $router->mount('/ws/echo' => [$access_log, $timing] => EchoWS->to_app);
 $router->mount('/events' => [$timing] => MessageEvents->to_app);
 
 # Static files as fallback for everything else (no middleware)
-$router->mount('/' => PAGI::App::File->new(
-    root => File::Spec->catdir(dirname(__FILE__), 'public')
-));
+$router->mount('/' => PAGI::App::File->app_path('public'));
 
 $router->to_app;

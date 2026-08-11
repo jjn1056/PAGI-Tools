@@ -16,8 +16,6 @@ use warnings;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use IO::Async::Timer::Periodic;
-use File::Basename qw(dirname);
-use File::Spec;
 
 use PAGI::SSE;
 use PAGI::App::File;
@@ -71,8 +69,7 @@ sub stop_metrics_broadcaster {
 }
 
 # Static file serving via PAGI::App::File
-my $public_dir = File::Spec->catdir(dirname(__FILE__), 'public');
-my $static_app = PAGI::App::File->new(root => $public_dir)->to_app;
+my $static_app = PAGI::App::File->app_path('public')->to_app;
 
 # Main app
 my $app = async sub {
