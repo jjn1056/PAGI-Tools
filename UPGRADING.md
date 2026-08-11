@@ -456,7 +456,8 @@ my $route_path = $scope->{'pagi.router'}{route};
 ```
 
 **After (shipped):** the shared compiler publishes a versioned routing
-container with a frame for each compiled Router boundary.
+container whose frame stack records the current routing owner and any
+compatible ancestor owners.
 
 ```perl
 my $container = $c->scope->{'pagi.routing'};
@@ -467,8 +468,9 @@ my $current_frame = $container->{frames}[-1];
 Prefer `$c->path_for(...)` when the goal is reverse routing rather than metadata
 inspection.
 
-Why: the frame stack can describe nested immutable routers, captures, logical
-placement, and the selected leaf without mutating shared descriptions.
+Why: the frame stack and its mount ancestry can describe nested immutable
+routers, captures, logical placement, and the selected leaf without mutating
+shared descriptions.
 
 ## Retain a `to_router` snapshot for stable inspection
 

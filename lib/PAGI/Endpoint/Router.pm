@@ -138,7 +138,8 @@ This release intentionally replaces the previous Endpoint handler,
 middleware, state, Context, nesting, and naming contracts without a
 compatibility layer. See the
 L<standalone router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>
-in the source distribution for executable before-and-after migrations.
+in the source distribution for concrete before-and-after examples with
+exercised shipped replacements.
 
 =head1 CONSTRUCTION AND LIFECYCLE
 
