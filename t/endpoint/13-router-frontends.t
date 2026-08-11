@@ -246,4 +246,64 @@ subtest 'two Endpoint objects report a materialization cycle' => sub {
         'cycle diagnostic includes both Endpoint placement names in order');
 };
 
+{
+    package Local::ProviderChildEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+    sub routes { $_[1]->get('/leaf' => 'leaf')->name('leaf') }
+    sub leaf {
+        my ($self, $c) = @_;
+        return $c->text('mount ' . $c->path_param('mount'));
+    }
+}
+
+{
+    package Local::ProviderEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+    sub Int { return qr/\A\d+\z/ }
+    sub new {
+        my ($class, %args) = @_;
+        return bless {
+            mode => $args{mode}, child => Local::ProviderChildEndpoint->new,
+        }, $class;
+    }
+    sub routes {
+        my ($self, $r) = @_;
+        if ($self->{mode} eq 'group') {
+            $r->group('/group/{group:&Int}' => sub {
+                $_[0]->get('/leaf' => 'group_leaf')->name('leaf');
+            })->name('group');
+        }
+        else {
+            $r->mount('/mount/{mount:&Int}', router => $self->{child})
+                ->name('mount');
+        }
+    }
+    sub group_leaf {
+        my ($self, $c) = @_;
+        return $c->text('group ' . $c->path_param('group'));
+    }
+}
+
+subtest 'a group prefix resolves its provider in the Endpoint package' => sub {
+    my $endpoint = Local::ProviderEndpoint->new(mode => 'group');
+    my $routing = $endpoint->to_router;
+    my $client = PAGI::Test::Client->new(app => $routing->to_app);
+
+    is($client->get('/group/12/leaf')->text, 'group 12',
+        'an unqualified group-prefix provider resolves in the Endpoint package');
+    is($client->get('/group/no/leaf')->status, 404,
+        'the Endpoint group provider rejects a nonmatching capture');
+};
+
+subtest 'a routing-aware mount prefix resolves its provider in the Endpoint package' => sub {
+    my $endpoint = Local::ProviderEndpoint->new(mode => 'mount');
+    my $routing = $endpoint->to_router;
+    my $client = PAGI::Test::Client->new(app => $routing->to_app);
+
+    is($client->get('/mount/34/leaf')->text, 'mount 34',
+        'an unqualified mount-prefix provider resolves in the Endpoint package');
+    is($client->get('/mount/no/leaf')->status, 404,
+        'the Endpoint mount provider rejects a nonmatching capture');
+};
+
 done_testing;

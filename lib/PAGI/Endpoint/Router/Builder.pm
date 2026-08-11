@@ -115,6 +115,7 @@ sub _add_route_from {
 
 sub group {
     my ($self, $path, @args) = @_;
+    my $caller = caller;
     my $middleware = [];
     $middleware = shift @args if @args && ref($args[0]) eq 'ARRAY';
     croak 'group requires a callback'
@@ -122,7 +123,7 @@ sub group {
     my $callback = $args[0];
     my $endpoint = $self->{endpoint};
 
-    $self->{builder}->group($path, $middleware, sub {
+    $self->{builder}->_group_from($caller, $path, $middleware, sub {
         my ($child) = @_;
         my $facade = ref($self)->new($endpoint, $child);
         $callback->($facade);
@@ -132,7 +133,8 @@ sub group {
 
 sub mount {
     my ($self, @args) = @_;
-    $self->{builder}->mount(@args);
+    my $caller = caller;
+    $self->{builder}->_mount_from($caller, @args);
     return $self;
 }
 

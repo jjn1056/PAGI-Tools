@@ -107,8 +107,13 @@ sub sse {
 }
 
 sub group {
-    my ($self, $path, @args) = @_;
+    my ($self, @args) = @_;
     my $package = caller;
+    return $self->_group_from($package, @args);
+}
+
+sub _group_from {
+    my ($self, $package, $path, @args) = @_;
 
     croak 'group path must be a string' unless defined $path && !ref($path);
     my $middleware = [];
@@ -138,8 +143,13 @@ sub group {
 }
 
 sub mount {
-    my ($self, $path, @args) = @_;
+    my ($self, @args) = @_;
     my $package = caller;
+    return $self->_mount_from($package, @args);
+}
+
+sub _mount_from {
+    my ($self, $package, $path, @args) = @_;
 
     croak 'mount path must be a string' unless defined $path && !ref($path);
     my $middleware = [];
