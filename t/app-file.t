@@ -4,6 +4,8 @@ use Test2::V0;
 use File::Spec;
 use File::Temp qw(tempdir);
 use FindBin qw($Bin);
+use Future;
+use Cwd ();
 
 use lib 'lib';
 use lib "$Bin/app-file-fixtures/one/lib";
@@ -22,6 +24,35 @@ sub fetched_text {
     my ($component, $path) = @_;
     local $ENV{PAGI_ENV} = 'production';
     return PAGI::Test::Client->new(app => $component)->get($path)->text;
+}
+
+sub capture_output {
+    my ($code) = @_;
+    my ($stdout, $stderr) = ('', '');
+    my $value;
+    {
+        local *STDOUT;
+        local *STDERR;
+        open STDOUT, '>', \$stdout or die "cannot capture STDOUT: $!";
+        open STDERR, '>', \$stderr or die "cannot capture STDERR: $!";
+        $value = $code->();
+    }
+    return ($value, $stdout, $stderr);
+}
+
+sub run_native {
+    my ($component, $method, $path) = @_;
+    my @events;
+    $component->to_app->(
+        {
+            type => 'http', method => $method, path => $path,
+            raw_path => $path, root_path => '', headers => [],
+            path_params => {},
+        },
+        sub { return Future->done({ type => 'http.disconnect' }) },
+        sub { push @events, $_[0]; return Future->done },
+    )->get;
+    return \@events;
 }
 
 subtest 'class constructor returns a serving component and preserves subclasses' => sub {
@@ -108,5 +139,109 @@ subtest 'relative caller source is fixed before a later chdir' => sub {
 }
 ok(!Local::IgnoredAppFileImport->can('imaginary_export'),
     'App::File import remains a no-export hook and ignores arguments');
+
+my $one_static = Cwd::realpath(File::Spec->catdir(
+    $Bin, 'app-file-fixtures', 'one', 'static',
+));
+my $file_component = TestApps::AppFile::One->files;
+my $client = PAGI::Test::Client->new(app => $file_component);
+
+subtest 'development logs final existing, missing, index, and HEAD candidates' => sub {
+    local $ENV{PAGI_ENV} = 'development';
+
+    my ($existing, $existing_out, $existing_err) = capture_output(sub {
+        return $client->get('/marker.txt');
+    });
+    is($existing->status, 200, 'existing file still responds');
+    is($existing->text, "caller one\n", 'existing body is unchanged');
+    is($existing_out, 'PAGI::App::File: attempting '
+        . File::Spec->catfile($one_static, 'marker.txt') . "\n",
+        'existing file emits one exact STDOUT record');
+    is($existing_err, '', 'diagnostic does not use STDERR');
+
+    my ($missing, $missing_out) = capture_output(sub {
+        return $client->get('/missing.txt');
+    });
+    is($missing->status, 404, 'missing response is unchanged');
+    is($missing_out, 'PAGI::App::File: attempting '
+        . File::Spec->catfile($one_static, 'missing.txt') . "\n",
+        'missing candidate is visible');
+
+    my ($index, $index_out) = capture_output(sub { return $client->get('/') });
+    is($index->status, 200, 'index still responds');
+    is($index_out, 'PAGI::App::File: attempting '
+        . File::Spec->catfile($one_static, 'index.html') . "\n",
+        'directory request logs selected index');
+
+    my ($empty, $empty_out) = capture_output(sub {
+        return $client->get('/empty-dir');
+    });
+    is($empty->status, 404, 'directory without an index remains 404');
+    is($empty_out, 'PAGI::App::File: attempting '
+        . File::Spec->catdir($one_static, 'empty-dir') . "\n",
+        'index-free directory logs its directory candidate');
+
+    my ($head, $head_out) = capture_output(sub {
+        return $client->head('/marker.txt');
+    });
+    is($head->status, 200, 'HEAD still responds');
+    is($head_out, $existing_out, 'HEAD uses the same candidate diagnostic');
+};
+
+subtest 'only exact request-time development mode logs' => sub {
+    for my $mode (undef, '', 'production', 'none', 'Development') {
+        local $ENV{PAGI_ENV};
+        defined $mode ? ($ENV{PAGI_ENV} = $mode) : delete $ENV{PAGI_ENV};
+        my ($response, $stdout, $stderr) = capture_output(sub {
+            return $client->get('/marker.txt');
+        });
+        is($response->status, 200, "request succeeds for mode " . ($mode // 'unset'));
+        is($stdout, '', "STDOUT is silent for mode " . ($mode // 'unset'));
+        is($stderr, '', "STDERR is silent for mode " . ($mode // 'unset'));
+    }
+};
+
+subtest 'requests rejected before filesystem service stay silent' => sub {
+    local $ENV{PAGI_ENV} = 'development';
+    for my $case (
+        ['POST', '/marker.txt', 405, 'unsupported method'],
+        ['GET', "/bad\0name", 400, 'null byte'],
+        ['GET', '/../secret', 403, 'traversal component'],
+        ['GET', '/.env', 403, 'hidden component'],
+    ) {
+        my ($method, $path, $status, $label) = @$case;
+        my ($events, $stdout) = capture_output(sub {
+            return run_native($file_component, $method, $path);
+        });
+        is($events->[0]{status}, $status, "$label keeps its response status");
+        is($stdout, '', "$label produces no file-attempt output");
+    }
+};
+
+subtest 'diagnostic escapes controls without changing the native candidate' => sub {
+    local $ENV{PAGI_ENV} = 'development';
+    my $path = "/bad\nname";
+    my ($events, $stdout, $stderr) = capture_output(sub {
+        return run_native($file_component, 'GET', $path);
+    });
+
+    is($events->[0]{status}, 404, 'control-bearing missing path stays a 404');
+    is($stdout, 'PAGI::App::File: attempting '
+        . File::Spec->catfile($one_static, 'bad') . '\\x0Aname' . "\n",
+        'newline is visible text inside one physical record');
+    is($stderr, '', 'escaped diagnostic remains STDOUT-only');
+};
+
+subtest 'development output does not rewrite a served file event' => sub {
+    local $ENV{PAGI_ENV} = 'development';
+    my ($events, $stdout) = capture_output(sub {
+        return run_native($file_component, 'GET', '/marker.txt');
+    });
+    is($events->[1]{file}, File::Spec->catfile($one_static, 'marker.txt'),
+        'server receives the original lexical candidate');
+    is($stdout, 'PAGI::App::File: attempting '
+        . File::Spec->catfile($one_static, 'marker.txt') . "\n",
+        'native request emits the same one-line diagnostic');
+};
 
 done_testing;

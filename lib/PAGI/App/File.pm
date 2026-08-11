@@ -130,6 +130,16 @@ sub new {
     return $self;
 }
 
+sub _development_file_attempt {
+    my ($file_path) = @_;
+    return unless ($ENV{PAGI_ENV} // '') eq 'development';
+
+    my $display = $file_path;
+    $display =~ s/([\x00-\x1f\x7f])/sprintf('\\x%02X', ord($1))/ge;
+    print STDOUT "PAGI::App::File: attempting $display\n";
+    return;
+}
+
 sub to_app {
     my ($self) = @_;
 
@@ -186,6 +196,8 @@ sub to_app {
                 }
             }
         }
+
+        _development_file_attempt($file_path);
 
         unless (-f $file_path && -r $file_path) {
             await $self->_send_error($send, 404, 'Not Found');
@@ -332,6 +344,21 @@ later changes directory. C<use PAGI::App::File ()> and C<require
 PAGI::App::File> do not record that origin; use C<PAGI_HOME> as the explicit
 escape hatch in those cases. The origin registrar and resolver are unsupported
 internals.
+
+=head1 DEVELOPMENT DIAGNOSTICS
+
+When C<PAGI_ENV> is exactly C<development> at request time, this application
+writes one record to C<STDOUT> after index selection and before it checks
+whether the candidate is a readable file. For example:
+
+    PAGI::App::File: attempting /Project-MyApp/static/css/app.css
+
+Both existing and missing candidates are reported. Rejected methods and paths
+are silent, as are all other C<PAGI_ENV> values. ASCII control bytes in the
+displayed path are escaped as C<\xNN>, so every diagnostic remains one physical
+line. The record shows the lexical candidate rather than a resolved symlink
+path, can disclose absolute paths, is not access logging, and never changes a
+response or file event.
 
 =head1 CONFIGURATION
 
