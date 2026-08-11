@@ -79,12 +79,13 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
     my $blogs = _source_text("$root/lib/MyApp/Person/Blogs.pm");
     my $view = _source_text("$root/lib/MyApp/View.pm");
 
-    like($root_app, qr/use PAGI::Utils qw\(app_path\)/,
-        'Root imports the application path helper');
-    like($root_app, qr/root\s*=>\s*app_path\('static'\)/,
-        'static mount uses one platform-aware application-relative expression');
-    unlike($root_app, qr/File::Basename|File::Spec|__FILE__|\$STATIC_ROOT/,
-        'Root contains no manual source-file path arithmetic');
+    unlike($root_app, qr/use PAGI::Utils qw\(app_path\)/,
+        'Root no longer needs the functional application path helper');
+    like($root_app,
+        qr/mount\('\/static'\s*=>\s*PAGI::App::File->app_path\('static'\)\)/,
+        'static mount uses the concise App File component constructor');
+    unlike($root_app, qr/PAGI::App::File->new\s*\(|File::Basename|File::Spec|__FILE__|\$STATIC_ROOT/,
+        'Root contains no manual or expanded static-root construction');
 
     like($data, qr/sub new\(\$class\)/, 'Data constructor uses a signature');
     like($root_app, qr/sub routing\(\$class\)/, 'Root routing uses a signature');

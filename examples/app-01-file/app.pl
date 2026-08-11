@@ -1,7 +1,5 @@
 use strict;
 use warnings;
-use File::Basename;
-use File::Spec;
 use PAGI::App::File;
 
 # PAGI::App::File Example
@@ -22,9 +20,6 @@ use PAGI::App::File;
 #   http://localhost:5000/style.css  -> CSS
 #   http://localhost:5000/subdir/nested.txt -> nested file
 
-my $dir = dirname(__FILE__);
-my $app = PAGI::App::File->new(
-    root => File::Spec->catdir($dir, 'static'),
-)->to_app;
+my $app = PAGI::App::File->app_path('static')->to_app;
 
 $app;

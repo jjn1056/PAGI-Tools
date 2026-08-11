@@ -5,7 +5,6 @@ use warnings;
 use PAGI::App::File;
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(router route mount);
-use PAGI::Utils qw(app_path);
 use MyApp::Data;
 use MyApp::Person ();
 use MyApp::View ();
@@ -50,9 +49,7 @@ sub routing($class) {
                 name => 'home',
                 desc => 'HTML landing page',
             ),
-            mount('/static' => PAGI::App::File->new(
-                root => app_path('static'),
-            )),
+            mount('/static' => PAGI::App::File->app_path('static')),
             mount('/person',
                 router    => MyApp::Person->routing,
                 name      => 'person',
