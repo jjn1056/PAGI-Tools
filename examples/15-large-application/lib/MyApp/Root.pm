@@ -2,18 +2,13 @@ package MyApp::Root;
 
 use v5.40;
 use warnings;
-use File::Basename qw(dirname);
-use File::Spec;
 use PAGI::App::File;
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(router route mount);
+use PAGI::Utils qw(app_path);
 use MyApp::Data;
 use MyApp::Person ();
 use MyApp::View ();
-
-my $STATIC_ROOT = File::Spec->catdir(
-    dirname(__FILE__), '..', '..', 'static',
-);
 
 sub startup($state, $scope) {
     $state->{data} = MyApp::Data->new;
@@ -56,7 +51,7 @@ sub routing($class) {
                 desc => 'HTML landing page',
             ),
             mount('/static' => PAGI::App::File->new(
-                root => $STATIC_ROOT,
+                root => app_path('static'),
             )),
             mount('/person',
                 router    => MyApp::Person->routing,

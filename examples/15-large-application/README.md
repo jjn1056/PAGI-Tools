@@ -12,6 +12,9 @@ and does not depend on Type::Tiny at runtime.
 
 From the PAGI-Tools checkout, use the currently shipped file loader:
 
+`app.pl` still locates `lib` because bootstrap happens before `PAGI::Utils` or
+`MyApp::Root` can be loaded.
+
 ```bash
 pagi-server --app examples/15-large-application/app.pl --port 5000
 ```
@@ -49,6 +52,10 @@ lib/MyApp/
 - Root mounts `PAGI::App::File` positionally at `/static`. That mount stays an
   opaque application boundary: the resolver knows its prefix but does not
   inspect named routes below it.
+- Root passes `app_path('static')` to `PAGI::App::File`. Because
+  `MyApp::Root` is loaded from `lib/MyApp/Root.pm`, the helper removes the
+  package suffix and trailing `lib`, then appends `static` with `File::Spec`.
+  A nonstandard deployment can set `PAGI_HOME` explicitly.
 - `MyApp::Data` is created during startup and shared through
   `$c->state->{data}`. `MyApp::View` renders the shared HTML document shell
   without introducing a template engine.
