@@ -136,10 +136,10 @@ description; C<to_app> is the explicit compilation boundary that returns the
 native PAGI coderef a server runs.
 
 The deliberately narrow name matters. C<PAGI::App> would look like the base
-class for the C<PAGI::App::*> namespace, while C<PAGI::Application> would claim
+class for the C<PAGI::App::*> package family, while C<PAGI::Application> would claim
 a central role this optional composer does not have. Direct router C<to_app>,
-manual middleware, L<PAGI::Lifespan>, and native PAGI applications remain
-supported alternatives.
+manual middleware, L<PAGI::Lifespan>, and hand-built protocol applications
+remain supported alternatives.
 
 =head1 IMPORTS
 
@@ -343,14 +343,18 @@ and configured callback failures are translated into lifespan failure events.
 
 =head1 RELATIONSHIP TO OTHER PAGI APIS
 
-C<< compose(routes => [...]) >> is a compact root declarative router plus
-application middleware and lifecycle; it does not replace L<PAGI::Routing>.
+C<< compose(routes => [...]) >> is a compact root functional router plus
+application middleware and lifecycle; it does not replace any router frontend.
 For router fallbacks, router middleware, reverse routing, or inspection, retain
 the router and pass it with C<< compose(app => $routing) >>. Compose deliberately
 does not delegate C<path_for>, C<route_named>, or other target-specific methods.
 
-L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, native apps, and component
-objects/classes can all be targets. L<PAGI::Lifespan> and
+L<PAGI::Routing>, L<PAGI::App::Router>, and L<PAGI::Endpoint::Router> are
+functional, mutable, and method-oriented frontends over one immutable routing
+engine. Any compiled frontend, native app, or component object/class can be the
+single Compose target. Compose remains the optional deployed root that can own
+application middleware and server-provided lifespan state; it is not a fourth
+router. L<PAGI::Lifespan> and
 L<PAGI::Utils/handle_lifespan> remain the low-level choices for hand-built
 native applications or their existing hook-registration behavior.
 

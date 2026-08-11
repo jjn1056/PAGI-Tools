@@ -6,20 +6,28 @@ use Test2::V0;
 my @core_modules = qw(
     PAGI::Tools
     PAGI::Compose
+    PAGI::Compose::Compiler
     PAGI::Authority
     PAGI::Routing
     PAGI::Routing::Router
     PAGI::Routing::Route
     PAGI::Routing::Mount
     PAGI::Routing::Middleware
+    PAGI::Routing::Pattern
+    PAGI::Routing::Resolver
+    PAGI::Routing::Compiler
+    PAGI::Routing::HeadBoundary
     PAGI::Middleware
     PAGI::Middleware::Helpers
     PAGI::Middleware::Builder
     PAGI::App::Router
+    PAGI::App::Router::Builder
+    PAGI::App::Router::Materializer
     PAGI::App::File
     PAGI::App::WrapPSGI
     PAGI::Endpoint::HTTP
     PAGI::Endpoint::Router
+    PAGI::Endpoint::Router::Builder
     PAGI::Endpoint::SSE
     PAGI::Endpoint::WebSocket
     PAGI::Request

@@ -5,7 +5,7 @@ ordinary shape without turning the example into a framework:
 
 - handlers loaded normally from `MyApp::Routes::Home` and passed as fully
   qualified coderefs;
-- an inline `/api` mount whose local `api` namespace composes the absolute
+- an inline `/api` mount whose local `api` name segment composes the absolute
   logical address `/api/item`;
 - a numeric path constraint;
 - one bare pure route middleware factory, normalized to an inspectable description;

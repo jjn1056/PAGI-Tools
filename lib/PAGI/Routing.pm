@@ -96,17 +96,17 @@ PAGI::Routing - Immutable declarative routing with Context handlers
 
 =head1 DESCRIPTION
 
-This module is a Starlette-inspired, Perlish alternative to
-L<PAGI::App::Router>. Constructor functions build an immutable, inspectable
-route tree. Normal HTTP handlers receive one L<PAGI::Context> and return one
+This module is the immutable functional frontend for PAGI's shared routing
+engine. Constructor functions build an immutable, inspectable route tree.
+Normal HTTP handlers receive one L<PAGI::Context> and return one
 L<PAGI::Response>; WebSocket and SSE handlers receive their corresponding
 Context subclasses and use imperative protocol helpers. Explicit C<raw> forms
 keep all three PAGI channels available when an endpoint needs to own events.
 
 The descriptions do no request I/O. C<to_app> is the explicit compilation
-boundary and returns the native PAGI coderef a server runs. This API is
-additive: the mutable L<PAGI::App::Router> and class-based
-L<PAGI::Endpoint::Router> remain supported.
+boundary and returns the native PAGI coderef a server runs. The mutable
+L<PAGI::App::Router> and method-oriented L<PAGI::Endpoint::Router> materialize
+this same Router model and use the same Resolver and Compiler.
 
 =head1 IMPORTS
 
@@ -775,28 +775,26 @@ not synthesize 500 responses; put that middleware at the application policy
 boundary. A compile-time factory/configuration error instead fails C<to_app>
 before an application exists to wrap.
 
-=head1 ROUTER API COMPARISON
+=head1 ROUTER FRONTENDS
 
-=over 4
+  PAGI::Routing          immutable functional declarations   $c handlers
+  PAGI::App::Router      mutable imperative builder          verb methods + $c
+  PAGI::Endpoint::Router class/role-oriented frontend        local method names
 
-=item * L<PAGI::Routing> uses the new immutable, declaration-ordered matcher.
-HTTP handlers receive C<$c> and return Response values. Route middleware is
-pure app-to-app event middleware. Its generated Allow order is first-seen.
+These are three declaration surfaces over one immutable Router, not separate
+matchers. They share Pattern parsing, Resolver slash addresses, Compiler
+matching and dispatch, route metadata, constraints, GET/HEAD qualification and
+wire suppression, generated 404/405 outcomes, first-seen C<Allow>, reverse
+routing, pure native middleware, and exact written declaration order.
 
-=item * L<PAGI::App::Router> uses the existing mutable route-first,
-mount-fallback matcher. Handlers are native PAGI applications and route
-middleware is pure app-to-app event middleware. Its generated Allow order is
-alphabetical.
-
-=item * L<PAGI::Endpoint::Router> delegates matching to
-PAGI::App::Router. Class methods receive C<($self, $c)> and HTTP methods return
-Response values. It also ships specialized value-flow route middleware in
-which C<< $next->() >> resolves to a Response.
-
-=back
-
-Allow represents a set; neither first-seen nor alphabetical rendering denotes
-method priority.
+C<PAGI::Routing> is already immutable. C<PAGI::App::Router> incrementally
+builds declarations whose ordinary handlers receive C<$c> and whose native
+targets require explicit C<raw>. C<PAGI::Endpoint::Router> binds unqualified
+local method names to one constructed object; its method handlers receive
+C<($self, $c)>. App and Endpoint C<to_router> calls create fresh immutable
+snapshots, while C<to_app> compiles one retained snapshot. All middleware uses
+the same four compile-time factory/C<wrap> forms and a request-time native app
+phase; there is no response-valued Endpoint middleware chain.
 
 =head1 SEE ALSO
 

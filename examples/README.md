@@ -4,6 +4,13 @@ This directory contains example applications built on the PAGI toolkit — the
 higher-level components (Endpoint, Middleware, Apps, Context, Request/Response,
 etc.) that live in this distribution.
 
+Routing examples use three frontends over one immutable engine:
+`PAGI::Routing` for functional declarations, `PAGI::App::Router` for a mutable
+verb-method builder, and `PAGI::Endpoint::Router` for local methods on a
+configured object. They share path Patterns, written declaration order,
+metadata, generated outcomes, and reverse routing. Native three-channel route
+handlers are always marked `raw`.
+
 ## Requirements
 
 - Perl 5.18+ with `Future::AsyncAwait`

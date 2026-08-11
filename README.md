@@ -23,25 +23,31 @@ PAGI-Tools adds the ergonomics — requests, response values, routing, a
 middleware suite — so the same application reads like this:
 
     use PAGI::App::Router;
-    use PAGI::Request;
-    use PAGI::Response;
+    use Future::AsyncAwait;
 
     my $router = PAGI::App::Router->new;
 
-    # A response value mounts straight onto a route:
-    $router->get('/' => PAGI::Response->json({ hello => 'world' }));
+    $router->get('/' => async sub {
+        my ($c) = @_;
+        return $c->json({ hello => 'world' });
+    })->name('home');
 
-    # A dynamic handler builds a request and sends a response value:
-    $router->get('/users/:id' => async sub {
-        my ($scope, $receive, $send) = @_;
-        my $req = PAGI::Request->new($scope, $receive);
-        await PAGI::Response->json({ id => $req->path_param('id') })->respond($send);
-    });
+    $router->get('/users/{id}' => async sub {
+        my ($c) = @_;
+        return $c->json({ id => $c->path_param('id') });
+    })->name('user');
 
-    my $app = $router->to_app;   # still just a PAGI app: an async sub
+    my $routing = $router->to_router; # retain one immutable snapshot
+    my $app = $routing->to_app;       # still a native PAGI app
 
-For an immutable route tree whose HTTP handlers receive one Context and return
-Response values, use the additive declarative API instead:
+Routing has three public frontends over that same immutable snapshot and
+compiler:
+
+    PAGI::Routing          immutable functional declarations   $c handlers
+    PAGI::App::Router      mutable imperative builder          verb methods + $c
+    PAGI::Endpoint::Router class/role-oriented frontend        local method names
+
+Use the functional frontend when the declarations are already immutable:
 
     use PAGI::Routing qw(:routes);
 
@@ -56,15 +62,24 @@ Response values, use the additive declarative API instead:
 
     my $app = $routing->to_app;
 
-Declarative routing distinguishes inline `routes => [...]`, inspectable
-`router => $child` mounts with a required namespace, and positional opaque
+Functional routing distinguishes inline `routes => [...]`, inspectable
+`router => $child` mounts with a required local `name`, and positional opaque
 application mounts. Named routes compose into slash addresses such as
 `/person/show`; request Contexts can generate relative links from the active
 placement, with compact or named path/query/fragment arguments. These helpers
 return strings or croak, perform no protocol I/O, and do not replace normal
 authorization checks.
 
-For a small deployed root, the optional composer can put declarative routes,
+The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
+route metadata, constraints, GET/HEAD behavior, generated outcomes, written
+declaration order, and reverse routing. Ordinary HTTP handlers receive `$c`
+and return a Response. Native channel ownership is always explicit with
+`raw`. See the
+[router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md)
+for the intentionally breaking migration from the previous App and Endpoint
+contracts.
+
+For a small deployed root, the optional composer can put routes,
 application-wide middleware, and lifecycle callbacks in one immutable
 description:
 
@@ -112,22 +127,23 @@ the ergonomics an author reaches for again and again, so you can build real
 PAGI applications without hand-emitting protocol events:
 
 - [PAGI::Middleware](https://metacpan.org/pod/PAGI%3A%3AMiddleware) and the `PAGI::Middleware::*` suite
-- `PAGI::App::*` - ready-made apps (static files, routers, proxies,
+- `PAGI::App::*` - ready-made apps (static files, the mutable router
+frontend, proxies,
 WebSocket chat/echo, PSGI bridging)
 - [PAGI::Endpoint::HTTP](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AHTTP), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter),
 [PAGI::Endpoint::SSE](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ASSE), [PAGI::Endpoint::WebSocket](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AWebSocket) - high-level endpoint
 framework
 - [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::Context](https://metacpan.org/pod/PAGI%3A%3AContext) - request
 processing and ergonomics
-- [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting) - immutable declarative route trees and Context
-handlers; an alternative to, not a replacement for, [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter)
+- [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter), and
+[PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter) - immutable functional, mutable imperative, and
+method-oriented frontends over one immutable routing engine
 - [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) - optional immutable application-root composition of
 one request target, application middleware, and explicit lifecycle callbacks
 - [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and friends - in-process test utilities for
 PAGI applications
-- [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils) - composition and lifespan helpers; its
-[to\_app](https://metacpan.org/pod/PAGI%3A%3AUtils#to_app) coercion is what lets every composition
-point above accept component objects and class names directly
+- [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils) - composition and lifespan helpers, including explicit
+component-to-application coercion
 
 It is the author's hope that these tools serve two audiences: people
 _exploring_ PAGI, who get going with far less friction than the raw protocol
@@ -144,6 +160,7 @@ protocol specification lives in the `PAGI` distribution.
 [PAGI::Tools::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ATutorial) (this distribution's helpers guide),
 [PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook) (this distribution's recipes), [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose),
 [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
+[router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md),
 [PAGI::Server::Runner](https://metacpan.org/pod/PAGI%3A%3AServer%3A%3ARunner) - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
 

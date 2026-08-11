@@ -90,7 +90,7 @@ L<PAGI::Context> and HTTP handlers should return Response values:
                       constraints => { id => qr/\d+/ },
                   ),
               ],
-              namespace => 'api',
+              name => 'api',
           ),
       ],
   );
@@ -133,19 +133,19 @@ lookup, escaping, and reverse-routing behavior.
 GET includes HEAD automatically. Paths are exact, with no slash redirect or
 automatic OPTIONS. Mounts have three contracts:
 
-  mount('/api', routes => \@nodes, namespace => 'api')
-  mount('/people', router => $people, namespace => 'person')
+  mount('/api', routes => \@nodes, name => 'api')
+  mount('/people', router => $people, name => 'person')
   mount('/static' => $static_app)
 
 The first is an inline structural subtree. The second keeps a separately
-configured Router as an inspectable child and requires a namespace. The third
+configured Router as an inspectable child and requires a local name. The third
 is an opaque application prefix. Passing a Router positionally still chooses
 opacity; C<< mount('/x' => $router) >> is not shorthand for the named
 C<< router => $router >> form.
 After a Router-mount prefix matches, the child owns its 404/405 as well as its
 full match. Parent no-match bubbling is deferred.
 
-Route names and namespaces are local segments; slash constructs absolute
+Route and structural-mount names are local segments; slash constructs absolute
 logical addresses such as C</api/user>. Context reverse calls may resolve from
 the active namespace and inherit only target-required captures:
 
@@ -229,69 +229,78 @@ C<compose(...)> returns an immutable description. The final C<to_app> compiles
 the native three-channel PAGI coderef once. Compose is not a base class and it
 does not duplicate router fallbacks or reverse-routing methods.
 
-=head2 2.3 PAGI::App::Router - Basic Routing
+=head2 2.3 PAGI::App::Router - Mutable Routing
 
-L<PAGI::App::Router> provides lightweight functional routing:
+L<PAGI::App::Router> is the mutable frontend for the same immutable routing
+model. Its verb methods append declarations in written order; ordinary
+handlers use the same Context contract as C<PAGI::Routing>:
 
   use PAGI::App::Router;
-  use PAGI::Response;
+  use PAGI::Routing qw(middleware);
 
   my $router = PAGI::App::Router->new;
 
-  # Mount a static response value — dispatch sends it automatically
-  $router->mount('/health' => PAGI::Response->json({ ok => \1 }));
+  $router->get('/' => sub {
+      my ($c) = @_;
+      return $c->text('Home');
+  })->name('home');
 
-  # HTTP routes
-  $router->get('/' => async sub {
-      my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope);
-      await $res->text('Home')->respond($send);
-  });
+  $router->post('/users' => sub {
+      my ($c) = @_;
+      return $c->json({ created => 1 }, status => 201);
+  })->name('create_user');
 
-  $router->post('/users' => async sub {
-      my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope);
-      await $res->json({ created => 1 }, status => 201)->respond($send);
-  });
+  $router->get('/users/{id}' => [
+      'RequestId',
+      $logging_factory,
+      $configured_auth,
+      middleware('Session', cookie_name => 'sid'),
+  ] => sub {
+      my ($c) = @_;
+      return $c->json({ id => $c->path_param('id') });
+  })->name('show_user');
 
-  # Path parameters
-  $router->get('/users/:id' => async sub {
-      my ($scope, $receive, $send) = @_;
-      my $req = PAGI::Request->new($scope, $receive);
-      my $res = $req->response;
-      my $id = $req->path_param('id');
-      await $res->json({ id => $id })->respond($send);
-  });
+  # Native three-channel applications must say raw.
+  $router->get('/download', raw => $download_app);
+  $router->websocket('/ws', raw => $native_ws_app);
+  $router->sse('/events', raw => $native_sse_app);
 
-  # WebSocket and SSE handlers drive $send imperatively — no return value
-  $router->websocket('/ws' => async sub { ... });
-  $router->sse('/events' => async sub { ... });
+  my $snapshot = $router->to_router;
+  my $app = $snapshot->to_app;
 
-  $router->to_app;
+The middleware entries above show all four universal forms: class name,
+synchronous factory coderef, configured object with C<wrap>, and explicit
+C<middleware(...)> description. Factories and C<wrap> run while C<to_app>
+compiles; the native app they return runs per request. Each C<to_router> call
+creates a fresh immutable snapshot, so retain one when inspection, reverse
+routing, and compilation must refer to the same route identities.
 
-For advanced routing patterns (nested routers, route-level middleware,
-class-based routing), see L<PAGI::Tools::Cookbook>.
+For handlers bound to a configured object, subclass
+L<PAGI::Endpoint::Router>. Its C<routes($builder)> method uses the same verb
+surface but accepts local unqualified method names. Construct nested Endpoint
+objects explicitly and mount them with C<< router => $child >> and local
+C<name>; package strings do not load routing behavior.
 
 =head2 2.4 Choosing a Router
 
-The three APIs are alternatives at different abstraction boundaries:
+The three APIs are declaration frontends at different abstraction boundaries:
 
-  API                    Matcher                         Handler                         Route middleware
-  ---------------------  ------------------------------  ------------------------------  ------------------------------
-  PAGI::Routing          immutable declaration-ordered   $c; HTTP returns Response       pure app-to-app event wrapper
-  PAGI::App::Router      mutable route-first/mount-last  native PAGI application         pure app-to-app event wrapper
-  PAGI::Endpoint::Router delegates to App::Router        class method + $c; Response     value-flow ($c, $next)
+  PAGI::Routing          immutable functional declarations   $c handlers
+  PAGI::App::Router      mutable imperative builder          verb methods + $c
+  PAGI::Endpoint::Router class/role-oriented frontend        local method names
 
-There are two matching engines: C<PAGI::Routing> owns the new
-declaration-ordered matcher, while C<PAGI::Endpoint::Router> delegates to the
-existing C<PAGI::App::Router> matcher. The latter checks routes before mounts
-and then mounts by longest prefix. C<PAGI::Routing> treats mounts as declared
-nodes that can immediately own a request.
+All three materialize L<PAGI::Routing::Router> and share Pattern parsing,
+Resolver slash addresses, Compiler matching, route metadata, constraints,
+GET/HEAD behavior, generated 404/405 outcomes, first-seen C<Allow>, reverse
+routing, pure native middleware, and exact written order. The first full match
+wins; declarations are never separated by kind or sorted by mount prefix.
 
-For generated 405 responses, C<PAGI::Routing> renders methods in first-seen
-order; C<PAGI::App::Router> (and therefore Endpoint::Router) renders them
-alphabetically. C<Allow> is a set, so neither display order expresses method
-priority.
+Choose C<PAGI::Routing> for functional immutable declarations,
+C<PAGI::App::Router> for incremental mutation with closures, and
+C<PAGI::Endpoint::Router> when local methods and ordinary object fields make
+the application boundary clearer. This release intentionally removes the old
+App and Endpoint matcher, handler, naming, middleware, state, and package-load
+contracts. See F<UPGRADING.md> for exercised before-and-after migrations.
 
 =head1 PART 3: HANDLING REQUESTS
 
@@ -463,14 +472,16 @@ to transmit:
   # Empty response (204 No Content)
   await $res->empty()->respond($send);
 
-Factory class methods build a detached response value you can use directly
-or mount on a router:
+Factory class methods build a detached response value you can use directly:
 
   # Build and send inline
   await PAGI::Response->json({ ok => \1 })->respond($send);
 
-  # Mount a static value — dispatch calls respond automatically
-  $router->mount('/health' => PAGI::Response->json({ ok => \1 }));
+  # Ordinary App routes receive Context and return the value.
+  $router->get('/health' => sub {
+      my ($c) = @_;
+      return $c->json({ ok => \1 });
+  });
 
 Key points:
 
@@ -750,7 +761,7 @@ Apply middleware to all routes using the C<builder> function:
 
   my $router = PAGI::App::Router->new;
 
-  $router->get('/' => async sub {
+  $router->get('/', raw => async sub {
       my ($scope, $receive, $send) = @_;
       await $send->({
           type    => 'http.response.start',
@@ -1014,7 +1025,10 @@ passing a configured instance (parentheses required):
 Or per-route:
 
   my $auth = MyApp::Middleware::Auth->new(secret => 'secret-key');
-  $router->get('/admin' => [$auth] => $handler);
+  $router->get('/admin' => [$auth] => sub {
+      my ($c) = @_;
+      return $c->text('admin');
+  });
 
 =head3 Middleware Patterns
 
@@ -1193,8 +1207,8 @@ via the class-method C<to_app>: C<'MyApp::API'>
 
 =back
 
-App positions are: C<mount> targets and route handlers in
-L<PAGI::App::Router>, opaque mounts and explicit C<raw> leaves in
+App positions include opaque mounts and explicit C<raw> leaves in
+L<PAGI::App::Router> and
 L<PAGI::Routing>, C<mount> and the final block value in
 L<PAGI::Middleware::Builder>'s C<builder {}>, L<PAGI::App::URLMap>
 mounts and its C<default>, L<PAGI::App::Cascade> entries, and the
@@ -1203,19 +1217,25 @@ C<app> argument to L<PAGI::Test::Client>. Put together:
   my $app = builder {
       enable 'AccessLog';
       mount '/static' => PAGI::App::File->new(root => 'public');
-      mount '/api'    => 'MyApp::API';
+      mount '/api'    => MyApp::API->new;
       PAGI::Response->text('no such page')->status(404);
   };
 
 Compilation happens exactly once, when the composition point receives
-the component — never per request.
+the component — never per request. Routing-aware App/Endpoint children are
+deliberately stricter: load their packages normally, construct configured
+objects explicitly, and pass them to
+C<< mount('/prefix', router => $child) >>. Ordinary route targets receive
+C<$c>; native coderefs and class/component apps belong only behind explicit
+C<raw> or opaque mount boundaries.
 
 Middleware position is the same idea with a different duck type:
 C<enable> accepts a middleware name (resolved under
 C<PAGI::Middleware::>, with C<^> to escape) or a configured instance
-with a C<wrap> method, and per-route middleware arrays in
-L<PAGI::App::Router> accept instances or coderef factories of the
-form C<sub { my ($app) = @_; async sub { ... } }>.
+with a C<wrap> method, and every routing middleware array accepts the same
+four forms: class name, coderef factory, configured C<wrap> object, or
+L<PAGI::Routing::Middleware> description. Factories have the form
+C<sub { my ($app) = @_; async sub { ... } }>.
 
 Passing middleware where an app belongs (or vice versa) croaks at
 composition time with a message pointing at the right position.

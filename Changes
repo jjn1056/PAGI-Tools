@@ -1,6 +1,15 @@
 # Revision history for PAGI-Tools
 
 0.002003
+  - BREAKING: PAGI::App::Router and PAGI::Endpoint::Router are now mutable and
+    method-oriented frontends over the immutable PAGI::Routing engine. The old
+    App matcher, native-by-default route handlers, route-first/mount-fallback
+    ordering, dotted names, package-string loading, Endpoint private state and
+    context override, and response-valued middleware chain are removed without
+    a compatibility mode. See UPGRADING.md for exercised before-and-after
+    migrations to Context handlers, explicit raw routes, local names and slash
+    addresses, explicit constructed child objects, retained snapshots, and
+    universal native middleware.
   - PAGI::Routing inline paths now accept zero-argument constraint providers
     such as `{id:&Int}`. Providers use exact declaration-package or qualified
     CODE-slot lookup, run once per source occurrence during construction, and
@@ -28,15 +37,15 @@
     state when callbacks are configured, normalizes immediate/Future callback
     completion, and shares routing's outermost HEAD wire boundary so all
     middleware sees the complete representation before suppression.
-  - New PAGI::Routing provides an immutable, declaration-ordered route tree as
-    an alternative to PAGI::App::Router. Normal HTTP handlers receive one
+  - New PAGI::Routing provides the immutable, declaration-ordered route tree
+    shared by all three public frontends. Normal HTTP handlers receive one
     PAGI::Context and return a PAGI::Response; explicit raw routes retain native
     channel ownership. The release includes inline and application mounts,
     route/mount/router pure event middleware, WebSocket and SSE Context
     handlers, automatic HEAD wire suppression, custom generated 404/405
     handlers, first-seen Allow, synchronous constraints, reverse URLs,
     request-local matched-route frames, inspection, and an executable example.
-    PAGI::App::Router and PAGI::Endpoint::Router remain supported.
+    PAGI::App::Router and PAGI::Endpoint::Router materialize the same model.
   - Declarative mount prefixes accept both the exact prefix and its slash form
     without redirecting, deliberately differing from Starlette's default
     slash behavior. ReverseProxy and TrustedHosts remain HTTP-only; routing

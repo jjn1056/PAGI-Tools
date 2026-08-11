@@ -107,11 +107,15 @@ return await handle_lifespan($scope, $receive, $send,
 
 # Routing with PAGI::App::Router
 my $router = PAGI::App::Router->new;
-$router->get('/' => async sub { ... })->name('hello');
-$router->post('/echo' => async sub { ... })->name('echo');
-$router->websocket('/ws/echo' => async sub { ... });
-$router->sse('/events' => async sub { ... });
+$router->get('/', raw => async sub { ... })->name('hello');
+$router->post('/echo', raw => async sub { ... })->name('echo');
+$router->websocket('/ws/echo', raw => async sub { ... });
+$router->sse('/events', raw => async sub { ... });
 ```
+
+These handlers intentionally demonstrate the protocol channels directly, so
+each route says `raw`. An ordinary App Router handler would receive `$c` and
+return a Response. The declarations run in exactly the order shown.
 
 ## Lifespan State
 

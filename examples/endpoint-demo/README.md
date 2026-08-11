@@ -47,6 +47,11 @@ sub on_disconnect { ... }
 - `PAGI::Middleware::AccessLog` - Request logging
 - Coderef middleware - Request timing, JSON validation
 
+The three Endpoint applications are already compiled native PAGI components,
+so the App Router attaches them as explicit opaque mounts. The `/` static-file
+mount is last because the shared routing engine preserves written order and a
+matched mount prefix owns dispatch immediately.
+
 ## Routes
 
 - `GET/POST /api/messages` - REST API

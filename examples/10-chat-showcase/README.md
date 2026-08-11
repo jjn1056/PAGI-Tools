@@ -50,6 +50,11 @@ request dispatch. The bare `middleware => [\&with_logging]` factory shorthand
 is normalized into an inspectable immutable middleware description when the
 Compose root is constructed.
 
+The WebSocket and SSE targets are existing native PAGI applications, so their
+route declarations use explicit `raw`. The opaque `/` HTTP mount is written
+last: the shared router preserves declaration order, and a matching prefix
+owns dispatch at that position.
+
 ```
 examples/10-chat-showcase/
 ├── app.pl                    # Main PAGI application (routing + middleware)
@@ -69,8 +74,8 @@ examples/10-chat-showcase/
 ### HTTP
 - `GET /` - Chat frontend
 - `GET /api/rooms` - List rooms with user counts
-- `GET /api/room/:name/history` - Message history
-- `GET /api/room/:name/users` - Users in room
+- `GET /api/room/{name}/history` - Message history
+- `GET /api/room/{name}/users` - Users in room
 - `GET /api/stats` - Server statistics
 
 ### WebSocket (`/ws/chat?name=Username`)

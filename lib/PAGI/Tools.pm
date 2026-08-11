@@ -36,25 +36,31 @@ PAGI-Tools adds the ergonomics — requests, response values, routing, a
 middleware suite — so the same application reads like this:
 
     use PAGI::App::Router;
-    use PAGI::Request;
-    use PAGI::Response;
+    use Future::AsyncAwait;
 
     my $router = PAGI::App::Router->new;
 
-    # A response value mounts straight onto a route:
-    $router->get('/' => PAGI::Response->json({ hello => 'world' }));
+    $router->get('/' => async sub {
+        my ($c) = @_;
+        return $c->json({ hello => 'world' });
+    })->name('home');
 
-    # A dynamic handler builds a request and sends a response value:
-    $router->get('/users/:id' => async sub {
-        my ($scope, $receive, $send) = @_;
-        my $req = PAGI::Request->new($scope, $receive);
-        await PAGI::Response->json({ id => $req->path_param('id') })->respond($send);
-    });
+    $router->get('/users/{id}' => async sub {
+        my ($c) = @_;
+        return $c->json({ id => $c->path_param('id') });
+    })->name('user');
 
-    my $app = $router->to_app;   # still just a PAGI app: an async sub
+    my $routing = $router->to_router; # retain one immutable snapshot
+    my $app = $routing->to_app;       # still a native PAGI app
 
-For an immutable route tree whose HTTP handlers receive one Context and return
-Response values, use the additive declarative API instead:
+Routing has three public frontends over that same immutable snapshot and
+compiler:
+
+    PAGI::Routing          immutable functional declarations   $c handlers
+    PAGI::App::Router      mutable imperative builder          verb methods + $c
+    PAGI::Endpoint::Router class/role-oriented frontend        local method names
+
+Use the functional frontend when the declarations are already immutable:
 
     use PAGI::Routing qw(:routes);
 
@@ -69,15 +75,24 @@ Response values, use the additive declarative API instead:
 
     my $app = $routing->to_app;
 
-Declarative routing distinguishes inline C<< routes => [...] >>, inspectable
-C<< router => $child >> mounts with a required namespace, and positional opaque
+Functional routing distinguishes inline C<< routes => [...] >>, inspectable
+C<< router => $child >> mounts with a required local C<name>, and positional opaque
 application mounts. Named routes compose into slash addresses such as
 C</person/show>; request Contexts can generate relative links from the active
 placement, with compact or named path/query/fragment arguments. These helpers
 return strings or croak, perform no protocol I/O, and do not replace normal
 authorization checks.
 
-For a small deployed root, the optional composer can put declarative routes,
+The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
+route metadata, constraints, GET/HEAD behavior, generated outcomes, written
+declaration order, and reverse routing. Ordinary HTTP handlers receive C<$c>
+and return a Response. Native channel ownership is always explicit with
+C<raw>. See the
+L<router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>
+for the intentionally breaking migration from the previous App and Endpoint
+contracts.
+
+For a small deployed root, the optional composer can put routes,
 application-wide middleware, and lifecycle callbacks in one immutable
 description:
 
@@ -128,7 +143,8 @@ PAGI applications without hand-emitting protocol events:
 
 =item * L<PAGI::Middleware> and the C<PAGI::Middleware::*> suite
 
-=item * C<PAGI::App::*> - ready-made apps (static files, routers, proxies,
+=item * C<PAGI::App::*> - ready-made apps (static files, the mutable router
+frontend, proxies,
 WebSocket chat/echo, PSGI bridging)
 
 =item * L<PAGI::Endpoint::HTTP>, L<PAGI::Endpoint::Router>,
@@ -138,8 +154,9 @@ framework
 =item * L<PAGI::Request>, L<PAGI::Response>, L<PAGI::Context> - request
 processing and ergonomics
 
-=item * L<PAGI::Routing> - immutable declarative route trees and Context
-handlers; an alternative to, not a replacement for, L<PAGI::App::Router>
+=item * L<PAGI::Routing>, L<PAGI::App::Router>, and
+L<PAGI::Endpoint::Router> - immutable functional, mutable imperative, and
+method-oriented frontends over one immutable routing engine
 
 =item * L<PAGI::Compose> - optional immutable application-root composition of
 one request target, application middleware, and explicit lifecycle callbacks
@@ -147,9 +164,8 @@ one request target, application middleware, and explicit lifecycle callbacks
 =item * L<PAGI::Test::Client> and friends - in-process test utilities for
 PAGI applications
 
-=item * L<PAGI::Utils> - composition and lifespan helpers; its
-L<to_app|PAGI::Utils/to_app> coercion is what lets every composition
-point above accept component objects and class names directly
+=item * L<PAGI::Utils> - composition and lifespan helpers, including explicit
+component-to-application coercion
 
 =back
 
@@ -168,6 +184,7 @@ L<PAGI::Tutorial> (the protocol tutorial, in the C<PAGI> distribution),
 L<PAGI::Tools::Tutorial> (this distribution's helpers guide),
 L<PAGI::Tools::Cookbook> (this distribution's recipes), L<PAGI::Compose>,
 L<PAGI::Routing>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, L<PAGI::Spec>,
+L<router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>,
 L<PAGI::Server::Runner> - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
 

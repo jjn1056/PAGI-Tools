@@ -49,7 +49,7 @@ my $routing = router(
                     constraints => { id => qr/\d+/ },
                 ),
             ],
-            namespace => 'api',
+            name => 'api',
             desc      => 'Example JSON API',
         ),
     ],
