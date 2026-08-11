@@ -6,6 +6,9 @@ use Scalar::Util qw(refaddr);
 use lib "$Bin/../examples/15-large-application/lib";
 use PAGI::Test::Client;
 
+local $ENV{PAGI_HOME};
+delete $ENV{PAGI_HOME};
+
 if ($] < 5.040) {
     plan skip_all => 'examples/15-large-application requires Perl 5.40';
     exit 0;
@@ -75,6 +78,13 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
     my $person = _source_text("$root/lib/MyApp/Person.pm");
     my $blogs = _source_text("$root/lib/MyApp/Person/Blogs.pm");
     my $view = _source_text("$root/lib/MyApp/View.pm");
+
+    like($root_app, qr/use PAGI::Utils qw\(app_path\)/,
+        'Root imports the application path helper');
+    like($root_app, qr/root\s*=>\s*app_path\('static'\)/,
+        'static mount uses one platform-aware application-relative expression');
+    unlike($root_app, qr/File::Basename|File::Spec|__FILE__|\$STATIC_ROOT/,
+        'Root contains no manual source-file path arithmetic');
 
     like($data, qr/sub new\(\$class\)/, 'Data constructor uses a signature');
     like($root_app, qr/sub routing\(\$class\)/, 'Root routing uses a signature');

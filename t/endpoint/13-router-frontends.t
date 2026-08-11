@@ -195,7 +195,7 @@ subtest 'Endpoint rejects malformed raw leaf declarations clearly' => sub {
                     { %{$c->scope->{path_params}} },
                 )
                 : undef,
-            scope_id => Scalar::Util::refaddr($c->scope),
+            scope => $c->scope,
         };
         push @{$self->{seen}}, $record;
         return $record;
@@ -346,7 +346,7 @@ subtest 'same-object siblings reuse one snapshot while placement metadata stays 
     is([map { $_->{relative} } @{$child->{seen}}],
         ['/left/acme/http/one', '/right/beta/http/two'],
         'relative reverse routing uses each active sibling placement');
-    isnt($child->{seen}[0]{scope_id}, $child->{seen}[1]{scope_id},
+    isnt(refaddr($child->{seen}[0]{scope}), refaddr($child->{seen}[1]{scope}),
         'the two placements receive isolated request scope clones');
     is([map { $_->{params} } @{$child->{seen}}], [
         { org => 'acme', leaf => 'one' },

@@ -55,6 +55,23 @@ sub new_context {
     return PAGI::Context->new($scope, $receive, $send);
 }
 
+sub app_path {
+    my ($invocant, @components) = @_;
+    my $class = blessed($invocant) || $invocant;
+
+    (my $module_file = $class) =~ s{::}{/}g;
+    $module_file .= '.pm';
+
+    my (undef, $caller_source) = caller;
+    my $source = $INC{$module_file};
+    $source = $caller_source unless defined $source && length $source;
+
+    require PAGI::Utils;
+    return PAGI::Utils::_app_path_from_origin(
+        $class, $source, @components,
+    );
+}
+
 sub _required_local_method {
     my ($self, $name, $kind) = @_;
     croak "$kind method name must be an unqualified name"
@@ -123,6 +140,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
     }
 
     my $endpoint = MyApp::Endpoint->new(repository => $repository);
+    my $static = $endpoint->app_path('static');
     my $app = $endpoint->to_app;
 
 =head1 DESCRIPTION
@@ -288,6 +306,21 @@ This explicit convenience method calls C<PAGI::Context-E<gt>new> and therefore
 selects the built-in HTTP, WebSocket, or SSE subclass. It is not the routing
 compiler's Context factory. Overriding it affects only explicit calls to the
 helper, never compiled route dispatch.
+
+=head2 app_path
+
+    my $home   = $endpoint->app_path();
+    my $static = $endpoint->app_path('static');
+
+Returns an absolute, platform-canonical application path using the same
+component validation and output contract as L<PAGI::Utils/app_path>. Object
+and class calls use their concrete Endpoint class. A loaded class obtains its
+source from the corresponding C<%INC> module entry, while an inline class
+falls back to the source of the explicit helper call.
+
+C<PAGI_HOME>, when defined and nonempty, has first precedence. The override
+affects only explicit C<app_path> calls; it does not affect route compilation
+or dispatch.
 
 Endpoint object fields and request lifespan state are separate mechanisms.
 Use validated constructor fields for object configuration. C<$c-E<gt>state>
