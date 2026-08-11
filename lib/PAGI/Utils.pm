@@ -10,8 +10,20 @@ use File::Spec;
 use Scalar::Util qw(blessed);
 use PAGI::Lifespan;
 
-our @EXPORT_OK = qw(handle_lifespan to_app is_response app_path);
-our %EXPORT_TAGS = (all => \@EXPORT_OK);
+my @PAGI_ENVIRONMENTS = qw(development test staging production);
+my %VALID_PAGI_ENV = map { $_ => 1 } @PAGI_ENVIRONMENTS;
+my @ENV_EXPORTS = qw(
+    pagi_env is_development is_test is_staging is_production
+);
+
+our @EXPORT_OK = (
+    qw(handle_lifespan to_app is_response app_path),
+    @ENV_EXPORTS,
+);
+our %EXPORT_TAGS = (
+    all => \@EXPORT_OK,
+    env => \@ENV_EXPORTS,
+);
 our %APP_PATH_SOURCE;
 
 sub _remember_app_path_origin {
@@ -31,6 +43,39 @@ sub import {
 
     local $Exporter::ExportLevel = 1;
     return Exporter::import($class, @_);
+}
+
+sub pagi_env {
+    croak 'pagi_env() does not accept arguments' if @_;
+
+    my $environment = $ENV{PAGI_ENV};
+    return 'production' unless defined $environment && length $environment;
+    croak "Invalid PAGI_ENV '$environment'; expected one of: "
+        . join(', ', @PAGI_ENVIRONMENTS)
+        unless $VALID_PAGI_ENV{$environment};
+    return $environment;
+}
+
+sub _environment_predicate {
+    my ($function, $expected, @arguments) = @_;
+    croak "$function() does not accept arguments" if @arguments;
+    return pagi_env() eq $expected ? 1 : 0;
+}
+
+sub is_development {
+    return _environment_predicate('is_development', 'development', @_);
+}
+
+sub is_test {
+    return _environment_predicate('is_test', 'test', @_);
+}
+
+sub is_staging {
+    return _environment_predicate('is_staging', 'staging', @_);
+}
+
+sub is_production {
+    return _environment_predicate('is_production', 'production', @_);
 }
 
 sub app_path {
@@ -192,7 +237,67 @@ PAGI::Utils - Shared utility helpers for PAGI
     my $static     = app_path('static');
     my $stylesheet = app_path('static', 'css', 'app.css');
 
+    use PAGI::Utils qw(:env);
+
+    if (is_development()) {
+        # Development-only configuration.
+    }
+
 =head1 FUNCTIONS
+
+=head2 pagi_env
+
+    use PAGI::Utils qw(:env);
+
+    my $environment = pagi_env();
+
+Returns the current C<PAGI_ENV>. The only accepted nonempty values are
+C<development>, C<test>, C<staging>, and C<production>. An unset or empty
+C<PAGI_ENV> safely defaults to C<production>; any other nonempty value croaks.
+The environment is read dynamically on every call rather than cached. This
+zero-argument function croaks if passed arguments.
+
+=head2 is_development
+
+    use PAGI::Utils qw(:env);
+
+    if (is_development()) { ... }
+
+Returns true when C<pagi_env()> is C<development>. It uses the same dynamic,
+strict C<PAGI_ENV> contract as C<pagi_env()> and accepts no arguments.
+
+=head2 is_test
+
+    use PAGI::Utils qw(:env);
+
+    if (is_test()) { ... }
+
+Returns true when C<pagi_env()> is C<test>. It uses the same dynamic, strict
+C<PAGI_ENV> contract as C<pagi_env()> and accepts no arguments.
+
+=head2 is_staging
+
+    use PAGI::Utils qw(:env);
+
+    if (is_staging()) { ... }
+
+Returns true when C<pagi_env()> is C<staging>. It uses the same dynamic,
+strict C<PAGI_ENV> contract as C<pagi_env()> and accepts no arguments.
+
+=head2 is_production
+
+    use PAGI::Utils qw(:env);
+
+    if (is_production()) { ... }
+
+Returns true when C<pagi_env()> is C<production>. It uses the same dynamic,
+strict C<PAGI_ENV> contract as C<pagi_env()> and accepts no arguments.
+
+=head2 EXPORTS
+
+C<:env> exports exactly C<pagi_env>, C<is_development>, C<is_test>,
+C<is_staging>, and C<is_production>. C<:all> exports every optional helper in
+C<PAGI::Utils>.
 
 =head2 app_path
 
