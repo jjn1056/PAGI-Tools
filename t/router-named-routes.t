@@ -66,7 +66,7 @@ subtest 'reverse errors use the immutable Resolver contract' => sub {
 subtest 'name validates the preceding declaration and local segment' => sub {
     my $router = PAGI::App::Router->new;
     like(dies { $router->name('missing') },
-        qr/name called without a preceding compatible route/,
+        qr/name called without a preceding compatible declaration/,
         'name requires a preceding compatible declaration');
     $router->get('/test' => handler());
     like(dies { $router->name('') },
@@ -142,7 +142,7 @@ subtest 'opaque mounts never publish or accept namespace names' => sub {
     my $router = PAGI::App::Router->new;
     $router->mount('/legacy' => $opaque);
     like(dies { $router->name('legacy') },
-        qr/name called without a preceding compatible route/,
+        qr/opaque mounts cannot be named/,
         'an opaque mount cannot be named');
     is($router->named_routes, {}, 'opaque target contributes no names');
 };

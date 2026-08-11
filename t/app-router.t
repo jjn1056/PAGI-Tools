@@ -119,7 +119,7 @@ subtest 'literal paths and constraints use the shared Pattern implementation' =>
         'a chained constraint rejects before handler invocation');
 
     like(dies { PAGI::App::Router->new->constraints(id => qr/.+/) },
-        qr/constraints called without a preceding compatible route/,
+        qr/constraints called without a preceding compatible declaration/,
         'constraints requires a compatible declaration');
     like(dies {
         my $bad = PAGI::App::Router->new;
