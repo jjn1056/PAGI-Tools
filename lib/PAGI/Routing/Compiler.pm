@@ -13,6 +13,7 @@ use PAGI::Routing::Resolver ();
 use PAGI::Utils ();
 
 my $TRACE_RECORDER_FOR;
+my $TRACE_PARENT_KEY = "\0PAGI::Routing::Trace::parent";
 BEGIN {
     require PAGI::Routing::Trace;
     PAGI::Routing::Trace->_claim_compiler_recorder_factory(sub {
@@ -54,8 +55,11 @@ sub _compile_router {
         my ($head_scope, $wire_send)
             = PAGI::Routing::HeadBoundary->prepare($scope, $send);
         my $routing_scope = $class->_routing_scope($head_scope, $resolver);
+        my ($trace_scope) = PAGI::Routing::Trace->_ensure_http_scope(
+            $routing_scope,
+        );
 
-        my $returned = $app->($routing_scope, $receive, $wire_send);
+        my $returned = $app->($trace_scope, $receive, $wire_send);
         await Future->wrap($returned);
         return;
     };
@@ -86,6 +90,7 @@ sub _compile_router_body {
         $method_not_allowed,
         $resolver,
         $location_prefix,
+        'router',
     );
 
     return PAGI::Routing::Middleware->_wrap_descriptors(
@@ -96,7 +101,7 @@ sub _compile_router_body {
 
 sub _compile_dispatcher {
     my ($class, $nodes, $not_found, $method_not_allowed, $resolver,
-        $location_prefix) = @_;
+        $location_prefix, $frame_kind) = @_;
 
     $location_prefix ||= [];
 
@@ -145,6 +150,7 @@ sub _compile_dispatcher {
                 $method_not_allowed,
                 $resolver,
                 \@location,
+                'inline',
             );
         }
 
@@ -159,7 +165,7 @@ sub _compile_dispatcher {
         };
     }
 
-    return async sub {
+    my $dispatch = async sub {
         my ($scope, $receive, $send) = @_;
         my $type = $scope->{type} // 'http';
 
@@ -183,41 +189,94 @@ sub _compile_dispatcher {
             return;
         }
 
-        my $decision = $class->_select_http(\@compiled_entries, $scope);
+        my $trace = $scope->{'pagi.routing.trace'};
+        my $recorder = $TRACE_RECORDER_FOR->($trace);
+        my $parent_link = delete $scope->{$TRACE_PARENT_KEY};
+        my $frame_id = $recorder->_begin_frame(
+            { kind => $frame_kind // 'inline' },
+            $parent_link,
+        );
 
-        if ($decision->{kind} eq 'full') {
-            my $returned = $decision->{app}->(
-                $decision->{scope},
-                $receive,
-                $send,
+        my $decision;
+        my $ok = eval {
+            $decision = $class->_select_http(
+                \@compiled_entries,
+                $scope,
+                $recorder,
+                $frame_id,
             );
-            await Future->wrap($returned);
-            return;
+
+            if ($decision->{kind} eq 'full') {
+                my $returned = $decision->{app}->(
+                    $decision->{scope},
+                    $receive,
+                    $send,
+                );
+                await Future->wrap($returned);
+            }
+            elsif ($decision->{kind} eq 'partial') {
+                my $allow = join ', ', @{$decision->{allowed_methods}};
+                my $provenance = {};
+                my $generated_send = $class->_generated_allow_send(
+                    $send,
+                    $allow,
+                    $provenance,
+                );
+                my $returned = $method_not_allowed->(
+                    $scope,
+                    $receive,
+                    $generated_send,
+                    $allow,
+                    $provenance,
+                );
+                await Future->wrap($returned);
+            }
+            else {
+                my $returned = $not_found->($scope, $receive, $send);
+                await Future->wrap($returned);
+            }
+            1;
+        };
+        unless ($ok) {
+            my $error = $@;
+            $recorder->_complete_exception($frame_id);
+            die $error;
         }
 
         if ($decision->{kind} eq 'partial') {
-            my $allow = join ', ', @{$decision->{allowed_methods}};
-            my $provenance = {};
-            my $generated_send = $class->_generated_allow_send(
-                $send,
-                $allow,
-                $provenance,
-            );
-            my $returned = $method_not_allowed->(
-                $scope,
-                $receive,
-                $generated_send,
-                $allow,
-                $provenance,
-            );
-            await Future->wrap($returned);
+            $recorder->_complete_decline($frame_id, {
+                path_matched => 1,
+                method_matched => 0,
+                allowed_methods => $decision->{allowed_methods},
+            });
             return;
         }
-
-        my $returned = $not_found->($scope, $receive, $send);
-        await Future->wrap($returned);
+        if ($decision->{kind} eq 'none') {
+            $recorder->_complete_decline($frame_id, {
+                path_matched => 0,
+                method_matched => 0,
+                allowed_methods => [],
+            });
+            return;
+        }
+        if (($decision->{_trace_selection} // '') eq 'child') {
+            if (exists $decision->{scope}{$TRACE_PARENT_KEY}) {
+                delete $decision->{scope}{$TRACE_PARENT_KEY};
+                $recorder->_complete_success($frame_id);
+            }
+            else {
+                $recorder->_complete_child(
+                    $frame_id,
+                    $decision->{_trace_parent_link},
+                );
+            }
+            return;
+        }
+        $recorder->_complete_success($frame_id);
         return;
     };
+
+    return $dispatch;
 }
 
 async sub _send_protocol_not_found {
@@ -394,7 +453,7 @@ sub _generated_allow_send {
 }
 
 sub _select_http {
-    my ($class, $compiled_entries, $scope) = @_;
+    my ($class, $compiled_entries, $scope, $recorder, $frame_id) = @_;
 
     my $path = defined $scope->{path} ? $scope->{path} : '/';
     my $method = uc(defined $scope->{method} ? $scope->{method} : '');
@@ -404,28 +463,67 @@ sub _select_http {
     for my $entry (@$compiled_entries) {
         if (my $mount = $entry->{mount}) {
             my $match = $mount->_pattern->match_mount($path);
+            $class->_record_trace_attempt(
+                $recorder,
+                $frame_id,
+                $entry,
+                defined($match) ? 1 : 0,
+                defined($match) ? 1 : 0,
+            );
             next unless defined $match;
 
             $class->_record_mount_match(
                 $scope, $entry->{metadata}, $match->{captures},
             );
 
-            return {
+            my $child_scope = $class->_mount_scope($scope, $match);
+            my $decision = {
                 kind  => 'full',
                 app   => $entry->{app},
-                scope => $class->_mount_scope($scope, $match),
+                scope => $child_scope,
             };
+            if ($recorder) {
+                if ($mount->is_raw) {
+                    $recorder->_select_opaque($frame_id);
+                    $decision->{scope} = $class->_shield_trace_scope(
+                        $child_scope,
+                    );
+                    $decision->{_trace_selection} = 'opaque';
+                }
+                else {
+                    my $link = $recorder->_expect_child($frame_id);
+                    $decision->{scope} = {
+                        %$child_scope,
+                        $TRACE_PARENT_KEY => $link,
+                    };
+                    $decision->{_trace_selection} = 'child';
+                    $decision->{_trace_parent_link} = $link;
+                }
+            }
+            return $decision;
         }
 
         my $route = $entry->{route};
-        next unless $route->kind eq 'route';
+        unless ($route->kind eq 'route') {
+            $class->_record_trace_attempt(
+                $recorder, $frame_id, $entry, 0, 0,
+            );
+            next;
+        }
         my $captures = $route->_pattern->match_route($path);
-        next unless defined $captures;
-
         my $methods = $route->methods;
-        my $method_matches = !ref($methods) && $methods eq '*'
+        my $method_matches = defined($captures)
+            && (!ref($methods) && $methods eq '*'
             ? 1
-            : grep { $_ eq $method } @$methods;
+            : grep { $_ eq $method } @$methods);
+        $class->_record_trace_attempt(
+            $recorder,
+            $frame_id,
+            $entry,
+            defined($captures) ? 1 : 0,
+            $method_matches ? 1 : 0,
+        );
+        next unless defined $captures;
 
         if ($method_matches) {
             $class->_record_leaf_match(
@@ -439,11 +537,25 @@ sub _select_http {
                 %$scope,
                 path_params => \%path_params,
             };
-            return {
+            my $decision = {
                 kind => 'full',
                 app => $entry->{app},
                 scope => $matched_scope,
             };
+            if ($recorder) {
+                if ($route->is_raw) {
+                    $recorder->_select_opaque($frame_id);
+                    $decision->{scope} = $class->_shield_trace_scope(
+                        $matched_scope,
+                    );
+                    $decision->{_trace_selection} = 'opaque';
+                }
+                else {
+                    $recorder->_select_leaf($frame_id);
+                    $decision->{_trace_selection} = 'leaf';
+                }
+            }
+            return $decision;
         }
 
         for my $allowed (@$methods) {
@@ -458,6 +570,42 @@ sub _select_http {
     } if @allowed_methods;
 
     return { kind => 'none' };
+}
+
+sub _record_trace_attempt {
+    my ($class, $recorder, $frame_id, $entry, $path_matched,
+        $method_matched) = @_;
+    return unless $recorder;
+
+    my $metadata = ref($entry->{metadata}) eq 'HASH'
+        ? $entry->{metadata}
+        : {};
+    my $match = ref($metadata->{match}) eq 'HASH'
+        ? $metadata->{match}
+        : {};
+    my $candidate_kind = $entry->{mount}
+        ? 'mount'
+        : $entry->{route}->kind;
+    my $declaration = $entry->{mount} || $entry->{route};
+    $recorder->_attempt($frame_id, {
+        namespace      => $metadata->{logical_namespace},
+        pattern        => $declaration->path,
+        name           => $match->{name},
+        desc           => $match->{desc},
+        candidate_kind => $candidate_kind,
+        path_matched   => $path_matched ? 1 : 0,
+        method_matched => $method_matched ? 1 : 0,
+    });
+    return;
+}
+
+sub _shield_trace_scope {
+    my ($class, $scope) = @_;
+    return $scope unless (($scope->{type} // 'http') eq 'http');
+
+    my $child_scope = { %$scope };
+    delete $child_scope->{'pagi.routing.trace'};
+    return $child_scope;
 }
 
 sub _select_protocol {
@@ -661,6 +809,19 @@ partial and none decisions are rendered through the normal handler adapter as
 generated 405 and 404 responses. Inline mounts inherit those handlers with a
 fresh local Allow set. Application mounts remain opaque after their prefix
 matches. Generated response and Allow state remain request-local.
+
+For HTTP requests, a directly compiled Router also ensures a request-local
+L<PAGI::Routing::Trace> and publishes trusted structural selection evidence.
+Router and inline-subtree frames preserve child ownership, while raw routes
+and opaque mounts receive a shallow scope without the parent collector.
+Candidate detail is development-only, declaration-derived, and bounded by the
+collector. WebSocket, SSE, and lifespan scopes do not install or modify this
+HTTP evidence.
+
+This evidence is intentionally inert at this stage. Partial and none decisions
+still emit the generated 405 and 404 responses described above; routing
+fallback middleware does not consume the evidence yet. That later integration
+must not be inferred from the current compiler publication contract.
 
 An explicit C<< router => $child >> mount is transparent to composed route
 inspection but is a child dispatch boundary at runtime. Once its prefix

@@ -276,8 +276,11 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
     }, 'selection publishes a leaf before route middleware can short-circuit');
 
     my @application_mount;
+    my $application_mount_saw_trace;
     my $mounted_target = async sub {
         my ($request_scope, $receive, $send) = @_;
+        $application_mount_saw_trace
+            = exists $request_scope->{'pagi.routing.trace'};
         push @application_mount, snapshot('mounted target', $request_scope);
         await $send->({
             type => 'http.response.start', status => 200, headers => [],
@@ -310,6 +313,8 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
     ], 'an opaque terminal mount retains inline ancestry without adding itself as a descriptor');
     is($application_mount[1]{match}, $application_mount[0]{match},
         'the mounted application receives the terminal parent match');
+    ok(!$application_mount_saw_trace,
+        'opaque mount shielding preserves metadata while removing parent Trace');
 };
 
 subtest 'separately compiled routers append frames without overwriting legacy metadata' => sub {
@@ -723,6 +728,11 @@ subtest 'concurrent requests isolate frames, matches, parameters, and generated 
         'concurrent requests have distinct match records');
     isnt(refaddr($first_frame->{captures}), refaddr($second_frame->{captures}),
         'concurrent requests have distinct capture snapshots');
+    isnt(
+        refaddr($contexts[0]->scope->{'pagi.routing.trace'}),
+        refaddr($contexts[1]->scope->{'pagi.routing.trace'}),
+        'concurrent requests have distinct routing Trace collectors',
+    );
     is([$first_frame->{logical_namespace}, $second_frame->{logical_namespace}],
         ['/', '/'], 'concurrent requests retain their own current namespaces');
     is([$first_frame->{captures}{id}, $second_frame->{captures}{id}],
@@ -833,6 +843,11 @@ subtest 'reentrant dispatch appends a frame without changing the outer invocatio
     is($inner_frames->[1]{match}{route}, '/inner', 'the inner invocation records its own match');
     is(refaddr($inner_frames->[0]{resolver}), refaddr($inner_frames->[1]{resolver}),
         'reentrant calls through one compiled app share its immutable resolver');
+    is(
+        refaddr($inner_scope->{'pagi.routing.trace'}),
+        refaddr($outer_scope_after->{'pagi.routing.trace'}),
+        'reentrant dispatch reuses the compatible request Trace collector',
+    );
 };
 
 subtest 'WebSocket and SSE leaves publish protocol-specific effective metadata' => sub {

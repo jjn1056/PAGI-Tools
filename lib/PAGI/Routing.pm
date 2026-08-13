@@ -208,6 +208,12 @@ wrapper or method was defined.
 The fallback values are ordinary HTTP Context handlers. The default handlers
 return plain-text 404 and 405 responses.
 
+Directly compiled Routers publish request-local trusted routing evidence for
+HTTP selection. During the current transition, that evidence is observational
+only: unmatched and method-mismatched requests still run these fallback
+handlers and emit the same generated 404 and 405 responses. WebSocket, SSE,
+and lifespan scopes do not install or alter HTTP routing evidence.
+
 =head2 route, websocket, sse
 
     route('/path' => $handler, %options)

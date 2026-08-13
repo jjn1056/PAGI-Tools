@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
 use PAGI::Response;
@@ -283,6 +284,11 @@ subtest 'a detached non-405 start event and intentional Allow pass by identity' 
 };
 
 subtest 'fully matched application 404 and 405 responses pass untouched' => sub {
+    my $raw_start = {
+        type => 'http.response.start',
+        status => 405,
+        headers => [['X-Origin', 'raw']],
+    };
     my $app = router(routes => [
         route('/application-404' => sub {
             return $_[0]->response
@@ -296,6 +302,21 @@ subtest 'fully matched application 404 and 405 responses pass untouched' => sub 
                 ->header('Allow' => 'BREW')
                 ->text('application method');
         }),
+        route('/application-405-no-allow' => sub {
+            return $_[0]->response
+                ->status(405)
+                ->header('X-Origin' => 'handler')
+                ->text('application method without Allow');
+        }),
+        route('/raw-405-no-allow', raw => async sub {
+            my ($request_scope, $receive, $send) = @_;
+            await Future->wrap($send->($raw_start));
+            await Future->wrap($send->({
+                type => 'http.response.body',
+                body => 'raw method without Allow',
+                more => 0,
+            }));
+        }),
     ])->to_app;
 
     my $not_found = run_app($app, path => '/application-404');
@@ -307,6 +328,20 @@ subtest 'fully matched application 404 and 405 responses pass untouched' => sub 
     is(response_start($not_allowed)->{status}, 405, 'a matched application 405 retains its status');
     is(response_header($not_allowed, 'Allow'), 'BREW', 'a matched application 405 retains its custom Allow');
     is(response_body($not_allowed), 'application method', 'a matched application 405 retains its body');
+
+    my $without_allow = run_app($app, path => '/application-405-no-allow');
+    is(response_start($without_allow)->{status}, 405,
+        'an explicit handler 405 retains its status');
+    is(response_header($without_allow, 'Allow'), undef,
+        'an explicit handler 405 does not receive a synthesized Allow');
+    is(response_header($without_allow, 'X-Origin'), 'handler',
+        'an explicit handler 405 retains unrelated headers');
+
+    my $raw_without_allow = run_app($app, path => '/raw-405-no-allow');
+    is(refaddr(response_start($raw_without_allow)), refaddr($raw_start),
+        'a native 405 start event passes through by identity');
+    is(response_header($raw_without_allow, 'Allow'), undef,
+        'a native 405 does not receive a synthesized Allow');
 };
 
 subtest 'compiled 405 responses preserve first-seen method order' => sub {

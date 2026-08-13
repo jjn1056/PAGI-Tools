@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
 use PAGI::Routing qw(router route mount middleware);
+use PAGI::Routing::Trace;
 
 sub MountProvider { return qr/accepted/ }
 
@@ -123,12 +124,13 @@ subtest 'application mounts rewrite static and exact-prefix scopes' => sub {
         mount('/api' => $mounted, middleware => [$scope_middleware]),
     ])->to_app;
 
-    my $parent_scope = scope(
+    my ($parent_scope, $parent_trace)
+        = PAGI::Routing::Trace->_ensure_http_scope(scope(
         path        => '/api/users',
         root_path   => '/outer',
         raw_path    => '/outer/api/users%20raw',
         path_params => { retained => 'yes' },
-    );
+    ));
     run_scope($app, $parent_scope);
     run_app(
         $app,
@@ -174,6 +176,12 @@ subtest 'application mounts rewrite static and exact-prefix scopes' => sub {
     );
     is($parent_scope->{path_params}, { retained => 'yes' },
         'path-parameter merging leaves the parent hash unchanged');
+    is($parent_scope->{'pagi.routing.trace'}, $parent_trace,
+        'the incoming compatible Trace remains installed on the parent scope');
+    ok(!exists $middleware_seen[0]{'pagi.routing.trace'},
+        'opaque mount middleware receives a scope shielded from parent Trace');
+    ok(!exists $seen[0]{'pagi.routing.trace'},
+        'the opaque mounted target cannot publish into parent Trace');
     is(
         [@{$middleware_seen[0]}{qw(path root_path raw_path)}],
         ['/users', '/outer/api', '/outer/api/users%20raw'],
