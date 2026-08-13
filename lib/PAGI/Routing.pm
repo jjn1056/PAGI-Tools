@@ -198,21 +198,17 @@ wrapper or method was defined.
 =head2 router
 
     router(
-        routes                 => \@nodes,
-        middleware             => \@middleware_entries,
-        not_found              => $handler,
-        method_not_allowed     => $handler,
-        desc                   => $text,
+        routes     => \@nodes,
+        middleware => \@middleware_entries,
+        desc       => $text,
     )
 
-The fallback values are ordinary HTTP Context handlers. The default handlers
-return plain-text 404 and 405 responses.
-
 Directly compiled Routers publish request-local trusted routing evidence for
-HTTP selection. During the current transition, that evidence is observational
-only: unmatched and method-mismatched requests still run these fallback
-handlers and emit the same generated 404 and 405 responses. WebSocket, SSE,
-and lifespan scopes do not install or alter HTTP routing evidence.
+HTTP selection. Unmatched and method-mismatched requests complete normally
+without sending a response. Install ordinary C<Routing::NotFound> and
+C<Routing::MethodNotAllowed> middleware at a Router, routing-aware Mount, or
+enclosing application boundary to render that evidence. WebSocket, SSE, and
+lifespan scopes do not install or alter HTTP routing evidence.
 
 =head2 route, websocket, sse
 
@@ -300,9 +296,9 @@ coderef, and reuse that app for requests.
 Middleware factories run once per compiled graph, not per request. Two
 C<to_app> calls therefore get ordinary independent middleware instances.
 Explicitly reused objects and closures still share the state their caller
-chose to share. One compiled app safely keeps request paths, Allow sets,
-Context objects, and metadata in request-local scope or lexicals during
-concurrent requests.
+chose to share. One compiled app safely keeps request paths, method unions,
+Context objects, routing Trace objects, and metadata in request-local scope or
+lexicals during concurrent requests.
 
 At request time a normal HTTP handler builds and returns a Response. Routing
 awaits an immediate or Future-backed result, validates it, and emits it exactly
@@ -317,14 +313,15 @@ never moves them into a worker or thread pool.
 
 Nodes are scanned strictly in declaration order; there is no specificity sort.
 For HTTP, a path-and-method match dispatches immediately. A path match with a
-wrong method contributes its normalized methods to a request-local Allow set
+wrong method contributes its normalized methods to a request-local method union
 and scanning continues, so a later full match still wins. If no full match
-exists, a nonempty set selects the 405 handler; otherwise the 404 handler runs.
-Allow retains first-seen order.
+exists, routing records a PARTIAL decline with the nonempty method union;
+otherwise it records a NONE decline. Both complete without calling C<$send>.
+The method union retains first-seen order and GET contributes HEAD.
 
-A matching mount owns the request immediately, including a child 404 or 405.
-An earlier broad mount can therefore preempt a later narrow mount or route.
-A failed mount constraint is no match and scanning continues.
+A matching Mount owns the request immediately, including an unanswered child
+decline. An earlier broad Mount can therefore preempt a later narrow Mount or
+route. A failed Mount constraint is no match and scanning continues.
 
 Paths are exact: C</users> and C</users/> differ. There is no slash redirect or
 normalization and no automatic OPTIONS response.
@@ -492,19 +489,20 @@ choose an explicit symlink policy; route matching is not filesystem security.
 Prefer L<PAGI::App::File> or L<PAGI::Middleware::Static> to using a wildcard
 capture as a filesystem path.
 
-=head1 GENERATED OUTCOMES AND CATCH-ALLS
-
-Before C<not_found>, the cached Context response has status 404. Before
-C<method_not_allowed>, it has status 405 and the computed C<Allow>. Returning
-C<< $c->text >>, C<< $c->html >>, or C<< $c->json >> uses that same response
-and preserves the seed. If a custom 405 returns a detached response that still
-has status 405 but no Allow, routing adds the computed field. It never replaces
-an existing Allow or adds one after the handler changes status.
+=head1 HTTP DECLINES, FALLBACK MIDDLEWARE, AND CATCH-ALLS
 
 A selected route's 404 or 405 is application output and passes through
-untouched. Router middleware sees generated responses; route middleware does
-not run when no route fully matched. A matched inline mount's middleware sees
-its subtree's generated outcome.
+untouched. A selected raw route or opaque Mount that sends nothing is also a
+selected application completion, not a routing decline. A selected normal
+HTTP handler must still return a Response; an invalid return remains an
+application error.
+
+Router middleware surrounds that Router's own decline. Middleware on an inline
+or Router Mount surrounds the already-selected child boundary, and the parent
+never resumes scanning. Put C<Routing::NotFound> or
+C<Routing::MethodNotAllowed> middleware at the boundary that owns response
+policy. Route placement is inert for exhaustion because route middleware runs
+only after that route fully matches.
 
 C<not_found> is not a catch-all route. A final C<< route('/*path' =E<gt> ...) >>
 is a normal route with captures, middleware, and method matching. A GET-only
@@ -514,12 +512,13 @@ deliberately.
 
 =head1 MOUNTS
 
-An inline mount is part of its containing Router and inherits that Router's
-fallback handlers. A C<< router => $child >> mount is visible to inspection
-and reverse routing, but remains a real dispatch boundary. Once its prefix
-matches, the child owns FULL, PARTIAL, and NONE: its middleware and generated
-404/405 handlers run, and the parent neither resumes sibling scanning nor
-unions Allow methods. Cooperative no-match bubbling remains deferred work.
+An inline Mount is a selected dispatch boundary within its containing Router.
+A C<< router => $child >> Mount is visible to inspection and reverse routing,
+but remains a real dispatch boundary. Once its prefix matches, the child owns
+FULL, PARTIAL, and NONE: unanswered child completion bubbles outward through
+child, occurrence, and enclosing Router middleware, while the parent neither
+resumes sibling scanning nor unions method evidence. A child or occurrence
+fallback response makes later outer fallback middleware inert.
 
 A positional application mount is opaque and owns every selected HTTP,
 WebSocket, and SSE outcome. Discovery stops there even if the target object is
@@ -612,9 +611,9 @@ segment, such as C<v1.1>, stays literal.
 
 For a named leaf, the current containing namespace is its absolute address
 without the final local name. An unnamed leaf, including a catch-all, uses the
-namespace contributed by its enclosing known mounts. A generated 404/405 uses
-the owning Router placement and captures only prefixes actually consumed; it
-does not borrow an arbitrary partial leaf.
+namespace contributed by its enclosing known Mounts. An unanswered decline
+uses the owning Router placement and captures only prefixes actually consumed;
+it does not borrow an arbitrary partial leaf.
 
 All reverse helpers accept compact and named argument forms:
 
@@ -790,8 +789,8 @@ before an application exists to wrap.
 These are three declaration surfaces over one immutable Router, not separate
 matchers. They share Pattern parsing, Resolver slash addresses, Compiler
 matching and dispatch, route metadata, constraints, GET/HEAD qualification and
-wire suppression, generated 404/405 outcomes, first-seen C<Allow>, reverse
-routing, pure native middleware, and exact written declaration order.
+wire suppression, nonterminal HTTP exhaustion, first-seen method evidence,
+reverse routing, pure native middleware, and exact written declaration order.
 
 C<PAGI::Routing> is already immutable. C<PAGI::App::Router> incrementally
 builds declarations whose ordinary handlers receive C<$c> and whose native

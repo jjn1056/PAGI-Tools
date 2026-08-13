@@ -286,8 +286,8 @@ subtest 'provider constraints select every mount form before middleware or targe
     for my $prefix (qw(inline-provider router-provider opaque-provider)) {
         my $path = "/$prefix/rejected/leaf";
         my $events = run_app($app, path => $path, raw_path => $path);
-        is(response_start($events)->{status}, 404,
-            "$prefix provider rejection retains the generated no-match outcome");
+        is($events, [],
+            "$prefix provider rejection leaves the Router unanswered");
     }
 
     is(\@inline_seen, ['accepted'], 'inline child runs only for the accepted prefix');
@@ -366,8 +366,7 @@ subtest 'mount ownership follows declaration order without inspecting child outc
         route('/api/missing' => sub { return $_[0]->text('parent resumed') }),
     ])->to_app;
     my $missing = run_app($child_missing, path => '/api/missing', raw_path => '/api/missing');
-    is(response_start($missing)->{status}, 404, 'an inline child 404 remains final');
-    is(response_body($missing), 'Not Found', 'the parent does not resume after the inline child 404');
+    is($missing, [], 'an unanswered inline child remains terminal');
 
     my $opaque_405 = router(routes => [
         route('/api/item' => sub { return $_[0]->text('parent GET') }, methods => 'GET'),
@@ -387,24 +386,30 @@ subtest 'mount ownership follows declaration order without inspecting child outc
     is(response_header($method, 'Allow'), 'PATCH', 'the parent partial GET is not merged into the opaque child Allow');
 };
 
-subtest 'inline mounts reset Allow and inherit HTTP fallback handlers' => sub {
+subtest 'inline Mount fallback middleware owns local decline evidence' => sub {
     my @fallback_calls;
-    my $app = router(
-        routes => [
-            route('/api/item' => sub { return $_[0]->text('parent POST') }, methods => 'POST'),
-            mount('/api', routes => [
+    my $app = router(routes => [
+        route('/api/item' => sub { return $_[0]->text('parent POST') }, methods => 'POST'),
+        mount('/api', routes => [
                 route('/item' => sub { return $_[0]->text('child GET') }, methods => 'GET'),
-            ]),
-        ],
-        not_found => sub {
-            push @fallback_calls, ['not_found', $_[0]->request->path];
-            return $_[0]->response->header('X-Fallback' => 'inherited')->text('child missing');
-        },
-        method_not_allowed => sub {
-            push @fallback_calls, ['method_not_allowed', $_[0]->response->header('Allow')];
-            return $_[0]->response->header('X-Fallback' => 'inherited')->text('child method');
-        },
-    )->to_app;
+        ], middleware => [
+            middleware('Routing::NotFound', handler => sub {
+                my ($context) = @_;
+                push @fallback_calls, ['not_found', $context->request->path];
+                return $context->response
+                    ->header('X-Fallback' => 'inline')
+                    ->text('child missing');
+            }),
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                my ($context, $snapshot) = @_;
+                push @fallback_calls,
+                    ['method_not_allowed', join(', ', @{$snapshot->allowed_methods})];
+                return $context->response
+                    ->header('X-Fallback' => 'inline')
+                    ->text('child method');
+            }),
+        ]),
+    ])->to_app;
 
     my $method = run_app(
         $app,
@@ -412,28 +417,28 @@ subtest 'inline mounts reset Allow and inherit HTTP fallback handlers' => sub {
         path => '/api/item',
         raw_path => '/api/item',
     );
-    is(response_start($method)->{status}, 405, 'the inherited method fallback keeps the generated child status');
+    is(response_start($method)->{status}, 405, 'the inline fallback renders 405');
     is(response_header($method, 'Allow'), 'GET, HEAD', 'the child uses a fresh local Allow set without parent POST');
-    is(response_header($method, 'X-Fallback'), 'inherited', 'the inherited method fallback rendered the child outcome');
+    is(response_header($method, 'X-Fallback'), 'inline', 'the inline Mount rendered its child outcome');
 
     my $missing = run_app(
         $app,
         path => '/api/missing',
         raw_path => '/api/missing',
     );
-    is(response_start($missing)->{status}, 404, 'the inherited not-found fallback keeps the generated child status');
-    is(response_body($missing), 'child missing', 'the inherited not-found handler renders inside the subtree');
+    is(response_start($missing)->{status}, 404, 'the inline fallback renders 404');
+    is(response_body($missing), 'child missing', 'the inline Mount renders inside its subtree');
     is(
         \@fallback_calls,
         [
             ['method_not_allowed', 'GET, HEAD'],
             ['not_found', '/missing'],
         ],
-        'both inherited handlers observe the rewritten child request and local generated state',
+        'both inline handlers observe rewritten scope and child-only evidence',
     );
 };
 
-subtest 'mount middleware surrounds generated child results while route middleware stays full-only' => sub {
+subtest 'Mount middleware surrounds fallback-rendered child declines while route middleware is full-only' => sub {
     my @trace;
     my $route_runs = 0;
     my $route_middleware = middleware(sub {
@@ -451,24 +456,26 @@ subtest 'mount middleware surrounds generated child results while route middlewa
                         return $_[0]->text('item');
                     }, methods => 'GET', middleware => [$route_middleware]),
                 ],
-                middleware => [tracing_middleware('mount', \@trace)],
+                middleware => [
+                    tracing_middleware('mount', \@trace),
+                    middleware('Routing::NotFound', handler => sub {
+                        push @trace, 'not found';
+                        return $_[0]->text('missing');
+                    }),
+                    middleware('Routing::MethodNotAllowed', handler => sub {
+                        push @trace, 'method not allowed';
+                        return $_[0]->text('wrong method');
+                    }),
+                ],
             ),
         ],
-        not_found => sub {
-            push @trace, 'not found';
-            return $_[0]->text('missing');
-        },
-        method_not_allowed => sub {
-            push @trace, 'method not allowed';
-            return $_[0]->text('wrong method');
-        },
     )->to_app;
 
     run_app($app, path => '/api/missing', raw_path => '/api/missing');
     is(
         \@trace,
         ['mount before', 'not found', 'mount after'],
-        'mount middleware surrounds an inherited child 404',
+        'Mount middleware surrounds its rendered child 404',
     );
     is($route_runs, 0, 'route middleware does not run for child 404');
 
@@ -477,7 +484,7 @@ subtest 'mount middleware surrounds generated child results while route middlewa
     is(
         \@trace,
         ['mount before', 'method not allowed', 'mount after'],
-        'mount middleware surrounds an inherited child 405',
+        'Mount middleware surrounds its rendered child 405',
     );
     is($route_runs, 0, 'route middleware does not run for child 405');
 };

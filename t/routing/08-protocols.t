@@ -406,8 +406,8 @@ subtest 'HTTP selection ignores WebSocket and SSE leaves without warnings' => su
     }
 
     is(\@warnings, [], 'mixed-protocol route tables do not warn during HTTP selection');
-    is($ws_only->[0]{status}, 404, 'a WebSocket-only path is absent from HTTP routing');
-    is($sse_only->[0]{status}, 404, 'an SSE-only path is absent from HTTP routing');
+    is($ws_only, [], 'a WebSocket-only path leaves HTTP routing unanswered');
+    is($sse_only, [], 'an SSE-only path leaves HTTP routing unanswered');
     is($shared->[0]{status}, 200, 'HTTP scanning continues to a later same-path HTTP leaf');
     is($shared->[1]{body}, 'http leaf', 'the later HTTP leaf owns the response');
 };
@@ -415,12 +415,12 @@ subtest 'HTTP selection ignores WebSocket and SSE leaves without warnings' => su
 subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcomes' => sub {
     my @http_fallback_calls;
     my $app = router(
-        routes => [],
-        not_found => sub {
+        middleware => [middleware('Routing::NotFound', handler => sub {
             my ($c) = @_;
             push @http_fallback_calls, $c->type // 'http';
             return $c->text('custom HTTP missing');
-        },
+        })],
+        routes => [],
     )->to_app;
 
     my $sse_events = run_scope($app, scope(type => 'sse', path => '/missing'));

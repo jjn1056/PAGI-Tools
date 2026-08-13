@@ -5,7 +5,7 @@ use warnings;
 use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
-use Scalar::Util qw(blessed refaddr);
+use Scalar::Util qw(blessed);
 use PAGI::Context;
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
@@ -68,26 +68,8 @@ sub _compile_router {
 sub _compile_router_body {
     my ($class, $router, $resolver, $location_prefix) = @_;
 
-    my $not_found_handler = $router->not_found || sub {
-        my ($context) = @_;
-        return $context->text('Not Found');
-    };
-    my $method_not_allowed_handler = $router->method_not_allowed || sub {
-        my ($context) = @_;
-        return $context->text('Method Not Allowed');
-    };
-    my $not_found = $class->_compile_generated_handler(
-        $not_found_handler,
-        404,
-    );
-    my $method_not_allowed = $class->_compile_generated_handler(
-        $method_not_allowed_handler,
-        405,
-    );
     my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
-        $not_found,
-        $method_not_allowed,
         $resolver,
         $location_prefix,
         'router',
@@ -100,8 +82,7 @@ sub _compile_router_body {
 }
 
 sub _compile_dispatcher {
-    my ($class, $nodes, $not_found, $method_not_allowed, $resolver,
-        $location_prefix, $frame_kind) = @_;
+    my ($class, $nodes, $resolver, $location_prefix, $frame_kind) = @_;
 
     $location_prefix ||= [];
 
@@ -146,8 +127,6 @@ sub _compile_dispatcher {
         else {
             $mounted_app = $class->_compile_dispatcher(
                 $node->routes,
-                $not_found,
-                $method_not_allowed,
                 $resolver,
                 \@location,
                 'inline',
@@ -212,27 +191,6 @@ sub _compile_dispatcher {
                     $receive,
                     $send,
                 );
-                await Future->wrap($returned);
-            }
-            elsif ($decision->{kind} eq 'partial') {
-                my $allow = join ', ', @{$decision->{allowed_methods}};
-                my $provenance = {};
-                my $generated_send = $class->_generated_allow_send(
-                    $send,
-                    $allow,
-                    $provenance,
-                );
-                my $returned = $method_not_allowed->(
-                    $scope,
-                    $receive,
-                    $generated_send,
-                    $allow,
-                    $provenance,
-                );
-                await Future->wrap($returned);
-            }
-            else {
-                my $returned = $not_found->($scope, $receive, $send);
                 await Future->wrap($returned);
             }
             1;
@@ -361,98 +319,19 @@ sub _compile_http_leaf {
 }
 
 sub _compile_http_handler {
-    my ($class, $handler, $policy) = @_;
+    my ($class, $handler) = @_;
 
     return async sub {
-        my ($scope, $receive, $send, @policy_arguments) = @_;
+        my ($scope, $receive, $send) = @_;
         my $context = PAGI::Context->new($scope, $receive, $send);
-        my $policy_state = $policy
-            ? $policy->{before}->($context, @policy_arguments)
-            : undef;
         my $returned = $handler->($context);
         my $result = await Future->wrap($returned);
 
         croak 'handler did not return a response'
             unless PAGI::Utils::is_response($result);
 
-        $policy->{after}->($result, $policy_state) if $policy;
         await $context->respond($result);
         return;
-    };
-}
-
-sub _compile_generated_handler {
-    my ($class, $handler, $status) = @_;
-
-    my $policy = {
-        before => sub {
-            my ($context, $allow, $provenance) = @_;
-            $provenance ||= {};
-            my $seeded = $context->response->status($status);
-            $seeded->header('Allow' => $allow)
-                if $status == 405 && defined $allow;
-            $provenance->{seed_identity} = refaddr($seeded);
-            return $provenance;
-        },
-        after => sub {
-            my ($result, $state) = @_;
-            $state->{returned_seed} = refaddr($result) == $state->{seed_identity}
-                ? 1
-                : 0;
-        },
-    };
-
-    return $class->_compile_http_handler($handler, $policy);
-}
-
-sub _generated_allow_send {
-    my ($class, $send, $allow, $provenance) = @_;
-
-    return sub {
-        my ($event) = @_;
-        return $send->($event)
-            unless ($event->{type} // '') eq 'http.response.start';
-
-        my $headers = ref($event->{headers}) eq 'ARRAY'
-            ? $event->{headers}
-            : [];
-
-        if (($event->{status} // 0) == 405) {
-            for my $pair (@$headers) {
-                return $send->($event)
-                    if ref($pair) eq 'ARRAY'
-                        && defined $pair->[0]
-                        && lc($pair->[0]) eq 'allow';
-            }
-
-            return $send->({
-                %$event,
-                headers => [@$headers, ['Allow' => $allow]],
-            });
-        }
-
-        return $send->($event) unless $provenance->{returned_seed};
-
-        my @filtered;
-        my $removed_seed;
-        for my $pair (@$headers) {
-            if (!$removed_seed
-                    && ref($pair) eq 'ARRAY'
-                    && defined $pair->[0]
-                    && lc($pair->[0]) eq 'allow'
-                    && defined $pair->[1]
-                    && $pair->[1] eq $allow) {
-                $removed_seed = 1;
-                next;
-            }
-            push @filtered, $pair;
-        }
-
-        return $send->($event) unless $removed_seed;
-        return $send->({
-            %$event,
-            headers => \@filtered,
-        });
     };
 }
 
@@ -808,11 +687,11 @@ PAGI::Routing::Compiler - Internal declarative routing compiler
 =head1 DESCRIPTION
 
 Compiles declarative routing descriptions into fresh application graphs. Full
-decisions invoke their selected leaf or declaration-ordered mount, while
-partial and none decisions are rendered through the normal handler adapter as
-generated 405 and 404 responses. Inline mounts inherit those handlers with a
-fresh local Allow set. Application mounts remain opaque after their prefix
-matches. Generated response and Allow state remain request-local.
+decisions invoke their selected leaf or declaration-ordered mount. HTTP
+partial and none decisions record a trusted decline and complete normally
+without calling the send channel. Application mounts remain opaque after
+their prefix matches. WebSocket and SSE misses retain their protocol-specific
+denial and close outcomes.
 
 For HTTP requests, a directly compiled Router also ensures a request-local
 L<PAGI::Routing::Trace> and publishes trusted structural selection evidence.
@@ -822,41 +701,44 @@ Candidate detail is development-only, declaration-derived, and bounded by the
 collector. WebSocket, SSE, and lifespan scopes do not install or modify this
 HTTP evidence.
 
-This evidence is intentionally inert at this stage. Partial and none decisions
-still emit the generated 405 and 404 responses described above; routing
-fallback middleware does not consume the evidence yet. That later integration
-must not be inferred from the current compiler publication contract.
+Direct Router compilation is therefore a routing component rather than a
+complete HTTP application policy. Ordinary
+L<PAGI::Middleware::Routing::NotFound> and
+L<PAGI::Middleware::Routing::MethodNotAllowed> middleware may render declines
+at Router or routing-aware Mount boundaries. The compiler itself neither
+chooses HTTP fallback status nor seeds or repairs a response.
 
 An explicit C<< router => $child >> mount is transparent to composed route
 inspection but is a child dispatch boundary at runtime. Once its prefix
 matches, the child Router owns its full, partial, none, WebSocket, and SSE
-outcomes; the parent neither resumes scanning nor unions its Allow methods.
-The child contributes its own generated handlers, dispatcher, and Router
-middleware. The containing Resolver supplies placement-specific effective
-metadata without mutating the child description or invoking the child's public
-C<to_app> boundary.
+outcomes; the parent neither resumes scanning nor unions its method evidence.
+The child contributes its own dispatcher and Router middleware. The containing
+Resolver supplies placement-specific effective metadata without mutating the
+child description or invoking the child's public C<to_app> boundary.
 
-This ownership is final after a matching Router-mount prefix. Cooperative
-no-match bubbling remains deferred. A root Router mount consumes no prefix and
-leaves C<path> and C<root_path> unchanged.
+This ownership is final after a matching Router-mount prefix. Unanswered child
+completion bubbles only outward through the selected middleware boundaries;
+it never resumes parent declaration scanning. A root Router mount consumes no
+prefix and leaves C<path> and C<root_path> unchanged.
 
 The executable nesting order is outer Router middleware, Router-mount
 middleware, child Router middleware, any selected inline-mount middleware,
-route middleware, and handler. Mount middleware therefore also surrounds the
-child's generated and protocol-miss outcomes. Each placement is compiled
-independently, and each public compilation constructs another fresh set of
-middleware wrappers.
+route middleware, and handler. Unanswered child completion unwinds through
+those routing boundaries, allowing the first applicable fallback middleware
+to respond; protocol-miss outcomes unwind through the same selected wrappers.
+Each placement is compiled independently, and each public compilation
+constructs another fresh set of middleware wrappers.
 
 C<compile> is a synchronous build-time boundary: it resolves middleware,
-native components, match entries, and fallback adapters but starts no request
-and emits no events. It returns a native async PAGI coderef. Invocation of that
-coderef installs exactly one fresh request-local C<pagi.routing> frame and one
-outermost HEAD wire boundary. Mounted Router bodies share that frame and HEAD
-owner, so all middleware sees the complete downstream match and the
-unsuppressed GET representation before HEAD body and sendfile suppression at
-the edge. The compiler matches the request, adapts synchronous and
-Future-backed completions, and emits or forwards the appropriate protocol
-events.
+native components, and match entries but starts no request and emits no events.
+It returns a native async PAGI coderef. Invocation of that coderef installs
+exactly one fresh request-local C<pagi.routing> frame and one outermost HEAD
+wire boundary. Mounted Router bodies share that frame and HEAD owner, so all
+middleware sees the complete downstream match and the unsuppressed GET
+representation before HEAD body and sendfile suppression at the edge. The
+compiler matches the request, adapts synchronous and Future-backed
+completions, and emits or forwards only selected application and
+protocol-specific events.
 
 Compatible version-1 routing metadata contributes ancestor frames. Opaque,
 malformed, or newer metadata is preserved on the incoming scope as an
@@ -866,11 +748,12 @@ Each frame captures the compiled router's entry C<root_path>; Context reverse
 routing uses that field and falls back only for legacy/manual v1 frames that
 omit it. Every API-created frame also begins with canonical
 C<logical_namespace> C</> and a fresh empty C<captures> hash. Entering an
-inline or Router mount replaces both values with that placement's logical namespace
-and a fresh snapshot of consumed effective-prefix captures. A FULL leaf
-replaces them with its containing logical namespace and complete effective captures.
-PARTIAL candidates never publish leaf state, so generated 404 and 405 handlers
-retain only the logical namespace and prefix snapshot owned by their selected mount
+inline or Router mount replaces both values with that placement's logical
+namespace and a fresh snapshot of consumed effective-prefix captures. A FULL
+leaf replaces them with its containing logical namespace and complete
+effective captures.
+PARTIAL candidates never publish leaf state, so unanswered declines retain
+only the logical namespace and prefix snapshot owned by their selected Mount
 ancestry. The capture hash is never aliased to C<< scope->{path_params} >> and
 no mutable frame state is shared between requests.
 

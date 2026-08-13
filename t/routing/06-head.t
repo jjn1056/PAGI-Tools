@@ -351,26 +351,56 @@ subtest 'HEAD suppression consumes terminal sendfile descriptors before transpor
     ], 'no file, offset, or length keys reach the wire');
 };
 
-subtest 'generated HEAD outcomes preserve metadata and suppress their bodies' => sub {
-    my $app = router(routes => [
-        route('/get' => sub { return $_[0]->text('get') }, methods => 'GET'),
-        route('/post' => sub { return $_[0]->text('post') }, methods => 'POST'),
-    ])->to_app;
+subtest 'fallback-rendered HEAD preserves calculated headers and suppresses payloads' => sub {
+    my $app = router(
+        middleware => [
+            middleware('ContentLength'),
+            middleware('Routing::NotFound', handler => sub {
+                return $_[0]->text('Not Found');
+            }),
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                return $_[0]->text('Method Not Allowed');
+            }),
+        ],
+        routes => [
+            route('/post' => sub { return $_[0]->text('post') }, methods => 'POST'),
+        ],
+    )->to_app;
 
     my $not_found = run_app($app, method => 'HEAD', path => '/missing');
-    is(response_start($not_found)->{status}, 404, 'HEAD preserves a generated 404 status');
-    is(response_header($not_found, 'Content-Type'), 'text/plain; charset=utf-8', 'HEAD preserves generated 404 type');
-    is(response_header($not_found, 'Content-Length'), 9, 'HEAD preserves generated 404 length');
+    is(response_start($not_found)->{status}, 404, 'HEAD preserves fallback 404 status');
+    is(response_header($not_found, 'Content-Type'), 'text/plain; charset=utf-8',
+        'HEAD preserves fallback representation type');
+    is(response_header($not_found, 'Content-Length'), 9,
+        'ContentLength inside the Router sees the full fallback 404 body');
     is(response_bodies($not_found), [{ type => 'http.response.body', body => '', more => 0 }],
-        'HEAD suppresses the generated 404 body');
+        'the one outer HEAD boundary suppresses the fallback 404 body');
 
     my $not_allowed = run_app($app, method => 'HEAD', path => '/post');
-    is(response_start($not_allowed)->{status}, 405, 'HEAD preserves a generated 405 status');
-    is(response_header($not_allowed, 'Allow'), 'POST', 'HEAD preserves the generated Allow header');
-    is(response_header($not_allowed, 'Content-Type'), 'text/plain; charset=utf-8', 'HEAD preserves generated 405 type');
-    is(response_header($not_allowed, 'Content-Length'), 18, 'HEAD preserves generated 405 length');
+    is(response_start($not_allowed)->{status}, 405, 'HEAD preserves fallback 405 status');
+    is(response_header($not_allowed, 'Allow'), 'POST',
+        'HEAD preserves fallback authoritative Allow');
+    is(response_header($not_allowed, 'Content-Type'), 'text/plain; charset=utf-8',
+        'HEAD preserves fallback 405 representation type');
+    is(response_header($not_allowed, 'Content-Length'), 18,
+        'ContentLength inside the Router sees the full fallback 405 body');
     is(response_bodies($not_allowed), [{ type => 'http.response.body', body => '', more => 0 }],
-        'HEAD suppresses the generated 405 body');
+        'the one outer HEAD boundary suppresses the fallback 405 body');
+
+    my $file_app = router(
+        middleware => [middleware('Routing::NotFound', handler => sub {
+            return $_[0]->response->send_file(__FILE__);
+        })],
+        routes => [],
+    )->to_app;
+    my $file = run_app($file_app, method => 'HEAD', path => '/missing');
+    is(response_start($file)->{status}, 404,
+        'file fallback retains the seeded 404 status');
+    is(response_header($file, 'Content-Length'), -s __FILE__,
+        'file fallback retains the calculated file length');
+    is(response_bodies($file), [
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'fallback sendfile bytes and descriptor are suppressed at the outer edge');
 };
 
 subtest 'GET events remain byte-for-byte unchanged' => sub {

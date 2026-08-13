@@ -108,7 +108,7 @@ subtest 'real compiler publishes root decisions without changing dispatch' => su
         method => 'DELETE', path => '/same', raw_path => '/same',
     ));
     is($events->[0]{status}, 200,
-        'the later declaration still owns the generated HTTP outcome');
+        'the later FULL declaration still owns the HTTP outcome');
     my $later_full_snapshot = $observations[-1]{snapshot};
     ok(!$later_full_snapshot->routing_declined,
         'a later FULL supersedes discarded partials');
@@ -123,8 +123,7 @@ subtest 'real compiler publishes root decisions without changing dispatch' => su
         path => '/inline/item',
         raw_path => '/inline/item',
     ));
-    is($events->[0]{status}, 405,
-        'the inline subtree retains its generated 405 response');
+    is($events, [], 'the inline subtree completes unanswered');
     ok($observations[-1]{snapshot}->routing_declined,
         'the root snapshot follows an inline selected child decline');
     is($observations[-1]{snapshot}->allowed_methods, [qw(GET HEAD)],
@@ -134,8 +133,7 @@ subtest 'real compiler publishes root decisions without changing dispatch' => su
     $events = run_app($app, scope(
         path => '/child/missing', raw_path => '/child/missing',
     ));
-    is($events->[0]{status}, 404,
-        'the Router child retains its generated 404 response');
+    is($events, [], 'the Router child completes unanswered');
     ok($observations[-1]{snapshot}->routing_declined,
         'the parent snapshot follows its selected Router child summary');
     ok(!$observations[-1]{snapshot}->path_matched,
@@ -154,10 +152,10 @@ subtest 'partial compiler frames fold as first-seen siblings' => sub {
         scope(method => 'DELETE', path => '/same', raw_path => '/same'),
     );
     my $checkpoint = $trace->checkpoint;
-    is(run_app($get, $request_scope)->[0]{status}, 405,
-        'the first Router retains its generated 405');
-    is(run_app($post, $request_scope)->[0]{status}, 405,
-        'the second Router retains its generated 405');
+    is(run_app($get, $request_scope), [],
+        'the first Router completes unanswered');
+    is(run_app($post, $request_scope), [],
+        'the second Router completes unanswered');
 
     my $snapshot = $trace->snapshot($checkpoint);
     ok($snapshot->routing_declined,
@@ -209,8 +207,7 @@ subtest 'a mount checkpoint sees one selected child summary' => sub {
         path => '/child/nested/item',
         raw_path => '/child/nested/item',
     ));
-    is($events->[0]{status}, 405,
-        'nested child dispatch keeps the existing generated response');
+    is($events, [], 'nested child dispatch completes unanswered');
     is(scalar @mount_snapshots, 1,
         'mount middleware records one completed checkpoint window');
     ok($mount_snapshots[0]->routing_declined,
@@ -413,8 +410,7 @@ subtest 'raw routes and opaque mounts shield parent evidence' => sub {
             unrelated => $shared,
         );
         my $events = run_app($parent, $request_scope);
-        is($events->[0]{status}, 405,
-            "$label child retains its independent generated 405");
+        is($events, [], "$label child completes independently unanswered");
         my $parent_observation = $parent_observations[-1];
         my $child_observation = $child_observations[-1];
         isnt(refaddr($parent_observation->{trace}),
@@ -505,8 +501,8 @@ subtest 'the private selected-child link is consumed once inside dispatch' => su
         raw_path => '/child/item',
         preserved_unknown => { identity => 'unchanged' },
     ));
-    is($copy_events->[0]{status}, 405,
-        'scope-copying child middleware retains the generated 405');
+    is($copy_events, [],
+        'scope-copying child middleware preserves unanswered completion');
     ok($original_retained_link,
         'the parent-owned scope still contains the preserved unknown link key');
     ok($copy_consumed_link,

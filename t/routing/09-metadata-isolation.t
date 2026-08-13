@@ -9,6 +9,7 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::Resolver;
+use PAGI::Routing::Trace;
 
 our $CONCURRENT_PROVIDER_CALLS = 0;
 sub ConcurrentId {
@@ -202,10 +203,10 @@ subtest 'metadata is installed before middleware and records effective mounted l
     is(scalar keys %mount_ids, 1, 'all levels in one compiled router share one request-local mounts array');
 };
 
-subtest 'generated outcomes, short circuits, and application mounts publish only selected metadata' => sub {
-    my @generated;
-    my $generated_app = router(
-        middleware => [observing_middleware('generated router', \@generated)],
+subtest 'declines, short circuits, and application mounts publish only selected metadata' => sub {
+    my @declined;
+    my $decline_app = router(
+        middleware => [observing_middleware('declined router', \@declined)],
         routes => [
             mount('/api', routes => [
                 route('/items' => sub { return $_[0]->text('items') }, methods => 'GET'),
@@ -213,34 +214,34 @@ subtest 'generated outcomes, short circuits, and application mounts publish only
         ],
     )->to_app;
 
-    run_scope($generated_app, scope(path => '/missing', raw_path => '/missing'));
-    is($generated[-1]{mounts}, [], 'a root generated 404 has no mount chain');
-    is($generated[-1]{match}, undef, 'a root generated 404 has no match');
-    is([$generated[-1]{logical_namespace}, $generated[-1]{captures}],
-        ['/', {}], 'a root generated 404 retains the root namespace and empty snapshot');
+    run_scope($decline_app, scope(path => '/missing', raw_path => '/missing'));
+    is($declined[-1]{mounts}, [], 'a root NONE decline has no mount chain');
+    is($declined[-1]{match}, undef, 'a root NONE decline has no match');
+    is([$declined[-1]{logical_namespace}, $declined[-1]{captures}],
+        ['/', {}], 'a root NONE decline retains root metadata');
 
-    @generated = ();
-    run_scope($generated_app, scope(
+    @declined = ();
+    run_scope($decline_app, scope(
         path => '/api/missing',
         raw_path => '/api/missing',
     ));
-    is($generated[-1]{mounts}, [{ path => '/api', name      => undef, desc => undef }],
-        'an inline child 404 retains the selected mount chain');
-    is($generated[-1]{match}, undef, 'an inline child 404 has no leaf match');
-    is([$generated[-1]{logical_namespace}, $generated[-1]{captures}],
-        ['/', {}], 'an unnamed inline child 404 retains its owning prefix state');
+    is($declined[-1]{mounts}, [{ path => '/api', name      => undef, desc => undef }],
+        'an inline child NONE retains the selected mount chain');
+    is($declined[-1]{match}, undef, 'an inline child NONE has no leaf match');
+    is([$declined[-1]{logical_namespace}, $declined[-1]{captures}],
+        ['/', {}], 'an unnamed inline child NONE retains its owning prefix state');
 
-    @generated = ();
-    run_scope($generated_app, scope(
+    @declined = ();
+    run_scope($decline_app, scope(
         method => 'POST',
         path => '/api/items',
         raw_path => '/api/items',
     ));
-    is($generated[-1]{mounts}, [{ path => '/api', name      => undef, desc => undef }],
-        'an inline child 405 retains the selected mount chain');
-    is($generated[-1]{match}, undef, 'a partial route does not publish a leaf match');
-    is([$generated[-1]{logical_namespace}, $generated[-1]{captures}],
-        ['/', {}], 'a PARTIAL leaf does not replace generated 405 state');
+    is($declined[-1]{mounts}, [{ path => '/api', name      => undef, desc => undef }],
+        'an inline child PARTIAL retains the selected mount chain');
+    is($declined[-1]{match}, undef, 'a partial route does not publish a leaf match');
+    is([$declined[-1]{logical_namespace}, $declined[-1]{captures}],
+        ['/', {}], 'a PARTIAL leaf does not replace owning prefix state');
 
     my $handler_calls = 0;
     my @short_circuit;
@@ -675,7 +676,7 @@ subtest 'compiled middleware state follows documented ownership boundaries' => s
         'the two inline mount occurrences execute different wrapper instances');
 };
 
-subtest 'concurrent requests isolate frames, matches, parameters, and generated response state' => sub {
+subtest 'concurrent requests isolate frames, matches, parameters, traces, and snapshots' => sub {
     my (@contexts, @gates);
     $CONCURRENT_PROVIDER_CALLS = 0;
     my $app = router(routes => [
@@ -760,46 +761,71 @@ subtest 'concurrent requests isolate frames, matches, parameters, and generated 
     is(response_body(\@first_events), 'one', 'the first pending request completes with its own response');
     is(response_body(\@second_events), 'two', 'the second pending request completes with its own response');
 
-    my (@fallback_contexts, @fallback_gates);
-    my $fallback_app = router(
-        routes => [
-            route('/method' => sub { return $_[0]->text('get') }, methods => 'GET'),
-        ],
-        method_not_allowed => sub {
-            my ($c) = @_;
-            push @fallback_contexts, $c;
-            my $gate = Future->new;
-            push @fallback_gates, $gate;
-            return $gate;
-        },
-    )->to_app;
-    my (@fallback_one_events, @fallback_two_events);
-    my $fallback_one = $fallback_app->(
-        scope(method => 'POST', path => '/method'),
+    my $partial_app = router(routes => [
+        route('/method' => sub { return $_[0]->text('get') }, methods => 'GET'),
+    ])->to_app;
+    my ($partial_one_scope, $partial_one_trace)
+        = PAGI::Routing::Trace->_ensure_http_scope(
+            scope(method => 'POST', path => '/method'),
+        );
+    my ($partial_two_scope, $partial_two_trace)
+        = PAGI::Routing::Trace->_ensure_http_scope(
+            scope(method => 'DELETE', path => '/method'),
+        );
+    my $partial_one_checkpoint = $partial_one_trace->checkpoint;
+    my $partial_two_checkpoint = $partial_two_trace->checkpoint;
+    my (@partial_one_events, @partial_two_events);
+    my $partial_one = $partial_app->(
+        $partial_one_scope,
         \&receive,
-        sub { push @fallback_one_events, $_[0]; return Future->done },
+        sub { push @partial_one_events, $_[0]; return Future->done },
     );
-    my $fallback_two = $fallback_app->(
-        scope(method => 'DELETE', path => '/method'),
+    my $partial_two = $partial_app->(
+        $partial_two_scope,
         \&receive,
-        sub { push @fallback_two_events, $_[0]; return Future->done },
+        sub { push @partial_two_events, $_[0]; return Future->done },
     );
-    is(scalar @fallback_contexts, 2, 'both generated 405 handlers start concurrently');
-    isnt(refaddr($fallback_contexts[0]->response), refaddr($fallback_contexts[1]->response),
-        'generated response accumulators are request-local');
-    is($fallback_contexts[0]->response->header('Allow'), 'GET, HEAD',
-        'the first fallback receives its computed Allow');
-    is($fallback_contexts[1]->response->header('Allow'), 'GET, HEAD',
-        'the second fallback receives its own computed Allow');
-    $fallback_contexts[0]->response->header('Allow' => 'PATCH');
-    is($fallback_contexts[1]->response->header('Allow'), 'GET, HEAD',
-        'mutating one fallback accumulator does not affect the other');
-    $fallback_gates[0]->done($fallback_contexts[0]->text('first 405'));
-    $fallback_gates[1]->done($fallback_contexts[1]->text('second 405'));
-    $fallback_one->get;
-    $fallback_two->get;
-    is(response_body(\@fallback_one_events), 'first 405', 'the first generated response completes independently');
-    is(response_body(\@fallback_two_events), 'second 405', 'the second generated response completes independently');
+    $partial_one->get;
+    $partial_two->get;
+    is([\@partial_one_events, \@partial_two_events], [[], []],
+        'both PARTIAL requests complete unanswered');
+    isnt(refaddr($partial_one_trace), refaddr($partial_two_trace),
+        'concurrent PARTIAL requests use distinct Trace collectors');
+    my $partial_one_snapshot = $partial_one_trace->snapshot(
+        $partial_one_checkpoint,
+    );
+    my $partial_two_snapshot = $partial_two_trace->snapshot(
+        $partial_two_checkpoint,
+    );
+    isnt(refaddr($partial_one_snapshot), refaddr($partial_two_snapshot),
+        'concurrent PARTIAL requests use distinct Snapshot objects');
+    my $partial_one_methods = $partial_one_snapshot->allowed_methods;
+    my $partial_two_methods = $partial_two_snapshot->allowed_methods;
+    isnt(refaddr($partial_one_methods), refaddr($partial_two_methods),
+        'concurrent snapshots return distinct method arrays');
+    is([$partial_one_methods, $partial_two_methods], [
+        [qw(GET HEAD)], [qw(GET HEAD)],
+    ], 'each concurrent snapshot retains the same immutable compiled union');
+    push @$partial_one_methods, 'MUTATED';
+    is($partial_two_methods, [qw(GET HEAD)],
+        'mutating one returned array cannot affect the other request');
+    is($partial_one_snapshot->allowed_methods, [qw(GET HEAD)],
+        'mutating one returned array cannot affect its source Snapshot');
+
+    my ($later_scope, $later_trace) = PAGI::Routing::Trace->_ensure_http_scope(
+        scope(method => 'PATCH', path => '/method'),
+    );
+    my $later_checkpoint = $later_trace->checkpoint;
+    my @later_events;
+    Future->wrap($partial_app->(
+        $later_scope,
+        \&receive,
+        sub { push @later_events, $_[0]; return Future->done },
+    ))->get;
+    is(\@later_events, [], 'a later PARTIAL request also completes unanswered');
+    is($later_trace->snapshot($later_checkpoint)->allowed_methods,
+        [qw(GET HEAD)],
+        'a later request receives a clean method union after consumer mutation');
 };
 
 subtest 'reentrant dispatch appends a frame without changing the outer invocation' => sub {

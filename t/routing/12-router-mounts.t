@@ -7,7 +7,6 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
-use PAGI::Response;
 use PAGI::Routing qw(router route websocket sse mount middleware);
 
 sub scope {
@@ -133,8 +132,8 @@ sub snapshot_frame {
     };
 }
 
-subtest 'a Router mount transfers HTTP ownership to child outcomes' => sub {
-    my @parent_calls;
+subtest 'a Router Mount transfers unanswered child ownership outward' => sub {
+    my (@parent_calls, @fallback_calls);
     my $child = router(
         routes => [
             route('/item' => sub { return $_[0]->text('child GET') },
@@ -146,26 +145,34 @@ subtest 'a Router mount transfers HTTP ownership to child outcomes' => sub {
                     ->text('handler missing');
             }),
         ],
-        not_found => sub { return $_[0]->text('child custom missing') },
-        method_not_allowed => sub {
-            return PAGI::Response->new->status(405)->text('child custom method');
-        },
     );
-    my $app = router(routes => [
-        route('/api/item' => sub {
-            push @parent_calls, 'earlier partial';
-            return $_[0]->text('parent PATCH');
-        }, methods => 'PATCH'),
-        mount('/api', router => $child, name      => 'child'),
-        route('/api/item' => sub {
-            push @parent_calls, 'later full item';
-            return $_[0]->text('parent PUT');
-        }, methods => 'PUT'),
-        route('/api/missing' => sub {
-            push @parent_calls, 'later full missing';
-            return $_[0]->text('parent resumed');
-        }),
-    ])->to_app;
+    my $app = router(
+        middleware => [
+            middleware('Routing::NotFound', handler => sub {
+                push @fallback_calls, 'outer not found';
+                return $_[0]->text('outer child missing');
+            }),
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                push @fallback_calls, 'outer method';
+                return $_[0]->text('outer child method');
+            }),
+        ],
+        routes => [
+            route('/api/item' => sub {
+                push @parent_calls, 'earlier partial';
+                return $_[0]->text('parent PATCH');
+            }, methods => 'PATCH'),
+            mount('/api', router => $child, name => 'child'),
+            route('/api/item' => sub {
+                push @parent_calls, 'later full item';
+                return $_[0]->text('parent PUT');
+            }, methods => 'PUT'),
+            route('/api/missing' => sub {
+                push @parent_calls, 'later full missing';
+                return $_[0]->text('parent resumed');
+            }),
+        ],
+    )->to_app;
 
     my $full = run_app($app, path => '/api/item', raw_path => '/api/item');
     is(response_body($full), 'child GET', 'a child FULL result owns the request');
@@ -173,14 +180,18 @@ subtest 'a Router mount transfers HTTP ownership to child outcomes' => sub {
     my $partial = run_app(
         $app, method => 'PUT', path => '/api/item', raw_path => '/api/item',
     );
-    is(response_start($partial)->{status}, 405, 'a child PARTIAL result remains final');
+    is(response_start($partial)->{status}, 405,
+        'outer MethodNotAllowed renders the selected child PARTIAL');
     is(response_header($partial, 'Allow'), 'GET, HEAD',
-        'a detached child 405 receives only the child Allow set');
-    is(response_body($partial), 'child custom method', 'the child custom 405 body wins');
+        'the child Allow excludes the discarded parent PATCH partial');
+    is(response_body($partial), 'outer child method',
+        'the outer boundary receives the unanswered child');
 
     my $none = run_app($app, path => '/api/missing', raw_path => '/api/missing');
-    is(response_start($none)->{status}, 404, 'a child NONE result remains final');
-    is(response_body($none), 'child custom missing', 'the child custom 404 body wins');
+    is(response_start($none)->{status}, 404,
+        'outer NotFound renders the selected child NONE');
+    is(response_body($none), 'outer child missing',
+        'the parent never resumes after child NONE');
 
     my $application = run_app(
         $app, path => '/api/application-404', raw_path => '/api/application-404',
@@ -192,6 +203,8 @@ subtest 'a Router mount transfers HTTP ownership to child outcomes' => sub {
     is(response_body($application), 'handler missing',
         'the handler-returned 404 keeps its body');
     is(\@parent_calls, [], 'no parent handler runs after Router-mount ownership transfers');
+    is(\@fallback_calls, ['outer method', 'outer not found'],
+        'outer fallback runs only for unanswered child PARTIAL and NONE');
 };
 
 subtest 'Router-mount middleware order, metadata, compilation freshness, and immutability' => sub {
@@ -199,6 +212,7 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
     my @metadata;
     my @after_metadata;
     my $builds = 0;
+    my ($mount_default_calls, $outer_default_calls) = (0, 0);
     my $stateful = middleware(sub {
         my ($inner) = @_;
         my $identity = ++$builds;
@@ -209,7 +223,18 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
         };
     });
     my $child = router(
-        middleware => [tracing_middleware('child Router', \@trace), $stateful],
+        middleware => [
+            tracing_middleware('child Router', \@trace),
+            $stateful,
+            middleware('Routing::NotFound', handler => sub {
+                push @trace, 'child 404';
+                return $_[0]->text('missing');
+            }),
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                push @trace, 'child 405';
+                return $_[0]->text('method');
+            }),
+        ],
         routes => [
             mount('/inline', routes => [
                 route('/item' => sub {
@@ -220,14 +245,6 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
                 }, name => 'item', middleware => [tracing_middleware('route', \@trace)]),
             ], name      => 'inline', middleware => [tracing_middleware('inline mount', \@trace)]),
         ],
-        not_found => sub {
-            push @trace, 'child 404';
-            return $_[0]->text('missing');
-        },
-        method_not_allowed => sub {
-            push @trace, 'child 405';
-            return $_[0]->text('method');
-        },
     );
 
     my $routes_before = [map { refaddr($_) } @{$child->routes}];
@@ -240,10 +257,28 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
         middleware => [
             tracing_middleware('outer Router', \@trace),
             after_metadata_middleware(\@after_metadata),
+            middleware('Routing::NotFound', handler => sub {
+                ++$outer_default_calls;
+                return $_[0]->text('outer missing');
+            }),
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                ++$outer_default_calls;
+                return $_[0]->text('outer method');
+            }),
         ],
         routes => [
             mount('/left', router => $child, name      => 'left',
-                desc => 'Left child', middleware => [tracing_middleware('Router mount', \@trace)]),
+                desc => 'Left child', middleware => [
+                    tracing_middleware('Router mount', \@trace),
+                    middleware('Routing::NotFound', handler => sub {
+                        ++$mount_default_calls;
+                        return $_[0]->text('mount missing');
+                    }),
+                    middleware('Routing::MethodNotAllowed', handler => sub {
+                        ++$mount_default_calls;
+                        return $_[0]->text('mount method');
+                    }),
+                ]),
             mount('/right', router => $child, name      => 'right'),
         ],
     );
@@ -291,14 +326,14 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
     is(\@trace, [
         'outer Router before', 'Router mount before', 'child Router before',
         'child 404', 'child Router after', 'Router mount after', 'outer Router after',
-    ], 'child generated 404 remains inside child, mount, and outer Router middleware');
+    ], 'child fallback 404 remains inside child, mount, and outer Router middleware');
     is($after_metadata[-1], {
         frame_count => 1,
         mounts => [
             { path => '/left', name      => 'left', desc => 'Left child' },
         ],
         match => undef,
-    }, 'outer middleware sees the Router placement after a child-generated 404');
+    }, 'outer middleware sees the Router placement after a child fallback 404');
     @trace = ();
     run_app(
         $first_app, method => 'POST',
@@ -306,9 +341,9 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
     );
     is(\@trace, [
         'outer Router before', 'Router mount before', 'child Router before',
-        'inline mount before', 'child 405', 'inline mount after',
+        'inline mount before', 'inline mount after', 'child 405',
         'child Router after', 'Router mount after', 'outer Router after',
-    ], 'child generated 405 is wrapped by the selected inline ancestry too');
+    ], 'child Router fallback renders after the unanswered inline boundary unwinds');
     is($after_metadata[-1], {
         frame_count => 1,
         mounts => [
@@ -316,7 +351,9 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
             { path => '/inline', name      => 'inline', desc => undef },
         ],
         match => undef,
-    }, 'outer middleware sees the complete ancestry after a child-generated 405');
+    }, 'outer middleware sees the complete ancestry after a child fallback 405');
+    is([$mount_default_calls, $outer_default_calls], [0, 0],
+        'child fallback responses keep Mount and parent defaults inert');
 
     is([map { refaddr($_) } @{$child->routes}], $routes_before,
         'composition preserves child route identities');
@@ -326,6 +363,71 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
         'composition preserves child middleware descriptions');
     is($child->path_for('/inline/item'), $path_before,
         'composition preserves child-local reverse routing');
+};
+
+subtest 'reused child Router has exact occurrence-local fallback ownership' => sub {
+    my @calls;
+    my $parent_defaults = 0;
+    my $child = router(routes => [
+        route('/item' => sub { return $_[0]->text('item') }, methods => 'GET'),
+    ]);
+    my $occurrence_middleware = sub {
+        my ($label) = @_;
+        return [
+            middleware('Routing::NotFound', handler => sub {
+                push @calls, "$label not found";
+                return $_[0]->text("$label missing");
+            }),
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                my ($context, $snapshot) = @_;
+                push @calls, "$label method";
+                return $context->text(
+                    "$label " . join(' ', @{$snapshot->allowed_methods}),
+                );
+            }),
+        ];
+    };
+    my $app = router(
+        middleware => [
+            middleware('Routing::NotFound', handler => sub {
+                ++$parent_defaults;
+                return $_[0]->text('parent missing');
+            }),
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                ++$parent_defaults;
+                return $_[0]->text('parent method');
+            }),
+        ],
+        routes => [
+            route('/left/item' => sub { return $_[0]->text('parent PATCH') },
+                methods => 'PATCH'),
+            mount('/left', router => $child, name => 'left',
+                middleware => $occurrence_middleware->('left')),
+            mount('/right', router => $child, name => 'right',
+                middleware => $occurrence_middleware->('right')),
+        ],
+    )->to_app;
+
+    my $left_partial = run_app(
+        $app, method => 'POST', path => '/left/item', raw_path => '/left/item',
+    );
+    is(response_body($left_partial), 'left GET HEAD',
+        'left occurrence renders child-only PARTIAL evidence');
+    is(response_header($left_partial, 'Allow'), 'GET, HEAD',
+        'left occurrence excludes the earlier parent PATCH partial');
+    is(response_body(run_app(
+        $app, path => '/left/missing', raw_path => '/left/missing',
+    )), 'left missing', 'left occurrence owns child NONE');
+    is(response_body(run_app(
+        $app, method => 'POST', path => '/right/item', raw_path => '/right/item',
+    )), 'right GET HEAD', 'right occurrence has independent PARTIAL policy');
+    is(response_body(run_app(
+        $app, path => '/right/missing', raw_path => '/right/missing',
+    )), 'right missing', 'right occurrence has independent NONE policy');
+    is(\@calls, [
+        'left method', 'left not found', 'right method', 'right not found',
+    ], 'the selected occurrence alone renders each reused child decline');
+    is($parent_defaults, 0, 'parent defaults remain inert after occurrence policy responds');
 };
 
 subtest 'relative child links follow the active Router placement without mutating the child' => sub {
@@ -449,6 +551,10 @@ subtest 'Router mounts share the one outer HEAD edge and root mounts consume not
 subtest 'Router mounts own WebSocket and SSE success and miss outcomes' => sub {
     my @http_fallback_calls;
     my $child = router(
+        middleware => [middleware('Routing::NotFound', handler => sub {
+            push @http_fallback_calls, 'child HTTP 404';
+            return $_[0]->text('must not run');
+        })],
         routes => [
             websocket('/socket' => sub {
                 $_[0]->close(1000, 'child')->get;
@@ -461,10 +567,6 @@ subtest 'Router mounts own WebSocket and SSE success and miss outcomes' => sub {
                 return Future->done('future SSE completion');
             }),
         ],
-        not_found => sub {
-            push @http_fallback_calls, 'child HTTP 404';
-            return $_[0]->text('must not run');
-        },
     );
     my @parent_protocol_calls;
     my $app = router(routes => [

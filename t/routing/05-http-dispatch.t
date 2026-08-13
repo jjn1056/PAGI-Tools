@@ -10,6 +10,7 @@ use PAGI::App::Router;
 use PAGI::Response;
 use PAGI::Routing qw(router route middleware);
 use PAGI::Routing::Compiler;
+use PAGI::Routing::Trace;
 
 sub HttpProvider { return qr/accepted/ }
 
@@ -196,8 +197,8 @@ subtest 'provider constraints select normal and raw HTTP leaves before invocatio
         'a rejected provider route lets declaration-order scanning continue');
     is($run->('/raw/accepted')->[0]{status}, 204,
         'an accepted provider capture selects the raw HTTP application');
-    is($run->('/raw/rejected')->[0]{status}, 404,
-        'a rejected raw provider route produces the existing generated outcome');
+    is($run->('/raw/rejected'), [],
+        'a rejected raw provider route leaves the Router unanswered');
     is(\@normal, ['accepted'],
         'the constrained normal handler runs only for its accepted capture');
     is(\@raw, ['accepted'],
@@ -525,7 +526,7 @@ subtest 'partial decisions preserve first-seen method order without sharing arra
     );
 };
 
-subtest 'PAGI::App::Router Allow values retain first-seen declaration order' => sub {
+subtest 'PAGI::App::Router decline evidence retains first-seen method order' => sub {
     my @cases = (
         [
             'POST declared before GET',
@@ -534,7 +535,7 @@ subtest 'PAGI::App::Router Allow values retain first-seen declaration order' => 
                 $router->post('/ordered' => sub { return Future->done });
                 $router->get('/ordered' => sub { return Future->done });
             },
-            'POST, GET, HEAD',
+            [qw(POST GET HEAD)],
         ],
         [
             'GET declared before POST',
@@ -543,7 +544,7 @@ subtest 'PAGI::App::Router Allow values retain first-seen declaration order' => 
                 $router->get('/ordered' => sub { return Future->done });
                 $router->post('/ordered' => sub { return Future->done });
             },
-            'GET, HEAD, POST',
+            [qw(GET HEAD POST)],
         ],
     );
 
@@ -553,9 +554,15 @@ subtest 'PAGI::App::Router Allow values retain first-seen declaration order' => 
         $declare->($router);
         my $app = $router->to_app;
         my ($receive, $send, $events) = channels();
+        my ($request_scope, $trace) = PAGI::Routing::Trace->_ensure_http_scope(
+            scope(method => 'TRACE', path => '/ordered'),
+        );
+        my $checkpoint = $trace->checkpoint;
 
-        $app->(scope(method => 'TRACE', path => '/ordered'), $receive, $send)->get;
-        is(allow_header($events), $want, "$label controls the Allow order");
+        $app->($request_scope, $receive, $send)->get;
+        is($events, [], "$label leaves the Router unanswered");
+        is($trace->snapshot($checkpoint)->allowed_methods, $want,
+            "$label controls the decline method order");
     }
 };
 

@@ -161,7 +161,7 @@ subtest 'opaque mount, WebSocket, and SSE accept bare factories' => sub {
     ], 'each protocol and opaque boundary executes its bare factory wrapper');
 };
 
-subtest 'bare router factory sees generated outcomes and mixed lists retain order' => sub {
+subtest 'bare router factory surrounds unanswered routing and mixed lists retain order' => sub {
     my (@statuses, @runs);
     my $observer = sub {
         my ($inner) = @_;
@@ -190,7 +190,7 @@ subtest 'bare router factory sees generated outcomes and mixed lists retain orde
     run_scope($app, scope(method => 'POST', path => '/present'));
     is(\@runs, [qw(bare explicit bare explicit)],
         'mixed bare and explicit list keeps first-listed-outermost order');
-    is(\@statuses, [404, 405], 'router wrapper sees both generated outcomes');
+    is(\@statuses, [], 'unanswered Router exhaustion emits no statuses');
 };
 
 subtest 'bare factory timing and failures remain compile-time behavior' => sub {

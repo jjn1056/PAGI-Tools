@@ -106,29 +106,9 @@ sub method_router {
     ])->to_app;
 }
 
-# Transitional Task 4 adapter. The real Router still renders its old decline;
-# send it to a private sink while preserving the compiler's trusted Trace.
-sub without_generated_decline {
-    my ($router_app) = @_;
-    return async sub {
-        my ($request_scope, $request_receive, $outer_send) = @_;
-        my $private_send = sub { return Future->done };
-        await Future->wrap(
-            $router_app->($request_scope, $request_receive, $private_send)
-        );
-    };
-}
-
-sub transitional_sink_factory {
-    return sub {
-        my ($inner) = @_;
-        return without_generated_decline($inner);
-    };
-}
-
 sub decline_app {
     my ($class, $router_app, @options) = @_;
-    return $class->new(@options)->wrap(without_generated_decline($router_app));
+    return $class->new(@options)->wrap($router_app);
 }
 
 subtest 'public constructors accept only an optional CODE handler' => sub {
@@ -279,7 +259,7 @@ subtest 'NotFound is inert for responses, exceptions, and missing evidence' => s
 
     my $after_decline = PAGI::Middleware::Routing::NotFound->new->wrap(async sub {
         my ($request_scope, $request_receive, $send) = @_;
-        await Future->wrap(without_generated_decline(not_found_router())->(
+        await Future->wrap(not_found_router()->(
             $request_scope, $request_receive, $send,
         ));
         await Future->wrap($send->({
@@ -469,7 +449,7 @@ subtest 'MethodNotAllowed is inert for responses, exceptions, and missing eviden
 
     my $after_decline = PAGI::Middleware::Routing::MethodNotAllowed->new->wrap(async sub {
         my ($request_scope, $request_receive, $send) = @_;
-        await Future->wrap(without_generated_decline(method_router())->(
+        await Future->wrap(method_router()->(
             $request_scope, $request_receive, $send,
         ));
         await Future->wrap($send->({
@@ -546,7 +526,7 @@ subtest 'nested fallbacks emit once and preserve append-only evidence' => sub {
             my ($context) = @_;
             ++$inner_calls;
             return $context->text('inner policy');
-        })->wrap(without_generated_decline($router_app));
+        })->wrap($router_app);
         my $nested = $class->new->wrap($inner);
         my ($trace_scope, $trace) = PAGI::Routing::Trace->_ensure_http_scope(
             $request_scope,
@@ -568,7 +548,6 @@ subtest 'short names work at Router and routing-aware Mount boundaries' => sub {
             middleware('Routing::NotFound', handler => sub {
                 return $_[0]->text('router not found');
             }),
-            transitional_sink_factory(),
         ],
         routes => [route('/known' => sub { return $_[0]->text('known') })],
     )->to_app;
@@ -580,7 +559,6 @@ subtest 'short names work at Router and routing-aware Mount boundaries' => sub {
             middleware('Routing::MethodNotAllowed', handler => sub {
                 return $_[0]->text('router method');
             }),
-            transitional_sink_factory(),
         ],
         routes => [route('/items' => sub { return $_[0]->text('items') },
             methods => 'GET')],
@@ -600,7 +578,6 @@ subtest 'short names work at Router and routing-aware Mount boundaries' => sub {
             middleware('Routing::NotFound', handler => sub {
                 return $_[0]->text('mount not found');
             }),
-            transitional_sink_factory(),
         ]),
     ])->to_app;
     is(event_body(run_app($mounted,
@@ -626,8 +603,8 @@ subtest 'Route placement is valid but cannot observe route exhaustion' => sub {
 
     is(event_body(run_app($app, scope(path => '/present'))), 'present',
         'selected Route response passes through both legal wrappers');
-    is(start_event(run_app($app, scope(path => '/missing')))->{status}, 404,
-        'Router owns exhaustion before Route middleware is entered');
+    is(run_app($app, scope(path => '/missing')), [],
+        'Router exhaustion remains unanswered before Route middleware is entered');
     is([$not_found_calls, $method_calls], [0, 0],
         'Route-level fallback renderers never observe exhaustion');
 };
