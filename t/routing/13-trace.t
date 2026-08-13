@@ -149,6 +149,38 @@ subtest 'empty checkpoint snapshots are immutable and collector-owned' => sub {
     );
 };
 
+subtest 'empty windows do not inherit prior detail state' => sub {
+    my $state = {
+        records => [
+            { sequence => 1, type => 'details_available' },
+            { sequence => 2, type => 'details_truncated' },
+        ],
+        frames          => {},
+        details_enabled => 1,
+        truncated       => 1,
+    };
+    my $prior = PAGI::Routing::Trace::Snapshot->_new(
+        PAGI::Routing::Trace::_snapshot_facts($state, 0, 2),
+    );
+    ok($prior->details_available,
+        'a window containing compiler detail activity reports details');
+    ok($prior->truncated,
+        'a window containing a truncation record reports truncation');
+
+    my $checkpoint_after_activity = 2;
+    my $empty = PAGI::Routing::Trace::Snapshot->_new(
+        PAGI::Routing::Trace::_snapshot_facts(
+            $state,
+            $checkpoint_after_activity,
+            $checkpoint_after_activity,
+        ),
+    );
+    ok(!$empty->details_available,
+        'a later empty window does not inherit prior detail availability');
+    ok(!$empty->truncated,
+        'a later empty window does not inherit prior truncation');
+};
+
 subtest 'mutation capabilities are private and sealed' => sub {
     my ($scope, $trace) = PAGI::Routing::Trace->_ensure_http_scope({
         type => 'http',
@@ -161,6 +193,14 @@ subtest 'mutation capabilities are private and sealed' => sub {
     );
 
     ok(!$trace->can($_), "Trace does not expose $_") for @writes;
+    ok(!$trace->can('_discard_window'),
+        'Trace does not expose the Cascade discard mutation');
+    my $direct_checkpoint = $trace->checkpoint;
+    like(
+        dies { $trace->_discard_window($direct_checkpoint) },
+        qr/Can't locate object method "_discard_window"/,
+        'ordinary middleware cannot append a trusted discard window',
+    );
     ok(!PAGI::Routing::Trace::Snapshot->can($_),
         "Snapshot does not expose $_") for @writes;
     ok(!PAGI::Routing::Trace::Recorder->can('new'),

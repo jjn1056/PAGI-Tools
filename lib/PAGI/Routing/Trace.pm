@@ -43,7 +43,6 @@ sub _new {
         details_resolved => 0,
         details_enabled  => 0,
         attempt_count    => 0,
-        truncated        => 0,
     };
     return $self;
 }
@@ -201,13 +200,19 @@ sub _snapshot_facts {
         }
     }
 
-    my @attempts;
-    if ($state->{details_enabled}) {
-        for my $record (@{$state->{records}}) {
-            next unless $record->{sequence} > $start
-                && $record->{sequence} <= $end;
-            next unless $record->{type} eq 'attempt';
-            next if _sequence_discarded($record->{sequence}, $ranges);
+    my (@attempts, $details_available, $truncated);
+    for my $record (@{$state->{records}}) {
+        next unless $record->{sequence} > $start
+            && $record->{sequence} <= $end;
+        next if _sequence_discarded($record->{sequence}, $ranges);
+        if ($record->{type} eq 'details_available') {
+            $details_available = 1;
+        }
+        elsif ($record->{type} eq 'details_truncated') {
+            $truncated = 1;
+        }
+        elsif ($record->{type} eq 'attempt') {
+            $details_available = 1;
             push @attempts, _copy_value($record->{record});
         }
     }
@@ -218,8 +223,8 @@ sub _snapshot_facts {
         method_matched    => $method_matched ? 1 : 0,
         allowed_methods   => \@allowed_methods,
         attempts          => \@attempts,
-        details_available => $state->{details_enabled} ? 1 : 0,
-        truncated         => $state->{truncated} ? 1 : 0,
+        details_available => $details_available ? 1 : 0,
+        truncated         => $truncated ? 1 : 0,
     };
 }
 
@@ -301,6 +306,12 @@ sub _write {
                 = PAGI::Utils::is_development() ? 1 : 0;
             $state->{details_resolved} = 1;
         }
+        if ($state->{details_enabled}) {
+            _append_record($state, {
+                type     => 'details_available',
+                frame_id => $frame_id,
+            });
+        }
         return $frame_id;
     }
 
@@ -313,7 +324,13 @@ sub _write {
             unless ref($record) eq 'HASH';
         return unless $state->{details_enabled};
         if ($state->{attempt_count} >= 256) {
-            $state->{truncated} = 1;
+            unless ($frame->{details_truncated}) {
+                $frame->{details_truncated} = 1;
+                _append_record($state, {
+                    type     => 'details_truncated',
+                    frame_id => $frame_id,
+                });
+            }
             return;
         }
         ++$state->{attempt_count};
@@ -409,7 +426,7 @@ sub _write {
     return;
 }
 
-sub _discard_window {
+my $DISCARD_WINDOW = sub {
     my ($trace, $checkpoint) = @_;
     my $state = _state_for($trace)
         or croak 'discarded routing window requires a compatible collector';
@@ -421,7 +438,7 @@ sub _discard_window {
         end   => $end,
     });
     return;
-}
+};
 
 sub _canonical_source {
     my ($source) = @_;
@@ -476,7 +493,7 @@ sub _claim_cascade_discard_factory {
     croak 'Cascade discard factory installer must be a code reference'
         unless ref($installer) eq 'CODE';
 
-    $installer->(sub { return _discard_window(@_) });
+    $installer->(sub { return $DISCARD_WINDOW->(@_) });
     _seal_claim(
         '_claim_cascade_discard_factory',
         'Cascade discard factory is permanently sealed',

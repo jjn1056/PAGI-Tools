@@ -93,6 +93,8 @@ facts.
 Detailed candidate attempts are collected only after the routing compiler
 resolves a development environment. They are absent in other environments and
 bounded to the first 256 records per request; L</truncated> reports overflow.
+Detail availability and truncation describe only this checkpoint window and do
+not carry into a later empty window.
 
 =head1 METHODS
 
