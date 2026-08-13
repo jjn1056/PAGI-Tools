@@ -12,6 +12,14 @@ use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
 use PAGI::Utils ();
 
+my $TRACE_RECORDER_FOR;
+BEGIN {
+    require PAGI::Routing::Trace;
+    PAGI::Routing::Trace->_claim_compiler_recorder_factory(sub {
+        ($TRACE_RECORDER_FOR) = @_;
+    });
+}
+
 sub compile {
     my ($class, $description) = @_;
 

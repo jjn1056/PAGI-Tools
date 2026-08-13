@@ -5,6 +5,14 @@ use warnings;
 use Future::AsyncAwait;
 use PAGI::Utils ();
 
+my $DISCARD_TRACE_WINDOW;
+BEGIN {
+    require PAGI::Routing::Trace;
+    PAGI::Routing::Trace->_claim_cascade_discard_factory(sub {
+        ($DISCARD_TRACE_WINDOW) = @_;
+    });
+}
+
 =head1 NAME
 
 PAGI::App::Cascade - Try apps in sequence until success
