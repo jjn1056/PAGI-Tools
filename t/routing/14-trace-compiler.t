@@ -469,6 +469,55 @@ subtest 'the private selected-child link is consumed once inside dispatch' => su
         'an unconsumed selected-child link completes as non-decline evidence');
 
     my $private_key = "\0PAGI::Routing::Trace::parent";
+    my (@copy_observations, $original_retained_link, $copy_consumed_link,
+        $copy_preserved_unknown);
+    my $copying_child = router(
+        middleware => [middleware(sub {
+            my ($inner) = @_;
+            return async sub {
+                my ($request_scope, $receive, $send) = @_;
+                my $copied_scope = { %$request_scope };
+                $copy_preserved_unknown
+                    = refaddr($copied_scope->{preserved_unknown})
+                    == refaddr($request_scope->{preserved_unknown});
+                my $returned = $inner->($copied_scope, $receive, $send);
+                await Future->wrap($returned);
+                $original_retained_link
+                    = exists $request_scope->{$private_key};
+                $copy_consumed_link
+                    = !exists $copied_scope->{$private_key};
+            };
+        })],
+        routes => [
+            route('/item' => sub { return $_[0]->text('post') },
+                methods => 'POST'),
+        ],
+    );
+    my $copying_parent = router(
+        middleware => [observing_middleware(\@copy_observations)],
+        routes => [
+            mount('/child', router => $copying_child, name => 'child'),
+        ],
+    )->to_app;
+    my $copy_events = run_app($copying_parent, scope(
+        method => 'GET',
+        path => '/child/item',
+        raw_path => '/child/item',
+        preserved_unknown => { identity => 'unchanged' },
+    ));
+    is($copy_events->[0]{status}, 405,
+        'scope-copying child middleware retains the generated 405');
+    ok($original_retained_link,
+        'the parent-owned scope still contains the preserved unknown link key');
+    ok($copy_consumed_link,
+        'the child dispatcher consumes the link from the forwarded scope copy');
+    ok($copy_preserved_unknown,
+        'the shallow scope copy preserves unrelated unknown values by identity');
+    ok($copy_observations[-1]{snapshot}->routing_declined,
+        'parent completion follows the link consumed through a scope copy');
+    is($copy_observations[-1]{snapshot}->allowed_methods, ['POST'],
+        'the copied-scope child decline folds into the parent summary');
+
     my $handler_saw_private_key;
     my $reusing_child = router(
         middleware => [middleware(sub {

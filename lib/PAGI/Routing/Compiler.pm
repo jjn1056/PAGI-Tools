@@ -260,15 +260,19 @@ sub _compile_dispatcher {
             return;
         }
         if (($decision->{_trace_selection} // '') eq 'child') {
-            if (exists $decision->{scope}{$TRACE_PARENT_KEY}) {
-                delete $decision->{scope}{$TRACE_PARENT_KEY};
-                $recorder->_complete_success($frame_id);
-            }
-            else {
+            delete $decision->{scope}{$TRACE_PARENT_KEY};
+            my $completed = eval {
                 $recorder->_complete_child(
                     $frame_id,
                     $decision->{_trace_parent_link},
                 );
+                1;
+            };
+            unless ($completed) {
+                my $error = $@;
+                die $error
+                    unless $error =~ /\Arouting parent link was not consumed by a child\b/;
+                $recorder->_complete_success($frame_id);
             }
             return;
         }
