@@ -23,6 +23,8 @@ my @load_modules = qw(
     PAGI::Middleware
     PAGI::Middleware::Helpers
     PAGI::Middleware::Builder
+    PAGI::Middleware::Routing::NotFound
+    PAGI::Middleware::Routing::MethodNotAllowed
     PAGI::App::Router
     PAGI::App::Router::Builder
     PAGI::App::Router::Materializer
