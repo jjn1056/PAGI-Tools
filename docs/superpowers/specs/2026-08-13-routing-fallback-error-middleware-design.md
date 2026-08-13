@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-13
 
-**Status:** Approved design; awaiting written-spec review
+**Status:** Approved design; implementation plan written
 
 **Scope:** Replace Router-owned HTTP 404/405 handlers with request-local routing
 evidence and ordinary middleware; make `PAGI::Compose` install minimal outer
@@ -218,13 +218,19 @@ not the application's official policy. Applications that need request IDs,
 access logging, security headers, or other ordinary response processing on
 404/405/500 install author fallback middleware inside those ordinary layers.
 
-The accepted runtime cost is bounded and visible: one request-local collector,
-summary updates during matching, and one send-observation closure per installed
-fallback/error boundary. Production does not allocate detailed attempt records,
-re-run the matcher, inspect middleware classes, or render more than one
-response. Performance work may later reduce allocations while preserving these
-observable boundaries; it must not recover speed by merging policy APIs or
-sharing mutable request state.
+The accepted runtime cost is bounded and visible: one request-local collector;
+compact structural frame records for each first-party routing search actually
+invoked; summary updates during matching; and one send-observation closure per
+installed fallback/error boundary. An ordinary selected mount chain adds
+frames roughly in proportion to routing depth; a sequential coordinator such
+as Cascade adds one frame summary for each Router search it invokes.
+
+Production retains the frame-begin, selected-child, and frame-completion
+information required for boundary-local checkpoints and summary queries. It
+does not allocate per-candidate attempt records, re-run the matcher, inspect
+middleware classes, or render more than one response. Performance work may
+later reduce allocations while preserving these observable boundaries; it
+must not recover speed by merging policy APIs or sharing mutable request state.
 
 ## 4. Goals
 
@@ -308,14 +314,23 @@ exception branch.
 
 ### 7.1 Collector ownership and scope transport
 
-The shared compiler gains a request-local evidence collector. Compose installs
-a fresh collector after preparing the HEAD wire boundary but before its
-ErrorHandler, completion guard, routing fallbacks, author middleware, and
-target. Each first-party routing fallback also ensures that a compatible
-collector exists before taking its checkpoint, so it can wrap a directly
-compiled Router outside Compose. A directly compiled Router installs one only
-when no compatible first-party collector is already present. Nested
-routing-aware Routers reuse the same collector.
+The shared compiler gains a request-local HTTP routing-evidence collector. All
+installation, checkpoint, and compiler-write behavior in this section is
+restricted to HTTP scopes.
+
+Compose installs a fresh collector on the HTTP path after preparing the HEAD
+wire boundary but before its ErrorHandler, completion guard, routing fallbacks,
+author middleware, and target. Each first-party routing fallback also ensures
+that a compatible collector exists before taking its checkpoint, so it can
+wrap a directly compiled Router outside Compose. A directly compiled Router
+installs one only when no compatible first-party collector is already present.
+Nested routing-aware Routers reuse the same collector.
+
+For WebSocket, SSE, and lifespan scopes, Compose, routing fallback middleware,
+Cascade, and the shared compiler neither install nor write
+`pagi.routing.trace`. An incoming value under that key is passed through as
+ordinary scope data and is not trusted or mutated. Existing protocol matching,
+denial, close, decline, and exception behavior remains unchanged.
 
 The collector is transported downward through a reserved first-party scope
 extension named:
@@ -330,10 +345,13 @@ contract or value shape of the other.
 
 The value is a first-party `PAGI::Routing::Trace` collector with public
 read-only checkpoint/snapshot methods and no public mutation API. Compiler
-writes require an unforgeable lexical capability; an application cannot
-manufacture trusted observations merely by placing a similarly shaped hash or
-object in scope. An incompatible incoming value is replaced at the first
-Compose, first-party fallback, or Router boundary.
+observations require an unforgeable lexical capability. The first-party
+Cascade coordinator has a separate capability that can append only the
+discarded-window disposition described in section 7.2; it cannot manufacture
+candidate or frame observations. An application cannot manufacture trusted
+observations merely by placing a similarly shaped hash or object in scope. An
+incompatible incoming value is replaced at the first Compose, first-party
+fallback, or Router boundary.
 
 The collector reference is deliberately shared through shallow scope copies so
 outer middleware sees observations recorded downstream. It is fresh for every
@@ -392,10 +410,27 @@ partial candidate in every ancestor. This is how a child method union remains
 authoritative after its Mount wins and how discarded parent partials remain
 diagnostic-only.
 
+Structural frame records and their compact summary facts exist in every
+environment; boundary-local snapshots must not be implemented from one flat
+request-global summary. Candidate-attempt records are the development-only
+portion of the ledger.
+
 The append-only ledger is not dispatch control flow. The compiler still uses
 its local FULL/PARTIAL scan and Mount ownership rules to select work. Trace
 records describe that work after each decision; changing or omitting a record
 must never cause another route to run.
+
+A first-party sequential coordinator sometimes discards a complete child
+response after routing work already occurred beneath that child. Cascade's
+`catch` behavior is the concrete case: a child-level routing fallback may have
+rendered the caught 404 or 405 after its Router recorded a decline. After the
+caught child completes successfully, Cascade appends a capability-protected
+disposition identifying that child's exact checkpoint window as discarded.
+It does not delete, rewrite, or consume the underlying records. Snapshots whose
+windows contain that disposition exclude the discarded child window from
+their active summary and attempt view. A checkpoint taken inside the child
+before Cascade makes its later decision continues to describe the child's
+local routing work normally.
 
 ### 7.3 Public snapshot API
 
@@ -416,10 +451,30 @@ These methods report facts, not an HTTP outcome. There is intentionally no
 `status`, `outcome`, `not_found`, `method_not_allowed`, or
 `not_acceptable` accessor.
 
-`allowed_methods` describes only the active exhausted search. Earlier partial
-matches that were superseded by a later FULL route or a winning Mount remain
-optional diagnostic attempts but do not contribute to the authoritative
-method union.
+A checkpoint window may contain more than one sibling routing search, such as
+Routers invoked sequentially by Cascade. Snapshot summaries combine the
+top-level completed frames within that window that ended in trusted routing
+decline. A completed frame nested beneath another included frame is represented
+through its ancestor's selected-child summary and is not counted again.
+
+Across those declined sibling searches:
+
+- `routing_declined` is true when at least one qualifying frame exists;
+- `path_matched` is true when any qualifying frame has a complete path match;
+- `method_matched` is true when any qualifying path match accepts the request
+  method; and
+- `allowed_methods` is the first-seen union from qualifying path-matched,
+  method-rejected frames.
+
+A sibling frame that selected a handler and produced an explicit response is
+not a routing decline. If a coordinator later discards that response through
+its own policy, the successful frame does not contribute to the snapshot's
+routing summary.
+
+Within each qualifying frame, only its active exhausted search contributes.
+Earlier partial matches superseded by a later FULL route or winning Mount
+remain optional diagnostic attempts but do not contribute to
+`allowed_methods`.
 
 A Mount-prefix match is not itself a complete path candidate. If a selected
 routing-aware child exhausts without a leaf path candidate, the enclosing
@@ -429,10 +484,13 @@ boundary's active evidence remains `path_matched == false`.
 
 Summary facts required by fallback middleware are always collected. Detailed
 attempt records are collected only when `PAGI::Utils::is_development()` is
-true. The collector resolves that dynamic environment gate lazily on its first
-compiler observation, after Compose's ErrorHandler has been entered. They are
-bounded to the first 256 records per request; reaching the limit sets
-`truncated` without changing matching or summary facts.
+true. The collector resolves the strict dynamic environment gate lazily on its
+first compiler observation, after Compose's automatic ErrorHandler has been
+entered. A native target that does not invoke a first-party routing compiler
+produces no such observation, so a normally completed native request need not
+resolve the environment gate. Detailed attempts are bounded to the first 256
+records per request; reaching the limit sets `truncated` without changing
+matching or summary facts.
 
 An attempt may identify a logical namespace, declaration-local pattern,
 effective name, declaration description, candidate kind, and which matching
@@ -523,6 +581,133 @@ Compose boundary before it is a complete public HTTP application.
 This low-level behavior is intentional. Compose is the convenience boundary
 that promises safe defaults.
 
+### 8.7 Incomplete composition migration
+
+Removing Router-generated 404/405 responses changes any composition that
+treats a compiled Router as a complete application.
+
+A Router-aware Mount should retain the Router object:
+
+```perl
+# Incomplete after this change: the opaque child may decline silently
+mount('/legacy' => $legacy_router->to_app)
+
+# Preferred: preserve routing-aware composition
+mount(
+    '/legacy',
+    router => $legacy_router,
+    name   => 'legacy',
+)
+```
+
+If the child must remain opaque, give it its own complete application
+boundary:
+
+```perl
+mount(
+    '/legacy' => compose(app => $legacy_router),
+)
+```
+
+`PAGI::App::URLMap` mounts and its optional `default` target are opaque
+application composition. A Router selected through either position that
+should provide its own fallback responses must likewise be wrapped:
+
+```perl
+my $map = PAGI::App::URLMap->new;
+
+# Incomplete if the selected Router declines
+$map->mount('/api' => $api_router->to_app);
+
+# Complete opaque child application
+$map->mount('/api' => compose(app => $api_router));
+```
+
+URLMap must shield the parent `pagi.routing.trace` publisher channel before
+invoking a selected mounted application or its default target, just like an
+opaque Router Mount. A first-party Router reached through URLMap may maintain
+an independent child trace, but URLMap does not merge it into the enclosing
+application merely because the child happens to be recognizable. Without this
+shielding, URLMap's existing shallow scope copy would accidentally turn opaque
+composition into routing-aware composition.
+
+Finally, a compiled Router is no longer a complete server application by
+itself:
+
+```perl
+# Low-level routing component; a miss sends no response
+my $app = $router->to_app;
+
+# Complete public application with automatic failsafes
+my $app = compose(app => $router)->to_app;
+```
+
+These are deployment-pattern breaks, not merely constructor migrations.
+Without an enclosing fallback, a normal Router decline produces no response
+events and may appear as an empty reply, hang, or server-specific protocol
+failure.
+
+### 8.8 `PAGI::App::Cascade`
+
+`PAGI::App::Cascade` participates in trusted HTTP routing composition. It
+ensures that a compatible request-local routing collector exists and takes a
+separate checkpoint around each child application.
+
+Its dispatch rules are:
+
+1. For a non-final child, Cascade intercepts only enough of the send stream to
+   inspect the first `http.response.start` event:
+   - if its status is in `catch`, Cascade suppresses that start and all
+     subsequent events from that child, awaits the child's completion, appends
+     the child checkpoint window's discarded disposition, and then advances;
+     and
+   - if its status is not in `catch`, Cascade immediately forwards the start
+     and streams every subsequent event to the original send channel without
+     response-wide buffering.
+2. A non-final child that completes without `http.response.start` advances to
+   the next child only when its checkpoint snapshot reports
+   `routing_declined`.
+3. A child that completes without response start and without a trusted routing
+   decline is an incomplete application, not a routing miss. Cascade throws a
+   typed application error rather than silently advancing.
+4. A non-final child must emit `http.response.start` before any body event. A
+   body event before start is an application error.
+5. A response whose status is not in `catch` is forwarded unchanged and ends
+   the Cascade after that child completes. Once its start has been forwarded,
+   a later exception is a post-response-start failure. Cascade propagates it
+   unchanged; an enclosing ErrorHandler must not emit a replacement response.
+6. The final child's explicit response is returned unchanged, including a
+   status listed in `catch`.
+7. If the final child records a trusted routing decline without responding,
+   Cascade also completes unanswered. Its trusted observations remain
+   available to an enclosing routing fallback.
+8. If the final child completes silently without trusted routing evidence,
+   Cascade throws the same incomplete-application error.
+
+Cascade does not translate caught explicit responses into trusted compiler
+observations. The discarded-window disposition only prevents routing work
+beneath that caught response—including a child fallback's prior decline—from
+becoming an active outer summary. Its `catch` option remains response policy;
+routing evidence remains a record of first-party routing work.
+
+A Cascade whose final result may be a trusted routing decline is itself a
+routing component. It needs an enclosing routing fallback or Compose boundary
+to be a complete public application.
+
+For example:
+
+```perl
+my $routing = PAGI::App::Cascade->new(
+    apps => [
+        $static_app,       # explicit 404 advances by catch policy
+        $api_router,       # trusted Router decline also advances
+        $site_router,      # final decline passes to Compose
+    ],
+);
+
+my $app = compose(app => $routing)->to_app;
+```
+
 ## 9. `PAGI::Middleware::Routing::NotFound`
 
 ### 9.1 Construction
@@ -590,13 +775,15 @@ HTTP/1.1 404 Not Found
 Content-Type: text/plain; charset=utf-8
 Cache-Control: no-store
 
-No application fallback handled this route.
+Not Found
 ```
 
-In development it includes the method, requested path, bounded attempt
-details, and direct advice to install application fallback middleware. All
-dynamic text is safely encoded. It must not expose headers, cookies, bodies,
-capture values, or arbitrary scope extensions.
+In development the body clearly identifies this as PAGI's automatic failsafe,
+states that no application fallback handled the route, and includes the
+method, requested path, bounded attempt details, and direct advice to install
+application fallback middleware. All dynamic text is safely encoded. It must
+not expose headers, cookies, bodies, capture values, or arbitrary scope
+extensions.
 
 The built-in renderer is a failsafe and debugging aid. Documentation must not
 present it as the normal way to brand a site's 404 page.
@@ -644,6 +831,15 @@ mount(
 
 The same three-level explanation and a cross-link belong in the
 MethodNotAllowed and ErrorHandler POD.
+
+`PAGI::Middleware::Routing::NotFound` POD must also cross-link to
+`PAGI::App::NotFound` and explain that they are adjacent but different
+abstractions. The middleware conditionally renders after a trusted routing
+decline and can be installed at routing boundaries. `PAGI::App::NotFound` is
+an unconditional application, useful as an explicit terminal target or final
+Cascade entry. `PAGI::App::NotFound` POD must include the reciprocal cross-link
+and must not suggest that mounting it is equivalent to installing routing
+fallback middleware.
 
 Attaching either routing fallback as Route middleware is legal middleware-list
 syntax but has no useful fallback effect: the wrapper is entered only after
@@ -746,10 +942,25 @@ It does not inspect routing evidence to turn normal declines into 404 or 405.
 If an enclosed Router completes normally without a response, ErrorHandler
 returns normally so an enclosing routing fallback can act.
 
+ErrorHandler follows the shared compiler's scope-type convention: an absent
+`scope->{type}` is treated as `http`. Protocol discrimination must not compare
+an undefined value directly or emit an uninitialized-value warning. A defined
+non-HTTP type continues to pass through without transformation.
+
 ### 11.2 Custom renderer
 
 Add an optional `handler` callback while retaining the documented
-`development`, `on_error`, `content_type`, and default-status configuration:
+`development`, `on_error`, `content_type`, and default-status configuration.
+The public `development` option remains a Boolean whose default is `0`;
+constructing an ordinary ErrorHandler does not implicitly consult `PAGI_ENV`.
+
+Compose explicitly configures its automatic outer instance with a private
+request-time development resolver backed by `PAGI::Utils::is_development()`.
+That resolver follows the exception-safe last-resort behavior in section 12.4.
+This private Compose configuration does not add another public ErrorHandler
+option or alter the behavior of author-constructed instances.
+
+For example:
 
 ```perl
 middleware(
@@ -760,17 +971,35 @@ middleware(
 ```
 
 The rendering handler receives exactly `($context, $error)` and must return an
-immediate or Future-backed Response. The production-safe existing renderer is
-used when no handler is supplied. Existing blessed exception status handling
-remains; this routing design neither introduces nor removes application-thrown
-HTTP exception conventions.
+immediate or Future-backed Response. When no handler is supplied, ErrorHandler
+uses its built-in renderer. The public `content_type` default remains
+`text/html`.
+
+Every response produced by the built-in renderer includes
+`Cache-Control: no-store`, regardless of its configured representation. A
+custom renderer owns the returned Response, including its content type and
+cache policy; ErrorHandler does not repair or replace those headers. Existing
+blessed exception status handling remains; this routing design neither
+introduces nor removes application-thrown HTTP exception conventions.
 
 Before invoking a custom handler, ErrorHandler seeds the Context's cached
 Response with the status selected from its existing configuration and blessed
 exception contract. An explicit handler status wins.
 
-`on_error` is reporting, not rendering. An exception thrown by `on_error` must
-not replace the original application exception.
+`on_error` is reporting, not rendering. ErrorHandler invokes it with the
+original exception and awaits both immediate and Future-backed completion using
+the same `Future->wrap(...)` normalization used by other asynchronous
+adapters. `undef` or another immediate return means successful completion;
+`on_error` does not return a Response.
+
+A synchronous exception or failed Future from `on_error` is a secondary
+reporting failure. ErrorHandler contains that failure and continues handling
+the original application exception. It must neither replace the original
+exception nor prevent the configured renderer from running before response
+start.
+
+After response start, ErrorHandler awaits `on_error` and then rethrows the
+original application exception regardless of the reporting callback's result.
 
 ### 11.3 Before response start
 
@@ -789,12 +1018,25 @@ therefore still able to produce its minimal safe response.
 Production output contains no exception text or stack. Development output may
 include both, escaped for its selected representation.
 
+Every built-in representation must produce an octet string before emission.
+The plain-text and HTML renderers encode their completed character strings as
+UTF-8 exactly once. The JSON renderer preserves the UTF-8 octets returned by
+the JSON encoder and must not encode them a second time.
+
+`Content-Length` is calculated from the final emitted octets, never from Perl
+character length. The body sent in `http.response.body` must be exactly the
+byte sequence whose length was advertised.
+
 ### 11.4 After response start
+
+This intentionally reverses the shipped ErrorHandler behavior, which warns and
+returns when an exception occurs after `http.response.start`.
 
 Once `http.response.start` has been sent, a replacement 500 response is
 impossible. ErrorHandler reports the original exception, does not invoke a
-response renderer, and rethrows so the server can abort or terminate the
-incomplete response. It never sends a second response start.
+response renderer, and rethrows the original exception so the server can abort
+or terminate the incomplete response. It never sends a second response start.
+A reporting failure must not replace the original exception.
 
 ### 11.5 Normal unanswered completion
 
@@ -879,19 +1121,29 @@ Compose's automatic instances use:
 
 - the built-in NotFound renderer;
 - the built-in MethodNotAllowed renderer;
-- the production-safe ErrorHandler renderer outside development;
+- ErrorHandler's built-in renderer explicitly configured with
+  `content_type => 'text/plain'`;
+- production-safe ErrorHandler output outside development;
 - development diagnostics only when
   `PAGI::Utils::is_development()` is true; and
 - no application callback options.
 
-They do not perform content negotiation. Default bodies are UTF-8 plain text
-and contain `Cache-Control: no-store`.
+They do not perform content negotiation. Responses produced by these three
+automatic built-in renderers are UTF-8 plain text and contain
+`Cache-Control: no-store`.
 
-Environment selection is dynamic per request through
-`PAGI::Utils::is_development()`, matching the canonical PAGI environment
-contract. An invalid nonempty `PAGI_ENV` therefore takes the application-error
-path before target dispatch rather than silently selecting production
-diagnostics; the automatic ErrorHandler reports it and emits the safe response.
+Environment selection is resolved on demand per request through
+`PAGI::Utils::is_development()`, preserving the canonical strict PAGI
+environment contract. With a first-party routing target, an invalid nonempty
+`PAGI_ENV` normally throws during the first compiler observation. With a native
+target, it may not be examined until diagnostic rendering is required.
+
+Compose's automatic outer ErrorHandler must resolve its own development-mode
+decision exception-safely. If that resolution throws, it reports the
+environment error, treats its last-resort renderer as production, and emits the
+safe response. This recovery rule applies only to the automatic outer failsafe;
+it does not make an invalid `PAGI_ENV` valid or weaken the strict utility
+contract elsewhere.
 
 ### 12.5 No suppression or disabling
 
@@ -1044,11 +1296,14 @@ Update at least:
 - `PAGI::Routing::Router` POD;
 - `PAGI::Routing::Trace` and `PAGI::Routing::Trace::Snapshot` POD;
 - `PAGI::App::Router` and Builder constructor documentation;
+- `PAGI::App::URLMap` opaque-composition documentation;
+- `PAGI::App::Cascade` routing-component, decline, and streaming documentation;
 - `PAGI::Endpoint::Router` inherited-router discussion;
 - `PAGI::Compose` target, middleware, ordering, and guarantee documentation;
 - `PAGI::Middleware::Routing::NotFound` POD;
 - `PAGI::Middleware::Routing::MethodNotAllowed` POD;
 - `PAGI::Middleware::ErrorHandler` POD;
+- `PAGI::App::NotFound` POD;
 - middleware authoring/cookbook material;
 - `UPGRADING.md` for removal of Router callbacks;
 - `Changes`; and
@@ -1084,6 +1339,37 @@ compose(
 It must also show the Router-level spelling for users who intentionally want
 subsystem policy rather than application policy.
 
+`UPGRADING.md` must state that ErrorHandler no longer swallows exceptions
+raised after response start. Applications or tests that relied on normal
+completion must instead expect the original exception to propagate; no
+replacement response is emitted.
+
+It must also record that built-in ErrorHandler responses now carry
+`Cache-Control: no-store` and byte-correct UTF-8 `Content-Length`, and that an
+immediate or Future-backed `on_error` callback is awaited before rendering or
+rethrowing the original exception.
+
+It must also give before-and-after examples for:
+
+- deploying `$router->to_app` directly;
+- placing a compiled Router in an opaque Mount;
+- preserving Router awareness with `router => $router`;
+- intentionally retaining opacity by wrapping the child in Compose; and
+- mounting a Router through `PAGI::App::URLMap`.
+
+It must explain that an outer Compose boundary cannot interpret evidence
+deliberately shielded by an opaque Mount. The opaque child must therefore
+complete its own response.
+
+`UPGRADING.md` must explain that Router entries in
+`PAGI::App::Cascade` now advance through trusted decline evidence rather than
+generated 404/405 responses. It must also state that an arbitrary silent
+Cascade child is now an application error and that a Cascade ending in a
+Router needs Compose, an enclosing routing fallback, or an explicit final
+response application. It must call out that a non-caught Cascade response now
+streams after its start event rather than being buffered until child
+completion, so a later failure is observably a post-response-start failure.
+
 ## 16. Verification Requirements
 
 ### 16.1 Router selection and evidence
@@ -1092,6 +1378,13 @@ Tests must prove:
 
 - no path candidate records a trusted routing decline and sends nothing;
 - same-path method partials record deterministic union methods;
+- two declined sibling searches aggregate `path_matched` and union allowed
+  methods in first-seen order;
+- nested selected-child frames are not counted twice;
+- a successful sibling whose response is subsequently discarded does not
+  contribute to the decline summary;
+- sibling declaration/execution order, not hash or lexical ordering,
+  determines the method union;
 - GET contributes HEAD;
 - a later FULL candidate supersedes prior partial evidence;
 - a winning routing-aware Mount propagates only its active child summary;
@@ -1111,8 +1404,23 @@ Tests must prove:
 - opaque and raw targets cannot append trusted parent evidence;
 - passing a Router through an opaque position does not merge its trace into
   the parent;
+- WebSocket, SSE, and lifespan dispatch neither creates nor mutates
+  `pagi.routing.trace`, including when the incoming scope already contains that
+  key;
+- a direct Router miss emits no events;
+- the same Router under Compose emits the default fallback;
 - a silent selected raw target is not converted into 404 or 405;
 - a silent opaque Mount is not converted into 404 or 405; and
+- an opaque mounted compiled Router decline reaches the outer completion guard
+  as 500 rather than 404;
+- wrapping that opaque child with Compose produces the child's fallback;
+- a `PAGI::App::URLMap`-selected naked Router can complete unanswered;
+- Compose around URLMap treats a selected naked Router's shielded decline as
+  an incomplete opaque application and renders 500 rather than 404;
+- the same URLMap opacity and completion rules apply when its `default` target
+  is a naked Router;
+- a Compose-wrapped Router mounted through `PAGI::App::URLMap` produces a
+  complete fallback response; and
 - a normal Context handler returning no Response remains an application error.
 
 ### 16.3 NotFound middleware
@@ -1140,9 +1448,33 @@ Cover:
 - a database-like failed Future before response start becomes a custom or
   built-in response;
 - synchronous exceptions behave identically;
+- a wide-character exception rendered as development plain text produces
+  valid UTF-8 bytes and byte-accurate `Content-Length`;
+- the same byte encoding and length invariants hold for HTML;
+- JSON containing a wide character is encoded exactly once and has
+  byte-accurate length;
+- production output remains valid UTF-8 without exposing exception text;
+- the emitted body byte length exactly equals the declared header for every
+  built-in representation;
+- a scope with no `type` is handled as HTTP without warnings;
+- an ordinary ErrorHandler retains static `development => 0` behavior by
+  default and does not consult an invalid `PAGI_ENV`;
+- a normally completed native application under Compose does not consult an
+  invalid `PAGI_ENV` merely because automatic failsafes are installed;
+- Compose's automatic instance resolves development mode per request and an
+  invalid `PAGI_ENV` still produces its production-safe last-resort response;
+- every built-in ErrorHandler representation contains
+  `Cache-Control: no-store`;
+- a custom ErrorHandler renderer's content type and cache policy pass through
+  unchanged;
 - routing fallback middleware rethrows exceptions rather than interpreting
   the trace;
-- `on_error` failure does not replace the original exception;
+- immediate and Future-backed `on_error` callbacks are awaited;
+- a synchronous exception or failed Future from `on_error` does not replace
+  the original application exception;
+- either reporting failure still permits safe rendering before response start;
+- after response start, the original exception is rethrown only after
+  reporting settles;
 - an author renderer failure reaches the outer Compose ErrorHandler;
 - an exception after response start never sends a second start and is
   rethrown;
@@ -1166,6 +1498,30 @@ Tests must prove the exact wrapper order and that:
 - Compose does not inspect or suppress author descriptors/factories; and
 - no new Compose callback or disable options are accepted.
 
+### 16.7 Cascade composition
+
+Tests must prove:
+
+- existing caught 404/405 behavior remains;
+- a non-final naked Router decline advances to the next child;
+- a non-final arbitrary silent application throws instead of advancing;
+- a non-caught streaming response forwards its start and first body chunk
+  before the child completes;
+- Cascade does not accumulate non-caught body events;
+- a caught streaming response discards every event before advancing;
+- a body event before response start throws;
+- an exception after a non-caught start propagates as a post-start failure;
+- a caught child completes before the next child begins;
+- a caught response rendered by child routing fallback discards that child's
+  prior decline from later enclosing snapshots;
+- a final Router decline remains unanswered with its evidence visible outside
+  Cascade;
+- a final arbitrary silent application throws;
+- Compose around a Cascade renders the final trusted decline;
+- an explicit final 404/405 remains untouched; and
+- exceptions and partially started responses are not reinterpreted as
+  declines.
+
 Run focused routing, middleware, Compose, App Router, Endpoint Router, Context,
 HEAD, lint, example integration, documentation, and upgrade-guide tests, then
 the repository suite once on the final reviewed tree.
@@ -1182,9 +1538,14 @@ handler compilation, and generated-`Allow` provenance repair should be removed
 rather than left dormant.
 
 The existing `PAGI::Middleware::ErrorHandler` remains the public class and must
-be evolved rather than duplicated by a new `ServerError` class. Existing
-documented configuration continues to work unless a separate review identifies
-a direct contradiction with the response-start safety rules in this design.
+be evolved rather than duplicated by a new `ServerError` class. The existing
+`development`, `on_error`, `content_type`, and `status` options remain public
+and retain their documented defaults. This design explicitly owns the
+behavioral changes: built-in responses add `Cache-Control: no-store`; built-in
+text and HTML become byte-correct UTF-8; immediate and Future-backed
+`on_error` completion is awaited; and post-response-start exceptions are
+reported and rethrown rather than swallowed. The optional custom `handler` is
+the only new public ErrorHandler configuration field.
 
 ## 18. Rejected Alternatives
 
