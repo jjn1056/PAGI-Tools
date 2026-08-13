@@ -3,8 +3,13 @@ package PAGI::Middleware::ErrorHandler;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Carp qw(croak);
+use Encode qw(encode);
+use Future;
 use Future::AsyncAwait;
 use Scalar::Util 'blessed';
+use PAGI::Context;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -33,11 +38,15 @@ application and converts them to appropriate HTTP error responses.
 
 =item * development (default: 0)
 
-If true, include stack trace in error responses. Should be false in production.
+If true, include stack trace in built-in error responses. This is a static
+Boolean and defaults to false; ordinary construction never consults
+C<PAGI_ENV>.
 
 =item * on_error (default: undef)
 
-Callback invoked with the error when an exception is caught. Useful for logging.
+Callback invoked with the original error when an exception is caught. Useful
+for logging. Immediate values and Futures are both accepted and awaited.
+Callback failures are contained and never replace the application error.
 
     on_error => sub  {
         my ($error) = @_; $logger->error($error) }
@@ -50,6 +59,14 @@ Content type for error responses. Supported: 'text/html', 'application/json', 't
 
 HTTP status code for general exceptions.
 
+=item * handler (default: undef)
+
+Optional renderer invoked as C<< $handler->($context, $original_error) >>.
+It must return an immediate or Future-backed PAGI response value. The cached
+Context response is seeded with the configured or exception-provided status;
+an explicit renderer status wins. A custom renderer owns its response content
+type and cache policy unchanged.
+
 =back
 
 =cut
@@ -57,10 +74,22 @@ HTTP status code for general exceptions.
 sub _init {
     my ($self, $config) = @_;
 
+    croak "unknown ErrorHandler option '_development_resolver'"
+        if exists $config->{_development_resolver};
+
     $self->{development} = $config->{development} // 0;
     $self->{on_error}    = $config->{on_error};
     $self->{content_type} = $config->{content_type} // 'text/html';
     $self->{status}      = $config->{status} // 500;
+    $self->{handler}     = $config->{handler};
+}
+
+sub _new_compose_failsafe {
+    my ($class, %config) = @_;
+    my $resolver = delete $config{_development_resolver};
+    my $self = $class->new(%config);
+    $self->{_development_resolver} = $resolver;
+    return $self;
 }
 
 sub wrap {
@@ -69,8 +98,8 @@ sub wrap {
     return async sub  {
         my ($scope, $receive, $send) = @_;
         # Only handle HTTP requests
-        if ($scope->{type} ne 'http') {
-            await $app->($scope, $receive, $send);
+        if (($scope->{type} // 'http') ne 'http') {
+            await Future->wrap($app->($scope, $receive, $send));
             return;
         }
 
@@ -82,30 +111,24 @@ sub wrap {
             if ($event->{type} eq 'http.response.start') {
                 $response_started = 1;
             }
-            await $send->($event);
+            await Future->wrap($send->($event));
         };
 
-        # Try to run the app
+        # Try to run the app, preserving the exact exception value.
         my $error;
-        eval {
-            await $app->($scope, $receive, $wrapped_send);
+        my $completed = eval {
+            await Future->wrap($app->($scope, $receive, $wrapped_send));
             1;
-        } or do {
-            $error = $@ || 'Unknown error';
         };
+        $error = $@ unless $completed;
 
         # Handle error if one occurred
-        if ($error) {
-            # Call on_error callback if provided
-            if ($self->{on_error}) {
-                eval { $self->{on_error}->($error) };
-            }
+        unless ($completed) {
+            await $self->_report_error($error);
 
             # If response already started, we can't send error page
             if ($response_started) {
-                # Best we can do is log and close
-                warn "Error occurred after response started: $error\n";
-                return;
+                die $error;
             }
 
             # Determine status code
@@ -116,36 +139,67 @@ sub wrap {
                 $status = $error->status_code;
             }
 
-            # Generate error response
-            my ($body, $content_type) = $self->_generate_error_body($error, $status);
+            my $context = PAGI::Context->new($scope, $receive, $send);
+            $context->response->status($status);
 
-            await $send->({
-                type    => 'http.response.start',
-                status  => $status,
-                headers => [
-                    ['content-type', $content_type],
-                    ['content-length', length($body)],
-                ],
-            });
+            my $response;
+            if ($self->{handler}) {
+                my $returned = $self->{handler}->($context, $error);
+                $response = await Future->wrap($returned);
+                croak 'handler did not return a response'
+                    unless PAGI::Utils::is_response($response);
+            }
+            else {
+                my $development = await $self->_development_for_request;
+                my ($body, $content_type) =
+                    $self->_generate_error_body($error, $status, $development);
+                $response = $context->response
+                    ->content_type($content_type)
+                    ->header('Cache-Control' => 'no-store')
+                    ->send_raw($body);
+            }
 
-            await $send->({
-                type => 'http.response.body',
-                body => $body,
-                more => 0,
-            });
+            await Future->wrap($context->respond($response));
         }
     };
 }
 
+async sub _report_error {
+    my ($self, $error) = @_;
+    return unless $self->{on_error};
+    eval { await Future->wrap($self->{on_error}->($error)); 1 };
+    return;
+}
+
+async sub _development_for_request {
+    my ($self) = @_;
+    return $self->{development} ? 1 : 0
+        unless $self->{_development_resolver};
+
+    my $development;
+    my $resolved = eval {
+        $development = $self->{_development_resolver}->();
+        1;
+    };
+    unless ($resolved) {
+        my $resolver_error = $@;
+        await $self->_report_error($resolver_error);
+        return 0;
+    }
+    return $development ? 1 : 0;
+}
+
 sub _generate_error_body {
-    my ($self, $error, $status) = @_;
+    my ($self, $error, $status, $development) = @_;
+    $development = $self->{development} ? 1 : 0
+        unless defined $development;
 
     my $error_text = "$error";
     my $content_type = $self->{content_type};
 
     # Clean up error for display
     my $display_error = $error_text;
-    unless ($self->{development}) {
+    unless ($development) {
         # In production, don't reveal internal details
         $display_error = $self->_status_message($status);
     }
@@ -155,21 +209,21 @@ sub _generate_error_body {
         my $body = JSON::MaybeXS::encode_json({
             error  => $display_error,
             status => $status,
-            ($self->{development} ? (stack => $error_text) : ()),
+            ($development ? (stack => $error_text) : ()),
         });
         return ($body, 'application/json');
     }
     elsif ($content_type eq 'text/plain') {
         my $body = "Error $status: $display_error";
-        if ($self->{development} && $error_text ne $display_error) {
+        if ($development && $error_text ne $display_error) {
             $body .= "\n\nStack trace:\n$error_text";
         }
-        return ($body, 'text/plain; charset=utf-8');
+        return (encode('UTF-8', $body), 'text/plain; charset=utf-8');
     }
     else {
         # Default to HTML
         my $safe_error = $self->_html_escape($display_error);
-        my $safe_stack = $self->{development} ? $self->_html_escape($error_text) : '';
+        my $safe_stack = $development ? $self->_html_escape($error_text) : '';
 
         my $body = <<"HTML";
 <!DOCTYPE html>
@@ -188,13 +242,13 @@ sub _generate_error_body {
     <div class="error">$safe_error</div>
 HTML
 
-        if ($self->{development} && $safe_stack) {
+        if ($development && $safe_stack) {
             $body .= "    <h2>Stack Trace</h2>\n    <pre>$safe_stack</pre>\n";
         }
 
         $body .= "</body>\n</html>\n";
 
-        return ($body, 'text/html; charset=utf-8');
+        return (encode('UTF-8', $body), 'text/html; charset=utf-8');
     }
 }
 
@@ -248,14 +302,23 @@ to set custom HTTP status codes:
 
 =over 4
 
-=item * If the response has already started when an error occurs,
-the middleware cannot send an error page. It will log the error and return.
+=item * Before response start, C<on_error> settles before the custom or built-in
+renderer runs. Built-in HTML, plain-text, and JSON responses are UTF-8 octet
+strings with byte-correct C<Content-Length> and C<Cache-Control: no-store>.
+Custom renderers control their own content and cache headers.
+
+=item * If the response has already started when an error occurs, no renderer
+is invoked and no replacement response is started. The middleware awaits
+C<on_error> and then rethrows the original exception so the server can abort
+the incomplete response. This intentionally reverses the earlier behavior
+that warned and swallowed post-start failures.
 
 =item * In development mode, the full error message and stack trace are
 included in the response. In production, only a generic message is shown.
 
-=item * For non-HTTP requests (WebSocket, SSE), errors are propagated
-without transformation.
+=item * A missing scope type is treated as HTTP. Defined non-HTTP requests
+(including WebSocket and SSE) pass through, so errors propagate without
+transformation.
 
 =back
 

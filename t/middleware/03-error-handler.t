@@ -55,6 +55,9 @@ subtest 'ErrorHandler catches exceptions and returns 500' => sub {
         }
     }
     like $ct, qr/text\/html/, 'content-type is text/html';
+    ok scalar(grep {
+        lc($_->[0]) eq 'cache-control' && $_->[1] eq 'no-store'
+    } @{$sent[0]{headers}}), 'built-in HTML response is not cacheable';
     like $sent[1]{body}, qr/Error 500/, 'body contains error status';
 };
 
@@ -164,6 +167,9 @@ subtest 'ErrorHandler supports JSON content type' => sub {
         }
     }
     is $ct, 'application/json', 'content-type is JSON';
+    ok scalar(grep {
+        lc($_->[0]) eq 'cache-control' && $_->[1] eq 'no-store'
+    } @{$sent[0]{headers}}), 'built-in JSON response is not cacheable';
 
     require JSON::MaybeXS;
     my $data = JSON::MaybeXS::decode_json($sent[1]{body});
@@ -202,6 +208,9 @@ subtest 'ErrorHandler supports plain text content type' => sub {
         }
     }
     like $ct, qr/text\/plain/, 'content-type is plain text';
+    ok scalar(grep {
+        lc($_->[0]) eq 'cache-control' && $_->[1] eq 'no-store'
+    } @{$sent[0]{headers}}), 'built-in plain response is not cacheable';
     like $sent[1]{body}, qr/Error 500/, 'plain text body contains error';
 };
 
