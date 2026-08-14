@@ -122,6 +122,9 @@ subtest 'empty checkpoint snapshots are immutable and collector-owned' => sub {
     ok(!$snapshot->details_available,
         'an empty window has no development details');
     ok(!$snapshot->truncated, 'an empty window is not truncated');
+    ok(!$snapshot->can($_), "Snapshot has no $_ accessor") for qw(
+        status outcome not_found method_not_allowed not_acceptable
+    );
 
     my $allowed = $snapshot->allowed_methods;
     my $attempts = $snapshot->attempts;

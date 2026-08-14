@@ -170,6 +170,24 @@ subtest 'selected explicit 404 and 405 responses pass through unchanged' => sub 
         'selected explicit 405 is not a routing decline');
 };
 
+subtest 'selected handler Context exposes no routing fallback API' => sub {
+    my $context;
+    my $app = router(routes => [
+        route('/context' => sub {
+            $context = $_[0];
+            return $context->text('context');
+        }),
+    ])->to_app;
+
+    my ($events) = run_with_trace($app, path => '/context');
+    is(response_start($events)->{status}, 200,
+        'matched Context handler completes normally');
+    isa_ok($context, 'PAGI::Context');
+    ok(!$context->can($_), "handler Context has no $_ method") for qw(
+        routing_trace not_found method_not_allowed
+    );
+};
+
 subtest 'selected silent raw and opaque targets remain successful selections' => sub {
     my $raw_runs = 0;
     my $opaque_runs = 0;

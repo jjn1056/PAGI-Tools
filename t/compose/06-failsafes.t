@@ -71,6 +71,12 @@ sub route_set {
         route('/explicit/405' => sub {
             return $_[0]->text('application 405', status => 405);
         }),
+        route('/explicit/406' => sub {
+            return $_[0]->text('application 406', status => 406);
+        }),
+        route('/explicit/415' => sub {
+            return $_[0]->text('application 415', status => 415);
+        }),
         route('/explicit/500' => sub {
             return $_[0]->text('application 500', status => 500);
         }),
@@ -115,11 +121,11 @@ subtest 'automatic route outcomes cover both Compose target modes' => sub {
     }
 };
 
-subtest 'explicit matched application errors pass unchanged in both target modes' => sub {
+subtest 'explicit matched application responses pass unchanged in both target modes' => sub {
     local $ENV{PAGI_ENV} = 'production';
     for my $mode (composition_modes(route_set())) {
         my ($label, $app) = @$mode;
-        for my $status (404, 405, 500) {
+        for my $status (404, 405, 406, 415, 500) {
             my ($events, $warnings, $error) = run_request(
                 $app, scope(path => "/explicit/$status"),
             );
