@@ -360,14 +360,15 @@ subtest 'URLMap coerces components, class names, and default' => sub {
     is $sent[1]{body}, 'fallback', 'default coerced too';
 };
 
-subtest 'Cascade coerces apps list and add()' => sub {
+subtest 'Cascade preserves app coercion and catch options' => sub {
     require TestApps::Component;
     require PAGI::App::NotFound;
 
     my $cascade = PAGI::App::Cascade->new(
         apps => [ PAGI::App::NotFound->new ],   # always 404s -> falls through
     );
-    $cascade->add(TestApps::Component->new(body => 'second'));
+    $cascade->add(make_response_app(404, 'coderef'));
+    $cascade->add(TestApps::Component->new(body => 'object'));
     my $app = $cascade->to_app;
 
     my @sent;
@@ -376,7 +377,37 @@ subtest 'Cascade coerces apps list and add()' => sub {
         sub { Future->done }, $send)->get;
 
     is $sent[0]{status}, 200, 'fell through the 404 component';
-    is $sent[1]{body}, 'second', 'component object added without ->to_app';
+    is $sent[1]{body}, 'object', 'coderef and component object are coerced';
+
+    @sent = ();
+    PAGI::App::Cascade->new(
+        apps => [make_response_app(404, 'first'), 'TestApps::Component'],
+    )->to_app->(
+        { type => 'http', method => 'GET', path => '/class' },
+        sub { Future->done }, $send,
+    )->get;
+    is $sent[1]{body}, 'component', 'class-name app is coerced';
+
+    @sent = ();
+    PAGI::App::Cascade->new(
+        apps  => [make_response_app(403, 'caught'), make_response_app(200, 'custom')],
+        catch => [403],
+    )->to_app->(
+        { type => 'http', method => 'GET', path => '/custom' },
+        sub { Future->done }, $send,
+    )->get;
+    is $sent[1]{body}, 'custom', 'custom catch remains supported';
+
+    like(
+        dies { PAGI::App::Cascade->new(apps => [[]]) },
+        qr/Cannot coerce ARRAY reference to a PAGI app/,
+        'constructor invalid shape retains PAGI::Utils diagnostic',
+    );
+    like(
+        dies { PAGI::App::Cascade->new->add({}) },
+        qr/Cannot coerce HASH reference to a PAGI app/,
+        'add invalid shape retains PAGI::Utils diagnostic',
+    );
 };
 
 subtest 'Redirect builds a response value (static + dynamic + query)' => sub {

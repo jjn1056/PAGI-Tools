@@ -69,6 +69,13 @@ status code as a Cascade fallback.
 Returns a customizable 404 (or other status) response. Useful as a
 fallback in a Cascade.
 
+This application is unconditional: whenever invoked it emits its configured
+response. L<PAGI::Middleware::Routing::NotFound> is the reciprocal conditional
+component; it renders only after an enclosed HTTP routing boundary completes
+unanswered with trusted not-found evidence. Use the middleware to interpret a
+Router decline, and use this application when an explicit terminal target is
+required. They are not interchangeable.
+
 =head1 OPTIONS
 
 =over 4
@@ -80,5 +87,10 @@ fallback in a Cascade.
 =item * C<status> - HTTP status code (default: 404)
 
 =back
+
+=head1 SEE ALSO
+
+L<PAGI::Middleware::Routing::NotFound>, L<PAGI::App::Cascade>,
+L<PAGI::Compose>
 
 =cut

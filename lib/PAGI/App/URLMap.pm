@@ -2,6 +2,7 @@ package PAGI::App::URLMap;
 
 use strict;
 use warnings;
+use Future;
 use Future::AsyncAwait;
 use PAGI::Utils ();
 
@@ -72,22 +73,33 @@ sub to_app {
                     path      => $new_path,
                     root_path => ($scope->{root_path} // '') . $prefix,
                 };
+                delete $new_scope->{'pagi.routing.trace'}
+                    if (($scope->{type} // 'http') eq 'http');
 
-                await $app->($new_scope, $receive, $send);
+                my $returned = $app->($new_scope, $receive, $send);
+                await Future->wrap($returned);
                 return;
             }
         }
 
         # No match - use default or 404
         if ($default) {
-            await $default->($scope, $receive, $send);
+            my $default_scope = $scope;
+            if (($scope->{type} // 'http') eq 'http') {
+                $default_scope = { %$scope };
+                delete $default_scope->{'pagi.routing.trace'};
+            }
+            my $returned = $default->($default_scope, $receive, $send);
+            await Future->wrap($returned);
         } else {
-            await $send->({
+            await Future->wrap($send->({
                 type => 'http.response.start',
                 status => 404,
                 headers => [['content-type', 'text/plain']],
-            });
-            await $send->({ type => 'http.response.body', body => 'Not Found', more => 0 });
+            }));
+            await Future->wrap($send->({
+                type => 'http.response.body', body => 'Not Found', more => 0,
+            }));
         }
     };
 }
@@ -107,6 +119,19 @@ a coderef, a component object with a C<to_app> method, or a class name.
 Mounted apps receive a scope with C<path> stripped of the prefix and
 C<root_path> extended with it, per the PAGI specification.
 
+Every selected HTTP mount target and C<default> is an opaque application
+boundary. URLMap shallow-clones the delegated scope and removes the enclosing
+C<pagi.routing.trace> value while preserving path rewriting and unrelated
+scope values. Routing evidence created by a selected child is therefore local
+to that child and is never published into an enclosing Router or Compose
+fallback boundary.
+
+A naked child Router that declines remains unanswered at the opaque boundary;
+an enclosing L<PAGI::Compose> treats that as incomplete application output.
+Wrap the child Router in its own L<PAGI::Compose> when the mounted application
+should render its own 404 or 405. For non-HTTP scopes URLMap does not remove or
+reinterpret a same-named scope value.
+
 =head1 OPTIONS
 
 =over 4
@@ -125,5 +150,9 @@ Mount an app at the given path prefix.
 =head2 map(\%mapping)
 
 Mount multiple apps from a hashref of prefix => app pairs.
+
+=head1 SEE ALSO
+
+L<PAGI::Compose>, L<PAGI::Routing::Trace>, L<PAGI::App::Cascade>
 
 =cut
