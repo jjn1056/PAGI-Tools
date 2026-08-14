@@ -234,6 +234,7 @@ Fallback policy is ordinary middleware. These two handlers share a renderer,
 read the status seeded into their local Context, and keep the 405 method union
 in the routing snapshot:
 
+  use Future::AsyncAwait;
   use PAGI::Compose qw(compose);
   use PAGI::Routing qw(router middleware);
 
@@ -999,6 +1000,8 @@ callbacks; put the only lifecycle owner at the deployed root.
 L<PAGI::Lifespan> remains available when its existing hook-registration form
 is specifically required or when composing a hand-built native application:
 
+  use Future::AsyncAwait;
+  use PAGI::Compose qw(compose);
   use PAGI::Lifespan;
 
   my $app = PAGI::Lifespan->new(
@@ -1008,8 +1011,11 @@ is specifically required or when composing a hand-built native application:
       shutdown => async sub ($state) {
           $state->{db}->disconnect if $state->{db};
       },
-      app      => $endpoint->to_app,
+      app      => compose(app => $endpoint)->to_app,
   )->to_app;
+
+Here the low-level wrapper owns lifecycle hooks while the nested Compose owns
+HTTP completion, including the mandatory 404 and 405 fallback boundary.
 
 =head3 Route-Level Middleware and Local Adapters
 
@@ -1138,8 +1144,10 @@ boundary:
   1;
 
   # app.pl
-  # use MyApp;
-  # MyApp->new(repository => $repository)->to_app;
+  use MyApp;
+  use PAGI::Compose qw(compose);
+
+  compose(app => MyApp->new(repository => $repository))->to_app;
 
 Now C</api> and C</api/42> are handled by the exact constructed child object.
 The retained snapshot can generate C</api/show> and inspect that child's
@@ -1801,6 +1809,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
   use Future::AsyncAwait;
   use Future::IO;
   use PAGI::App::Router;
+  use PAGI::Compose qw(compose);
   use PAGI::Response;
 
   my $router = PAGI::App::Router->new;
@@ -1828,7 +1837,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
           ->retain();
   });
 
-  $router->to_app;
+  compose(app => $router)->to_app;
 
 B<Warning:> C<< ->retain() >> alone silently swallows errors - always add
 C<< ->on_fail() >> first.
@@ -1850,6 +1859,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
   use IO::Async::Function;
   use IO::Async::Loop;
   use PAGI::App::Router;
+  use PAGI::Compose qw(compose);
   use PAGI::Response;
 
   my $loop = IO::Async::Loop->new;
@@ -1884,7 +1894,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
       # $f->retain();
   });
 
-  $router->to_app;
+  compose(app => $router)->to_app;
 
 B<Warning:> IO::Async::Function forks child processes. If running with C<--workers N>, each server worker forks its own Function workers. With 4 server workers and 2 Function workers each, you have 12 processes. For high-volume CPU work, consider a dedicated job queue instead.
 

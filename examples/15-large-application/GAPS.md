@@ -33,30 +33,37 @@ mount instead.
 application mounts remains intentionally unsupported; a generalized external
 reverse-routing provider is deferred until it has demonstrated consumers.
 
-## GAP-02: Cooperative no-match bubbling through component mounts
+## GAP-02: Trusted child declines are resolved; sibling resumption remains deferred
 
-**Desired behavior:** When a routing-aware mounted component has a genuine
-NONE result, it declines without sending and its parent resumes
-declaration-order scanning. A child FULL match, PARTIAL method match, explicit
-catchall, or emitted response remains final. Arbitrary native PAGI
-applications remain terminal unless they explicitly adopt a future
-cooperative contract.
+**Shipped behavior:** A selected routing-aware child can complete without
+sending when it publishes trusted NONE or PARTIAL evidence. That evidence
+reaches the enclosing routing fallback middleware or Compose boundary, which
+renders the application's 404 or 405. Arbitrary silent native applications do
+not acquire this control-flow meaning.
 
-**Shipped behavior:** Once a Router-mount prefix matches, the child owns FULL,
-PARTIAL, and NONE. A child NONE sends that Router's generated or custom 404;
-the parent does not resume scanning or union allowed methods.
+**Ownership boundary:** Selecting the Person or Blogs Mount still transfers
+ownership to that child. The parent does not resume declaration-order sibling
+scanning after child NONE, and it does not union a selected child's PARTIAL
+methods with discarded parent candidates. Root's ordinary catchall is a real
+route, not an enclosing fallback, so it does not handle paths already owned by
+Person or Blogs.
 
-**Evidence:** `GET /person/1/unmatched` returns the Person Router's plain
-`Not Found` response instead of reaching Root's branded catchall. In contrast,
-an unknown numeric blog is handled by `show_blog`, and a deeper Blogs path is
-handled by Blogs' explicit catchall; both correctly remain local. A wrong
-method remains a child 405 with `Allow: GET, HEAD`.
+**Evidence:** `GET /person/not-an-integer` and
+`GET /person/1/unmatched` publish trusted child NONE evidence and receive the
+root Compose automatic `Not Found` response rather than Root's branded
+catchall. An unknown numeric blog remains a handler-owned 404, while a deeper
+Blogs path remains owned by Blogs' explicit catchall. A wrong method under the
+selected Blogs child reaches Compose's automatic 405 with exactly
+`Allow: GET, HEAD`. The integration test exercises each of these boundaries.
 
-**Current workaround:** None. The example records shipped behavior rather than
-buffering events or treating an emitted 404 as control flow.
+**Current workaround:** None is needed for trusted child NONE/PARTIAL evidence
+or application-level 404/405 rendering. An application that wants sibling
+resumption must express that ownership explicitly rather than relying on an
+emitted 404 or arbitrary silent completion as control flow.
 
-**Follow-on status:** Unsolved and deferred. Cooperative no-match bubbling and
-the broader 404/405 model require a separate routing-component decline design.
+**Follow-on status:** Resolved for trusted decline propagation and enclosing
+fallback policy. Resuming parent sibling scans and combining method evidence
+across the selected Mount boundary remain intentionally unsupported.
 
 ## GAP-03: Optional route-component base class is separately deferred
 

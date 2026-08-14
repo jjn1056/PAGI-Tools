@@ -12,6 +12,7 @@ use lib 'lib';
 use PAGI::App::Cascade;
 use PAGI::App::URLMap;
 use PAGI::Compose qw(compose);
+use PAGI::Exception::IncompleteResponse;
 use PAGI::Middleware::ErrorHandler;
 use PAGI::Routing qw(middleware mount route router);
 
@@ -103,6 +104,16 @@ sub response_header {
     return;
 }
 
+sub response_header_values {
+    my ($events, $name) = @_;
+    my $start = response_start($events);
+    return [] unless $start;
+    return [map { $_->[1] } grep {
+        ref($_) eq 'ARRAY'
+            && lc(defined $_->[0] ? $_->[0] : '') eq lc($name)
+    } @{$start->{headers} || []}];
+}
+
 sub response_app {
     my ($status, $body) = @_;
     return sub {
@@ -154,6 +165,9 @@ subtest 'application fallback middleware renders custom 404 and 405 policy' => s
                 my ($context, $trace) = @_;
                 is($trace->allowed_methods, [qw(GET HEAD)],
                     'MethodNotAllowed receives a method snapshot');
+                $context->response
+                    ->header('Allow' => 'DELETE')
+                    ->header('allow' => 'PATCH');
                 return $context->text('application method policy');
             }),
         ],
@@ -174,8 +188,8 @@ subtest 'application fallback middleware renders custom 404 and 405 policy' => s
     is($method_error, undef, 'custom application 405 completes');
     is($method_warnings, [], 'custom application 405 does not warn');
     is(response_start($method)->{status}, 405, 'status is seeded to 405');
-    is(response_header($method, 'Allow'), 'GET, HEAD',
-        'the middleware applies the authoritative method union');
+    is(response_header_values($method, 'Allow'), ['GET, HEAD'],
+        'conflicting duplicate Allow fields become one authoritative union');
     is(response_body($method), 'application method policy',
         'custom 405 body is used');
 };
@@ -357,6 +371,26 @@ subtest 'Cascade advances on trusted Router decline evidence' => sub {
         'the next Cascade child owns the response');
     is(response_body($events), 'next application',
         'Cascade did not require a generated 404 to advance');
+};
+
+subtest 'Cascade rejects arbitrary silent native children' => sub {
+    my $next_invocations = 0;
+    my $next = response_app(200, 'must not run');
+    my $cascade = PAGI::App::Cascade->new(apps => [
+        sub { return Future->done },
+        sub {
+            $next_invocations++;
+            return $next->(@_);
+        },
+    ])->to_app;
+
+    my ($events, $error, $warnings)
+        = run_http($cascade, path => '/missing');
+    isa_ok($error, ['PAGI::Exception::IncompleteResponse'],
+        'silent native child raises the typed lifecycle failure');
+    is($warnings, [], 'the typed failure does not warn');
+    is($events, [], 'no response from a later child is emitted');
+    is($next_invocations, 0, 'Cascade does not invoke the next child');
 };
 
 subtest 'ErrorHandler awaits reporting and rethrows post-start failures' => sub {
