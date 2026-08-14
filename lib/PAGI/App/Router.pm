@@ -32,6 +32,7 @@ PAGI::App::Router - Mutable frontend for the shared immutable PAGI router
 =head1 SYNOPSIS
 
     use PAGI::App::Router;
+    use PAGI::Compose qw(compose);
     use PAGI::Routing qw(middleware);
 
     my $r = PAGI::App::Router->new;
@@ -40,7 +41,7 @@ PAGI::App::Router - Mutable frontend for the shared immutable PAGI router
     $r->get('/raw', raw => $native_app);
     $r->mount('/people', router => $people)->name('people');
     my $routing = $r->to_router;
-    my $app = $routing->to_app;
+    my $app = compose(app => $routing)->to_app;
 
 =head1 DESCRIPTION
 
@@ -50,10 +51,12 @@ from L<PAGI::App::Router::Builder>, materializes public routing descriptions,
 and delegates matching and dispatch entirely to the shared
 L<PAGI::Routing::Compiler>. It contains no matcher and keeps no request state.
 
-The constructor accepts C<desc>, C<middleware>, C<not_found>, and
-C<method_not_allowed>. The two generated-outcome handlers are ordinary HTTP
-Context handlers. Their cached Response is seeded with status 404 or 405; the
-405 response also begins with the selected C<Allow> value.
+The Router-level constructor accepts only C<desc> and C<middleware>. HTTP route
+exhaustion is nonterminal: it records trusted routing evidence and completes
+without emitting a response. Application, Router, or Mount policy uses
+L<PAGI::Middleware::Routing::NotFound> and
+L<PAGI::Middleware::Routing::MethodNotAllowed>; a deployed application commonly
+uses L<PAGI::Compose> for complete automatic 404, 405, and error failsafes.
 
 =head1 MIGRATING
 
@@ -195,10 +198,13 @@ the exact order declared. Nothing is sorted by kind, path specificity, name,
 hash order, or mount-prefix length. The first FULL match wins.
 
 An HTTP path match for the wrong method is PARTIAL rather than final. Scanning
-continues for a later FULL route; if none exists, all PARTIAL declarations
-contribute methods to the deterministic first-seen C<Allow> union. Otherwise
-the owning Router generates 404. A matched mount prefix owns dispatch at its
-written position, including the mounted Router's generated outcomes.
+continues for a later FULL route; if none exists, all active PARTIAL
+declarations contribute methods to the deterministic first-seen method union
+recorded in routing evidence. With no complete path match the Router records a
+not-found decline instead. In either case it emits no HTTP response itself.
+A matched mount prefix owns dispatch at its written position, including an
+unanswered decline from its routing-aware child; the parent does not resume
+later declarations.
 
 =head1 SNAPSHOTS AND COMPILATION
 
@@ -221,6 +227,11 @@ Materializes exactly one fresh Router snapshot and compiles that retained
 snapshot through the shared compiler. Each call returns another middleware
 graph. Build and retain the app for its intended lifetime rather than calling
 C<to_app> per request.
+
+The returned coderef is deliberately a low-level routing component. A matched
+handler response is complete, while an exhausted HTTP search sends no events.
+Wrap a deployed Router with L<PAGI::Compose>, or install the routing fallback
+middleware explicitly at every required boundary.
 
 =head1 INSPECTION AND REVERSE ROUTING
 

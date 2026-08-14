@@ -10,6 +10,7 @@ use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Endpoint::Router ();
 use PAGI::Routing qw(middleware mount route router sse websocket);
+use PAGI::Routing::Trace ();
 
 sub scope {
     my (%change) = @_;
@@ -214,7 +215,7 @@ sub immutable_router_projection {
 
 sub exercise_representative {
     my ($routing, $seen) = @_;
-    my $app = $routing->to_app;
+    my $app = compose(app => $routing)->to_app;
     my $full = run_scope($app, scope(path => '/resource/7'));
     my $partial = run_scope($app, scope(
         method => 'DELETE', path => '/resource/7'));
@@ -918,9 +919,16 @@ my @migration_cases = (
                     ['sse', '/raw_sse'],
                 ], 'raw leaves publish selected leaf metadata');
 
-            is(run_scope($app, scope(method => 'POST',
-                    path => '/raw-http/7'))->[0]{status},
-                405, 'raw HTTP remains method-aware');
+            my ($wrong_scope, $trace) =
+                PAGI::Routing::Trace->_ensure_http_scope(scope(
+                    method => 'POST', path => '/raw-http/7'));
+            my $checkpoint = $trace->checkpoint;
+            my $wrong = run_scope($app, $wrong_scope);
+            my $snapshot = $trace->snapshot($checkpoint);
+            is($wrong, [],
+                'low-level raw-route method exhaustion emits no events');
+            is($snapshot->allowed_methods, ['GET', 'HEAD'],
+                'raw HTTP remains method-aware in trusted routing evidence');
             is(scalar @raw_seen, 3,
                 'the wrong-method request never invokes the raw HTTP target');
 

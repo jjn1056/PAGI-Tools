@@ -438,16 +438,12 @@ subtest 'mount and router descriptions copy their collections' => sub {
     is(refaddr($router_last->router), refaddr($child), 'Router selector may come last');
 
     my $routes = [$inline, $raw];
-    my $not_found = sub { };
-    my $method_not_allowed = sub { };
     my $router_middleware = middleware('Top');
     my $router_middleware_input = [$router_middleware];
     my $router = router(
         routes => $routes,
         middleware => $router_middleware_input,
         desc => 'Root routes',
-        not_found => $not_found,
-        method_not_allowed => $method_not_allowed,
     );
     isa_ok($router, 'PAGI::Routing::Router');
     is($router->kind, 'router', 'router kind');
@@ -469,8 +465,9 @@ subtest 'mount and router descriptions copy their collections' => sub {
     is($router->methods, undef, 'methods are inapplicable to router');
     is($router->constraints, undef, 'constraints are inapplicable to router');
     ok(!$router->can('namespace'), 'public namespace accessor is removed from Router');
-    is(refaddr($router->not_found), refaddr($not_found), 'router retains not-found handler identity');
-    is(refaddr($router->method_not_allowed), refaddr($method_not_allowed), 'router retains method-not-allowed handler identity');
+    ok(!$router->can('not_found'), 'Router has no not-found callback accessor');
+    ok(!$router->can('method_not_allowed'),
+        'Router has no method-not-allowed callback accessor');
 };
 
 subtest 'middleware descriptions preserve targets and copy class config' => sub {
@@ -584,7 +581,11 @@ subtest 'constructors reject invalid declarations' => sub {
     is(refaddr($opaque_router->target), refaddr($child_router), 'positional Router remains an opaque application target');
     is($opaque_router->router, undef, 'positional Router is not the explicit Router form');
     ok($opaque_router->is_raw, 'positional Router remains raw');
-    like dies { router(not_found => 'not a handler') }, qr/not_found must be a coderef/, 'router fallback handlers must be coderefs';
+    for my $removed (qw(not_found method_not_allowed)) {
+        like dies { router($removed => sub { }) },
+            qr/unknown router option '\Q$removed\E'/,
+            "removed Router option '$removed' is rejected without compatibility";
+    }
     like dies { route '/bad-middleware' => $handler, middleware => 'nope' }, qr/middleware must be an arrayref/, 'middleware must be an arrayref';
     my $not_middleware = bless {}, 'NotMiddlewareObject';
     for my $invalid ([], {}, $not_middleware) {

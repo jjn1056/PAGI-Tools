@@ -7,6 +7,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
+use PAGI::Routing qw(middleware);
 use PAGI::Test::Client;
 
 sub raw_http_app {
@@ -225,19 +226,27 @@ subtest 'slash names, relative Context links, constraints, and metadata share on
     }], 'dispatch publishes shared pagi.routing metadata and no pagi.router key');
 };
 
-subtest 'custom generated outcomes and explicit HEAD use the shared compiler' => sub {
+subtest 'custom routing policy and explicit HEAD use the shared compiler' => sub {
     my @generated;
     my $router = PAGI::App::Router->new(
-        not_found => sub {
-            my ($c) = @_;
-            push @generated, ['not_found', $c->response->status, $c->response->header('Allow')];
-            return $c->text('custom missing');
-        },
-        method_not_allowed => sub {
-            my ($c) = @_;
-            push @generated, ['method_not_allowed', $c->response->status, $c->response->header('Allow')];
-            return $c->text('custom method');
-        },
+        middleware => [
+            middleware('Routing::NotFound', handler => sub {
+                my ($c, $trace) = @_;
+                push @generated, [
+                    'not_found', $c->response->status,
+                    $c->response->header('Allow'), $trace->allowed_methods,
+                ];
+                return $c->text('custom missing');
+            }),
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                my ($c, $trace) = @_;
+                push @generated, [
+                    'method_not_allowed', $c->response->status,
+                    $c->response->header('Allow'), $trace->allowed_methods,
+                ];
+                return $c->text('custom method');
+            }),
+        ],
     );
     $router->get('/only' => sub { return $_[0]->text('only') });
     $router->head('/report' => sub {
@@ -254,14 +263,14 @@ subtest 'custom generated outcomes and explicit HEAD use the shared compiler' =>
     my $get = $client->get('/report');
 
     is([$missing->status, $missing->content], [404, 'custom missing'],
-        'custom not-found handler receives and returns the seeded response');
+        'custom NotFound middleware receives and returns the seeded response');
     is([$wrong_method->status, $wrong_method->header('Allow'), $wrong_method->content],
         [405, 'GET, HEAD', 'custom method'],
-        'custom method handler keeps the shared first-seen Allow outcome');
+        'custom MethodNotAllowed middleware keeps the first-seen Allow outcome');
     is(\@generated, [
-        ['not_found', 404, undef],
-        ['method_not_allowed', 405, 'GET, HEAD'],
-    ], 'custom generated handlers receive ordinary HTTP Contexts');
+        ['not_found', 404, undef, []],
+        ['method_not_allowed', 405, undef, ['GET', 'HEAD']],
+    ], 'fallback handlers receive Context state and routing evidence separately');
     is([$head->status, $head->content_length, $head->content], [203, 8, ''],
         'an explicit HEAD declared before GET wins and is body-suppressed');
     is([$get->status, $get->content], [200, 'automatic'],

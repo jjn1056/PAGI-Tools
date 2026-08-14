@@ -6,6 +6,7 @@ use Future;
 
 use lib 'lib';
 use PAGI::App::Router;
+use PAGI::Compose qw(compose);
 
 sub channels {
     my @events;
@@ -68,7 +69,7 @@ subtest 'ordinary HTTP routing uses Context handlers and shared path grammar' =>
     $router->get('/users/{id}' => handler('show', \@calls));
     $router->post('/users' => handler('create', \@calls));
     $router->get('/files/*path' => handler('file', \@calls));
-    my $app = $router->to_app;
+    my $app = compose(app => $router)->to_app;
 
     is(response_body(run_scope($app, path => '/users')), 'list',
         'a static route dispatches');
@@ -86,7 +87,7 @@ subtest 'ordinary HTTP routing uses Context handlers and shared path grammar' =>
 
     my $missing = run_scope($app, path => '/missing');
     is([$missing->[0]{status}, response_body($missing)], [404, 'Not Found'],
-        'an unknown path receives the shared generated 404');
+        'an unknown path receives the Compose automatic 404');
     my $wrong = run_scope($app, method => 'DELETE', path => '/users');
     is([$wrong->[0]{status}, response_header($wrong, 'Allow')],
         [405, 'GET, HEAD, POST'],
@@ -101,7 +102,7 @@ subtest 'literal paths and constraints use the shared Pattern implementation' =>
     $router->get('/people/{name:[A-Za-z]+}' => handler('name', \@calls));
     $router->get('/posts/{slug}' => handler('post', \@calls))
         ->constraints(slug => qr/\A[a-z0-9-]+\z/);
-    my $app = $router->to_app;
+    my $app = compose(app => $router)->to_app;
 
     is(response_body(run_scope($app, path => '/api/v1.0/report[2024]')), 'literal',
         'regex metacharacters remain literal path text');
@@ -133,7 +134,7 @@ subtest 'any and generic route declarations replace the old method option' => su
     my $router = PAGI::App::Router->new;
     $router->any('/health' => handler('health'));
     $router->route('/resource' => handler('resource'), methods => ['GET', 'POST']);
-    my $app = $router->to_app;
+    my $app = compose(app => $router)->to_app;
 
     for my $method (qw(GET POST PUT DELETE PATCH HEAD OPTIONS)) {
         is(run_scope($app, method => $method, path => '/health')->[0]{status}, 200,

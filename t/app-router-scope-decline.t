@@ -5,14 +5,11 @@ use Test2::V0;
 use Future;
 
 use PAGI::App::Router;
+use PAGI::Routing qw(middleware);
+use PAGI::Routing::Trace ();
 
-# An unmatched route must answer with the event family that matches the scope:
-# plain http.response.* on http and sse.http.response.* on SSE. WebSocket uses
-# websocket.http.response.* only when the optional denial extension is
-# advertised; otherwise it closes before acceptance so the server returns the
-# portable bare 403. Emitting a plain http.response.* on an sse/websocket scope
-# raises on a conforming server (the per-scope send-dispatch has no
-# http.response.* branch).
+# HTTP route exhaustion is a normal unanswered routing decline. SSE and
+# WebSocket keep their protocol-specific miss behavior.
 
 sub mock_send {
     my @sent;
@@ -20,16 +17,21 @@ sub mock_send {
     return ($send, \@sent);
 }
 
-subtest 'unmatched HTTP route -> plain http.response.* 404 (regression)' => sub {
+subtest 'unmatched HTTP route completes unanswered with trusted evidence' => sub {
     my $router = PAGI::App::Router->new;
     my $app = $router->to_app;
 
+    my ($scope, $trace) = PAGI::Routing::Trace->_ensure_http_scope({
+        type => 'http', method => 'GET', path => '/nope', headers => [],
+    });
+    my $checkpoint = $trace->checkpoint;
     my ($send, $sent) = mock_send();
-    $app->({ method => 'GET', path => '/nope' }, sub { Future->done }, $send)->get;
+    $app->($scope, sub { Future->done }, $send)->get;
+    my $snapshot = $trace->snapshot($checkpoint);
 
-    is $sent->[0]{type},   'http.response.start', 'start event is http.response.start';
-    is $sent->[0]{status}, 404,                   'status 404';
-    is $sent->[1]{type},   'http.response.body',  'body event is http.response.body';
+    is($sent, [], 'low-level App Router emits no HTTP response events');
+    ok($snapshot->routing_declined, 'the compiler records a trusted decline');
+    ok(!$snapshot->path_matched, 'the decline records no complete path match');
 };
 
 subtest 'unmatched SSE route -> sse.http.response.* 404' => sub {
@@ -73,14 +75,19 @@ subtest 'unmatched WebSocket route without denial extension -> portable close' =
         'close before accept asks the server for the spec-defined bare 403';
 };
 
-subtest 'custom not_found is an ordinary HTTP generated-response handler' => sub {
+subtest 'custom NotFound middleware is ordinary Router-level policy' => sub {
     my @seen;
     my $not_found = sub {
-        my ($c) = @_;
+        my ($c, $trace) = @_;
         push @seen, [ref($c), scalar @_];
+        ok($trace->routing_declined, 'custom policy receives the decline snapshot');
         return $c->text('custom missing');
     };
-    my $router = PAGI::App::Router->new(not_found => $not_found);
+    my $router = PAGI::App::Router->new(
+        middleware => [
+            middleware('Routing::NotFound', handler => $not_found),
+        ],
+    );
     my $app = $router->to_app;
 
     my ($send, $sent) = mock_send();
@@ -88,9 +95,9 @@ subtest 'custom not_found is an ordinary HTTP generated-response handler' => sub
         sub { Future->done }, $send)->get;
 
     is([$sent->[0]{status}, $sent->[1]{body}], [404, 'custom missing'],
-        'the seeded custom HTTP response is emitted');
-    is(\@seen, [['PAGI::Context::HTTP', 1]],
-        'the generated handler receives one HTTP Context');
+        'the seeded custom HTTP response is emitted by middleware');
+    is(\@seen, [['PAGI::Context::HTTP', 2]],
+        'the fallback handler receives HTTP Context and routing snapshot');
 };
 
 done_testing;

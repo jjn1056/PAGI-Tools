@@ -40,7 +40,10 @@ HTTP, WebSocket, SSE, and static route declarations:
 PAGI::Compose
   -> application-wide logging middleware
     -> PAGI::App::Router
-      -> HTTP / WebSocket / SSE handlers
+      -> opaque HTTP handler
+        -> PAGI::Compose
+          -> internal API Router
+      -> WebSocket / SSE handlers
 ```
 
 Configured startup and shutdown callbacks require server lifespan state
@@ -53,7 +56,10 @@ Compose root is constructed.
 The WebSocket and SSE targets are existing native PAGI applications, so their
 route declarations use explicit `raw`. The opaque `/` HTTP mount is written
 last: the shared router preserves declaration order, and a matching prefix
-owns dispatch at that position.
+owns dispatch at that position. `ChatApp::HTTP` therefore gives its internal
+API Router a Compose boundary of its own. An unknown `/api/...` path receives
+that child's complete 404 instead of leaking an unanswered decline through the
+opaque mount or falling through to static serving.
 
 ```
 examples/10-chat-showcase/

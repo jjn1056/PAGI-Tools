@@ -57,12 +57,12 @@ SKIP: {
     is(
         $wrong_method->json,
         { error => 'Method not allowed', allow => 'GET, HEAD' },
-        'custom 405 handler can read the seeded Allow header',
+        'custom 405 handler renders the method union from routing evidence',
     );
 
     my $head = $client->head('/');
     is($head->status, 200, 'automatic HEAD selects the GET route');
-    is($head->content, '', 'router-owned HEAD handling suppresses the body');
+    is($head->content, '', 'application HEAD boundary suppresses the body');
     is($head->header('Content-Length'), $home->header('Content-Length'), 'HEAD keeps GET-equivalent Content-Length');
     is($head->header('X-Route-Demo'), 'home', 'route middleware still runs for HEAD');
 

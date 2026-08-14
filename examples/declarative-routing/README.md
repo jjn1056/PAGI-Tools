@@ -9,11 +9,17 @@ ordinary shape without turning the example into a framework:
   logical address `/api/item`;
 - a numeric path constraint;
 - one bare pure route middleware factory, normalized to an inspectable description;
-- custom 404 and 405 handlers;
+- custom 404 and 405 routing middleware handlers;
 - absolute slash-addressed `path_for` and request-aware `url_for` generation
   (both return strings and perform no protocol I/O); and
-- a final `$routing->to_app` expression, so `app.pl` evaluates to the native
-  PAGI application coderef a server expects.
+- a final `compose(app => $routing, middleware => [...])->to_app` expression,
+  so `app.pl` evaluates to the complete native PAGI application coderef a
+  server expects.
+
+The custom handlers receive an HTTP Context plus the routing snapshot for the
+boundary they enclose. In particular, the 405 renderer reads
+`$trace->allowed_methods`; Router exhaustion does not seed an `Allow` header or
+invoke a Router callback.
 
 Run it from the distribution root:
 

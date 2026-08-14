@@ -7,6 +7,11 @@ its App Router declarations use explicit `raw` handlers. Ordinary App handlers
 instead receive `$c`, return a Response, and leave emission to the shared
 routing compiler.
 
+The final Router is deployed through `compose(app => $router)`. Direct
+`$router->to_app` remains useful as a low-level routing component, but an
+unknown HTTP path then completes without response events; Compose supplies the
+complete application boundary used by the server example.
+
 ## Run
 
 ```bash

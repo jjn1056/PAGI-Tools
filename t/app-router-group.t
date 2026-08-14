@@ -7,6 +7,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
+use PAGI::Compose qw(compose);
 
 sub run_scope {
     my ($app, %scope) = @_;
@@ -81,7 +82,7 @@ subtest 'group prefixes, captures, and parent siblings dispatch normally' => sub
             $team->get('/members' => handler('members', \@seen));
         });
     });
-    my $app = $router->to_app;
+    my $app = compose(app => $router)->to_app;
 
     is(body(run_scope($app, path => '/health')), 'health',
         'a parent sibling remains reachable');
@@ -153,21 +154,22 @@ subtest 'group naming uses local segments and canonical slash addresses' => sub 
         qr/unknown route name/, 'dots never expand into hierarchy separators');
 };
 
-subtest 'group constraints and generated outcomes remain subtree owned' => sub {
+subtest 'group constraints and application fallbacks remain subtree owned' => sub {
     my $router = PAGI::App::Router->new;
     $router->group('/api/{version}' => sub {
         my ($api) = @_;
         $api->get('/items/{id:\d+}' => handler('item'));
         $api->post('/items/{id:\d+}' => handler('create'));
     })->name('api')->desc('API version')->constraints(version => qr/\Av\d+\z/);
-    my $app = $router->to_app;
+    my $app = compose(app => $router)->to_app;
 
     is(body(run_scope($app, path => '/api/v2/items/7')), 'item',
         'group and leaf constraints both qualify dispatch');
     is(run_scope($app, path => '/api/latest/items/7')->[0]{status}, 404,
         'a rejected group constraint is no match');
     my $partial = run_scope($app, method => 'DELETE', path => '/api/v2/items/7');
-    is($partial->[0]{status}, 405, 'the inline subtree owns its 405');
+    is($partial->[0]{status}, 405,
+        'the inline subtree evidence controls the application 405');
     my ($allow) = map { $_->[1] }
         grep { lc($_->[0]) eq 'allow' } @{$partial->[0]{headers}};
     is($allow, 'GET, HEAD, POST', 'grouped siblings retain first-seen Allow order');

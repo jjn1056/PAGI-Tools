@@ -26,10 +26,10 @@ async sub not_found {
 }
 
 async sub method_not_allowed {
-    my ($c) = @_;
+    my ($c, $trace) = @_;
     return $c->json({
         error => 'Method not allowed',
-        allow => $c->response->header('Allow'),
+        allow => join(', ', @{$trace->allowed_methods}),
     });
 }
 

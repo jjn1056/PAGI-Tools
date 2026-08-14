@@ -50,10 +50,22 @@ for my $case (@cases) {
         is(ref($app), 'CODE', 'returns a native PAGI application');
 
         SKIP: {
-            skip 'example did not load', 2 unless ref($app) eq 'CODE';
-            my $response = PAGI::Test::Client->new(app => $app)->get('/');
+            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 5 : 2)
+                unless ref($app) eq 'CODE';
+            my $client = PAGI::Test::Client->new(app => $app);
+            my $response = $client->get('/');
             is($response->status, 200, 'static index responds');
             like($response->text, $case->{title}, 'index comes from the public root');
+
+            if ($case->{name} eq 'endpoint demo') {
+                my $missing = $client->get('/not-a-static-file');
+                is($missing->status, 404,
+                    'unresolved endpoint-demo root request is complete');
+                ok(defined $missing->content,
+                    'unresolved root request includes a terminal body');
+                is($missing->content_length, length($missing->content),
+                    'unresolved root response advertises its complete body');
+            }
         }
     };
 }

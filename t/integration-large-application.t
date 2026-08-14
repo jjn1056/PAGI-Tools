@@ -436,9 +436,9 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         is($noninteger_person->status, 404,
             'a noninteger person identifier does not reach the typed leaf');
         is($noninteger_person->text, 'Not Found',
-            'a noninteger person identifier keeps the child Router generated 404');
+            'a noninteger person identifier reaches the Compose automatic 404');
         unlike($noninteger_person->text, qr{<h1>Person not found</h1>},
-            'the generated noninteger response is not the branded handler 404');
+            'the automatic noninteger response is not the branded handler 404');
 
         my $blog_missing = $client->get('/person/1/blog/999');
         is($blog_missing->status, 404,
@@ -459,14 +459,15 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
 
         my $child_none = $client->get('/person/1/unmatched');
         is($child_none->status, 404,
-            'current Person Router mount owns its routing NONE');
+            'Person Router mount owns its routing decline');
         is($child_none->text, 'Not Found',
-            'GAP-02 evidence: generated child 404 cannot bubble to Root');
+            'Compose completes the child decline instead of resuming Root catchall');
 
         my $wrong_method = $client->post('/person/1/blog/101');
-        is($wrong_method->status, 405, 'child PARTIAL remains final');
+        is($wrong_method->status, 405,
+            'child method exhaustion reaches the Compose automatic 405');
         is($wrong_method->header('Allow'), 'GET, HEAD',
-            'child 405 carries the normalized Allow header');
+            'automatic 405 carries only the selected child method union');
 
         my $css = $client->get('/static/app.css');
         is($css->status, 200, 'static stylesheet is mounted');

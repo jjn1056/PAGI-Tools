@@ -6,6 +6,7 @@ use Future;
 use Scalar::Util qw(refaddr);
 
 use lib 'lib';
+use PAGI::Compose qw(compose);
 use PAGI::Endpoint::Router ();
 use PAGI::Test::Client ();
 
@@ -112,6 +113,11 @@ subtest 'Endpoint raw leaves preserve native targets and middleware for every pr
     my $endpoint = Local::RawEndpoint->new;
     my $routing = $endpoint->to_router;
     my $nodes = $routing->routes;
+
+    ok(!$routing->can('not_found'),
+        'Endpoint materialization has no not-found callback accessor');
+    ok(!$routing->can('method_not_allowed'),
+        'Endpoint materialization has no method-not-allowed callback accessor');
 
     is([map { $_->is_raw ? 1 : 0 } @$nodes], [1, 1, 1, 0, 0],
         'only the three explicitly tagged declarations are raw leaves');
@@ -426,7 +432,9 @@ subtest 'two Endpoint objects report a materialization cycle' => sub {
 
 subtest 'a leaf resolves its inline provider in the Endpoint package' => sub {
     my $endpoint = Local::ProviderEndpoint->new(mode => 'leaf');
-    my $client = PAGI::Test::Client->new(app => $endpoint->to_app);
+    my $client = PAGI::Test::Client->new(
+        app => compose(app => $endpoint->to_router)->to_app,
+    );
 
     is($client->get('/provider/56')->text, 'leaf 56',
         'an unqualified leaf provider resolves in the Endpoint package');
@@ -437,7 +445,9 @@ subtest 'a leaf resolves its inline provider in the Endpoint package' => sub {
 subtest 'a group prefix resolves its provider in the Endpoint package' => sub {
     my $endpoint = Local::ProviderEndpoint->new(mode => 'group');
     my $routing = $endpoint->to_router;
-    my $client = PAGI::Test::Client->new(app => $routing->to_app);
+    my $client = PAGI::Test::Client->new(
+        app => compose(app => $routing)->to_app,
+    );
 
     is($client->get('/group/12/leaf')->text, 'group 12',
         'an unqualified group-prefix provider resolves in the Endpoint package');
@@ -448,7 +458,9 @@ subtest 'a group prefix resolves its provider in the Endpoint package' => sub {
 subtest 'a routing-aware mount prefix resolves its provider in the Endpoint package' => sub {
     my $endpoint = Local::ProviderEndpoint->new(mode => 'mount');
     my $routing = $endpoint->to_router;
-    my $client = PAGI::Test::Client->new(app => $routing->to_app);
+    my $client = PAGI::Test::Client->new(
+        app => compose(app => $routing)->to_app,
+    );
 
     is($client->get('/mount/34/leaf')->text, 'mount 34',
         'an unqualified mount-prefix provider resolves in the Endpoint package');

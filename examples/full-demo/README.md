@@ -99,23 +99,28 @@ ws.onopen = () => ws.send('Hello from browser!');
 ## Code Structure
 
 ```perl
-# Lifespan handling with PAGI::Utils::handle_lifespan
-return await handle_lifespan($scope, $receive, $send,
-    startup  => async sub { ... },
-    shutdown => async sub { ... },
-) if $scope->{type} eq 'lifespan';
-
 # Routing with PAGI::App::Router
 my $router = PAGI::App::Router->new;
 $router->get('/', raw => async sub { ... })->name('hello');
 $router->post('/echo', raw => async sub { ... })->name('echo');
 $router->websocket('/ws/echo', raw => async sub { ... });
 $router->sse('/events', raw => async sub { ... });
+
+# Complete application boundary and lifespan callbacks
+compose(
+    app => $router,
+    lifespan => {
+        startup  => async sub { ... },
+        shutdown => async sub { ... },
+    },
+)->to_app;
 ```
 
 These handlers intentionally demonstrate the protocol channels directly, so
 each route says `raw`. An ordinary App Router handler would receive `$c` and
-return a Response. The declarations run in exactly the order shown.
+return a Response. The declarations run in exactly the order shown. Compose
+keeps the same callbacks and state identity while providing complete HTTP
+fallback and application-error boundaries around the Router.
 
 ## Lifespan State
 
@@ -143,5 +148,5 @@ my $counter = $scope->{state}{request_counter}++;
 ## See Also
 
 - [PAGI::App::Router](../../lib/PAGI/App/Router.pm) - Full router documentation
-- [PAGI::Utils](../../lib/PAGI/Utils.pm) - Utility functions including handle_lifespan
+- [PAGI::Compose](../../lib/PAGI/Compose.pm) - Application boundaries and lifespan callbacks
 - [examples/](../) - Other example applications

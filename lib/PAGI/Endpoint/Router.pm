@@ -104,6 +104,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
     package MyApp::Endpoint;
     use parent 'PAGI::Endpoint::Router';
     use Future::AsyncAwait;
+    use PAGI::Compose qw(compose);
     use PAGI::Routing qw(middleware);
 
     sub new {
@@ -141,7 +142,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 
     my $endpoint = MyApp::Endpoint->new(repository => $repository);
     my $static = $endpoint->app_path('static');
-    my $app = $endpoint->to_app;
+    my $app = compose(app => $endpoint->to_router)->to_app;
 
 =head1 DESCRIPTION
 
@@ -191,8 +192,12 @@ Recursive Endpoint graphs fail with the shared placement-cycle diagnostic.
 =head2 to_app
 
 Materializes one fresh snapshot and compiles it through the shared compiler.
-Retain the returned native PAGI application for its intended lifetime. A class
-call constructs one Endpoint instance; an object call keeps its receiver.
+Retain the returned native PAGI routing component for its intended lifetime. A
+class call constructs one Endpoint instance; an object call keeps its receiver.
+Direct C<to_app> is legal low-level compilation, but an exhausted HTTP search
+emits no response. Use an enclosing L<PAGI::Compose> for a complete deployed
+application, or attach routing fallback middleware at the enclosing Router or
+Mount boundary.
 
 =head1 ROUTE DECLARATIONS
 
@@ -331,9 +336,10 @@ nor injects that key and has no C<state> or C<context_class> method.
 =head1 SNAPSHOTS AND ORDER
 
 Each C<to_router> returns a fresh immutable snapshot, and each C<to_app>
-compiles one retained snapshot. Matching, middleware folds, generated 404/405
-outcomes, first-seen C<Allow> order, route metadata, reverse resolution, and
+compiles one retained snapshot. Matching, middleware folds, nonterminal HTTP
+exhaustion, first-seen method evidence, route metadata, reverse resolution, and
 request-local scope cloning are exactly those documented by
-L<PAGI::App::Router>. Endpoint adds only method binding over that machinery.
+L<PAGI::App::Router>. Endpoint adds only method binding over that machinery and
+does not add Router fallback callback options or accessors.
 
 =cut

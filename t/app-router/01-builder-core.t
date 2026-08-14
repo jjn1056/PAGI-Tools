@@ -5,6 +5,7 @@ use Test2::V0;
 use Scalar::Util qw(refaddr);
 
 use lib 'lib';
+use PAGI::App::Router ();
 use PAGI::App::Router::Builder ();
 use PAGI::Routing::Middleware ();
 
@@ -15,22 +16,19 @@ use PAGI::Routing::Middleware ();
 
 subtest 'constructor copies and normalizes router configuration' => sub {
     my $factory = sub { return $_[0] };
-    my $not_found = sub { };
-    my $method_not_allowed = sub { };
     my $middleware = [$factory];
 
     my $builder = PAGI::App::Router::Builder->new(
-        desc               => 'root routes',
-        middleware         => $middleware,
-        not_found          => $not_found,
-        method_not_allowed => $method_not_allowed,
+        desc       => 'root routes',
+        middleware => $middleware,
     );
 
     my $options = $builder->_router_options;
     is($options->{desc}, 'root routes', 'stores the top-level description');
-    is(refaddr($options->{not_found}), refaddr($not_found), 'keeps not-found identity');
-    is(refaddr($options->{method_not_allowed}), refaddr($method_not_allowed),
-        'keeps method-not-allowed identity');
+    ok(!exists $options->{not_found},
+        'materialized Router options have no not-found callback key');
+    ok(!exists $options->{method_not_allowed},
+        'materialized Router options have no method-not-allowed callback key');
     ok($options->{middleware}[0]->isa('PAGI::Routing::Middleware'),
         'normalizes top-level middleware immediately');
 
@@ -48,9 +46,17 @@ subtest 'constructor copies and normalizes router configuration' => sub {
     like dies { PAGI::App::Router::Builder->new(desc => []) },
         qr/desc must be a string/,
         'invalid descriptions are rejected';
-    like dies { PAGI::App::Router::Builder->new(not_found => 'no') },
-        qr/not_found must be a coderef/,
-        'invalid fallback handlers are rejected';
+    for my $class (qw(PAGI::App::Router::Builder PAGI::App::Router)) {
+        my $instance = $class->new;
+        ok(!$instance->can('not_found'), "$class has no not-found accessor");
+        ok(!$instance->can('method_not_allowed'),
+            "$class has no method-not-allowed accessor");
+        for my $removed (qw(not_found method_not_allowed)) {
+            like dies { $class->new($removed => sub { }) },
+                qr/unknown router option '\Q$removed\E'/,
+                "$class rejects removed option '$removed'";
+        }
+    }
 };
 
 subtest 'all leaf declarations retain one exact ordered record sequence' => sub {

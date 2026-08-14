@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use PAGI::App::Router;
-use PAGI::Utils qw(handle_lifespan);
+use PAGI::Compose qw(compose);
 
 # Safe sleep that works even without Future::IO backend
 my $HAS_FUTURE_IO = eval { require Future::IO; 1 };
@@ -196,18 +196,13 @@ $router->sse('/events', raw => async sub {
     $disconnect->cancel if $disconnect->can('cancel') && !$disconnect->is_ready;
 })->name('sse_events');
 
-my $router_app = $router->to_app;
-
 # ============================================================================
 # Main Application with Lifespan
 # ============================================================================
 
-async sub pagi {
-    my ($scope, $receive, $send) = @_;
-
-    # Handle lifespan events
-    return await handle_lifespan(
-        $scope, $receive, $send,
+compose(
+    app => $router,
+    lifespan => {
         startup => async sub {
             my ($state) = @_;
             warn "[STARTUP] Initializing application...\n";
@@ -228,10 +223,5 @@ async sub pagi {
             # Cleanup resources here
             warn "[SHUTDOWN] Cleanup complete\n";
         },
-    ) if $scope->{type} eq 'lifespan';
-
-    # Route all other requests through the router
-    return await $router_app->($scope, $receive, $send);
-}
-
-\&pagi;
+    },
+)->to_app;

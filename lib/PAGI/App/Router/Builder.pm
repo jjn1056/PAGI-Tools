@@ -13,30 +13,22 @@ sub new {
     my ($class, @args) = @_;
     my $opts = _option_hash('router', @args);
 
-    my %allowed = map { $_ => 1 }
-        qw(desc middleware not_found method_not_allowed);
+    my %allowed = map { $_ => 1 } qw(desc middleware);
     for my $key (keys %$opts) {
         croak "unknown router option '$key'" unless $allowed{$key};
     }
 
     PAGI::Routing::Route::_validate_text('desc', $opts->{desc}, 0)
         if exists $opts->{desc};
-    for my $name (qw(not_found method_not_allowed)) {
-        croak "$name must be a coderef"
-            if exists $opts->{$name} && ref($opts->{$name}) ne 'CODE';
-    }
-
     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
         exists $opts->{middleware} ? $opts->{middleware} : [],
         'middleware',
     );
 
     return bless {
-        declarations       => [],
-        desc               => $opts->{desc},
-        middleware         => $middleware,
-        not_found          => $opts->{not_found},
-        method_not_allowed => $opts->{method_not_allowed},
+        declarations => [],
+        desc         => $opts->{desc},
+        middleware   => $middleware,
     }, $class;
 }
 
@@ -314,10 +306,8 @@ sub _declarations {
 sub _router_options {
     my ($self) = @_;
     return {
-        desc               => $self->{desc},
-        middleware         => [@{$self->{middleware}}],
-        not_found          => $self->{not_found},
-        method_not_allowed => $self->{method_not_allowed},
+        desc       => $self->{desc},
+        middleware => [@{$self->{middleware}}],
     };
 }
 
@@ -382,10 +372,6 @@ sub _materialize_with {
         routes     => $self->_materialize_nodes($materializer),
         middleware => $options->{middleware},
         (defined $options->{desc} ? (desc => $options->{desc}) : ()),
-        (defined $options->{not_found}
-            ? (not_found => $options->{not_found}) : ()),
-        (defined $options->{method_not_allowed}
-            ? (method_not_allowed => $options->{method_not_allowed}) : ()),
     );
 }
 
@@ -477,6 +463,9 @@ public-style declaration, and materializes immutable routing leaves and
 structural Mounts in that same order. It does not match requests, retain
 request state, or emit protocol events.
 
+The Router-level constructor surface is C<desc> and C<middleware>. Routing
+fallback policy is ordinary middleware rather than Builder callback storage.
+
 Middleware is normalized when a declaration is recorded. Normal targets are
 Context handlers; a native three-channel application must be supplied through
 the explicit C<raw> tag. Mutable router frontends are accepted only through a
@@ -484,7 +473,9 @@ known C<< router => >> mount, never as opaque or raw targets; callers that need
 an opaque application boundary must compile the frontend explicitly first.
 Each C<to_router> call uses a fresh root-local Materializer, so later Builder
 mutations cannot alter an existing snapshot. C<to_app> compiles one such
-retained snapshot. The public C<PAGI::App::Router> facade is layered on this
-core.
+retained snapshot as a low-level routing component; HTTP exhaustion remains
+unanswered until routing fallback middleware or an enclosing
+L<PAGI::Compose> boundary handles it. The public C<PAGI::App::Router> facade is
+layered on this core.
 
 =cut

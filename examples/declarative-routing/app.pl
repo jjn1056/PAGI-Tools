@@ -3,7 +3,8 @@ use warnings;
 use File::Basename qw(dirname);
 use lib dirname(__FILE__) . '/lib';
 use Future::AsyncAwait;
-use PAGI::Routing qw(:routes);
+use PAGI::Compose qw(compose);
+use PAGI::Routing qw(:routes middleware);
 use PAGI::Middleware::Helpers qw(wrap_send);
 use MyApp::Routes::Home ();
 
@@ -32,8 +33,6 @@ my $home_header = sub {
 
 my $routing = router(
     desc => 'Declarative routing example',
-    not_found => \&MyApp::Routes::Home::not_found,
-    method_not_allowed => \&MyApp::Routes::Home::method_not_allowed,
     routes => [
         route('/' => \&MyApp::Routes::Home::home,
             name       => 'home',
@@ -55,4 +54,12 @@ my $routing = router(
     ],
 );
 
-$routing->to_app;
+compose(
+    app => $routing,
+    middleware => [
+        middleware('Routing::NotFound',
+            handler => \&MyApp::Routes::Home::not_found),
+        middleware('Routing::MethodNotAllowed',
+            handler => \&MyApp::Routes::Home::method_not_allowed),
+    ],
+)->to_app;

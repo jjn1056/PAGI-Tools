@@ -8,6 +8,7 @@ use JSON::MaybeXS;
 use File::Spec;
 use File::Basename qw(dirname);
 use PAGI::App::Router;
+use PAGI::Compose qw(compose);
 
 use ChatApp::State qw(
     get_all_rooms get_room get_room_messages get_room_users get_stats
@@ -118,7 +119,7 @@ sub handler {
     $router->get('/api/room/{name}/users', raw => _room_users_handler());
     $router->get('/api/stats', raw => _stats_handler());
 
-    my $api_app = $router->to_app;
+    my $api_app = compose(app => $router)->to_app;
 
     return async sub {
         my ($scope, $receive, $send) = @_;

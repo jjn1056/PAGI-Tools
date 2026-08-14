@@ -30,6 +30,7 @@ sub maybe_sleep {
 }
 
 use PAGI::App::Router;
+use PAGI::Compose qw(compose);
 use PAGI::Response;
 use PAGI::Request;
 
@@ -273,4 +274,4 @@ $router->mount('/ws' => async sub {
     });
 });
 
-$router->to_app;
+compose(app => $router)->to_app;

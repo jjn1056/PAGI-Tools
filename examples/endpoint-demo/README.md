@@ -52,6 +52,11 @@ so the App Router attaches them as explicit opaque mounts. The `/` static-file
 mount is last because the shared routing engine preserves written order and a
 matched mount prefix owns dispatch immediately.
 
+Only the root Router is wrapped in `compose(app => $router)`. The HTTP,
+WebSocket, and SSE Endpoint applications remain opaque at their existing mount
+boundaries; the root Compose supplies the deployed application's outer safety
+boundary without changing their protocol ownership.
+
 ```perl
 $router->mount('/' => PAGI::App::File->app_path('public'));
 ```

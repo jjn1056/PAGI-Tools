@@ -13,6 +13,7 @@ use Time::HiRes qw(time);
 
 use PAGI::App::File;
 use PAGI::App::Router;
+use PAGI::Compose qw(compose);
 use PAGI::Middleware::AccessLog;
 use PAGI::Response;
 
@@ -190,4 +191,4 @@ $router->mount('/events' => [$timing] => MessageEvents->to_app);
 # Static files as fallback for everything else (no middleware)
 $router->mount('/' => PAGI::App::File->app_path('public'));
 
-$router->to_app;
+compose(app => $router)->to_app;

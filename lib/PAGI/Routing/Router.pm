@@ -13,7 +13,7 @@ sub new {
     croak 'router option list must be key/value pairs' if @args % 2;
     my %opts = @args;
 
-    my %allowed = map { $_ => 1 } qw(routes middleware desc not_found method_not_allowed);
+    my %allowed = map { $_ => 1 } qw(routes middleware desc);
     for my $key (keys %opts) {
         croak "unknown router option '$key'" unless $allowed{$key};
     }
@@ -25,19 +25,12 @@ sub new {
         'middleware',
     );
     PAGI::Routing::Route::_validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
-    for my $name (qw(not_found method_not_allowed)) {
-        croak "$name must be a coderef"
-            if exists $opts{$name} && ref($opts{$name}) ne 'CODE';
-    }
-
     my @routes = @$routes;
     my $self = bless {
         kind       => 'router',
         routes     => \@routes,
         middleware => $middleware,
         desc       => $opts{desc},
-        not_found  => $opts{not_found},
-        method_not_allowed => $opts{method_not_allowed},
     }, $class;
 
     $self->{_resolver} = PAGI::Routing::Resolver->new(router => $self);
@@ -54,8 +47,6 @@ sub target     { undef }
 sub is_raw     { undef }
 sub methods    { undef }
 sub constraints { undef }
-sub not_found { $_[0]->{not_found} }
-sub method_not_allowed { $_[0]->{method_not_allowed} }
 sub _resolver     { $_[0]->{_resolver} }
 sub named_routes { $_[0]->{_resolver}->named_routes }
 sub route_named  { $_[0]->{_resolver}->route_named($_[1]) }
@@ -81,12 +72,13 @@ PAGI::Routing::Router - Immutable declarative router description
 
 =head1 DESCRIPTION
 
-The root routing description. Construction validates its direct node list,
-fallback handlers, middleware descriptors, descriptions, canonical slash
-addresses, and every inspectable inline or Router-mount ancestry. A Router
-description remains placement-free: mounting it never writes a parent path or
-local name onto the child. This is compile-time configuration only; the object
-stores no request scope, match, or response state.
+The root routing description. Construction accepts only C<routes>,
+C<middleware>, and C<desc>, and validates the direct node list, middleware
+descriptors, descriptions, canonical slash addresses, and every inspectable
+inline or Router-mount ancestry. A Router description remains placement-free:
+mounting it never writes a parent path or local name onto the child. This is
+compile-time configuration only; the object stores no request scope, match, or
+response state.
 
 =head1 ACCESSORS
 
@@ -108,9 +100,8 @@ same Router may be reused in completed sibling branches.
 
 C<middleware> returns a fresh arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
-identity. C<desc>, C<not_found>, and C<method_not_allowed> return declaration
-values. Leaf/mount-only accessors such as C<name>, C<path>, C<target>,
-C<methods>, and C<constraints> return undef.
+identity. C<desc> returns the declaration value. Leaf/mount-only accessors such
+as C<name>, C<path>, C<target>, C<methods>, and C<constraints> return undef.
 
 =head1 METHODS
 
@@ -160,5 +151,13 @@ L<PAGI::Routing::Compiler> on every call. Middleware factories and components
 are resolved during this call. It emits no events and starts no requests; the
 returned coderef performs request matching and protocol I/O only when invoked.
 Retain that coderef rather than compiling per request.
+
+This direct compilation is a low-level routing component. HTTP exhaustion
+records trusted routing evidence and completes normally without emitting a
+response. Use L<PAGI::Compose> for a complete deployed application, or install
+L<PAGI::Middleware::Routing::NotFound> and
+L<PAGI::Middleware::Routing::MethodNotAllowed> at the Router or enclosing
+boundary when custom policy belongs there. WebSocket and SSE miss behavior is
+unchanged.
 
 =cut
