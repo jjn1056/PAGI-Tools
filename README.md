@@ -23,6 +23,7 @@ PAGI-Tools adds the ergonomics — requests, response values, routing, a
 middleware suite — so the same application reads like this:
 
     use PAGI::App::Router;
+    use PAGI::Compose qw(compose);
     use Future::AsyncAwait;
 
     my $router = PAGI::App::Router->new;
@@ -38,7 +39,7 @@ middleware suite — so the same application reads like this:
     })->name('user');
 
     my $routing = $router->to_router; # retain one immutable snapshot
-    my $app = $routing->to_app;       # still a native PAGI app
+    my $app = compose(app => $routing)->to_app; # complete deployed app
 
 Routing has three public frontends over that same immutable snapshot and
 compiler:
@@ -50,6 +51,7 @@ compiler:
 Use the functional frontend when the declarations are already immutable:
 
     use PAGI::Routing qw(:routes);
+    use PAGI::Compose qw(compose);
 
     async sub home {
         my ($c) = @_;
@@ -60,7 +62,7 @@ Use the functional frontend when the declarations are already immutable:
         route('/' => \&home, name => 'home'),
     ]);
 
-    my $app = $routing->to_app;
+    my $app = compose(app => $routing)->to_app;
 
 Functional routing distinguishes inline `routes => [...]`, inspectable
 `router => $child` mounts with a required local `name`, and positional opaque
@@ -71,10 +73,13 @@ return strings or croak, perform no protocol I/O, and do not replace normal
 authorization checks.
 
 The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
-route metadata, constraints, GET/HEAD behavior, generated outcomes, written
-declaration order, and reverse routing. Ordinary HTTP handlers receive `$c`
-and return a Response. Native channel ownership is always explicit with
-`raw`. See the
+route metadata, constraints, GET/HEAD behavior, nonterminal HTTP decline
+evidence, first-seen method unions, written declaration order, and reverse
+routing. Ordinary HTTP handlers receive `$c` and return a Response. Native
+channel ownership is always explicit with `raw`. A naked `to_app` Router is a
+low-level routing component: a miss sends no response. Compose supplies the
+complete deployed boundary and mandatory inert 404, 405, and 500 failsafes.
+See the
 [router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md)
 for the intentionally breaking migration from the previous App and Endpoint
 contracts.
@@ -103,7 +108,10 @@ description:
 
 [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) is an optional application-root composer, not a base class or
 a replacement router. Build an explicit router and pass it through `app` when
-router-specific configuration or inspection is needed.
+router-specific configuration or inspection is needed. Official fallback and
+error representations are ordinary middleware inside request IDs, access
+logging, and security middleware; the outer automatic responses remain a
+plain last resort.
 
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
@@ -139,7 +147,8 @@ processing and ergonomics
 [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter) - immutable functional, mutable imperative, and
 method-oriented frontends over one immutable routing engine
 - [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) - optional immutable application-root composition of
-one request target, application middleware, and explicit lifecycle callbacks
+one request target, application middleware, explicit lifecycle callbacks, and
+mandatory HTTP routing/error failsafes
 - [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and friends - in-process test utilities for
 PAGI applications
 - [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils) - composition and lifespan helpers, including explicit

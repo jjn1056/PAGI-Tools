@@ -24,6 +24,10 @@ my $main   = MyApp::Main->new(api => $api);
 my $app = compose(app => $main->to_router, lifespan => { ... })->to_app;
 ```
 
+That Compose is also the complete HTTP boundary: the Endpoint Router itself is
+a nonterminal routing component, while Compose supplies mandatory inert 404,
+405, response-completion, and application-error safeguards.
+
 Each package owns only its immutable configuration: `Main` keeps its `api`
 child and `API` keeps its `events` child. The server creates the resource and
 metrics hash in `Compose` startup; handlers read it through `$c->state`.

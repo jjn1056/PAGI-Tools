@@ -211,6 +211,20 @@ An HTTP Cascade intended as a deployed root should be enclosed by an explicit
 routing fallback policy or L<PAGI::Compose> so a final Router decline receives
 an application response.
 
+    my $routing = PAGI::App::Cascade->new(
+        apps => [
+            $static_app,          # explicit caught 404 may advance
+            $api_router->to_app,  # trusted Router decline may advance
+            $site_router->to_app, # final decline passes outward
+        ],
+    );
+
+    my $app = compose(app => $routing)->to_app;
+
+The status catch and trusted-decline paths are intentionally distinct. Cascade
+does not turn a caught response into routing evidence, and it does not require
+a Router to manufacture 404 merely to advance.
+
 =head1 OPTIONS
 
 =over 4

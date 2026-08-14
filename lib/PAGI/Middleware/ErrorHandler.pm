@@ -286,6 +286,53 @@ sub _status_message {
 
 __END__
 
+=head1 BOUNDARIES AND DATABASE FAILURES
+
+ErrorHandler is ordinary middleware and uses the same placement rules as the
+routing fallbacks. Application middleware provides whole-application policy:
+
+    compose(
+        app => $routing,
+        middleware => [
+            middleware('ErrorHandler',
+                handler  => \&site_server_error,
+                on_error => \&report_error),
+        ],
+    )
+
+Router middleware provides reusable subsystem policy, while a routing-aware
+Mount middleware list changes only one mounted occurrence:
+
+    my $api = router(
+        routes => \@api_routes,
+        middleware => [
+            middleware('ErrorHandler',
+                handler => \&api_server_error),
+        ],
+    );
+
+    mount('/api/v1',
+        router     => $api,
+        name       => 'v1',
+        middleware => [
+            middleware('ErrorHandler',
+                handler => \&legacy_server_error),
+        ],
+    )
+
+Unlike Routing::NotFound and Routing::MethodNotAllowed, ErrorHandler is also
+useful on a Route: exceptions happen after that Route is selected, while route
+exhaustion does not.
+
+If a database call throws or returns a failed Future before response start,
+C<on_error> settles before the custom or built-in renderer runs. If the same
+failure happens after a streaming start, rendering is no longer safe:
+ErrorHandler settles C<on_error>, emits no second start, and rethrows the
+original database exception. Put an author ErrorHandler inside request-ID,
+access-log, and security middleware when those wrappers must observe the
+official 500. Compose keeps its own plain outer ErrorHandler installed as the
+last recovery boundary if author policy itself fails.
+
 =head1 EXCEPTION HANDLING
 
 The middleware supports exception objects with a C<status_code> method

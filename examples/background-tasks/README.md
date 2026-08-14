@@ -10,7 +10,8 @@ routing compiler.
 The final Router is deployed through `compose(app => $router)`. Direct
 `$router->to_app` remains useful as a low-level routing component, but an
 unknown HTTP path then completes without response events; Compose supplies the
-complete application boundary used by the server example.
+complete application boundary used by the server example. Its automatic
+fallbacks are mandatory and inert after any route starts a response.
 
 ## Run
 

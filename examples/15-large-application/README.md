@@ -101,14 +101,17 @@ would normally expose a narrower local provider such as `&PersonId`.
 
 - `/person/999` is a Person handler-owned 404.
 - `/person/-1` matches `&Int` and is also a Person handler-owned 404.
-- `/person/not-an-integer` fails `&Int` and remains the Person Router's plain
-  generated 404.
+- `/person/not-an-integer` fails `&Int`; the selected Person Router publishes
+  a trusted decline and the root Compose renders its plain automatic 404.
 - `/person/1/blog/999` is a Blogs handler-owned 404.
 - `/person/1/blog/not/a/route` is handled by Blogs' explicit catchall.
 - `/outside` is handled by Root's ordinary explicit catchall.
-- `/person/1/unmatched` is still the Person Router's generated child 404:
-  matched child Router boundaries own NONE, so no-match bubbling remains
-  deferred as GAP-02.
+- `/person/1/unmatched` is owned by the selected Person Router. The parent does
+  not resume its root catchall; trusted decline evidence reaches the root
+  Compose fallback instead.
+- A method mismatch under a selected child reaches Compose's automatic 405
+  with only that child's first-seen `Allow` union; discarded parent partials
+  do not leak into it.
 - `/static/missing.css` remains owned by the opaque file application rather
   than being reinterpreted by Root.
 

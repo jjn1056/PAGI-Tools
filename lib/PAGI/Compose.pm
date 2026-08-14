@@ -399,8 +399,12 @@ The completion guard never replaces an inner exception.
 Install ordinary author middleware for the application's official policy:
 
     middleware => [
+        'RequestId',
+        'AccessLog',
+        'SecurityHeaders',
         middleware('ErrorHandler',
-            handler => \&site_error),
+            handler  => \&site_error,
+            on_error => \&report_error),
         middleware('Routing::NotFound',
             handler => \&site_not_found),
         middleware('Routing::MethodNotAllowed',
@@ -408,11 +412,20 @@ Install ordinary author middleware for the application's official policy:
     ]
 
 These renderers run inside the automatic last resort. Earlier listed author
-middleware can log, decorate, or otherwise observe their responses. If custom
-policy fails or leaves HTTP unanswered, the automatic boundary still protects
-the deployed root. Lifespan callback failures retain the separate lifespan
-failure-event behavior documented above, and non-HTTP target failures retain
-their existing propagation behavior.
+middleware can attach request identity, log, add security headers, or otherwise
+observe their responses. If custom policy fails or leaves HTTP unanswered, the
+automatic boundary still protects the deployed root. Both the author and
+automatic layers remain installed; an inner response makes the outer layer
+inert rather than triggering a duplicate start. Lifespan callback failures
+retain the separate lifespan failure-event behavior documented above, and
+non-HTTP target failures retain their existing propagation behavior.
+
+An ordinary author ErrorHandler has static C<development =E<gt> 0> behavior
+unless configured otherwise and awaits immediate or Future-backed C<on_error>
+reporting. Only Compose's private automatic instance resolves development mode
+dynamically per handled request. Before response start a database throw or
+failed Future may be rendered; after start the same failure is reported and
+re-thrown without a second response.
 
 =head1 RELATIONSHIP TO OTHER PAGI APIS
 

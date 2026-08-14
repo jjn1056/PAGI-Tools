@@ -1,6 +1,34 @@
 # Revision history for PAGI-Tools
 
 0.002003
+  - BREAKING: HTTP Router exhaustion is now nonterminal. The immutable, App,
+    and Endpoint Router frontends reject the removed `not_found` and
+    `method_not_allowed` callback options without compatibility aliases.
+    Routers publish request-local matching facts instead; ordinary
+    Routing::NotFound and Routing::MethodNotAllowed middleware render policy
+    at Compose, Router, or routing-aware Mount boundaries. Routing-generated
+    405 responses carry one authoritative first-seen union Allow field.
+  - PAGI::Compose now installs mandatory inert HTTP safeguards around every
+    target: a fresh routing Trace, ErrorHandler, response-completion guard,
+    NotFound, MethodNotAllowed, and the final HEAD wire boundary. Its built-in
+    production 404/405/500 responses are plain UTF-8, no-store failsafes.
+    Applications install official fallback/error middleware inside logging,
+    request-ID, and security middleware; an inner response makes the outer
+    defaults inert.
+  - ErrorHandler adds an optional Response renderer, awaits immediate or
+    Future-backed `on_error` reporting, and rethrows the original exception
+    after response start without attempting a second response. Built-in HTML,
+    text, and JSON responses now use byte-correct UTF-8 Content-Length and
+    `Cache-Control: no-store`. Ordinary ErrorHandler development mode remains
+    static; only Compose's private failsafe resolves the environment per
+    handled request.
+  - PAGI::App::Cascade now advances a naked Router by trusted decline evidence
+    independently of its explicit-status `catch` list, streams non-caught
+    responses after start, and rejects arbitrary silent HTTP children.
+    PAGI::App::URLMap remains opaque and shields parent routing evidence;
+    Router children that need local fallbacks must be wrapped in Compose.
+    See UPGRADING.md for exact deployed-Router, Mount, URLMap, Cascade, and
+    ErrorHandler migrations.
   - PAGI::Utils now exports `pagi_env` and the four environment predicates
     through `:env` and `:all`; unset or empty PAGI_ENV safely means production,
     while invalid nonempty values croak. PAGI::App::File now uses
@@ -51,8 +79,8 @@
     PAGI::Context and return a PAGI::Response; explicit raw routes retain native
     channel ownership. The release includes inline and application mounts,
     route/mount/router pure event middleware, WebSocket and SSE Context
-    handlers, automatic HEAD wire suppression, custom generated 404/405
-    handlers, first-seen Allow, synchronous constraints, reverse URLs,
+    handlers, automatic HEAD wire suppression, nonterminal HTTP exhaustion,
+    first-seen method evidence, synchronous constraints, reverse URLs,
     request-local matched-route frames, inspection, and an executable example.
     PAGI::App::Router and PAGI::Endpoint::Router materialize the same model.
   - Declarative mount prefixes accept both the exact prefix and its slash form

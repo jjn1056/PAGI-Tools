@@ -55,7 +55,9 @@ matched mount prefix owns dispatch immediately.
 Only the root Router is wrapped in `compose(app => $router)`. The HTTP,
 WebSocket, and SSE Endpoint applications remain opaque at their existing mount
 boundaries; the root Compose supplies the deployed application's outer safety
-boundary without changing their protocol ownership.
+boundary without changing their protocol ownership. If one selected opaque
+HTTP child were to complete silently, the outer response guard would treat it
+as incomplete output (500), not as a trusted routing 404.
 
 ```perl
 $router->mount('/' => PAGI::App::File->app_path('public'));

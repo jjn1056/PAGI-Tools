@@ -132,6 +132,16 @@ Wrap the child Router in its own L<PAGI::Compose> when the mounted application
 should render its own 404 or 405. For non-HTTP scopes URLMap does not remove or
 reinterpret a same-named scope value.
 
+    # Incomplete opaque child: outer Compose sees silent application output.
+    $map->mount('/api' => $api_router->to_app);
+
+    # Complete opaque child: the child Compose owns its fallback response.
+    $map->mount('/api' => compose(app => $api_router)->to_app);
+
+The same rule applies to C<default>. URLMap does not recognize Router classes
+or offer a routing-aware mount form; use L<PAGI::Routing> C<< router => >>
+Mounts when trusted child evidence must remain visible to an outer fallback.
+
 =head1 OPTIONS
 
 =over 4

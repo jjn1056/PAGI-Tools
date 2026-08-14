@@ -8,8 +8,10 @@ Routing examples use three frontends over one immutable engine:
 `PAGI::Routing` for functional declarations, `PAGI::App::Router` for a mutable
 verb-method builder, and `PAGI::Endpoint::Router` for local methods on a
 configured object. They share path Patterns, written declaration order,
-metadata, generated outcomes, and reverse routing. Native three-channel route
-handlers are always marked `raw`.
+metadata, nonterminal HTTP decline evidence, and reverse routing. Native
+three-channel route handlers are always marked `raw`. Deployed Router examples
+use Compose for complete 404, 405, and application-error safeguards; direct
+`to_app` remains the lower-level routing-component spelling.
 
 ## Requirements
 

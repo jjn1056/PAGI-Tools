@@ -58,6 +58,7 @@ PAGI::Routing - Immutable declarative routing with Context handlers
 =head1 SYNOPSIS
 
     use PAGI::Routing qw(:routes :middleware);
+    use PAGI::Compose qw(compose);
 
     use Future::AsyncAwait;
     use MyApp::Routes::Home ();
@@ -92,7 +93,7 @@ PAGI::Routing - Immutable declarative routing with Context handlers
         ],
     );
 
-    my $app = $routing->to_app;
+    my $app = compose(app => $routing)->to_app;
 
 =head1 DESCRIPTION
 
@@ -209,6 +210,14 @@ without sending a response. Install ordinary C<Routing::NotFound> and
 C<Routing::MethodNotAllowed> middleware at a Router, routing-aware Mount, or
 enclosing application boundary to render that evidence. WebSocket, SSE, and
 lifespan scopes do not install or alter HTTP routing evidence.
+
+The evidence snapshot reports facts: whether routing declined, whether a path
+or method matched, the first-seen allowed-method union, and bounded development
+attempts. It never reports a status or outcome decision. The trace is passed
+explicitly to fallback handlers. L<PAGI::Context> intentionally gains no
+C<routing_trace>, C<not_found>, or C<method_not_allowed> method because Context
+also serves native applications and third-party routers that do not publish
+this first-party contract.
 
 =head2 route, websocket, sse
 
@@ -497,12 +506,26 @@ selected application completion, not a routing decline. A selected normal
 HTTP handler must still return a Response; an invalid return remains an
 application error.
 
+When MethodNotAllowed renders a trusted method partial as 405, it emits exactly
+one authoritative C<Allow> field from the snapshot's deterministic first-seen
+union; GET contributes HEAD. The renderer reads C<allowed_methods> from the
+snapshot rather than mutable Context headers. An explicit handler/native 405
+remains application output and is never repaired by an outer fallback.
+
 Router middleware surrounds that Router's own decline. Middleware on an inline
 or Router Mount surrounds the already-selected child boundary, and the parent
 never resumes scanning. Put C<Routing::NotFound> or
 C<Routing::MethodNotAllowed> middleware at the boundary that owns response
 policy. Route placement is inert for exhaustion because route middleware runs
 only after that route fully matches.
+
+Direct C<< $routing->to_app >> is therefore a lower-level component spelling.
+Use C<< compose(app => $routing)->to_app >> for a complete deployed HTTP
+application. An opaque Mount or raw route shields the parent routing-evidence
+channel; if its selected native target sends nothing, Compose treats that as
+incomplete output and renders 500 rather than inventing a 404. Preserve Router
+awareness with C<< router => $child >>, or keep opacity and wrap the child in
+its own Compose boundary.
 
 C<not_found> is not a catch-all route. A final C<< route('/*path' =E<gt> ...) >>
 is a normal route with captures, middleware, and method matching. A GET-only

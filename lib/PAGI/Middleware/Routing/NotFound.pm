@@ -75,6 +75,11 @@ channels plus the read-only L<PAGI::Routing::Trace::Snapshot>. Its immediate or
 Future-backed return must satisfy L<PAGI::Utils/is_response>. The Context's
 cached response is seeded to 404; an explicit handler status wins.
 
+The snapshot reports matching facts, not status: the middleware acts when
+C<routing_declined> is true and C<path_matched> is false. Context has no
+routing-fallback convenience methods because not every Context application
+uses the first-party routing Trace.
+
 =head1 BOUNDARIES AND OWNERSHIP
 
 Router middleware observes that Router's own exhaustion. Middleware on a

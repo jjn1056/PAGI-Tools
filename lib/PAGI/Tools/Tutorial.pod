@@ -95,13 +95,18 @@ L<PAGI::Context> and HTTP handlers should return Response values:
       ],
   );
 
-  $routing->to_app;
+  my $routing_component = $routing->to_app;
 
 Constructors validate and build immutable descriptions. C<to_app> compiles a
 fresh native PAGI wrapper graph and starts no request; call it once for the app
 instance and retain the returned coderef. At request time routing matches in
 declaration order, constructs C<$c>, awaits the handler, and emits its returned
 Response exactly once.
+
+The compiled coderef is deliberately a routing component rather than a
+complete public HTTP application. If no route answers, it records trusted
+request-local matching facts and sends nothing. Part 2.2 wraps that component
+in Compose for a deployed root with complete 404, 405, and 500 safeguards.
 
 Reusable semantic constraints can sit beside a parameter. An imported
 Type::Tiny type is an ordinary zero-argument provider function:
@@ -142,8 +147,10 @@ configured Router as an inspectable child and requires a local name. The third
 is an opaque application prefix. Passing a Router positionally still chooses
 opacity; C<< mount('/x' => $router) >> is not shorthand for the named
 C<< router => $router >> form.
-After a Router-mount prefix matches, the child owns its 404/405 as well as its
-full match. Parent no-match bubbling is deferred.
+After a Router-mount prefix matches, the child owns its full match and any
+unanswered decline. The parent never resumes scanning; the decline unwinds
+through child Router, Mount-occurrence, enclosing Router, and application
+fallback middleware until one responds.
 
 Route and structural-mount names are local segments; slash constructs absolute
 logical addresses such as C</api/user>. Context reverse calls may resolve from
@@ -204,18 +211,23 @@ does not invent state, so a server without lifespan-state support receives a
 clear startup failure whenever callbacks are configured. Plain and
 Future-backed callbacks are both accepted.
 
-C<routes> is the compact form. When an existing router or application already
-owns the request policy, pass it through C<app> instead:
+C<routes> is the compact form. When a separately configured Router or another
+application component already exists, pass it through C<app> instead:
 
   my $routing = router(
       routes => \@nodes,
       middleware => [middleware('RouterMetrics')],
-      not_found => \&not_found,
   );
 
   my $app = compose(
       app => $routing,
-      middleware => [middleware('RequestId')],
+      middleware => [
+          middleware('RequestId'),
+          middleware('Routing::NotFound',
+              handler => \&not_found),
+          middleware('Routing::MethodNotAllowed',
+              handler => \&method_not_allowed),
+      ],
       lifespan => { startup => \&startup },
   )->to_app;
 
@@ -225,9 +237,17 @@ WebSocket, SSE, and extension scopes. The first listed middleware is outermost.
 Only the deployed root runs lifecycle callbacks; mounting or nesting a Compose
 description retains request dispatch but does not run that inner lifecycle.
 
+For HTTP, Compose also installs one mandatory outer graph: final HEAD wire
+suppression, a fresh routing Trace, ErrorHandler, response-completion guard,
+Routing::NotFound, Routing::MethodNotAllowed, then the author middleware and
+target. An author response makes the outer defaults inert. Keep official
+fallback and error policy inside request-ID, access-log, and security
+middleware when those layers should observe or decorate it. Compose does not
+add callback, disable, or replacement-detection options for these safeguards.
+
 C<compose(...)> returns an immutable description. The final C<to_app> compiles
 the native three-channel PAGI coderef once. Compose is not a base class and it
-does not duplicate router fallbacks or reverse-routing methods.
+does not duplicate Router callback APIs or reverse-routing methods.
 
 =head2 2.3 PAGI::App::Router - Mutable Routing
 
@@ -236,6 +256,7 @@ model. Its verb methods append declarations in written order; ordinary
 handlers use the same Context contract as C<PAGI::Routing>:
 
   use PAGI::App::Router;
+  use PAGI::Compose qw(compose);
   use PAGI::Routing qw(middleware);
 
   my $router = PAGI::App::Router->new;
@@ -266,7 +287,7 @@ handlers use the same Context contract as C<PAGI::Routing>:
   $router->sse('/events', raw => $native_sse_app);
 
   my $snapshot = $router->to_router;
-  my $app = $snapshot->to_app;
+  my $app = compose(app => $snapshot)->to_app;
 
 The middleware entries above show all four universal forms: class name,
 synchronous factory coderef, configured object with C<wrap>, and explicit
@@ -291,9 +312,16 @@ The three APIs are declaration frontends at different abstraction boundaries:
 
 All three materialize L<PAGI::Routing::Router> and share Pattern parsing,
 Resolver slash addresses, Compiler matching, route metadata, constraints,
-GET/HEAD behavior, generated 404/405 outcomes, first-seen C<Allow>, reverse
-routing, pure native middleware, and exact written order. The first full match
-wins; declarations are never separated by kind or sorted by mount prefix.
+GET/HEAD behavior, nonterminal HTTP declines, first-seen method evidence,
+reverse routing, pure native middleware, and exact written order. The first
+full match wins; declarations are never separated by kind or sorted by mount
+prefix.
+
+The routing Trace contains facts rather than a status decision. Ordinary
+fallback middleware receives its checkpoint snapshot and decides whether to
+render. Context intentionally has no C<routing_trace>, C<not_found>, or
+C<method_not_allowed> convenience method: Context also serves applications
+and routers that do not publish this first-party contract.
 
 Choose C<PAGI::Routing> for functional immutable declarations,
 C<PAGI::App::Router> for incremental mutation with closures, and
@@ -952,7 +980,14 @@ Catch and format errors:
 
 C<ErrorHandler> renders C<text/html> by default; set
 C<< content_type => 'application/json' >> (or C<'text/plain'>) to change the
-format.
+format. Ordinary construction has static C<development =E<gt> 0> behavior and
+does not consult C<PAGI_ENV>. Its optional C<handler> receives
+C<($context, $error)> and returns an immediate or Future-backed Response.
+C<on_error> is awaited reporting, not rendering; reporter failure is contained.
+Before response start, ErrorHandler reports and renders. After start it reports,
+emits no replacement response, and rethrows the original exception so the
+server can abort the incomplete stream. Built-in bodies are byte-correct UTF-8
+and carry C<Cache-Control: no-store>.
 
 =back
 
@@ -1152,18 +1187,34 @@ L<PAGI::App::URLMap> routes requests to different apps based on URL prefix:
   $urlmap->mount('/api' => $api_app);
   $urlmap->mount('/admin' => $admin_app);
   $urlmap->mount('/static' => $static);
-  $urlmap->to_app;
+  compose(app => $urlmap)->to_app;
+
+Each selected mount and C<default> is opaque. A naked compiled Router can
+decline silently inside that boundary, and an outer Compose reports the result
+as incomplete output (500), not as 404. Wrap that Router with
+C<< compose(app => $router)->to_app >> when the URLMap child should complete
+its own routing fallback.
 
 =head2 7.4 PAGI::App::Cascade - Try Apps in Sequence
 
-L<PAGI::App::Cascade> tries apps in order until one returns a non-404:
+L<PAGI::App::Cascade> tries apps in order using two independent rules:
+explicit non-final statuses in C<catch>, and trusted unanswered Router
+declines:
 
   use PAGI::App::Cascade;
 
-  my $app = PAGI::App::Cascade->new(
+  my $routing = PAGI::App::Cascade->new(
       apps => [$static, $api, $fallback],
       catch => [404, 405],
   );
+
+  my $app = compose(app => $routing)->to_app;
+
+A non-caught response streams after its start event. A caught response is
+suppressed and awaited through its terminal body before the next child runs.
+An arbitrary silent HTTP child is an application error. A final Router decline
+remains unanswered, so a deployed Cascade ending that way needs routing
+fallback middleware or Compose.
 
 =head2 7.5 PAGI::App::Proxy - Reverse Proxy
 
@@ -1240,11 +1291,13 @@ C<sub { my ($app) = @_; async sub { ... } }>.
 Passing middleware where an app belongs (or vice versa) croaks at
 composition time with a message pointing at the right position.
 
-The one place that still wants an explicit C<< ->to_app >> is the value
-your F<app.pl> hands to the server: the server contract is a plain
-coderef, so end your file with C<< $router->to_app >> or
-C<< $routing->to_app >> (or a
-C<builder {}> block, which already returns one).
+The value F<app.pl> hands to the server must still be a native coderef. For a
+Router or a routing-capable Cascade, end the file with
+C<< compose(app => $routing)->to_app >> so the deployed HTTP application has
+complete fallbacks. Direct C<< $routing->to_app >> is the lower-level spelling
+when an explicit enclosing component supplies that policy. A C<builder {}>
+block already returns a native coderef; whether it is complete depends on the
+applications it composes.
 
 =head1 SEE ALSO
 

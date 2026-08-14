@@ -81,6 +81,11 @@ Future-backed return must satisfy L<PAGI::Utils/is_response>. The Context's
 cached response is seeded to 405, but no mutable C<Allow> value is seeded. An
 explicit handler status wins.
 
+The snapshot reports facts rather than a status decision. This middleware acts
+only for a trusted decline with a complete path match, no method match, and a
+nonempty method union. Context intentionally has no routing-fallback
+convenience method; handlers receive the first-party snapshot explicitly.
+
 =head1 AUTHORITATIVE ALLOW
 
 When the emitted C<http.response.start> status is 405, every case-insensitive

@@ -27,7 +27,8 @@ small runnable declarative app, see F<examples/declarative-routing>.
 
 All three materialize the same immutable Router and share Pattern parsing,
 Resolver slash addresses, Compiler dispatch, metadata, constraints, GET/HEAD,
-generated outcomes, reverse routing, and written declaration order.
+nonterminal HTTP decline evidence, reverse routing, and written declaration
+order.
 
 =head2 A Declarative Route Tree with Package Handlers
 
@@ -49,6 +50,7 @@ guessing:
 
   # app.pl
   use MyApp::Routes::Home ();
+  use PAGI::Compose qw(compose);
   use PAGI::Routing qw(:routes);
 
   my $routing = router(
@@ -57,15 +59,19 @@ guessing:
       ],
   );
 
-  $routing->to_app;
+  compose(app => $routing)->to_app;
 
-The final expression is the native PAGI app. Compile once for the application
-instance; do not call C<to_app> inside a request.
+The final expression is the complete native PAGI app. A direct
+C<< $routing->to_app >> remains useful as a lower-level routing component, but
+an exhausted HTTP search sends no response unless an enclosing fallback acts.
+Compile once for the application instance; do not call C<to_app> inside a
+request.
 
 =head2 Inline, Router, and Application Mounts
 
 The C<routes> form is structural. Its names and reverse paths are known to the
-parent, and it uses the containing Router's fallback handlers:
+parent, and unanswered exhaustion unwinds through the containing Router's
+fallback middleware:
 
   mount('/tenants/{tenant_id}',
       routes => [
@@ -117,8 +123,9 @@ The root resolver publishes C</home>, C</person/index>, and
 C</person/show>. The child Router keeps only its local descriptions; inside a
 request, Context uses the active placement for relative calls such as
 C<< $c->path_for('show') >>. After C</people> matches, the child Router owns its
-full, partial, and no-match results, including its generated 404/405. The root
-does not resume scanning. Cooperative no-match bubbling remains deferred.
+full, partial, and no-match results. A decline can reach child Router,
+Mount-occurrence, enclosing Router, and application fallback middleware; the
+root never resumes sibling scanning.
 
 The positional form is an opaque application mount:
 
@@ -223,33 +230,100 @@ useful.
 
 =head2 Negotiated 404 and 405 Responses
 
-Fallbacks are ordinary Context handlers. The router seeds 404 or 405 plus
-C<Allow> before invoking them, so one function can negotiate both:
+Fallback policy is ordinary middleware. These two handlers share a renderer,
+read the status seeded into their local Context, and keep the 405 method union
+in the routing snapshot:
 
-  async sub http_error {
-      my ($c) = @_;
+  use PAGI::Compose qw(compose);
+  use PAGI::Routing qw(router middleware);
+
+  async sub render_http_error {
+      my ($c, $allowed) = @_;
       my $status = $c->response->status;
       my $type = $c->request->preferred_type(
           'application/json', 'text/html', 'text/plain',
       ) // 'text/plain';
 
       $c->response->header('Vary' => 'Accept');
-      return $c->json({ status => $status })
+      return $c->json({ status => $status, allowed => $allowed })
           if $type eq 'application/json';
       return $c->html("<h1>$status</h1>")
           if $type eq 'text/html';
       return $c->text("HTTP $status");
   }
 
-  my $routing = router(
-      routes                 => \@routes,
-      not_found              => \&http_error,
-      method_not_allowed     => \&http_error,
-  );
+  async sub not_found {
+      my ($c, $snapshot) = @_;
+      return await render_http_error($c, []);
+  }
+
+  async sub method_not_allowed {
+      my ($c, $snapshot) = @_;
+      return await render_http_error($c, $snapshot->allowed_methods);
+  }
+
+  my $app = compose(
+      app => router(routes => \@routes),
+      middleware => [
+          middleware('Routing::NotFound',
+              handler => \&not_found),
+          middleware('Routing::MethodNotAllowed',
+              handler => \&method_not_allowed),
+      ],
+  )->to_app;
 
 A selected application's own 404 or 405 is left untouched. If a detached
-custom 405 response lacks Allow, the router adds only that required field; an
-existing Allow or changed status wins.
+custom routing renderer returns 405, MethodNotAllowed removes missing,
+duplicate, or conflicting C<Allow> fields and emits exactly one authoritative
+first-seen union from the snapshot. GET contributes HEAD. Returning a status
+other than 405 leaves application headers alone and adds no computed field.
+
+=head2 Compose Safety and Application Error Policy
+
+Compose installs the same mandatory inert outer graph for every HTTP target:
+
+  HEAD wire boundary
+    fresh routing Trace
+      automatic ErrorHandler
+        response-completion guard
+          automatic Routing::NotFound
+            automatic Routing::MethodNotAllowed
+              author middleware, in listed order
+                target
+
+Its production defaults are plain UTF-8, no-store emergency responses. Put
+the application's official policy inside request IDs, access logging, and
+security middleware so those layers observe its 404, 405, and 500 responses:
+
+  my $app = compose(
+      app => $routing,
+      middleware => [
+          'RequestId',
+          'AccessLog',
+          'SecurityHeaders',
+          middleware('ErrorHandler',
+              handler  => \&server_error,
+              on_error => \&report_error),
+          middleware('Routing::NotFound',
+              handler => \&not_found),
+          middleware('Routing::MethodNotAllowed',
+              handler => \&method_not_allowed),
+      ],
+  )->to_app;
+
+For example, a database failed Future before response start is awaited by the
+author ErrorHandler, reported through C<on_error>, and rendered by
+C<server_error>. C<on_error> may return immediately or through a Future; its
+failure is contained. If the database fails after a streaming response has
+started, ErrorHandler awaits reporting, calls no renderer, emits no second
+start, and rethrows the original database exception so the server can abort.
+
+Ordinary ErrorHandler instances default to static production mode and never
+consult C<PAGI_ENV>. Compose's private outer instance resolves development per
+handled request and falls back to safe production output if resolution fails.
+Built-in ErrorHandler HTML, text, and JSON use UTF-8 octets, byte-correct
+C<Content-Length>, and C<Cache-Control: no-store>. A custom renderer owns its
+own headers.
 
 =head2 Real Catch-All Routes
 
@@ -511,9 +585,9 @@ available for unnamed leaves.
 An opaque application mount instead sets terminal C<match> with
 C<kind =E<gt> 'mount'>, its complete effective mount path in C<route>,
 C<name =E<gt> undef>, its containing C<logical_namespace>, and its declared
-C<desc> or undef. It does not append a C<mounts> record for itself. A generated
-404/405 leaves C<match>
-undefined. See L<PAGI::Routing/MATCHED-ROUTE SCOPE CONVENTION> for the complete
+C<desc> or undef. It does not append a C<mounts> record for itself. An
+unanswered NONE/PARTIAL decline leaves C<match> undefined. See
+L<PAGI::Routing/MATCHED-ROUTE SCOPE CONVENTION> for the complete
 public schema.
 
 An explicit Router mount shares the containing frame. A separately compiled
@@ -772,7 +846,8 @@ L<PAGI::Endpoint::Router> provides an object-oriented approach to routing. You d
 
   # In app.pl:
   # use MyApp;
-  # MyApp->new(repository => $repository)->to_app;
+  # use PAGI::Compose qw(compose);
+  # compose(app => MyApp->new(repository => $repository))->to_app;
 
 Handler methods are called with:
 

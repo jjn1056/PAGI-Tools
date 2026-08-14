@@ -120,7 +120,9 @@ These handlers intentionally demonstrate the protocol channels directly, so
 each route says `raw`. An ordinary App Router handler would receive `$c` and
 return a Response. The declarations run in exactly the order shown. Compose
 keeps the same callbacks and state identity while providing complete HTTP
-fallback and application-error boundaries around the Router.
+fallback and application-error boundaries around the Router. A naked Router
+miss would send no events; the deployed Compose root renders the plain
+automatic fallback instead.
 
 ## Lifespan State
 

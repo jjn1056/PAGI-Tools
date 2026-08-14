@@ -74,7 +74,9 @@ response. L<PAGI::Middleware::Routing::NotFound> is the reciprocal conditional
 component; it renders only after an enclosed HTTP routing boundary completes
 unanswered with trusted not-found evidence. Use the middleware to interpret a
 Router decline, and use this application when an explicit terminal target is
-required. They are not interchangeable.
+required, such as the final entry in a Cascade. Invoking this app never checks
+a routing Trace and never becomes inert because another search matched. They
+are not interchangeable.
 
 =head1 OPTIONS
 

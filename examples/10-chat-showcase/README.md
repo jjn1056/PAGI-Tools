@@ -53,6 +53,9 @@ request dispatch. The bare `middleware => [\&with_logging]` factory shorthand
 is normalized into an inspectable immutable middleware description when the
 Compose root is constructed.
 
+The root Compose also supplies mandatory plain HTTP 404, 405, and 500
+failsafes. They do not change the WebSocket or SSE ownership described below.
+
 The WebSocket and SSE targets are existing native PAGI applications, so their
 route declarations use explicit `raw`. The opaque `/` HTTP mount is written
 last: the shared router preserves declaration order, and a matching prefix

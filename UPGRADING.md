@@ -1,13 +1,348 @@
-# Upgrading router frontends
+# Upgrading PAGI-Tools
 
-This guide is for applications moving from the previous `PAGI::App::Router`
-or `PAGI::Endpoint::Router` APIs to the shipped unified router frontends. The
-new frontends intentionally remove the old contracts shown in the Before
-examples; there is no compatibility mode.
+This guide is the standalone handoff for existing applications moving to the
+current PAGI::Tools release. It covers both the shipped routing-fallback and
+application-error boundary and the earlier unification of the
+`PAGI::App::Router` and `PAGI::Endpoint::Router` frontends. Contracts shown in
+Before examples have been removed. There is no compatibility mode and there
+are no compatibility aliases.
 
 Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
+
+## Routing fallbacks and application error handling
+
+### Replace Router callbacks with ordinary middleware
+
+Routers now discover routes; they do not own an application's 404 or 405
+representation. An exhausted HTTP search records request-local routing facts
+and completes normally without starting a response.
+
+**Before (removed):** Router construction accepted response callbacks.
+
+```perl
+my $routing = router(
+    routes                 => \@routes,
+    not_found              => \&not_found,
+    method_not_allowed     => \&method_not_allowed,
+);
+```
+
+**After (shipped):** install the same policy as application middleware.
+
+```perl
+use PAGI::Compose qw(compose);
+use PAGI::Routing qw(router middleware);
+
+my $routing = router(routes => \@routes);
+
+my $app = compose(
+    app => $routing,
+    middleware => [
+        middleware('Routing::NotFound',
+            handler => \&not_found),
+        middleware('Routing::MethodNotAllowed',
+            handler => \&method_not_allowed),
+    ],
+)->to_app;
+```
+
+Those removed names are rejected as unknown Router options. They are not
+ignored, warned about, or retained as aliases. The removal applies equally to
+the immutable, App, and Endpoint Router frontends.
+
+Use Router middleware when the policy belongs to one reusable subsystem
+instead of the whole application:
+
+```perl
+my $api = router(
+    routes => \@api_routes,
+    middleware => [
+        middleware('Routing::NotFound',
+            handler => \&api_not_found),
+        middleware('Routing::MethodNotAllowed',
+            handler => \&api_method_not_allowed),
+    ],
+);
+```
+
+Both handlers receive `($context, $snapshot)` and may return an immediate or
+Future-backed Response. The Context status is seeded to 404 or 405. The
+MethodNotAllowed handler reads `allowed_methods` from the snapshot; `Allow` is
+not seeded into mutable Context state. If that handler returns status 405, the
+middleware replaces every conflicting `Allow` field with exactly one
+authoritative, first-seen method union. GET contributes HEAD. Returning a
+different status, such as a deliberate 404, suppresses that computed field.
+
+### Treat a Router as a nonterminal component
+
+**Before (removed deployment assumption):** a compiled Router's generated
+fallback made it look like a complete server application.
+
+```perl
+my $app = $routing->to_app;
+```
+
+**After (shipped):** direct compilation remains the lower-level component
+boundary, while Compose supplies a complete public HTTP application.
+
+```perl
+# Low-level routing component: a miss sends no response events.
+my $routing_app = $routing->to_app;
+
+# Complete deployed application: mandatory 404, 405, and 500 failsafes.
+my $app = compose(app => $routing)->to_app;
+```
+
+Deploying the naked component can produce an empty reply, hang, or
+server-specific protocol failure when no enclosing fallback responds. Use it
+only when an explicit outer composition supplies the missing application
+policy.
+
+For every HTTP target, Compose installs this exact outer-to-inner graph:
+
+```text
+HEAD wire boundary
+  fresh routing Trace
+    Compose ErrorHandler failsafe
+      response-completion guard
+        Compose Routing::NotFound failsafe
+          Compose Routing::MethodNotAllowed failsafe
+            author Compose middleware, in listed order
+              target Router or application
+```
+
+These automatic layers are mandatory and deliberately plain. Compose has no
+`not_found`, `method_not_allowed`, `server_error`, disable, or replacement-
+detection options. Author middleware never suppresses them; an inner author
+response simply makes every outer failsafe inert. Install official policy
+inside request IDs, access logging, and security-header middleware so those
+wrappers observe and decorate application 404/405/500 responses:
+
+```perl
+middleware => [
+    'RequestId',
+    'AccessLog',
+    'SecurityHeaders',
+    middleware('ErrorHandler',
+        handler  => \&site_server_error,
+        on_error => \&report_error),
+    middleware('Routing::NotFound',
+        handler => \&site_not_found),
+    middleware('Routing::MethodNotAllowed',
+        handler => \&site_method_not_allowed),
+]
+```
+
+The automatic emergency bodies sit outside the author stack and therefore do
+not travel inward through it. Their production text is safe and generic.
+
+### Choose routing-aware or opaque Mount ownership explicitly
+
+Once any Mount prefix wins, that occurrence owns the request; the parent never
+resumes later route scanning. The difference is whether the boundary can carry
+trusted routing evidence outward.
+
+**Before (now incomplete):** compiling a Router before mounting it selected an
+opaque application that happened to provide its own generated fallback.
+
+```perl
+mount('/legacy' => $legacy_router->to_app)
+```
+
+**After (shipped, routing-aware):** retain the Router object. A child decline
+can reach child Router middleware, this Mount occurrence, enclosing Routers,
+and Compose in that order.
+
+```perl
+mount(
+    '/legacy',
+    router => $legacy_router,
+    name   => 'legacy',
+)
+```
+
+Occurrence-specific policy belongs directly on the Mount:
+
+```perl
+mount(
+    '/legacy',
+    router     => $legacy_router,
+    name       => 'legacy',
+    middleware => [
+        middleware('Routing::NotFound',
+            handler => \&legacy_not_found),
+    ],
+)
+```
+
+**After (shipped, intentionally opaque):** give the child its own complete
+application boundary before passing the native app.
+
+```perl
+mount('/legacy' => compose(app => $legacy_router)->to_app)
+```
+
+An opaque Mount shields its parent's routing Trace. A naked compiled Router
+behind it can decline only into its private child trace, so an outer Compose
+cannot reinterpret that silence as 404; its response guard produces 500.
+Wrapping the child makes the child's fallback response cross the opaque
+boundary normally. Raw route targets use the same evidence shielding, although
+they remain exact method-aware leaves rather than prefix mounts.
+
+### Complete Router children placed in URLMap
+
+`PAGI::App::URLMap` mounts and its `default` target are always opaque.
+
+**Before (now incomplete):**
+
+```perl
+my $map = PAGI::App::URLMap->new;
+$map->mount('/api' => $api_router->to_app);
+```
+
+**After (shipped):**
+
+```perl
+my $map = PAGI::App::URLMap->new;
+$map->mount('/api' => compose(app => $api_router)->to_app);
+```
+
+The same rule applies to `default`. Compose around URLMap sees a selected
+naked Router as incomplete opaque output and renders 500. Compose around the
+child Router renders the child's 404 or 405 before URLMap returns. URLMap does
+not inspect the target class or merge a child's private Trace into its parent.
+
+### Distinguish Cascade status catching from trusted decline
+
+**Before:** Router entries advanced only because their generated 404/405
+responses appeared in `catch`.
+
+```perl
+my $routing = PAGI::App::Cascade->new(
+    apps  => [$static_app, $api_router->to_app, $site_router->to_app],
+    catch => [404, 405],
+);
+```
+
+**After (shipped):** the spellings stay valid, but the two advance rules are
+separate. A non-final Router may advance by trusted unanswered decline; an
+explicit non-final response advances only when its status appears in `catch`.
+
+```perl
+my $routing = PAGI::App::Cascade->new(
+    apps => [$static_app, $api_router->to_app, $site_router->to_app],
+);
+
+my $app = compose(app => $routing)->to_app;
+```
+
+A final Router decline remains unanswered for the enclosing routing fallback.
+An arbitrary silent child is an incomplete-application error, not an implicit
+miss. Non-caught responses now stream their start and body chunks as they
+arrive instead of waiting for whole-child completion. A later exception is
+therefore observably after response start and must propagate. Caught responses
+are suppressed, awaited through their terminal body, and only then advance.
+
+### Update ErrorHandler lifecycle expectations
+
+**Before (removed behavior):** an exception after
+`http.response.start` was warned about and swallowed, so callers could observe
+normal completion even though the response was incomplete.
+
+```perl
+# Earlier tests could expect this failed stream to complete normally.
+await $wrapped->($scope, $receive, $send);
+```
+
+**After (shipped):** ErrorHandler awaits reporting, emits no replacement
+response, and rethrows the original exception for the server to abort the
+stream.
+
+```perl
+my $future = Future->wrap($wrapped->($scope, $receive, $send));
+die 'reporting was not awaited' if $future->is_ready;
+$reporting_finished->done;
+my $error = dies { $future->get };
+is(refaddr($error), refaddr($original_error));
+is($response_starts, 1);
+```
+
+```perl
+my $errors = middleware(
+    'ErrorHandler',
+    handler => sub {
+        my ($context, $error) = @_;
+        return $context->json({ error => 'request failed' });
+    },
+    on_error => sub {
+        my ($error) = @_;
+        return $reporter->record($error); # immediate value or Future
+    },
+);
+```
+
+Before response start, a database throw or failed Future is reported and then
+rendered by the custom or built-in handler. After response start, the renderer
+is never called: `on_error` must settle first, its own failure is contained,
+and the original database exception is rethrown unchanged. Tests that formerly
+expected normal completion must now expect that failure and exactly one
+response-start event.
+
+Ordinary ErrorHandler construction keeps static `development => 0`; it does
+not consult `PAGI_ENV`. Compose's private outer failsafe resolves development
+mode per handled request and falls back to safe production text if environment
+resolution itself fails. Every built-in ErrorHandler representation now adds
+`Cache-Control: no-store`. Text and HTML bodies are UTF-8 octets encoded once;
+JSON encoder octets are preserved; and `Content-Length` counts the emitted
+bytes. A custom renderer owns its own content type and cache policy.
+
+### Keep catch-all routing distinct from NotFound policy
+
+**Before (too broad for error policy):** a final route was sometimes used only
+to manufacture the application's missing-page response.
+
+```perl
+route('/*path' => \&missing_page, methods => ['GET'])
+```
+
+**After (shipped application policy):** let an ordinary fallback run after the
+search declines.
+
+```perl
+compose(
+    app => $routing,
+    middleware => [
+        middleware('Routing::NotFound',
+            handler => \&missing_page),
+    ],
+)
+```
+
+Retain an ordinary catch-all when it really is a selected resource, such as an
+SPA shell:
+
+```perl
+route('/*path' => \&spa_shell, methods => ['GET'])
+```
+
+It participates in declaration order, captures, method matching, and route
+middleware. A GET-only catch-all gives an unknown POST a method partial; a
+`methods => '*'` catch-all can deliberately supersede earlier partials.
+
+`Routing::NotFound` instead runs only after its enclosed trusted search
+declines. Use it for application or subsystem error policy. It does not make a
+parent catch-all resume after a selected Mount already owns the path.
+
+The routing Trace passed to fallback handlers contains facts, never a chosen
+HTTP status: `routing_declined`, `path_matched`, `method_matched`,
+`allowed_methods`, and bounded development attempts. PAGI::Context
+intentionally has no `routing_trace`, `not_found`, or `method_not_allowed`
+convenience method because Context also serves native applications and
+third-party routers that do not implement this first-party evidence contract.
+Middleware authors can use the low-level scope key and the Trace checkpoint/
+snapshot API when they deliberately participate in it.
 
 ## Choose a frontend: three descriptions, one engine
 
@@ -46,7 +381,7 @@ incremental closure declarations, and `PAGI::Endpoint::Router` for handlers
 bound to one configured object.
 
 Why: one compiler now gives all three frontends the same matching, middleware,
-metadata, reverse-routing, and generated-response behavior.
+metadata, reverse-routing, and nonterminal HTTP-decline behavior.
 
 ## App handlers now receive `$c`
 

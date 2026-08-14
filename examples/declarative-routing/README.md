@@ -19,7 +19,9 @@ ordinary shape without turning the example into a framework:
 The custom handlers receive an HTTP Context plus the routing snapshot for the
 boundary they enclose. In particular, the 405 renderer reads
 `$trace->allowed_methods`; Router exhaustion does not seed an `Allow` header or
-invoke a Router callback.
+invoke a Router callback. Those handlers are the application's official policy
+inside Compose's mandatory plain outer safeguards, which remain inert once the
+custom response starts.
 
 Run it from the distribution root:
 
