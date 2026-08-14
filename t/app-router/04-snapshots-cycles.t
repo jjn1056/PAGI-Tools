@@ -7,6 +7,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router::Builder ();
+use PAGI::Compose qw(compose);
 use PAGI::Routing::Router ();
 use PAGI::Test::Client ();
 
@@ -92,7 +93,9 @@ subtest 'snapshots are immutable, root-local, and fresh' => sub {
         'mutation after the first snapshot is invisible to it');
     is([map { $_->path } @{$second->routes}], ['/one', '/two'],
         'a later snapshot sees the later declaration in written order');
-    is(PAGI::Test::Client->new(app => $first->to_app)->get('/two')->status, 404,
+    is(PAGI::Test::Client->new(
+        app => compose(app => $first)->to_app,
+    )->get('/two')->status, 404,
         'the retained first snapshot cannot dispatch a later mutation');
     is(PAGI::Test::Client->new(app => $second->to_app)->get('/two')->text, 'two',
         'the later snapshot dispatches its own immutable declaration set');
@@ -240,7 +243,8 @@ subtest 'to_app materializes once and compiles the retained snapshot' => sub {
     my $builder = Local::CountingBuilder->new;
     return unless router_methods_exist($builder);
     $builder->get('/item' => handler('item'));
-    my $app = $builder->to_app;
+    my $root_app = $builder->to_app;
+    my $app = compose(app => $root_app)->to_app;
     is($builder->{to_router_calls}, 1, 'to_app calls to_router exactly once');
     $builder->get('/late' => handler('late'));
     my $client = PAGI::Test::Client->new(app => $app);

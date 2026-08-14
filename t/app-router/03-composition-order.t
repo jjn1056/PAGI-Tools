@@ -8,6 +8,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router::Builder ();
+use PAGI::Compose qw(compose);
 use PAGI::Routing::Router ();
 use PAGI::Test::Client ();
 
@@ -39,6 +40,13 @@ sub opaque_app {
 sub client_for {
     my ($builder) = @_;
     return PAGI::Test::Client->new(app => $builder->to_app);
+}
+
+sub complete_client_for {
+    my ($builder) = @_;
+    return PAGI::Test::Client->new(
+        app => compose(app => $builder)->to_app,
+    );
 }
 
 sub router_methods_exist {
@@ -202,18 +210,18 @@ subtest 'a PARTIAL continues scanning to a later FULL route' => sub {
         'only the later FULL handler executes');
 };
 
-subtest 'generated Allow follows first-seen sibling declaration order' => sub {
+subtest 'Compose fallback Allow follows first-seen sibling declaration order' => sub {
     my $get_first = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($get_first);
     $get_first->get('/item' => handler('GET'));
     $get_first->post('/item' => handler('POST'));
-    is(client_for($get_first)->delete('/item')->header('Allow'),
+    is(complete_client_for($get_first)->delete('/item')->header('Allow'),
         'GET, HEAD, POST', 'GET then POST retains first-seen Allow order');
 
     my $post_first = PAGI::App::Router::Builder->new;
     $post_first->post('/item' => handler('POST'));
     $post_first->get('/item' => handler('GET'));
-    is(client_for($post_first)->delete('/item')->header('Allow'),
+    is(complete_client_for($post_first)->delete('/item')->header('Allow'),
         'POST, GET, HEAD', 'POST then GET retains first-seen Allow order');
 };
 
