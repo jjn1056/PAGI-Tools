@@ -6,9 +6,14 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
+use PAGI::Compose::ResponseGuard ();
+use PAGI::Middleware::ErrorHandler ();
+use PAGI::Middleware::Routing::MethodNotAllowed ();
+use PAGI::Middleware::Routing::NotFound ();
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Router ();
+use PAGI::Routing::Trace ();
 use PAGI::Utils ();
 
 my $STATE_KEY = "\0PAGI::Compose::Compiler::lifespan_state";
@@ -33,16 +38,37 @@ sub compile {
         return;
     };
 
-    my $app = PAGI::Routing::Middleware->_wrap_descriptors(
+    my $author_app = PAGI::Routing::Middleware->_wrap_descriptors(
         $description->middleware,
         $dispatcher,
     );
+    my $http_app = PAGI::Middleware::Routing::MethodNotAllowed->new
+        ->wrap($author_app);
+    $http_app = PAGI::Middleware::Routing::NotFound->new
+        ->wrap($http_app);
+    $http_app = PAGI::Compose::ResponseGuard->wrap($http_app);
+    $http_app = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
+        content_type => 'text/plain',
+        on_error => sub {
+            my ($error) = @_;
+            warn "PAGI application error: $error";
+            return;
+        },
+        _development_resolver => sub { return PAGI::Utils::is_development() },
+    )->wrap($http_app);
 
     return async sub {
         my ($scope, $receive, $send) = @_;
         my $provenance_scope = $class->_prepare_lifespan_scope($scope);
         my ($inner_scope, $wire_send)
             = PAGI::Routing::HeadBoundary->prepare($provenance_scope, $send);
+        my $app = $author_app;
+        if (($inner_scope->{type} // 'http') eq 'http') {
+            ($inner_scope) = PAGI::Routing::Trace->_fresh_http_scope(
+                $inner_scope,
+            );
+            $app = $http_app;
+        }
         my $returned = $app->($inner_scope, $receive, $wire_send);
         await Future->wrap($returned);
         return;
@@ -166,9 +192,16 @@ This module is the internal compilation engine used by
 L<PAGI::Compose/to_app>. It is not a public constructor; applications should
 create a L<PAGI::Compose> description and compile that description instead.
 
-Each compilation builds a target, middleware graph, dispatcher, and final HEAD
-wire boundary. All request/lifespan phase, callback, server-state proof, and
-HEAD-send state is local to one application invocation. None is retained on
-the Compose description or shared between concurrent scopes.
+Each compilation builds a target, declared middleware graph, dispatcher, fresh
+automatic HTTP routing fallbacks, completion guard, private ErrorHandler, and
+final HEAD wire boundary. HTTP request order is HEAD, fresh routing Trace,
+ErrorHandler, guard, NotFound, MethodNotAllowed, declared middleware, and
+target. Lifespan and non-HTTP extension scopes retain the declared middleware
+and dispatcher path without those automatic HTTP wrappers.
+
+All response observation, request Trace, lifecycle phase, callback,
+server-state proof, and HEAD-send state is local to one application invocation.
+None is retained on the Compose description or shared between concurrent
+scopes.
 
 =cut

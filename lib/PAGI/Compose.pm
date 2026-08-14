@@ -174,21 +174,27 @@ Bare coderefs have deliberately different meanings according to position:
 C<routes> must be an arrayref accepted by L<PAGI::Routing>. An empty arrayref
 is valid and explicit. The list is shallow-copied and structurally validated
 at construction. Each C<to_app> builds a fresh root declarative router, whose
-matching, generated 404/405 responses, route metadata, and reverse-routing
-behavior remain router-owned.
+matching, route metadata, and reverse-routing behavior remain router-owned.
+Normal HTTP exhaustion is an unanswered routing-component outcome with trusted
+trace evidence. Compose's automatic outer fallback interprets that evidence as
+404 or 405. Protocol-specific misses retain the Router's existing outcomes.
 
-Compose does not accept router options such as C<not_found>,
-C<method_not_allowed>, or C<desc>. Build and retain a router when those are
-needed. The compact direct form is
-C<< compose(app => router(%router_options)) >>; retaining the router also keeps
-its inspection API available:
+Compose does not accept Router construction options through C<routes>. Build
+and retain a Router when router middleware, C<desc>, reverse routing, or
+inspection is needed. The compact direct form is
+C<< compose(app => router(%router_options)) >>; retaining the Router also keeps
+its inspection API available while Compose still owns the deployed boundary:
 
     my $routing = router(
-        routes             => \@nodes,
-        not_found          => \&not_found,
-        method_not_allowed => \&method_not_allowed,
+        routes => \@nodes,
     );
-    my $app = compose(app => $routing)->to_app;
+    my $app = compose(
+        app => $routing,
+        middleware => [
+            middleware('Routing::NotFound',
+                handler => \&site_not_found),
+        ],
+    )->to_app;
 
 =head2 app
 
@@ -225,9 +231,12 @@ at construction; this phase does not load classes, construct objects, call
 C<wrap>, or perform protocol I/O. C<middleware($class, %config)> is required
 only for configured classes and remains useful for explicit reuse or
 inspection. This is application middleware, not router middleware. It
-surrounds generated routing outcomes and sees HTTP, WebSocket, SSE, lifespan,
-and application-defined extension scopes. Protocol-specific middleware must
-pass unrelated scope types through.
+sees HTTP, WebSocket, SSE, lifespan, and application-defined extension scopes.
+An author fallback or error renderer is inside earlier listed author
+middleware, so those earlier wrappers see the official response. Compose's
+automatic emergency fallback is outside the complete author stack and does not
+send its default response inward through author middleware. Protocol-specific
+middleware must pass unrelated scope types through.
 
 For router-only middleware, use C<< compose(app => router(...)) >>.
 
@@ -257,27 +266,51 @@ middleware, lifecycle phase, request scope, server state, or response events.
 
 =head1 COMPILATION AND MIDDLEWARE ORDER
 
-C<to_app> is the second phase: it synchronously compiles the target and fresh
-middleware instances after constructor-time normalization, then returns one
-native PAGI coderef. It performs no request or lifecycle I/O. Target loading,
-middleware construction, and wrapping failures therefore occur at C<to_app>.
-Calling C<to_app> again builds an independent middleware graph and recompiles
-component objects, although lexical state deliberately captured by user
-coderefs remains ordinary shared Perl state.
+C<to_app> is the second phase: it synchronously compiles the target, fresh
+author middleware wrappers, and fresh automatic safety wrappers after
+constructor-time normalization, then returns one native PAGI coderef. It
+performs no request or lifecycle I/O. Target loading, middleware construction,
+and wrapping failures therefore occur at C<to_app>. Calling C<to_app> again
+builds an independent graph and recompiles component objects, although lexical
+state deliberately captured by user coderefs remains ordinary shared Perl
+state.
 
-The first listed middleware is outermost:
+For HTTP, the exact outer-to-inner order is:
 
   final HEAD wire boundary
-    first application middleware
-      second application middleware
-        Compose dispatcher
-          lifespan driver or request target
+    fresh shallow routing-trace scope
+      automatic ErrorHandler
+        response-completion guard
+          automatic Routing::NotFound
+            automatic Routing::MethodNotAllowed
+              first application middleware
+                second application middleware
+                  Compose dispatcher
+                    request target
+
+The final HEAD boundary is outermost. Each HTTP request then receives a new
+first-party routing Trace, replacing even a compatible incoming collector
+without mutating the caller's scope. All lifecycle observation is lexical to
+that request. The completion guard observes events without copying or
+rewriting them and accepts a terminal C<http.response.body> with absent or
+false C<more>, including sendfile bodies.
+
+WebSocket, SSE, lifespan, and application-defined extension scopes retain the
+author stack and dispatcher path; they do not enter the automatic HTTP
+ErrorHandler, guard, or routing fallbacks. The first author middleware listed
+remains outermost within that stack:
+
+  first application middleware
+    second application middleware
+      Compose dispatcher
+        lifespan driver or non-HTTP request target
 
 Middleware scope changes are visible to callbacks and the request target;
 receive/send wrappers cover lifecycle events as well as request protocols. A
 middleware that does not call inward owns that scope. Immediate and
 Future-backed target completion are both accepted, and target return values
-are ignored because native PAGI events are the result channel.
+are ignored because native PAGI events are the result channel. Normal HTTP
+completion must include response start followed by a terminal body event.
 
 =head1 LIFESPAN OWNERSHIP AND STATE
 
@@ -314,14 +347,16 @@ A failed startup does not invoke shutdown. A startup callback that allocates
 several resources before failing owns cleanup of that partial startup.
 Receive/send channel failures propagate rather than provoking a second
 protocol response. Exceptions thrown outside the lifecycle callbacks by
-application middleware remain ordinary middleware failures.
+application middleware remain ordinary middleware failures. The automatic HTTP
+safety graph is not entered for lifespan.
 
 =head1 HEAD REQUESTS
 
-For HTTP HEAD, the final Compose wire boundary sits outside all application
-middleware. Middleware therefore sees the complete GET-equivalent
-representation and may calculate C<Content-Length>, compression metadata,
-ETags, and similar headers before suppression.
+For HTTP HEAD, the final Compose wire boundary sits outside the automatic
+safety graph and all application middleware. Middleware and built-in fallback
+or error renderers therefore complete the full representation before wire
+suppression. Body-derived C<Content-Length>, compression metadata, ETags, and
+similar headers survive for target, fallback, error, and sendfile responses.
 
 The boundary never rewrites HEAD to GET. Custom HEAD routes still receive
 method C<HEAD>, so they can avoid an expensive GET handler. At the wire it
@@ -336,18 +371,59 @@ not enable it accidentally.
 =head1 ERRORS
 
 Constructor validation and C<to_app> compilation errors are synchronous.
-Request-target and application-middleware failures propagate normally;
-Compose does not synthesize HTTP 500 responses. Use application-wide error
-middleware when that policy is required. Only missing required lifespan state
-and configured callback failures are translated into lifespan failure events.
+Every compiled Compose root has one unconditional HTTP safety boundary. There
+is no public option to suppress, detect, configure, or disable it, and Compose
+does not inspect author middleware to decide whether to install it.
+
+After normal unanswered completion, trusted routing evidence produces a
+plain-text no-store 404 or 405; 405 carries the deterministic union C<Allow>.
+Normal completion without a valid response lifecycle throws
+L<PAGI::Exception::IncompleteResponse>. Before response start, that exception,
+request-target failures, failed Futures, author-middleware failures, and author
+renderer failures are reported and converted to one plain-text no-store 500.
+The internal reporter warns C<PAGI application error: $error>. Explicit
+application responses, including matched 404, 405, and 500, pass unchanged and
+are neither reported nor reinterpreted.
+
+The automatic ErrorHandler resolves C<PAGI_ENV> only while rendering an error.
+Development responses may include the error diagnostic; production responses
+remain generic. If environment resolution itself fails, that failure is also
+reported and the response uses safe production output. A normally complete
+native response does not consult the environment or warn.
+
+After response start, a thrown error or missing terminal body cannot be
+replaced safely. Compose reports it, sends no second response start, and
+rethrows the original value so the server can abort the incomplete stream.
+The completion guard never replaces an inner exception.
+
+Install ordinary author middleware for the application's official policy:
+
+    middleware => [
+        middleware('ErrorHandler',
+            handler => \&site_error),
+        middleware('Routing::NotFound',
+            handler => \&site_not_found),
+        middleware('Routing::MethodNotAllowed',
+            handler => \&site_method_not_allowed),
+    ]
+
+These renderers run inside the automatic last resort. Earlier listed author
+middleware can log, decorate, or otherwise observe their responses. If custom
+policy fails or leaves HTTP unanswered, the automatic boundary still protects
+the deployed root. Lifespan callback failures retain the separate lifespan
+failure-event behavior documented above, and non-HTTP target failures retain
+their existing propagation behavior.
 
 =head1 RELATIONSHIP TO OTHER PAGI APIS
 
-C<< compose(routes => [...]) >> is a compact root functional router plus
-application middleware and lifecycle; it does not replace any router frontend.
-For router fallbacks, router middleware, reverse routing, or inspection, retain
-the router and pass it with C<< compose(app => $routing) >>. Compose deliberately
-does not delegate C<path_for>, C<route_named>, or other target-specific methods.
+C<< compose(routes => [...]) >> is a compact deployed root: a functional
+Router plus application middleware, lifecycle, and automatic HTTP safety. It
+does not replace any Router frontend. A directly compiled Router remains a
+routing component whose exhausted HTTP search is unanswered; wrapping it with
+C<< compose(app => $routing) >> adds the application boundary. For router
+middleware, reverse routing, or inspection, retain that Router and pass it to
+Compose. Compose deliberately does not delegate C<path_for>, C<route_named>,
+or other target-specific methods.
 
 L<PAGI::Routing>, L<PAGI::App::Router>, and L<PAGI::Endpoint::Router> are
 functional, mutable, and method-oriented frontends over one immutable routing

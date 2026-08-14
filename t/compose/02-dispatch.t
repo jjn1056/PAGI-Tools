@@ -70,7 +70,7 @@ subtest 'routes mode dispatches HTTP WebSocket and SSE' => sub {
     sub new { return bless {}, $_[0] }
 }
 
-subtest 'immediate and Future-backed app completion are normalized' => sub {
+subtest 'non-HTTP immediate and Future-backed app completion remain normalized' => sub {
     my $immediate_calls = 0;
     my $immediate = compose(app => sub { ++$immediate_calls; return })->to_app;
     run_scope($immediate, scope(type => 'example.extension'));
