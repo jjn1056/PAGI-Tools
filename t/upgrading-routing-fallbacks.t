@@ -465,8 +465,80 @@ subtest 'the standalone guide carries the routing fallback migration' => sub {
     local $/;
     my $guide = <$guide_fh>;
     close $guide_fh;
+
+    my $section = sub {
+        my ($heading) = @_;
+        my ($body) = $guide =~ /^### \Q$heading\E\n(.*?)(?=^### |\z)/ms;
+        return '' unless defined $body;
+        $body =~ s/\s+/ /g;
+        return $body;
+    };
+
     like($guide, qr/^## Routing fallbacks and application error handling$/m,
         'the existing-user handoff includes the migration section');
+
+    my $callbacks = $section->(
+        'Replace Router callbacks with ordinary middleware');
+    like(
+        $callbacks,
+        qr/not_found\s*=>\s*\\&not_found.*method_not_allowed\s*=>\s*\\&method_not_allowed.*removed names are rejected as unknown Router options/s,
+        'the guide identifies both removed Router callbacks',
+    );
+    like(
+        $callbacks,
+        qr/middleware\('Routing::NotFound'.*middleware\('Routing::MethodNotAllowed'/s,
+        'the guide replaces Router callbacks with ordinary routing middleware',
+    );
+
+    like(
+        $section->('Treat a Router as a nonterminal component'),
+        qr/my \$routing_app = \$routing->to_app;.*my \$app = compose\(app => \$routing\)->to_app;.*empty reply, hang, or server-specific protocol failure/s,
+        'the guide distinguishes naked Router components from deployed Compose apps',
+    );
+
+    my $mounts = $section->(
+        'Choose routing-aware or opaque Mount ownership explicitly');
+    like(
+        $mounts,
+        qr/mount\(\s*'\/legacy',\s*router\s*=>\s*\$legacy_router.*mount\('\/legacy'\s*=>\s*compose\(app => \$legacy_router\)->to_app\)/s,
+        'the guide shows both routing-aware and complete opaque Mount forms',
+    );
+    like(
+        $mounts,
+        qr/opaque Mount shields its parent's routing Trace.*response guard produces 500/s,
+        'the guide explains why a naked Router is unsafe behind an opaque Mount',
+    );
+
+    like(
+        $section->('Complete Router children placed in URLMap'),
+        qr/URLMap.*always opaque.*\$map->mount\('\/api'\s*=>\s*compose\(app => \$api_router\)->to_app\).*naked Router.*500/s,
+        'the guide requires complete Compose children behind URLMap',
+    );
+
+    my $cascade = $section->(
+        'Distinguish Cascade status catching from trusted decline');
+    like(
+        $cascade,
+        qr/trusted unanswered decline.*explicit non-final response advances only when its status appears in `catch`/s,
+        'the guide distinguishes trusted decline from caught response status',
+    );
+    like(
+        $cascade,
+        qr/Non-caught responses now stream.*Caught responses are suppressed.*terminal body/s,
+        'the guide documents Cascade streaming and caught-response buffering',
+    );
+
+    my $errors = $section->('Update ErrorHandler lifecycle expectations');
+    like(
+        $errors,
+        qr/ErrorHandler awaits reporting.*rethrows the original exception.*`on_error` must settle first/s,
+        'the guide documents awaited reporting and post-start rethrow',
+    );
+    like(
+        $errors,
+        qr/Cache-Control: no-store.*UTF-8 octets encoded once.*`Content-Length` counts the emitted bytes/s,
+        'the guide documents no-store output and UTF-8 byte lengths',
+    );
 };
 
 done_testing;
