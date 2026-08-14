@@ -200,8 +200,9 @@ hash order, or mount-prefix length. The first FULL match wins.
 An HTTP path match for the wrong method is PARTIAL rather than final. Scanning
 continues for a later FULL route; if none exists, all active PARTIAL
 declarations contribute methods to the deterministic first-seen method union
-recorded in routing evidence. With no complete path match the Router records a
-not-found decline instead. In either case it emits no HTTP response itself.
+recorded in routing evidence. A search with no complete path candidate records
+that matching fact as a decline. In either case the Router emits no HTTP
+response itself.
 A matched mount prefix owns dispatch at its written position, including an
 unanswered decline from its routing-aware child; the parent does not resume
 later declarations.

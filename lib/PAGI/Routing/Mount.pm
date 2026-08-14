@@ -187,9 +187,10 @@ captures, rewrites C<path>/C<root_path>, and then calls mount middleware and
 the child. C<raw_path> remains unchanged. A root mount consumes no prefix and
 leaves C<path>, C<root_path>, and C<raw_path> unchanged.
 
-An explicit Router target remains a child dispatch boundary: after the prefix
-matches, that Router owns full, partial, and no-match results, including its
-generated 404/405 handlers and protocol outcomes. The parent does not resume
-scanning or union methods. Cooperative no-match bubbling is deferred.
+An explicit Router target remains the selected routing boundary after its
+prefix matches. A C<FULL> child dispatch is handled there. Unanswered C<NONE>
+or C<PARTIAL> evidence can reach routing fallback middleware or
+L<PAGI::Compose> at an enclosing boundary. The parent does not resume sibling
+scanning or union methods after selecting the Mount.
 
 =cut
