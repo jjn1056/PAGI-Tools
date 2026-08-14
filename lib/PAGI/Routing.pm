@@ -562,8 +562,10 @@ The first entry listed is outermost. Placement is:
 
 Route middleware runs only after a full route match. Scope rewriting and
 matched-route metadata are installed before the matching mount/route wrapper.
-Generated child 404/405 responses cross the child Router, Router-mount, and
-outer Router middleware but no route middleware. The one outermost
+A child-owned NONE/PARTIAL decline unwinds through the selected child Router
+and Router-mount middleware without resuming the parent scan. When fallback
+middleware renders it, the response crosses the remaining enclosing
+middleware but no route middleware. The one outermost
 L<PAGI::Routing::HeadBoundary> removes the final HEAD body, including sendfile
 events, only after every Router/mount/route middleware has observed the
 unsuppressed GET representation. WebSocket and SSE retain their existing
@@ -744,9 +746,10 @@ A selected opaque application mount uses the same match shape:
     }
 
 The opaque mount does not append an entry for itself to C<mounts>; its terminal
-C<match> is the only record it adds. Generated 404/405 outcomes leave C<match>
-undefined while retaining the namespace and consumed-prefix capture snapshot
-of their owning placement.
+C<match> is the only record it adds. Unanswered NONE/PARTIAL declines leave
+C<match> undefined while retaining the namespace and consumed-prefix capture
+snapshot of their owning placement. Routing fallback middleware may render
+that trusted decline without changing the match metadata.
 
 Explicit Router mounts share their containing resolver frame. A separately
 compiled Router reached through an opaque application mount appends a
