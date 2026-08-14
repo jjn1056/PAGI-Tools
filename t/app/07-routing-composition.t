@@ -320,6 +320,75 @@ subtest 'sibling Router declines union through a real Cascade' => sub {
         'the later outer snapshot excludes only the caught child window');
 };
 
+subtest 'child checkpoints survive a later Cascade discard disposition' => sub {
+    local $ENV{PAGI_ENV} = 'development';
+
+    for my $case (
+        ['equal-sequence checkpoint', 0],
+        ['checkpoint after earlier records', 1],
+    ) {
+        my ($label, $record_before_checkpoint) = @$case;
+        my $warmup = router(routes => [
+            route('/warm' => sub { return $_[0]->text('warm') },
+                desc => 'warmup decline'),
+        ])->to_app;
+        my $local_router = router(routes => [
+            route('/local' => sub { return $_[0]->text('local') },
+                desc => 'child local decline'),
+        ])->to_app;
+        my $child_policy = PAGI::Middleware::Routing::NotFound->new
+            ->wrap($local_router);
+
+        my ($saved_trace, $saved_checkpoint);
+        my $child = async sub {
+            my ($request_scope, $request_receive, $send) = @_;
+            if ($record_before_checkpoint) {
+                my $warmup_result = $warmup->(
+                    $request_scope,
+                    $request_receive,
+                    $send,
+                );
+                await Future->wrap($warmup_result);
+            }
+            $saved_trace = $request_scope->{'pagi.routing.trace'};
+            $saved_checkpoint = $saved_trace->checkpoint;
+            my $child_result = $child_policy->(
+                $request_scope,
+                $request_receive,
+                $send,
+            );
+            await Future->wrap($child_result);
+            return;
+        };
+
+        my $cascade = PAGI::App::Cascade->new(apps => [
+            $child,
+            response_app(200, 'accepted'),
+        ])->to_app;
+        my ($request_scope, $trace) = PAGI::Routing::Trace->_ensure_http_scope(
+            scope(path => '/missing'),
+        );
+        my $outer_checkpoint = $trace->checkpoint;
+        my ($events, $error) = run_app($cascade, $request_scope);
+
+        is($error, undef, "$label completes through the second child");
+        is(response_start($events)->{status}, 200,
+            "$label caught child response stays discarded");
+
+        my $child_snapshot = $saved_trace->snapshot($saved_checkpoint);
+        ok($child_snapshot->routing_declined,
+            "$label retains its child-local decline when materialized later");
+        is(attempt_descriptions($child_snapshot), ['child local decline'],
+            "$label retains only evidence after its local checkpoint");
+
+        my $outer_snapshot = $trace->snapshot($outer_checkpoint);
+        ok(!$outer_snapshot->routing_declined,
+            "$label remains excluded from the enclosing checkpoint");
+        is(attempt_descriptions($outer_snapshot), [],
+            "$label contributes no discarded attempts to the enclosing view");
+    }
+};
+
 subtest 'HTTP Cascade streams accepted children and suppresses caught children' => sub {
     my $accepted_gate = Future->new;
     my $accepted_next_runs = 0;

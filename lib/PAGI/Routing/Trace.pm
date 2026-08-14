@@ -37,6 +37,7 @@ sub _new {
         compatibility   => $COMPATIBILITY_MARKER,
         identity        => {},
         sequence        => 0,
+        next_checkpoint => 0,
         next_frame      => 0,
         records         => [],
         frames          => {},
@@ -94,6 +95,7 @@ sub checkpoint {
     $CHECKPOINT_STATE{refaddr($checkpoint)} = {
         identity => $state->{identity},
         sequence => $state->{sequence},
+        ordinal  => ++$state->{next_checkpoint},
     };
     return $checkpoint;
 }
@@ -111,12 +113,13 @@ sub _checkpoint_state {
 }
 
 sub _discard_ranges {
-    my ($state, $start, $end) = @_;
+    my ($state, $start, $end, $checkpoint_ordinal) = @_;
     my @ranges;
     for my $record (@{$state->{records}}) {
         next unless $record->{sequence} > $start
             && $record->{sequence} <= $end;
         next unless $record->{type} eq 'discard';
+        next unless $checkpoint_ordinal <= $record->{start_checkpoint_ordinal};
         push @ranges, [$record->{start}, $record->{end}];
     }
     return \@ranges;
@@ -155,8 +158,13 @@ sub _frame_summary {
 }
 
 sub _snapshot_facts {
-    my ($state, $start, $end) = @_;
-    my $ranges = _discard_ranges($state, $start, $end);
+    my ($state, $start, $end, $checkpoint_ordinal) = @_;
+    my $ranges = _discard_ranges(
+        $state,
+        $start,
+        $end,
+        $checkpoint_ordinal,
+    );
     my %included;
     my @frames;
 
@@ -164,8 +172,8 @@ sub _snapshot_facts {
         $state->{frames}{$_}{completion}
     } keys %{$state->{frames}};
     for my $frame_id (sort {
-        $state->{frames}{$a}{completion_sequence}
-            <=> $state->{frames}{$b}{completion_sequence}
+        $state->{frames}{$a}{begin_sequence}
+            <=> $state->{frames}{$b}{begin_sequence}
     } @completed_frame_ids) {
         my $frame = $state->{frames}{$frame_id};
         next unless $frame->{completion_sequence} > $start
@@ -237,6 +245,7 @@ sub snapshot {
         $state,
         $checkpoint_state->{sequence},
         $state->{sequence},
+        $checkpoint_state->{ordinal},
     );
     require PAGI::Routing::Trace::Snapshot;
     return PAGI::Routing::Trace::Snapshot->_new($facts);
@@ -433,9 +442,10 @@ my $DISCARD_WINDOW = sub {
     my $checkpoint_state = _checkpoint_state($state, $checkpoint);
     my $end = $state->{sequence};
     _append_record($state, {
-        type  => 'discard',
-        start => $checkpoint_state->{sequence},
-        end   => $end,
+        type                     => 'discard',
+        start                    => $checkpoint_state->{sequence},
+        start_checkpoint_ordinal => $checkpoint_state->{ordinal},
+        end                      => $end,
     });
     return;
 };
@@ -557,5 +567,9 @@ given checkpoint. A checkpoint from another collector is rejected. Snapshot
 arrays are defensive copies, detailed attempts are available only when the
 development environment gate was enabled by compiler activity, and retained
 attempts are bounded to 256 per request.
+
+A checkpoint taken inside a child retains that local view even when an
+enclosing Cascade later appends a discard disposition for the child's
+response.
 
 =cut

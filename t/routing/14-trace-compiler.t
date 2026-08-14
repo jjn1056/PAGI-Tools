@@ -178,6 +178,64 @@ subtest 'partial compiler frames fold as first-seen siblings' => sub {
         'sequential sibling methods follow first-seen execution order');
 };
 
+subtest 'interleaved sibling frames retain invocation-order method unions' => sub {
+    local $ENV{PAGI_ENV} = 'development';
+    my $a_child_completed = Future->new;
+    my $release_a_parent = Future->new;
+    my $delay_after_child = middleware(sub {
+        my ($inner) = @_;
+        return async sub {
+            my $returned = $inner->(@_);
+            await Future->wrap($returned);
+            $a_child_completed->done unless $a_child_completed->is_ready;
+            await $release_a_parent;
+            return;
+        };
+    });
+
+    my $a_child = router(routes => [
+        route('/x' => sub { return $_[0]->text('a') },
+            methods => 'GET', desc => 'A GET'),
+    ]);
+    my $a = router(routes => [
+        mount('/api',
+            router     => $a_child,
+            name       => 'a_child',
+            middleware => [$delay_after_child],
+        ),
+    ])->to_app;
+    my $b = router(routes => [
+        route('/api/x' => sub { return $_[0]->text('b') },
+            methods => 'POST', desc => 'B POST'),
+    ])->to_app;
+
+    my ($request_scope, $trace) = PAGI::Routing::Trace->_ensure_http_scope(
+        scope(method => 'PUT', path => '/api/x', raw_path => '/api/x'),
+    );
+    my $checkpoint = $trace->checkpoint;
+    my $send = sub { die 'an interleaved decline must not send a response' };
+
+    my $a_future = Future->wrap($a->($request_scope, \&receive, $send));
+    ok($a_child_completed->is_ready,
+        'the first sibling records GET before the second sibling begins');
+    ok(!$a_future->is_ready,
+        'the first sibling root remains incomplete at the ordering boundary');
+
+    my $b_future = Future->wrap($b->($request_scope, \&receive, $send));
+    ok($b_future->is_ready,
+        'the second sibling completes before the first sibling root');
+    $release_a_parent->done;
+    Future->needs_all($a_future, $b_future)->get;
+
+    my $snapshot = $trace->snapshot($checkpoint);
+    is($snapshot->allowed_methods, [qw(GET HEAD POST)],
+        'method union follows sibling invocation order, not completion order');
+    is([map { $_->{desc} }
+        grep { defined($_->{desc}) && length($_->{desc}) }
+        @{$snapshot->attempts}], ['A GET', 'B POST'],
+        'diagnostic attempts retain the same first-seen order');
+};
+
 subtest 'a mount checkpoint sees one selected child summary' => sub {
     my @mount_snapshots;
     my $checkpointing_mount = middleware(sub {
