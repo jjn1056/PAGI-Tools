@@ -122,17 +122,6 @@ subtest 'normal incomplete completion throws the exact typed stage' => sub {
                 });
             },
         },
-        {
-            label   => 'response body before start',
-            stage   => 'body_before_start',
-            message => 'HTTP application sent a response body before response start',
-            app     => sub {
-                my ($request_scope, $receive, $send) = @_;
-                return $send->({
-                    type => 'http.response.body', body => 'out of order', more => 0,
-                });
-            },
-        },
     );
 
     for my $case (@cases) {
@@ -141,6 +130,30 @@ subtest 'normal incomplete completion throws the exact typed stage' => sub {
         is($error->stage, $case->{stage}, "$case->{label} has the exact stage");
         is("$error", $case->{message}, "$case->{label} has the exact message");
     }
+};
+
+subtest 'body before start is rejected without reaching the outer send' => sub {
+    my $invalid = {
+        type => 'http.response.body', body => 'out of order', more => 0,
+    };
+    my ($send, $events) = capture_send();
+    my $app = PAGI::Compose::ResponseGuard->wrap(sub {
+        my ($request_scope, $receive, $guard_send) = @_;
+        return $guard_send->($invalid);
+    });
+    my $error;
+    eval {
+        Future->wrap($app->(
+            scope(), sub { return Future->done }, $send,
+        ))->get;
+        1;
+    } or $error = $@;
+
+    is($events, [], 'invalid body event is not forwarded');
+    isa_ok($error, ['PAGI::Exception::IncompleteResponse']);
+    is($error->stage, 'body_before_start', 'the exact guard stage is thrown');
+    is("$error", 'HTTP application sent a response body before response start',
+        'the typed exception retains the exact diagnostic');
 };
 
 {

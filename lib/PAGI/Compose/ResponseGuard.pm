@@ -23,7 +23,7 @@ sub wrap {
 
         my $started = 0;
         my $terminal = 0;
-        my $body_before_start = 0;
+        my $body_before_start;
         my $observing_send = sub {
             my ($event) = @_;
             my $type = $event->{type} // '';
@@ -31,7 +31,14 @@ sub wrap {
                 $started = 1;
             }
             elsif ($type eq 'http.response.body') {
-                $body_before_start = 1 unless $started;
+                unless ($started) {
+                    $body_before_start ||=
+                        PAGI::Exception::IncompleteResponse->new(
+                            stage   => 'body_before_start',
+                            message => 'HTTP application sent a response body before response start',
+                        );
+                    die $body_before_start;
+                }
                 $terminal = 1 unless $event->{more};
             }
             return $send->($event);
@@ -41,10 +48,7 @@ sub wrap {
         await Future->wrap($returned);
 
         if ($body_before_start) {
-            die PAGI::Exception::IncompleteResponse->new(
-                stage   => 'body_before_start',
-                message => 'HTTP application sent a response body before response start',
-            );
+            die $body_before_start;
         }
         unless ($started) {
             die PAGI::Exception::IncompleteResponse->new(
@@ -72,10 +76,11 @@ PAGI::Compose::ResponseGuard - Internal Compose HTTP completion guard
 
 =head1 DESCRIPTION
 
-This private wrapper observes HTTP response lifecycle events without rewriting
-them. After normal application completion it throws a typed incomplete-response
-exception unless response start and a terminal body were observed. Inner
-application exceptions pass through unchanged. Non-HTTP scopes are delegated
-with their original channels.
+This private wrapper observes HTTP response lifecycle events without copying or
+rewriting them. It rejects a response body sent before response start without
+forwarding that invalid event. After normal application completion it throws a
+typed incomplete-response exception unless response start and a terminal body
+were observed. Inner application exceptions pass through unchanged. Non-HTTP
+scopes are delegated with their original channels.
 
 =cut

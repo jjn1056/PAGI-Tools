@@ -301,4 +301,28 @@ subtest 'post-start incomplete response is reported and rethrown without replace
         'internal reporter receives the typed guard error');
 };
 
+subtest 'body before start becomes one clean automatic 500 response' => sub {
+    local $ENV{PAGI_ENV} = 'production';
+    my $invalid = {
+        type => 'http.response.body', body => 'must not reach the wire', more => 0,
+    };
+    my $app = compose(app => sub {
+        my ($request_scope, $receive, $send) = @_;
+        return $send->($invalid);
+    })->to_app;
+    my ($events, $warnings, $error) = run_request($app, scope());
+
+    is($error, undef, 'automatic ErrorHandler contains the guard exception');
+    is([map { $_->{type} } @$events], [
+        'http.response.start', 'http.response.body',
+    ], 'wire receives only the replacement response pair');
+    assert_rendered(
+        'body-before-start guard failure', $events, 500,
+        'Error 500: Internal Server Error',
+    );
+    is(scalar @$warnings, 1, 'body-before-start failure is reported once');
+    like($warnings->[0], qr/^PAGI application error: HTTP application sent a response body before response start/,
+        'internal reporter receives the typed guard diagnostic');
+};
+
 done_testing;
