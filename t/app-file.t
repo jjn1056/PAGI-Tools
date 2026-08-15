@@ -55,6 +55,90 @@ sub run_native {
     return \@events;
 }
 
+subtest 'stock file errors negotiate through Pages without changing file outcomes' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $file = File::Spec->catfile($root, 'sample.txt');
+    open my $fh, '>', $file or die "cannot create $file: $!";
+    print {$fh} '0123456789';
+    close $fh or die "cannot close $file: $!";
+
+    my $client = PAGI::Test::Client->new(
+        app => PAGI::App::File->new(root => $root),
+        raise_app_exceptions => 1,
+    );
+
+    my $missing = $client->get('/private/missing.txt',
+        headers => { Accept => 'application/problem+json' });
+    is($missing->status, 404, 'missing file keeps its status');
+    is($missing->content_type, 'application/problem+json',
+        'missing file negotiates a problem response');
+    is($missing->json, {
+        type   => 'about:blank',
+        title  => 'Not Found',
+        status => 404,
+        detail => 'The requested resource was not found.',
+    }, 'missing file uses the safe stock problem body');
+    unlike($missing->content, qr/private|missing\.txt|\Q$root\E/,
+        'missing response does not disclose the request or filesystem path');
+    is($missing->header('Cache-Control'), 'no-store',
+        'missing response is not stored');
+    is($missing->header('Vary'), 'Accept',
+        'missing response records negotiation');
+
+    my $method = $client->post('/sample.txt',
+        headers => { Accept => 'application/problem+json' });
+    is($method->status, 405, 'unsupported method keeps its status');
+    is($method->header('Allow'), 'GET, HEAD',
+        'unsupported method advertises the exact supported methods');
+
+    my $range = $client->get('/sample.txt', headers => {
+        Accept => 'application/problem+json', Range => 'bytes=20-30',
+    });
+    is($range->status, 416, 'invalid range keeps its status');
+    is($range->header('Content-Range'), 'bytes */10',
+        'invalid range reports the known representation length');
+
+    my $bad = $client->get("/bad\0name",
+        headers => { Accept => 'text/plain' });
+    is($bad->status, 400, 'null byte keeps its bad-request status');
+    is($bad->content_type, 'text/plain; charset=utf-8',
+        'bad request can negotiate stock text');
+    like($bad->text, qr/^400 Bad Request\n/,
+        'text response identifies the stock status safely');
+
+    my $forbidden = $client->get('/.secret',
+        headers => { Accept => 'text/html' });
+    is($forbidden->status, 403, 'hidden component keeps its forbidden status');
+    is($forbidden->content_type, 'text/html; charset=utf-8',
+        'forbidden response can negotiate stock HTML');
+    like($forbidden->text, qr/<title>403 Forbidden<\/title>/,
+        'HTML response identifies the stock status');
+    unlike($forbidden->text, qr/\.secret|\Q$root\E/,
+        'HTML response does not disclose the hidden or filesystem path');
+
+    my $full = $client->get('/sample.txt');
+    is($full->status, 200, 'full file request still succeeds');
+    is($full->content, '0123456789', 'full file bytes are unchanged');
+    is($full->content_length, 10, 'full file length is unchanged');
+
+    my $head = $client->head('/sample.txt');
+    is($head->status, 200, 'HEAD still succeeds');
+    is($head->content, '', 'HEAD still has no body');
+    is($head->content_length, 10, 'HEAD retains representation length');
+
+    my $partial = $client->get('/sample.txt',
+        headers => { Range => 'bytes=2-5' });
+    is($partial->status, 206, 'valid range still succeeds');
+    is($partial->content, '2345', 'valid range bytes are unchanged');
+    is($partial->header('Content-Range'), 'bytes 2-5/10',
+        'valid range metadata is unchanged');
+
+    my $cached = $client->get('/sample.txt',
+        headers => { 'If-None-Match' => $full->header('ETag') });
+    is($cached->status, 304, 'matching ETag still produces 304');
+    is($cached->content, '', '304 remains bodyless');
+};
+
 subtest 'class constructor returns a serving component and preserves subclasses' => sub {
     my $home = File::Spec->catdir($Bin, 'app-file-fixtures', 'one');
     local $ENV{PAGI_HOME} = $home;

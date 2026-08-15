@@ -3,10 +3,12 @@ package PAGI::Middleware::Static;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
 use File::Spec;
 use Digest::MD5 'md5_hex';
 use Fcntl ':mode';
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -215,7 +217,7 @@ sub wrap {
 
         # Check for path traversal
         unless ($file_path && $self->_is_safe_path($file_path)) {
-            await $self->_send_error($send, 403, 'Forbidden');
+            await $self->_send_error($scope, $send, 403);
             return;
         }
 
@@ -225,7 +227,7 @@ sub wrap {
                 await $app->($scope, $receive, $send);
                 return;
             }
-            await $self->_send_error($send, 404, 'Not Found');
+            await $self->_send_error($scope, $send, 404);
             return;
         }
 
@@ -239,7 +241,7 @@ sub wrap {
                     await $app->($scope, $receive, $send);
                     return;
                 }
-                await $self->_send_error($send, 404, 'Not Found');
+                await $self->_send_error($scope, $send, 404);
                 return;
             }
         }
@@ -247,7 +249,7 @@ sub wrap {
         # Get file stats
         my @stat = stat($file_path);
         unless (@stat) {
-            await $self->_send_error($send, 500, 'Cannot stat file');
+            await $self->_send_error($scope, $send, 500);
             return;
         }
 
@@ -284,7 +286,7 @@ sub wrap {
 
         if ($is_range && !defined $start) {
             # Invalid range
-            await $self->_send_error($send, 416, 'Range Not Satisfiable');
+            await $self->_send_error($scope, $send, 416, length => $size);
             return;
         }
 
@@ -486,21 +488,18 @@ sub _format_http_date {
 }
 
 async sub _send_error {
-    my ($self, $send, $status, $message) = @_;
+    my ($self, $scope, $send, $status, @options) = @_;
+    my %method_for = (
+        403 => 'forbidden',
+        404 => 'not_found',
+        416 => 'range_not_satisfiable',
+        500 => 'internal_server_error',
+    );
+    my $method = $method_for{$status}
+        or die "PAGI::Middleware::Static does not own status $status";
 
-    await $send->({
-        type    => 'http.response.start',
-        status  => $status,
-        headers => [
-            ['content-type', 'text/plain'],
-            ['content-length', length($message)],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $message,
-        more => 0,
-    });
+    my $response = PAGI::Pages->$method($scope, @options);
+    await Future->wrap($response->respond($send));
 }
 
 1;
@@ -508,6 +507,13 @@ async sub _send_error {
 __END__
 
 =head1 SECURITY
+
+Static-owned 403, 404, 416, and 500 responses use L<PAGI::Pages> to negotiate
+HTML, problem JSON, or plain text from the original request. Successful file,
+HEAD, range, and cache responses retain the middleware's existing streaming
+behavior. Requests that do not match, unsupported methods, and missing files
+under C<pass_through> continue to use the inner application's response without
+Pages intervention.
 
 This middleware includes path traversal protection to prevent access to
 files outside the configured root directory. Requests containing ".."

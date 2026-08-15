@@ -15,6 +15,7 @@ use Future::AsyncAwait;
 use IO::Async::Loop;
 use File::Temp qw(tempdir);
 use File::Spec;
+use PAGI::Test::Client;
 
 require PAGI::App::Directory;
 
@@ -25,6 +26,83 @@ sub run_async {
     my $future = $code->();
     $loop->await($future);
 }
+
+subtest 'Directory keeps listing and File delegation order around Pages errors' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $listing = File::Spec->catdir($root, 'listing');
+    my $indexed = File::Spec->catdir($root, 'indexed');
+    mkdir $listing or die "Cannot create $listing: $!";
+    mkdir $indexed or die "Cannot create $indexed: $!";
+
+    my $listed_file = File::Spec->catfile($listing, 'listed.txt');
+    open my $listed_fh, '>', $listed_file or die $!;
+    print {$listed_fh} 'listed';
+    close $listed_fh or die $!;
+
+    my $plain_file = File::Spec->catfile($root, 'plain.txt');
+    open my $plain_fh, '>', $plain_file or die $!;
+    print {$plain_fh} 'plain';
+    close $plain_fh or die $!;
+
+    my $index_file = File::Spec->catfile($indexed, 'index.html');
+    open my $index_fh, '>', $index_file or die $!;
+    print {$index_fh} 'index-body';
+    close $index_fh or die $!;
+
+    my $client = PAGI::Test::Client->new(
+        app => PAGI::App::Directory->new(root => $root),
+        raise_app_exceptions => 1,
+    );
+
+    my $missing = $client->get('/unresolved/private.txt',
+        headers => { Accept => 'application/problem+json' });
+    is($missing->status, 403,
+        'unresolved candidate remains Directory-owned forbidden');
+    is($missing->content_type, 'application/problem+json',
+        'Directory forbidden negotiates a problem response');
+    is($missing->json, {
+        type   => 'about:blank',
+        title  => 'Forbidden',
+        status => 403,
+        detail => 'You do not have permission to access this resource.',
+    }, 'Directory uses the safe stock forbidden body');
+    unlike($missing->content, qr/unresolved|private\.txt|\Q$root\E/,
+        'Directory response does not disclose request or filesystem paths');
+    is($missing->header('Cache-Control'), 'no-store',
+        'Directory forbidden is not stored');
+    is($missing->header('Vary'), 'Accept',
+        'Directory forbidden records negotiation');
+
+    my $html_forbidden = $client->get('/../outside',
+        headers => { Accept => 'text/html' });
+    is($html_forbidden->status, 403,
+        'unresolved traversal remains Directory-owned forbidden');
+    is($html_forbidden->content_type, 'text/html; charset=utf-8',
+        'Directory forbidden can negotiate HTML');
+    unlike($html_forbidden->text, qr/outside|\Q$root\E/,
+        'Directory HTML remains path-safe');
+
+    my $listing_post = $client->post('/listing');
+    is($listing_post->status, 200,
+        'POST to index-free directory still reaches the listing');
+    like($listing_post->text, qr/listed\.txt/,
+        'POST listing still contains directory entries');
+
+    my $file_post = $client->post('/plain.txt',
+        headers => { Accept => 'text/plain' });
+    is($file_post->status, 405,
+        'POST to a resolved file still delegates to File');
+    is($file_post->header('Allow'), 'GET, HEAD',
+        'delegated File response retains its exact Allow field');
+
+    my $index_range = $client->get('/indexed', headers => {
+        Accept => 'text/plain', Range => 'bytes=20-30',
+    });
+    is($index_range->status, 416,
+        'invalid range against a resolved index delegates to File');
+    is($index_range->header('Content-Range'), 'bytes */10',
+        'delegated index range carries the selected file length');
+};
 
 # =============================================================================
 # Test: HTML escaping functions

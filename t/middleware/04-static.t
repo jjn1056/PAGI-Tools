@@ -11,6 +11,7 @@ use Cwd 'abs_path';
 use lib 'lib';
 
 use PAGI::Middleware::Static;
+use PAGI::Test::Client;
 
 my $loop = IO::Async::Loop->new;
 
@@ -22,6 +23,98 @@ sub run_async {
 
 # Get absolute path to test files
 my $test_root = abs_path('t/static_test_files');
+
+subtest 'Static owned errors negotiate through Pages without changing seams' => sub {
+    my $inner = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type => 'http.response.start', status => 209,
+            headers => [['content-type', 'text/plain']],
+        });
+        await $send->({
+            type => 'http.response.body', body => 'inner response', more => 0,
+        });
+    };
+    my $mw = PAGI::Middleware::Static->new(root => $test_root);
+    my $client = PAGI::Test::Client->new(
+        app => $mw->wrap($inner), raise_app_exceptions => 1,
+    );
+
+    my $missing = $client->get('/private/missing.txt',
+        headers => { Accept => 'application/problem+json' });
+    is($missing->status, 404, 'owned missing file keeps its status');
+    is($missing->content_type, 'application/problem+json',
+        'owned missing file negotiates a problem response');
+    is($missing->json, {
+        type   => 'about:blank',
+        title  => 'Not Found',
+        status => 404,
+        detail => 'The requested resource was not found.',
+    }, 'Static uses the safe stock missing body');
+    unlike($missing->content, qr/private|missing\.txt|\Q$test_root\E/,
+        'Static missing response does not disclose paths');
+    is($missing->header('Cache-Control'), 'no-store',
+        'Static missing response is not stored');
+    is($missing->header('Vary'), 'Accept',
+        'Static missing response records negotiation');
+
+    my $forbidden = $client->get('/../../../etc/passwd',
+        headers => { Accept => 'text/html' });
+    is($forbidden->status, 403, 'unsafe path keeps its forbidden status');
+    is($forbidden->content_type, 'text/html; charset=utf-8',
+        'unsafe path can negotiate stock HTML');
+    unlike($forbidden->text, qr/etc\/passwd|\Q$test_root\E/,
+        'forbidden HTML does not disclose paths');
+
+    my $text_missing = $client->get('/absent.txt',
+        headers => { Accept => 'text/plain' });
+    is($text_missing->content_type, 'text/plain; charset=utf-8',
+        'owned missing response can negotiate stock text');
+    like($text_missing->text, qr/^404 Not Found\n/,
+        'text response identifies the stock status safely');
+
+    my $range = $client->get('/hello.txt', headers => {
+        Accept => 'application/problem+json', Range => 'bytes=1000-2000',
+    });
+    is($range->status, 416, 'owned invalid range keeps its status');
+    is($range->header('Content-Range'), 'bytes */12',
+        'owned invalid range reports the known representation length');
+
+    my $full = $client->get('/hello.txt');
+    is($full->status, 200, 'full static request still succeeds');
+    is($full->content, "Hello World\n", 'full static bytes are unchanged');
+
+    my $head = $client->head('/hello.txt');
+    is($head->status, 200, 'static HEAD still succeeds');
+    is($head->content, '', 'static HEAD remains bodyless');
+    is($head->content_length, 12, 'static HEAD retains representation length');
+
+    my $partial = $client->get('/hello.txt',
+        headers => { Range => 'bytes=0-4' });
+    is($partial->status, 206, 'static valid range still succeeds');
+    is($partial->content, 'Hello', 'static range bytes are unchanged');
+    is($partial->header('Content-Range'), 'bytes 0-4/12',
+        'static range metadata is unchanged');
+
+    my $cached = $client->get('/hello.txt',
+        headers => { 'If-None-Match' => $full->header('ETag') });
+    is($cached->status, 304, 'static matching ETag still produces 304');
+    is($cached->content, '', 'static 304 remains bodyless');
+
+    my $passing = PAGI::Middleware::Static->new(
+        root => $test_root, pass_through => 1,
+    );
+    my $passing_client = PAGI::Test::Client->new(
+        app => $passing->wrap($inner), raise_app_exceptions => 1,
+    );
+    my $passed = $passing_client->get('/still-missing.txt',
+        headers => { Accept => 'application/problem+json' });
+    is($passed->status, 209, 'pass-through status remains inner-app owned');
+    is($passed->content_type, 'text/plain',
+        'pass-through content type remains inner-app owned');
+    is($passed->content, 'inner response',
+        'pass-through body remains inner-app owned');
+};
 
 # =============================================================================
 # Test: Static middleware serves files with correct MIME types

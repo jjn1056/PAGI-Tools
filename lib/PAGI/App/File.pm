@@ -2,11 +2,13 @@ package PAGI::App::File;
 
 use strict;
 use warnings;
+use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Digest::MD5 qw(md5_hex);
 use File::Spec;
 use Cwd ();  # For realpath
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -160,7 +162,7 @@ sub to_app {
 
         my $method = uc($scope->{method} // '');
         unless ($method eq 'GET' || $method eq 'HEAD') {
-            await $self->_send_error($send, 405, 'Method Not Allowed');
+            await $self->_send_error($scope, $send, 405);
             return;
         }
 
@@ -168,7 +170,7 @@ sub to_app {
 
         # Security: Block null byte injection
         if ($path =~ /\0/) {
-            await $self->_send_error($send, 400, 'Bad Request');
+            await $self->_send_error($scope, $send, 400);
             return;
         }
 
@@ -181,12 +183,12 @@ sub to_app {
         for my $component (@components) {
             # Block components with 2+ dots (.. , ..., ....)
             if ($component =~ /^\.{2,}$/) {
-                await $self->_send_error($send, 403, 'Forbidden');
+                await $self->_send_error($scope, $send, 403);
                 return;
             }
             # Block hidden files (dotfiles) - components starting with .
             if ($component =~ /^\./ && $component ne '') {
-                await $self->_send_error($send, 403, 'Forbidden');
+                await $self->_send_error($scope, $send, 403);
                 return;
             }
         }
@@ -209,14 +211,14 @@ sub to_app {
         _development_file_attempt($file_path);
 
         unless (-f $file_path && -r $file_path) {
-            await $self->_send_error($send, 404, 'Not Found');
+            await $self->_send_error($scope, $send, 404);
             return;
         }
 
         # Security: Verify resolved path stays within root (prevents symlink escape)
         my $real_path = Cwd::realpath($file_path);
         unless ($real_path && index($real_path, $root) == 0) {
-            await $self->_send_error($send, 403, 'Forbidden');
+            await $self->_send_error($scope, $send, 403);
             return;
         }
 
@@ -249,7 +251,7 @@ sub to_app {
             $end = $size - 1 if $end eq '' || $end >= $size;
 
             if ($start > $end || $start >= $size) {
-                await $self->_send_error($send, 416, 'Range Not Satisfiable');
+                await $self->_send_error($scope, $send, 416, length => $size);
                 return;
             }
 
@@ -318,14 +320,20 @@ sub _get_header {
 }
 
 async sub _send_error {
-    my ($self, $send, $status, $message) = @_;
+    my ($self, $scope, $send, $status, @options) = @_;
+    my %method_for = (
+        400 => 'bad_request',
+        403 => 'forbidden',
+        404 => 'not_found',
+        405 => 'method_not_allowed',
+        416 => 'range_not_satisfiable',
+    );
+    my $method = $method_for{$status}
+        or die "PAGI::App::File does not own status $status";
+    push @options, allow => [qw(GET HEAD)] if $status == 405;
 
-    await $send->({
-        type => 'http.response.start',
-        status => $status,
-        headers => [['content-type', 'text/plain'], ['content-length', length($message)]],
-    });
-    await $send->({ type => 'http.response.body', body => $message, more => 0 });
+    my $response = PAGI::Pages->$method($scope, @options);
+    await Future->wrap($response->respond($send));
 }
 
 1;
@@ -376,6 +384,13 @@ absolute paths, is not access logging, and never changes a response or file
 event.
 
 =head1 CONFIGURATION
+
+Stock 400, 403, 404, 405, and 416 errors are rendered by L<PAGI::Pages> and
+negotiate among HTML, problem JSON, and plain text from the request C<Accept>
+header. These defaults are non-cacheable; 405 responses advertise C<GET,
+HEAD>, and 416 responses include the known representation length. File MIME
+selection, streaming, caching, and range handling for successful responses
+remain owned by this component, including the C<default_type> seam.
 
 =over 4
 

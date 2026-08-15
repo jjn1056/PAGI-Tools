@@ -70,7 +70,7 @@ sub to_app {
         # Symlink escape check: ensure resolved path is within root
         my $real_dir = realpath($dir_path);
         if (!$real_dir || index($real_dir, $real_root) != 0) {
-            await $self->_send_error($send, 403, 'Forbidden');
+            await $self->_send_error($scope, $send, 403);
             return;
         }
 
@@ -99,7 +99,7 @@ async sub _send_listing {
     my ($self, $send, $scope, $dir_path, $rel_path) = @_;
 
     opendir my $dh, $dir_path or do {
-        await $self->_send_error($send, 403, 'Forbidden');
+        await $self->_send_error($scope, $send, 403);
         return;
     };
 
@@ -195,6 +195,12 @@ __END__
 Extends L<PAGI::App::File> to add directory listing capabilities.
 When a directory is requested and no index file is found, returns
 an HTML or JSON listing of directory contents.
+
+Forbidden responses detected before listing or file delegation use the
+negotiated L<PAGI::Pages> defaults inherited from L<PAGI::App::File>.
+Directory listings remain this component's HTML/JSON responses, including for
+methods other than GET and HEAD. Resolved files and index files still delegate
+to L<PAGI::App::File>, which owns their method and range errors.
 
 =head1 OPTIONS
 
