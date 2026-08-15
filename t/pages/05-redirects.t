@@ -189,6 +189,8 @@ subtest 'redirect query preservation keeps raw data before the first fragment' =
         ['/search?sort=date',         'q=perl', '/search?sort=date&q=perl'],
         ['/search#results',           'q=perl', '/search?q=perl#results'],
         ['/search?sort=date#results', 'q=perl', '/search?sort=date&q=perl#results'],
+        ['/search#first#second', 'q=a%2Bb&x=%26',
+            '/search?q=a%2Bb&x=%26#first#second'],
         ['/search#results',           '',       '/search#results'],
     );
 

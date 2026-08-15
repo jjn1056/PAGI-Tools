@@ -51,6 +51,25 @@ sub response_body {
     return $events->[1]{body};
 }
 
+sub event_header_all {
+    my ($events, $name) = @_;
+    my $wanted = lc $name;
+    return map { $_->[1] }
+        grep { lc($_->[0]) eq $wanted }
+        @{$events->[0]{headers} || []};
+}
+
+{
+    package Local::Hostile511Pages;
+    our @ISA = ('PAGI::Pages');
+    sub render_problem {
+        return {
+            login  => '/renderer-invented',
+            status => 599,
+        };
+    }
+}
+
 subtest 'semantic status fields are normalized exactly' => sub {
     my @field_cases = (
         [unauthorized => { challenge => 'Basic realm="x"' },
@@ -129,6 +148,41 @@ subtest 'mandatory fields can come from validated raw headers' => sub {
     is([$mixed->header_all('WWW-Authenticate')], [
         'Bearer realm="raw"', 'Basic realm="semantic"',
     ], 'raw and semantic challenges coexist as separate field lines');
+};
+
+subtest 'mandatory and cache fields survive response event emission' => sub {
+    my @cases = (
+        [unauthorized => [challenge => ['Basic realm="one"', 'Bearer realm="two"']],
+            'WWW-Authenticate', ['Basic realm="one"', 'Bearer realm="two"']],
+        [method_not_allowed => [allow => []], 'Allow', ['']],
+        [proxy_authentication_required => [challenge => 'Basic realm="proxy"'],
+            'Proxy-Authenticate', ['Basic realm="proxy"']],
+        [upgrade_required => [upgrade => 'websocket'],
+            'Upgrade', ['websocket']],
+    );
+
+    for my $case (@cases) {
+        my ($method, $options, $name, $want) = @$case;
+        my $events = send_response(PAGI::Pages->$method(
+            http_scope(), as => 'text', @$options,
+        ));
+        is([event_header_all($events, $name)], $want,
+            "$method emits its mandatory field on http.response.start");
+        is([event_header_all($events, 'Cache-Control')], ['no-store'],
+            "$method emits its default cache policy on http.response.start");
+    }
+
+    my $upgrade = send_response(PAGI::Pages->upgrade_required(
+        http_scope(), as => 'text', upgrade => 'websocket',
+    ));
+    is([event_header_all($upgrade, 'Connection')], ['Upgrade'],
+        '426 emits HTTP/1.1 connection signaling on http.response.start');
+
+    my $override = send_response(PAGI::Pages->gone(
+        http_scope(), as => 'text', cache_control => 'public, max-age=60',
+    ));
+    is([event_header_all($override, 'Cache-Control')], ['public, max-age=60'],
+        'an explicit ordinary-error cache policy survives event emission');
 };
 
 subtest 'mandatory fields and Upgrade request versions are enforced' => sub {
@@ -355,6 +409,24 @@ subtest '511 login_url is consistent across HTML, text, and problem JSON' => sub
     ));
     is($problem->{login}, $login,
         'problem JSON includes the authoritative login extension');
+
+    my $invented = decode_json(response_body(
+        Local::Hostile511Pages->network_authentication_required(
+            http_scope(), as => 'json',
+        ),
+    ));
+    ok(!exists($invented->{login}),
+        'a hostile renderer cannot invent the reserved 511 login member');
+    is($invented->{status}, 511,
+        'a hostile renderer cannot replace the 511 problem status');
+
+    my $reasserted = decode_json(response_body(
+        Local::Hostile511Pages->network_authentication_required(
+            http_scope(), as => 'json', login_url => $login,
+        ),
+    ));
+    is($reasserted->{login}, $login,
+        'validated login_url replaces a hostile renderer login member');
 };
 
 subtest 'error and welcome cache policies are exact' => sub {
