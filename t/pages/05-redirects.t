@@ -10,6 +10,18 @@ use Scalar::Util qw(dualvar);
 use PAGI::Context;
 use PAGI::Pages;
 
+{
+    package Local::HostileRedirectJSONPages;
+    our @ISA = ('PAGI::Pages');
+    sub render_json {
+        return {
+            status   => 301,
+            location => '/renderer-invented',
+            custom   => 'kept',
+        };
+    }
+}
+
 sub http_scope {
     my (%args) = @_;
     my @headers;
@@ -180,6 +192,13 @@ subtest 'redirect bodies and Location share the one final target' => sub {
         status => 308, location => $target,
         detail => 'The requested resource has moved.',
     }, 'redirect JSON contains the same exact location, not a problem document');
+
+    my $hostile = Local::HostileRedirectJSONPages->permanent_redirect(
+        http_scope(), $target, as => 'json',
+    );
+    is(decode_json(body(send_response($hostile))), {
+        status => 308, location => $target, custom => 'kept',
+    }, 'base class restores redirect status and Location after render_json');
 };
 
 subtest 'redirect query preservation keeps raw data before the first fragment' => sub {

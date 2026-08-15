@@ -148,7 +148,12 @@ sub html_favicon_href {
 {
     package Local::CustomFaviconPages;
     our @ISA = ('PAGI::Pages');
-    sub favicon_href { return '/assets/status.svg?theme=light&v=1' }
+    our @SEEN_STATUS;
+    sub favicon_href {
+        my ($self, $page) = @_;
+        push @SEEN_STATUS, $page->{status};
+        return '/assets/status.svg?theme=light&v=1';
+    }
 }
 
 {
@@ -171,9 +176,33 @@ sub html_favicon_href {
 }
 
 {
+    package Local::FutureHTMLPages;
+    our @ISA = ('PAGI::Pages');
+    sub render_html { return Future->done('<p>late HTML</p>') }
+}
+
+{
+    package Local::FutureProblemPages;
+    our @ISA = ('PAGI::Pages');
+    sub render_problem { return Future->done({ status => 404 }) }
+}
+
+{
+    package Local::FutureJSONPages;
+    our @ISA = ('PAGI::Pages');
+    sub render_json { return Future->done({ title => 'late JSON' }) }
+}
+
+{
     package Local::FutureFaviconPages;
     our @ISA = ('PAGI::Pages');
     sub favicon_href { return Future->done('/late.svg') }
+}
+
+{
+    package Local::ControlFaviconPages;
+    our @ISA = ('PAGI::Pages');
+    sub favicon_href { return "/bad\nfavicon.svg" }
 }
 
 {
@@ -449,8 +478,11 @@ subtest 'stock favicon is inline exact-status SVG with documented seams' => sub 
     like(decode_data_uri(html_favicon_href($custom_html)), qr/599/,
         'custom SVG contains exact status 599 rather than a family label');
 
+    local @Local::CustomFaviconPages::SEEN_STATUS;
     my $same_origin = decode('UTF-8', body(send_response(
         Local::CustomFaviconPages->not_found(http_scope(), as => 'html'))), FB_CROAK);
+    is(\@Local::CustomFaviconPages::SEEN_STATUS, [404],
+        'favicon_href receives the exact request-local status');
     like($same_origin, qr{href="/assets/status\.svg\?theme=light&amp;v=1"},
         'custom same-origin favicon URI is HTML-attribute escaped');
 
@@ -470,10 +502,18 @@ subtest 'full HTML overrides own favicon inclusion' => sub {
 
 subtest 'renderer failures and Future-valued hooks occur before send' => sub {
     my @cases = (
+        [Local::FutureHTMLPages->not_found(as => 'html'),
+            qr/renderer must return an immediate value/, 'Future HTML renderer'],
         [Local::FutureTextPages->not_found(as => 'text'),
             qr/renderer must return an immediate value/, 'Future text renderer'],
+        [Local::FutureProblemPages->not_found(as => 'json'),
+            qr/renderer must return an immediate value/, 'Future problem renderer'],
+        [Local::FutureJSONPages->welcome(as => 'json'),
+            qr/renderer must return an immediate value/, 'Future JSON renderer'],
         [Local::FutureFaviconPages->not_found(as => 'html'),
             qr/renderer must return an immediate value/, 'Future favicon hook'],
+        [Local::ControlFaviconPages->not_found(as => 'html'),
+            qr/favicon_href.*URI-reference/i, 'control-bearing favicon hook'],
         [Local::BadJSONPages->not_found(as => 'json'),
             qr/(?:circular|JSON|encode)/i, 'JSON encoding failure'],
         [Local::BadShapePages->not_found(as => 'json'),
