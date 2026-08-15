@@ -1081,3 +1081,557 @@ for my $method (@{PAGI::Pages::_Catalog->_named_methods}) {
 }
 
 1;
+
+__END__
+
+=encoding UTF-8
+
+=head1 NAME
+
+PAGI::Pages - Negotiated conventional HTTP response factory
+
+=head1 SYNOPSIS
+
+    use PAGI::Pages;
+
+    # A Context or HTTP scope constructs an ordinary, unsent Response.
+    my $response = PAGI::Pages->not_found($context);
+    my $response = PAGI::Pages->not_found($scope);
+
+    # Without a request source, the same call compiles a plain coderef.
+    my $endpoint = PAGI::Pages->not_found(
+        detail => 'That page does not exist.',
+    );
+
+    my $response = $endpoint->($context);       # Context handler
+    my $response = $endpoint->($scope);         # still unsent
+    await $endpoint->($scope, $receive, $send); # native HTTP PAGI app
+
+=head1 DESCRIPTION
+
+C<PAGI::Pages> constructs conventional welcome, redirect, and HTTP error
+responses. It centralizes safe stock copy, representation negotiation,
+UTF-8 encoding, problem details, cache policy, redirect construction, and
+status-specific fields. Every immediate call returns a fresh
+L<PAGI::Response>; Pages is not a Router, middleware, template system, or
+second response type.
+
+The fixed welcome page says:
+
+    Welcome to PAGI
+
+    PAGI is a spiritual successor to PSGI for asynchronous Perl applications. It
+    connects servers, frameworks, and applications across HTTP, WebSocket, and
+    Server-Sent Events.
+
+    Read the PAGI documentation →
+    https://metacpan.org/pod/PAGI
+
+HTML renders the final label as a link. Text includes the label and URL.
+Welcome and redirects use ordinary JSON; errors use RFC 9457 problem JSON.
+
+=head1 CONSTRUCTION
+
+    my $pages = PAGI::Pages->new(
+        as      => 'auto', # auto, html, json, or text
+        default => 'html', # html, json, or text
+    );
+
+C<as> defaults to C<auto>. C<default> defaults to C<html> and is used only by
+automatic negotiation. Unknown options and invalid values croak. Instances
+contain only immutable, request-independent policy. A class call creates a
+fresh default instance of that class; there is no singleton or shared request
+state.
+
+=head1 RESPONSE AND ENDPOINT OWNERSHIP
+
+A C<PAGI::Context::HTTP> or an unblessed scope whose explicit C<type> is
+C<http> is a request source. It constructs but does not send a response:
+
+    my $response = PAGI::Pages->not_found($scope);
+    $response->headers->set('X-Request-ID' => $request_id);
+    await $response->respond($send);
+
+The scope-only form is deliberately unsent so raw callers can inspect or
+modify the value before the one wire operation. A normal Router Context
+handler instead returns the value; the Router adapter owns the send step:
+
+    async sub missing {
+        my ($context) = @_;
+        return PAGI::Pages->not_found($context);
+    }
+
+Do not call C<respond> inside a normal Context route. Use an explicit C<raw>
+route when the handler must own C<$receive>, C<$send>, and protocol events.
+
+Without a request source, a page call returns a plain unblessed coderef. It
+accepts C<($context, @ignored_callback_metadata)>, C<($scope)>, or the native
+HTTP triplet C<($scope, $receive, $send)>. Only the triplet sends. Other
+invocation shapes and non-HTTP scopes croak before response construction.
+
+=head1 COMPLETE COMPOSITION FORMS
+
+The following forms are complete at the boundary they demonstrate. Examples
+that deploy a server root use L<PAGI::Compose> so lifespan and final HEAD wire
+handling have an owner.
+
+=head2 1. Class-style one-off Response from Context
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    my $app = compose(routes => [
+        route('/missing' => sub {
+            my ($context) = @_;
+            return PAGI::Pages->not_found($context);
+        }),
+    ])->to_app;
+
+=head2 2. Welcome endpoint in a small runnable demo
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    my $app = compose(routes => [
+        route('/' => PAGI::Pages->welcome),
+    ])->to_app;
+
+=head2 3. Configured instance and presentation subclass
+
+    package MyApp::Pages;
+    use parent 'PAGI::Pages';
+
+    sub render_text {
+        my ($self, $page) = @_;
+        return "My service: $page->{status} $page->{title}\n";
+    }
+
+    sub favicon_href { return '/assets/status.svg' }
+
+    package main;
+    use PAGI::Compose qw(compose);
+    use PAGI::Routing qw(route);
+
+    my $pages = MyApp::Pages->new(as => 'text', default => 'text');
+    my $app = compose(routes => [
+        route('/missing' => $pages->not_found),
+    ])->to_app;
+
+=head2 4. Returning a Response from an async Context handler
+
+    use Future::AsyncAwait;
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    async sub lookup_item { return undef }
+
+    my $app = compose(routes => [
+        route('/items/{id}' => async sub {
+            my ($context) = @_;
+            my $item = await lookup_item($context->path_param('id'));
+            return PAGI::Pages->not_found($context) unless $item;
+            return $context->json($item);
+        }),
+    ])->to_app;
+
+=head2 5. Constructing, modifying, and explicitly sending in raw PAGI
+
+    use Future;
+    use Future::AsyncAwait;
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+
+    sub make_request_id { return 'example-request-id' }
+
+    my $http = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->not_found($scope, as => 'text');
+        $response->header('X-Request-ID' => make_request_id());
+        await Future->wrap($response->respond($send));
+    };
+
+    my $app = compose(app => $http)->to_app;
+
+=head2 6. Deferred endpoint in Route
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    my $app = compose(routes => [
+        route('/old' => PAGI::Pages->permanent_redirect('/new')),
+    ])->to_app;
+
+C<route> is an exact, method-aware routing leaf. C</old/child> does not reach
+this endpoint, and normal route diagnostics still apply.
+
+=head2 7. Deferred endpoint in Mount
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(mount);
+
+    my $app = compose(routes => [
+        mount('/gone' => PAGI::Pages->gone),
+    ])->to_app;
+
+C<mount> is an opaque prefix owner. It transfers C</gone> and the complete
+C</gone/...> subtree to the terminal Pages app; every HTTP method reaches it.
+A mounted Pages endpoint ignores the remaining child path. Route and Mount are
+therefore not interchangeable selection mechanisms.
+
+=head2 8. Deferred endpoint as the Compose target
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+
+    my $app = compose(
+        app => PAGI::Pages->service_unavailable(retry_after => 300),
+    )->to_app;
+
+=head2 9. Direct deferred-endpoint HTTP triplet
+
+    use Future;
+    use Future::AsyncAwait;
+    use PAGI::Pages;
+
+    my $endpoint = PAGI::Pages->not_found(as => 'text');
+    my $embedded_http = async sub {
+        my ($scope, $receive, $send) = @_;
+        die 'HTTP embedding only' unless ($scope->{type} // '') eq 'http';
+        await Future->wrap($endpoint->($scope, $receive, $send));
+    };
+
+This is an HTTP-only embedding, not a complete server root: the endpoint
+rejects lifespan, WebSocket, SSE, and extension scopes and does not provide a
+final deployment HEAD boundary. Invoked directly for HEAD, it sends the full
+representation body; the embedding application must supply wire suppression.
+
+=head2 10. The same endpoint deployed through Compose
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+
+    my $endpoint = PAGI::Pages->not_found;
+    my $app = compose(app => $endpoint)->to_app;
+
+Compose consumes root lifespan and places the final HEAD wire boundary outside
+Pages. Pages still constructs the full GET-equivalent representation for HEAD;
+Compose preserves its status and headers and suppresses the final wire body.
+
+=head2 11. NotFound and ErrorHandler middleware endpoints
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(router route middleware);
+
+    sub home {
+        my ($context) = @_;
+        return $context->text('Home');
+    }
+
+    my $routing = router(routes => [route('/' => \&home)]);
+    my $app = compose(
+        app => $routing,
+        middleware => [
+            middleware('Routing::NotFound',
+                handler => PAGI::Pages->not_found),
+            middleware('ErrorHandler',
+                handler => PAGI::Pages->internal_server_error),
+        ],
+    )->to_app;
+
+Pages ignores the routing snapshot or original exception passed as trailing
+callback metadata. Use a wrapper when that metadata must choose copy or
+extensions.
+
+=head2 12. MethodNotAllowed with the snapshot method union
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(router route middleware);
+
+    sub items {
+        my ($context) = @_;
+        return $context->text('Items');
+    }
+
+    my $pages = PAGI::Pages->new;
+    my $routing = router(routes => [
+        route('/items' => \&items, methods => ['GET', 'POST']),
+    ]);
+    my $app = compose(
+        app => $routing,
+        middleware => [
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                my ($context, $snapshot) = @_;
+                return $pages->method_not_allowed(
+                    $context,
+                    allow => $snapshot->allowed_methods,
+                );
+            }),
+        ],
+    )->to_app;
+
+=head2 13. HTML, JSON/problem JSON, and text negotiation
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    my $app = compose(routes => [
+        route('/missing' => PAGI::Pages->not_found),
+    ])->to_app;
+
+    # curl -H 'Accept: text/html'                http://localhost:5000/missing
+    # curl -H 'Accept: application/problem+json' http://localhost:5000/missing
+    # curl -H 'Accept: application/json'         http://localhost:5000/missing
+    # curl -H 'Accept: text/plain'                http://localhost:5000/missing
+
+Welcome and redirects instead emit ordinary C<application/json> when
+C<application/json> is selected. C<application/problem+json> alone does not
+select JSON for those non-problem documents.
+
+=head2 14. Fixed representation and automatic fallback
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    my $fixed_pages = PAGI::Pages->new(as => 'json');
+    my $auto_pages = PAGI::Pages->new(as => 'auto', default => 'text');
+    my $app = compose(routes => [
+        route('/fixed' => $fixed_pages->not_found),
+        route('/auto'  => $auto_pages->not_found),
+    ])->to_app;
+
+C</fixed> ignores Accept and omits C<Vary: Accept>. C</auto> negotiates and
+merges C<Accept> into C<Vary>. Missing Accept, C<*/*>, equal-quality default
+ties, and total rejection use the configured default. Total rejection does
+not recursively create a 406.
+
+=head2 15. Custom RFC 9457 problem
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    my $app = compose(routes => [
+        route('/upstream' => PAGI::Pages->status(
+            599,
+            type       => 'https://example.com/problems/upstream-timeout',
+            title      => 'Upstream Connection Timeout',
+            detail     => 'The reporting gateway could not connect upstream.',
+            instance   => '/requests/abc123',
+            extensions => { upstream => 'reports' },
+        )),
+    ])->to_app;
+
+Unknown 400-599 statuses require C<type>, C<title>, and C<detail>. The type
+must be an absolute URI other than C<about:blank>. Registered statuses use
+C<about:blank> and their registered title unless a custom C<type> and C<title>
+are supplied together. C<instance> is never inferred. Problem extensions are
+top-level and may not replace C<type>, C<title>, C<status>, C<detail>, or
+C<instance>.
+
+=head2 16. Mandatory and status-specific fields
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    my $app = compose(routes => [
+        route('/login' => PAGI::Pages->unauthorized(
+            challenge => 'Bearer realm="api"')),
+        route('/proxy' => PAGI::Pages->proxy_authentication_required(
+            challenge => 'Basic realm="proxy"')),
+        route('/methods' => PAGI::Pages->method_not_allowed(
+            allow => [qw(GET HEAD)])),
+        route('/upgrade' => PAGI::Pages->upgrade_required(
+            upgrade => 'h2c')),
+        route('/range' => PAGI::Pages->range_not_satisfiable(
+            length => 1234)),
+        route('/busy' => PAGI::Pages->too_many_requests(
+            retry_after => 30)),
+        route('/blocked' => PAGI::Pages->unavailable_for_legal_reasons(
+            blocked_by => 'https://example.com/policy')),
+        route('/network-login' => PAGI::Pages->network_authentication_required(
+            login_url => '/network-login-form')),
+    ])->to_app;
+
+The emitted mappings are C<challenge> to C<WWW-Authenticate> for 401 or
+C<Proxy-Authenticate> for 407, C<allow> to normalized C<Allow> for 405, and
+C<upgrade> to C<Upgrade> plus C<Connection: Upgrade> for HTTP/1.1-only 426.
+Those four inputs are mandatory. C<length> emits
+C<Content-Range: bytes */N>; C<retry_after> applies to 413, 429, 503, and
+redirects; C<blocked_by> emits a C<blocked-by> Link; C<login_url> becomes the
+511 representation link and problem C<login> extension.
+
+407 describes authentication with an intermediary proxy. 511 is intended for
+network-interception or captive-portal responses. Neither is an ordinary
+origin application's authentication error; origins normally use 401/403.
+
+=head2 17. Redirect query preservation before fragments
+
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    my $app = compose(routes => [
+        route('/find' => PAGI::Pages->redirect(
+            '/search?sort=date#results',
+            status         => 308,
+            preserve_query => 1,
+        )),
+    ])->to_app;
+
+For an incoming C<q=perl>, both Location and the body use
+C</search?sort=date&q=perl#results>. Pages appends the raw query without
+decoding or re-encoding it. C<preserve_query> defaults to false.
+
+=head2 18. Safe response modification before send
+
+    use Future::AsyncAwait;
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+
+    sub make_request_id { return 'example-request-id' }
+
+    my $http = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->not_found($scope);
+        $response->headers->set('X-Request-ID' => make_request_id());
+        await $response->respond($send);
+    };
+
+    my $app = compose(app => $http)->to_app;
+
+This is the documented low-level escape hatch. Pages does not revalidate a
+Response after construction, so callers that change status, owned fields, or
+mandatory fields own the resulting protocol correctness.
+
+=head2 19. Stock, same-origin, and omitted favicons
+
+    package MyApp::AssetPages;
+    use parent 'PAGI::Pages';
+    sub favicon_href { return '/assets/status.svg' }
+
+    package MyApp::StrictCSPPages;
+    use parent 'PAGI::Pages';
+    sub favicon_href { return undef }
+
+    package main;
+    use PAGI::Compose qw(compose);
+    use PAGI::Pages;
+    use PAGI::Routing qw(route);
+
+    my $app = compose(routes => [
+        route('/stock'  => PAGI::Pages->not_found),
+        route('/asset'  => MyApp::AssetPages->not_found),
+        route('/strict' => MyApp::StrictCSPPages->not_found),
+    ])->to_app;
+
+Stock HTML embeds a percent-encoded SVG data URI containing the exact status,
+so it causes no fallback C</favicon.ico> request. A same-origin hook can retain
+the stock document under a stricter asset policy. Returning C<undef> omits the
+link for Content Security Policies that disallow C<data:> images. A full
+C<render_html> override owns the complete document and whether it calls
+C<favicon_href>.
+
+=head1 ERROR AND REDIRECT METHODS
+
+C<status($request, $code, %options)> is the general 400-599 error constructor.
+The named error methods are ordinary installed methods, not C<AUTOLOAD>
+fallbacks:
+
+    400 bad_request                         401 unauthorized
+    402 payment_required                    403 forbidden
+    404 not_found                           405 method_not_allowed
+    406 not_acceptable                      407 proxy_authentication_required
+    408 request_timeout                     409 conflict
+    410 gone                                411 length_required
+    412 precondition_failed                 413 content_too_large
+    414 uri_too_long                        415 unsupported_media_type
+    416 range_not_satisfiable               417 expectation_failed
+    421 misdirected_request                 422 unprocessable_content
+    423 locked                              424 failed_dependency
+    425 too_early                           426 upgrade_required
+    428 precondition_required               429 too_many_requests
+    431 request_header_fields_too_large     451 unavailable_for_legal_reasons
+    500 internal_server_error               501 not_implemented
+    502 bad_gateway                         503 service_unavailable
+    504 gateway_timeout                     505 http_version_not_supported
+    506 variant_also_negotiates             507 insufficient_storage
+    508 loop_detected                       511 network_authentication_required
+
+This checked-in catalog was compared with the
+L<IANA HTTP Status Code Registry|https://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml>
+on 2026-08-14. IANA lists 418 as unused and 510 as obsoleted, so neither has a
+named helper. Use the strict custom C<status> form for a deliberate private or
+otherwise unregistered code. The catalog is never fetched at runtime.
+
+Redirects accept only 301, 302, 303, 307, and 308. C<redirect> takes a
+C<status> option; the corresponding named methods are C<moved_permanently>,
+C<found>, C<see_other>, C<temporary_redirect>, and C<permanent_redirect>.
+Named redirect methods reject a conflicting C<status> option.
+
+=head1 OPTIONS, FIELDS, AND CACHE POLICY
+
+Welcome accepts C<as>, C<headers>, and C<cache_control>. Errors additionally
+accept C<detail>, C<type>, C<title>, C<instance>, C<extensions>, and the
+status-specific semantic options shown above. Redirects accept C<as>,
+C<status> on the general method, C<detail>, C<headers>, C<cache_control>,
+C<preserve_query>, and C<retry_after>.
+
+The C<headers> option is a flat C<[name =E<gt> value, ...]> arrayref. Pages
+rejects malformed fields and reserves C<Content-Type>, C<Content-Length>,
+C<Transfer-Encoding>, C<Location>, C<Cache-Control>, and C<Connection> for its
+own construction. Automatic negotiation merges C<Accept> into an existing
+C<Vary> field without duplicate tokens.
+
+Errors default to C<Cache-Control: no-store>. Callers may explicitly replace
+that default except for 428, 429, 431, and 511, whose defining RFCs require
+non-storage. Welcome and redirects add no cache field by default.
+
+=head1 CONTENT NEGOTIATION
+
+Automatic negotiation offers HTML, JSON, and text. It uses each concrete
+type's most-specific effective Accept quality, honors exact C<q=0>
+exclusions, and breaks equal-quality ties in configured-default, HTML, JSON,
+then text order. A fixed C<as> ignores Accept. Stock English output does not
+negotiate C<Accept-Language>.
+
+=head1 SUBCLASSING AND SYNCHRONOUS WORK
+
+Presentation subclasses may override:
+
+    render_html($descriptor)     # Unicode scalar
+    render_text($descriptor)     # Unicode scalar
+    render_problem($descriptor)  # hashref for RFC 9457 errors
+    render_json($descriptor)     # hashref for welcome and redirects
+    favicon_href($descriptor)    # URI-reference scalar or undef
+
+Hooks are synchronous and receive a fresh request-local descriptor. A Future
+or invalid return shape is rejected before any send. Pages retains authority
+over the wire status, Content-Type, Content-Length, Location, cache policy,
+mandatory fields, negotiation, Vary, and the agreement between an RFC 9457
+C<status> member and the HTTP status.
+
+Stock construction is bounded in-memory work: it inspects the existing HTTP
+scope, negotiates three representation families, validates short scalars and
+fields, escapes fixed page copy, encodes one small document, and constructs a
+Response. It performs no filesystem or network I/O, subprocess work, dynamic
+renderer loading, template discovery, or runtime catalog lookup. Fetch async
+application data before calling Pages; only C<respond($send)> is asynchronous.
+
+=head1 SEE ALSO
+
+L<PAGI::Response> for literal low-level response construction and sending,
+L<PAGI::Routing> for exact routes and opaque mounts, L<PAGI::Compose> for the
+deployed lifespan/HEAD/error boundary, L<PAGI::Middleware::ErrorHandler>,
+L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>
+
+=cut

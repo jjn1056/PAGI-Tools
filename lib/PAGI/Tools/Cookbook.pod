@@ -230,48 +230,35 @@ useful.
 
 =head2 Negotiated 404 and 405 Responses
 
-Fallback policy is ordinary middleware. These two handlers share a renderer,
-read the status seeded into their local Context, and keep the 405 method union
-in the routing snapshot:
+Fallback policy is ordinary middleware. L<PAGI::Pages> supplies the negotiated
+stock 404 endpoint directly. MethodNotAllowed needs a small wrapper because its
+authoritative method union lives in the routing snapshot:
 
-  use Future::AsyncAwait;
   use PAGI::Compose qw(compose);
+  use PAGI::Pages;
   use PAGI::Routing qw(router middleware);
 
-  async sub render_http_error {
-      my ($c, $allowed) = @_;
-      my $status = $c->response->status;
-      my $type = $c->request->preferred_type(
-          'application/json', 'text/html', 'text/plain',
-      ) // 'text/plain';
-
-      $c->response->header('Vary' => 'Accept');
-      return $c->json({ status => $status, allowed => $allowed })
-          if $type eq 'application/json';
-      return $c->html("<h1>$status</h1>")
-          if $type eq 'text/html';
-      return $c->text("HTTP $status");
-  }
-
-  async sub not_found {
-      my ($c, $snapshot) = @_;
-      return await render_http_error($c, []);
-  }
-
-  async sub method_not_allowed {
-      my ($c, $snapshot) = @_;
-      return await render_http_error($c, $snapshot->allowed_methods);
-  }
+  my $pages = PAGI::Pages->new;
 
   my $app = compose(
       app => router(routes => \@routes),
       middleware => [
           middleware('Routing::NotFound',
-              handler => \&not_found),
+              handler => $pages->not_found),
           middleware('Routing::MethodNotAllowed',
-              handler => \&method_not_allowed),
+              handler => sub {
+                  my ($c, $snapshot) = @_;
+                  return $pages->method_not_allowed(
+                      $c, allow => $snapshot->allowed_methods,
+                  );
+              }),
       ],
   )->to_app;
+
+Pages selects HTML, RFC 9457 problem JSON, or text from C<Accept>, adds
+C<Vary: Accept>, and defaults errors to C<Cache-Control: no-store>. Use a
+configured Pages instance or subclass here for application presentation; no
+Pages object is discovered through Context, Compose, or global state.
 
 A selected application's own 404 or 405 is left untouched. If a detached
 custom routing renderer returns 405, MethodNotAllowed removes missing,
@@ -292,7 +279,8 @@ Compose installs the same mandatory inert outer graph for every HTTP target:
               author middleware, in listed order
                 target
 
-Its production defaults are plain UTF-8, no-store emergency responses. Put
+Its stock HTTP defaults are negotiated, no-store Pages responses, with a final
+hardcoded UTF-8 text 500 only if Pages rendering itself fails. Put
 the application's official policy inside request IDs, access logging, and
 security middleware so those layers observe its 404, 405, and 500 responses:
 
@@ -322,9 +310,13 @@ start, and rethrows the original database exception so the server can abort.
 Ordinary ErrorHandler instances default to static production mode and never
 consult C<PAGI_ENV>. Compose's private outer instance resolves development per
 handled request and falls back to safe production output if resolution fails.
-Built-in ErrorHandler HTML, text, and JSON use UTF-8 octets, byte-correct
-C<Content-Length>, and C<Cache-Control: no-store>. A custom renderer owns its
-own headers.
+The built-in renderer negotiates through Pages. To fix one representation, use
+the existing handler seam:
+
+  middleware('ErrorHandler',
+      handler => PAGI::Pages->internal_server_error(as => 'json'))
+
+A custom renderer remains authoritative for its own content and headers.
 
 =head2 Real Catch-All Routes
 
@@ -2026,8 +2018,8 @@ tests or one-liners:
       -e 'PAGI::App::File->new(root => ".")->to_app'
 
   # Quick redirect
-  pagi-server -MPAGI::App::Redirect \
-      -e 'PAGI::App::Redirect->new(location => "https://example.com")->to_app'
+  pagi-server -MPAGI::Compose -MPAGI::Pages \
+      -e 'PAGI::Compose::compose(app => PAGI::Pages->redirect("https://example.com"))->to_app'
 
 =head2 Loading Modules with -M
 
@@ -2407,6 +2399,10 @@ See L<PAGI::Test::Client> for the full API including WebSocket and SSE testing.
 =item * L<PAGI::Tools::Tutorial> - Guide to middleware, helpers, and built-in apps
 
 =item * L<PAGI::Routing> - Immutable declarative routing reference
+
+=item * L<PAGI::Pages> - Negotiated conventional HTTP responses and endpoints
+
+=item * L<PAGI::Response> - Literal low-level response construction
 
 =item * L<PAGI::Middleware::Helpers> - Functional event-channel wrappers
 

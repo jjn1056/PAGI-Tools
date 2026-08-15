@@ -54,6 +54,14 @@ middleware suite — so the same application reads like this:
     my $routing = $router->to_router; # retain one immutable snapshot
     my $app = compose(app => $routing)->to_app; # complete deployed app
 
+For a small conventional landing page or HTTP error, L<PAGI::Pages> builds an
+ordinary negotiated Response or a terminal endpoint:
+
+    use PAGI::Pages;
+
+    my $response = PAGI::Pages->not_found($context);
+    my $endpoint = PAGI::Pages->welcome;
+
 Routing has three public frontends over that same immutable snapshot and
 compiler:
 
@@ -123,8 +131,8 @@ L<PAGI::Compose> is an optional application-root composer, not a base class or
 a replacement router. Build an explicit router and pass it through C<app> when
 router-specific configuration or inspection is needed. Official fallback and
 error representations are ordinary middleware inside request IDs, access
-logging, and security middleware; the outer automatic responses remain a
-plain last resort.
+logging, and security middleware; the outer automatic Pages-backed responses
+remain a stock last resort.
 
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
@@ -162,6 +170,9 @@ framework
 =item * L<PAGI::Request>, L<PAGI::Response>, L<PAGI::Context> - request
 processing and ergonomics
 
+=item * L<PAGI::Pages> - negotiated conventional welcome, redirect, and HTTP
+error Responses and terminal endpoints
+
 =item * L<PAGI::Routing>, L<PAGI::App::Router>, and
 L<PAGI::Endpoint::Router> - immutable functional, mutable imperative, and
 method-oriented frontends over one immutable routing engine
@@ -192,7 +203,8 @@ protocol specification lives in the C<PAGI> distribution.
 L<PAGI::Tutorial> (the protocol tutorial, in the C<PAGI> distribution),
 L<PAGI::Tools::Tutorial> (this distribution's helpers guide),
 L<PAGI::Tools::Cookbook> (this distribution's recipes), L<PAGI::Compose>,
-L<PAGI::Routing>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, L<PAGI::Spec>,
+L<PAGI::Routing>, L<PAGI::Pages>, L<PAGI::Response>, L<PAGI::App::Router>,
+L<PAGI::Endpoint::Router>, L<PAGI::Spec>,
 L<router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>,
 L<PAGI::Server::Runner> - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)

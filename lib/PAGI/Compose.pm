@@ -376,11 +376,14 @@ is no public option to suppress, detect, configure, or disable it, and Compose
 does not inspect author middleware to decide whether to install it.
 
 After normal unanswered completion, trusted routing evidence produces a
-plain-text no-store 404 or 405; 405 carries the deterministic union C<Allow>.
+negotiated, no-store L<PAGI::Pages> 404 or 405; 405 carries the deterministic
+union C<Allow>.
 Normal completion without a valid response lifecycle throws
 L<PAGI::Exception::IncompleteResponse>. Before response start, that exception,
 request-target failures, failed Futures, author-middleware failures, and author
-renderer failures are reported and converted to one plain-text no-store 500.
+renderer failures are reported and converted to one negotiated, no-store Pages
+500. Pages construction itself is protected by ErrorHandler's final hardcoded
+UTF-8 text 500 path.
 The internal reporter warns C<PAGI application error: $error>. Explicit
 application responses, including matched 404, 405, and 500, pass unchanged and
 are neither reported nor reinterpreted.
@@ -398,17 +401,26 @@ The completion guard never replaces an inner exception.
 
 Install ordinary author middleware for the application's official policy:
 
+    use MyApp::Pages;
+
+    my $pages = MyApp::Pages->new;
+
     middleware => [
         'RequestId',
         'AccessLog',
         'SecurityHeaders',
         middleware('ErrorHandler',
-            handler  => \&site_error,
+            handler  => $pages->internal_server_error,
             on_error => \&report_error),
         middleware('Routing::NotFound',
-            handler => \&site_not_found),
+            handler => $pages->not_found),
         middleware('Routing::MethodNotAllowed',
-            handler => \&site_method_not_allowed),
+            handler => sub {
+                my ($context, $snapshot) = @_;
+                return $pages->method_not_allowed(
+                    $context, allow => $snapshot->allowed_methods,
+                );
+            }),
     ]
 
 These renderers run inside the automatic last resort. Earlier listed author
@@ -426,6 +438,11 @@ reporting. Only Compose's private automatic instance resolves development mode
 dynamically per handled request. Before response start a database throw or
 failed Future may be rendered; after start the same failure is reported and
 re-thrown without a second response.
+
+There is no C<pages> option on Compose and no ambient renderer selection.
+Install ordinary inner middleware as above when application presentation uses a
+Pages subclass. The mandatory stock outer failsafes remain installed and
+recover if an inner renderer fails.
 
 =head1 RELATIONSHIP TO OTHER PAGI APIS
 
@@ -449,7 +466,7 @@ native applications or their existing hook-registration behavior.
 
 =head1 SEE ALSO
 
-L<PAGI::Routing>, L<PAGI::Routing::Middleware>, L<PAGI::Lifespan>,
+L<PAGI::Routing>, L<PAGI::Routing::Middleware>, L<PAGI::Pages>, L<PAGI::Lifespan>,
 L<PAGI::Utils>, L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>
 
 =cut

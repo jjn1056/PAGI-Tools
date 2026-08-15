@@ -581,6 +581,60 @@ B<Note:> C<redirect()> sets the body and returns C<$self>; the response is
 not transmitted until C<respond($send)> is called. Use C<return> after
 the await if you have more code below.
 
+=head2 4.2 PAGI::Pages - Conventional Negotiated Responses
+
+Use L<PAGI::Pages> when the response is a conventional welcome, HTTP error, or
+redirect rather than an application-owned literal document. A Context call
+returns an ordinary Response for Router to send:
+
+  use PAGI::Pages;
+
+  route('/items/{id}' => async sub {
+      my ($c) = @_;
+      my $item = await find_item($c->path_param('id'));
+      return PAGI::Pages->not_found($c) unless $item;
+      return $c->json($item);
+  });
+
+A raw app constructs the same unsent value, may modify it, and explicitly owns
+the send:
+
+  my $response = PAGI::Pages->not_found($scope, as => 'text');
+  $response->header('X-Request-ID' => $request_id);
+  await $response->respond($send);
+
+Without a Context or scope, the call returns a plain coderef that works as a
+normal route target or native HTTP app:
+
+  route('/' => PAGI::Pages->welcome)
+  route('/old' => PAGI::Pages->redirect('/new', status => 308))
+  mount('/gone' => PAGI::Pages->gone)
+
+The route forms are exact and method-aware. The mount owns C</gone> and its
+entire subtree for every HTTP method; a terminal Pages app ignores the
+remaining child path. A direct deferred-endpoint triplet is HTTP-only. Deploy
+it through C<< compose(app => $endpoint)->to_app >> when the root must also own
+lifespan and final HEAD body suppression.
+
+Automatic representation selection negotiates HTML, RFC 9457 problem JSON for
+errors (ordinary JSON for welcome and redirects), and text. Use C<< as =>
+'html' >>, C<'json'>, or C<'text'> for a fixed representation. Error responses
+default to C<Cache-Control: no-store>. Pages also validates mandatory fields:
+
+  PAGI::Pages->unauthorized($c,
+      challenge => 'Bearer realm="api"');
+  PAGI::Pages->method_not_allowed($c,
+      allow => [qw(GET HEAD)]);
+
+Redirect query preservation is explicit and defaults off:
+
+  PAGI::Pages->redirect($c, '/search#results',
+      status => 308, preserve_query => 1);
+
+Pages has no Context shortcut and Compose has no Pages configuration option.
+Use a Pages instance or subclass explicitly when application presentation
+needs custom synchronous render hooks.
+
 =head1 PART 5: REAL-TIME & STREAMING
 
 =head2 5.1 PAGI::WebSocket - WebSocket Helper
@@ -822,7 +876,7 @@ Middleware executes in order: AccessLog -> CORS -> GZip -> app.
       enable 'CORS', origins => '*';           # Enable CORS
       enable 'SecurityHeaders';                # Add security headers
       enable 'GZip', min_size => 1024;         # Compress responses
-      enable 'ErrorHandler', development => 1;  # Pretty errors
+      enable 'ErrorHandler', development => 1;  # Development diagnostics
       $router;
   };
 
@@ -975,12 +1029,19 @@ Rate limiting with configurable strategies:
 
 Catch and format errors:
 
-  enable 'ErrorHandler', development => 1;  # Pretty HTML errors with stack traces
+  enable 'ErrorHandler', development => 1;  # Development detail with stack trace
   enable 'ErrorHandler';                    # Production (default): generic errors, no stack leak
 
-C<ErrorHandler> renders C<text/html> by default; set
-C<< content_type => 'application/json' >> (or C<'text/plain'>) to change the
-format. Ordinary construction has static C<development =E<gt> 0> behavior and
+C<ErrorHandler>'s built-in response negotiates through L<PAGI::Pages>. Supply
+a Pages endpoint through the existing handler seam to fix its representation:
+
+  use PAGI::Pages;
+
+  enable 'ErrorHandler',
+      handler => PAGI::Pages->internal_server_error(as => 'json');
+
+Use C<< as => 'html' >> or C<'text'> for the other fixed forms. Ordinary
+construction has static C<development =E<gt> 0> behavior and
 does not consult C<PAGI_ENV>. Its optional C<handler> receives
 C<($context, $error)> and returns an immediate or Future-backed Response.
 C<on_error> is awaited reporting, not rendering; reporter failure is contained.
@@ -1311,7 +1372,7 @@ applications it composes.
 
 =item * L<PAGI::Routing>, L<PAGI::Middleware::Builder>,
 L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, L<PAGI::Response>,
-L<PAGI::Request> - individual module documentation
+L<PAGI::Pages>, L<PAGI::Request> - individual module documentation
 
 =back
 

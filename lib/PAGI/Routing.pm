@@ -527,6 +527,17 @@ incomplete output and renders 500 rather than inventing a 404. Preserve Router
 awareness with C<< router => $child >>, or keep opacity and wrap the child in
 its own Compose boundary.
 
+L<PAGI::Pages> supplies terminal negotiated endpoints without a Router-specific
+adapter:
+
+    route('/old' => PAGI::Pages->permanent_redirect('/new'))
+    mount('/gone' => PAGI::Pages->gone)
+
+The first is still one exact, method-aware route. The second owns the complete
+C</gone> subtree for every HTTP method and ignores the remaining child path.
+Choose C<route> or C<mount> for that routing boundary, not merely because both
+accept the same Pages coderef.
+
 C<not_found> is not a catch-all route. A final C<< route('/*path' =E<gt> ...) >>
 is a normal route with captures, middleware, and method matching. A GET-only
 catch-all makes unknown non-GET paths 405. A C<methods =E<gt> '*'> catch-all can
@@ -830,7 +841,7 @@ phase; there is no response-valued Endpoint middleware chain.
 =head1 SEE ALSO
 
 L<PAGI::Tools::Cookbook>, L<PAGI::Context>, L<PAGI::Authority>,
-L<PAGI::Compose>, L<PAGI::Middleware::Helpers>, L<PAGI::App::Router>,
-L<PAGI::Endpoint::Router>
+L<PAGI::Compose>, L<PAGI::Pages>, L<PAGI::Response>,
+L<PAGI::Middleware::Helpers>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>
 
 =cut

@@ -1,6 +1,30 @@
 # Revision history for PAGI-Tools
 
 0.002003
+  - New PAGI::Pages constructs ordinary negotiated Responses and coderef terminal
+    endpoints for the fixed PAGI welcome page, registered or strict custom
+    4xx/5xx problems, and 301/302/303/307/308 redirects. It supports HTML,
+    RFC 9457 problem JSON or ordinary JSON, and text; synchronous subclass
+    render hooks; exact-status embedded SVG favicons; validated semantic HTTP
+    fields; safe no-store error defaults; and fragment-correct optional query
+    preservation.
+  - BREAKING: the standalone NotFound and Redirect applications are removed.
+    Pages replaces their terminal uses; redirects now default
+    `preserve_query` to false. ErrorHandler removes `content_type`, negotiates
+    its built-in output through Pages, and uses its existing handler seam for a
+    fixed representation. See UPGRADING.md for exact replacements.
+  - Generic first-party HTTP error and Location-redirect defaults now delegate
+    representation construction to Pages while each component retains its
+    trigger, status, protocol facts, and existing custom-response seam. This
+    adds required File 405/416 and Static 416 fields, stops JSONBody decoder
+    detail leakage, validates authentication realms and redirect codes, and
+    fixes query placement before redirect fragments. Loader, URLMap, and
+    Throttle now reject their incompatible non-HTTP fallback cases clearly.
+  - Shared Accept matching now honors the most-specific effective quality, so
+    exact q=0 exclusions are not revived by positive wildcards and equal
+    qualities retain server order. Unknown explicit Context scope types now
+    produce a generic Context with a once-per-factory/type warning; malformed
+    or missing types croak instead of being treated as HTTP.
   - BREAKING: HTTP Router exhaustion is now nonterminal. The immutable, App,
     and Endpoint Router frontends reject the removed `not_found` and
     `method_not_allowed` callback options without compatibility aliases.
@@ -11,17 +35,18 @@
   - PAGI::Compose now installs mandatory inert HTTP safeguards around every
     target: a fresh routing Trace, ErrorHandler, response-completion guard,
     NotFound, MethodNotAllowed, and the final HEAD wire boundary. Its built-in
-    production 404/405/500 responses are plain UTF-8, no-store failsafes.
+    production 404/405/500 responses are negotiated Pages-backed, no-store
+    failsafes, with a final hardcoded text 500 if Pages rendering fails.
     Applications install official fallback/error middleware inside logging,
     request-ID, and security middleware; an inner response makes the outer
     defaults inert.
   - ErrorHandler adds an optional Response renderer, awaits immediate or
     Future-backed `on_error` reporting, and rethrows the original exception
-    after response start without attempting a second response. Built-in HTML,
-    text, and JSON responses now use byte-correct UTF-8 Content-Length and
-    `Cache-Control: no-store`. Ordinary ErrorHandler development mode remains
-    static; only Compose's private failsafe resolves the environment per
-    handled request.
+    after response start without attempting a second response. Its built-in
+    Pages-backed responses use byte-correct UTF-8 Content-Length and
+    `Cache-Control: no-store`; a supplied handler remains authoritative.
+    Ordinary ErrorHandler development mode remains static; only Compose's
+    private failsafe resolves the environment per handled request.
   - PAGI::App::Cascade now advances a naked Router by trusted decline evidence
     independently of its explicit-status `catch` list, streams non-caught
     responses after start, and rejects arbitrary silent HTTP children.
@@ -239,8 +264,8 @@
     low_water_mark, on_high_water/on_drain/is_writable, WebSocket->deny().
   - PAGI::Request->multipart_stream: pull-based streaming multipart parsing with
     app-controlled sinks; mutually exclusive with the buffered body methods.
-  - PAGI::App::Redirect and ::NotFound build a PAGI::Response value (modules kept
-    for the dynamic case).
+  - The standalone Redirect and NotFound applications build a PAGI::Response
+    value (modules kept for the dynamic case).
   - PAGI::Lifespan coerces its app arg via to_app, and reports shutdown-handler
     failures instead of swallowing them.
   - Spec: URLMap sets root_path; WrapCGI builds SCRIPT_NAME from root_path.

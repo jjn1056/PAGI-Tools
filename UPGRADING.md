@@ -11,6 +11,227 @@ Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Pages response factory and default response migrations
+
+`PAGI::Pages` now owns conventional first-party welcome, HTTP error, and
+redirect representations. It returns an ordinary `PAGI::Response` when given a
+Context or HTTP scope and a plain Context/native-PAGI endpoint coderef when no
+request source is supplied.
+
+### Replace the removed NotFound application
+
+**Before (removed):**
+
+```perl
+PAGI::App::NotFound->new->to_app;
+```
+
+**After (shipped):**
+
+```perl
+use PAGI::Pages;
+
+PAGI::Pages->not_found;
+```
+
+The replacement negotiates HTML, RFC 9457 problem JSON, or text and defaults
+to `Cache-Control: no-store`. For an intentionally literal body, keep using a
+direct Response instead:
+
+```perl
+PAGI::Response->text('No such page', status => 404)->to_app;
+```
+
+### Replace the removed Redirect application
+
+**Before (removed):**
+
+```perl
+PAGI::App::Redirect->new(
+    to             => '/new',
+    status         => 308,
+    preserve_query => 1,
+)->to_app;
+```
+
+**After (shipped):**
+
+```perl
+use PAGI::Pages;
+
+PAGI::Pages->redirect(
+    '/new',
+    status         => 308,
+    preserve_query => 1,
+);
+```
+
+The old application preserved the incoming query by default. Pages defaults
+`preserve_query` to `0`; opt in as above when query propagation is intended.
+When enabled, Pages appends the raw query without re-encoding it and places it
+before the first target fragment. Dynamic destinations move to an ordinary
+Context handler or raw closure that computes the target and then calls Pages.
+
+Pages redirects accept only 301, 302, 303, 307, and 308. Invalid configured
+codes now fail at construction. The selected representation has a body and is
+negotiated; use `PAGI::Response->redirect` when a literal empty redirect is the
+application contract.
+
+### Replace ErrorHandler content_type
+
+The `content_type` option has been removed. The built-in response now
+negotiates through Pages. Use the existing `handler` seam to fix a
+representation.
+
+**Before (removed HTML selection):**
+
+```perl
+middleware('ErrorHandler', content_type => 'text/html');
+```
+
+**After (shipped):**
+
+```perl
+middleware('ErrorHandler',
+    handler => PAGI::Pages->internal_server_error(as => 'html'),
+);
+```
+
+**Before (removed JSON selection):**
+
+```perl
+middleware('ErrorHandler', content_type => 'application/json');
+```
+
+**After (shipped):**
+
+```perl
+middleware('ErrorHandler',
+    handler => PAGI::Pages->internal_server_error(as => 'json'),
+);
+```
+
+**Before (removed text selection):**
+
+```perl
+middleware('ErrorHandler', content_type => 'text/plain');
+```
+
+**After (shipped):**
+
+```perl
+middleware('ErrorHandler',
+    handler => PAGI::Pages->internal_server_error(as => 'text'),
+);
+```
+
+To use request negotiation, remove `content_type` and do not install a
+representation-fixing handler. Existing custom handlers remain authoritative
+and literal.
+
+Without a custom handler, an exception's `status_code` is kept only when it is
+a registered Pages error that needs no missing protocol facts. Bare 401, 405,
+407, and 426 claims now fall back to safe 500, as do unknown, unused,
+obsoleted, non-error, malformed, reference-valued, throwing, or failed-Future
+claims. A configured `status` follows the same restriction unless a custom
+handler is supplied; with a handler it remains that handler's seed value.
+
+### Update Compose fallback appearance assertions
+
+Compose still installs mandatory 404, 405, and 500 failsafes, but their stock
+representations now negotiate through Pages instead of using fixed plain or
+ErrorHandler-configured bodies. Status choice and `no-store` behavior remain;
+405 still carries the authoritative `Allow` union. Tests that asserted a
+built-in English body should assert status, required fields, and selected media
+type, or install an explicit handler for literal application copy.
+
+There is no `pages` option on Compose and no Pages shortcut on Context. To use
+a Pages subclass, install ordinary inner NotFound, MethodNotAllowed, and
+ErrorHandler middleware. Compose's stock outer failsafes remain installed and
+recover if that application renderer fails.
+
+### Audit changed first-party defaults
+
+The triggering condition and status remain owned by each component below.
+Only its stock generic HTTP error or Location-redirect branch moved to Pages.
+Consequently the default body, `Content-Type`, byte `Content-Length`, `Vary`,
+and cache fields may change through consistent negotiation and encoding.
+
+| Component | Stock default now delegated to Pages | Facts or custom branch preserved |
+|---|---|---|
+| `PAGI::App::File` | 400, 403, 404, 405, 416 | 405 supplies `Allow: GET, HEAD`; 416 supplies selected file length |
+| `PAGI::App::Directory` | pre-delegation 403; File defaults after a file/index target resolves | directory safety and listing decisions remain local |
+| `PAGI::App::URLMap` | no-default HTTP 404 | mount selection and opaque ownership remain local |
+| `PAGI::App::Proxy` | backend-connect 502 | connection decision and demo warning remain local |
+| `PAGI::App::Loader` | HTTP load-failure 500 | loading, warnings, and reload policy remain local |
+| `PAGI::App::WrapCGI` | HTTP process-start 500 | CGI execution and parsed CGI responses remain literal |
+| `PAGI::App::Throttle` | default HTTP 429 | `retry_after`, enabled rate-limit fields, and `on_limit` |
+| `PAGI::Middleware::Static` | 403, 404, 500, 416 | pass-through remains local; 416 supplies selected file length |
+| `PAGI::Middleware::Auth::Basic` | default 401 | generated Basic challenge and configured realm |
+| `PAGI::Middleware::Auth::Bearer` | default 401 | generated Bearer challenge, realm, and safe failure detail |
+| `PAGI::Middleware::CSRF` | enforced default 403 | validation and `enforce => 'app'` application responses |
+| `PAGI::Middleware::ContentNegotiation` | strict-mode 406 | supported-type detail and existing scope metadata |
+| `PAGI::Middleware::FormBody` | body-limit 413 | limit and request consumption remain local |
+| `PAGI::Middleware::JSONBody` | body-limit 413; invalid-JSON 400 | parsing decision remains local; decoder exception text is no longer exposed |
+| `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after` and bypass/enabled decisions; explicit `body` or `content_type` keeps the literal branch |
+| `PAGI::Middleware::RateLimit` | default 429 | `retry_after` and `X-RateLimit-*` fields |
+| `PAGI::Middleware::ReverseProxy` | forwarded-authority 400 | trust and normalization decisions remain local |
+| `PAGI::Middleware::TrustedHosts` | missing, malformed, duplicate, or rejected Host 400 | host policy remains local |
+| `PAGI::Middleware::HTTPSRedirect` | invalid-authority 400 and redirect | authority/HSTS policy, code, path, and query remain local |
+| `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, code, rewritten path, and incoming query remain local |
+| `PAGI::Endpoint::HTTP` | automatic 405 | complete computed `allowed_methods` result |
+
+File's automatic 405 now includes its required `Allow: GET, HEAD`. File and
+Static invalid-range responses now include `Content-Range: bytes */N` when the
+selected representation length is known. JSONBody's stable client detail is
+`The request body is not valid JSON.` rather than the raw decoder diagnostic.
+
+ContentNegotiation now uses `PAGI::Request::Negotiate` for the same effective
+quality rules as Pages. An exact `q=0` exclusion overrides less-specific
+positive wildcards, and equal-quality matches retain server order. Its strict
+406 is a Pages response selected independently from the application's offered
+types; total page-representation rejection uses Pages' failsafe default rather
+than recursing into another 406.
+
+Basic and Bearer realms are quote/backslash escaped for their schemes and then
+strictly validated as response-header values. HTTPSRedirect and Rewrite pass
+the unmodified logical target plus `preserve_query => 1`, so an incoming query
+is now placed before a target fragment. Their redirect codes are validated at
+construction against the five Pages redirect statuses.
+
+Stock changed representations are distinct from preserved custom branches.
+Maintenance uses Pages only when neither `body` nor `content_type` was supplied;
+either option retains its literal response. Throttle's `on_limit`, every
+custom routing/error handler, application-authored body, callback response,
+and explicit Response remain authoritative and unnegotiated. Healthcheck
+documents, bodyless 204/304/conditional/range-success responses, CORS
+preflights, WebSocket/SSE protocol outcomes, and literal teaching examples do
+not become Pages output.
+
+Only HTTP defaults use Pages. Three formerly malformed non-HTTP fallbacks now
+fail clearly instead of emitting `http.response.*` events on another protocol:
+
+- Loader load failure croaks that the application could not be loaded for the
+  received scope type.
+- URLMap exhaustion without a default croaks that it has no default for the
+  received scope type.
+- Throttle exhaustion without `on_limit` croaks that its built-in response is
+  HTTP-only and names `on_limit` as the escape hatch.
+
+### Account for related negotiation and scope-type hardening
+
+Concrete Accept matching now uses the most-specific effective quality, so a
+positive wildcard no longer revives an exact `q=0` exclusion. Wildcard queries
+still succeed when at least one covered concrete type has positive effective
+quality, including a positive concrete exception inside an excluded family.
+
+`PAGI::Context` no longer treats an unknown explicit scope type as HTTP. A
+mapped type selects its registered Context subclass; an unmapped scalar type
+uses the generic base Context and warns once per factory/type pair. Missing,
+empty, or reference-valued scope types now croak as malformed. Applications
+supporting an extension protocol should map it explicitly or deliberately
+handle the generic Context; generic Contexts have no HTTP response API.
+
 ## Routing fallbacks and application error handling
 
 ### Replace Router callbacks with ordinary middleware
@@ -113,7 +334,8 @@ HEAD wire boundary
               target Router or application
 ```
 
-These automatic layers are mandatory and deliberately plain. Compose has no
+These automatic layers are mandatory and deliberately stock. Their
+representations negotiate through Pages. Compose has no
 `not_found`, `method_not_allowed`, `server_error`, disable, or replacement-
 detection options. Author middleware never suppresses them; an inner author
 response simply makes every outer failsafe inert. Install official policy
@@ -136,7 +358,7 @@ middleware => [
 ```
 
 The automatic emergency bodies sit outside the author stack and therefore do
-not travel inward through it. Their production text is safe and generic.
+not travel inward through it. Their production output is safe and generic.
 
 ### Choose routing-aware or opaque Mount ownership explicitly
 
@@ -292,11 +514,11 @@ response-start event.
 
 Ordinary ErrorHandler construction keeps static `development => 0`; it does
 not consult `PAGI_ENV`. Compose's private outer failsafe resolves development
-mode per handled request and falls back to safe production text if environment
-resolution itself fails. Every built-in ErrorHandler representation now adds
-`Cache-Control: no-store`. Text and HTML bodies are UTF-8 octets encoded once;
-JSON encoder octets are preserved; and `Content-Length` counts the emitted
-bytes. A custom renderer owns its own content type and cache policy.
+mode per handled request and falls back to safe production output if
+environment resolution itself fails. Every built-in Pages-backed
+representation adds `Cache-Control: no-store`, uses UTF-8 consistently, and
+counts emitted bytes for `Content-Length`. A custom renderer owns its own
+content type and cache policy.
 
 ### Keep catch-all routing distinct from NotFound policy
 

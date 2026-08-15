@@ -76,6 +76,16 @@ response body and also return C<$self>. They can be called as class-method
 factories (C<< PAGI::Response->json($data) >>) or as instance methods
 (C<< $res->json($data) >>).
 
+Use Response when status, fields, and body are application-owned literal
+values. L<PAGI::Pages> is the conventional layer above it for negotiated stock
+welcome, redirect, and HTTP error pages with safe details, RFC 9457 problems,
+cache policy, and mandatory status fields. A Pages call still returns this
+same mutable Response type:
+
+    my $res = PAGI::Pages->not_found($scope);
+    $res->header('X-Request-ID' => $request_id);
+    await $res->respond($send);
+
 =head1 CONSTRUCTOR
 
 =head2 new
@@ -1010,7 +1020,7 @@ connection is available.
 
 =head1 SEE ALSO
 
-L<PAGI>, L<PAGI::Request>, L<PAGI::Server>
+L<PAGI>, L<PAGI::Request>, L<PAGI::Pages>, L<PAGI::Server>
 
 =head1 AUTHOR
 
