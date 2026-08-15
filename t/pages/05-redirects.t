@@ -194,6 +194,38 @@ subtest 'redirect query preservation keeps raw data before the first fragment' =
         'preserve_query defaults to false');
 };
 
+subtest 'query preservation rejects unsafe raw query data before response construction' => sub {
+    my $safe = PAGI::Pages->redirect(
+        http_scope(query_string => 'q=a%2Bb&x=%26'), '/search#results',
+        preserve_query => 1, as => 'text',
+    );
+    is($safe->header('Location'), '/search?q=a%2Bb&x=%26#results',
+        'safe percent-encoded raw query bytes are unchanged');
+
+    for my $query ("q=ok\r\nInjected: yes", "q=ok\x1f", "q=\x{263a}") {
+        like(dies {
+            PAGI::Pages->redirect(
+                http_scope(query_string => $query), '/search',
+                preserve_query => 1, as => 'text',
+            );
+        }, qr/query_string.*URI-reference/i,
+            'unsafe preserved query is rejected before response construction');
+
+        my @events;
+        my $endpoint = PAGI::Pages->redirect('/search',
+            preserve_query => 1, as => 'text');
+        like(dies {
+            $endpoint->(
+                http_scope(query_string => $query),
+                sub { Future->done },
+                sub { push @events, $_[0]; return Future->done },
+            );
+        }, qr/query_string.*URI-reference/i,
+            'unsafe preserved query rejects native invocation before response start');
+        is(\@events, [], 'unsafe preserved query emits no response event');
+    }
+};
+
 subtest 'redirect cache and retry fields follow redirect policy' => sub {
     my $default = PAGI::Pages->redirect(http_scope(), '/next', as => 'text');
     is($default->header('Cache-Control'), undef,

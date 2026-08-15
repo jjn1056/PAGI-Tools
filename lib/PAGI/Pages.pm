@@ -428,6 +428,7 @@ sub _redirect_location {
     return $target unless $preserve_query;
     my $query = $scope->{query_string};
     return $target unless defined($query) && !ref($query) && length($query);
+    _validate_uri_reference('query_string', $query);
 
     my $fragment = '';
     my $fragment_at = index($target, '#');
@@ -443,7 +444,7 @@ sub _redirect_location {
             && index($target, '?') == length($target) - 1)) {
         $target .= '&';
     }
-    return $target . $query . $fragment;
+    return _validate_uri_reference('redirect target', $target . $query . $fragment);
 }
 
 sub _error_factory {
