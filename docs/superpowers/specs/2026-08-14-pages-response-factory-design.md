@@ -7,9 +7,11 @@
 **Source audit base:** `main` at `457037baf075b573a3468f5c03eda2f56355ee3a`
 
 **Scope:** Add a negotiated, subclassable response factory for a short PAGI
-welcome page and conventional HTTP error and redirect pages; make it the
-source of generic first-party HTTP error and redirect responses; remove the
-superseded `PAGI::App::NotFound` and `PAGI::App::Redirect` applications
+welcome page and conventional HTTP error and redirect pages; correct the shared
+Accept matching it uses and Context's malformed-versus-extension scope
+classification; make Pages the source of generic first-party HTTP error and
+redirect responses; remove the superseded `PAGI::App::NotFound` and
+`PAGI::App::Redirect` applications
 
 ## 1. Decision
 
@@ -91,8 +93,15 @@ fallbacks, ErrorHandler, small applications, examples, and user code:
 - escape and UTF-8 encode dynamic text;
 - emit safe cache headers;
 - construct RFC-required fields such as `Allow`;
-- avoid leaking exception details; and
+- avoid leaking exception details and decoder diagnostics such as module
+  filesystem paths and line numbers; and
 - construct a correct redirect body and `Location` field.
+
+Error handling also has a fragile secondary-failure path: an exception's
+unguarded `status_code` accessor can throw or return an invalid status,
+replacing the original exception before any safe response begins. Pages
+integration gives ErrorHandler a guarded status-selection path whose own
+failures still collapse to the final safe 500 response.
 
 `PAGI::Response` deliberately remains literal and low-level:
 
@@ -181,12 +190,14 @@ This work will not:
 - negotiate `Accept-Language` or ship a translation catalog;
 - render WebSocket, SSE, or lifespan outcomes;
 - add a public status-catalog introspection API in v1;
+- add a global Context protocol registry, automatic protocol-module loading,
+  or a general Context-factory injection mechanism;
 - add runtime IANA lookups or update the catalog over the network;
 - use `AUTOLOAD` for named status methods;
 - turn every status code into a body-bearing page;
-- replace explicit application responses with Pages output; or
+- replace explicit application responses with Pages output;
 - replace protocol documents whose body is the component's public data model,
-  such as health-check JSON, with a generic page;
+  such as health-check JSON, with a generic page; or
 - make a mounted Pages endpoint participate in child route matching.
 
 ## 5. Construction and Invocation
@@ -252,10 +263,12 @@ async sub missing ($context) {
 }
 ```
 
-The request source must represent an HTTP scope. Consistent with
-`PAGI::Request` and the routing compiler, an omitted scope type defaults to
-HTTP. Explicit WebSocket, SSE, lifespan, and unknown scope types and non-HTTP
-Context subclasses croak with a diagnostic naming the received type.
+The request source must represent an HTTP scope whose `type` is explicitly
+`http`, or a `PAGI::Context::HTTP` backed by such a scope. The PAGI specification
+requires a scope type and requires applications to reject scope types they do
+not support. Missing, WebSocket, SSE, lifespan, and unsupported scope types and
+non-HTTP Context subclasses therefore croak before response construction with
+a diagnostic naming the missing or received type.
 
 ### 5.3 Deferred endpoint form
 
@@ -676,8 +689,12 @@ Pages does not work around defects with a private parser. The shared
 `PAGI::Request::Negotiate` implementation is corrected so `best_match`
 computes each supported type's effective quality from its most-specific
 matching media range, then chooses the positive-quality supported type with
-the highest effective quality in server order. `accepts_type` uses the same
-effective-quality rule.
+the highest effective quality in server order. For a concrete requested type,
+`accepts_type` returns true only when that type's most-specific matching Accept
+range has positive effective quality. A requested wildcard retains the
+documented bidirectional behavior: it returns true when at least one media type
+covered by that wildcard has positive effective quality. A zero-quality range
+overrides less-specific positive ranges only for the media types it covers.
 
 This fixes the current case where a positive wildcard can incorrectly revive
 an exact exclusion:
@@ -688,8 +705,11 @@ Accept: text/html;q=0, */*;q=1
 
 `text/html` has effective quality zero and is not acceptable. Existing public
 Request negotiation tests gain exact-exclusion, type-wildcard-exclusion, and
-server-order tie cases. Pages then layers only its documented JSON-family
-alias rule on top of the shared primitive.
+server-order tie cases. They also retain and extend the wildcard-query tests to
+cover a positive concrete member, an exact exclusion under a positive global
+wildcard, a completely excluded type family, and a positive concrete exception
+inside an otherwise excluded family. Pages then layers only its documented
+JSON-family alias rule on top of the shared primitive.
 
 ### 8.4 Language
 
@@ -1212,7 +1232,7 @@ The following defaults migrate in this change:
 | Component | Default response delegated to Pages | Component-owned facts retained |
 |---|---|---|
 | `PAGI::App::File` | 400, 403, 404, 405, 416 | 405 supplies `Allow: GET, HEAD`; 416 supplies the selected file length |
-| `PAGI::App::Directory` | its 403 responses and inherited File defaults | directory safety/listing decision remains local |
+| `PAGI::App::Directory` | pre-delegation 403 responses; File defaults only after a resolved file or index target is delegated | directory safety/listing decision remains local |
 | `PAGI::App::URLMap` | no-default HTTP 404 | mount selection and opaque-boundary behavior remain unchanged |
 | `PAGI::App::Proxy` | backend-connect 502 | connection decision remains local; demo-only warning is unchanged |
 | `PAGI::App::Loader` | HTTP load-failure 500 | loading, warnings, and reload behavior remain local |
@@ -1228,7 +1248,7 @@ The following defaults migrate in this change:
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after` and bypass/enabled decisions remain local |
 | `PAGI::Middleware::RateLimit` | default 429 | `retry_after` and `X-RateLimit-*` fields |
 | `PAGI::Middleware::ReverseProxy` | forwarded-authority 400 | trust and normalization decisions remain local |
-| `PAGI::Middleware::TrustedHosts` | missing/invalid-host 400 | host policy remains local |
+| `PAGI::Middleware::TrustedHosts` | missing Host, structurally malformed or duplicate Host, and allowlist-rejected Host 400 | host policy remains local |
 | `PAGI::Middleware::HTTPSRedirect` | invalid-authority 400 and redirect | authority validation, HSTS behavior, redirect code, path, and query |
 | `PAGI::Middleware::Rewrite` | redirect-mode response | rule selection, redirect code, rewritten path, and incoming query |
 | `PAGI::Endpoint::HTTP` | automatic 405 | the endpoint's complete `allowed_methods` result |
@@ -1253,6 +1273,14 @@ option selects the existing literal custom-response branch, while
 `retry_after` remains effective in both branches. `on_limit` continues to win
 over Throttle's default.
 
+Directory resolves and checks the candidate before delegating to File. A
+missing or otherwise unresolvable path therefore remains Directory's
+pre-delegation 403 branch; it does not reach File's 404. A directory without an
+index is rendered as a 200 listing before File's method gate, so its POST
+behavior does not reach File's 405. Pages adoption preserves those existing
+trigger decisions. Tests must not infer File behavior for branches that never
+delegate.
+
 JSONBody's invalid-input detail becomes the stable, safe sentence `The request
 body is not valid JSON.` rather than interpolating the decoder exception into
 a client response. Other component details may retain concise facts already
@@ -1263,9 +1291,15 @@ ContentNegotiation replaces its private best-match loop with
 `PAGI::Request::Negotiate->best_match` while retaining the existing
 `pagi.preferred_content_type` and `pagi.accepted_types` scope shapes. This
 makes the middleware share section 8.3's exact-exclusion and server-order
-rules. Its strict 406 then delegates to Pages; because the triggering Accept
-field has no supported match, Pages' documented total-failure rule renders the
-configured default instead of recursing.
+rules. Its strict branch constructs and sends a Pages 406 directly; it does not
+redispatch through ContentNegotiation. The middleware's application
+representation set and Pages' error representation set are independent. If a
+request rejects every application representation but accepts a Pages
+representation, Pages selects that representation. For example,
+`Accept: application/json` against an XML-only application produces an
+`application/problem+json` 406. If the request also rejects every Pages
+representation, Pages uses its documented failsafe default. Pages never
+generates another 406 from failed page negotiation, so neither path recurses.
 
 HTTPSRedirect and Rewrite delegate the *unmodified logical target* plus
 `preserve_query => 1` to Pages rather than concatenating a query themselves.
@@ -1319,8 +1353,9 @@ lib/PAGI/App/NotFound.pm
 lib/PAGI/App/Redirect.pm
 ```
 
-Remove them from distribution manifests, load tests, documentation indexes,
-test matrices, and examples. Replace unconditional NotFound apps with a Pages
+Remove live references from `lib/`, `t/`, `examples/`, `Changes`, and generated
+public documentation. Add `PAGI::Pages` to `t/00-load.t`; neither removed module
+is currently listed there. Replace unconditional NotFound apps with a Pages
 endpoint. Replace Redirect apps with a Pages endpoint or a small raw closure
 when destination calculation requires request-specific application logic.
 
@@ -1328,15 +1363,89 @@ The repository-wide removal includes the concrete references in
 `PAGI::App::Cascade` POD, `PAGI::Middleware::Builder` POD,
 `PAGI::Middleware::Routing::NotFound` POD, `PAGI::Tools::Cookbook`,
 `t/app/02-routing.t`, `examples/test-lifespan-shutdown/app.pl`, and `Changes`.
-The implementation performs a final repository search so a less obvious link
+The final live-source search is scoped to `lib/`, `t/`, `examples/`, `Changes`,
+the root README, and distribution configuration so a less obvious shipped link
 or example cannot retain a dead package name.
+
+`MANIFEST` is generated by Dist::Zilla and ignored by Git, so implementation
+does not edit it directly. The built distribution must contain `PAGI::Pages`
+and must not contain either removed module. Historical files under
+`docs/superpowers/` are intentionally exempt from replacement and search
+assertions: `dist.ini` prunes `docs/`, and those records continue describing
+the code and decisions that existed when they were written.
 
 The old Redirect app's `preserve_query => 1` default is intentionally not
 retained. Pages defaults it to false and implements fragment-safe merging.
 
+### 12.7 Context scope-type resolution
+
+Correct `PAGI::Context`'s current unknown-to-HTTP fallback as part of the
+protocol boundary this work depends on. Context is a value wrapper and cannot
+know every scope type a future application may support; it must neither reject
+all extensions nor misclassify them as HTTP.
+
+`PAGI::Context->_resolve_class` follows this contract:
+
+- a missing, undefined, empty, or reference-valued `scope->{type}` croaks as a
+  malformed PAGI scope;
+- a type present in the invoking class's `_type_map` selects that mapped class;
+- an explicit unmapped scalar type selects the base `PAGI::Context` class and
+  emits one warning per factory-class/type pair per process; and
+- a subclass may continue overriding `_type_map` or `_resolve_class` for richer
+  protocol-specific behavior.
+
+For example:
+
+```perl
+PAGI::Context->new({ type => 'http' }, $receive, $send);
+# PAGI::Context::HTTP
+
+PAGI::Context->new({ type => 'myapp.mcp' }, $receive, $send);
+# generic PAGI::Context with type "myapp.mcp"; warns once
+
+PAGI::Context::HTTP->new({ type => 'myapp.mcp' }, $receive, $send);
+# generic PAGI::Context, never PAGI::Context::HTTP; warns once for this factory
+
+PAGI::Context->new({}, $receive, $send);
+# croaks: PAGI scope type is required
+```
+
+Returning a generic Context does not declare that the surrounding application
+supports that protocol. The application, router, or endpoint remains
+responsible for accepting the scope deliberately or throwing as required by
+the PAGI specification. Protocol-owning first-party components retain their
+explicit supported-type gates. Pages accepts only explicit HTTP.
+
+The warning names the factory class and received type. Repeated scopes of the
+same type through the same factory class do not flood request logs. An
+application deliberately using its own generic Context subclass for a custom
+protocol may retain that class and silence the warning by mapping the type
+explicitly:
+
+```perl
+package MyApp::Context;
+use parent 'PAGI::Context';
+
+sub _type_map ($class) {
+    return {
+        %{ $class->SUPER::_type_map },
+        'myapp.mcp' => 'MyApp::Context',
+    };
+}
+```
+
+Custom event types inside an existing HTTP, WebSocket, SSE, or other scope do
+not participate in Context-class selection; `_resolve_class` dispatches only
+on the connection scope's `type`. A future standardized MCP or other protocol
+package may map its assigned scope type to a protocol-specific subclass. A
+global registry, automatic module discovery, and Router-level Context-factory
+injection remain separate designs.
+
 ## 13. Security and Failure Properties
 
-- All HTML dynamic values are escaped in both text and attribute contexts.
+- Stock HTML escapes every descriptor-derived dynamic value in the appropriate
+  text or attribute context. A subclass overriding `render_html` owns escaping
+  within its returned document.
 - All text and HTML hooks return Unicode; the base class performs strict UTF-8
   encoding and calculates byte-correct Content-Length through Response.
 - Problem payload encoding failures occur before response start.
@@ -1371,12 +1480,28 @@ scope says HEAD. Response bodies must remain visible to enclosing middleware
 that calculates GET-equivalent headers such as compression or Content-Length;
 the outermost HEAD boundary owns wire suppression.
 
-Router and Compose already install that boundary, so route, mount, and Compose
-examples are complete. A Pages endpoint deployed directly as the server's raw
-application must be wrapped in `PAGI::Middleware::Head` (or the documented
-equivalent outer application stack). A raw caller that directly invokes
-`response->respond($send)` has the same responsibility. The Pages POD shows a
-complete direct deployment and explains why the HEAD middleware is outermost.
+Routing and Compose install the final `PAGI::Routing::HeadBoundary`, which
+suppresses the wire body without rewriting `HEAD` to `GET`.
+`PAGI::Middleware::Head` is not equivalent and must not be recommended here:
+it rewrites the method and can bypass a custom HEAD route.
+
+A deferred Pages endpoint is a native HTTP application, but it is not by
+itself a complete multi-protocol server root. The supported root deployment is:
+
+```perl
+my $app = compose(
+    app => PAGI::Pages->not_found,
+)->to_app;
+```
+
+Compose supplies lifespan handling and the correct final HEAD boundary. A
+framework invoking the endpoint directly owns an equivalent final wire
+boundary: the inner application retains method `HEAD`, while response bodies,
+sendfile events, streaming chunks, and trailers are suppressed only after all
+body-derived headers have been calculated. A raw caller that directly invokes
+`response->respond($send)` has the same responsibility.
+`PAGI::Routing::HeadBoundary` remains an internal compiler utility rather than
+new application API.
 
 ## 14. Documentation and Examples
 
@@ -1393,17 +1518,20 @@ for all of these forms:
 6. Using a deferred endpoint in `route`.
 7. Using a deferred endpoint in `mount`, with the subtree warning adjacent.
 8. Using a deferred endpoint as `compose(app => ...)`.
-9. Calling a deferred endpoint directly as a raw PAGI app.
-10. Supplying Pages endpoints to NotFound and ErrorHandler middleware.
-11. Wrapping MethodNotAllowed to use the routing snapshot's method union.
-12. HTML, ordinary JSON/problem+json, and text negotiation with concrete
+9. Invoking a deferred endpoint directly with an HTTP PAGI triplet, labeled as
+   HTTP-only embedding rather than a complete server root.
+10. Deploying the same endpoint as a server root through Compose, which owns
+    lifespan and the final HEAD boundary.
+11. Supplying Pages endpoints to NotFound and ErrorHandler middleware.
+12. Wrapping MethodNotAllowed to use the routing snapshot's method union.
+13. HTML, ordinary JSON/problem+json, and text negotiation with concrete
     Accept fields.
-13. Fixed `as` and automatic fallback behavior.
-14. Custom RFC 9457 type/title/detail/instance/extensions.
-15. Every mandatory status-specific option and its emitted header.
-16. Redirect query preservation before fragments.
-17. Safe response modification before `respond($send)`.
-18. Embedded stock favicons, a same-origin subclass override, and `undef`
+14. Fixed `as` and automatic fallback behavior.
+15. Custom RFC 9457 type/title/detail/instance/extensions.
+16. Every mandatory status-specific option and its emitted header.
+17. Redirect query preservation before fragments.
+18. Safe response modification before `respond($send)`.
+19. Embedded stock favicons, a same-origin subclass override, and `undef`
     suppression for strict CSP applications.
 
 The main synopsis explicitly explains *why* `$scope` alone returns an unsent
@@ -1549,8 +1677,15 @@ to the old collection of component-specific bodies.
 - Deferred scope-only calls return Responses.
 - Deferred raw triplets send complete responses and settle their Future.
 - Invalid arities, receive/send shapes, malformed scope structures, and
-  explicit non-HTTP scopes fail with stable diagnostics; omitted type follows
-  the HTTP default.
+  missing or explicit non-HTTP scope types fail with stable diagnostics.
+- Context requires a nonempty scalar scope type, maps built-in and subclass
+  `_type_map` entries, and returns the base `PAGI::Context` class for an
+  explicit unmapped type rather than blessing it as the invoking class.
+- A generic custom-protocol Context preserves its raw scope and receive/send
+  channels, does not expose HTTP response helpers, and is rejected by Pages.
+- The first unmapped type through each factory class warns with the class and
+  type; subsequent scopes of the same pair do not warn, while an explicit map
+  to an application Context subclass suppresses the warning entirely.
 - One endpoint handles concurrent in-flight requests without state leakage.
 
 ### 16.2 Composition forms
@@ -1559,11 +1694,16 @@ to the old collection of component-specific bodies.
 - The same endpoint works as an opaque Mount application.
 - A mount owns descendant paths while a route does not.
 - The same endpoint works as a Compose target.
-- The same endpoint works when invoked directly as a native PAGI app.
+- The same endpoint sends the expected response when invoked directly with an
+  HTTP native PAGI triplet.
+- Direct lifespan invocation fails with the documented non-HTTP diagnostic and
+  emits no HTTP events.
+- A server-root example wraps the endpoint in Compose and completes lifespan
+  startup and shutdown.
 - HEAD preserves the calculated GET headers and suppresses body events through
   the existing outer HEAD boundary.
-- A direct raw Pages deployment documents and verifies an outer Head
-  middleware; immediate raw `respond` is not misrepresented as owning HEAD.
+- The Compose-wrapped root retains custom HEAD routing and suppresses only the
+  final wire body. Direct raw `respond` is not misrepresented as owning HEAD.
 
 ### 16.3 Negotiation
 
@@ -1572,6 +1712,10 @@ to the old collection of component-specific bodies.
 - q-values, specificity, exclusions, and ties follow section 8.
 - Shared `best_match` and `accepts_type` honor exact q=0 exclusions over
   positive wildcards and retain server order on effective-quality ties.
+- `accepts_type` retains bidirectional wildcard queries: `text/html` satisfies
+  a `text/*` query; exact q=0 excludes that exact concrete query; a
+  `text/*;q=0` range excludes a `text/*` query despite a positive `*/*`; and a
+  more-specific positive `text/html` exception makes that wildcard query true.
 - Error JSON honors the application/json alias but an explicit
   problem+json q=0 rejection wins.
 - Problem+json alone does not select welcome or redirect JSON.
@@ -1582,9 +1726,13 @@ to the old collection of component-specific bodies.
 
 ### 16.4 Rendering
 
-- Every named status returns its registered code/title and nonempty safe detail.
-- HTML is complete, self-contained, English, and escapes all dynamic values.
-- HTML contains no inferred navigation or external resources.
+- Every named status, when supplied any status-mandatory options, returns its
+  registered code/title and nonempty safe detail.
+- Stock HTML is complete, self-contained, English, and escapes every
+  descriptor-derived dynamic value; subclass documentation makes
+  custom-renderer escaping responsibility explicit.
+- Stock HTML contains no inferred navigation and loads no external resources;
+  the Welcome page's explicit documentation hyperlink is permitted.
 - Welcome HTML/text/JSON contains the exact short stock copy and documentation
   target, and its HTML link is safely escaped.
 - Welcome accepts only its three documented options and has no default cache
@@ -1600,8 +1748,14 @@ to the old collection of component-specific bodies.
   redirect's status or Location.
 - Stock HTML embeds the correct 2xx/3xx/4xx/5xx PNG data URI and does not
   reference `/favicon.ico` or an external resource.
-- The family label remains present independently of color, and the committed
-  icon bytes match the approved colors and 32-pixel masters.
+- Each stock data URI decodes to bytes exactly matching its checked-in 2xx,
+  3xx, 4xx, or 5xx golden PNG fixture. Tests verify the PNG signature and read
+  the uncompressed IHDR fields directly to assert 32-by-32 dimensions without
+  adding an image-decoding dependency.
+- Representative 200, 3xx, 4xx, and 5xx descriptors select the corresponding
+  golden asset. The approved labels, typography, colors, off-white glyph, and
+  browser-tab legibility remain design-review properties embodied by those
+  fixtures rather than claims derived by the automated suite.
 - `favicon_href` sees the exact request-local status, accepts a safe custom URI,
   returns `undef` to omit the element, rejects controls, and escapes attributes.
 - A full `render_html` override owns favicon inclusion and is not modified by
@@ -1682,14 +1836,24 @@ to the old collection of component-specific bodies.
 - File/Static 416, File/Endpoint 405, Basic/Bearer 401, both rate-limit
   implementations, Maintenance 503, and redirect query/fragment preservation
   assert their specific required or retained fields.
+- TrustedHosts covers missing, structurally invalid or duplicate, and
+  structurally valid but allowlist-rejected Host fields through Pages-backed
+  400 responses.
+- Directory missing paths retain its pre-delegation Pages-backed 403; POST to a
+  listing directory retains the existing 200 listing outside Pages; POST and
+  invalid Range against resolved delegated file/index targets exercise File's
+  Pages-backed 405 and 416 respectively.
 - Basic and Bearer realm tests cover quotes, backslashes, and rejected field
   delimiters without producing malformed challenge fields.
 - Maintenance custom body/content-type, Throttle `on_limit`, and all routing
   custom handlers bypass Pages unchanged.
 - JSONBody invalid input never exposes its decoder exception.
 - ContentNegotiation retains its public scope values while sharing Request
-  negotiation semantics; its strict 406 cannot recurse on an unacceptable
-  Accept field.
+  negotiation semantics. In strict mode, an XML-only application with
+  `Accept: application/json` emits exactly one problem-JSON 406; with
+  `Accept: image/png` it emits exactly one default-format 406; and
+  `Accept: */*;q=0` reaches the strict branch after the shared negotiator fix.
+  The downstream application is never called in these cases.
 - Health-check JSON, 204/304 responses, WebSocket/SSE responses, and explicit
   application bodies remain byte-for-byte outside the adoption boundary.
 - Loader, URLMap, and Throttle non-HTTP fallback tests assert the exact clear
@@ -1697,8 +1861,12 @@ to the old collection of component-specific bodies.
 
 ### 16.9 Removal and documentation
 
-- Removed application modules are absent from manifest/load lists.
-- No code, POD link, or example refers to the removed modules.
+- A Dist::Zilla build contains `PAGI::Pages` and excludes both removed module
+  files; no source `MANIFEST` edit is expected.
+- `t/00-load.t` loads Pages; no nonexistent legacy load-list entries are
+  removed.
+- The scoped live-source search in section 12.6 contains no obsolete reference;
+  historical Superpowers plans and specs remain unchanged.
 - POD examples compile; runnable examples execute under the documented Perl.
 - Documentation exercises route, mount, Compose, Context, raw construction,
   raw sending, subclassing, middleware, negotiation, and mandatory headers.
@@ -1802,6 +1970,8 @@ intercepting and buffering it.
 ## 18. Sources
 
 - [PAGI documentation](https://metacpan.org/pod/PAGI)
+- [PAGI core specification](https://metacpan.org/pod/PAGI::Spec)
+- [PAGI extension specification](https://metacpan.org/pod/PAGI::Spec::Extensions)
 - [IANA HTTP Status Code Registry](https://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml)
 - [RFC 9110: HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110.html)
 - [RFC 9113: HTTP/2](https://www.rfc-editor.org/rfc/rfc9113.html)
