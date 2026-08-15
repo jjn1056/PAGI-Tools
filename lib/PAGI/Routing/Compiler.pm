@@ -47,7 +47,9 @@ sub _compile_router {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
-        my $type = $scope->{type} // 'http';
+        my $type = $scope->{type};
+        croak 'PAGI scope type is required'
+            unless defined($type) && !ref($type) && length($type);
         return if $type eq 'lifespan';
         croak "unsupported PAGI scope type '$type'"
             unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';

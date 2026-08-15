@@ -516,8 +516,8 @@ Ordinary ErrorHandler construction keeps static `development => 0`; it does
 not consult `PAGI_ENV`. Compose's private outer failsafe resolves development
 mode per handled request and falls back to safe production output if
 environment resolution itself fails. Every built-in Pages-backed
-representation adds `Cache-Control: no-store`, uses UTF-8 consistently, and
-counts emitted bytes for `Content-Length`. A custom renderer owns its own
+representation adds `Cache-Control: no-store`, uses UTF-8 octets encoded once,
+and `Content-Length` counts the emitted bytes. A custom renderer owns its own
 content type and cache policy.
 
 ### Keep catch-all routing distinct from NotFound policy

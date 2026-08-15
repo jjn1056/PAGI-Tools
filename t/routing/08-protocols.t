@@ -474,21 +474,19 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
     is([$lifespan_reads, $lifespan_sends], [0, 0],
         'lifespan completion neither reads nor sends');
 
-    my $missing_type_events = run_scope($app, {
-        method => 'GET', path => '/missing', headers => [],
-    });
-    is($missing_type_events->[0]{type}, 'http.response.start',
-        'a missing scope type defaults to HTTP dispatch');
-    is($missing_type_events->[0]{status}, 404,
-        'the normal HTTP not-found policy handles a missing type');
-    my $missing_type_head = run_scope($app, {
-        method => 'HEAD', path => '/missing', headers => [],
-    });
-    is($missing_type_head->[1], {
-        type => 'http.response.body', body => '', more => 0,
-    }, 'defaulting a missing type to HTTP includes the outer HEAD wire contract');
-    is(\@http_fallback_calls, ['http', 'http'],
-        'only missing-type HTTP requests invoke the configured fallback');
+    like(
+        dies {
+            $app->(
+                { method => 'GET', path => '/missing', headers => [] },
+                sub { return Future->done },
+                sub { return Future->done },
+            )->get;
+        },
+        qr/PAGI scope type is required/,
+        'a missing scope type is rejected as a malformed PAGI scope',
+    );
+    is(\@http_fallback_calls, [],
+        'a malformed scope never invokes the HTTP fallback');
 
     my ($grpc_reads, $grpc_sends) = (0, 0);
     like(
@@ -541,6 +539,22 @@ subtest 'scope-type gates run before short-circuiting router middleware' => sub 
     is([$lifespan_reads, $lifespan_sends], [0, 0],
         'router middleware cannot read or send on lifespan');
     is(\@middleware_types, [], 'lifespan never enters router middleware');
+
+    my ($missing_reads, $missing_sends) = (0, 0);
+    like(
+        dies {
+            $app->(
+                { path => '/' },
+                sub { ++$missing_reads; return Future->done },
+                sub { ++$missing_sends; return Future->done },
+            )->get;
+        },
+        qr/PAGI scope type is required/,
+        'a missing type is rejected before short-circuiting router middleware',
+    );
+    is([$missing_reads, $missing_sends], [0, 0],
+        'router middleware cannot touch malformed-scope channels');
+    is(\@middleware_types, [], 'malformed scopes never enter router middleware');
 
     my ($grpc_reads, $grpc_sends) = (0, 0);
     like(

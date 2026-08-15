@@ -809,8 +809,8 @@ Routing itself ignores lifespan scopes. At the deployed application root, use
 L<PAGI::Compose> to combine the routing object, application middleware, and
 startup/shutdown callbacks. L<PAGI::Lifespan> remains the lower-level wrapper
 for native applications and its existing hook-registration behavior. Do not
-put two independent lifespan consumers around one root. Unknown scope types
-croak.
+put two independent lifespan consumers around one root. Missing and unknown
+scope types croak before router middleware or channel I/O.
 
 Construction and compilation errors are reported early where possible.
 Request-time dispatch, constraint, raw-application, and middleware exceptions

@@ -439,13 +439,13 @@ subtest 'ErrorHandler awaits reporting and rethrows post-start failures' => sub 
 
 subtest 'built-in ErrorHandler output is no-store and byte-correct UTF-8' => sub {
     my $middleware = PAGI::Middleware::ErrorHandler->new(
-        content_type => 'text/plain',
-        development  => 1,
+        development => 1,
     );
     my ($events, $error, $warnings) = run_http(
         $middleware->wrap(sub {
             return Future->fail("database snowman \x{2603}\n");
         }),
+        headers => [['accept', 'text/plain']],
     );
     is($error, undef, 'pre-start failure is rendered');
     is($warnings, [], 'ordinary ErrorHandler rendering is warning-free');

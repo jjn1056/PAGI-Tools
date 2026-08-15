@@ -86,8 +86,12 @@ subtest 'ordinary HTTP routing uses Context handlers and shared path grammar' =>
         'the wildcard preserves its remaining path');
 
     my $missing = run_scope($app, path => '/missing');
-    is([$missing->[0]{status}, response_body($missing)], [404, 'Not Found'],
+    is($missing->[0]{status}, 404,
         'an unknown path receives the Compose automatic 404');
+    is(response_header($missing, 'Content-Type'), 'text/html; charset=utf-8',
+        'the automatic 404 uses the negotiated Pages representation');
+    like(response_body($missing), qr{<h1>Not Found</h1>},
+        'the automatic 404 renders the Pages not-found body');
     my $wrong = run_scope($app, method => 'DELETE', path => '/users');
     is([$wrong->[0]{status}, response_header($wrong, 'Allow')],
         [405, 'GET, HEAD, POST'],

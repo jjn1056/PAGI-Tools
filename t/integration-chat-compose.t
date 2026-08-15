@@ -53,8 +53,8 @@ SKIP: {
         'application logging surrounds the complete lifespan loop');
     is($missing->status, 404,
         'an unknown API path is completed by the inner HTTP child');
-    is($missing->text, 'Not Found',
-        'the child uses its Compose routing fallback');
+    like($missing->text, qr/<h1>Not Found<\/h1>/,
+        'the child uses its negotiated Compose routing fallback');
     is($starts_by_path{'/api/not-a-route'}, 1,
         'the opaque outer mount and root Compose emit no second response');
 }
