@@ -53,7 +53,7 @@ compose(app => PAGI::Pages->service_unavailable)->to_app;
 
 Pages negotiates self-contained HTML, ordinary JSON for welcome and redirect
 pages, RFC 9457 problem JSON for errors, or UTF-8 plain text. Stock HTML embeds
-a quiet status-family favicon, so an ordinary browser does not make a second
+a quiet exact-status SVG favicon, so an ordinary browser does not make a second
 favicon request. Pages owns the registered status catalog, safe default copy,
 encoding, escaping, representation headers, cache defaults, redirect
 construction, and status-specific HTTP validation. Subclasses own only
@@ -164,8 +164,8 @@ systems, or domain-specific error models.
 - Make named helpers enforce mandatory HTTP response fields.
 - Provide polished, neutral, self-contained HTML suitable for demos and
   framework defaults without pretending to be an application brand.
-- Embed generic, subdued status-family favicons in stock HTML without causing
-  another HTTP request.
+- Embed a generic, subdued exact-status SVG favicon in stock HTML without
+  causing another HTTP request or requiring binary assets.
 - Keep synchronous construction bounded, in-memory, and small; asynchronous
   work remains in the surrounding handler and response transmission.
 - Replace repeated first-party default-page implementations.
@@ -519,10 +519,10 @@ descriptor has this shape:
 Welcome descriptors carry `kind => 'welcome'`, status 200, the fixed title,
 detail, and documentation URI. Redirect descriptors carry
 `kind => 'redirect'`, the final Location, and redirect kind. Every descriptor
-therefore contains the exact status even when a renderer or favicon hook uses
-only its status family. The descriptor is request-local and is not exposed as
-mutable instance state. Renderer hooks receive a shallow request-local value
-and may not retain it as shared state.
+therefore contains the exact status used by the stock favicon as well as the
+wire response. The descriptor is request-local and is not exposed as mutable
+instance state. Renderer hooks receive a shallow request-local value and may
+not retain it as shared state.
 
 ### 7.2 Welcome options
 
@@ -831,19 +831,20 @@ Redirect JSON is intentionally not RFC 9457:
 Welcome JSON is likewise an ordinary document, using the exact shape in
 section 6.1. It does not contain a problem `type` or numeric `status` member.
 
-### 9.5 Stock status-family favicon
+### 9.5 Stock exact-status favicon
 
 Every stock HTML document contains an explicit embedded favicon:
 
 ```html
-<link rel="icon" type="image/png" href="data:image/png;base64,...">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,...">
 ```
 
-The stock icons are generic status-family indicators, not PAGI branding. Each
-is rasterized from a 32-pixel master and contains the family label `2xx`,
-`3xx`, `4xx`, or `5xx`; the leading digit is larger than the compact lowercase
-`xx` so the family remains legible at normal browser-tab size. The glyph is
-off-white (`#faf8f1`) on a rounded square with these subdued colors:
+The stock icon is a generic status indicator, not PAGI branding. It contains
+the descriptor's exact three-digit status: the leading family digit is large
+and the final two digits are smaller. Thus a welcome page shows `200`, a
+permanent redirect shows `308`, a missing page shows `404`, and a network
+authentication error shows `511`. The glyph is off-white (`#faf8f1`) on a
+rounded square with these subdued family colors:
 
 | Family | Name | Background |
 |---|---|---|
@@ -852,15 +853,16 @@ off-white (`#faf8f1`) on a rounded square with these subdued colors:
 | 4xx | muted mustard | `#8a7743` |
 | 5xx | muted burgundy | `#82505a` |
 
-The welcome page therefore uses the 2xx icon, redirects use 3xx, client errors
-use 4xx, and server errors use 5xx. The icon communicates its category through
-both text and color; color is not the sole signal.
+The icon communicates the exact status through text and its category through
+both the leading digit and color; color is not the sole signal.
 
 `favicon_href($page)` receives the normalized descriptor, including its exact
-status. The base implementation selects one of the four embedded PNG data
-URIs by status family. A subclass may return another URI-reference or `undef`
-to omit the link. Returned scalars reject control characters and are HTML
-attribute escaped. There is no per-call favicon option.
+status. The base implementation selects the static family color and inserts a
+freshly stringified, already-validated three-digit numeric status into a small
+static SVG template. It percent-encodes that bounded ASCII SVG into a data URI;
+it does not copy unchecked request text into XML. A subclass may return another
+URI-reference or `undef` to omit the link. Returned scalars reject control
+characters and are HTML attribute escaped. There is no per-call favicon option.
 
 A subclass overriding only `favicon_href` keeps the stock document and changes
 the icon. A subclass overriding `render_html` owns the complete document,
@@ -871,6 +873,14 @@ same-origin asset or return `undef`.
 Embedding the icon prevents the ordinary browser fallback request for
 `/favicon.ico`; an explicit client request for that path still reaches normal
 routing. No standalone favicon route or asset is installed.
+
+The approved prototype's complete SVG `link` element is 645 bytes. Equivalent
+transparent 32-pixel PNGs rasterized from the same artwork produced complete
+base64 `link` elements between 1,231 and 1,395 bytes, averaging 1,336 bytes;
+the SVG prototype was 51.7% smaller on average. The empty control
+`<link rel="icon" href="data:,">` is 31 bytes. These measurements justify SVG
+over committed PNG assets; they are design-review evidence, not golden test
+fixtures or a permanent payload-size contract.
 
 ### 9.6 Synchronous work budget
 
@@ -891,9 +901,10 @@ The stock request path is therefore restricted to bounded in-memory work:
 It must not perform filesystem or network access, invoke subprocesses, discover
 templates, dynamically load renderers, parse a status catalog, rasterize an
 icon, or base64-encode icon data per request. Stock copy, status metadata,
-HTML/CSS fragments, and the four favicon data URIs are checked-in constants.
-The implementation should avoid a general template engine or intermediate
-object graph for these fixed pages.
+HTML/CSS fragments, the SVG template, and its four family colors are checked-in
+constants. Constructing and percent-encoding one bounded SVG from the validated
+numeric status is permitted. The implementation should avoid a general
+template engine or intermediate object graph for these fixed pages.
 
 Any application or subclass requiring asynchronous data obtains it before
 calling Pages:
@@ -1451,10 +1462,12 @@ injection remain separate designs.
 - Problem payload encoding failures occur before response start.
 - Redirect targets reject control characters and are independently escaped in
   bodies; Pages does not claim to prevent application-level open redirects.
-- Stock favicon data is a checked-in constant, not constructed from request
-  data. Custom `favicon_href` results reject controls and are HTML-attribute
-  escaped; applications with CSP rules that disallow `data:` images have the
-  documented override or omission seam.
+- The stock favicon interpolates only a freshly stringified status that has
+  already passed Pages' numeric and range validation into an otherwise static
+  SVG template. It never copies unchecked request text into XML. Custom
+  `favicon_href` results reject controls and are HTML-attribute escaped;
+  applications with CSP rules that disallow `data:` images have the documented
+  override or omission seam.
 - Raw header input receives Pages' strict preflight validation before entering
   the opaque shared header container.
 - Caller-supplied Content-Length and Transfer-Encoding are rejected.
@@ -1746,16 +1759,18 @@ to the old collection of component-specific bodies.
 - JSON `status` cannot diverge from wire status through a subclass.
 - `render_json` may customize welcome presentation but cannot replace a
   redirect's status or Location.
-- Stock HTML embeds the correct 2xx/3xx/4xx/5xx PNG data URI and does not
-  reference `/favicon.ico` or an external resource.
-- Each stock data URI decodes to bytes exactly matching its checked-in 2xx,
-  3xx, 4xx, or 5xx golden PNG fixture. Tests verify the PNG signature and read
-  the uncompressed IHDR fields directly to assert 32-by-32 dimensions without
-  adding an image-decoding dependency.
-- Representative 200, 3xx, 4xx, and 5xx descriptors select the corresponding
-  golden asset. The approved labels, typography, colors, off-white glyph, and
-  browser-tab legibility remain design-review properties embodied by those
-  fixtures rather than claims derived by the automated suite.
+- Stock HTML embeds an `image/svg+xml` data URI and does not reference
+  `/favicon.ico`, a checked-in image asset, or an external resource.
+- A light semantic test decodes representative stock SVG data URIs and confirms
+  that they contain the descriptor's exact three-digit status. It includes one
+  registered status and a custom valid `599`, which must render `599` rather
+  than the generic `5xx` label.
+- Favicon tests intentionally do not freeze exact SVG markup, byte count,
+  geometry, typography, or colors. No image-decoding dependency or golden
+  binary fixture is added.
+- The approved leading-digit/trailing-digits proportions, typography, colors,
+  and browser-tab legibility remain design-review properties rather than pixel
+  claims made by the automated suite.
 - `favicon_href` sees the exact request-local status, accepts a safe custom URI,
   returns `undef` to omit the element, rejects controls, and escapes attributes.
 - A full `render_html` override owns favicon inclusion and is not modified by
@@ -1763,9 +1778,10 @@ to the old collection of component-specific bodies.
 - Renderer return-shape and encoding failures occur before response start.
 - Every renderer and favicon hook rejects a returned `Future`; async prerequisite
   work is demonstrated in the surrounding handler.
-- Stock construction performs no request-time file access, favicon generation,
-  dynamic renderer loading, network access, or subprocess invocation; favicon
-  and catalog data are static constants.
+- Stock construction performs no request-time file access, image rasterization,
+  dynamic renderer loading, network access, or subprocess invocation; the only
+  favicon work is bounded interpolation and percent-encoding against a static
+  SVG template and family-color table.
 - A post-construction Response mutation remains possible and is documented as
   the caller-owned protocol escape hatch.
 
