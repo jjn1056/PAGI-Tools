@@ -354,10 +354,15 @@ sub _validated_status {
 
 sub _validated_redirect_status {
     my ($status) = @_;
+    my $canonical = defined($status) && !ref($status) ? "$status" : undef;
     croak 'PAGI::Pages redirect status must be one of 301, 302, 303, 307, or 308'
-        unless defined($status) && !ref($status)
-            && $status =~ /\A[0-9]+\z/ && $REDIRECT_STATUS{$status};
-    return 0 + $status;
+        unless defined($canonical) && $canonical =~ /\A[0-9]+\z/
+            && $REDIRECT_STATUS{$canonical};
+
+    my $numeric = 0 + $status;
+    croak 'PAGI::Pages redirect status must be one of 301, 302, 303, 307, or 308'
+        unless $REDIRECT_STATUS{$numeric} && "$numeric" eq $canonical;
+    return $numeric;
 }
 
 sub _welcome_descriptor {

@@ -5,6 +5,7 @@ use Test2::V0;
 use Encode qw(decode FB_CROAK);
 use Future;
 use JSON::MaybeXS qw(decode_json);
+use Scalar::Util qw(dualvar);
 
 use PAGI::Context;
 use PAGI::Pages;
@@ -81,6 +82,35 @@ subtest 'redirect methods select only their documented statuses' => sub {
             qr/status.*301.*302.*303.*307.*308/i,
             "generic redirect rejects unsupported status $status");
     }
+
+    for my $case (
+        ['canonical string with unsupported numeric facet', dualvar(999, '301')],
+        ['supported numeric with noncanonical string facet', dualvar(301, '999')],
+    ) {
+        my ($label, $status) = @$case;
+        like(dies { PAGI::Pages->redirect('/next', status => $status) },
+            qr/status.*301.*302.*303.*307.*308/i,
+            "generic redirect rejects $label");
+    }
+
+    my @supported = qw(301 302 303 307 308);
+    for my $string_status (@supported) {
+        for my $numeric_status (@supported) {
+            next if $numeric_status eq $string_status;
+            my $status = dualvar(0 + $numeric_status, $string_status);
+            like(dies { PAGI::Pages->redirect('/next', status => $status) },
+                qr/status.*301.*302.*303.*307.*308/i,
+                "generic redirect rejects string $string_status with numeric "
+                    . $numeric_status);
+        }
+    }
+
+    my $matching = PAGI::Pages->redirect(
+        http_scope(), '/next', status => dualvar(307, '307'), as => 'text',
+    );
+    is($matching->status, 307,
+        'generic redirect stores a matching dualvar as the intended status');
+
     like(dies { PAGI::Pages->found('/next', status => 302) }, qr/status/i,
         'named redirect rejects a supplied status option even when it matches');
 };
