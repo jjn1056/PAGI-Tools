@@ -2,7 +2,10 @@ package PAGI::App::Throttle;
 
 use strict;
 use warnings;
+use Carp qw(croak);
+use Future;
 use Future::AsyncAwait;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -95,30 +98,35 @@ sub to_app {
             if ($on_limit) {
                 await $on_limit->($scope, $receive, $send, $retry_after);
             } else {
-                my @headers = (
-                    ['content-type', 'text/plain'],
-                    ['retry-after', $retry_after],
+                my $type = $scope->{type} // '<missing>';
+                croak 'built-in rate-limit response is HTTP-only; '
+                    . "configure on_limit for scope type '$type'"
+                    unless $type eq 'http';
+                await $self->_send_rate_limited(
+                    $scope, $send, $retry_after, $now, $burst, $add_headers,
                 );
-
-                if ($add_headers) {
-                    push @headers, ['x-ratelimit-limit', $burst];
-                    push @headers, ['x-ratelimit-remaining', 0];
-                    push @headers, ['x-ratelimit-reset', int($now + $retry_after)];
-                }
-
-                await $send->({
-                    type    => 'http.response.start',
-                    status  => 429,
-                    headers => \@headers,
-                });
-                await $send->({
-                    type => 'http.response.body',
-                    body => 'Too Many Requests',
-                    more => 0,
-                });
             }
         }
     };
+}
+
+async sub _send_rate_limited {
+    my ($self, $scope, $send, $retry_after, $now, $burst, $add_headers) = @_;
+
+    my @headers;
+    if ($add_headers) {
+        push @headers,
+            'X-RateLimit-Limit'     => $burst,
+            'X-RateLimit-Remaining' => 0,
+            'X-RateLimit-Reset'     => int($now + $retry_after);
+    }
+
+    my $response = PAGI::Pages->too_many_requests(
+        $scope,
+        retry_after => $retry_after,
+        headers     => \@headers,
+    );
+    await Future->wrap($response->respond($send));
 }
 
 # Class method to reset a key's bucket
@@ -155,6 +163,15 @@ __END__
 Token bucket rate limiting for PAGI applications. Limits requests
 based on configurable rate and burst settings.
 
+The built-in HTTP limit response is a 429 Too Many Requests response rendered
+by L<PAGI::Pages>. It negotiates HTML, problem JSON, or plain text from the
+original request and retains C<Retry-After> plus the enabled
+C<X-RateLimit-*> fields. C<on_limit> remains an authoritative literal custom
+response seam. Without C<on_limit>, exhaustion on a non-HTTP scope croaks
+rather than emitting HTTP events; allowed non-HTTP scopes and child responses
+retain their existing protocol behavior. There is no Pages configuration
+option.
+
 =head1 OPTIONS
 
 =over 4
@@ -167,7 +184,8 @@ based on configurable rate and burst settings.
 
 =item * C<key_for> - Coderef to extract rate limit key from scope
 
-=item * C<on_limit> - Custom handler for rate-limited requests
+=item * C<on_limit> - Literal custom handler for rate-limited requests; also
+the required response-policy seam when non-HTTP scopes may be exhausted
 
 =item * C<headers> - Add rate limit headers (default: 1)
 

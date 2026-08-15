@@ -2,7 +2,10 @@ package PAGI::App::Loader;
 
 use strict;
 use warnings;
+use Carp qw(croak);
+use Future;
 use Future::AsyncAwait;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -37,17 +40,22 @@ sub to_app {
         my $app = $self->_get_app();
 
         unless ($app) {
-            await $send->({
-                type => 'http.response.start',
-                status => 500,
-                headers => [['content-type', 'text/plain']],
-            });
-            await $send->({ type => 'http.response.body', body => 'App failed to load', more => 0 });
+            my $type = $scope->{type} // '<missing>';
+            croak "application could not be loaded for scope type '$type'"
+                unless $type eq 'http';
+            await $self->_send_load_failure($scope, $send);
             return;
         }
 
         await $app->($scope, $receive, $send);
     };
+}
+
+async sub _send_load_failure {
+    my ($self, $scope, $send) = @_;
+
+    my $response = PAGI::Pages->internal_server_error($scope);
+    await Future->wrap($response->respond($send));
 }
 
 sub _get_app {
@@ -96,6 +104,13 @@ __END__
 
 Loads a PAGI app from a .pl file. Supports optional auto-reload
 for development.
+
+For an HTTP scope, a load failure sends a generic 500 Internal Server Error
+through L<PAGI::Pages>, negotiating HTML, problem JSON, or plain text from the
+original request. A load failure for another scope type croaks and names that
+type rather than emitting HTTP events. Once loaded, the child application
+remains authoritative for all of its successful, protocol-specific, and
+custom responses. Loader has no Pages configuration surface.
 
 =head1 OPTIONS
 

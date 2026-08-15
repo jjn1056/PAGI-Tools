@@ -3,9 +3,11 @@ package PAGI::Endpoint::HTTP;
 use strict;
 use warnings;
 
+use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
+use PAGI::Pages;
 use PAGI::Utils qw(is_response);
 
 # Factory class method - override in subclass for customization
@@ -53,13 +55,15 @@ async sub dispatch {
     }
     # 405 Method Not Allowed
     else {
-        my $allow = join(', ', $self->allowed_methods);
-        $res = $ctx->response->header('Allow', $allow)->status(405)->text("405 Method Not Allowed");
+        $res = PAGI::Pages->method_not_allowed(
+            $ctx,
+            allow => [$self->allowed_methods],
+        );
     }
 
     croak ref($self) . "->$http_method did not return a response"
         unless is_response($res);
-    await $ctx->respond($res);
+    await Future->wrap($ctx->respond($res));
 }
 
 sub to_app {
@@ -124,13 +128,21 @@ to handling HTTP requests. Define methods named after HTTP verbs (get,
 post, put, patch, delete, head, options) and the endpoint automatically
 dispatches to them.
 
+When no method handler exists, the automatic 405 response uses
+L<PAGI::Pages> to negotiate HTML, problem JSON, or plain text from the original
+request and retains the endpoint's complete, sorted C<allowed_methods> result
+in C<Allow>. Explicit method handlers and an explicit C<options> method remain
+authoritative custom-response seams. Automatic OPTIONS retains its existing
+empty response with C<Allow>. Endpoint::HTTP has no Pages configuration
+surface.
+
 =head2 Features
 
 =over 4
 
 =item * Automatic method dispatch based on HTTP verb
 
-=item * 405 Method Not Allowed for undefined methods
+=item * Negotiated 405 Method Not Allowed for undefined methods
 
 =item * OPTIONS handling with Allow header
 

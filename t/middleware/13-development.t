@@ -4,10 +4,12 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
+use JSON::MaybeXS ();
 
 use PAGI::Middleware::Debug;
 use PAGI::Middleware::Lint;
 use PAGI::Middleware::Maintenance;
+use PAGI::Middleware::Healthcheck;
 use PAGI::Middleware::MethodOverride;
 
 my $loop = IO::Async::Loop->new;
@@ -250,7 +252,10 @@ subtest 'Lint middleware - accepts valid response' => sub {
 # ===================
 
 subtest 'Maintenance middleware - serves 503 when enabled' => sub {
-    my $maintenance = PAGI::Middleware::Maintenance->new(enabled => 1);
+    my $maintenance = PAGI::Middleware::Maintenance->new(
+        enabled     => 1,
+        retry_after => 120,
+    );
 
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
@@ -259,14 +264,100 @@ subtest 'Maintenance middleware - serves 503 when enabled' => sub {
     };
 
     my $wrapped = $maintenance->wrap($app);
-    my $scope = make_scope();
+    my $scope = make_scope(headers => [['Accept', 'application/json']]);
 
     my @events;
     run_async { $wrapped->($scope, async sub { {} }, async sub  {
         my ($e) = @_; push @events, $e }) };
 
     is $events[0]{status}, 503, 'returns 503';
-    like $events[1]{body}, qr/Maintenance|maintenance/i, 'maintenance page';
+    my @retry_after = map { $_->[1] }
+        grep { lc($_->[0]) eq 'retry-after' } @{$events[0]{headers}};
+    is \@retry_after, [120], 'built-in response has one Retry-After field';
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
+    is $headers{'content-type'}, 'application/problem+json',
+        'untouched built-in response negotiates problem JSON';
+    is $headers{'retry-after'}, 120, 'built-in response retains Retry-After';
+    my $problem = JSON::MaybeXS::decode_json($events[1]{body});
+    is $problem->{status}, 503, 'problem status matches the wire status';
+    is $problem->{title}, 'Service Unavailable', 'problem uses the stock title';
+};
+
+subtest 'Maintenance middleware - explicit body remains literal' => sub {
+    my $maintenance = PAGI::Middleware::Maintenance->new(
+        enabled     => 1,
+        retry_after => 60,
+        body        => 'Author maintenance body',
+    );
+
+    my $wrapped = $maintenance->wrap(async sub { die 'downstream must not run' });
+    my $scope = make_scope(headers => [['Accept', 'application/json']]);
+    my @events;
+    run_async { $wrapped->($scope, async sub { {} }, async sub {
+        my ($event) = @_; push @events, $event }) };
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
+    my @retry_after = map { $_->[1] }
+        grep { lc($_->[0]) eq 'retry-after' } @{$events[0]{headers}};
+    is \@retry_after, [60], 'custom body branch has one Retry-After field';
+    is $events[0]{status}, 503, 'custom body branch remains 503';
+    is $headers{'content-type'}, 'text/html',
+        'custom body branch retains the literal default content type';
+    is $headers{'retry-after'}, 60, 'custom body branch retains Retry-After';
+    ok !exists $headers{vary}, 'custom body branch does not negotiate';
+    is $events[1]{body}, 'Author maintenance body',
+        'author-supplied body remains byte-for-byte literal';
+};
+
+subtest 'Maintenance middleware - explicit content_type remains literal' => sub {
+    my $maintenance = PAGI::Middleware::Maintenance->new(
+        enabled      => 1,
+        retry_after  => 30,
+        content_type => 'application/x-maintenance',
+    );
+
+    my $wrapped = $maintenance->wrap(async sub { die 'downstream must not run' });
+    my $scope = make_scope(headers => [['Accept', 'application/json']]);
+    my @events;
+    run_async { $wrapped->($scope, async sub { {} }, async sub {
+        my ($event) = @_; push @events, $event }) };
+
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
+    my @retry_after = map { $_->[1] }
+        grep { lc($_->[0]) eq 'retry-after' } @{$events[0]{headers}};
+    is \@retry_after, [30], 'custom content-type branch has one Retry-After field';
+    is $events[0]{status}, 503, 'custom content-type branch remains 503';
+    is $headers{'content-type'}, 'application/x-maintenance',
+        'author-supplied content type remains literal';
+    is $headers{'retry-after'}, 30, 'custom content-type branch retains Retry-After';
+    ok !exists $headers{vary}, 'custom content-type branch does not negotiate';
+    like $events[1]{body}, qr/Under Maintenance/,
+        'content-type-only branch retains the existing built-in literal body';
+};
+
+subtest 'Maintenance middleware - option presence selects the literal branch' => sub {
+    for my $option (qw(body content_type)) {
+        my $maintenance = PAGI::Middleware::Maintenance->new(
+            enabled     => 1,
+            retry_after => 15,
+            $option     => undef,
+        );
+        my $wrapped = $maintenance->wrap(async sub { die 'downstream must not run' });
+        my $scope = make_scope(headers => [['Accept', 'application/json']]);
+        my @events;
+        run_async { $wrapped->($scope, async sub { {} }, async sub {
+            my ($event) = @_; push @events, $event }) };
+
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
+        is $headers{'content-type'}, 'text/html',
+            "the presence of $option selects literal response defaults";
+        is $headers{'retry-after'}, 15,
+            "the presence of $option retains Retry-After";
+        ok !exists $headers{vary},
+            "the presence of $option bypasses negotiation";
+        like $events[1]{body}, qr/Under Maintenance/,
+            "the presence of $option retains the literal default body";
+    }
 };
 
 subtest 'Maintenance middleware - passes through when disabled' => sub {
@@ -330,6 +421,31 @@ subtest 'Maintenance middleware - bypasses for allowed paths' => sub {
         my ($e) = @_; push @events, $e }) };
 
     is $events[0]{status}, 200, 'bypasses for health path';
+};
+
+subtest 'Healthcheck middleware - unhealthy response remains protocol JSON' => sub {
+    my $health = PAGI::Middleware::Healthcheck->new(
+        path   => '/health',
+        checks => { database => sub { 0 } },
+    );
+    my $wrapped = $health->wrap(async sub { die 'downstream must not run' });
+    my $scope = make_scope(
+        path    => '/health',
+        headers => [['Accept', 'text/html']],
+    );
+
+    my @events;
+    run_async { $wrapped->($scope, async sub { {} }, async sub {
+        my ($event) = @_; push @events, $event }) };
+
+    is $events[0]{status}, 503, 'unhealthy check remains 503';
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
+    is $headers{'content-type'}, 'application/json',
+        'health-check media type ignores Pages negotiation';
+    my $document = JSON::MaybeXS::decode_json($events[1]{body});
+    is $document->{status}, 'error', 'protocol status remains in the JSON body';
+    is $document->{checks}{database}{status}, 'error',
+        'protocol check details remain in the JSON body';
 };
 
 # ===================

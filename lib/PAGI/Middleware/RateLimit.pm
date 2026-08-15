@@ -3,7 +3,9 @@ package PAGI::Middleware::RateLimit;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -26,6 +28,14 @@ PAGI::Middleware::RateLimit - Request rate limiting middleware
 
 PAGI::Middleware::RateLimit implements token bucket rate limiting per client.
 Clients exceeding the rate limit receive 429 Too Many Requests.
+
+The built-in 429 response uses L<PAGI::Pages> to negotiate HTML, problem JSON,
+or plain text from the original HTTP request. It retains C<Retry-After> and
+all C<X-RateLimit-*> fields calculated by the middleware. Allowed requests
+and their child responses remain unchanged. This middleware has no custom
+limit-response callback and no Pages configuration surface; applications that
+need different response policy should place it at an application-owned
+boundary.
 
 =head1 CONFIGURATION
 
@@ -97,7 +107,7 @@ sub wrap {
         my ($allowed, $remaining, $reset) = $self->_check_rate_limit($key);
 
         if (!$allowed) {
-            await $self->_send_rate_limited($send, $remaining, $reset);
+            await $self->_send_rate_limited($scope, $send, $remaining, $reset);
             return;
         }
 
@@ -175,30 +185,21 @@ sub _check_rate_limit {
 }
 
 async sub _send_rate_limited {
-    my ($self, $send, $remaining, $reset) = @_;
+    my ($self, $scope, $send, $remaining, $reset) = @_;
 
     my $retry_after = $reset - _now();
     $retry_after = 1 if $retry_after < 1;
 
-    my $body = 'Rate limit exceeded. Try again later.';
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => 429,
-        headers => [
-            ['Content-Type', 'text/plain'],
-            ['Content-Length', length($body)],
-            ['Retry-After', $retry_after],
-            ['X-RateLimit-Limit', $self->{burst}],
-            ['X-RateLimit-Remaining', 0],
-            ['X-RateLimit-Reset', $reset],
+    my $response = PAGI::Pages->too_many_requests(
+        $scope,
+        retry_after => $retry_after,
+        headers     => [
+            'X-RateLimit-Limit'     => $self->{burst},
+            'X-RateLimit-Remaining' => 0,
+            'X-RateLimit-Reset'     => $reset,
         ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+    );
+    await Future->wrap($response->respond($send));
 }
 
 # Class method to reset rate limits (useful for testing)

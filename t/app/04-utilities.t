@@ -109,6 +109,9 @@ subtest 'App::Healthcheck' => sub {
         });
 
         is $sent[0]{status}, 503, 'returns 503';
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
+        is $headers{'content-type'}, 'application/json',
+            'unhealthy health checks retain their protocol JSON';
         my $body = JSON::MaybeXS::decode_json($sent[1]{body});
         is $body->{status}, 'error', 'overall status is error';
         is $body->{checks}{database}{status}, 'error', 'database check failed';
@@ -174,7 +177,7 @@ subtest 'App::Loader loads app from file' => sub {
         is $sent[1]{body}, 'Loaded!', 'correct response';
     };
 
-    subtest 'returns 500 for invalid file' => sub {
+    subtest 'invalid HTTP app negotiates a Pages 500' => sub {
         my @warnings;
         local $SIG{__WARN__} = sub { push @warnings, $_[0] };
 
@@ -183,7 +186,11 @@ subtest 'App::Loader loads app from file' => sub {
         my @sent;
         run_async(async sub {
             await $app->(
-                { type => 'http', path => '/' },
+                {
+                    type    => 'http',
+                    path    => '/',
+                    headers => [['Accept', 'application/json']],
+                },
                 async sub { { type => 'http.disconnect' } },
                 async sub  {
         my ($event) = @_; push @sent, $event },
@@ -191,8 +198,34 @@ subtest 'App::Loader loads app from file' => sub {
         });
 
         is $sent[0]{status}, 500, 'returns 500 for invalid file';
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
+        is $headers{'content-type'}, 'application/problem+json',
+            'load failure negotiates problem JSON';
+        is $headers{'cache-control'}, 'no-store', 'load failure is not stored';
+        my $problem = JSON::MaybeXS::decode_json($sent[1]{body});
+        is $problem->{status}, 500, 'problem status matches the wire status';
+        is $problem->{title}, 'Internal Server Error',
+            'problem document uses the stock title';
         like "@warnings", qr/Error loading|did not return a coderef/,
             'load failure is logged (captured, not leaked to STDERR)';
+    };
+
+    subtest 'invalid non-HTTP app croaks without HTTP events' => sub {
+        my @warnings;
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+
+        my $app = PAGI::App::Loader->new(file => '/nonexistent/app.pl')->to_app;
+        my @sent;
+
+        like dies {
+            $app->(
+                { type => 'websocket', path => '/' },
+                async sub { { type => 'websocket.disconnect' } },
+                async sub { my ($event) = @_; push @sent, $event },
+            )->get;
+        }, qr/^application could not be loaded for scope type 'websocket'/,
+            'failure names the unsupported scope type';
+        is \@sent, [], 'load failure emits no HTTP events on a non-HTTP scope';
     };
 };
 
@@ -328,7 +361,11 @@ subtest 'App::Throttle rate limiting' => sub {
         my @sent;
         run_async(async sub {
             await $app->(
-                { type => 'http', path => '/' },
+                {
+                    type    => 'http',
+                    path    => '/',
+                    headers => [['Accept', 'application/json']],
+                },
                 async sub { { type => 'http.disconnect' } },
                 async sub  {
         my ($event) = @_; push @sent, $event },
@@ -336,7 +373,107 @@ subtest 'App::Throttle rate limiting' => sub {
         });
 
         is $sent[0]{status}, 429, 'returns 429';
-        ok((grep { $_->[0] eq 'retry-after' } @{$sent[0]{headers}}), 'has Retry-After header');
+        for my $name (qw(retry-after x-ratelimit-limit x-ratelimit-remaining x-ratelimit-reset)) {
+            my @values = map { $_->[1] }
+                grep { lc($_->[0]) eq $name } @{$sent[0]{headers}};
+            is scalar(@values), 1, "has exactly one $name field";
+        }
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
+        is $headers{'content-type'}, 'application/problem+json',
+            'built-in limit response negotiates problem JSON';
+        ok exists $headers{'retry-after'}, 'has Retry-After header';
+        is $headers{'x-ratelimit-limit'}, 1, 'retains X-RateLimit-Limit';
+        is $headers{'x-ratelimit-remaining'}, 0, 'retains X-RateLimit-Remaining';
+        ok exists $headers{'x-ratelimit-reset'}, 'retains X-RateLimit-Reset';
+        my $problem = JSON::MaybeXS::decode_json($sent[1]{body});
+        is $problem->{status}, 429, 'problem status matches the wire status';
+    };
+
+    subtest 'custom on_limit response remains literal' => sub {
+        PAGI::App::Throttle->reset_all;
+
+        my $app = PAGI::App::Throttle->new(
+            app     => async sub { },
+            rate    => 0.001,
+            burst   => 1,
+            key_for => sub { 'custom_limit' },
+            on_limit => async sub {
+                my ($scope, $receive, $send, $retry_after) = @_;
+                await $send->({
+                    type    => 'http.response.start',
+                    status  => 409,
+                    headers => [['content-type', 'application/x-custom-limit']],
+                });
+                await $send->({
+                    type => 'http.response.body', body => "custom:$retry_after", more => 0,
+                });
+            },
+        )->to_app;
+
+        run_async(async sub {
+            await $app->(
+                { type => 'http', path => '/', headers => [] },
+                async sub { { type => 'http.disconnect' } },
+                async sub { },
+            );
+        });
+
+        my @sent;
+        run_async(async sub {
+            await $app->(
+                {
+                    type    => 'http',
+                    path    => '/',
+                    headers => [['Accept', 'application/json']],
+                },
+                async sub { { type => 'http.disconnect' } },
+                async sub { my ($event) = @_; push @sent, $event },
+            );
+        });
+
+        is $sent[0]{status}, 409, 'custom handler retains its status';
+        is $sent[0]{headers}, [['content-type', 'application/x-custom-limit']],
+            'custom handler retains its literal headers';
+        like $sent[1]{body}, qr/^custom:\d+$/, 'custom handler retains its literal body';
+    };
+
+    subtest 'non-HTTP scopes pass until exhaustion then croak without HTTP events' => sub {
+        PAGI::App::Throttle->reset_all;
+
+        my $child_calls = 0;
+        my $app = PAGI::App::Throttle->new(
+            app => async sub {
+                my ($scope, $receive, $send) = @_;
+                $child_calls++;
+                await $send->({ type => 'websocket.close', code => 1000 });
+            },
+            rate    => 0.001,
+            burst   => 1,
+            key_for => sub { 'websocket_limit' },
+        )->to_app;
+
+        my @first_events;
+        run_async(async sub {
+            await $app->(
+                { type => 'websocket', path => '/' },
+                async sub { { type => 'websocket.disconnect' } },
+                async sub { my ($event) = @_; push @first_events, $event },
+            );
+        });
+        is \@first_events, [{ type => 'websocket.close', code => 1000 }],
+            'an allowed non-HTTP scope retains child protocol behavior';
+
+        my @limited_events;
+        like dies {
+            $app->(
+                { type => 'websocket', path => '/' },
+                async sub { { type => 'websocket.disconnect' } },
+                async sub { my ($event) = @_; push @limited_events, $event },
+            )->get;
+        }, qr/^built-in rate-limit response is HTTP-only; configure on_limit for scope type 'websocket'/,
+            'failure names on_limit and the unsupported scope type';
+        is \@limited_events, [], 'exhaustion emits no HTTP events on a non-HTTP scope';
+        is $child_calls, 1, 'the exhausted request does not reach the child';
     };
 };
 

@@ -2,7 +2,9 @@ package PAGI::App::WrapCGI;
 
 use strict;
 use warnings;
+use Future;
 use Future::AsyncAwait;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -76,15 +78,10 @@ sub to_app {
 
         # Execute CGI
         local %ENV = %env;
-        my $pid = open my $fh, '-|';
+        my ($pid, $fh) = $self->_open_cgi();
 
         unless (defined $pid) {
-            await $send->({
-                type => 'http.response.start',
-                status => 500,
-                headers => [['content-type', 'text/plain']],
-            });
-            await $send->({ type => 'http.response.body', body => 'Internal Server Error', more => 0 });
+            await $self->_send_process_failure($scope, $send);
             return;
         }
 
@@ -126,6 +123,20 @@ sub to_app {
     };
 }
 
+sub _open_cgi {
+    my ($self) = @_;
+
+    my $pid = open my $fh, '-|';
+    return ($pid, $fh);
+}
+
+async sub _send_process_failure {
+    my ($self, $scope, $send) = @_;
+
+    my $response = PAGI::Pages->internal_server_error($scope);
+    await Future->wrap($response->respond($send));
+}
+
 1;
 
 __END__
@@ -135,6 +146,11 @@ __END__
 Executes CGI scripts and converts their output to PAGI responses.
 Sets up the standard CGI environment variables and parses the
 CGI output (Status header, other headers, and body).
+
+Failure to start the CGI process sends a generic 500 Internal Server Error
+through L<PAGI::Pages>, negotiating HTML, problem JSON, or plain text from the
+original HTTP request. Output from a process that starts remains the literal
+CGI status, fields, and body. WrapCGI has no Pages configuration surface.
 
 =head1 OPTIONS
 

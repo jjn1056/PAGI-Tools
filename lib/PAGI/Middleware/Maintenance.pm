@@ -3,7 +3,9 @@ package PAGI::Middleware::Maintenance;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -26,6 +28,14 @@ PAGI::Middleware::Maintenance - Serve maintenance page when enabled
 PAGI::Middleware::Maintenance serves a 503 Service Unavailable page
 when maintenance mode is enabled. Supports IP-based bypass for admins.
 
+With neither C<body> nor C<content_type> supplied, the built-in response uses
+L<PAGI::Pages> to negotiate HTML, problem JSON, or plain text from the original
+request. It retains the configured C<Retry-After> value. Supplying either
+C<body> or C<content_type> selects the existing literal response branch;
+C<Retry-After> remains effective there as well. Enabled, disabled, and bypass
+decisions remain local to this middleware, and there is no Pages configuration
+surface.
+
 =head1 CONFIGURATION
 
 =over 4
@@ -46,13 +56,17 @@ Arrayref of paths that bypass maintenance mode (e.g., health checks).
 
 Seconds until maintenance expected to end. Sets Retry-After header.
 
-=item * content_type (default: 'text/html')
+=item * content_type
 
-Content-Type of the maintenance page.
+Explicit Content-Type for a literal maintenance response. Supplying it selects
+the literal custom-response branch. When only C<body> is supplied, this branch
+defaults to C<text/html>.
 
-=item * body (default: built-in HTML page)
+=item * body
 
-Custom maintenance page body.
+Explicit literal maintenance page body. Supplying it selects the literal
+custom-response branch. When only C<content_type> is supplied, the existing
+built-in HTML body is used literally.
 
 =back
 
@@ -61,6 +75,8 @@ Custom maintenance page body.
 sub _init {
     my ($self, $config) = @_;
 
+    $self->{_custom_response} =
+        exists $config->{body} || exists $config->{content_type};
     $self->{enabled} = $config->{enabled} // 0;
     $self->{bypass_ips} = $config->{bypass_ips} // [];
     $self->{bypass_paths} = $config->{bypass_paths} // [];
@@ -96,7 +112,7 @@ sub wrap {
         }
 
         # Serve maintenance page
-        await $self->_send_maintenance($send);
+        await $self->_send_maintenance($scope, $send);
     };
 }
 
@@ -162,7 +178,16 @@ sub _all_valid_octets {
 }
 
 async sub _send_maintenance {
-    my ($self, $send) = @_;
+    my ($self, $scope, $send) = @_;
+
+    unless ($self->{_custom_response}) {
+        my @options;
+        push @options, retry_after => $self->{retry_after}
+            if defined $self->{retry_after};
+        my $response = PAGI::Pages->service_unavailable($scope, @options);
+        await Future->wrap($response->respond($send));
+        return;
+    }
 
     my $body = $self->{body};
 

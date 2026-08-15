@@ -2,8 +2,10 @@ package PAGI::App::Proxy;
 
 use strict;
 use warnings;
+use Future;
 use Future::AsyncAwait;
 use IO::Socket::INET;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -84,19 +86,10 @@ sub to_app {
         my $request = "$method $path HTTP/1.1\r\n" . join("\r\n", @headers) . "\r\n\r\n" . $body;
 
         # Connect to backend
-        my $sock = IO::Socket::INET->new(
-            PeerHost => $host,
-            PeerPort => $port,
-            Timeout  => $timeout,
-        );
+        my $sock = $self->_connect_backend($host, $port, $timeout);
 
         unless ($sock) {
-            await $send->({
-                type => 'http.response.start',
-                status => 502,
-                headers => [['content-type', 'text/plain']],
-            });
-            await $send->({ type => 'http.response.body', body => 'Bad Gateway', more => 0 });
+            await $self->_send_bad_gateway($scope, $send);
             return;
         }
 
@@ -130,6 +123,23 @@ sub to_app {
     };
 }
 
+sub _connect_backend {
+    my ($self, $host, $port, $timeout) = @_;
+
+    return IO::Socket::INET->new(
+        PeerHost => $host,
+        PeerPort => $port,
+        Timeout  => $timeout,
+    );
+}
+
+async sub _send_bad_gateway {
+    my ($self, $scope, $send) = @_;
+
+    my $response = PAGI::Pages->bad_gateway($scope);
+    await Future->wrap($response->respond($send));
+}
+
 1;
 
 __END__
@@ -137,6 +147,12 @@ __END__
 =head1 DESCRIPTION
 
 Simple HTTP reverse proxy for development and demonstration purposes.
+
+If the backend connection cannot be opened, the application sends a generic
+502 Bad Gateway response through L<PAGI::Pages>. The response negotiates HTML,
+problem JSON, or plain text from the original HTTP request. Responses received
+from a backend remain literal proxy output; there is no Pages configuration
+surface on this demonstration application.
 
 B<WARNING: NOT FOR PRODUCTION USE>
 
@@ -153,7 +169,8 @@ async and severely limits throughput.
 
 =item * B<No Connection Pooling> - Creates a new connection for every request.
 
-=item * B<Limited Error Handling> - Basic 502 response on connection failure.
+=item * B<Limited Error Handling> - A negotiated generic 502 response is the
+only local connection-failure handling.
 
 =back
 

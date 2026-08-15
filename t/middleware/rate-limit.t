@@ -5,6 +5,7 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
+use JSON::MaybeXS ();
 
 use lib 'lib';
 
@@ -33,22 +34,22 @@ my $simple_app = async sub {
 };
 
 sub make_scope {
-    my ($client_ip) = @_;
+    my ($client_ip, $headers) = @_;
     return {
         type    => 'http',
         path    => '/',
         method  => 'GET',
-        headers => [],
+        headers => $headers // [],
         client  => [$client_ip // '127.0.0.1', 12345],
     };
 }
 
 sub make_request {
-    my ($wrapped, $client_ip) = @_;
+    my ($wrapped, $client_ip, $headers) = @_;
     my @sent;
     run_async(async sub {
         await $wrapped->(
-            make_scope($client_ip),
+            make_scope($client_ip, $headers),
             async sub { { type => 'http.disconnect' } },
             async sub { my ($event) = @_; push @sent, $event },
         );
@@ -77,6 +78,43 @@ subtest 'burst exhaustion results in 429' => sub {
 
     my @sent = make_request($wrapped);
     is $sent[0]{status}, 429, 'request 4 blocked (burst exhausted)';
+};
+
+subtest 'default 429 negotiates through Pages and retains rate-limit fields' => sub {
+    PAGI::Middleware::RateLimit->_clear_buckets();
+
+    my $mw = PAGI::Middleware::RateLimit->new(
+        requests_per_second => 0.1,
+        burst               => 1,
+    );
+    my $wrapped = $mw->wrap($simple_app);
+
+    my @allowed = make_request($wrapped, '10.20.30.40');
+    is $allowed[0]{status}, 200, 'the burst token remains available';
+
+    my @limited = make_request(
+        $wrapped,
+        '10.20.30.40',
+        [['Accept', 'application/json']],
+    );
+    is $limited[0]{status}, 429, 'exhaustion remains 429';
+
+    for my $name (qw(retry-after x-ratelimit-limit x-ratelimit-remaining x-ratelimit-reset)) {
+        my @values = map { $_->[1] }
+            grep { lc($_->[0]) eq $name } @{$limited[0]{headers}};
+        is scalar(@values), 1, "has exactly one $name field";
+    }
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$limited[0]{headers}};
+    is $headers{'content-type'}, 'application/problem+json',
+        'Accept negotiation selects problem JSON';
+    ok exists $headers{'retry-after'}, 'retains Retry-After';
+    is $headers{'x-ratelimit-limit'}, 1, 'retains X-RateLimit-Limit';
+    is $headers{'x-ratelimit-remaining'}, 0, 'retains X-RateLimit-Remaining';
+    ok exists $headers{'x-ratelimit-reset'}, 'retains X-RateLimit-Reset';
+
+    my $problem = JSON::MaybeXS::decode_json($limited[1]{body});
+    is $problem->{status}, 429, 'problem status matches the wire status';
+    is $problem->{title}, 'Too Many Requests', 'problem uses the stock title';
 };
 
 # =============================================================================
