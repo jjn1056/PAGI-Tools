@@ -3,10 +3,12 @@ package PAGI::Middleware::CSRF;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
 use Digest::SHA qw(sha256_hex);
 use PAGI::Utils::Random qw(secure_random_bytes);
 use PAGI::Utils::SecureCompare qw(secure_compare);
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -35,7 +37,10 @@ PAGI::Middleware::CSRF - Cross-Site Request Forgery protection middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::CSRF provides protection against Cross-Site Request
-Forgery attacks by validating tokens on state-changing requests.
+Forgery attacks by validating tokens on state-changing requests. Its built-in
+enforced 403 response negotiates through L<PAGI::Pages>. The C<enforce =E<gt>
+'app'> flow remains issue-only, so application-owned responses, including
+L<PAGI::Context> responses, remain literal and authoritative.
 
 =head1 CONFIGURATION
 
@@ -154,7 +159,7 @@ sub wrap {
 
         # Use timing-safe comparison to prevent timing attacks
         if (!$submitted_token || !$cookie_token || !secure_compare($submitted_token, $cookie_token)) {
-            await $self->_send_error($send, 403, 'CSRF token validation failed');
+            await $self->_send_error($scope, $send, 403);
             return;
         }
 
@@ -204,21 +209,11 @@ sub _get_header {
 }
 
 async sub _send_error {
-    my ($self, $send, $status, $message) = @_;
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => $status,
-        headers => [
-            ['content-type', 'text/plain'],
-            ['content-length', length($message)],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $message,
-        more => 0,
-    });
+    my ($self, $scope, $send, $status) = @_;
+    die "PAGI::Middleware::CSRF does not own status $status"
+        unless $status == 403;
+    my $response = PAGI::Pages->forbidden($scope);
+    await Future->wrap($response->respond($send));
 }
 
 1;

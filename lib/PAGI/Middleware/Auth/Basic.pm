@@ -3,8 +3,10 @@ package PAGI::Middleware::Auth::Basic;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
 use MIME::Base64 qw(decode_base64);
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -35,7 +37,10 @@ PAGI::Middleware::Auth::Basic - HTTP Basic Authentication middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::Auth::Basic implements HTTP Basic Authentication (RFC 7617).
-It validates credentials and returns 401 Unauthorized for failed authentication.
+It validates credentials and renders its built-in 401 Unauthorized failures
+through L<PAGI::Pages>, including representation negotiation. Successful
+authentication and existing path or non-HTTP pass-through behavior remain
+unchanged.
 
 =head1 CONFIGURATION
 
@@ -86,7 +91,7 @@ sub wrap {
         my $auth_header = $self->_get_header($scope, 'authorization');
 
         unless ($auth_header) {
-            await $self->_send_unauthorized($send);
+            await $self->_send_unauthorized($scope, $send);
             return;
         }
 
@@ -94,14 +99,14 @@ sub wrap {
         my ($username, $password) = $self->_parse_basic_auth($auth_header);
 
         unless (defined $username) {
-            await $self->_send_unauthorized($send);
+            await $self->_send_unauthorized($scope, $send);
             return;
         }
 
         # Validate credentials
         my $valid = eval { $self->{authenticator}->($username, $password) };
         if ($@ || !$valid) {
-            await $self->_send_unauthorized($send);
+            await $self->_send_unauthorized($scope, $send);
             return;
         }
 
@@ -148,28 +153,22 @@ sub _parse_basic_auth {
     return ($username, $password // '');
 }
 
+sub _quote_realm {
+    my ($self) = @_;
+    my $realm = $self->{realm};
+    $realm =~ s/\\/\\\\/g;
+    $realm =~ s/"/\\"/g;
+    return $realm;
+}
+
 async sub _send_unauthorized {
-    my ($self, $send) = @_;
-
-    my $realm_escaped = $self->{realm};
-    $realm_escaped =~ s/"/\\"/g;
-
-    my $body = 'Unauthorized';
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => 401,
-        headers => [
-            ['Content-Type', 'text/plain'],
-            ['Content-Length', length($body)],
-            ['WWW-Authenticate', qq{Basic realm="$realm_escaped", charset="UTF-8"}],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+    my ($self, $scope, $send) = @_;
+    my $realm = $self->_quote_realm;
+    my $challenge = qq{Basic realm="$realm", charset="UTF-8"};
+    my $response = PAGI::Pages->unauthorized(
+        $scope, challenge => $challenge,
+    );
+    await Future->wrap($response->respond($send));
 }
 
 sub _get_header {
@@ -207,6 +206,10 @@ Hashref with authentication info:
 
 HTTP Basic Authentication transmits credentials in base64 encoding (not encrypted).
 Always use HTTPS when using Basic Authentication in production.
+
+The configured realm is escaped for a quoted Basic challenge (backslashes
+before quotes), then validated by L<PAGI::Pages> as an HTTP field value. An
+invalid realm fails before any response event is emitted.
 
 =head1 SEE ALSO
 

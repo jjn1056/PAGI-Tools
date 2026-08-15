@@ -3,8 +3,10 @@ package PAGI::Middleware::ReverseProxy;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -26,8 +28,10 @@ PAGI::Middleware::ReverseProxy processes X-Forwarded-* headers only after the
 request passes its trusted-proxy check, and updates the scope with the original
 client information. When supplied, a trusted X-Forwarded-Host must occur exactly
 once and be a single valid authority; repeated fields, comma-containing values,
-and malformed authorities receive a generic HTTP 400 response. Non-HTTP and
-untrusted scopes continue to pass through unchanged.
+and malformed authorities receive a generic HTTP 400 response negotiated
+through L<PAGI::Pages>. Authority trust and normalization decisions remain in
+this middleware. Non-HTTP and untrusted scopes continue to pass through
+unchanged outside Pages.
 
 =head1 CONFIGURATION
 
@@ -94,7 +98,7 @@ sub wrap {
             } @{ $scope->{headers} // [] };
 
         if (@forwarded_host > 1) {
-            await $self->_send_error($send, 400, 'Invalid forwarded Host');
+            await $self->_send_error($scope, $send, 400);
             return;
         }
 
@@ -109,7 +113,7 @@ sub wrap {
                 $validation_error = $@;
             }
             if ($validation_error) {
-                await $self->_send_error($send, 400, 'Invalid forwarded Host');
+                await $self->_send_error($scope, $send, 400);
                 return;
             }
         }
@@ -231,21 +235,11 @@ sub _get_header {
 }
 
 async sub _send_error {
-    my ($self, $send, $status, $message) = @_;
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => $status,
-        headers => [
-            ['Content-Type', 'text/plain'],
-            ['Content-Length', length($message)],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $message,
-        more => 0,
-    });
+    my ($self, $scope, $send, $status) = @_;
+    die "PAGI::Middleware::ReverseProxy does not own status $status"
+        unless $status == 400;
+    my $response = PAGI::Pages->bad_request($scope);
+    await Future->wrap($response->respond($send));
 }
 
 1;

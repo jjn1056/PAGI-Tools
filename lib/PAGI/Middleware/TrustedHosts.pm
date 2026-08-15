@@ -3,8 +3,10 @@ package PAGI::Middleware::TrustedHosts;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -24,10 +26,13 @@ PAGI::Middleware::TrustedHosts - Host header validation middleware
 
 PAGI::Middleware::TrustedHosts structurally validates the Host header before
 matching its raw, validated value against a list of allowed hosts. Duplicate or
-malformed Host headers receive a generic HTTP 400 response. This helps prevent
-host header injection attacks.
+malformed Host headers, missing required hosts, and allowlist rejections receive
+a generic HTTP 400 response negotiated through L<PAGI::Pages>. Structural
+validation and allowlist decisions remain authoritative in this middleware.
+This helps prevent host header injection attacks.
 
-Non-HTTP scopes continue to pass through unchanged without Host validation.
+Non-HTTP scopes continue to pass through unchanged without Host validation or
+Pages rendering.
 
 =head1 CONFIGURATION
 
@@ -86,7 +91,7 @@ sub wrap {
             $authority_error = $@;
         }
         if ($authority_error) {
-            await $self->_send_error($send, 400, 'Invalid Host header');
+            await $self->_send_error($scope, $send, 400);
             return;
         }
 
@@ -96,7 +101,7 @@ sub wrap {
                 await $app->($scope, $receive, $send);
                 return;
             }
-            await $self->_send_error($send, 400, 'Missing Host header');
+            await $self->_send_error($scope, $send, 400);
             return;
         }
 
@@ -115,27 +120,17 @@ sub wrap {
         if ($allowed) {
             await $app->($scope, $receive, $send);
         } else {
-            await $self->_send_error($send, 400, 'Invalid Host header');
+            await $self->_send_error($scope, $send, 400);
         }
     };
 }
 
 async sub _send_error {
-    my ($self, $send, $status, $message) = @_;
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => $status,
-        headers => [
-            ['content-type', 'text/plain'],
-            ['content-length', length($message)],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $message,
-        more => 0,
-    });
+    my ($self, $scope, $send, $status) = @_;
+    die "PAGI::Middleware::TrustedHosts does not own status $status"
+        unless $status == 400;
+    my $response = PAGI::Pages->bad_request($scope);
+    await Future->wrap($response->respond($send));
 }
 
 1;

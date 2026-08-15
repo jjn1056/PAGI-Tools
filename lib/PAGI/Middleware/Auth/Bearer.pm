@@ -3,10 +3,12 @@ package PAGI::Middleware::Auth::Bearer;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
 use JSON::MaybeXS ();
 use MIME::Base64 qw(decode_base64url);
 use Digest::SHA qw(hmac_sha256);
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -34,7 +36,10 @@ PAGI::Middleware::Auth::Bearer - Bearer token authentication middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::Auth::Bearer validates Bearer tokens in the Authorization
-header. It supports JWT (JSON Web Tokens) with HMAC-SHA256 signatures.
+header. It supports JWT (JSON Web Tokens) with HMAC-SHA256 signatures. Its
+built-in 401 failures negotiate through L<PAGI::Pages> while retaining the
+scheme challenge and safe failure detail. Successful authentication and
+existing path or non-HTTP pass-through behavior remain unchanged.
 
 =head1 CONFIGURATION
 
@@ -98,7 +103,7 @@ sub wrap {
         my $auth_header = $self->_get_header($scope, 'authorization');
 
         unless ($auth_header) {
-            await $self->_send_unauthorized($send, 'Token required');
+            await $self->_send_unauthorized($scope, $send, 'Token required');
             return;
         }
 
@@ -106,7 +111,9 @@ sub wrap {
         my $token = $self->_parse_bearer_token($auth_header);
 
         unless ($token) {
-            await $self->_send_unauthorized($send, 'Invalid authorization header');
+            await $self->_send_unauthorized(
+                $scope, $send, 'Invalid authorization header',
+            );
             return;
         }
 
@@ -114,7 +121,7 @@ sub wrap {
         my $claims = $self->_validate_token($token);
 
         unless ($claims) {
-            await $self->_send_unauthorized($send, 'Invalid token');
+            await $self->_send_unauthorized($scope, $send, 'Invalid token');
             return;
         }
 
@@ -238,25 +245,24 @@ sub _secure_compare {
     return $result == 0;
 }
 
+sub _quote_realm {
+    my ($self) = @_;
+    my $realm = $self->{realm};
+    $realm =~ s/\\/\\\\/g;
+    $realm =~ s/"/\\"/g;
+    return $realm;
+}
+
 async sub _send_unauthorized {
-    my ($self, $send, $error) = @_;
-
-    my $body = $error;
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => 401,
-        headers => [
-            ['Content-Type', 'text/plain'],
-            ['Content-Length', length($body)],
-            ['WWW-Authenticate', qq{Bearer realm="$self->{realm}"}],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+    my ($self, $scope, $send, $error) = @_;
+    my $realm = $self->_quote_realm;
+    my $challenge = qq{Bearer realm="$realm"};
+    my $response = PAGI::Pages->unauthorized(
+        $scope,
+        challenge => $challenge,
+        detail    => $error,
+    );
+    await Future->wrap($response->respond($send));
 }
 
 sub _get_header {
@@ -331,6 +337,10 @@ option with L<Crypt::JWT>:
 
 See L<Crypt::JWT> for complete JWT/JWS/JWE support including RS256, ES256,
 JWKS, and all standard claim validations.
+
+The configured realm is escaped for a quoted Bearer challenge (backslashes
+before quotes), then validated by L<PAGI::Pages> as an HTTP field value. An
+invalid realm fails before any response event is emitted.
 
 =head1 SEE ALSO
 

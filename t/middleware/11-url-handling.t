@@ -34,6 +34,12 @@ sub run_async (&) {
     $loop->await($code->());
 }
 
+sub response_header_values {
+    my ($event, $name) = @_;
+    return map { $_->[1] }
+        grep { lc($_->[0]) eq lc($name) } @{$event->{headers}};
+}
+
 # ===================
 # Rewrite Middleware Tests
 # ===================
@@ -524,6 +530,7 @@ subtest 'ReverseProxy - trusted forwarded Host rejects ambiguity and invalid aut
             headers => [
                 ['X-Forwarded-Host', 'public.example'],
                 ['X-Forwarded-Host', 'public.example'],
+                ['Accept', 'text/plain'],
             ],
         },
         {
@@ -531,6 +538,7 @@ subtest 'ReverseProxy - trusted forwarded Host rejects ambiguity and invalid aut
             headers => [
                 ['X-Forwarded-Host', 'public.example'],
                 ['X-Forwarded-Host', 'evil.example'],
+                ['Accept', 'text/plain'],
             ],
         },
         {
@@ -538,19 +546,29 @@ subtest 'ReverseProxy - trusted forwarded Host rejects ambiguity and invalid aut
             headers => [
                 ['X-FoRwArDeD-HoSt', 'public.example'],
                 ['x-forwarded-host', 'public.example'],
+                ['Accept', 'text/plain'],
             ],
         },
         {
             name    => 'comma-containing value',
-            headers => [['X-Forwarded-Host', 'public.example, evil.example']],
+            headers => [
+                ['X-Forwarded-Host', 'public.example, evil.example'],
+                ['Accept', 'text/plain'],
+            ],
         },
         {
             name    => 'malformed authority',
-            headers => [['X-Forwarded-Host', 'public.example/path']],
+            headers => [
+                ['X-Forwarded-Host', 'public.example/path'],
+                ['Accept', 'text/plain'],
+            ],
         },
         {
             name    => 'port exceeds 65535',
-            headers => [['X-Forwarded-Host', 'public.example:65536']],
+            headers => [
+                ['X-Forwarded-Host', 'public.example:65536'],
+                ['Accept', 'text/plain'],
+            ],
         },
     );
 
@@ -575,21 +593,60 @@ subtest 'ReverseProxy - trusted forwarded Host rejects ambiguity and invalid aut
         };
 
         is $app_calls, 0, "$case->{name}: downstream is not called";
-        is \@events, [
-            {
-                type    => 'http.response.start',
-                status  => 400,
+        is scalar(@events), 2, "$case->{name}: complete response is sent";
+        is $events[0]{status}, 400, "$case->{name}: status remains 400";
+        is [response_header_values($events[0], 'Content-Type')],
+            ['text/plain; charset=utf-8'],
+            "$case->{name}: Pages negotiates text";
+        is [response_header_values($events[0], 'Cache-Control')],
+            ['no-store'], "$case->{name}: Pages applies error cache policy";
+        is [response_header_values($events[0], 'Vary')],
+            ['Accept'], "$case->{name}: Pages varies on Accept";
+        is $events[1], {
+            type => 'http.response.body',
+            body => "400 Bad Request\n\nThe server could not understand the request.\n",
+            more => 0,
+        }, "$case->{name}: generic Pages 400 response is sent";
+    }
+};
+
+subtest 'ReverseProxy invalid forwarded authority negotiates problem JSON' => sub {
+    my $proxy = PAGI::Middleware::ReverseProxy->new(
+        trusted_proxies => ['127.0.0.1'],
+    );
+    my $app_calls = 0;
+    my $wrapped = $proxy->wrap(async sub { $app_calls++ });
+    my @events;
+
+    run_async {
+        $wrapped->(
+            make_scope(
+                client  => ['127.0.0.1', 12345],
                 headers => [
-                    ['Content-Type', 'text/plain'],
-                    ['Content-Length', length('Invalid forwarded Host')],
+                    ['X-Forwarded-Host', 'public.example/path'],
+                    ['Accept', 'application/problem+json'],
                 ],
-            },
-            {
-                type => 'http.response.body',
-                body => 'Invalid forwarded Host',
-                more => 0,
-            },
-        ], "$case->{name}: generic 400 response is sent";
+            ),
+            async sub { {} },
+            async sub { my ($event) = @_; push @events, $event },
+        )
+    };
+
+    is $app_calls, 0, 'invalid forwarded authority does not call downstream';
+    is $events[0]{status}, 400, 'invalid forwarded authority retains status 400';
+    is [response_header_values($events[0], 'Content-Type')],
+        ['application/problem+json'],
+        'invalid forwarded authority negotiates problem JSON';
+    is [response_header_values($events[0], 'Cache-Control')],
+        ['no-store'], 'problem response uses the Pages error cache policy';
+    is [response_header_values($events[0], 'Vary')],
+        ['Accept'], 'problem response varies on Accept';
+    my $problem = eval { JSON::MaybeXS::decode_json($events[1]{body}) };
+    ok $problem, 'invalid forwarded authority renders a JSON problem document';
+    if ($problem) {
+        is $problem->{status}, 400, 'problem document contains status 400';
+        is $problem->{detail}, 'The server could not understand the request.',
+            'problem document does not expose the rejected authority';
     }
 };
 
@@ -628,6 +685,36 @@ subtest 'ReverseProxy - untrusted malformed forwarded Host passes through unchan
     is $json->encode($scope), $scope_bytes,
         'untrusted malformed field and scope remain byte-for-byte unchanged';
     is \@events, [], 'ReverseProxy sends no local rejection';
+};
+
+subtest 'ReverseProxy - non-HTTP scopes pass through outside Pages' => sub {
+    my $proxy = PAGI::Middleware::ReverseProxy->new(trust_all => 1);
+    my $captured_scope;
+    my $app_calls = 0;
+    my $scope = {
+        type    => 'websocket',
+        path    => '/socket',
+        client  => ['127.0.0.1', 12345],
+        headers => [['X-Forwarded-Host', 'public.example/path']],
+    };
+    my $wrapped = $proxy->wrap(async sub {
+        ($captured_scope) = @_;
+        $app_calls++;
+    });
+    my @events;
+
+    run_async {
+        $wrapped->(
+            $scope,
+            async sub { {} },
+            async sub { my ($event) = @_; push @events, $event },
+        )
+    };
+
+    is $app_calls, 1, 'non-HTTP scope reaches downstream once';
+    is refaddr($captured_scope), refaddr($scope),
+        'non-HTTP pass-through preserves the original scope';
+    is \@events, [], 'non-HTTP pass-through emits no Pages response';
 };
 
 subtest 'ReverseProxy - rewritten scope does not inherit stale Request headers' => sub {
