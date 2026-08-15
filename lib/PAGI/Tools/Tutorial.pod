@@ -606,9 +606,9 @@ the send:
 Without a Context or scope, the call returns a plain coderef that works as a
 normal route target or native HTTP app:
 
-  route('/' => PAGI::Pages->welcome)
-  route('/old' => PAGI::Pages->redirect('/new', status => 308))
-  mount('/gone' => PAGI::Pages->gone)
+  route('/' => PAGI::Pages->welcome);
+  route('/old' => PAGI::Pages->redirect('/new', status => 308));
+  mount('/gone' => PAGI::Pages->gone);
 
 The route forms are exact and method-aware. The mount owns C</gone> and its
 entire subtree for every HTTP method; a terminal Pages app ignores the

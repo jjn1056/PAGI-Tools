@@ -530,8 +530,10 @@ its own Compose boundary.
 L<PAGI::Pages> supplies terminal negotiated endpoints without a Router-specific
 adapter:
 
-    route('/old' => PAGI::Pages->permanent_redirect('/new'))
-    mount('/gone' => PAGI::Pages->gone)
+    use PAGI::Pages;
+
+    route('/old' => PAGI::Pages->permanent_redirect('/new'));
+    mount('/gone' => PAGI::Pages->gone);
 
 The first is still one exact, method-aware route. The second owns the complete
 C</gone> subtree for every HTTP method and ignores the remaining child path.
