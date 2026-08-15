@@ -13,7 +13,7 @@ route because one Router may be reused at multiple placements.
 
 **Shipped behavior:** The explicit
 `mount('/prefix', router => $router, name => '...')` form is inspected by
-the containing resolver. Root therefore discovers the complete five-address
+the containing resolver. Root therefore discovers the complete six-address
 graph and Context can reverse between Root, Person, and Blogs from the active
 request namespace. A positional application mount remains opaque: traversal
 stops at its known prefix even when its target happens to compile a Router.

@@ -109,7 +109,8 @@ would normally expose a narrower local provider such as `&PersonId`.
 - `/person/999` is a Person handler-owned 404.
 - `/person/-1` matches `&Int` and is also a Person handler-owned 404.
 - `/person/not-an-integer` fails `&Int`; the selected Person Router publishes
-  a trusted decline and the root Compose renders its plain automatic 404.
+  a trusted decline and the root Compose renders its negotiated Pages-backed
+  automatic 404.
 - `/person/1/blog/999` is a Blogs handler-owned 404.
 - `/person/1/blog/not/a/route` is handled by Blogs' explicit catchall.
 - `/outside` is handled by Root's ordinary explicit catchall.
