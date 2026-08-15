@@ -232,13 +232,39 @@ sub _status_for_error {
         $claimed = $error->status_code if $has_status;
         1;
     };
-    return 500 unless $obtained;
+    unless ($obtained) {
+        $self->_diagnose_rejected_status('status_code accessor failed');
+        return 500;
+    }
     return $self->{status} unless $has_status;
-    return 500 unless defined($claimed) && !ref($claimed)
-        && $claimed =~ /\A[0-9]+\z/;
-    return 500 unless $self->{handler}
-        || $self->_pages_accepts_status($claimed);
+    unless (defined($claimed)) {
+        $self->_diagnose_rejected_status('undefined result');
+        return 500;
+    }
+    if (ref($claimed)) {
+        $self->_diagnose_rejected_status('reference-valued result');
+        return 500;
+    }
+    unless ($claimed =~ /\A[0-9]+\z/) {
+        $self->_diagnose_rejected_status('nonnumeric scalar result');
+        return 500;
+    }
+    unless ($self->{handler} || $self->_pages_accepts_status($claimed)) {
+        $self->_diagnose_rejected_status(
+            "status $claimed is not a complete registered Pages error",
+        );
+        return 500;
+    }
     return 0 + $claimed;
+}
+
+sub _diagnose_rejected_status {
+    my ($self, $reason) = @_;
+    eval {
+        warn "PAGI ErrorHandler rejected exception status_code claim: $reason\n";
+        1;
+    };
+    return;
 }
 
 async sub _send_last_resort {

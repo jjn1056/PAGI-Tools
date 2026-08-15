@@ -31,6 +31,15 @@ sub invoke {
     return ($future, \@events);
 }
 
+sub invoke_with_send {
+    my ($middleware, $app, $send, $scope) = @_;
+    return Future->wrap($middleware->wrap($app)->(
+        $scope || { type => 'http', path => '/' },
+        sub { Future->done({ type => 'http.disconnect' }) },
+        $send,
+    ));
+}
+
 sub settle {
     my ($future) = @_;
     $loop->await($future->else(sub { Future->done }));
@@ -67,6 +76,13 @@ sub header_value {
     use overload q{""} => sub { die "stringification failed\n" }, fallback => 1;
     sub new { bless {}, shift }
     sub status_code { 500 }
+}
+
+{
+    package Local::HostileRejectedStatusError;
+    use overload q{""} => sub { die "hostile stringification failed\n" }, fallback => 1;
+    sub new { bless {}, shift }
+    sub status_code { 'not-a-status' }
 }
 
 {
@@ -208,38 +224,108 @@ subtest 'Future custom renderer owns explicit status and headers' => sub {
 
 subtest 'built-in exception status claims are guarded and Pages-valid' => sub {
     my @cases = (
-        ['registered 404', Local::StatusError->new(404, 'missing secret'), 404],
-        ['unknown 418', Local::StatusError->new(418, 'teapot secret'), 500],
-        ['incomplete 401', Local::StatusError->new(401, 'auth secret'), 500],
-        ['non-error 302', Local::StatusError->new(302, 'redirect secret'), 500],
-        ['malformed scalar', Local::StatusError->new('wat', 'malformed secret'), 500],
-        ['Future value', Local::StatusError->new(Future->done(404), 'future secret'), 500],
-        ['throwing accessor', Local::ThrowingStatusError->new, 500],
+        ['registered 404', Local::StatusError->new(404, 'missing secret'), 404, undef],
+        ['unknown 418', Local::StatusError->new(418, 'teapot secret'), 500,
+            qr/rejected exception status_code claim: status 418 is not a complete registered Pages error/],
+        ['incomplete 401', Local::StatusError->new(401, 'auth secret'), 500,
+            qr/rejected exception status_code claim: status 401 is not a complete registered Pages error/],
+        ['non-error 302', Local::StatusError->new(302, 'redirect secret'), 500,
+            qr/rejected exception status_code claim: status 302 is not a complete registered Pages error/],
+        ['malformed scalar', Local::StatusError->new('wat', 'malformed secret'), 500,
+            qr/rejected exception status_code claim: nonnumeric scalar result/],
+        ['Future value', Local::StatusError->new(Future->done(404), 'future secret'), 500,
+            qr/rejected exception status_code claim: reference-valued result/],
+        ['throwing accessor', Local::ThrowingStatusError->new, 500,
+            qr/rejected exception status_code claim: status_code accessor failed/],
     );
 
     for my $case (@cases) {
-        my ($label, $error, $expected) = @$case;
+        my ($label, $error, $expected, $diagnostic) = @$case;
         my @reported;
-        my ($future, $events) = invoke(
-            PAGI::Middleware::ErrorHandler->new(
-                on_error => sub { push @reported, $_[0]; return Future->done },
-            ),
-            async sub { die $error },
-            {
-                type => 'http', path => '/',
-                headers => [['Accept' => 'application/problem+json']],
-            },
-        );
-        settle($future);
+        my @warnings;
+        my ($future, $events);
+        {
+            local $SIG{__WARN__} = sub { push @warnings, @_ };
+            ($future, $events) = invoke(
+                PAGI::Middleware::ErrorHandler->new(
+                    on_error => sub { push @reported, $_[0]; return Future->done },
+                ),
+                async sub { die $error },
+                {
+                    type => 'http', path => '/',
+                    headers => [['Accept' => 'application/problem+json']],
+                },
+            );
+            settle($future);
+        }
         ok $future->is_done, "$label is contained";
         is $events->[0]{status}, $expected, "$label selects safe status $expected";
         is refaddr($reported[0]), refaddr($error),
             "$label reports the original exception object";
+        if ($diagnostic) {
+            is scalar(@warnings), 1, "$label emits one framework diagnostic";
+            like $warnings[0], $diagnostic,
+                "$label diagnostic identifies the rejected claim";
+        }
+        else {
+            is \@warnings, [], "$label emits no rejected-claim diagnostic";
+        }
         my $problem = JSON::MaybeXS::decode_json($events->[1]{body});
         is $problem->{status}, $expected, "$label problem status matches the wire";
         unlike $problem->{detail}, qr/secret|accessor failed|original throwing-status/,
             "$label production response exposes no exception diagnostics";
     }
+};
+
+subtest 'rejected-status diagnostics are safe and failure-contained' => sub {
+    my $hostile = Local::HostileRejectedStatusError->new;
+    my @reported;
+    my @warnings;
+    my ($future, $events);
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        ($future, $events) = invoke(
+            PAGI::Middleware::ErrorHandler->new(
+                on_error => sub { push @reported, $_[0]; return },
+            ),
+            sub { die $hostile },
+        );
+        settle($future);
+    }
+
+    ok $future->is_done, 'hostile rejected status is contained';
+    is refaddr($reported[0]), refaddr($hostile),
+        'hostile original exception reaches the reporter';
+    is $events->[0]{status}, 500, 'hostile claim uses the safe response status';
+    is scalar(@warnings), 1, 'hostile claim emits one framework diagnostic';
+    like $warnings[0], qr/nonnumeric scalar result/,
+        'diagnostic identifies the rejection without stringifying the exception';
+    unlike $warnings[0], qr/hostile stringification failed/,
+        'diagnostic contains no hostile exception stringification data';
+    unlike $events->[1]{body}, qr/hostile|stringification|not-a-status/,
+        'production response contains neither exception nor claimed status data';
+
+    my $diagnostic_error = bless {}, 'Local::DiagnosticFailure';
+    my $original = Local::StatusError->new(418, 'report me');
+    @reported = ();
+    {
+        local $SIG{__WARN__} = sub { die $diagnostic_error };
+        ($future, $events) = invoke(
+            PAGI::Middleware::ErrorHandler->new(
+                on_error => sub { push @reported, $_[0]; return Future->done },
+            ),
+            async sub { die $original },
+        );
+        settle($future);
+    }
+
+    ok $future->is_done, 'throwing diagnostic sink is contained';
+    is refaddr($reported[0]), refaddr($original),
+        'diagnostic failure cannot replace the original reporter value';
+    is $events->[0]{status}, 500,
+        'diagnostic failure cannot alter the safe response status';
+    is scalar(grep { $_->{type} eq 'http.response.start' } @$events), 1,
+        'diagnostic failure does not cause a second response start';
 };
 
 subtest 'throwing exception stringification cannot replace the safe response' => sub {
@@ -403,6 +489,167 @@ subtest 'post-start reporting failure preserves original string' => sub {
         'reporting failure does not replace original string';
     is scalar(grep { $_->{type} eq 'http.response.start' } @$events), 1,
         'reporting failure still emits no second start';
+};
+
+subtest 'outer send failures retain post-start failure semantics' => sub {
+    my @cases = (
+        ['synchronous', sub { die $_[0] }],
+        ['failed Future', sub { Future->fail($_[0]) }],
+    );
+
+    for my $case (@cases) {
+        my ($label, $fail_send) = @$case;
+        my $send_error = bless {}, 'Local::OuterSendFailure';
+        my @attempted;
+        my @reported;
+        my $renderer_calls = 0;
+        my $middleware = PAGI::Middleware::ErrorHandler->new(
+            on_error => sub { push @reported, $_[0]; return Future->done },
+            handler  => sub { $renderer_calls++; die 'must not render' },
+        );
+        my $future = invoke_with_send(
+            $middleware,
+            async sub {
+                my ($scope, $receive, $send) = @_;
+                await Future->wrap($send->({
+                    type => 'http.response.start', status => 200, headers => [],
+                }));
+            },
+            sub {
+                my ($event) = @_;
+                push @attempted, $event;
+                return $fail_send->($send_error);
+            },
+        );
+        settle($future);
+
+        ok $future->is_failed, "$label outer send failure propagates";
+        is refaddr($future->failure), refaddr($send_error),
+            "$label outer send failure identity is preserved";
+        is [map { $_->{type} } @attempted], ['http.response.start'],
+            "$label outer send makes no retry or replacement attempt";
+        is scalar(@reported), 1, "$label outer send failure is reported once";
+        is refaddr($reported[0]), refaddr($send_error),
+            "$label reporter receives the original send failure";
+        is $renderer_calls, 0,
+            "$label post-start failure never invokes the renderer";
+    }
+};
+
+subtest 'last-resort send failures propagate without retry' => sub {
+    my @cases = (
+        [
+            'start failure',
+            sub {
+                my ($event, $send_error) = @_;
+                die $send_error;
+            },
+            ['http.response.start'],
+        ],
+        [
+            'body failure',
+            sub {
+                my ($event, $send_error) = @_;
+                return Future->done
+                    if $event->{type} eq 'http.response.start';
+                return Future->fail($send_error);
+            },
+            ['http.response.start', 'http.response.body'],
+        ],
+    );
+
+    for my $case (@cases) {
+        my ($label, $send_result, $expected_types) = @$case;
+        my $original = bless {}, 'Local::OriginalApplicationFailure';
+        my $send_error = bless {}, 'Local::LastResortSendFailure';
+        my @reported;
+        my @attempted;
+        my $middleware = PAGI::Middleware::ErrorHandler->new(
+            on_error => sub { push @reported, $_[0]; return Future->done },
+        );
+        my $future;
+        {
+            no warnings 'redefine';
+            local *PAGI::Pages::status = sub { die "private Pages failure\n" };
+            $future = invoke_with_send(
+                $middleware,
+                async sub { die $original },
+                sub {
+                    my ($event) = @_;
+                    push @attempted, $event;
+                    return $send_result->($event, $send_error);
+                },
+            );
+            settle($future);
+        }
+
+        ok $future->is_failed, "last-resort $label propagates";
+        is refaddr($future->failure), refaddr($send_error),
+            "last-resort $label preserves send failure identity";
+        is [map { $_->{type} } @attempted], $expected_types,
+            "last-resort $label makes no retry or second start";
+        is scalar(@reported), 1,
+            "last-resort $label does not report a replacement error";
+        is refaddr($reported[0]), refaddr($original),
+            "last-resort $label preserves original application reporting";
+    }
+};
+
+subtest 'failed-Future custom handler and response send failures propagate' => sub {
+    my $original = Local::StatusError->new(500, 'original application error');
+    my $handler_error = bless {}, 'Local::HandlerFutureFailure';
+    my @reported;
+    my @attempted;
+    my $handler_calls = 0;
+    my $middleware = PAGI::Middleware::ErrorHandler->new(
+        on_error => sub { push @reported, $_[0]; return Future->done },
+        handler  => sub {
+            $handler_calls++;
+            return Future->fail($handler_error);
+        },
+    );
+    my $future = invoke_with_send(
+        $middleware,
+        async sub { die $original },
+        sub { push @attempted, $_[0]; return Future->done },
+    );
+    settle($future);
+
+    ok $future->is_failed, 'failed-Future custom handler propagates';
+    is refaddr($future->failure), refaddr($handler_error),
+        'failed-Future custom handler preserves failure identity';
+    is $handler_calls, 1, 'failed-Future custom handler is invoked once';
+    is \@attempted, [], 'failed-Future custom handler emits no response';
+    is scalar(@reported), 1, 'custom handler path reports only the application error';
+    is refaddr($reported[0]), refaddr($original),
+        'custom handler path preserves original application reporting';
+
+    my $send_error = bless {}, 'Local::CustomResponseSendFailure';
+    @reported = ();
+    @attempted = ();
+    $middleware = PAGI::Middleware::ErrorHandler->new(
+        on_error => sub { push @reported, $_[0]; return Future->done },
+        handler  => sub { Future->done(Local::DetachedResponse->new) },
+    );
+    $future = invoke_with_send(
+        $middleware,
+        async sub { die $original },
+        sub {
+            push @attempted, $_[0];
+            return Future->fail($send_error);
+        },
+    );
+    settle($future);
+
+    ok $future->is_failed, 'failed-Future custom response send propagates';
+    is refaddr($future->failure), refaddr($send_error),
+        'failed-Future custom response send preserves failure identity';
+    is [map { $_->{type} } @attempted], ['http.response.start'],
+        'failed-Future custom response send makes no retry or second start';
+    is scalar(@reported), 1,
+        'custom response send path reports only the application error';
+    is refaddr($reported[0]), refaddr($original),
+        'custom response send path preserves original application reporting';
 };
 
 subtest 'built-in representations emit UTF-8 octets with byte lengths' => sub {
