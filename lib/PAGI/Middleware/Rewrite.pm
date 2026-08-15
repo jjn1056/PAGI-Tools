@@ -3,7 +3,10 @@ package PAGI::Middleware::Rewrite;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Carp qw(croak);
+use Future;
 use Future::AsyncAwait;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -25,7 +28,11 @@ PAGI::Middleware::Rewrite - URL rewriting middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::Rewrite rewrites request paths before passing to the
-inner application. Supports both exact matches and regex patterns.
+inner application. Supports both exact matches and regex patterns. Redirect
+mode renders through L<PAGI::Pages> using the original request scope, preserves
+the incoming raw query without re-encoding, and places it before the first
+target fragment. Rule selection and internal rewriting remain local, and there
+is no Pages configuration option.
 
 =head1 CONFIGURATION
 
@@ -44,7 +51,8 @@ If true, send redirect response instead of rewriting internally.
 
 =item * redirect_code (default: 301)
 
-HTTP status code for redirects.
+HTTP status code for redirects. The supported values are exactly 301, 302, 303,
+307, and 308; invalid values croak during construction.
 
 =back
 
@@ -56,7 +64,12 @@ sub _init {
     $self->{rules} = $config->{rules}
         // die "Rewrite middleware requires 'rules' option";
     $self->{redirect} = $config->{redirect} // 0;
-    $self->{redirect_code} = $config->{redirect_code} // 301;
+    my $redirect_code = exists($config->{redirect_code})
+        ? $config->{redirect_code} : 301;
+    croak 'Rewrite redirect_code must be one of 301, 302, 303, 307, or 308'
+        unless defined($redirect_code) && !ref($redirect_code)
+            && $redirect_code =~ /\A(?:301|302|303|307|308)\z/;
+    $self->{redirect_code} = 0 + $redirect_code;
 }
 
 sub wrap {
@@ -80,11 +93,7 @@ sub wrap {
 
         # Redirect mode
         if ($self->{redirect}) {
-            my $location = $new_path;
-            if (defined $scope->{query_string} && $scope->{query_string} ne '') {
-                $location .= '?' . $scope->{query_string};
-            }
-            await $self->_send_redirect($send, $location);
+            await $self->_send_redirect($scope, $send, $new_path);
             return;
         }
 
@@ -131,25 +140,14 @@ sub _apply_rules {
 }
 
 async sub _send_redirect {
-    my ($self, $send, $location) = @_;
-
-    my $status = $self->{redirect_code};
-    my $body = "Redirecting to $location";
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => $status,
-        headers => [
-            ['Content-Type', 'text/plain'],
-            ['Content-Length', length($body)],
-            ['Location', $location],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+    my ($self, $scope, $send, $location) = @_;
+    my $response = PAGI::Pages->redirect(
+        $scope,
+        $location,
+        status         => $self->{redirect_code},
+        preserve_query => 1,
+    );
+    await Future->wrap($response->respond($send));
 }
 
 1;
@@ -163,6 +161,12 @@ Regex patterns can use capture groups:
     { from => qr{^/blog/(\d{4})/(\d{2})}, to => '/archive/$1-$2' }
 
 This would rewrite C</blog/2024/01> to C</archive/2024-01>.
+
+Internal rewrite mode passes the rewritten scope to the inner application and
+does not invoke Pages. Unmatched HTTP requests and all non-HTTP scopes retain
+their existing pass-through behavior. Redirect mode passes the unmodified
+logical rule target to Pages, which validates it and performs fragment-safe
+query preservation before sending the response.
 
 =head1 SEE ALSO
 

@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use JSON::MaybeXS;
@@ -112,6 +113,58 @@ subtest 'Rewrite middleware - redirect mode' => sub {
     is $headers{location}, '/new', 'redirect location';
 };
 
+subtest 'Rewrite redirect preserves raw query before target fragment' => sub {
+    my $rewrite = PAGI::Middleware::Rewrite->new(
+        rules => [{ from => '/old', to => '/new?sort=date#results' }],
+        redirect => 1,
+        redirect_code => 308,
+    );
+    my $wrapped = $rewrite->wrap(async sub {
+        die "redirect called downstream\n";
+    });
+    my @events;
+
+    run_async {
+        $wrapped->(
+            make_scope(path => '/old', query_string => 'q=a%2Bb&x=%26'),
+            async sub { {} },
+            async sub { my ($event) = @_; push @events, $event },
+        )
+    };
+
+    is $events[0]{status}, 308, 'configured redirect status is retained';
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
+    is $headers{location}, '/new?sort=date&q=a%2Bb&x=%26#results',
+        'raw query is inserted before the first fragment';
+};
+
+subtest 'redirect middleware constructors accept exactly Pages redirect statuses' => sub {
+    my @factories = (
+        Rewrite => sub {
+            PAGI::Middleware::Rewrite->new(
+                rules => [], redirect => 1, redirect_code => $_[0],
+            );
+        },
+        HTTPSRedirect => sub {
+            PAGI::Middleware::HTTPSRedirect->new(redirect_code => $_[0]);
+        },
+    );
+
+    while (@factories) {
+        my ($name, $factory) = splice(@factories, 0, 2);
+        for my $status (301, 302, 303, 307, 308) {
+            ok lives { $factory->($status) },
+                "$name accepts redirect status $status";
+        }
+        for my $status (undef, 0, 200, 300, 304, 305, 306, 309, 399, '302.0', 'x') {
+            like dies { $factory->($status) },
+                qr/redirect_code.*301.*302.*303.*307.*308/i,
+                "$name rejects unsupported redirect status "
+                    . (defined($status) ? $status : 'undef');
+        }
+    }
+};
+
 subtest 'Rewrite middleware - no match passes through' => sub {
     my $rewrite = PAGI::Middleware::Rewrite->new(
         rules => [{ from => '/old', to => '/new' }],
@@ -131,6 +184,38 @@ subtest 'Rewrite middleware - no match passes through' => sub {
     run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
 
     is $captured_scope->{path}, '/other', 'path unchanged';
+};
+
+subtest 'Rewrite non-HTTP scopes pass through unchanged' => sub {
+    my $rewrite = PAGI::Middleware::Rewrite->new(
+        rules => [{ from => '/old', to => '/new#fragment' }],
+        redirect => 1,
+    );
+    my $scope = {
+        type         => 'websocket',
+        path         => '/old',
+        query_string => 'q=socket',
+    };
+    my $captured_scope;
+    my @events;
+    my $wrapped = $rewrite->wrap(async sub {
+        my ($downstream_scope, $receive, $send) = @_;
+        $captured_scope = $downstream_scope;
+        await $send->({ type => 'websocket.accept' });
+    });
+
+    run_async {
+        $wrapped->(
+            $scope,
+            async sub { {} },
+            async sub { my ($event) = @_; push @events, $event },
+        )
+    };
+
+    is refaddr($captured_scope), refaddr($scope),
+        'Rewrite passes the original non-HTTP scope by identity';
+    is \@events, [{ type => 'websocket.accept' }],
+        'Rewrite forwards the protocol-specific child event unchanged';
 };
 
 # ===================
@@ -181,6 +266,34 @@ subtest 'HTTPSRedirect - passes through HTTPS' => sub {
         my ($e) = @_; push @events, $e }) };
 
     is $events[0]{status}, 200, 'HTTPS passes through';
+};
+
+subtest 'HTTPSRedirect - HSTS remains local to secure pass-through' => sub {
+    my $redirect = PAGI::Middleware::HTTPSRedirect->new(
+        hsts => 1,
+        hsts_max_age => 600,
+    );
+    my $wrapped = $redirect->wrap(async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type => 'http.response.start', status => 204, headers => [],
+        });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    });
+    my @events;
+
+    run_async {
+        $wrapped->(
+            make_scope(scheme => 'https'),
+            async sub { {} },
+            async sub { my ($event) = @_; push @events, $event },
+        )
+    };
+
+    is $events[0]{status}, 204, 'secure child retains its response status';
+    is [response_header_values($events[0], 'Strict-Transport-Security')],
+        ['max-age=600; includeSubDomains'],
+        'secure child response receives the configured HSTS field';
 };
 
 subtest 'HTTPSRedirect - excludes paths' => sub {
@@ -271,14 +384,47 @@ subtest 'HTTPSRedirect - builds redirect authority from Host or server' => sub {
     }
 };
 
-subtest 'HTTPSRedirect - invalid authority returns local 400' => sub {
+subtest 'HTTPSRedirect preserves raw query before path fragment' => sub {
+    my $redirect = PAGI::Middleware::HTTPSRedirect->new(
+        redirect_code => 303,
+    );
+    my $wrapped = $redirect->wrap(async sub {
+        die "redirect called downstream\n";
+    });
+    my @events;
+
+    run_async {
+        $wrapped->(
+            make_scope(
+                path         => '/search?sort=date#results',
+                query_string => 'q=a%2Bb&x=%26',
+                headers      => [['Host', 'example.com']],
+            ),
+            async sub { {} },
+            async sub { my ($event) = @_; push @events, $event },
+        )
+    };
+
+    is $events[0]{status}, 303, 'configured redirect status is retained';
+    my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
+    is $headers{location},
+        'https://example.com/search?sort=date&q=a%2Bb&x=%26#results',
+        'raw query is inserted before the first fragment';
+};
+
+subtest 'HTTPSRedirect - invalid authority negotiates Pages 400' => sub {
     my @cases = (
         {
             name  => 'duplicate Host',
             scope => make_scope(
-                headers => [['Host', 'example.com'], ['host', 'evil.example']],
+                headers => [
+                    ['Host', 'example.com'],
+                    ['host', 'evil.example'],
+                    ['Accept', 'application/problem+json'],
+                ],
                 server  => ['fallback.example', 80],
             ),
+            content_type => 'application/problem+json',
         },
         {
             name  => 'malformed Host',
@@ -320,14 +466,84 @@ subtest 'HTTPSRedirect - invalid authority returns local 400' => sub {
         is $events[0]{type}, 'http.response.start', "$case->{name}: response starts";
         is $events[0]{status}, 400, "$case->{name}: status is 400";
         my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
-        is $headers{'content-length'}, length('Invalid Host header'),
-            "$case->{name}: Content-Length matches generic body";
-        is $events[1], {
-            type => 'http.response.body',
-            body => 'Invalid Host header',
-            more => 0,
-        }, "$case->{name}: generic terminal body";
+        is $headers{'content-type'},
+            $case->{content_type} // 'text/html; charset=utf-8',
+            "$case->{name}: Pages negotiates from the original scope";
+        is $headers{'cache-control'}, 'no-store',
+            "$case->{name}: Pages applies the error cache policy";
+        unlike $events[1]{body}, qr/Invalid Host header|evil\.example/,
+            "$case->{name}: response does not expose rejected authority data";
+        if ($case->{content_type}) {
+            my $problem = decode_json($events[1]{body});
+            is $problem->{status}, 400,
+                "$case->{name}: problem document carries status 400";
+        }
     }
+};
+
+subtest 'redirect middleware inherits Pages target validation before sending' => sub {
+    my @cases = (
+        [
+            Rewrite => sub {
+                my ($target) = @_;
+                return PAGI::Middleware::Rewrite->new(
+                    rules => [{ from => '/old', to => $target }],
+                    redirect => 1,
+                )->wrap(async sub { die "redirect called downstream\n" });
+            },
+            sub { make_scope(path => '/old') },
+        ],
+        [
+            HTTPSRedirect => sub {
+                return PAGI::Middleware::HTTPSRedirect->new->wrap(
+                    async sub { die "redirect called downstream\n" },
+                );
+            },
+            sub {
+                my ($target) = @_;
+                return make_scope(
+                    path => $target,
+                    headers => [['Host', 'example.com']],
+                );
+            },
+        ],
+    );
+
+    for my $case (@cases) {
+        my ($name, $wrap, $scope_for) = @$case;
+        for my $target ("/bad\nnext", "/wide\x{263a}") {
+            my $wrapped = $wrap->($target);
+            my @events;
+            my $future = $wrapped->(
+                $scope_for->($target),
+                async sub { {} },
+                async sub { my ($event) = @_; push @events, $event },
+            );
+            $loop->await($future);
+            ok $future->is_failed, "$name rejects unsafe logical target";
+            like [$future->failure]->[0], qr/redirect target.*URI-reference/i,
+                "$name reports Pages target validation";
+            is \@events, [], "$name rejects target before response start";
+        }
+    }
+};
+
+subtest 'Pages-backed redirect awaits and propagates send failure' => sub {
+    my $diagnostic = "redirect send sentinel\n";
+    my $wrapped = PAGI::Middleware::Rewrite->new(
+        rules => [{ from => '/old', to => '/new' }],
+        redirect => 1,
+    )->wrap(async sub { die "redirect called downstream\n" });
+    my $future = $wrapped->(
+        make_scope(path => '/old'),
+        async sub { {} },
+        sub { Future->fail($diagnostic) },
+    );
+    $loop->await($future);
+
+    ok $future->is_failed, 'redirect wrapper remains failed';
+    is [$future->failure]->[0], $diagnostic,
+        'exact Pages response send failure propagates';
 };
 
 subtest 'HTTPSRedirect - non-HTTP downstream exception propagates' => sub {

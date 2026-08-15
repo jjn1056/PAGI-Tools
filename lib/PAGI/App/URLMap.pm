@@ -2,8 +2,10 @@ package PAGI::App::URLMap;
 
 use strict;
 use warnings;
+use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
+use PAGI::Pages;
 use PAGI::Utils ();
 
 =head1 NAME
@@ -92,14 +94,11 @@ sub to_app {
             my $returned = $default->($default_scope, $receive, $send);
             await Future->wrap($returned);
         } else {
-            await Future->wrap($send->({
-                type => 'http.response.start',
-                status => 404,
-                headers => [['content-type', 'text/plain']],
-            }));
-            await Future->wrap($send->({
-                type => 'http.response.body', body => 'Not Found', more => 0,
-            }));
+            my $type = $scope->{type} // '<missing>';
+            croak "URLMap has no default for scope type '$type'"
+                unless $type eq 'http';
+            my $response = PAGI::Pages->not_found($scope);
+            await Future->wrap($response->respond($send));
         }
     };
 }
@@ -141,6 +140,13 @@ reinterpret a same-named scope value.
 The same rule applies to C<default>. URLMap does not recognize Router classes
 or offer a routing-aware mount form; use L<PAGI::Routing> C<< router => >>
 Mounts when trusted child evidence must remain visible to an outer fallback.
+
+When no mount matches and no C<default> is configured, an HTTP request receives
+a 404 response negotiated by L<PAGI::Pages> from the original request scope.
+WebSocket, SSE, lifespan, and other non-HTTP exhaustion croak with the scope
+type instead of emitting incompatible HTTP events. Selected mounts and an
+explicit C<default> remain authoritative opaque boundaries as described above;
+URLMap has no Pages configuration surface.
 
 =head1 OPTIONS
 

@@ -3,8 +3,11 @@ package PAGI::Middleware::HTTPSRedirect;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Carp qw(croak);
+use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -27,6 +30,12 @@ scope server tuple. It never invents a C<localhost> authority; duplicate or
 malformed Host data and unusable server fallbacks receive a generic HTTP 400
 response. Useful for enforcing secure connections in production.
 
+Redirect and invalid-authority responses are rendered by L<PAGI::Pages> from
+the original request scope. Incoming raw query data is preserved without
+re-encoding and is inserted before the first fragment in the redirect target.
+Authority selection, exclusions, secure-request pass-through, and HSTS remain
+owned by this middleware; there is no Pages configuration option.
+
 Non-HTTP scopes continue to pass through unchanged without authority handling.
 
 =head1 CONFIGURATION
@@ -35,7 +44,9 @@ Non-HTTP scopes continue to pass through unchanged without authority handling.
 
 =item * redirect_code (default: 301)
 
-HTTP status code for redirects. Use 302 for temporary redirects.
+HTTP status code for redirects. The supported values are exactly 301, 302, 303,
+307, and 308. Invalid values croak during construction. Use 302 for a temporary
+redirect.
 
 =item * exclude (optional)
 
@@ -56,7 +67,12 @@ HSTS max-age in seconds (1 year default).
 sub _init {
     my ($self, $config) = @_;
 
-    $self->{redirect_code} = $config->{redirect_code} // 301;
+    my $redirect_code = exists($config->{redirect_code})
+        ? $config->{redirect_code} : 301;
+    croak 'HTTPSRedirect redirect_code must be one of 301, 302, 303, 307, or 308'
+        unless defined($redirect_code) && !ref($redirect_code)
+            && $redirect_code =~ /\A(?:301|302|303|307|308)\z/;
+    $self->{redirect_code} = 0 + $redirect_code;
     $self->{exclude} = $config->{exclude} // [];
     $self->{hsts} = $config->{hsts} // 0;
     $self->{hsts_max_age} = $config->{hsts_max_age} // 31536000;
@@ -114,17 +130,14 @@ sub wrap {
             $authority_error = $@;
         }
         if ($authority_error) {
-            await $self->_send_error($send, 400, 'Invalid Host header');
+            await $self->_send_error($scope, $send, 400);
             return;
         }
 
         my $path = $scope->{path} // '/';
-        my $query = $scope->{query_string};
-
         my $url = "https://$authority$path";
-        $url .= "?$query" if defined $query && $query ne '';
 
-        await $self->_send_redirect($send, $url);
+        await $self->_send_redirect($scope, $send, $url);
     };
 }
 
@@ -142,43 +155,21 @@ sub _is_excluded {
 }
 
 async sub _send_redirect {
-    my ($self, $send, $location) = @_;
-
-    my $status = $self->{redirect_code};
-    my $body = "Redirecting to $location";
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => $status,
-        headers => [
-            ['Content-Type', 'text/plain'],
-            ['Content-Length', length($body)],
-            ['Location', $location],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+    my ($self, $scope, $send, $location) = @_;
+    my $response = PAGI::Pages->redirect(
+        $scope,
+        $location,
+        status         => $self->{redirect_code},
+        preserve_query => 1,
+    );
+    await Future->wrap($response->respond($send));
 }
 
 async sub _send_error {
-    my ($self, $send, $status, $message) = @_;
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => $status,
-        headers => [
-            ['Content-Type', 'text/plain'],
-            ['Content-Length', length($message)],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $message,
-        more => 0,
-    });
+    my ($self, $scope, $send, $status) = @_;
+    croak "HTTPSRedirect does not own status $status" unless $status == 400;
+    my $response = PAGI::Pages->bad_request($scope);
+    await Future->wrap($response->respond($send));
 }
 
 1;
@@ -193,7 +184,10 @@ when behind a reverse proxy (use ReverseProxy middleware).
 
 Host validation and server fallback are only used when constructing an HTTP
 redirect. Existing HTTPS, excluded paths, and non-HTTP scopes retain their
-pass-through behavior.
+pass-through behavior. In redirect branches, Pages owns the negotiated body,
+Location construction, fragment-safe raw-query preservation, and response
+validation. HSTS is still added only to responses from an already-secure
+request when enabled.
 
 =head1 SEE ALSO
 

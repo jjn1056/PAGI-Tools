@@ -5,6 +5,7 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
+use JSON::MaybeXS qw(decode_json);
 
 use lib 'lib';
 use FindBin;
@@ -85,7 +86,7 @@ subtest 'App::URLMap routes by path prefix' => sub {
         is $received_path, '/users/123', 'path adjusted (prefix removed)';
     };
 
-    subtest 'returns 404 for unmatched path' => sub {
+    subtest 'negotiates Pages 404 for unmatched HTTP path' => sub {
         my $urlmap = PAGI::App::URLMap->new;
         $urlmap->mount('/api' => make_response_app(200, 'API'));
         my $app = $urlmap->to_app;
@@ -93,7 +94,11 @@ subtest 'App::URLMap routes by path prefix' => sub {
         my @sent;
         run_async(async sub {
             await $app->(
-                { type => 'http', path => '/unknown' },
+                {
+                    type    => 'http',
+                    path    => '/unknown',
+                    headers => [['Accept', 'application/problem+json']],
+                },
                 async sub { { type => 'http.disconnect' } },
                 async sub  {
         my ($event) = @_; push @sent, $event },
@@ -101,6 +106,13 @@ subtest 'App::URLMap routes by path prefix' => sub {
         });
 
         is $sent[0]{status}, 404, 'returns 404';
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
+        is $headers{'content-type'}, 'application/problem+json',
+            'unmatched HTTP response negotiates through Pages';
+        is $headers{'cache-control'}, 'no-store',
+            'unmatched HTTP response uses Pages error cache policy';
+        is decode_json($sent[1]{body})->{status}, 404,
+            'problem document carries the fallback status';
     };
 
     subtest 'longest prefix wins' => sub {

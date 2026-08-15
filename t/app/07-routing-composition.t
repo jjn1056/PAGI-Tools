@@ -764,6 +764,25 @@ subtest 'URLMap targets are opaque HTTP application boundaries' => sub {
     is([map { refaddr($_) } @non_http_seen],
         [refaddr($same_named), refaddr($same_named)],
         'non-HTTP mount and default preserve same-named values by identity');
+
+    for my $type (qw(websocket sse)) {
+        my $unmapped_scope = {
+            type                 => $type,
+            path                 => '/unmapped',
+            'pagi.routing.trace' => $same_named,
+        };
+        my ($events, $error) = run_app(
+            PAGI::App::URLMap->new->to_app,
+            $unmapped_scope,
+        );
+        like($error, qr/\AURLMap has no default for scope type '\Q$type\E'/,
+            "$type exhaustion without a default croaks clearly");
+        is($events, [],
+            "$type exhaustion emits no incompatible HTTP response events");
+        is(refaddr($unmapped_scope->{'pagi.routing.trace'}),
+            refaddr($same_named),
+            "$type exhaustion leaves same-named scope data untouched");
+    }
 };
 
 done_testing;
