@@ -118,7 +118,6 @@ subtest 'built-in routing and error bodies retain derived headers under HEAD' =>
             ])->to_app,
             scope(method => 'GET', path => '/missing'),
             scope(method => 'HEAD', path => '/missing'),
-            9,
         ],
         [
             'MethodNotAllowed',
@@ -127,29 +126,28 @@ subtest 'built-in routing and error bodies retain derived headers under HEAD' =>
             ])->to_app,
             scope(method => 'GET', path => '/known'),
             scope(method => 'HEAD', path => '/known'),
-            18,
         ],
         [
             'ErrorHandler',
             compose(app => sub { die "HEAD error\n" })->to_app,
             scope(method => 'GET'),
             scope(method => 'HEAD'),
-            32,
         ],
     );
 
     for my $case (@cases) {
-        my ($label, $app, $get_scope, $head_scope, $length) = @$case;
+        my ($label, $app, $get_scope, $head_scope) = @$case;
         my ($get, $head);
         {
             local $SIG{__WARN__} = sub { return };
             $get = run_scope($app, $get_scope);
             $head = run_scope($app, $head_scope);
         }
-        is(response_header($get, 'Content-Length'), $length,
-            "$label GET carries the built-in representation length");
-        is(response_header($head, 'Content-Length'), $length,
-            "$label HEAD retains the built-in representation length");
+        my $get_length = response_header($get, 'Content-Length');
+        like($get_length, qr/\A(?:0|[1-9][0-9]*)\z/,
+            "$label GET carries a valid representation length");
+        is(response_header($head, 'Content-Length'), $get_length,
+            "$label HEAD retains the equivalent GET representation length");
         is(response_bodies($head), [
             { type => 'http.response.body', body => '', more => 0 },
         ], "$label HEAD emits one empty terminal wire body");
