@@ -58,7 +58,7 @@ sub response_header {
 
     sub render_text {
         my ($self, $page) = @_;
-        push @RENDERED_BY, Scalar::Util::refaddr($self);
+        push @RENDERED_BY, $self;
         return $self->SUPER::render_text($page);
     }
 }
@@ -70,13 +70,13 @@ sub response_header {
 
     sub render_html {
         my ($self, $page) = @_;
-        push @PAGE_IDS, Scalar::Util::refaddr($page);
+        push @PAGE_IDS, $page;
         return $self->SUPER::render_html($page);
     }
 
     sub render_text {
         my ($self, $page) = @_;
-        push @PAGE_IDS, Scalar::Util::refaddr($page);
+        push @PAGE_IDS, $page;
         return $self->SUPER::render_text($page);
     }
 }
@@ -144,15 +144,15 @@ subtest 'class calls are fresh and retain subclass class dispatch' => sub {
     isa_ok($second, ['PAGI::Response']);
     is($Local::CountingPages::NEW_COUNT, 2,
         'each subclass class call constructs a fresh subclass instance');
-    isnt($Local::CountingPages::RENDERED_BY[0],
-        $Local::CountingPages::RENDERED_BY[1],
+    isnt(refaddr($Local::CountingPages::RENDERED_BY[0]),
+        refaddr($Local::CountingPages::RENDERED_BY[1]),
         'each class call renders through its distinct subclass instance');
 
     my $instance = Local::CountingPages->new(as => 'text');
     my $identity = refaddr($instance);
     local @Local::CountingPages::RENDERED_BY;
     $instance->welcome(http_scope());
-    is($Local::CountingPages::RENDERED_BY[0], $identity,
+    is(refaddr($Local::CountingPages::RENDERED_BY[0]), $identity,
         'instance invocation retains instance identity for hooks');
 };
 
@@ -345,7 +345,8 @@ subtest 'compiled endpoint is safe across concurrent in-flight calls' => sub {
         'text request retains its negotiated representation');
     like($html_events[1]{body}, qr/<!doctype html>/i, 'HTML body does not leak text rendering');
     unlike($text_events[1]{body}, qr/<!doctype html>/i, 'text body does not leak HTML rendering');
-    isnt($Local::ConcurrentPages::PAGE_IDS[0], $Local::ConcurrentPages::PAGE_IDS[1],
+    isnt(refaddr($Local::ConcurrentPages::PAGE_IDS[0]),
+        refaddr($Local::ConcurrentPages::PAGE_IDS[1]),
         'concurrent hooks receive distinct request-local descriptors');
 };
 
