@@ -3,6 +3,7 @@ package PAGI::Middleware::Routing::NotFound;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware::Routing::_Fallback';
+use PAGI::Pages ();
 use PAGI::Utils ();
 
 =encoding UTF-8
@@ -53,10 +54,10 @@ routing evidence that no path candidate matched. Explicit responses, thrown
 exceptions, started streams, silent native applications without evidence, and
 non-HTTP scopes pass through unchanged.
 
-The built-in response is a production-safe failsafe: status 404, UTF-8 plain
-text C<Not Found>, and C<Cache-Control: no-store>. In development it adds only
-the request method, path, and bounded first-party routing-attempt facts. Install
-a configured instance inside ordinary application middleware for the site's
+The built-in response is a production-safe, C<no-store> L<PAGI::Pages> 404
+that negotiates HTML, problem JSON, or text. In development it adds only the
+request method, path, and bounded first-party routing-attempt facts. Install a
+configured instance inside ordinary application middleware for the site's
 official branded or structured policy; the outer automatic Compose default is
 an emergency response and does not travel inward through author middleware.
 
@@ -91,17 +92,24 @@ Route middleware is legal syntax but has no fallback effect. A Route wrapper is
 entered only after that Route fully matches, so it cannot observe the Router or
 Mount search that exhausted. Put local fallback policy on the Router or Mount.
 
-=head1 COMPARISON WITH PAGI::App::NotFound
+=head1 TERMINAL PAGES ENDPOINTS
 
 This middleware is conditional: it interprets a trusted routing decline at an
-enclosing boundary. L<PAGI::App::NotFound> is an unconditional application,
-useful as an explicit terminal target or final Cascade entry. Mounting that app
-is not equivalent to installing routing fallback middleware.
+enclosing boundary. For an unconditional terminal 404 endpoint, use Pages
+directly and let Compose supply the final HTTP and protocol boundaries:
+
+    my $app = compose(
+        app => PAGI::Pages->not_found,
+    )->to_app;
+
+The immediate form can also construct a response inside a selected handler:
+
+    return PAGI::Pages->not_found($context);
 
 =head1 SEE ALSO
 
 L<PAGI::Middleware::Routing::MethodNotAllowed>, L<PAGI::Routing::Trace>,
-L<PAGI::App::NotFound>, L<PAGI::Compose>, L<PAGI::Routing>
+L<PAGI::Pages>, L<PAGI::Compose>, L<PAGI::Routing>
 
 =cut
 
@@ -118,18 +126,19 @@ sub _seed_context {
 
 sub _default_response {
     my ($self, $context, $snapshot) = @_;
-    return $self->_plain_text_response($context, 'Not Found')
-        unless PAGI::Utils::is_development();
-
-    my @lines = (
-        'PAGI automatic routing fallback: Not Found',
-        'No application fallback handled this route.',
-        'Method: ' . $self->_safe_fact($context->method),
-        'Path: ' . $self->_safe_fact($context->path),
-        $self->_attempt_diagnostics($snapshot),
-        'Install application Routing::NotFound middleware for official policy.',
-    );
-    return $self->_plain_text_response($context, join("\n", @lines));
+    my $detail = 'The requested resource was not found.';
+    if (PAGI::Utils::is_development()) {
+        my @lines = (
+            'PAGI automatic routing fallback: Not Found',
+            'No application fallback handled this route.',
+            'Method: ' . $self->_safe_fact($context->method),
+            'Path: ' . $self->_safe_fact($context->path),
+            $self->_attempt_diagnostics($snapshot),
+            'Install application Routing::NotFound middleware for official policy.',
+        );
+        $detail = join("\n", @lines);
+    }
+    return PAGI::Pages->not_found($context, detail => $detail);
 }
 
 1;

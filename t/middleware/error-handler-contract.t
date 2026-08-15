@@ -12,6 +12,7 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 
 use PAGI::Middleware::ErrorHandler;
+use PAGI::Pages ();
 
 my $loop = IO::Async::Loop->new;
 
@@ -55,6 +56,20 @@ sub header_value {
 }
 
 {
+    package Local::ThrowingStatusError;
+    use overload q{""} => sub { 'original throwing-status exception' }, fallback => 1;
+    sub new { bless {}, shift }
+    sub status_code { die "status accessor failed\n" }
+}
+
+{
+    package Local::ThrowingStringError;
+    use overload q{""} => sub { die "stringification failed\n" }, fallback => 1;
+    sub new { bless {}, shift }
+    sub status_code { 500 }
+}
+
+{
     package Local::DetachedResponse;
     sub new { bless {}, shift }
     sub respond {
@@ -73,11 +88,21 @@ sub header_value {
     }
 }
 
-subtest 'ordinary defaults are static production HTML' => sub {
+subtest 'public defaults and options are exact and environment-independent' => sub {
     local $ENV{PAGI_ENV} = 'definitely-invalid';
     my $middleware;
     is dies { $middleware = PAGI::Middleware::ErrorHandler->new }, undef,
         'construction does not consult PAGI_ENV';
+    is($middleware->{development}, 0, 'development defaults to false');
+    is($middleware->{status}, 500, 'status defaults to 500');
+    is($middleware->{on_error}, undef, 'on_error defaults to undef');
+    is($middleware->{handler}, undef, 'handler defaults to undef');
+    for my $option (qw(content_type pages as renderer unknown)) {
+        like dies {
+            PAGI::Middleware::ErrorHandler->new($option => 'value')
+        }, qr/unknown ErrorHandler option '\Q$option\E'/,
+            "$option is not a public ErrorHandler option";
+    }
     my ($future, $events) = invoke($middleware, async sub {
         die "private details";
     });
@@ -85,20 +110,49 @@ subtest 'ordinary defaults are static production HTML' => sub {
 
     ok $future->is_done, 'invalid environment does not affect handling';
     like header_value($events->[0], 'content-type'), qr{^text/html},
-        'ordinary default remains HTML';
+        'ordinary default negotiates to Pages HTML';
     unlike $events->[1]{body}, qr/private details/,
         'ordinary default remains production-safe';
 };
 
-subtest 'every built-in representation disables caching' => sub {
-    for my $content_type ('text/html', 'text/plain', 'application/json') {
+subtest 'every negotiated built-in representation disables caching' => sub {
+    my @cases = (
+        ['text/html', 'text/html; charset=utf-8'],
+        ['text/plain', 'text/plain; charset=utf-8'],
+        ['application/problem+json', 'application/problem+json'],
+    );
+    for my $case (@cases) {
+        my ($accept, $content_type) = @$case;
         my ($future, $events) = invoke(
-            PAGI::Middleware::ErrorHandler->new(content_type => $content_type),
+            PAGI::Middleware::ErrorHandler->new,
             async sub { die "built-in failure" },
+            {
+                type => 'http', path => '/',
+                headers => [['Accept' => $accept]],
+            },
         );
         settle($future);
+        is header_value($events->[0], 'content-type'), $content_type,
+            "$accept selects $content_type";
         is header_value($events->[0], 'cache-control'), 'no-store',
-            "$content_type carries Cache-Control: no-store";
+            "$accept carries Cache-Control: no-store";
+    }
+};
+
+subtest 'configured built-in statuses must be complete registered Pages errors' => sub {
+    my $middleware;
+    is dies {
+        $middleware = PAGI::Middleware::ErrorHandler->new(status => 404)
+    }, undef, 'registered complete status is accepted';
+    my ($future, $events) = invoke($middleware, async sub { die "missing\n" });
+    settle($future);
+    is $events->[0]{status}, 404, 'configured registered status is emitted';
+
+    for my $status (401, 405, 407, 426, 418, 302, 'malformed', Future->done(500)) {
+        like dies {
+            PAGI::Middleware::ErrorHandler->new(status => $status)
+        }, qr/handler is required/i,
+            'incomplete, unknown, non-error, or reference status requires a handler';
     }
 };
 
@@ -128,8 +182,8 @@ subtest 'immediate custom renderer receives and preserves exception status' => s
 subtest 'Future custom renderer owns explicit status and headers' => sub {
     my $seeded_status;
     my $middleware = PAGI::Middleware::ErrorHandler->new(
-        content_type => 'text/html',
-        handler      => sub {
+        status  => 401,
+        handler => sub {
             my ($context, $error) = @_;
             $seeded_status = $context->response->status;
             return Future->done($context->text(
@@ -143,12 +197,74 @@ subtest 'Future custom renderer owns explicit status and headers' => sub {
     my ($future, $events) = invoke($middleware, async sub { die "conflict" });
     settle($future);
 
-    is $seeded_status, 500, 'cached response is seeded with the default status';
+    is $seeded_status, 401,
+        'custom renderer retains a normally incomplete configured status seed';
     is $events->[0]{status}, 409, 'explicit renderer status wins over seed';
     is header_value($events->[0], 'content-type'), 'application/vnd.error+json',
         'custom content type is untouched';
     is header_value($events->[0], 'cache-control'), 'public, max-age=60',
         'custom cache policy is untouched';
+};
+
+subtest 'built-in exception status claims are guarded and Pages-valid' => sub {
+    my @cases = (
+        ['registered 404', Local::StatusError->new(404, 'missing secret'), 404],
+        ['unknown 418', Local::StatusError->new(418, 'teapot secret'), 500],
+        ['incomplete 401', Local::StatusError->new(401, 'auth secret'), 500],
+        ['non-error 302', Local::StatusError->new(302, 'redirect secret'), 500],
+        ['malformed scalar', Local::StatusError->new('wat', 'malformed secret'), 500],
+        ['Future value', Local::StatusError->new(Future->done(404), 'future secret'), 500],
+        ['throwing accessor', Local::ThrowingStatusError->new, 500],
+    );
+
+    for my $case (@cases) {
+        my ($label, $error, $expected) = @$case;
+        my @reported;
+        my ($future, $events) = invoke(
+            PAGI::Middleware::ErrorHandler->new(
+                on_error => sub { push @reported, $_[0]; return Future->done },
+            ),
+            async sub { die $error },
+            {
+                type => 'http', path => '/',
+                headers => [['Accept' => 'application/problem+json']],
+            },
+        );
+        settle($future);
+        ok $future->is_done, "$label is contained";
+        is $events->[0]{status}, $expected, "$label selects safe status $expected";
+        is refaddr($reported[0]), refaddr($error),
+            "$label reports the original exception object";
+        my $problem = JSON::MaybeXS::decode_json($events->[1]{body});
+        is $problem->{status}, $expected, "$label problem status matches the wire";
+        unlike $problem->{detail}, qr/secret|accessor failed|original throwing-status/,
+            "$label production response exposes no exception diagnostics";
+    }
+};
+
+subtest 'throwing exception stringification cannot replace the safe response' => sub {
+    my $error = Local::ThrowingStringError->new;
+    my @reported;
+    my ($future, $events) = invoke(
+        PAGI::Middleware::ErrorHandler->new(
+            development => 1,
+            on_error => sub { push @reported, $_[0]; return },
+        ),
+        sub { die $error },
+        {
+            type => 'http', path => '/',
+            headers => [['Accept' => 'text/plain']],
+        },
+    );
+    settle($future);
+
+    ok $future->is_done, 'throwing string overload is contained';
+    is $events->[0]{status}, 500, 'throwing string overload retains safe status 500';
+    is refaddr($reported[0]), refaddr($error), 'reporter receives the original object';
+    unlike $events->[1]{body}, qr/stringification failed/,
+        'stringification failure is absent from development output';
+    like $events->[1]{body}, qr/Internal Server Error/,
+        'catalog-safe detail remains available';
 };
 
 subtest 'response validation uses the shared response contract' => sub {
@@ -290,32 +406,78 @@ subtest 'post-start reporting failure preserves original string' => sub {
 };
 
 subtest 'built-in representations emit UTF-8 octets with byte lengths' => sub {
-    for my $content_type ('text/plain', 'text/html', 'application/json') {
+    my @cases = (
+        ['text/plain', 'text/plain; charset=utf-8'],
+        ['text/html', 'text/html; charset=utf-8'],
+        ['application/problem+json', 'application/problem+json'],
+    );
+    for my $case (@cases) {
+        my ($accept, $content_type) = @$case;
         my ($future, $events) = invoke(
             PAGI::Middleware::ErrorHandler->new(
-                content_type => $content_type,
-                development  => 1,
+                development => 1,
             ),
             async sub { die "snowman \x{2603}\n" },
+            {
+                type => 'http', path => '/',
+                headers => [['Accept' => $accept]],
+            },
         );
         settle($future);
 
         my $body = $events->[1]{body};
-        ok !utf8::is_utf8($body), "$content_type body is an octet string";
+        is header_value($events->[0], 'content-type'), $content_type,
+            "$accept is negotiated";
+        ok !utf8::is_utf8($body), "$accept body is an octet string";
         is 0 + header_value($events->[0], 'content-length'), length($body),
-            "$content_type Content-Length is the emitted byte length";
+            "$accept Content-Length is the emitted byte length";
         my $decoded = decode('UTF-8', $body, FB_CROAK | LEAVE_SRC);
-        if ($content_type eq 'application/json') {
+        if ($accept eq 'application/problem+json') {
             require JSON::MaybeXS;
             my $data = JSON::MaybeXS::decode_json($body);
-            is $data->{error}, "snowman \x{2603}\n",
-                'JSON contains the wide error exactly once';
+            is $data->{detail}, "snowman \x{2603}\n",
+                'problem JSON contains the wide detail exactly once';
         }
         else {
             like $decoded, qr/snowman \x{2603}/,
-                "$content_type decodes to the original wide error";
+                "$accept decodes to the original wide error";
         }
     }
+};
+
+subtest 'Pages construction failure uses the hardcoded pre-start response' => sub {
+    my @reported;
+    my $middleware = PAGI::Middleware::ErrorHandler->new(
+        on_error => sub { push @reported, $_[0]; return Future->done },
+    );
+    my ($future, $events);
+    {
+        no warnings 'redefine';
+        local *PAGI::Pages::status = sub { die "private Pages failure\n" };
+        ($future, $events) = invoke(
+            $middleware,
+            async sub { die "original application failure\n" },
+            {
+                type => 'http', path => '/',
+                headers => [['Accept' => 'application/problem+json']],
+            },
+        );
+        settle($future);
+    }
+
+    ok $future->is_done, 'Pages construction failure is contained before start';
+    is scalar(@$events), 2, 'last resort emits exactly start and body events';
+    is $events->[0]{status}, 500, 'last resort status is 500';
+    is header_value($events->[0], 'content-type'), 'text/plain; charset=utf-8',
+        'last resort has its hardcoded UTF-8 text content type';
+    is header_value($events->[0], 'cache-control'), 'no-store',
+        'last resort is not cacheable';
+    is $events->[1]{body}, "Internal Server Error\n",
+        'last resort body is exact and contains no dynamic data';
+    is 0 + header_value($events->[0], 'content-length'),
+        length($events->[1]{body}), 'last resort byte length is exact';
+    is \@reported, ["original application failure\n"],
+        'reporting remains about the original application exception';
 };
 
 subtest 'missing scope type is HTTP without warnings' => sub {
@@ -347,8 +509,7 @@ subtest 'private development resolver is not a public option' => sub {
 subtest 'Compose failsafe resolves development per handled request' => sub {
     my $calls = 0;
     my $middleware = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
-        content_type            => 'text/plain',
-        _development_resolver   => sub { ++$calls == 1 ? 1 : 0 },
+        _development_resolver => sub { ++$calls == 1 ? 1 : 0 },
     );
     my ($first, $first_events) = invoke(
         $middleware, async sub { die "first private detail\n" },
@@ -371,7 +532,6 @@ subtest 'Compose failsafe resolves development per handled request' => sub {
 subtest 'Compose resolver failure is reported and rendered safely' => sub {
     my @reported;
     my $middleware = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
-        content_type          => 'text/plain',
         _development_resolver => sub { die "invalid environment\n" },
         on_error              => sub { push @reported, $_[0]; Future->done },
     );

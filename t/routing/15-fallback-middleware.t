@@ -6,6 +6,7 @@ use Test2::V0;
 use Encode qw(decode FB_CROAK);
 use Future;
 use Future::AsyncAwait;
+use JSON::MaybeXS qw(decode_json);
 use Scalar::Util qw(refaddr);
 
 use PAGI::Middleware::Routing::NotFound;
@@ -214,24 +215,52 @@ subtest 'NotFound constructs its Context with original request channels' => sub 
         'renderer Context keeps the outer send channel');
 };
 
-subtest 'NotFound built-in responses are safe UTF-8 no-store failsafes' => sub {
+subtest 'NotFound built-in responses negotiate Pages representations' => sub {
     local $ENV{PAGI_ENV} = 'production';
-    my $production = run_app(
-        decline_app('PAGI::Middleware::Routing::NotFound', not_found_router()),
-        scope(path => '/missing', raw_path => '/missing'),
+    my @cases = (
+        ['problem JSON', 'application/problem+json', 'application/problem+json'],
+        ['HTML', 'text/html', 'text/html; charset=utf-8'],
+        ['text', 'text/plain', 'text/plain; charset=utf-8'],
     );
-    my $start = start_event($production);
-    is($start->{status}, 404, 'production fallback status is 404');
-    is(event_body($production), 'Not Found', 'production body is exact');
-    is(header_values($start, 'Content-Type'), ['text/plain; charset=utf-8'],
-        'production body declares UTF-8 text');
-    is(header_values($start, 'Cache-Control'), ['no-store'],
-        'production fallback is not cacheable');
+    for my $case (@cases) {
+        my ($label, $accept, $content_type) = @$case;
+        my $production = run_app(
+            decline_app('PAGI::Middleware::Routing::NotFound', not_found_router()),
+            scope(
+                path => '/missing', raw_path => '/missing',
+                headers => [['Accept' => $accept]],
+            ),
+        );
+        my $start = start_event($production);
+        is($start->{status}, 404, "$label fallback status is 404");
+        is(header_values($start, 'Content-Type'), [$content_type],
+            "$label fallback declares its negotiated representation");
+        is(header_values($start, 'Cache-Control'), ['no-store'],
+            "$label fallback is not cacheable");
+        my $body = event_body($production);
+        if ($label eq 'problem JSON') {
+            my $problem = decode_json($body);
+            is($problem->{status}, 404, 'problem JSON carries the wire status');
+            is($problem->{title}, 'Not Found', 'problem JSON carries the catalog title');
+            unlike($problem->{detail}, qr{/missing|/known},
+                'production problem detail contains no routing diagnostics');
+        }
+        else {
+            my $decoded = decode('UTF-8', $body, FB_CROAK);
+            like($decoded, qr/404\s+Not Found/,
+                "$label body identifies the selected status");
+            unlike($decoded, qr{/missing|/known},
+                "$label production body contains no routing diagnostics");
+        }
+    }
 
     local $ENV{PAGI_ENV} = 'development';
     my $development = run_app(
         decline_app('PAGI::Middleware::Routing::NotFound', not_found_router()),
-        scope(method => "G\x{c9}T", path => "/caf\x{e9}", raw_path => "/caf\x{e9}"),
+        scope(
+            method => "G\x{c9}T", path => "/caf\x{e9}", raw_path => "/caf\x{e9}",
+            headers => [['Accept' => 'text/plain']],
+        ),
     );
     my $decoded = decode('UTF-8', event_body($development), FB_CROAK);
     like($decoded, qr/PAGI automatic routing fallback/i,
@@ -404,26 +433,57 @@ subtest 'MethodNotAllowed leaves Allow untouched when renderer changes status' =
         'non-405 response keeps unrelated headers');
 };
 
-subtest 'MethodNotAllowed built-in responses are safe UTF-8 no-store failsafes' => sub {
+subtest 'MethodNotAllowed built-in responses negotiate Pages representations' => sub {
     local $ENV{PAGI_ENV} = 'production';
-    my $production = run_app(
-        decline_app('PAGI::Middleware::Routing::MethodNotAllowed', method_router()),
-        scope(method => 'DELETE', path => '/items'),
+    my @cases = (
+        ['problem JSON', 'application/problem+json', 'application/problem+json'],
+        ['HTML', 'text/html', 'text/html; charset=utf-8'],
+        ['text', 'text/plain', 'text/plain; charset=utf-8'],
     );
-    my $start = start_event($production);
-    is($start->{status}, 405, 'production fallback status is 405');
-    is(event_body($production), 'Method Not Allowed', 'production body is exact');
-    is(header_values($start, 'Allow'), ['GET, HEAD, POST'],
-        'production Allow is authoritative');
-    is(header_values($start, 'Content-Type'), ['text/plain; charset=utf-8'],
-        'production body declares UTF-8 text');
-    is(header_values($start, 'Cache-Control'), ['no-store'],
-        'production fallback is not cacheable');
+    for my $case (@cases) {
+        my ($label, $accept, $content_type) = @$case;
+        my $production = run_app(
+            decline_app(
+                'PAGI::Middleware::Routing::MethodNotAllowed', method_router(),
+            ),
+            scope(
+                method => 'DELETE', path => '/items',
+                headers => [['Accept' => $accept]],
+            ),
+        );
+        my $start = start_event($production);
+        is($start->{status}, 405, "$label fallback status is 405");
+        is(header_values($start, 'Allow'), ['GET, HEAD, POST'],
+            "$label Allow is authoritative");
+        is(header_values($start, 'Content-Type'), [$content_type],
+            "$label fallback declares its negotiated representation");
+        is(header_values($start, 'Cache-Control'), ['no-store'],
+            "$label fallback is not cacheable");
+        my $body = event_body($production);
+        if ($label eq 'problem JSON') {
+            my $problem = decode_json($body);
+            is($problem->{status}, 405, 'problem JSON carries the wire status');
+            is($problem->{title}, 'Method Not Allowed',
+                'problem JSON carries the catalog title');
+            unlike($problem->{detail}, qr{DELETE|/items},
+                'production problem detail contains no routing diagnostics');
+        }
+        else {
+            my $decoded = decode('UTF-8', $body, FB_CROAK);
+            like($decoded, qr/405\s+Method Not Allowed/,
+                "$label body identifies the selected status");
+            unlike($decoded, qr{DELETE|/items},
+                "$label production body contains no routing diagnostics");
+        }
+    }
 
     local $ENV{PAGI_ENV} = 'development';
     my $development = run_app(
         decline_app('PAGI::Middleware::Routing::MethodNotAllowed', method_router()),
-        scope(method => "D\x{c9}LETE", path => '/items'),
+        scope(
+            method => "D\x{c9}LETE", path => '/items',
+            headers => [['Accept' => 'text/plain']],
+        ),
     );
     my $decoded = decode('UTF-8', event_body($development), FB_CROAK);
     like($decoded, qr/PAGI automatic routing fallback/i,

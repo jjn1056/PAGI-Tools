@@ -9,7 +9,10 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util 'blessed';
 use PAGI::Context;
+use PAGI::Pages ();
 use PAGI::Utils ();
+
+my %PUBLIC_OPTION = map { $_ => 1 } qw(development on_error status handler);
 
 =head1 NAME
 
@@ -30,7 +33,9 @@ PAGI::Middleware::ErrorHandler - Exception handling middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::ErrorHandler catches exceptions thrown by the inner
-application and converts them to appropriate HTTP error responses.
+application and converts them to appropriate HTTP error responses. Its built-in
+renderer delegates to L<PAGI::Pages>, so request C<Accept> fields negotiate
+HTML, problem JSON, or text. Custom handlers retain full response ownership.
 
 =head1 CONFIGURATION
 
@@ -38,9 +43,9 @@ application and converts them to appropriate HTTP error responses.
 
 =item * development (default: 0)
 
-If true, include stack trace in built-in error responses. This is a static
-Boolean and defaults to false; ordinary construction never consults
-C<PAGI_ENV>.
+If true, include safely stringified exception detail in built-in error
+responses. This is a static Boolean and defaults to false; ordinary
+construction never consults C<PAGI_ENV>.
 
 =item * on_error (default: undef)
 
@@ -51,13 +56,11 @@ Callback failures are contained and never replace the application error.
     on_error => sub  {
         my ($error) = @_; $logger->error($error) }
 
-=item * content_type (default: 'text/html')
-
-Content type for error responses. Supported: 'text/html', 'application/json', 'text/plain'
-
 =item * status (default: 500)
 
-HTTP status code for general exceptions.
+HTTP status code for general exceptions. Without a custom C<handler>, this must
+be a registered error that Pages can render without missing mandatory response
+facts. Statuses such as 401, 405, 407, and 426 therefore require a handler.
 
 =item * handler (default: undef)
 
@@ -67,6 +70,10 @@ Context response is seeded with the configured or exception-provided status;
 an explicit renderer status wins. A custom renderer owns its response content
 type and cache policy unchanged.
 
+Use the handler seam to force a fixed Pages representation:
+
+    handler => PAGI::Pages->internal_server_error(as => 'json')
+
 =back
 
 =cut
@@ -74,14 +81,20 @@ type and cache policy unchanged.
 sub _init {
     my ($self, $config) = @_;
 
-    croak "unknown ErrorHandler option '_development_resolver'"
-        if exists $config->{_development_resolver};
+    for my $key (keys %$config) {
+        croak "unknown ErrorHandler option '$key'"
+            unless $PUBLIC_OPTION{$key};
+    }
 
     $self->{development} = $config->{development} // 0;
     $self->{on_error}    = $config->{on_error};
-    $self->{content_type} = $config->{content_type} // 'text/html';
     $self->{status}      = $config->{status} // 500;
     $self->{handler}     = $config->{handler};
+
+    unless ($self->{handler}) {
+        croak 'ErrorHandler configured status cannot be rendered completely; a handler is required'
+            unless $self->_pages_accepts_status($self->{status});
+    }
 }
 
 sub _new_compose_failsafe {
@@ -107,8 +120,8 @@ sub wrap {
 
         # Intercept send to track if response has started
         my $wrapped_send = async sub  {
-        my ($event) = @_;
-            if ($event->{type} eq 'http.response.start') {
+            my ($event) = @_;
+            if (($event->{type} // '') eq 'http.response.start') {
                 $response_started = 1;
             }
             await Future->wrap($send->($event));
@@ -131,32 +144,42 @@ sub wrap {
                 die $error;
             }
 
-            # Determine status code
-            my $status = $self->{status};
-
-            # Check for specific exception types
-            if (blessed($error) && $error->can('status_code')) {
-                $status = $error->status_code;
-            }
-
-            my $context = PAGI::Context->new($scope, $receive, $send);
+            my $status = $self->_status_for_error($error);
+            my $context_scope = defined($scope->{type})
+                ? $scope : { %$scope, type => 'http' };
+            my $context = PAGI::Context->new($context_scope, $receive, $send);
             $context->response->status($status);
 
             my $response;
             if ($self->{handler}) {
-                my $returned = $self->{handler}->($context, $error);
-                $response = await Future->wrap($returned);
+                $response = await Future->wrap(
+                    $self->{handler}->($context, $error),
+                );
                 croak 'handler did not return a response'
                     unless PAGI::Utils::is_response($response);
             }
             else {
                 my $development = await $self->_development_for_request;
-                my ($body, $content_type) =
-                    $self->_generate_error_body($error, $status, $development);
-                $response = $context->response
-                    ->content_type($content_type)
-                    ->header('Cache-Control' => 'no-store')
-                    ->send_raw($body);
+                my @detail;
+                if ($development) {
+                    my $error_text;
+                    my $stringified = eval {
+                        $error_text = "$error";
+                        1;
+                    };
+                    @detail = (detail => $error_text) if $stringified;
+                }
+
+                my $rendered = eval {
+                    $response = PAGI::Pages->status(
+                        $context, $status, @detail,
+                    );
+                    1;
+                };
+                unless ($rendered) {
+                    await $self->_send_last_resort($wrapped_send);
+                    return;
+                }
             }
 
             await Future->wrap($context->respond($response));
@@ -178,7 +201,9 @@ async sub _development_for_request {
 
     my $development;
     my $resolved = eval {
-        $development = $self->{_development_resolver}->();
+        $development = await Future->wrap(
+            $self->{_development_resolver}->(),
+        );
         1;
     };
     unless ($resolved) {
@@ -189,97 +214,51 @@ async sub _development_for_request {
     return $development ? 1 : 0;
 }
 
-sub _generate_error_body {
-    my ($self, $error, $status, $development) = @_;
-    $development = $self->{development} ? 1 : 0
-        unless defined $development;
-
-    my $error_text = "$error";
-    my $content_type = $self->{content_type};
-
-    # Clean up error for display
-    my $display_error = $error_text;
-    unless ($development) {
-        # In production, don't reveal internal details
-        $display_error = $self->_status_message($status);
-    }
-
-    if ($content_type eq 'application/json') {
-        require JSON::MaybeXS;
-        my $body = JSON::MaybeXS::encode_json({
-            error  => $display_error,
-            status => $status,
-            ($development ? (stack => $error_text) : ()),
-        });
-        return ($body, 'application/json');
-    }
-    elsif ($content_type eq 'text/plain') {
-        my $body = "Error $status: $display_error";
-        if ($development && $error_text ne $display_error) {
-            $body .= "\n\nStack trace:\n$error_text";
-        }
-        return (encode('UTF-8', $body), 'text/plain; charset=utf-8');
-    }
-    else {
-        # Default to HTML
-        my $safe_error = $self->_html_escape($display_error);
-        my $safe_stack = $development ? $self->_html_escape($error_text) : '';
-
-        my $body = <<"HTML";
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Error $status</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 40px; }
-        h1 { color: #c00; }
-        .error { background: #fee; padding: 20px; border-radius: 4px; margin: 20px 0; }
-        pre { background: #f4f4f4; padding: 15px; overflow-x: auto; border-radius: 4px; }
-    </style>
-</head>
-<body>
-    <h1>Error $status</h1>
-    <div class="error">$safe_error</div>
-HTML
-
-        if ($development && $safe_stack) {
-            $body .= "    <h2>Stack Trace</h2>\n    <pre>$safe_stack</pre>\n";
-        }
-
-        $body .= "</body>\n</html>\n";
-
-        return (encode('UTF-8', $body), 'text/html; charset=utf-8');
-    }
-}
-
-sub _html_escape {
-    my ($self, $text) = @_;
-
-    $text =~ s/&/&amp;/g;
-    $text =~ s/</&lt;/g;
-    $text =~ s/>/&gt;/g;
-    $text =~ s/"/&quot;/g;
-    return $text;
-}
-
-sub _status_message {
+sub _pages_accepts_status {
     my ($self, $status) = @_;
+    return eval {
+        PAGI::Pages->status($status);
+        1;
+    } ? 1 : 0;
+}
 
-    my %messages = (
-        400 => 'Bad Request',
-        401 => 'Unauthorized',
-        403 => 'Forbidden',
-        404 => 'Not Found',
-        405 => 'Method Not Allowed',
-        408 => 'Request Timeout',
-        413 => 'Payload Too Large',
-        429 => 'Too Many Requests',
-        500 => 'Internal Server Error',
-        502 => 'Bad Gateway',
-        503 => 'Service Unavailable',
-        504 => 'Gateway Timeout',
-    );
-    return $messages{$status} // 'Error';
+sub _status_for_error {
+    my ($self, $error) = @_;
+    return $self->{status} unless blessed($error);
+
+    my ($has_status, $claimed);
+    my $obtained = eval {
+        $has_status = $error->can('status_code') ? 1 : 0;
+        $claimed = $error->status_code if $has_status;
+        1;
+    };
+    return 500 unless $obtained;
+    return $self->{status} unless $has_status;
+    return 500 unless defined($claimed) && !ref($claimed)
+        && $claimed =~ /\A[0-9]+\z/;
+    return 500 unless $self->{handler}
+        || $self->_pages_accepts_status($claimed);
+    return 0 + $claimed;
+}
+
+async sub _send_last_resort {
+    my ($self, $send) = @_;
+    my $body = encode('UTF-8', "Internal Server Error\n");
+    await Future->wrap($send->({
+        type    => 'http.response.start',
+        status  => 500,
+        headers => [
+            ['Content-Type' => 'text/plain; charset=utf-8'],
+            ['Content-Length' => length($body)],
+            ['Cache-Control' => 'no-store'],
+        ],
+    }));
+    await Future->wrap($send->({
+        type => 'http.response.body',
+        body => $body,
+        more => 0,
+    }));
+    return;
 }
 
 1;
@@ -330,13 +309,16 @@ failure happens after a streaming start, rendering is no longer safe:
 ErrorHandler settles C<on_error>, emits no second start, and rethrows the
 original database exception. Put an author ErrorHandler inside request-ID,
 access-log, and security middleware when those wrappers must observe the
-official 500. Compose keeps its own plain outer ErrorHandler installed as the
+official 500. Compose keeps its own stock outer ErrorHandler installed as the
 last recovery boundary if author policy itself fails.
 
 =head1 EXCEPTION HANDLING
 
-The middleware supports exception objects with a C<status_code> method
-to set custom HTTP status codes:
+The middleware supports exception objects with a C<status_code> method. The
+claim is called exception-safely and, for the built-in renderer, is preserved
+only when it names a registered error Pages can render completely. Throwing,
+Future-valued, reference-valued, malformed, unknown, non-error, and incomplete
+claims fall back to 500 without replacing the original exception:
 
     package My::Exception;
     sub new { bless { status => $_[1], message => $_[2] }, $_[0] }
@@ -350,9 +332,15 @@ to set custom HTTP status codes:
 =over 4
 
 =item * Before response start, C<on_error> settles before the custom or built-in
-renderer runs. Built-in HTML, plain-text, and JSON responses are UTF-8 octet
-strings with byte-correct C<Content-Length> and C<Cache-Control: no-store>.
-Custom renderers control their own content and cache headers.
+renderer runs. Built-in HTML, plain-text, and problem-JSON responses are UTF-8
+octet strings with byte-correct C<Content-Length> and
+C<Cache-Control: no-store>. Custom renderers control their own content and
+cache headers.
+
+=item * If built-in Pages construction fails before response start, the
+middleware emits one hardcoded UTF-8 plain-text 500 with C<no-store>. That last
+resort contains no exception or renderer data. A failure while sending it
+propagates without another response attempt.
 
 =item * If the response has already started when an error occurs, no renderer
 is invoked and no replacement response is started. The middleware awaits
@@ -360,8 +348,9 @@ C<on_error> and then rethrows the original exception so the server can abort
 the incomplete response. This intentionally reverses the earlier behavior
 that warned and swallowed post-start failures.
 
-=item * In development mode, the full error message and stack trace are
-included in the response. In production, only a generic message is shown.
+=item * In development mode, a successfully stringified original exception is
+used as detail. In production, Pages' catalog-safe detail is used and the
+exception is never stringified for presentation.
 
 =item * A missing scope type is treated as HTTP. Defined non-HTTP requests
 (including WebSocket and SSE) pass through, so errors propagate without

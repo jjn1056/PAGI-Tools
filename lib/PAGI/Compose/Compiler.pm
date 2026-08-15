@@ -48,7 +48,6 @@ sub compile {
         ->wrap($http_app);
     $http_app = PAGI::Compose::ResponseGuard->wrap($http_app);
     $http_app = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
-        content_type => 'text/plain',
         on_error => sub {
             my ($error) = @_;
             warn "PAGI application error: $error";

@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware::Routing::_Fallback';
 use Future;
+use PAGI::Pages ();
 use PAGI::Utils ();
 
 =encoding UTF-8
@@ -55,8 +56,8 @@ also contain a nonempty allowed-method union. Explicit responses, thrown
 exceptions, started streams, silent native applications without evidence, and
 non-HTTP scopes pass through unchanged.
 
-The built-in response is a production-safe failsafe: status 405, UTF-8 plain
-text C<Method Not Allowed>, C<Cache-Control: no-store>, and one authoritative
+The built-in response is a production-safe, C<no-store> L<PAGI::Pages> 405
+that negotiates HTML, problem JSON, or text and emits one authoritative
 C<Allow> field. Development adds only safe request and bounded first-party
 routing-attempt facts. Install a configured instance inside ordinary
 application middleware for official application policy; the outer automatic
@@ -133,19 +134,24 @@ sub _seed_context {
 
 sub _default_response {
     my ($self, $context, $snapshot) = @_;
-    return $self->_plain_text_response($context, 'Method Not Allowed')
-        unless PAGI::Utils::is_development();
-
-    my @lines = (
-        'PAGI automatic routing fallback: Method Not Allowed',
-        'No application fallback handled this route.',
-        'Method: ' . $self->_safe_fact($context->method),
-        'Path: ' . $self->_safe_fact($context->path),
-        'Allowed methods: ' . join(', ', @{$snapshot->allowed_methods}),
-        $self->_attempt_diagnostics($snapshot),
-        'Install application Routing::MethodNotAllowed middleware for official policy.',
+    my $detail = 'The request method is not allowed for this resource.';
+    if (PAGI::Utils::is_development()) {
+        my @lines = (
+            'PAGI automatic routing fallback: Method Not Allowed',
+            'No application fallback handled this route.',
+            'Method: ' . $self->_safe_fact($context->method),
+            'Path: ' . $self->_safe_fact($context->path),
+            'Allowed methods: ' . join(', ', @{$snapshot->allowed_methods}),
+            $self->_attempt_diagnostics($snapshot),
+            'Install application Routing::MethodNotAllowed middleware for official policy.',
+        );
+        $detail = join("\n", @lines);
+    }
+    return PAGI::Pages->method_not_allowed(
+        $context,
+        allow  => $snapshot->allowed_methods,
+        detail => $detail,
     );
-    return $self->_plain_text_response($context, join("\n", @lines));
 }
 
 sub _prepare_response {

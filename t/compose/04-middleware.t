@@ -8,6 +8,7 @@ use FindBin qw($Bin);
 use lib "$Bin/lib";
 use ComposeTest qw(scope run_scope);
 use PAGI::Compose qw(compose);
+use PAGI::Pages;
 use PAGI::Routing qw(route middleware);
 
 {
@@ -18,6 +19,15 @@ use PAGI::Routing qw(route middleware);
         my ($self, $inner) = @_;
         ++$self->{wraps};
         return $inner;
+    }
+}
+
+{
+    package ComposeOwnedPages;
+    our @ISA = ('PAGI::Pages');
+    sub render_text {
+        my ($self, $page) = @_;
+        return "owned:$page->{status}:$page->{title}\n";
     }
 }
 
@@ -243,7 +253,6 @@ subtest 'author-rendered 404 405 and 500 cross only earlier author middleware' =
                 return $context->text('author 405');
             }),
             middleware('ErrorHandler',
-                content_type => 'text/plain',
                 on_error => sub {
                     push @trace, 'author ErrorHandler report';
                     return;
@@ -300,6 +309,50 @@ subtest 'author-rendered 404 405 and 500 cross only earlier author middleware' =
     ok(!(grep { /NotFound render|MethodNotAllowed render/ } @trace),
         'author routing fallbacks do not replace an author-rendered 500');
     is($error_events->[0]{status}, 500, 'author ErrorHandler retains status 500');
+};
+
+subtest 'inner custom Pages middleware owns responses inside stock failsafes' => sub {
+    local $ENV{PAGI_ENV} = 'production';
+    my $pages = ComposeOwnedPages->new(as => 'text');
+    my $app = compose(
+        routes => [
+            route('/items' => sub { return $_[0]->text('item') }, methods => 'GET'),
+            route('/explode' => sub { die "custom Pages target failed\n" }),
+        ],
+        middleware => [
+            middleware('Routing::NotFound', handler => $pages->not_found),
+            middleware('Routing::MethodNotAllowed', handler => sub {
+                my ($context, $snapshot) = @_;
+                return $pages->method_not_allowed(
+                    $context,
+                    allow => $snapshot->allowed_methods,
+                );
+            }),
+            middleware('ErrorHandler', handler => $pages->internal_server_error),
+        ],
+    )->to_app;
+
+    my @cases = (
+        ['404', scope(path => '/missing'), 404, "owned:404:Not Found\n"],
+        [
+            '405', scope(path => '/items', method => 'DELETE'),
+            405, "owned:405:Method Not Allowed\n",
+        ],
+        [
+            '500', scope(path => '/explode'),
+            500, "owned:500:Internal Server Error\n",
+        ],
+    );
+    for my $case (@cases) {
+        my ($label, $request_scope, $status, $body) = @$case;
+        my $events = run_scope($app, $request_scope);
+        is scalar(grep { ($_->{type} // '') eq 'http.response.start' } @$events),
+            1, "inner custom Pages $label emits exactly one response start";
+        is $events->[0]{status}, $status,
+            "inner custom Pages $label status reaches the wire";
+        is $events->[1]{body}, $body,
+            "inner custom Pages $label renderer wins over stock outer defaults";
+    }
 };
 
 subtest 'automatic fallback runs after the declared author stack unwinds' => sub {

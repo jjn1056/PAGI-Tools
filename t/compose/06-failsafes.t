@@ -3,6 +3,7 @@ use warnings;
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
+use JSON::MaybeXS qw(decode_json);
 use Scalar::Util qw(refaddr);
 use FindBin qw($Bin);
 use lib "$Bin/lib";
@@ -61,6 +62,25 @@ sub assert_rendered {
     is(body_text($events), $body, "$label body is exact");
 }
 
+sub assert_pages_error {
+    my ($label, $events, $status, $title, $content_type) = @_;
+    my $response_starts = starts($events);
+    is(scalar @$response_starts, 1, "$label emits exactly one response start");
+    is($response_starts->[0]{status}, $status, "$label status is $status");
+    is(header_values($response_starts->[0], 'Content-Type'), [$content_type],
+        "$label uses its negotiated Pages representation");
+    my $body = body_text($events);
+    if ($content_type eq 'application/problem+json') {
+        my $problem = decode_json($body);
+        is($problem->{status}, $status, "$label problem status matches the wire");
+        is($problem->{title}, $title, "$label problem title is semantic");
+    }
+    else {
+        like($body, qr/\Q$status\E\s+\Q$title\E/,
+            "$label body contains semantic status and title");
+    }
+}
+
 sub route_set {
     return [
         route('/items' => sub { return $_[0]->text('get') }, methods => 'GET'),
@@ -104,18 +124,29 @@ subtest 'automatic route outcomes cover both Compose target modes' => sub {
         assert_rendered("$label FULL", $full, 200, 'get');
 
         my ($none, $none_warnings, $none_error) = run_request(
-            $app, scope(path => '/missing'),
+            $app, scope(
+                path => '/missing',
+                headers => [['Accept' => 'application/problem+json']],
+            ),
         );
         is($none_error, undef, "$label none outcome completes");
         is($none_warnings, [], "$label none outcome does not warn");
-        assert_rendered("$label none", $none, 404, 'Not Found');
+        assert_pages_error(
+            "$label none", $none, 404, 'Not Found', 'application/problem+json',
+        );
 
         my ($partial, $partial_warnings, $partial_error) = run_request(
-            $app, scope(path => '/items', method => 'DELETE'),
+            $app, scope(
+                path => '/items', method => 'DELETE',
+                headers => [['Accept' => 'text/plain']],
+            ),
         );
         is($partial_error, undef, "$label partial outcome completes");
         is($partial_warnings, [], "$label partial outcome does not warn");
-        assert_rendered("$label partial", $partial, 405, 'Method Not Allowed');
+        assert_pages_error(
+            "$label partial", $partial, 405, 'Method Not Allowed',
+            'text/plain; charset=utf-8',
+        );
         is(header_values(starts($partial)->[0], 'Allow'), ['GET, HEAD, POST'],
             "$label partial outcome carries the deterministic union Allow");
     }
@@ -161,7 +192,10 @@ subtest 'silent native raw and opaque targets become production-safe 500' => sub
         my ($label, $app, $request_scope) = @$case;
         my ($events, $warnings, $error) = run_request($app, $request_scope);
         is($error, undef, "$label incompletion is contained");
-        assert_rendered($label, $events, 500, 'Error 500: Internal Server Error');
+        assert_pages_error(
+            $label, $events, 500, 'Internal Server Error',
+            'text/html; charset=utf-8',
+        );
         is(scalar @$warnings, 1, "$label is reported once");
         like($warnings->[0], qr/^PAGI application error: HTTP application completed /,
             "$label reports the guard failure");
@@ -194,7 +228,12 @@ subtest 'application throws failed Futures and renderer failures become one 500'
         my ($label, $app, $request_scope, $warning_pattern) = @$case;
         my ($events, $warnings, $error) = run_request($app, $request_scope);
         is($error, undef, "$label is contained");
-        assert_rendered($label, $events, 500, 'Error 500: Internal Server Error');
+        assert_pages_error(
+            $label, $events, 500, 'Internal Server Error',
+            'text/html; charset=utf-8',
+        );
+        unlike(body_text($events), $warning_pattern,
+            "$label production response does not expose the original failure");
         is(scalar @$warnings, 1, "$label is reported once");
         like($warnings->[0], $warning_pattern, "$label reports the original failure");
     }
@@ -249,9 +288,9 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
         $routing, scope(path => '/missing'),
     );
     is($route_error, undef, 'Router observation environment failure is contained');
-    assert_rendered(
+    assert_pages_error(
         'invalid environment Router observation', $route_events, 500,
-        'Error 500: Internal Server Error',
+        'Internal Server Error', 'text/html; charset=utf-8',
     );
     is(scalar @$route_warnings, 2,
         'Router observation and resolver failures are both reported');
@@ -263,9 +302,9 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
     my $throwing = compose(app => sub { die "native application failed\n" })->to_app;
     my ($throw_events, $throw_warnings, $throw_error) = run_request($throwing, scope());
     is($throw_error, undef, 'throwing native app remains contained');
-    assert_rendered(
+    assert_pages_error(
         'invalid environment throwing native app', $throw_events, 500,
-        'Error 500: Internal Server Error',
+        'Internal Server Error', 'text/html; charset=utf-8',
     );
     is(scalar @$throw_warnings, 2,
         'application and resolver failures are both reported');
@@ -322,9 +361,9 @@ subtest 'body before start becomes one clean automatic 500 response' => sub {
     is([map { $_->{type} } @$events], [
         'http.response.start', 'http.response.body',
     ], 'wire receives only the replacement response pair');
-    assert_rendered(
+    assert_pages_error(
         'body-before-start guard failure', $events, 500,
-        'Error 500: Internal Server Error',
+        'Internal Server Error', 'text/html; charset=utf-8',
     );
     is(scalar @$warnings, 1, 'body-before-start failure is reported once');
     like($warnings->[0], qr/^PAGI application error: HTTP application sent a response body before response start/,

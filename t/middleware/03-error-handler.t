@@ -58,10 +58,11 @@ subtest 'ErrorHandler catches exceptions and returns 500' => sub {
     ok scalar(grep {
         lc($_->[0]) eq 'cache-control' && $_->[1] eq 'no-store'
     } @{$sent[0]{headers}}), 'built-in HTML response is not cacheable';
-    like $sent[1]{body}, qr/Error 500/, 'body contains error status';
+    like $sent[1]{body}, qr/500\s+Internal Server Error/,
+        'body contains the Pages status and title';
 };
 
-subtest 'ErrorHandler shows stack trace in development mode' => sub {
+subtest 'ErrorHandler shows exception detail in development mode' => sub {
     my $mw = PAGI::Middleware::ErrorHandler->new(development => 1);
 
     my $app = async sub  {
@@ -82,7 +83,8 @@ subtest 'ErrorHandler shows stack trace in development mode' => sub {
     });
 
     like $sent[1]{body}, qr/Detailed error message/, 'error message shown in dev mode';
-    like $sent[1]{body}, qr/Stack Trace/, 'stack trace section present';
+    like $sent[1]{body}, qr/500\s+Internal Server Error/,
+        'development response retains the status semantics';
 };
 
 subtest 'ErrorHandler hides details in production mode' => sub {
@@ -136,11 +138,8 @@ subtest 'ErrorHandler calls on_error callback' => sub {
     like $errors[0], qr/Test error for callback/, 'error passed to callback';
 };
 
-subtest 'ErrorHandler supports JSON content type' => sub {
-    my $mw = PAGI::Middleware::ErrorHandler->new(
-        content_type => 'application/json',
-        development  => 1,
-    );
+subtest 'ErrorHandler negotiates problem JSON' => sub {
+    my $mw = PAGI::Middleware::ErrorHandler->new(development => 1);
 
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
@@ -152,7 +151,10 @@ subtest 'ErrorHandler supports JSON content type' => sub {
     my @sent;
     run_async(async sub {
         await $wrapped->(
-            { type => 'http', path => '/' },
+            {
+                type => 'http', path => '/',
+                headers => [['Accept' => 'application/problem+json']],
+            },
             async sub { { type => 'http.disconnect' } },
             async sub  {
         my ($event) = @_; push @sent, $event },
@@ -166,22 +168,20 @@ subtest 'ErrorHandler supports JSON content type' => sub {
             last;
         }
     }
-    is $ct, 'application/json', 'content-type is JSON';
+    is $ct, 'application/problem+json', 'content-type is problem JSON';
     ok scalar(grep {
         lc($_->[0]) eq 'cache-control' && $_->[1] eq 'no-store'
     } @{$sent[0]{headers}}), 'built-in JSON response is not cacheable';
 
     require JSON::MaybeXS;
     my $data = JSON::MaybeXS::decode_json($sent[1]{body});
-    is $data->{status}, 500, 'JSON contains status';
-    like $data->{error}, qr/JSON error/, 'JSON contains error';
-    ok exists $data->{stack}, 'JSON contains stack in dev mode';
+    is $data->{status}, 500, 'problem JSON contains status';
+    is $data->{title}, 'Internal Server Error', 'problem JSON contains title';
+    like $data->{detail}, qr/JSON error/, 'problem JSON contains development detail';
 };
 
-subtest 'ErrorHandler supports plain text content type' => sub {
-    my $mw = PAGI::Middleware::ErrorHandler->new(
-        content_type => 'text/plain',
-    );
+subtest 'ErrorHandler negotiates plain text' => sub {
+    my $mw = PAGI::Middleware::ErrorHandler->new;
 
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
@@ -193,7 +193,10 @@ subtest 'ErrorHandler supports plain text content type' => sub {
     my @sent;
     run_async(async sub {
         await $wrapped->(
-            { type => 'http', path => '/' },
+            {
+                type => 'http', path => '/',
+                headers => [['Accept' => 'text/plain']],
+            },
             async sub { { type => 'http.disconnect' } },
             async sub  {
         my ($event) = @_; push @sent, $event },
@@ -211,7 +214,15 @@ subtest 'ErrorHandler supports plain text content type' => sub {
     ok scalar(grep {
         lc($_->[0]) eq 'cache-control' && $_->[1] eq 'no-store'
     } @{$sent[0]{headers}}), 'built-in plain response is not cacheable';
-    like $sent[1]{body}, qr/Error 500/, 'plain text body contains error';
+    like $sent[1]{body}, qr/500\s+Internal Server Error/,
+        'plain text body contains Pages status semantics';
+};
+
+subtest 'ErrorHandler rejects the removed content_type option' => sub {
+    like dies {
+        PAGI::Middleware::ErrorHandler->new(content_type => 'text/plain')
+    }, qr/unknown ErrorHandler option 'content_type'/,
+        'fixed representations use a custom handler';
 };
 
 subtest 'ErrorHandler respects exception status_code method' => sub {
@@ -240,7 +251,7 @@ subtest 'ErrorHandler respects exception status_code method' => sub {
     });
 
     is $sent[0]{status}, 404, 'status from exception status_code method';
-    like $sent[1]{body}, qr/Error 404/, 'body reflects status';
+    like $sent[1]{body}, qr/404\s+Not Found/, 'body reflects Pages status semantics';
 };
 
 subtest 'ErrorHandler passes through successful responses' => sub {
