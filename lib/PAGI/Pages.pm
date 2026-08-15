@@ -6,6 +6,7 @@ use warnings;
 use Carp qw(croak);
 use Encode qw(encode FB_CROAK);
 use Future;
+use HTTP::Date ();
 use JSON::MaybeXS ();
 use Scalar::Util qw(blessed);
 
@@ -19,8 +20,23 @@ my %DEFAULT_REPRESENTATION = map { $_ => 1 } qw(html json text);
 my %WELCOME_OPTION = map { $_ => 1 } qw(as headers cache_control);
 my %ERROR_OPTION = map { $_ => 1 } qw(
     as detail type title instance extensions headers cache_control
+    challenge allow length upgrade retry_after blocked_by login_url
 );
 my %PROBLEM_MEMBER = map { $_ => 1 } qw(type title status detail instance);
+my %SEMANTIC_STATUS = (
+    challenge   => { map { $_ => 1 } qw(401 407) },
+    allow       => { 405 => 1 },
+    length      => { 416 => 1 },
+    upgrade     => { 426 => 1 },
+    retry_after => { map { $_ => 1 } qw(413 429 503) },
+    blocked_by  => { 451 => 1 },
+    login_url   => { 511 => 1 },
+);
+my %RESPONSE_OWNED_FIELD = map { $_ => 1 } qw(
+    content-type content-length transfer-encoding location cache-control
+    connection
+);
+my %FORCED_NO_STORE = map { $_ => 1 } qw(428 429 431 511);
 
 my $WELCOME_TITLE = 'Welcome to PAGI';
 my $WELCOME_DETAIL = 'PAGI is a spiritual successor to PSGI for asynchronous Perl applications. '
@@ -252,7 +268,7 @@ sub _validate_headers {
         _validate_field_value("header '$name'", $value);
         my $lower = lc $name;
         croak "PAGI::Pages caller header '$name' is response-owned"
-            if $lower eq 'content-length' || $lower eq 'transfer-encoding';
+            if $RESPONSE_OWNED_FIELD{$lower};
     }
     return \@copy;
 }
@@ -261,7 +277,7 @@ sub _validate_field_value {
     my ($label, $value) = @_;
     croak "PAGI::Pages $label must be a field-value scalar"
         unless defined($value) && !ref($value)
-            && $value !~ /[\x00-\x08\x0A-\x1F\x7F]/;
+            && $value =~ /\A[\x20-\x7E]*\z/;
     return $value;
 }
 
@@ -309,6 +325,7 @@ sub _welcome_descriptor {
 sub _error_factory {
     my ($status, $opts) = @_;
     my $entry = PAGI::Pages::_Catalog->_entry($status);
+    my $prepared = _prepare_error_options($status, $opts);
     my $extension_json = exists($opts->{extensions})
         ? JSON::MaybeXS::encode_json($opts->{extensions}) : undef;
 
@@ -344,14 +361,257 @@ sub _error_factory {
             extensions => defined($extension_json)
                 ? JSON::MaybeXS::decode_json($extension_json) : {},
             as            => $opts->{as},
-            headers       => exists($opts->{headers}) ? [@{$opts->{headers}}] : [],
-            cache_control => $opts->{cache_control},
+            headers       => [@{$prepared->{headers}}],
+            cache_control => $prepared->{cache_control},
+            login_url     => $prepared->{login_url},
+            upgrade_connection => $prepared->{upgrade_connection},
         };
     };
 }
 
+sub _prepare_error_options {
+    my ($status, $opts) = @_;
+
+    for my $option (keys %SEMANTIC_STATUS) {
+        next unless exists $opts->{$option};
+        croak "PAGI::Pages semantic option '$option' is not valid for status $status"
+            unless $SEMANTIC_STATUS{$option}{$status};
+    }
+
+    if ($status == 511 && exists($opts->{extensions})
+            && exists($opts->{extensions}{login})) {
+        croak "PAGI::Pages extension 'login' is a reserved problem member for status 511";
+    }
+
+    my @headers = exists($opts->{headers}) ? @{$opts->{headers}} : ();
+    my @generated;
+
+    if ($status == 401 || $status == 407) {
+        my $name = $status == 401
+            ? 'WWW-Authenticate' : 'Proxy-Authenticate';
+        my @raw = _header_values(\@headers, $name);
+        for my $value (@raw) {
+            croak "PAGI::Pages $name challenge must be a nonempty scalar"
+                unless length $value;
+        }
+        my $challenges = exists($opts->{challenge})
+            ? _normalize_challenges($opts->{challenge}) : [];
+        croak "PAGI::Pages status $status requires at least one $name challenge"
+            unless @raw || @$challenges;
+        push @generated, map { ($name => $_) } @$challenges;
+    }
+
+    if ($status == 405) {
+        my $has_raw = _has_header(\@headers, 'Allow');
+        croak 'PAGI::Pages status 405 Allow conflicts with raw Allow header'
+            if exists($opts->{allow}) && $has_raw;
+        if ($has_raw) {
+            my $methods = _normalize_raw_token_field(
+                \@headers, 'Allow', 1, 1,
+            );
+            @headers = @{_replace_header(\@headers, 'Allow', join(', ', @$methods))};
+        }
+        elsif (exists $opts->{allow}) {
+            my $methods = _normalize_token_option('allow', $opts->{allow}, 1, 1);
+            push @generated, Allow => join(', ', @$methods);
+        }
+        else {
+            croak 'PAGI::Pages status 405 requires an Allow field';
+        }
+    }
+
+    if ($status == 416 && exists $opts->{length}) {
+        croak 'PAGI::Pages length conflicts with raw Content-Range header'
+            if _has_header(\@headers, 'Content-Range');
+        my $length = _normalize_nonnegative_integer('length', $opts->{length});
+        push @generated, 'Content-Range' => 'bytes */' . $length;
+    }
+
+    if ($status == 426) {
+        my $has_raw = _has_header(\@headers, 'Upgrade');
+        croak 'PAGI::Pages upgrade conflicts with raw Upgrade header'
+            if exists($opts->{upgrade}) && $has_raw;
+        if ($has_raw) {
+            my $protocols = _normalize_raw_token_field(
+                \@headers, 'Upgrade', 0, 0,
+            );
+            @headers = @{_replace_header(
+                \@headers, 'Upgrade', join(', ', @$protocols),
+            )};
+        }
+        elsif (exists $opts->{upgrade}) {
+            my $protocols = _normalize_token_option(
+                'upgrade', $opts->{upgrade}, 0, 0,
+            );
+            push @generated, Upgrade => join(', ', @$protocols);
+        }
+        else {
+            croak 'PAGI::Pages status 426 requires an Upgrade field';
+        }
+    }
+
+    if (($status == 413 || $status == 429 || $status == 503)
+            && exists $opts->{retry_after}) {
+        croak 'PAGI::Pages retry_after conflicts with raw Retry-After header'
+            if _has_header(\@headers, 'Retry-After');
+        push @generated, 'Retry-After' => _normalize_retry_after(
+            $opts->{retry_after},
+        );
+    }
+
+    if ($status == 451 && exists $opts->{blocked_by}) {
+        croak 'PAGI::Pages blocked_by conflicts with raw Link header'
+            if _has_header(\@headers, 'Link');
+        my $uri = _validate_uri_reference('blocked_by', $opts->{blocked_by});
+        croak 'PAGI::Pages blocked_by contains a Link delimiter'
+            if $uri =~ /[<>]/;
+        push @generated, Link => '<' . $uri . '>; rel="blocked-by"';
+    }
+
+    my $login_url;
+    if ($status == 511 && exists $opts->{login_url}) {
+        $login_url = _validate_uri_reference('login_url', $opts->{login_url});
+    }
+
+    my $cache_control = exists($opts->{cache_control})
+        ? $opts->{cache_control} : 'no-store';
+    if ($FORCED_NO_STORE{$status}) {
+        if (exists $opts->{cache_control}) {
+            my $value = $opts->{cache_control};
+            $value =~ s/\A +//;
+            $value =~ s/ +\z//;
+            croak "PAGI::Pages status $status cache_control must be no-store"
+                unless lc($value) eq 'no-store';
+        }
+        $cache_control = 'no-store';
+    }
+
+    push @headers, @generated;
+    return {
+        headers            => \@headers,
+        cache_control      => $cache_control,
+        login_url          => $login_url,
+        upgrade_connection => $status == 426 ? 1 : 0,
+    };
+}
+
+sub _normalize_challenges {
+    my ($value) = @_;
+    my @values = ref($value) eq 'ARRAY' ? @$value : ($value);
+    croak 'PAGI::Pages challenge must be a nonempty scalar or arrayref of challenges'
+        unless (ref($value) eq 'ARRAY' || !ref($value)) && @values;
+    for my $challenge (@values) {
+        _validate_field_value('challenge', $challenge);
+        croak 'PAGI::Pages challenge must be a nonempty scalar or arrayref of challenges'
+            unless length $challenge;
+    }
+    return \@values;
+}
+
+sub _normalize_token_option {
+    my ($label, $value, $uppercase, $allow_empty) = @_;
+    my @values = ref($value) eq 'ARRAY' ? @$value : ($value);
+    croak "PAGI::Pages $label must be a token or arrayref of tokens"
+        unless ref($value) eq 'ARRAY' || !ref($value);
+    return [] if $allow_empty && !@values;
+    croak "PAGI::Pages $label must contain at least one token" unless @values;
+
+    my (@normalized, %seen);
+    for my $token (@values) {
+        if ($allow_empty && @values == 1
+                && defined($token) && !ref($token) && $token eq '') {
+            return [];
+        }
+        croak "PAGI::Pages $label values must be HTTP tokens"
+            unless _is_http_token($token);
+        my $normalized = $uppercase ? uc($token) : $token;
+        my $key = lc $normalized;
+        push @normalized, $normalized unless $seen{$key}++;
+    }
+    return \@normalized;
+}
+
+sub _normalize_raw_token_field {
+    my ($headers, $name, $uppercase, $allow_empty) = @_;
+    my @parts;
+    for my $value (_header_values($headers, $name)) {
+        push @parts, split(/,/, $value, -1);
+    }
+    for my $part (@parts) {
+        $part =~ s/\A +//;
+        $part =~ s/ +\z//;
+    }
+    return [] if $allow_empty && @parts && !grep { length } @parts;
+    return _normalize_token_option($name, \@parts, $uppercase, 0);
+}
+
+sub _normalize_nonnegative_integer {
+    my ($label, $value) = @_;
+    croak "PAGI::Pages $label must be a non-negative integer"
+        unless defined($value) && !ref($value) && $value =~ /\A[0-9]+\z/;
+    $value =~ s/\A0+(?=[0-9])//;
+    return $value;
+}
+
+sub _normalize_retry_after {
+    my ($value) = @_;
+    return _normalize_nonnegative_integer('retry_after', $value)
+        if defined($value) && !ref($value) && $value =~ /\A[0-9]+\z/;
+    _validate_field_value('retry_after', $value);
+    my $epoch = HTTP::Date::str2time($value);
+    croak 'PAGI::Pages retry_after must be delay seconds or a canonical IMF-fixdate'
+        unless defined($epoch) && HTTP::Date::time2str($epoch) eq $value;
+    return $value;
+}
+
+sub _is_http_token {
+    my ($value) = @_;
+    return defined($value) && !ref($value)
+        && $value =~ /\A[!#\$%&'\*\+\-\.\^_\x60\|~0-9A-Za-z]+\z/;
+}
+
+sub _has_header {
+    my ($headers, $wanted) = @_;
+    my $lower = lc $wanted;
+    for (my $index = 0; $index < @$headers; $index += 2) {
+        return 1 if lc($headers->[$index]) eq $lower;
+    }
+    return 0;
+}
+
+sub _header_values {
+    my ($headers, $wanted) = @_;
+    my $lower = lc $wanted;
+    my @values;
+    for (my $index = 0; $index < @$headers; $index += 2) {
+        push @values, $headers->[$index + 1]
+            if lc($headers->[$index]) eq $lower;
+    }
+    return @values;
+}
+
+sub _replace_header {
+    my ($headers, $wanted, $value) = @_;
+    my $lower = lc $wanted;
+    my (@copy, $inserted);
+    for (my $index = 0; $index < @$headers; $index += 2) {
+        my ($name, $existing) = @$headers[$index, $index + 1];
+        if (lc($name) eq $lower) {
+            if (!$inserted) {
+                push @copy, $wanted => $value;
+                $inserted = 1;
+            }
+            next;
+        }
+        push @copy, $name => $existing;
+    }
+    push @copy, $wanted => $value unless $inserted;
+    return \@copy;
+}
+
 sub _response_for {
     my ($self, $scope, $page) = @_;
+    my $headers = $self->_assembled_headers($scope, $page);
     my $representation = $self->_select_representation($scope, $page);
     my $hook_page = _descriptor_for_hook($page);
     my ($body, $content_type);
@@ -388,6 +648,12 @@ sub _response_for {
         else {
             delete $problem{instance};
         }
+        if ($page->{status} == 511 && defined $page->{login_url}) {
+            $problem{login} = $page->{login_url};
+        }
+        elsif ($page->{status} == 511) {
+            delete $problem{login};
+        }
         $body = eval { JSON::MaybeXS::encode_json(\%problem) };
         croak "PAGI::Pages could not encode problem JSON: $@" if $@;
         $content_type = 'application/problem+json';
@@ -404,17 +670,32 @@ sub _response_for {
 
     my $response = PAGI::Response->new($scope);
     $response->status($page->{status});
-    my @headers = @{$page->{headers} || []};
+    my @headers = @$headers;
     while (@headers) {
         my ($name, $value) = splice(@headers, 0, 2);
         $response->header($name, $value);
     }
-    $response->headers->set('Cache-Control', $page->{cache_control})
-        if defined $page->{cache_control};
-    _merge_vary_accept($response) if $self->_effective_as($page) eq 'auto';
     $response->headers->set('Content-Type', $content_type);
     $response->send_raw($body);
     return $response;
+}
+
+sub _assembled_headers {
+    my ($self, $scope, $page) = @_;
+    my @headers = @{$page->{headers} || []};
+
+    if ($page->{upgrade_connection}) {
+        my $version = PAGI::Request->new($scope)->http_version;
+        croak 'PAGI::Pages status 426 Upgrade requires HTTP/1.1'
+            unless defined($version) && !ref($version) && $version eq '1.1';
+        push @headers, Connection => 'Upgrade';
+    }
+
+    push @headers, 'Cache-Control' => $page->{cache_control}
+        if defined $page->{cache_control};
+    return _merge_vary_accept(\@headers)
+        if $self->_effective_as($page) eq 'auto';
+    return \@headers;
 }
 
 sub _descriptor_for_hook {
@@ -479,9 +760,9 @@ sub _problem_type_explicitly_rejected {
 }
 
 sub _merge_vary_accept {
-    my ($response) = @_;
+    my ($headers) = @_;
     my (@tokens, %seen);
-    for my $value ($response->headers->get_all('Vary')) {
+    for my $value (_header_values($headers, 'Vary')) {
         for my $token (split /,/, $value) {
             $token =~ s/\A\s+//;
             $token =~ s/\s+\z//;
@@ -492,8 +773,7 @@ sub _merge_vary_accept {
         }
     }
     push @tokens, 'Accept' unless $seen{accept};
-    $response->headers->set('Vary', join(', ', @tokens));
-    return;
+    return _replace_header($headers, 'Vary', join(', ', @tokens));
 }
 
 sub _reject_future {
@@ -522,6 +802,10 @@ sub render_html {
     if ($page->{kind} eq 'welcome') {
         $action = '<p class="action"><a href="' . _html_escape($page->{documentation})
             . '">' . _html_escape($WELCOME_LABEL) . '</a></p>';
+    }
+    elsif ($page->{status} == 511 && defined $page->{login_url}) {
+        $action = '<p class="action"><a href="' . _html_escape($page->{login_url})
+            . '">Network login</a></p>';
     }
 
     return '<!doctype html>' . "\n"
@@ -557,8 +841,12 @@ sub render_text {
             . $WELCOME_LABEL . "\n"
             . $page->{documentation} . "\n";
     }
-    return $page->{status} . ' ' . $page->{title} . "\n\n"
+    my $text = $page->{status} . ' ' . $page->{title} . "\n\n"
         . $page->{detail} . "\n";
+    if ($page->{status} == 511 && defined $page->{login_url}) {
+        $text .= "\nNetwork login:\n" . $page->{login_url} . "\n";
+    }
+    return $text;
 }
 
 sub render_problem {
@@ -569,6 +857,8 @@ sub render_problem {
     $problem{status} = $page->{status};
     $problem{detail} = $page->{detail};
     $problem{instance} = $page->{instance} if defined $page->{instance};
+    $problem{login} = $page->{login_url}
+        if $page->{status} == 511 && defined $page->{login_url};
     return \%problem;
 }
 

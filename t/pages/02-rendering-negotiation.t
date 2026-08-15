@@ -352,10 +352,16 @@ subtest 'problem JSON has standard members, optional instance, and extensions' =
 };
 
 subtest 'every named error renders its own registered status semantics' => sub {
+    my %required_options = (
+        unauthorized                  => [challenge => 'Basic realm="test"'],
+        method_not_allowed            => [allow => []],
+        proxy_authentication_required => [challenge => 'Basic realm="proxy"'],
+        upgrade_required              => [upgrade => 'websocket'],
+    );
     for my $named (@NAMED_ERRORS) {
         my ($status, $method, $title) = @$named;
         my $events = send_response(PAGI::Pages->$method(
-            http_scope(), as => 'json'));
+            http_scope(), as => 'json', @{$required_options{$method} || []}));
         my $problem = decode_json(body($events));
         is($events->[0]{status}, $status, "$method emits status $status");
         is($problem->{title}, $title, "$method emits its registered title");
