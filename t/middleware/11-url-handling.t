@@ -212,6 +212,26 @@ subtest 'redirect middleware constructors accept exactly Pages redirect statuses
             is \@warnings, [], "$name rejects $label without warnings";
         }
 
+        my @supported = qw(301 302 303 307 308);
+        for my $string_status (@supported) {
+            for my $numeric_status (@supported) {
+                next if $numeric_status eq $string_status;
+                my $status = dualvar(0 + $numeric_status, $string_status);
+                my @warnings;
+                my $error;
+                {
+                    local $SIG{__WARN__} = sub { push @warnings, @_ };
+                    $error = dies { $factory->($status) };
+                }
+                like $error,
+                    qr/redirect_code.*301.*302.*303.*307.*308/i,
+                    "$name rejects string $string_status with numeric "
+                        . "$numeric_status at construction";
+                is \@warnings, [],
+                    "$name rejects unequal supported facets without warnings";
+            }
+        }
+
         my $matching;
         my @matching_warnings;
         {

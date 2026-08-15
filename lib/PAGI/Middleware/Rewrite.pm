@@ -75,7 +75,8 @@ sub _init {
     }
     croak 'Rewrite redirect_code must be one of 301, 302, 303, 307, or 308'
         unless defined($normalized_redirect_code)
-            && $supported_redirect_code{$normalized_redirect_code};
+            && $supported_redirect_code{$normalized_redirect_code}
+            && "$normalized_redirect_code" eq $canonical_redirect_code;
     $self->{redirect_code} = $normalized_redirect_code;
 }
 
