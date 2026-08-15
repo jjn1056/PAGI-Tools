@@ -392,7 +392,7 @@ sub _prepare_error_options {
         my @raw = _header_values(\@headers, $name);
         for my $value (@raw) {
             croak "PAGI::Pages $name challenge must be a nonempty scalar"
-                unless length $value;
+                unless $value =~ /\S/;
         }
         my $challenges = exists($opts->{challenge})
             ? _normalize_challenges($opts->{challenge}) : [];
@@ -503,7 +503,7 @@ sub _normalize_challenges {
     for my $challenge (@values) {
         _validate_field_value('challenge', $challenge);
         croak 'PAGI::Pages challenge must be a nonempty scalar or arrayref of challenges'
-            unless length $challenge;
+            unless $challenge =~ /\S/;
     }
     return \@values;
 }

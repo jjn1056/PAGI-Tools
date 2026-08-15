@@ -144,6 +144,20 @@ subtest 'mandatory fields and Upgrade request versions are enforced' => sub {
             "$method rejects missing mandatory information");
     }
 
+    my @blank_challenges = (
+        [unauthorized => [challenge => '   '], 'semantic 401'],
+        [proxy_authentication_required => [challenge => '   '], 'semantic 407'],
+        [unauthorized => [headers => ['WWW-Authenticate' => '   ']], 'raw 401'],
+        [proxy_authentication_required => [
+            headers => ['Proxy-Authenticate' => '   '],
+        ], 'raw 407'],
+    );
+    for my $case (@blank_challenges) {
+        my ($method, $args, $label) = @$case;
+        like(dies { PAGI::Pages->$method(@$args) }, qr/nonempty|challenge/i,
+            "$label rejects an OWS-only authentication challenge");
+    }
+
     my $default_version = {
         type => 'http', method => 'GET', path => '/', headers => [],
         query_string => '',
