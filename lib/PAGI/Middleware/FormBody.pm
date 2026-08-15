@@ -3,7 +3,9 @@ package PAGI::Middleware::FormBody;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -30,6 +32,9 @@ PAGI::Middleware::FormBody - Form request body parsing middleware
 
 PAGI::Middleware::FormBody parses URL-encoded form request bodies and
 makes the parsed data available in C<< $scope->{'pagi.parsed_body'} >>.
+Successful requests retain the parsed and raw body scope values. A request
+that exceeds C<max_size> receives a negotiated L<PAGI::Pages> 413 response
+based on the original request scope.
 
 =head1 CONFIGURATION
 
@@ -90,7 +95,7 @@ sub wrap {
         }
 
         if ($too_large) {
-            await $self->_send_error($send, 413, 'Request body too large');
+            await $self->_send_error($scope, $send, 413);
             return;
         }
 
@@ -158,21 +163,11 @@ sub _get_header {
 }
 
 async sub _send_error {
-    my ($self, $send, $status, $message) = @_;
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => $status,
-        headers => [
-            ['Content-Type', 'text/plain'],
-            ['Content-Length', length($message)],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $message,
-        more => 0,
-    });
+    my ($self, $scope, $send, $status) = @_;
+    die "PAGI::Middleware::FormBody does not own status $status"
+        unless $status == 413;
+    my $response = PAGI::Pages->content_too_large($scope);
+    await Future->wrap($response->respond($send));
 }
 
 1;
@@ -208,5 +203,6 @@ L<PAGI::Middleware> - Base class for middleware
 
 L<PAGI::Middleware::JSONBody> - JSON body parsing
 
-=cut
+L<PAGI::Pages> - Negotiated default responses
 
+=cut

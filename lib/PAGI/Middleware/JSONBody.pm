@@ -3,8 +3,10 @@ package PAGI::Middleware::JSONBody;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
 use JSON::MaybeXS ();
+use PAGI::Pages;
 
 =head1 NAME
 
@@ -30,7 +32,11 @@ PAGI::Middleware::JSONBody - JSON request body parsing middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::JSONBody parses JSON request bodies and makes the
-parsed data available in C<< $scope->{'pagi.parsed_body'} >>.
+parsed data available in C<< $scope->{'pagi.parsed_body'} >>. Successful
+requests retain the parsed and raw body scope values. Body-limit and invalid
+JSON failures receive negotiated L<PAGI::Pages> responses based on the
+original request scope. Decoder diagnostics are never included in the client
+response.
 
 =head1 CONFIGURATION
 
@@ -99,7 +105,7 @@ sub wrap {
         }
 
         if ($too_large) {
-            await $self->_send_error($send, 413, 'Request body too large');
+            await $self->_send_error($scope, $send, 413);
             return;
         }
 
@@ -109,7 +115,7 @@ sub wrap {
             $parsed = JSON::MaybeXS::decode_json($body);
         };
         if ($@) {
-            await $self->_send_error($send, 400, 'Invalid JSON: ' . $@);
+            await $self->_send_error($scope, $send, 400);
             return;
         }
 
@@ -157,23 +163,21 @@ sub _get_header {
 }
 
 async sub _send_error {
-    my ($self, $send, $status, $message) = @_;
-
-    my $body = JSON::MaybeXS::encode_json({ error => $message });
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => $status,
-        headers => [
-            ['Content-Type', 'application/json'],
-            ['Content-Length', length($body)],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+    my ($self, $scope, $send, $status) = @_;
+    my $response;
+    if ($status == 413) {
+        $response = PAGI::Pages->content_too_large($scope);
+    }
+    elsif ($status == 400) {
+        $response = PAGI::Pages->bad_request(
+            $scope,
+            detail => 'The request body is not valid JSON.',
+        );
+    }
+    else {
+        die "PAGI::Middleware::JSONBody does not own status $status";
+    }
+    await Future->wrap($response->respond($send));
 }
 
 1;
@@ -202,5 +206,6 @@ L<PAGI::Middleware> - Base class for middleware
 
 L<PAGI::Middleware::FormBody> - Form body parsing
 
-=cut
+L<PAGI::Pages> - Negotiated default responses
 
+=cut

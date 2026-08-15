@@ -3,7 +3,10 @@ package PAGI::Middleware::ContentNegotiation;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use Future;
 use Future::AsyncAwait;
+use PAGI::Pages;
+use PAGI::Request::Negotiate;
 
 =head1 NAME
 
@@ -35,8 +38,11 @@ PAGI::Middleware::ContentNegotiation - HTTP content negotiation middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::ContentNegotiation parses the Accept header and determines
-the best content type to return. It adds the preferred type to the scope
-for the application to use.
+the best content type to return using the shared L<PAGI::Request::Negotiate>
+matching rules. It adds the preferred type and parsed accepted types to the
+scope for the application to use. In strict mode, an unmatched request is
+answered directly with a negotiated L<PAGI::Pages> 406 response; the wrapped
+application is not redispatched.
 
 =head1 CONFIGURATION
 
@@ -80,10 +86,12 @@ sub wrap {
 
         # Parse Accept header
         my $accept = $self->_get_header($scope, 'accept') // '*/*';
-        my $preferred = $self->_negotiate($accept);
+        my $preferred = PAGI::Request::Negotiate->best_match(
+            $self->{supported_types}, $accept,
+        );
 
         if (!$preferred && $self->{strict}) {
-            await $self->_send_not_acceptable($send);
+            await $self->_send_not_acceptable($scope, $send);
             return;
         }
 
@@ -100,60 +108,12 @@ sub wrap {
     };
 }
 
-sub _negotiate {
-    my ($self, $accept) = @_;
-
-    my @accepted = $self->_parse_accept($accept);
-    return unless @accepted;
-
-    for my $item (@accepted) {
-        my $type = $item->{type};
-
-        # Check for exact match
-        for my $supported (@{$self->{supported_types}}) {
-            return $supported if lc($type) eq lc($supported);
-        }
-
-        # Check for wildcard matches
-        if ($type eq '*/*') {
-            return $self->{supported_types}[0];
-        }
-
-        if ($type =~ m{^([^/]+)/\*$}) {
-            my $major = lc($1);
-            for my $supported (@{$self->{supported_types}}) {
-                return $supported if $supported =~ m{^$major/}i;
-            }
-        }
-    }
-
-    return;
-}
-
 sub _parse_accept {
     my ($self, $accept) = @_;
 
-    my @items;
-
-    for my $part (split /\s*,\s*/, $accept) {
-        my ($type, @params) = split /\s*;\s*/, $part;
-        next unless $type;
-
-        my $q = 1.0;
-        for my $param (@params) {
-            if ($param =~ /^q\s*=\s*([0-9.]+)$/i) {
-                $q = $1 + 0;
-                last;
-            }
-        }
-
-        push @items, { type => $type, q => $q };
-    }
-
-    # Sort by quality value, descending
-    @items = sort { $b->{q} <=> $a->{q} } @items;
-
-    return @items;
+    return map {
+        +{ type => $_->[0], q => $_->[1] }
+    } PAGI::Request::Negotiate->parse_accept($accept);
 }
 
 sub _get_header {
@@ -167,24 +127,14 @@ sub _get_header {
 }
 
 async sub _send_not_acceptable {
-    my ($self, $send) = @_;
+    my ($self, $scope, $send) = @_;
 
     my $supported = join(', ', @{$self->{supported_types}});
-    my $body = "Not Acceptable. Supported types: $supported";
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => 406,
-        headers => [
-            ['Content-Type', 'text/plain'],
-            ['Content-Length', length($body)],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+    my $response = PAGI::Pages->not_acceptable(
+        $scope,
+        detail => "Not Acceptable. Supported types: $supported",
+    );
+    await Future->wrap($response->respond($send));
 }
 
 1;
@@ -203,20 +153,26 @@ The best matching MIME type from the supported types.
 
 =item * pagi.accepted_types
 
-Array of parsed Accept header entries, sorted by quality value.
+Array of parsed Accept header entries in the shared preference order.
 
 =back
 
 =head1 ACCEPT HEADER PARSING
 
-The Accept header is parsed according to RFC 7231:
+The Accept header is parsed by L<PAGI::Request::Negotiate>:
 
     Accept: text/html, application/json;q=0.9, */*;q=0.1
 
-Higher quality values (q) indicate higher preference. The default is q=1.0.
+Each entry retains the existing C<< { type => $type, q => $quality } >> shape
+and shared preference order. Higher quality values (q) indicate higher
+preference. The default is q=1.0.
 
 =head1 SEE ALSO
 
 L<PAGI::Middleware> - Base class for middleware
+
+L<PAGI::Pages> - Negotiated default responses
+
+L<PAGI::Request::Negotiate> - Shared Accept matching
 
 =cut

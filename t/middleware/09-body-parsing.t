@@ -29,6 +29,25 @@ sub run_async (&) {
     $loop->await($code->());
 }
 
+sub response_starts {
+    my ($events) = @_;
+    return grep { ($_->{type} // '') eq 'http.response.start' } @$events;
+}
+
+sub response_header {
+    my ($events, $name) = @_;
+    my ($start) = response_starts($events);
+    my $wanted = lc $name;
+    my ($header) = grep { lc($_->[0]) eq $wanted } @{$start->{headers} // []};
+    return $header ? $header->[1] : undef;
+}
+
+sub response_body {
+    my ($events) = @_;
+    return join '', map { $_->{body} // '' }
+        grep { ($_->{type} // '') eq 'http.response.body' } @$events;
+}
+
 # ===================
 # JSONBody Middleware Tests
 # ===================
@@ -111,6 +130,45 @@ subtest 'JSONBody - returns 400 for invalid JSON' => sub {
     is $events[0]{status}, 400, 'returns 400 for invalid JSON';
 };
 
+subtest 'JSONBody - invalid JSON delegates a safe negotiated 400' => sub {
+    my $json_mw = PAGI::Middleware::JSONBody->new();
+    my $downstream_calls = 0;
+    my $app = async sub { $downstream_calls++ };
+    my $wrapped = $json_mw->wrap($app);
+    my $scope = make_scope(headers => [
+        ['Content-Type', 'application/json'],
+        ['Accept', 'application/json'],
+    ]);
+
+    my $body_sent = 0;
+    my $receive = async sub {
+        return { type => 'http.disconnect' } if $body_sent++;
+        return { type => 'http.request', body => '{ malformed', more => 0 };
+    };
+    my @events;
+    my $send = async sub { push @events, $_[0] };
+
+    {
+        no warnings 'redefine';
+        local *JSON::MaybeXS::decode_json = sub {
+            die "decoder failed at /srv/private/decoder/source.c line 731\n";
+        };
+        run_async { $wrapped->($scope, $receive, $send) };
+    }
+
+    my @starts = response_starts(\@events);
+    is scalar(@starts), 1, 'invalid JSON starts exactly one response';
+    is $starts[0]{status}, 400, 'invalid JSON remains a 400 response';
+    is response_header(\@events, 'Content-Type'), 'application/problem+json',
+        '400 response honors the original JSON Accept header';
+    my $problem = decode_json(response_body(\@events));
+    is $problem->{detail}, 'The request body is not valid JSON.',
+        'client receives the stable safe detail';
+    unlike response_body(\@events), qr{/srv/private/decoder/source[.]c},
+        'decoder filesystem path is not exposed';
+    is $downstream_calls, 0, 'invalid JSON does not call downstream';
+};
+
 subtest 'JSONBody - returns 413 for large body' => sub {
     my $json_mw = PAGI::Middleware::JSONBody->new(max_size => 100);
 
@@ -145,6 +203,30 @@ subtest 'JSONBody - returns 413 for large body' => sub {
     run_async { $wrapped->($scope, $receive, $send) };
 
     is $events[0]{status}, 413, 'returns 413 for large body';
+};
+
+subtest 'JSONBody - body limit delegates a negotiated 413' => sub {
+    my $json_mw = PAGI::Middleware::JSONBody->new(max_size => 4);
+    my $downstream_calls = 0;
+    my $wrapped = $json_mw->wrap(async sub { $downstream_calls++ });
+    my $scope = make_scope(headers => [
+        ['Content-Type', 'application/json'],
+        ['Accept', 'application/json'],
+    ]);
+    my $receive = async sub {
+        return { type => 'http.request', body => '{"too":"large"}', more => 0 };
+    };
+    my @events;
+    my $send = async sub { push @events, $_[0] };
+
+    run_async { $wrapped->($scope, $receive, $send) };
+
+    my @starts = response_starts(\@events);
+    is scalar(@starts), 1, 'JSON limit starts exactly one response';
+    is $starts[0]{status}, 413, 'JSON limit remains a 413 response';
+    is response_header(\@events, 'Content-Type'), 'application/problem+json',
+        'JSON limit honors the original JSON Accept header';
+    is $downstream_calls, 0, 'JSON limit does not call downstream';
 };
 
 subtest 'JSONBody - skips non-JSON content types' => sub {
@@ -312,6 +394,30 @@ subtest 'FormBody - handles multiple values for same key' => sub {
     is $captured_scope->{'pagi.parsed_body'}{color}, ['red', 'green', 'blue'], 'all values present';
 };
 
+subtest 'FormBody - body limit delegates a negotiated 413' => sub {
+    my $form_mw = PAGI::Middleware::FormBody->new(max_size => 4);
+    my $downstream_calls = 0;
+    my $wrapped = $form_mw->wrap(async sub { $downstream_calls++ });
+    my $scope = make_scope(headers => [
+        ['Content-Type', 'application/x-www-form-urlencoded'],
+        ['Accept', 'text/plain'],
+    ]);
+    my $receive = async sub {
+        return { type => 'http.request', body => 'name=too-long', more => 0 };
+    };
+    my @events;
+    my $send = async sub { push @events, $_[0] };
+
+    run_async { $wrapped->($scope, $receive, $send) };
+
+    my @starts = response_starts(\@events);
+    is scalar(@starts), 1, 'form limit starts exactly one response';
+    is $starts[0]{status}, 413, 'form limit remains a 413 response';
+    is response_header(\@events, 'Content-Type'), 'text/plain; charset=utf-8',
+        'form limit honors the original text Accept header';
+    is $downstream_calls, 0, 'form limit does not call downstream';
+};
+
 subtest 'FormBody - skips non-form content types' => sub {
     my $form_mw = PAGI::Middleware::FormBody->new();
 
@@ -363,6 +469,33 @@ subtest 'ContentNegotiation - selects preferred type' => sub {
     run_async { $wrapped->($scope, $receive, $send) };
 
     is $captured_scope->{'pagi.preferred_content_type'}, 'text/html', 'selects highest q value';
+};
+
+subtest 'ContentNegotiation - shares exact exclusions and accepted scope shape' => sub {
+    my $content_neg = PAGI::Middleware::ContentNegotiation->new(
+        supported_types => ['application/json', 'text/html'],
+    );
+
+    my $captured_scope;
+    my $app = async sub { $captured_scope = $_[0] };
+    my $wrapped = $content_neg->wrap($app);
+    my $scope = make_scope(
+        method  => 'GET',
+        headers => [[
+            'Accept',
+            'application/json;q=0, */*;q=0.5, text/html;q=0.5',
+        ]],
+    );
+
+    run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
+
+    is $captured_scope->{'pagi.preferred_content_type'}, 'text/html',
+        'exact q=0 exclusion is not revived by the positive wildcard';
+    is $captured_scope->{'pagi.accepted_types'}, [
+        { type => 'text/html', q => 0.5 },
+        { type => '*/*', q => 0.5 },
+        { type => 'application/json', q => 0 },
+    ], 'accepted types retain the public hash shape in shared preference order';
 };
 
 subtest 'ContentNegotiation - handles wildcard' => sub {
@@ -473,6 +606,58 @@ subtest 'ContentNegotiation - strict mode returns 406' => sub {
     run_async { $wrapped->($scope, $receive, $send) };
 
     is $events[0]{status}, 406, 'returns 406 Not Acceptable in strict mode';
+};
+
+subtest 'ContentNegotiation - strict failures respond once through Pages' => sub {
+    my @cases = (
+        {
+            name         => 'JSON alias selects problem JSON',
+            accept       => 'application/json',
+            content_type => 'application/problem+json',
+        },
+        {
+            name         => 'unsupported image uses the configured default',
+            accept       => 'image/png',
+            content_type => 'text/html; charset=utf-8',
+        },
+        {
+            name         => 'excluded wildcard reaches one strict response',
+            accept       => '*/*;q=0',
+            content_type => 'text/html; charset=utf-8',
+        },
+    );
+
+    for my $case (@cases) {
+        subtest $case->{name} => sub {
+            my $content_neg = PAGI::Middleware::ContentNegotiation->new(
+                supported_types => ['application/xml'],
+                strict          => 1,
+            );
+            my $downstream_calls = 0;
+            my $wrapped = $content_neg->wrap(async sub { $downstream_calls++ });
+            my $scope = make_scope(
+                method  => 'GET',
+                headers => [['Accept', $case->{accept}]],
+            );
+            my @events;
+            my $send = async sub { push @events, $_[0] };
+
+            run_async { $wrapped->($scope, async sub { {} }, $send) };
+
+            my @starts = response_starts(\@events);
+            is scalar(@starts), 1, 'emits exactly one response start';
+            is $starts[0]{status}, 406, 'the single response is 406';
+            is response_header(\@events, 'Content-Type'), $case->{content_type},
+                'Pages selects the expected representation';
+            is $downstream_calls, 0, 'does not call downstream';
+            if ($case->{accept} eq 'application/json') {
+                my $problem = decode_json(response_body(\@events));
+                is $problem->{detail},
+                    'Not Acceptable. Supported types: application/xml',
+                    '406 retains the safe supported-type detail';
+            }
+        };
+    }
 };
 
 subtest 'ContentNegotiation - handles no Accept header' => sub {
