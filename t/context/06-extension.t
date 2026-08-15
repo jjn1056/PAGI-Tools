@@ -129,12 +129,35 @@ subtest 'custom _resolve_class overrides resolution logic' => sub {
     ok(!$plain_ws->can('is_jsonrpc'), 'plain WS does not have custom method');
 };
 
-subtest 'unknown type from custom factory falls back to HTTP' => sub {
-    my $ctx = PAGI::Context->new(
-        { type => 'carrier_pigeon', headers => [] },
-        sub {}, sub {},
-    );
-    isa_ok($ctx, 'PAGI::Context::HTTP');
+subtest 'mapped extensions do not warn and each factory warns separately for unmapped types' => sub {
+    {
+        package TestSecondFactory::Context;
+        our @ISA = ('PAGI::Context');
+    }
+
+    my @warnings;
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        my $mapped = TestExt::Context->new(
+            { type => 'grpc', headers => [] }, sub {}, sub {},
+        );
+        my $base = PAGI::Context->new(
+            { type => 'mcp', headers => [] }, sub {}, sub {},
+        );
+        my $generic = TestSecondFactory::Context->new(
+            { type => 'mcp', headers => [] }, sub {}, sub {},
+        );
+
+        isa_ok($mapped, 'TestExt::Context::GRPC');
+        is(ref($base), 'PAGI::Context', 'base factory uses generic Context');
+        is(ref($generic), 'PAGI::Context', 'unmapped custom factory uses generic base');
+    }
+
+    is(scalar @warnings, 2, 'each factory emits its own mcp warning');
+    like(join('', @warnings), qr/PAGI::Context.*mcp/,
+        'base warning identifies its factory and type');
+    like(join('', @warnings), qr/TestSecondFactory::Context.*mcp/,
+        'second factory warning identifies its factory and type');
 };
 
 done_testing;

@@ -29,10 +29,32 @@ subtest '_resolve_class returns correct subclass' => sub {
         'PAGI::Context::WebSocket', 'websocket type resolves');
     is(PAGI::Context->_resolve_class({ type => 'sse' }),
         'PAGI::Context::SSE', 'sse type resolves');
-    is(PAGI::Context->_resolve_class({}),
-        'PAGI::Context::HTTP', 'missing type defaults to HTTP');
-    is(PAGI::Context->_resolve_class({ type => 'unknown' }),
-        'PAGI::Context::HTTP', 'unknown type defaults to HTTP');
+    like(dies { PAGI::Context->_resolve_class({}) },
+        qr/scope type.*required/i, 'missing type is malformed');
+    like(dies { PAGI::Context->_resolve_class([]) },
+        qr/scope.*hashref/i, 'non-hash scope is malformed');
+    like(dies { PAGI::Context->_resolve_class({ type => '' }) },
+        qr/scope type.*required/i, 'empty type is malformed');
+    like(dies { PAGI::Context->_resolve_class({ type => [] }) },
+        qr/scope type.*required/i, 'reference type is malformed');
+};
+
+subtest 'unmapped explicit type uses a generic Context once per factory and type' => sub {
+    like(dies { PAGI::Context->new({ headers => [] }, sub {}, sub {}) },
+        qr/scope type.*required/i, 'missing type is malformed');
+
+    my @warnings;
+    my ($first, $second);
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        $first  = PAGI::Context->new({ type => 'mcp', marker => 1 }, sub {}, sub {});
+        $second = PAGI::Context->new({ type => 'mcp', marker => 2 }, sub {}, sub {});
+    }
+    is(ref($first), 'PAGI::Context', 'unknown explicit type uses generic base');
+    is($first->scope->{marker}, 1, 'generic Context preserves raw scope');
+    ok(!$first->can('response'), 'generic Context has no HTTP response API');
+    is(scalar @warnings, 1, 'factory/type warning is emitted once');
+    like($warnings[0], qr/PAGI::Context.*mcp/, 'warning names factory and type');
 };
 
 subtest 'new returns correct subclass' => sub {

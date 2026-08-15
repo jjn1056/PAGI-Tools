@@ -153,6 +153,21 @@ subtest 'best_match with quality=0 (explicitly rejected)' => sub {
     is($best, 'text/html', 'Skips q=0 types');
 };
 
+subtest 'best_match uses effective quality for each supported type' => sub {
+    my @best_cases = (
+        [['text/html', 'application/json'],
+         'text/html;q=0, */*;q=1', 'application/json'],
+        [['text/html', 'application/json'],
+         'text/*;q=0, */*;q=0.5', 'application/json'],
+        [['application/json', 'text/html'],
+         'application/json;q=0.7, text/html;q=0.7', 'application/json'],
+    );
+    for my $case (@best_cases) {
+        is(PAGI::Request::Negotiate->best_match($case->[0], $case->[1]),
+            $case->[2], "effective match for $case->[1]");
+    }
+};
+
 # Test: type_matches exact match
 subtest 'type_matches exact match' => sub {
     my $matches = PAGI::Request::Negotiate->type_matches('text/html', 'text/html');
@@ -278,6 +293,19 @@ subtest 'accepts_type with quality=0' => sub {
     ok(!$accepts, 'Does not accept q=0');
 };
 
+subtest 'accepts_type uses effective quality for concrete and wildcard queries' => sub {
+    my @accept_cases = (
+        ['text/html;q=0, */*;q=1', 'text/html', 0],
+        ['text/html',               'text/*',   1],
+        ['text/*;q=0, */*;q=1',     'text/*',   0],
+        ['text/*;q=0, text/html',   'text/*',   1],
+    );
+    for my $case (@accept_cases) {
+        is(!!PAGI::Request::Negotiate->accepts_type($case->[0], $case->[1]),
+            !!$case->[2], "wildcard query for $case->[0]");
+    }
+};
+
 # Test: quality_for_type gets quality value
 subtest 'quality_for_type gets quality value' => sub {
     my $q = PAGI::Request::Negotiate->quality_for_type(
@@ -376,7 +404,7 @@ subtest 'PAGI::Request accepts with multiple headers' => sub {
     ok $req->accepts('text/html'), 'accepts first header value';
     ok $req->accepts('application/json'), 'accepts second header value';
     ok !$req->accepts('text/xml'), 'does not accept missing type';
-    is $req->preferred_type('json', 'html'), 'html', 'preferred_type works with multiple headers';
+    is $req->preferred_type('json', 'html'), 'json', 'preferred_type retains supported order on a tie';
 };
 
 done_testing;

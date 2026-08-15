@@ -159,26 +159,16 @@ sub best_match {
     my ($class, $supported, $accept_header) = @_;
     return unless $supported && @$supported;
 
-    # Parse Accept header
-    my @accepted = $class->parse_accept($accept_header);
-
-    # Normalize supported types (expand shortcuts)
-    my @normalized = map { $class->normalize_type($_) } @$supported;
-
-    # Find best match
-    for my $accepted (@accepted) {
-        my ($type, $quality) = @$accepted;
-        next if $quality == 0;  # Explicitly rejected
-
-        for my $i (0 .. $#normalized) {
-            if ($class->type_matches($normalized[$i], $type)) {
-                # Return original (possibly shortcut) type
-                return $supported->[$i];
-            }
+    my ($winner, $winner_q);
+    for my $candidate (@$supported) {
+        my $q = $class->quality_for_type($accept_header, $candidate);
+        next unless $q > 0;
+        if (!defined($winner) || $q > $winner_q) {
+            ($winner, $winner_q) = ($candidate, $q);
         }
     }
 
-    return;
+    return $winner;
 }
 
 =head2 type_matches
@@ -264,16 +254,19 @@ sub accepts_type {
     my ($class, $accept_header, $type) = @_;
     $type = $class->normalize_type($type);
 
+    return $class->quality_for_type($accept_header, $type) > 0
+        unless $type =~ m{\*};
+
+    return 1 if $class->quality_for_type($accept_header, $type) > 0;
+
     my @accepted = $class->parse_accept($accept_header);
 
     for my $accepted (@accepted) {
-        my ($pattern, $quality) = @$accepted;
-        next if $quality == 0;
+        my ($concrete) = @$accepted;
+        next if $concrete =~ m{\*};
+        next unless $class->type_matches($concrete, $type);
 
-        # Check both directions: type matches pattern OR pattern matches type
-        # This allows accepts('text/*') to return true if client accepts 'text/html'
-        return 1 if $class->type_matches($type, $pattern);
-        return 1 if $class->type_matches($pattern, $type);
+        return 1 if $class->quality_for_type($accept_header, $concrete) > 0;
     }
 
     return 0;

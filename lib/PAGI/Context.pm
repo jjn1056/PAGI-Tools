@@ -10,6 +10,8 @@ use PAGI::Utils::SecureCompare qw(secure_compare);
 use PAGI::Authority ();
 use PAGI::Routing::Resolver ();
 
+my %WARNED_UNMAPPED;
+
 =encoding UTF-8
 
 =head1 NAME
@@ -127,6 +129,10 @@ Override C<_type_map> to add or replace protocol types:
 
 Override C<_resolve_class> for custom resolution logic beyond the type map.
 
+An explicit, unmapped type returns the generic C<PAGI::Context> base class,
+with one warning per invoking factory and type. Mapped extension types return
+their mapped class without a warning.
+
 =head1 CONSTRUCTOR
 
 =head2 new
@@ -134,7 +140,10 @@ Override C<_resolve_class> for custom resolution logic beyond the type map.
     my $ctx = PAGI::Context->new($scope, $receive, $send);
 
 Factory constructor. Returns a subclass instance based on
-C<< $scope->{type} >>. Defaults to HTTP if type is missing or unknown.
+C<< $scope->{type} >>. The scope must be an unblessed hashref with a defined,
+nonempty scalar type. Missing or malformed types croak. Explicit unmapped
+types return the generic C<PAGI::Context> base class and warn once per
+invoking factory and type.
 
 =cut
 
@@ -172,15 +181,30 @@ sub _type_map {
     my $class = PAGI::Context->_resolve_class($scope);
 
 Resolves the scope to a subclass package name. Looks up
-C<< $scope->{type} >> in C<_type_map>; defaults to the C<http> mapping
-if the type is missing or unknown. Override for custom resolution logic.
+C<< $scope->{type} >> in C<_type_map>. Scope must be an unblessed hashref and
+type must be a defined, nonempty scalar; malformed types croak. An unmapped
+explicit type warns once for each invoking factory/type pair and returns the
+literal C<PAGI::Context> base class. Override for custom resolution logic.
 
 =cut
 
 sub _resolve_class {
     my ($class, $scope) = @_;
-    my $type = $scope->{type} // 'http';
-    return $class->_type_map->{$type} // $class->_type_map->{http};
+    croak 'scope must be an unblessed hashref'
+        unless ref($scope) eq 'HASH' && !blessed($scope);
+
+    my $type = $scope->{type};
+    croak 'scope type is required'
+        unless defined($type) && !ref($type) && length($type);
+
+    my $map = $class->_type_map;
+    return $map->{$type} if exists $map->{$type};
+
+    my $key = $class . "\0" . $type;
+    if (!$WARNED_UNMAPPED{$key}++) {
+        warn "$class received unmapped scope type '$type'; using PAGI::Context\n";
+    }
+    return 'PAGI::Context';
 }
 
 =head1 METHODS
