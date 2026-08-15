@@ -105,7 +105,9 @@ They are included in `:all`. A new `:path` bundle contains `app_path`,
 `path_from_root` validates request-controlled components and constructs a
 filesystem pathname. `replace_path_prefix` performs component-aware translation
 of an existing path into another namespace. Both are synchronous, lexical,
-and free of filesystem I/O.
+side-effect-free, and perform no target filesystem inspection. Resolving a
+relative input may consult the process working directory through
+`File::Spec->rel2abs`.
 
 `PAGI::App::File` owns filesystem inspection and HTTP file serving. It exposes
 documented `locate` and `serve` seams and returns request-local
@@ -435,7 +437,8 @@ The application does not open a filehandle merely to validate it. Such an open
 would add synchronous blocking, transfer handle ownership to the application,
 and reduce the server's freedom to choose an optimized implementation.
 
-The new pure path utilities perform string work only. Location retains the
+The new path utilities perform no target inspection or mutation; relative
+inputs may consult the current working directory. Location retains the
 filesystem probes inherently required to identify files, directories, indexes,
 permissions, size, and mtime. The selected file's metadata is reused rather
 than re-statted during response generation.
