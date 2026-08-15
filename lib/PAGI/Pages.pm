@@ -18,6 +18,9 @@ use PAGI::Response;
 my %REPRESENTATION = map { $_ => 1 } qw(auto html json text);
 my %DEFAULT_REPRESENTATION = map { $_ => 1 } qw(html json text);
 my %WELCOME_OPTION = map { $_ => 1 } qw(as headers cache_control);
+my %REDIRECT_OPTION = map { $_ => 1 } qw(
+    as status detail headers cache_control preserve_query retry_after
+);
 my %ERROR_OPTION = map { $_ => 1 } qw(
     as detail type title instance extensions headers cache_control
     challenge allow length upgrade retry_after blocked_by login_url
@@ -37,6 +40,13 @@ my %RESPONSE_OWNED_FIELD = map { $_ => 1 } qw(
     connection
 );
 my %FORCED_NO_STORE = map { $_ => 1 } qw(428 429 431 511);
+my %REDIRECT_STATUS = (
+    301 => 'Moved Permanently',
+    302 => 'Found',
+    303 => 'See Other',
+    307 => 'Temporary Redirect',
+    308 => 'Permanent Redirect',
+);
 
 my $WELCOME_TITLE = 'Welcome to PAGI';
 my $WELCOME_DETAIL = 'PAGI is a spiritual successor to PSGI for asynchronous Perl applications. '
@@ -103,6 +113,23 @@ sub status {
     return $self->_endpoint($factory);
 }
 
+sub redirect {
+    my ($proto, @args) = @_;
+    my $self = _policy_for($proto);
+    my $source = _take_request_source(\@args);
+    my $target = shift @args;
+    my $opts = _normalize_options('redirect', \%REDIRECT_OPTION, @args);
+    my $status = exists($opts->{status})
+        ? _validated_redirect_status($opts->{status}) : 302;
+    my $factory = _redirect_factory($target, $status, $opts);
+
+    if (defined $source) {
+        my $scope = _scope_from_source($source);
+        return $self->_response_for($scope, $factory->($scope));
+    }
+    return $self->_endpoint($factory);
+}
+
 sub _invoke_named {
     my ($proto, $status, @args) = @_;
     my $self = _policy_for($proto);
@@ -112,6 +139,23 @@ sub _invoke_named {
 
     return $self->_response_for(_scope_from_source($source), $factory->())
         if defined $source;
+    return $self->_endpoint($factory);
+}
+
+sub _invoke_named_redirect {
+    my ($proto, $status, @args) = @_;
+    my $self = _policy_for($proto);
+    my $source = _take_request_source(\@args);
+    my $target = shift @args;
+    my $opts = _normalize_options('redirect', \%REDIRECT_OPTION, @args);
+    croak 'PAGI::Pages named redirect methods do not accept a status option'
+        if exists $opts->{status};
+    my $factory = _redirect_factory($target, $status, $opts);
+
+    if (defined $source) {
+        my $scope = _scope_from_source($source);
+        return $self->_response_for($scope, $factory->($scope));
+    }
     return $self->_endpoint($factory);
 }
 
@@ -166,19 +210,19 @@ sub _endpoint {
 
         if (@call && _is_context_candidate($call[0])) {
             my $scope = _scope_from_source($call[0]);
-            return $self->_response_for($scope, $descriptor_factory->());
+            return $self->_response_for($scope, $descriptor_factory->($scope));
         }
 
         if (@call && _is_scope_candidate($call[0])) {
             my $scope = _scope_from_source($call[0]);
             if (@call == 1) {
-                return $self->_response_for($scope, $descriptor_factory->());
+                return $self->_response_for($scope, $descriptor_factory->($scope));
             }
             if (@call == 3
                     && ref($call[1]) eq 'CODE'
                     && ref($call[2]) eq 'CODE') {
                 my $response = $self->_response_for(
-                    $scope, $descriptor_factory->(),
+                    $scope, $descriptor_factory->($scope),
                 );
                 return Future->wrap($response->respond($call[2]));
             }
@@ -308,6 +352,14 @@ sub _validated_status {
     return 0 + $status;
 }
 
+sub _validated_redirect_status {
+    my ($status) = @_;
+    croak 'PAGI::Pages redirect status must be one of 301, 302, 303, 307, or 308'
+        unless defined($status) && !ref($status)
+            && $status =~ /\A[0-9]+\z/ && $REDIRECT_STATUS{$status};
+    return 0 + $status;
+}
+
 sub _welcome_descriptor {
     my ($opts) = @_;
     return {
@@ -320,6 +372,78 @@ sub _welcome_descriptor {
         headers       => exists($opts->{headers}) ? [@{$opts->{headers}}] : [],
         cache_control => $opts->{cache_control},
     };
+}
+
+sub _redirect_factory {
+    my ($target, $status, $opts) = @_;
+    $target = _validate_uri_reference('redirect target', $target);
+    my $prepared = _prepare_redirect_options($opts);
+    my $detail = exists($opts->{detail})
+        ? $opts->{detail} : 'The requested resource has moved.';
+
+    return sub {
+        my ($scope) = @_;
+        my $location = _redirect_location($target, $scope,
+            $prepared->{preserve_query});
+        return {
+            kind          => 'redirect',
+            status        => $status,
+            title         => $REDIRECT_STATUS{$status},
+            detail        => $detail,
+            location      => $location,
+            as            => $opts->{as},
+            headers       => [@{$prepared->{headers}}],
+            cache_control => $prepared->{cache_control},
+        };
+    };
+}
+
+sub _prepare_redirect_options {
+    my ($opts) = @_;
+    my @headers = exists($opts->{headers}) ? @{$opts->{headers}} : ();
+
+    if (exists $opts->{retry_after}) {
+        croak 'PAGI::Pages redirect retry_after conflicts with raw Retry-After header'
+            if _has_header(\@headers, 'Retry-After');
+        push @headers, 'Retry-After' => _normalize_retry_after(
+            $opts->{retry_after},
+        );
+    }
+
+    my $preserve_query = exists($opts->{preserve_query})
+        ? $opts->{preserve_query} : 0;
+    croak 'PAGI::Pages preserve_query must be a Boolean scalar'
+        unless defined($preserve_query) && !ref($preserve_query)
+            && ($preserve_query eq '0' || $preserve_query eq '1');
+
+    return {
+        headers        => \@headers,
+        cache_control  => $opts->{cache_control},
+        preserve_query => $preserve_query ? 1 : 0,
+    };
+}
+
+sub _redirect_location {
+    my ($target, $scope, $preserve_query) = @_;
+    return $target unless $preserve_query;
+    my $query = $scope->{query_string};
+    return $target unless defined($query) && !ref($query) && length($query);
+
+    my $fragment = '';
+    my $fragment_at = index($target, '#');
+    if ($fragment_at >= 0) {
+        $fragment = substr($target, $fragment_at);
+        $target = substr($target, 0, $fragment_at);
+    }
+
+    if (index($target, '?') < 0) {
+        $target .= '?';
+    }
+    elsif (!(substr($target, -1, 1) eq '?'
+            && index($target, '?') == length($target) - 1)) {
+        $target .= '&';
+    }
+    return $target . $query . $fragment;
 }
 
 sub _error_factory {
@@ -663,7 +787,12 @@ sub _response_for {
         _reject_future($rendered);
         croak 'render_json must return a hashref'
             unless ref($rendered) eq 'HASH' && !blessed($rendered);
-        $body = eval { JSON::MaybeXS::encode_json($rendered) };
+        my %json = %$rendered;
+        if ($page->{kind} eq 'redirect') {
+            $json{status} = $page->{status};
+            $json{location} = $page->{location};
+        }
+        $body = eval { JSON::MaybeXS::encode_json(\%json) };
         croak "PAGI::Pages could not encode JSON: $@" if $@;
         $content_type = 'application/json';
     }
@@ -693,6 +822,8 @@ sub _assembled_headers {
 
     push @headers, 'Cache-Control' => $page->{cache_control}
         if defined $page->{cache_control};
+    push @headers, Location => $page->{location}
+        if $page->{kind} eq 'redirect';
     return _merge_vary_accept(\@headers)
         if $self->_effective_as($page) eq 'auto';
     return \@headers;
@@ -803,6 +934,10 @@ sub render_html {
         $action = '<p class="action"><a href="' . _html_escape($page->{documentation})
             . '">' . _html_escape($WELCOME_LABEL) . '</a></p>';
     }
+    elsif ($page->{kind} eq 'redirect') {
+        $action = '<p class="action"><a href="' . _html_escape($page->{location})
+            . '">' . _html_escape($page->{location}) . '</a></p>';
+    }
     elsif ($page->{status} == 511 && defined $page->{login_url}) {
         $action = '<p class="action"><a href="' . _html_escape($page->{login_url})
             . '">Network login</a></p>';
@@ -843,6 +978,9 @@ sub render_text {
     }
     my $text = $page->{status} . ' ' . $page->{title} . "\n\n"
         . $page->{detail} . "\n";
+    if ($page->{kind} eq 'redirect') {
+        $text .= "\nLocation:\n" . $page->{location} . "\n";
+    }
     if ($page->{status} == 511 && defined $page->{login_url}) {
         $text .= "\nNetwork login:\n" . $page->{login_url} . "\n";
     }
@@ -864,11 +1002,43 @@ sub render_problem {
 
 sub render_json {
     my ($self, $page) = @_;
+    if ($page->{kind} eq 'redirect') {
+        return {
+            status   => $page->{status},
+            location => $page->{location},
+            detail   => $page->{detail},
+        };
+    }
     return {
         title         => $page->{title},
         detail        => $page->{detail},
         documentation => $page->{documentation},
     };
+}
+
+sub moved_permanently {
+    my $proto = shift;
+    return _invoke_named_redirect($proto, 301, @_);
+}
+
+sub found {
+    my $proto = shift;
+    return _invoke_named_redirect($proto, 302, @_);
+}
+
+sub see_other {
+    my $proto = shift;
+    return _invoke_named_redirect($proto, 303, @_);
+}
+
+sub temporary_redirect {
+    my $proto = shift;
+    return _invoke_named_redirect($proto, 307, @_);
+}
+
+sub permanent_redirect {
+    my $proto = shift;
+    return _invoke_named_redirect($proto, 308, @_);
 }
 
 sub favicon_href {
