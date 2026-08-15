@@ -13,8 +13,7 @@ use lib "$FindBin::Bin/../lib";
 
 use PAGI::App::URLMap;
 use PAGI::App::Cascade;
-use PAGI::App::NotFound;
-use PAGI::App::Redirect;
+use PAGI::Pages;
 
 my $loop = IO::Async::Loop->new;
 
@@ -211,106 +210,6 @@ subtest 'App::Cascade tries apps in sequence' => sub {
     };
 };
 
-# =============================================================================
-# Test: PAGI::App::NotFound
-# =============================================================================
-
-subtest 'App::NotFound returns 404' => sub {
-
-    subtest 'default 404 response' => sub {
-        my $app = PAGI::App::NotFound->new->to_app;
-
-        my @sent;
-        run_async(async sub {
-            await $app->(
-                { type => 'http', path => '/anything' },
-                async sub { { type => 'http.disconnect' } },
-                async sub  {
-        my ($event) = @_; push @sent, $event },
-            );
-        });
-
-        is $sent[0]{status}, 404, 'returns 404';
-        like $sent[1]{body}, qr/Not Found/i, 'default body';
-    };
-
-    subtest 'custom body' => sub {
-        my $app = PAGI::App::NotFound->new(body => 'Custom 404')->to_app;
-
-        my @sent;
-        run_async(async sub {
-            await $app->(
-                { type => 'http', path => '/anything' },
-                async sub { { type => 'http.disconnect' } },
-                async sub  {
-        my ($event) = @_; push @sent, $event },
-            );
-        });
-
-        is $sent[1]{body}, 'Custom 404', 'custom body';
-    };
-};
-
-# =============================================================================
-# Test: PAGI::App::Redirect
-# =============================================================================
-
-subtest 'App::Redirect returns redirects' => sub {
-
-    subtest 'default 302 redirect' => sub {
-        my $app = PAGI::App::Redirect->new(to => '/new-location')->to_app;
-
-        my @sent;
-        run_async(async sub {
-            await $app->(
-                { type => 'http', path => '/old' },
-                async sub { { type => 'http.disconnect' } },
-                async sub  {
-        my ($event) = @_; push @sent, $event },
-            );
-        });
-
-        is $sent[0]{status}, 302, 'returns 302';
-        ok((grep { $_->[0] eq 'location' && $_->[1] eq '/new-location' } @{$sent[0]{headers}}),
-            'Location header set');
-    };
-
-    subtest '301 permanent redirect' => sub {
-        my $app = PAGI::App::Redirect->new(to => '/new', status => 301)->to_app;
-
-        my @sent;
-        run_async(async sub {
-            await $app->(
-                { type => 'http', path => '/old' },
-                async sub { { type => 'http.disconnect' } },
-                async sub  {
-        my ($event) = @_; push @sent, $event },
-            );
-        });
-
-        is $sent[0]{status}, 301, 'returns 301';
-    };
-
-    subtest 'redirect with code' => sub {
-        my $app = PAGI::App::Redirect->new(
-            to => sub { "/prefix$_[0]->{path}" },
-        )->to_app;
-
-        my @sent;
-        run_async(async sub {
-            await $app->(
-                { type => 'http', path => '/test' },
-                async sub { { type => 'http.disconnect' } },
-                async sub  {
-        my ($event) = @_; push @sent, $event },
-            );
-        });
-
-        ok((grep { $_->[0] eq 'location' && $_->[1] eq '/prefix/test' } @{$sent[0]{headers}}),
-            'dynamic Location');
-    };
-};
-
 subtest 'URLMap sets spec root_path key (not script_name)' => sub {
     my @coercion_calls;
     my $inner = async sub {
@@ -374,10 +273,9 @@ subtest 'URLMap coerces components, class names, and default' => sub {
 
 subtest 'Cascade preserves app coercion and catch options' => sub {
     require TestApps::Component;
-    require PAGI::App::NotFound;
 
     my $cascade = PAGI::App::Cascade->new(
-        apps => [ PAGI::App::NotFound->new ],   # always 404s -> falls through
+        apps => [PAGI::Pages->not_found(as => 'text')],
     );
     $cascade->add(make_response_app(404, 'coderef'));
     $cascade->add(TestApps::Component->new(body => 'object'));
@@ -422,9 +320,7 @@ subtest 'Cascade preserves app coercion and catch options' => sub {
     );
 };
 
-subtest 'Redirect builds a response value (static + dynamic + query)' => sub {
-    require PAGI::App::Redirect;
-
+subtest 'Pages redirect endpoints and ordinary closures compose as apps' => sub {
     my $run = sub {
         my ($app, $scope) = @_;
         my @sent;
@@ -434,35 +330,44 @@ subtest 'Redirect builds a response value (static + dynamic + query)' => sub {
     };
 
     my $sent = $run->(
-        PAGI::App::Redirect->new(to => '/new', status => 301)->to_app,
+        PAGI::Pages->moved_permanently('/new', as => 'text'),
         { type => 'http', method => 'GET', path => '/old' },
     );
     is $sent->[0]{status}, 301, 'status';
     my %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
     is $h{location}, '/new', 'location';
-    is $h{'content-type'}, 'text/plain', 'content-type preserved';
-    is $h{'content-length'}, 0, 'content-length 0';
-    is $sent->[1]{body}, '', 'empty body';
+    is $h{'content-type'}, 'text/plain; charset=utf-8',
+        'fixed endpoint renders a Pages representation';
 
+    my $dynamic = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $target = "/from$scope->{path}";
+        my $response = PAGI::Pages->redirect(
+            $scope,
+            $target,
+            preserve_query => 1,
+            as             => 'text',
+        );
+        await Future->wrap($response->respond($send));
+    };
     $sent = $run->(
-        PAGI::App::Redirect->new(to => sub { my ($s) = @_; "/from$s->{path}" })->to_app,
+        $dynamic,
         { type => 'http', method => 'GET', path => '/p', query_string => 'a=1' },
     );
     %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
-    is $h{location}, '/from/p?a=1', 'coderef receives scope; query preserved';
+    is $h{location}, '/from/p?a=1',
+        'ordinary closure computes the target and asks Pages to preserve query';
     is $sent->[0]{status}, 302, 'default status';
 
     $sent = $run->(
-        PAGI::App::Redirect->new(to => '/x', preserve_query => 0)->to_app,
+        PAGI::Pages->redirect('/x', as => 'text'),
         { type => 'http', method => 'GET', path => '/y', query_string => 'a=1' },
     );
     %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
-    is $h{location}, '/x', 'preserve_query => 0 suppresses query append';
+    is $h{location}, '/x', 'Pages secure default does not preserve query';
 };
 
-subtest 'NotFound builds a response value (static + coderef body)' => sub {
-    require PAGI::App::NotFound;
-
+subtest 'Pages terminal endpoints participate in Cascade catch handling' => sub {
     my $run = sub {
         my ($app, $scope) = @_;
         my @sent;
@@ -471,31 +376,19 @@ subtest 'NotFound builds a response value (static + coderef body)' => sub {
         return \@sent;
     };
 
-    # defaults
+    my $cascade = PAGI::App::Cascade->new(
+        apps => [
+            PAGI::Pages->not_found(as => 'text'),
+            PAGI::Pages->gone(as => 'text'),
+        ],
+    )->to_app;
     my $sent = $run->(
-        PAGI::App::NotFound->new->to_app,
-        { type => 'http', method => 'GET', path => '/nope' },
-    );
-    is $sent->[0]{status}, 404, 'default 404';
-    my %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
-    is $h{'content-type'}, 'text/plain', 'default content-type';
-    is $h{'content-length'}, length('Not Found'), 'content-length matches body';
-    is $sent->[1]{body}, 'Not Found', 'default body';
-
-    # custom status/content_type + coderef body that USES the scope
-    $sent = $run->(
-        PAGI::App::NotFound->new(
-            status       => 410,
-            content_type => 'text/html',
-            body         => sub { my ($s) = @_; "gone: $s->{path}" },
-        )->to_app,
+        $cascade,
         { type => 'http', method => 'GET', path => '/x' },
     );
-    is $sent->[0]{status}, 410, 'custom status';
-    %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
-    is $h{'content-type'}, 'text/html', 'custom content-type';
-    is $h{'content-length'}, length('gone: /x'), 'content-length for coderef body';
-    is $sent->[1]{body}, 'gone: /x', 'coderef body receives scope';
+    is $sent->[0]{status}, 410, 'caught Pages 404 advances to final Pages endpoint';
+    like $sent->[1]{body}, qr/^410 Gone/m,
+        'final Pages endpoint owns the terminal representation';
 };
 
 done_testing;

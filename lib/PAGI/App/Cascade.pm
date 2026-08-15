@@ -22,9 +22,10 @@ PAGI::App::Cascade - Try apps in sequence until success
 =head1 SYNOPSIS
 
     use PAGI::App::Cascade;
+    use PAGI::Pages ();
 
     my $app = PAGI::App::Cascade->new(
-        apps => [$static_app, PAGI::App::NotFound->new(body => 'nope')],
+        apps => [$static_app, PAGI::Pages->not_found(as => 'text')],
         catch => [404, 405],
     )->to_app;
 

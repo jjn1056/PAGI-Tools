@@ -176,6 +176,7 @@ subtest 'component routing publishes the canonical composed address map' => sub 
     is(
         {
             '/home' => $root->path_for('/home'),
+            '/pagi' => $root->path_for('/pagi'),
             '/person/index' => $root->path_for('/person/index'),
             '/person/show' => $root->path_for(
                 '/person/show', { person_id => 2 },
@@ -192,24 +193,26 @@ subtest 'component routing publishes the canonical composed address map' => sub 
         },
         {
             '/home' => '/',
+            '/pagi' => '/pagi',
             '/person/index' => '/person/',
             '/person/show' => '/person/2',
             '/person/show-negative' => '/person/-1',
             '/person/blog/index' => '/person/2/blog/',
             '/person/blog/show' => '/person/2/blog/201',
         },
-        'Root exposes the five canonical logical addresses and URL patterns',
+        'Root exposes the six canonical logical addresses and URL patterns',
     );
     is(
         [sort keys %{$root->named_routes}],
         [qw(
             /home
+            /pagi
             /person/blog/index
             /person/blog/show
             /person/index
             /person/show
         )],
-        'Root publishes exactly the five named leaves',
+        'Root publishes exactly the six named leaves',
     );
 
     my ($home_source) = grep {
@@ -313,6 +316,7 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         } @{$state->{data}->people};
         my ($first_blog) = @{$state->{data}->blogs_for($ada->{id})};
         my $home_target = '/';
+        my $pagi_path = $routing->path_for('/pagi');
 
         my $people_path = $routing->path_for('/person/index');
         my $person_path = $routing->path_for(
@@ -332,6 +336,15 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         is($home->status, 200, 'Root home responds');
         like($home->text, qr{<h1>My PAGI People</h1>},
             'Root home renders startup-backed fixture data');
+
+        my $pagi_link = _follow_link($client, $home, 'PAGI welcome');
+        is($pagi_link->{href}, $pagi_path,
+            'Root renders the named Pages welcome path');
+        is($pagi_link->{response}->status, 200,
+            'Root-to-Pages generated link is followed');
+        like($pagi_link->{response}->text,
+            qr/<title>200 Welcome to PAGI<\/title>/,
+            'Pages route returns the stock Welcome response from Context');
 
         my $people_link = _follow_link($client, $home, 'Browse people');
         is($people_link->{href}, $people_path,
@@ -435,8 +448,8 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         my $noninteger_person = $client->get('/person/not-an-integer');
         is($noninteger_person->status, 404,
             'a noninteger person identifier does not reach the typed leaf');
-        is($noninteger_person->text, 'Not Found',
-            'a noninteger person identifier reaches the Compose automatic 404');
+        like($noninteger_person->text, qr{<h1>Not Found</h1>},
+            'a noninteger person identifier reaches the Pages-backed Compose 404');
         unlike($noninteger_person->text, qr{<h1>Person not found</h1>},
             'the automatic noninteger response is not the branded handler 404');
 
@@ -460,7 +473,7 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         my $child_none = $client->get('/person/1/unmatched');
         is($child_none->status, 404,
             'Person Router mount owns its routing decline');
-        is($child_none->text, 'Not Found',
+        like($child_none->text, qr{<h1>Not Found</h1>},
             'Compose completes the child decline instead of resuming Root catchall');
 
         my $wrong_method = $client->post('/person/1/blog/101');

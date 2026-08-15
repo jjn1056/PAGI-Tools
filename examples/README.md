@@ -49,11 +49,12 @@ raw PAGI protocol details that belong alongside the server implementation.
 10. `endpoint-demo` - high-level HTTP endpoint with `PAGI::Endpoint::HTTP`
 11. `endpoint-router-demo` - composing routes with `PAGI::Endpoint::Router`
 12. `full-demo` - kitchen-sink demo combining multiple toolkit features
-13. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
-14. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
-15. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
-16. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
-17. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently
+13. `pages` - Compose-rooted `PAGI::Pages` demo covering Welcome, redirects, negotiated HTML/problem JSON/text errors, Route versus Mount, Context-managed Responses, raw `respond($send)`, and lifespan
+14. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
+15. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
+16. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
+17. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
+18. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently
 
 **Note on `websocket-chat-v2/public`:** this directory is a symlink to
 `10-chat-showcase/public`. It works in git checkouts but is omitted from the

@@ -71,9 +71,11 @@ call enable(), enable_if(), mount(), and return the final app.
 The final value of the block is coerced via L<PAGI::Utils/to_app>,
 so you can return a component object or class name directly:
 
+    use PAGI::Pages ();
+
     my $app = builder {
         enable 'ContentLength';
-        PAGI::App::NotFound->new;
+        PAGI::Pages->not_found;
     };
 
 =cut
@@ -258,7 +260,7 @@ sub add_mount {
 Build the composed application. C<$inner_app> accepts anything
 L<PAGI::Utils/to_app> accepts: a coderef, a component object with
 C<to_app>, or a class name. This means C<builder { ...; $router }> and
-C<builder { ...; PAGI::App::NotFound->new }> work without an explicit
+C<builder { ...; PAGI::Pages->not_found }> work without an explicit
 C<< ->to_app >> call.
 
 =cut

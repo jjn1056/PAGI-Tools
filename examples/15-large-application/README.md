@@ -59,6 +59,10 @@ lib/MyApp/
 - `MyApp::Data` is created during startup and shared through
   `$c->state->{data}`. `MyApp::View` renders the shared HTML document shell
   without introducing a template engine.
+- Root's named `/pagi` route returns `PAGI::Pages->welcome($c)`. The home page
+  reaches it through a generated `path_for('/pagi')` link, demonstrating an
+  ordinary Pages Response returned from a selected Context handler without
+  replacing the application's branded or domain-specific missing pages.
 
 ## Named address map
 
@@ -68,6 +72,7 @@ paths. The mount names contribute `person` and `blog`:
 | Logical address | URL pattern | Source package |
 |---|---|---|
 | `/home` | `/` | `MyApp::Root` |
+| `/pagi` | `/pagi` | `MyApp::Root` |
 | `/person/index` | `/person/` | `MyApp::Person` |
 | `/person/show` | `/person/{person_id}` | `MyApp::Person` |
 | `/person/blog/index` | `/person/{person_id}/blog/` | `MyApp::Person::Blogs` |
@@ -99,6 +104,8 @@ would normally expose a narrower local provider such as `&PersonId`.
 
 ## Outcomes worth trying
 
+- `/pagi` is the stock Pages Welcome response reached from the generated home
+  link.
 - `/person/999` is a Person handler-owned 404.
 - `/person/-1` matches `&Int` and is also a Person handler-owned 404.
 - `/person/not-an-integer` fails `&Int`; the selected Person Router publishes
@@ -123,8 +130,8 @@ prove -lv t/integration-large-application.t
 
 The integration test uses `PAGI::Test::Client->run`, including lifespan
 startup and shutdown. It begins navigation at `/`, extracts exact-label hrefs
-from the rendered HTML, and follows the generated links through the complete
-Root, Person, and Blogs graph without starting a live server.
+from the rendered HTML, and follows the generated Pages, Root, Person, and
+Blogs links without starting a live server.
 
 ## Starlette comparison
 

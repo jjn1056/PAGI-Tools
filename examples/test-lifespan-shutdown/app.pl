@@ -1,12 +1,13 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
+use Future;
 use Future::AsyncAwait;
-use PAGI::App::NotFound;
+use PAGI::Pages;
 
 print STDERR "Parent PID: $$\n";
 
-my $not_found = PAGI::App::NotFound->new->to_app;
+my $not_found = PAGI::Pages->not_found(as => 'text');
 
 my $app = async sub {
     my ($scope, $receive, $send) = @_;
@@ -30,7 +31,8 @@ my $app = async sub {
     }
 
     # Default handler for HTTP
-    return await $not_found->($scope, $receive, $send);
+    return await Future->wrap($not_found->($scope, $receive, $send));
 };
 
+no warnings 'void';
 $app;

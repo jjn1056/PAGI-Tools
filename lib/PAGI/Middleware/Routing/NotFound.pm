@@ -98,6 +98,8 @@ This middleware is conditional: it interprets a trusted routing decline at an
 enclosing boundary. For an unconditional terminal 404 endpoint, use Pages
 directly and let Compose supply the final HTTP and protocol boundaries:
 
+    use PAGI::Pages ();
+
     my $app = compose(
         app => PAGI::Pages->not_found,
     )->to_app;
