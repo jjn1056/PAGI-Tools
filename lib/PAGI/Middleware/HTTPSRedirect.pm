@@ -69,10 +69,17 @@ sub _init {
 
     my $redirect_code = exists($config->{redirect_code})
         ? $config->{redirect_code} : 301;
+    my %supported_redirect_code = map { $_ => 1 } qw(301 302 303 307 308);
+    my ($canonical_redirect_code, $normalized_redirect_code);
+    if (defined($redirect_code) && !ref($redirect_code)) {
+        $canonical_redirect_code = "$redirect_code";
+        $normalized_redirect_code = 0 + $redirect_code
+            if $supported_redirect_code{$canonical_redirect_code};
+    }
     croak 'HTTPSRedirect redirect_code must be one of 301, 302, 303, 307, or 308'
-        unless defined($redirect_code) && !ref($redirect_code)
-            && $redirect_code =~ /\A(?:301|302|303|307|308)\z/;
-    $self->{redirect_code} = 0 + $redirect_code;
+        unless defined($normalized_redirect_code)
+            && $supported_redirect_code{$normalized_redirect_code};
+    $self->{redirect_code} = $normalized_redirect_code;
     $self->{exclude} = $config->{exclude} // [];
     $self->{hsts} = $config->{hsts} // 0;
     $self->{hsts_max_age} = $config->{hsts_max_age} // 31536000;

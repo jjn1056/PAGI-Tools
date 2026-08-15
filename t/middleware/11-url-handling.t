@@ -6,7 +6,7 @@ use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use JSON::MaybeXS;
-use Scalar::Util qw(refaddr);
+use Scalar::Util qw(dualvar refaddr);
 
 use PAGI::Middleware::Rewrite;
 use PAGI::Middleware::HTTPSRedirect;
@@ -156,12 +156,72 @@ subtest 'redirect middleware constructors accept exactly Pages redirect statuses
             ok lives { $factory->($status) },
                 "$name accepts redirect status $status";
         }
-        for my $status (undef, 0, 200, 300, 304, 305, 306, 309, 399, '302.0', 'x') {
-            like dies { $factory->($status) },
+
+        for my $case (
+            ['undefined', undef],
+            ['zero', 0],
+            ['non-redirect integer', 200],
+            ['unsupported 3xx integer', 300],
+            ['bodyless 304', 304],
+            ['unused 305', 305],
+            ['unused 306', 306],
+            ['unsupported 309', 309],
+            ['unsupported 399', 399],
+            ['decimal string', '302.0'],
+            ['leading-zero string', '0301'],
+            ['empty string', ''],
+            ['nonnumeric string', 'x'],
+            ['array reference', []],
+            ['hash reference', {}],
+            ['code reference', sub { 301 }],
+        ) {
+            my ($label, $status) = @$case;
+            my @warnings;
+            my $error;
+            {
+                local $SIG{__WARN__} = sub { push @warnings, @_ };
+                $error = dies { $factory->($status) };
+            }
+            like $error,
                 qr/redirect_code.*301.*302.*303.*307.*308/i,
-                "$name rejects unsupported redirect status "
-                    . (defined($status) ? $status : 'undef');
+                "$name rejects $label redirect status at construction";
+            is \@warnings, [], "$name rejects $label without warnings";
         }
+
+        my @dualvar_cases = (
+            [
+                'canonical string with unsupported numeric facet',
+                dualvar(999, '301'),
+            ],
+            [
+                'supported numeric with noncanonical string facet',
+                dualvar(301, '999'),
+            ],
+        );
+        for my $case (@dualvar_cases) {
+            my ($label, $status) = @$case;
+            my @warnings;
+            my $error;
+            {
+                local $SIG{__WARN__} = sub { push @warnings, @_ };
+                $error = dies { $factory->($status) };
+            }
+            like $error,
+                qr/redirect_code.*301.*302.*303.*307.*308/i,
+                "$name rejects $label at construction";
+            is \@warnings, [], "$name rejects $label without warnings";
+        }
+
+        my $matching;
+        my @matching_warnings;
+        {
+            local $SIG{__WARN__} = sub { push @matching_warnings, @_ };
+            $matching = $factory->(dualvar(307, '307'));
+        }
+        is $matching->{redirect_code}, 307,
+            "$name stores a matching dualvar as the intended status";
+        is \@matching_warnings, [],
+            "$name accepts a matching dualvar without warnings";
     }
 };
 
