@@ -6,6 +6,7 @@ use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use JSON::MaybeXS qw(decode_json);
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 
@@ -14,6 +15,7 @@ use PAGI::Middleware::SecurityHeaders;
 use PAGI::Middleware::TrustedHosts;
 use PAGI::Middleware::CSRF;
 use PAGI::Context;
+use PAGI::Headers;
 
 my $loop = IO::Async::Loop->new;
 
@@ -604,6 +606,118 @@ subtest 'TrustedHosts rejects undefined headers even when empty Host is allowed'
     is $sent[0]{status}, 400, 'undefined headers container returns 400';
     like $sent[1]{body}, qr{<title>400 Bad Request</title>},
         'undefined headers container returns the default Pages HTML body';
+};
+
+subtest 'TrustedHosts structurally malformed headers retain safe Accept negotiation' => sub {
+    my @cases = (
+        {
+            name    => 'scalar header entry',
+            invalid => sub { 'Host: rejected.example' },
+        },
+        {
+            name    => 'hashref header entry',
+            invalid => sub { { Host => 'rejected.example' } },
+        },
+        {
+            name    => 'wrong-length header pair',
+            invalid => sub { ['Host', 'rejected.example', 'extra'] },
+        },
+        {
+            name    => 'reference header name',
+            invalid => sub { [['Host'], 'rejected.example'] },
+        },
+        {
+            name        => 'reference header value with inherited cache',
+            invalid     => sub { ['Host', ['rejected.example']] },
+            stale_cache => 1,
+        },
+    );
+    my @representations = (
+        ['application/problem+json', 'application/problem+json'],
+        ['text/plain', 'text/plain; charset=utf-8'],
+    );
+
+    for my $case (@cases) {
+        for my $representation (@representations) {
+            my ($accept, $content_type) = @$representation;
+            my $headers = [
+                $case->{invalid}->(),
+                ['AcCePt', $accept],
+            ];
+            my $header_bytes = JSON::MaybeXS->new(canonical => 1)->encode($headers);
+            my $scope = {
+                type    => 'http',
+                path    => '/',
+                method  => 'GET',
+                headers => $headers,
+            };
+            if ($case->{stale_cache}) {
+                $scope->{'pagi.request.headers'} = PAGI::Headers->new([
+                    ['Accept', 'text/html'],
+                ]);
+            }
+            my $original_headers = $scope->{headers};
+            my $original_cache = $scope->{'pagi.request.headers'};
+            my $mw = PAGI::Middleware::TrustedHosts->new(
+                hosts => ['example.com'],
+            );
+            my $app_calls = 0;
+            my $wrapped = $mw->wrap(async sub { $app_calls++ });
+            my @sent;
+            my $future = $wrapped->(
+                $scope,
+                async sub { { type => 'http.disconnect' } },
+                async sub { my ($event) = @_; push @sent, $event },
+            );
+            $loop->await($future);
+
+            my $label = "$case->{name} with $accept";
+            ok $future->is_done, "$label completes without an internal diagnostic";
+            is $app_calls, 0, "$label does not call downstream";
+            is scalar(@sent), 2, "$label sends exactly start and terminal body";
+            if (@sent == 2) {
+                is $sent[0]{type}, 'http.response.start',
+                    "$label sends response start first";
+                is $sent[0]{status}, 400, "$label retains status 400";
+                is [response_header_values($sent[0], 'Content-Type')],
+                    [$content_type],
+                    "$label negotiates using the surviving Accept pair";
+                is $sent[1]{type}, 'http.response.body',
+                    "$label sends a terminal response body";
+                is $sent[1]{more}, 0, "$label terminates the response";
+                unlike $sent[1]{body}, qr/rejected\.example/,
+                    "$label does not expose rejected header input";
+
+                if ($accept eq 'application/problem+json') {
+                    my $problem = eval { decode_json($sent[1]{body}) };
+                    ok $problem, "$label renders a JSON problem document";
+                    if ($problem) {
+                        is $problem->{status}, 400,
+                            "$label renders problem status";
+                        is $problem->{detail},
+                            'The server could not understand the request.',
+                            "$label renders only the safe generic detail";
+                    }
+                }
+                else {
+                    is $sent[1]{body},
+                        "400 Bad Request\n\nThe server could not understand the request.\n",
+                        "$label renders the safe generic text body";
+                }
+            }
+
+            is refaddr($scope->{headers}), refaddr($original_headers),
+                "$label preserves the original header container";
+            my $current_header_bytes = JSON::MaybeXS->new(canonical => 1)
+                ->encode($scope->{headers});
+            is $current_header_bytes,
+                $header_bytes, "$label does not mutate malformed header data";
+            if ($case->{stale_cache}) {
+                is refaddr($scope->{'pagi.request.headers'}), refaddr($original_cache),
+                    "$label leaves the original request header cache untouched";
+            }
+        }
+    }
 };
 
 subtest 'TrustedHosts preserves non-HTTP pass-through gate' => sub {
