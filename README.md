@@ -41,8 +41,8 @@ middleware suite — so the same application reads like this:
     my $routing = $router->to_router; # retain one immutable snapshot
     my $app = compose(app => $routing)->to_app; # complete deployed app
 
-For conventional negotiated pages, `PAGI::Pages` returns an ordinary Response
-or a terminal endpoint:
+For a small conventional landing page or HTTP error, [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) builds an
+ordinary negotiated Response or a terminal endpoint:
 
     use PAGI::Pages;
 
@@ -84,8 +84,8 @@ The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
 route metadata, constraints, GET/HEAD behavior, nonterminal HTTP decline
 evidence, first-seen method unions, written declaration order, and reverse
 routing. Ordinary HTTP handlers receive `$c` and return a Response. Native
-channel ownership is always explicit with `raw`. A naked `to_app` Router is a
-low-level routing component: a miss sends no response. Compose supplies the
+channel ownership is always explicit with `raw`. A naked `to_app` Router is
+a low-level routing component: a miss sends no response. Compose supplies the
 complete deployed boundary and mandatory inert 404, 405, and 500 failsafes.
 See the
 [router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md)
@@ -178,7 +178,8 @@ protocol specification lives in the `PAGI` distribution.
 [PAGI::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATutorial) (the protocol tutorial, in the `PAGI` distribution),
 [PAGI::Tools::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ATutorial) (this distribution's helpers guide),
 [PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook) (this distribution's recipes), [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose),
-[PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
+[PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter),
+[PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
 [router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md),
 [PAGI::Server::Runner](https://metacpan.org/pod/PAGI%3A%3AServer%3A%3ARunner) - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)
