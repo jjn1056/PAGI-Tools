@@ -222,6 +222,42 @@ subtest 'Future custom renderer owns explicit status and headers' => sub {
         'custom cache policy is untouched';
 };
 
+subtest 'invalid exception status claim reaches custom handler with a safe seed' => sub {
+    my $error = Local::StatusError->new(999, 'out-of-range secret');
+    my (@reported, @warnings);
+    my ($seeded_status, $handler_error);
+    my $middleware = PAGI::Middleware::ErrorHandler->new(
+        on_error => sub { push @reported, $_[0]; return Future->done },
+        handler  => sub {
+            my ($context, $received_error) = @_;
+            $seeded_status = $context->response->status;
+            $handler_error = $received_error;
+            return $context->text('safe custom response');
+        },
+    );
+
+    my ($future, $events);
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        ($future, $events) = invoke($middleware, async sub { die $error });
+        settle($future);
+    }
+
+    ok $future->is_done, 'out-of-range claim is contained';
+    is $seeded_status, 500, 'custom handler receives a safe status seed';
+    is refaddr($handler_error), refaddr($error),
+        'custom handler receives the original exception object';
+    is refaddr($reported[0]), refaddr($error),
+        'on_error reports the original exception object';
+    is $events->[0]{status}, 500, 'custom response keeps the safe seed by default';
+    is $events->[1]{body}, 'safe custom response',
+        'custom handler still owns the response body';
+    is scalar(@warnings), 1, 'one rejected-claim diagnostic is emitted';
+    like $warnings[0],
+        qr/rejected exception status_code claim: status 999 is outside 100-599/,
+        'diagnostic identifies the out-of-range claim';
+};
+
 subtest 'built-in exception status claims are guarded and Pages-valid' => sub {
     my @cases = (
         ['registered 404', Local::StatusError->new(404, 'missing secret'), 404, undef],

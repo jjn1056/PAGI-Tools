@@ -1029,8 +1029,8 @@ Rate limiting with configurable strategies:
 
 Catch and format errors:
 
-  enable 'ErrorHandler', development => 1;  # Development detail with stack trace
-  enable 'ErrorHandler';                    # Production (default): generic errors, no stack leak
+  enable 'ErrorHandler', development => 1;  # Safely stringified development detail
+  enable 'ErrorHandler';                    # Production (default): generic errors, no detail leak
 
 C<ErrorHandler>'s built-in response negotiates through L<PAGI::Pages>. Supply
 a Pages endpoint through the existing handler seam to fix its representation:

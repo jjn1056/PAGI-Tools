@@ -120,10 +120,12 @@ sub _get_header {
     my ($self, $scope, $name) = @_;
 
     $name = lc($name);
+    my @values;
     for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
+        push @values, $h->[1] if lc($h->[0]) eq $name;
     }
-    return;
+    return unless @values;
+    return join(', ', @values);
 }
 
 async sub _send_not_acceptable {

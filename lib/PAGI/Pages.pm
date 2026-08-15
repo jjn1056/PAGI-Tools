@@ -857,7 +857,9 @@ sub _select_representation {
     my @families = ($self->{default});
     push @families, grep { $_ ne $self->{default} } qw(html json text);
 
-    my $accept = PAGI::Request->new($scope)->header('accept');
+    my $request = PAGI::Request->new($scope);
+    my @accept_values = $request->header_all('accept');
+    my $accept = @accept_values ? join(', ', @accept_values) : undef;
     my $problem_rejected = $page->{kind} eq 'error'
         ? _problem_type_explicitly_rejected($accept) : 0;
     my (@supported, %family_for);

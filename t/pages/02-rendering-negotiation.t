@@ -268,6 +268,15 @@ subtest 'auto negotiation selects the documented representation families' => sub
         http_scope(accept => 'application/problem+json;q=0, application/json, text/plain;q=0.5')));
     is(header($exact_problem_rejection, 'Content-Type'), 'text/plain; charset=utf-8',
         'application/json alias cannot revive an exact problem+json exclusion');
+
+    my $repeated_scope = http_scope();
+    $repeated_scope->{headers} = [
+        ['Accept' => 'text/plain'],
+        ['Accept' => 'text/html;q=0'],
+    ];
+    my $repeated = send_response(PAGI::Pages->not_found($repeated_scope));
+    is(header($repeated, 'Content-Type'), 'text/plain; charset=utf-8',
+        'repeated Accept fields are combined in wire order');
 };
 
 subtest 'fixed representation ignores Accept and does not add Vary' => sub {

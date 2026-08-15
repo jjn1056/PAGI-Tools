@@ -498,6 +498,31 @@ subtest 'ContentNegotiation - shares exact exclusions and accepted scope shape' 
     ], 'accepted types retain the public hash shape in shared preference order';
 };
 
+subtest 'ContentNegotiation - combines repeated Accept fields' => sub {
+    my $content_neg = PAGI::Middleware::ContentNegotiation->new(
+        supported_types => ['text/html', 'text/plain'],
+    );
+
+    my $captured_scope;
+    my $wrapped = $content_neg->wrap(async sub { $captured_scope = $_[0] });
+    my $scope = make_scope(
+        method  => 'GET',
+        headers => [
+            ['Accept', 'text/html;q=0'],
+            ['Accept', 'text/plain'],
+        ],
+    );
+
+    run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
+
+    is $captured_scope->{'pagi.preferred_content_type'}, 'text/plain',
+        'a later acceptable field participates in selection';
+    is $captured_scope->{'pagi.accepted_types'}, [
+        { type => 'text/plain', q => 1 },
+        { type => 'text/html', q => 0 },
+    ], 'accepted metadata contains every repeated field in preference order';
+};
+
 subtest 'ContentNegotiation - handles wildcard' => sub {
     my $content_neg = PAGI::Middleware::ContentNegotiation->new(
         supported_types => ['application/json', 'text/html'],

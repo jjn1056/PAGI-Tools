@@ -249,13 +249,20 @@ sub _status_for_error {
         $self->_diagnose_rejected_status('nonnumeric scalar result');
         return 500;
     }
+    my $numeric = 0 + $claimed;
+    unless ($numeric >= 100 && $numeric <= 599) {
+        $self->_diagnose_rejected_status(
+            "status $claimed is outside 100-599",
+        );
+        return 500;
+    }
     unless ($self->{handler} || $self->_pages_accepts_status($claimed)) {
         $self->_diagnose_rejected_status(
             "status $claimed is not a complete registered Pages error",
         );
         return 500;
     }
-    return 0 + $claimed;
+    return $numeric;
 }
 
 sub _diagnose_rejected_status {
