@@ -102,6 +102,18 @@ subtest 'Result is a validated read-only request value' => sub {
         );
     }, qr/result path.*string/i, 'reference paths are rejected');
     like(dies {
+        PAGI::App::File::Result->new(
+            kind => 'directory', path => '/tmp/a', size => 10,
+        );
+    }, qr/non-file result.*size.*mtime/i,
+        'a non-file result rejects file size metadata');
+    like(dies {
+        PAGI::App::File::Result->new(
+            kind => 'missing', path => '/tmp/a', mtime => 20,
+        );
+    }, qr/non-file result.*size.*mtime/i,
+        'a non-file result rejects file mtime metadata');
+    like(dies {
         PAGI::App::File::Result->new(kind => 'missing', extra => 1);
     }, qr/unknown result.*extra/i, 'unknown constructor keys are rejected');
 

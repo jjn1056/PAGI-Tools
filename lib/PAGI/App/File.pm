@@ -90,8 +90,10 @@ change it.  Construction does not require the root to exist.
 
 =head2 allow_hidden
 
-Hidden request components and hidden configured indexes are forbidden by
-default.  Set C<allow_hidden =E<gt> 1> to make them eligible.
+Hidden request components are forbidden by default.  Hidden configured indexes
+are instead ineligible and skipped during index selection.  Set
+C<allow_hidden =E<gt> 1> to permit hidden request components and make hidden
+indexes eligible.
 
 =head2 index
 

@@ -31,6 +31,10 @@ sub new {
             unless defined($args{path})
                 && defined($args{size}) && defined($args{mtime});
     }
+    else {
+        croak 'Non-file Result must not specify size or mtime'
+            if exists($args{size}) || exists($args{mtime});
+    }
 
     return bless [
         $kind, $args{path}, $args{size}, $args{mtime},
