@@ -2,11 +2,16 @@ package PAGI::App::Directory;
 
 use strict;
 use warnings;
+use bytes ();
+use Carp qw(croak);
+use Encode qw(decode encode FB_CROAK LEAVE_SRC);
+use Errno qw(EACCES EPERM);
+use Fcntl qw(S_ISDIR);
 use Future::AsyncAwait;
 use parent 'PAGI::App::File';
 use JSON::MaybeXS ();
 use File::Spec;
-use Cwd qw(realpath);
+use PAGI::Routing::HeadBoundary;
 
 =head1 NAME
 
@@ -22,16 +27,6 @@ PAGI::App::Directory - Serve files with directory listing
 
 =cut
 
-sub new {
-    my ($class, %args) = @_;
-
-    my $self = $class->SUPER::new(%args);
-    $self->{show_hidden} = $args{show_hidden} // 0;
-    # Cache realpath of root for symlink escape detection
-    $self->{real_root} = realpath($self->{root}) // $self->{root};
-    return $self;
-}
-
 # HTML escape to prevent XSS
 sub _html_escape {
     my $str = shift;
@@ -44,10 +39,27 @@ sub _html_escape {
     return $str;
 }
 
+sub _utf8_bytes {
+    my $str = shift;
+    return $str unless utf8::is_utf8($str);
+    return encode('UTF-8', $str, FB_CROAK | LEAVE_SRC);
+}
+
+sub _utf8_text {
+    my $str = shift;
+    return $str if utf8::is_utf8($str);
+
+    my $decoded = eval {
+        decode('UTF-8', $str, FB_CROAK | LEAVE_SRC);
+    };
+    return defined($decoded) ? $decoded : $str;
+}
+
 # URL encode for href attributes
 sub _url_encode {
     my $str = shift;
     return '' unless defined $str;
+    $str = _utf8_bytes($str);
     $str =~ s/([^A-Za-z0-9\-_.~\/])/sprintf("%%%02X", ord($1))/ge;
     return $str;
 }
@@ -56,68 +68,91 @@ sub to_app {
     my ($self) = @_;
 
     my $parent_app = $self->SUPER::to_app();
-    my $root = $self->{root};
-    my $real_root = $self->{real_root};
 
     return async sub  {
         my ($scope, $receive, $send) = @_;
-        die "Unsupported scope type: $scope->{type}" if $scope->{type} ne 'http';
+        PAGI::App::File::_validate_http_scope($scope);
 
-        my $path = $scope->{path} // '/';
-        $path =~ s{^/+}{};
-        my $dir_path = File::Spec->catdir($root, $path);
-
-        # Symlink escape check: ensure resolved path is within root
-        my $real_dir = realpath($dir_path);
-        if (!$real_dir || index($real_dir, $real_root) != 0) {
-            await $self->_send_error($scope, $send, 403);
-            return;
+        my $method = PAGI::App::File::_scope_method($scope);
+        unless ($method eq 'GET' || $method eq 'HEAD') {
+            return await $parent_app->($scope, $receive, $send);
         }
 
-        # If it's a directory without index file, show listing
-        if (-d $dir_path) {
-            my $has_index = 0;
-            for my $index (@{$self->{index}}) {
-                if (-f File::Spec->catfile($dir_path, $index)) {
-                    $has_index = 1;
-                    last;
-                }
-            }
+        my $request_path = $scope->{path} // '/';
+        my $result = $self->locate($request_path);
+        return await $self->serve($scope, $send, $result)
+            unless $result->is_directory;
 
-            unless ($has_index) {
-                await $self->_send_listing($send, $scope, $dir_path, $path);
-                return;
-            }
-        }
+        my $listing_scope = $scope;
+        $listing_scope = { %$scope, method => $method }
+            if defined($scope->{method}) && !ref($scope->{method})
+                && $scope->{method} ne $method;
+        ($listing_scope, $send)
+            = PAGI::Routing::HeadBoundary->prepare($listing_scope, $send);
 
-        # Fall back to parent file serving
-        await $parent_app->($scope, $receive, $send);
+        my $relative_path = $request_path;
+        $relative_path =~ s{^/+}{};
+        return await $self->_send_listing(
+            $send, $listing_scope, $result->path, $relative_path,
+        );
     };
+}
+
+sub _open_directory {
+    my ($self, $dir_path) = @_;
+    opendir my $dh, $dir_path or return;
+    return $dh;
 }
 
 async sub _send_listing {
     my ($self, $send, $scope, $dir_path, $rel_path) = @_;
 
-    opendir my $dh, $dir_path or do {
-        await $self->_send_error($scope, $send, 403);
-        return;
-    };
+    $! = 0;
+    my $dh = $self->_open_directory($dir_path);
+    my $open_errno = 0 + $!;
+    my $open_error = "$!";
+    unless ($dh) {
+        return await PAGI::App::File::_respond_page(
+            $scope, $send, 'forbidden',
+        ) if $open_errno == EACCES || $open_errno == EPERM;
+        croak "Cannot open directory '$dir_path': $open_error";
+    }
 
     my @entries;
-    while (my $entry = readdir $dh) {
-        next if $entry eq '.';
-        next if !$self->{show_hidden} && $entry =~ /^\./;
+    while (1) {
+        $! = 0;
+        my $entry = readdir $dh;
+        unless (defined $entry) {
+            my $read_errno = 0 + $!;
+            my $read_error = "$!";
+            if ($read_errno) {
+                closedir $dh;
+                croak "Cannot read directory '$dir_path': $read_error";
+            }
+            last;
+        }
+
+        next if $entry eq '.' || $entry eq '..';
+        next if !$self->{allow_hidden} && $entry =~ /^\./;
 
         my $full_path = File::Spec->catfile($dir_path, $entry);
         my @stat = stat($full_path);
+        unless (@stat) {
+            my $stat_error = "$!";
+            closedir $dh;
+            croak "Cannot inspect directory entry '$full_path': $stat_error";
+        }
         push @entries, {
             name  => $entry,
-            is_dir => -d $full_path ? 1 : 0,
+            is_dir => S_ISDIR($stat[2]) ? 1 : 0,
             size  => $stat[7] // 0,
             mtime => $stat[9] // 0,
         };
     }
-    closedir $dh;
+    unless (closedir $dh) {
+        my $close_error = "$!";
+        croak "Cannot close directory '$dir_path': $close_error";
+    }
 
     # Sort directories first, then by name
     @entries = sort { $b->{is_dir} <=> $a->{is_dir} || $a->{name} cmp $b->{name} } @entries;
@@ -125,11 +160,17 @@ async sub _send_listing {
     # Check Accept header for JSON
     my $accept = $self->_get_header($scope, 'accept') // '';
     if ($accept =~ m{application/json}) {
-        my $json = JSON::MaybeXS::encode_json(\@entries);
+        my @json_entries = map {
+            +{ %$_, name => _utf8_text($_->{name}) }
+        } @entries;
+        my $json = JSON::MaybeXS::encode_json(\@json_entries);
         await $send->({
             type => 'http.response.start',
             status => 200,
-            headers => [['content-type', 'application/json'], ['content-length', length($json)]],
+            headers => [
+                ['content-type', 'application/json'],
+                ['content-length', bytes::length($json)],
+            ],
         });
         await $send->({ type => 'http.response.body', body => $json, more => 0 });
         return;
@@ -140,7 +181,7 @@ async sub _send_listing {
     $base_path =~ s{/+$}{};
 
     # Escape base_path for safe HTML output
-    my $escaped_path = _html_escape($base_path);
+    my $escaped_path = _utf8_bytes(_html_escape($base_path));
 
     my $html = "<!DOCTYPE html><html><head><title>Index of $escaped_path/</title>";
     $html .= '<style>body{font-family:sans-serif;margin:20px}table{border-collapse:collapse}';
@@ -159,7 +200,7 @@ async sub _send_listing {
         my $size = $entry->{is_dir} ? '-' : _format_size($entry->{size});
 
         # Escape all user-controlled values to prevent XSS
-        my $escaped_display = _html_escape($display);
+        my $escaped_display = _utf8_bytes(_html_escape($display));
         my $escaped_href = _html_escape(_url_encode($href));
         $html .= qq{<tr><td><a href="$escaped_href">$escaped_display</a></td><td>$size</td></tr>};
     }
@@ -169,7 +210,10 @@ async sub _send_listing {
     await $send->({
         type => 'http.response.start',
         status => 200,
-        headers => [['content-type', 'text/html'], ['content-length', length($html)]],
+        headers => [
+            ['content-type', 'text/html; charset=utf-8'],
+            ['content-length', bytes::length($html)],
+        ],
     });
     await $send->({ type => 'http.response.body', body => $html, more => 0 });
 }
@@ -192,23 +236,34 @@ __END__
 
 =head1 DESCRIPTION
 
-Extends L<PAGI::App::File> to add directory listing capabilities.
-When a directory is requested and no index file is found, returns
-an HTML or JSON listing of directory contents.
+PAGI::App::Directory is a L<PAGI::App::File> subclass that adds one policy:
+an index-free directory receives an HTML or JSON listing.  It uses the one
+inherited C<locate> result for each GET or HEAD request and delegates every
+non-directory result to inherited C<serve>.
 
-Forbidden responses detected before listing or file delegation use the
-negotiated L<PAGI::Pages> defaults inherited from L<PAGI::App::File>.
-Directory listings remain this component's HTML/JSON responses, including for
-methods other than GET and HEAD. Resolved files and index files still delegate
-to L<PAGI::App::File>, which owns their method and range errors.
+L<PAGI::App::File> therefore remains the owner of file and index responses,
+ETags, ranges, conditional requests, file events, and negotiated 403 and 404
+responses.  It also handles unsupported methods before location and returns
+the negotiated 405 response with C<Allow: GET, HEAD>.  Directory listings are
+available only to GET and HEAD.  HEAD preserves the matching GET status and
+headers while emitting no listing bytes.
 
-=head1 OPTIONS
+An C<opendir> permission error uses the negotiated L<PAGI::Pages> forbidden
+response.  Unexpected directory listing I/O failures propagate to the server.
+As with L<PAGI::App::File>, configured symbolic links are trusted and may point
+outside the lexical root; use a tree that untrusted principals cannot modify.
+HTML listings declare and emit UTF-8; JSON listings are likewise UTF-8 octets.
 
-Inherits all options from L<PAGI::App::File>, plus:
+=head1 CONFIGURATION
+
+All configuration is inherited from L<PAGI::App::File>.  In particular,
+C<allow_hidden> defaults to false and governs both direct file retrieval and
+entries included in a listing.  Set it to true to allow both.  The special
+C<.> and C<..> directory entries are never included.
 
 =over 4
 
-=item * C<show_hidden> - Show hidden files (starting with .) (default: 0)
+=item * C<allow_hidden> - Include and directly serve hidden names (default: 0)
 
 =back
 
