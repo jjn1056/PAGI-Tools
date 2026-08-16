@@ -3,7 +3,9 @@ package PAGI::Middleware::XSendfile;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
+use File::Spec;
 use Future::AsyncAwait;
+use PAGI::Utils qw(replace_path_prefix);
 use Scalar::Util 'blessed';
 
 =head1 NAME
@@ -131,16 +133,40 @@ A string prefix (simple case):
     mapping => '/protected/'
     # /var/www/files/foo.txt => /protected/var/www/files/foo.txt
 
+The prefix and full source path are slash-cleaned before they are joined.
+
 A hashref for path translation:
 
     mapping => { '/var/www/files/' => '/protected/' }
     # /var/www/files/foo.txt => /protected/foo.txt
+
+Hash source prefixes are normalized as absolute current-platform paths and
+matched only at path-component boundaries. The longest normalized prefix wins;
+lexical source-prefix order breaks ties deterministically. An exact source root
+maps to the replacement itself. If no hash source prefix matches, the
+middleware declines interception and forwards the original response events.
+It never falls back to exposing the unmatched filesystem path in the proxy
+header.
+
+Without a mapping, C<X-Sendfile> and C<X-Lighttpd-Send-File> use the source
+filesystem path directly.
 
 =item * variation (optional)
 
 Additional string appended to Vary header to prevent caching issues.
 
 =back
+
+=head2 Header Safety and Trusted Configuration
+
+Mappings are trusted server configuration, not request input. Every scalar or
+hash replacement must be a defined, nonempty string without control bytes.
+Unsafe configured replacements are rejected during construction.
+
+The completed sendfile header is validated again before it is appended. If a
+request-derived path suffix introduces NUL, CR, LF, another C0 control byte, or
+DEL, the middleware safely declines interception and replays the original
+response start and file event without adding the proxy header.
 
 =head1 RANGE REQUESTS / PARTIAL CONTENT
 
@@ -262,6 +288,69 @@ my %VALID_TYPES = (
     'X-Lighttpd-Send-File' => 1,
 );
 
+sub _slash_clean {
+    my ($value) = @_;
+    $value =~ tr{\\}{/};
+    $value =~ s{/+}{/}g;
+    return $value;
+}
+
+sub _normalise_replacement {
+    my ($replacement) = @_;
+
+    die 'XSendfile mapping replacement must be a defined, nonempty string'
+        unless defined $replacement && !ref($replacement)
+            && length($replacement);
+    die 'XSendfile mapping replacement contains a prohibited header control byte'
+        if $replacement =~ /[\x00-\x1f\x7f]/;
+
+    $replacement = _slash_clean($replacement);
+    $replacement =~ s{/+\z}{} unless $replacement eq '/';
+    return $replacement;
+}
+
+sub _normalise_mapping {
+    my ($mapping) = @_;
+
+    return ('direct', undef) unless defined $mapping;
+
+    if (!ref $mapping) {
+        return ('scalar', _normalise_replacement($mapping));
+    }
+
+    die 'XSendfile mapping must be a nonempty string or hash reference'
+        unless ref($mapping) eq 'HASH';
+
+    my @records;
+    for my $source (keys %$mapping) {
+        die 'XSendfile mapping source must be a defined, nonempty string'
+            unless defined $source && length($source);
+
+        my $normalised_source =
+            File::Spec->canonpath(File::Spec->rel2abs($source));
+        push @records, {
+            original_source   => $source,
+            normalised_source => $normalised_source,
+            replacement       => _normalise_replacement($mapping->{$source}),
+            normalised_length => length($normalised_source),
+            lexical_key       => $source,
+        };
+    }
+
+    @records = sort {
+        $b->{normalised_length} <=> $a->{normalised_length}
+            || $a->{lexical_key} cmp $b->{lexical_key}
+    } @records;
+
+    return ('hash', \@records);
+}
+
+sub _valid_header_value {
+    my ($value) = @_;
+    return defined $value && !ref($value) && length($value)
+        && $value !~ /[\x00-\x1f\x7f]/;
+}
+
 sub _init {
     my ($self, $config) = @_;
 
@@ -272,8 +361,11 @@ sub _init {
         . join(', ', sort keys %VALID_TYPES)
         unless $VALID_TYPES{$type};
 
-    $self->{type}      = $type;
-    $self->{mapping}   = $config->{mapping};
+    my ($mapping_type, $mapping) = _normalise_mapping($config->{mapping});
+
+    $self->{type}         = $type;
+    $self->{mapping_type} = $mapping_type;
+    $self->{mapping}      = $mapping;
     $self->{variation} = $config->{variation};
 }
 
@@ -310,29 +402,32 @@ sub wrap {
                 if (defined $path && !$is_partial) {
                     # We have a full file path - use X-Sendfile
                     my $mapped_path = $self->_map_path($path);
-                    my @headers = @{$pending_start->{headers} // []};
 
-                    # Add the X-Sendfile header
-                    push @headers, [$self->{type}, $mapped_path];
+                    if (_valid_header_value($mapped_path)) {
+                        my @headers = @{$pending_start->{headers} // []};
 
-                    # Add Vary header if configured
-                    if ($self->{variation}) {
-                        push @headers, ['Vary', $self->{variation}];
+                        # Add the X-Sendfile header
+                        push @headers, [$self->{type}, $mapped_path];
+
+                        # Add Vary header if configured
+                        if ($self->{variation}) {
+                            push @headers, ['Vary', $self->{variation}];
+                        }
+
+                        # Send response with empty body
+                        await $send->({
+                            type    => 'http.response.start',
+                            status  => $pending_start->{status},
+                            headers => \@headers,
+                        });
+                        await $send->({
+                            type => 'http.response.body',
+                            body => '',
+                        });
+
+                        $pending_start = undef;
+                        return;
                     }
-
-                    # Send response with empty body
-                    await $send->({
-                        type    => 'http.response.start',
-                        status  => $pending_start->{status},
-                        headers => \@headers,
-                    });
-                    await $send->({
-                        type => 'http.response.body',
-                        body => '',
-                    });
-
-                    $pending_start = undef;
-                    return;
                 }
             }
 
@@ -373,28 +468,35 @@ sub _extract_path {
 sub _map_path {
     my ($self, $path) = @_;
 
+    return undef if ref($path);
+
+    my $mapping_type = $self->{mapping_type};
     my $mapping = $self->{mapping};
 
     # No mapping - return path as-is (for X-Sendfile/Lighttpd)
-    return $path unless defined $mapping;
+    return $path if $mapping_type eq 'direct';
 
     # Simple string prefix
-    if (!ref $mapping) {
-        return $mapping . $path;
+    if ($mapping_type eq 'scalar') {
+        my $source = _slash_clean($path);
+        $source =~ s{\A/+}{};
+        return $mapping unless length $source;
+        return '/' . $source if $mapping eq '/';
+        return $mapping . '/' . $source;
     }
 
-    # Hash mapping - find matching prefix and replace
-    if (ref $mapping eq 'HASH') {
-        for my $from (keys %$mapping) {
-            if (substr($path, 0, length($from)) eq $from) {
-                my $to = $mapping->{$from};
-                return $to . substr($path, length($from));
-            }
-        }
+    # Hash mapping - find the first component-aware match in specificity order
+    for my $record (@$mapping) {
+        my $mapped = replace_path_prefix(
+            $path,
+            $record->{normalised_source},
+            $record->{replacement},
+        );
+        return $mapped if defined $mapped;
     }
 
-    # No mapping matched - return as-is
-    return $path;
+    # An unmatched hash mapping declines interception.
+    return undef;
 }
 
 1;

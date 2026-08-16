@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
+use File::Spec;
 use IO::Async::Loop;
 
 use lib 'lib';
@@ -25,6 +26,65 @@ sub find_header {
         return $h->[1] if lc($h->[0]) eq lc($name);
     }
     return undef;
+}
+
+sub record_file_response {
+    my (%args) = @_;
+
+    my $middleware = PAGI::Middleware::XSendfile->new(%{$args{config}});
+    my $start = $args{start} || {
+        type    => 'http.response.start',
+        status  => 200,
+        headers => [],
+    };
+    my $body = $args{body};
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->($start);
+        await $send->($body);
+    };
+
+    my @sent;
+    run_async(async sub {
+        await $middleware->wrap($app)->(
+            { type => 'http', path => '/download' },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; push @sent, $event },
+        );
+    });
+
+    return (\@sent, $start, $body);
+}
+
+{
+    package Local::OrderedHash;
+
+    sub TIEHASH {
+        return bless { keys => [], values => {}, index => 0 }, $_[0];
+    }
+
+    sub STORE {
+        my ($self, $key, $value) = @_;
+        push @{$self->{keys}}, $key unless exists $self->{values}{$key};
+        $self->{values}{$key} = $value;
+    }
+
+    sub FETCH {
+        my ($self, $key) = @_;
+        return $self->{values}{$key};
+    }
+
+    sub FIRSTKEY {
+        my ($self) = @_;
+        $self->{index} = 0;
+        return $self->{keys}[0];
+    }
+
+    sub NEXTKEY {
+        my ($self) = @_;
+        $self->{index}++;
+        return $self->{keys}[$self->{index}];
+    }
 }
 
 # =============================================================================
@@ -173,6 +233,246 @@ subtest 'simple string prefix mapping' => sub {
 
     my $accel = find_header($sent[0]{headers}, 'X-Accel-Redirect');
     is $accel, '/protected/var/www/files/doc.txt', 'prefix prepended to path';
+};
+
+subtest 'scalar mapping slash-cleans the prefix and source path' => sub {
+    my ($sent) = record_file_response(
+        config => {
+            type    => 'X-Accel-Redirect',
+            mapping => '/protected//',
+        },
+        body => {
+            type => 'http.response.body',
+            file => '/var//www\\files/doc.txt',
+        },
+    );
+
+    is(
+        find_header($sent->[0]{headers}, 'X-Accel-Redirect'),
+        '/protected/var/www/files/doc.txt',
+        'scalar mapping retains simple prefix semantics without doubled slashes',
+    );
+};
+
+subtest 'hash mappings choose the most-specific component prefix' => sub {
+    my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
+    my $private = File::Spec->catdir($files, 'private');
+    my $file = File::Spec->catfile($private, 'a.pdf');
+
+    tie my %general_first, 'Local::OrderedHash';
+    $general_first{$files} = '/internal/files';
+    $general_first{$private} = '/internal/private';
+
+    tie my %specific_first, 'Local::OrderedHash';
+    $specific_first{$private} = '/internal/private';
+    $specific_first{$files} = '/internal/files';
+
+    for my $case (
+        ['general mapping configured first', \%general_first],
+        ['specific mapping configured first', \%specific_first],
+    ) {
+        my ($label, $mapping) = @$case;
+        my ($sent) = record_file_response(
+            config => {
+                type    => 'X-Accel-Redirect',
+                mapping => $mapping,
+            },
+            body => {
+                type => 'http.response.body',
+                file => $file,
+            },
+        );
+
+        is scalar(@$sent), 2, "$label emits exactly two events";
+        is(
+            find_header($sent->[0]{headers}, 'X-Accel-Redirect'),
+            '/internal/private/a.pdf',
+            "$label cannot change the most-specific winner",
+        );
+        is $sent->[1], {
+            type => 'http.response.body',
+            body => '',
+        }, "$label emits one terminal empty body";
+    }
+};
+
+subtest 'hash mapping exact roots map without a synthetic suffix' => sub {
+    my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
+    my ($sent) = record_file_response(
+        config => {
+            type    => 'X-Accel-Redirect',
+            mapping => { $files => '/internal/files/' },
+        },
+        body => {
+            type => 'http.response.body',
+            file => $files,
+        },
+    );
+
+    is(
+        find_header($sent->[0]{headers}, 'X-Accel-Redirect'),
+        '/internal/files',
+        'exact source root maps cleanly',
+    );
+};
+
+subtest 'equal normalized hash prefixes use a lexical tie breaker' => sub {
+    my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
+    my $equivalent = File::Spec->catdir($files, File::Spec->curdir);
+    my ($sent) = record_file_response(
+        config => {
+            type => 'X-Accel-Redirect',
+            mapping => {
+                $equivalent => '/internal/second',
+                $files      => '/internal/first',
+            },
+        },
+        body => {
+            type => 'http.response.body',
+            file => File::Spec->catfile($files, 'a.pdf'),
+        },
+    );
+
+    is(
+        find_header($sent->[0]{headers}, 'X-Accel-Redirect'),
+        '/internal/first/a.pdf',
+        'lexically first original prefix wins a normalized-length tie',
+    );
+};
+
+subtest 'false prefix siblings safely decline interception' => sub {
+    my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
+    my $body = {
+        type => 'http.response.body',
+        file => File::Spec->catfile(
+            File::Spec->rootdir, 'srv', 'files-old', 'a.pdf'),
+    };
+    my ($sent, $start) = record_file_response(
+        config => {
+            type    => 'X-Accel-Redirect',
+            mapping => { $files => '/internal/files' },
+        },
+        body => $body,
+    );
+
+    is $sent, [$start, $body],
+        'a textual sibling replays the original start and file event once';
+    is find_header($sent->[0]{headers}, 'X-Accel-Redirect'), undef,
+        'a textual sibling does not receive an acceleration header';
+};
+
+subtest 'unmatched hash mappings replay the original response' => sub {
+    my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
+    my $start = {
+        type    => 'http.response.start',
+        status  => 200,
+        headers => [['content-type', 'application/pdf']],
+    };
+    my $body = {
+        type => 'http.response.body',
+        file => File::Spec->catfile(
+            File::Spec->rootdir, 'opt', 'reports', 'a.pdf'),
+    };
+    my ($sent) = record_file_response(
+        config => {
+            type    => 'X-Accel-Redirect',
+            mapping => { $files => '/internal/files' },
+        },
+        start => $start,
+        body  => $body,
+    );
+
+    is $sent, [$start, $body],
+        'unmatched mapping forwards the two original raw events exactly once';
+    is find_header($sent->[0]{headers}, 'X-Accel-Redirect'), undef,
+        'unmatched mapping does not expose the filesystem path in a header';
+};
+
+subtest 'unsafe configured mapping destinations are rejected' => sub {
+    my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
+
+    for my $case (
+        ['NUL', "\x00"],
+        ['unit separator', "\x1f"],
+        ['line feed', "\x0a"],
+        ['delete', "\x7f"],
+    ) {
+        my ($label, $control) = @$case;
+        like(
+            dies {
+                PAGI::Middleware::XSendfile->new(
+                    type    => 'X-Accel-Redirect',
+                    mapping => { $files => "/internal$control/files" },
+                );
+            },
+            qr/mapping replacement.*control/i,
+            "$label is not accepted in a hash mapping destination",
+        );
+    }
+
+    like(
+        dies {
+            PAGI::Middleware::XSendfile->new(
+                type    => 'X-Accel-Redirect',
+                mapping => "/internal\rfiles",
+            );
+        },
+        qr/mapping replacement.*control/i,
+        'carriage return is not accepted in a scalar mapping destination',
+    );
+};
+
+subtest 'invalid mapping shapes are rejected at construction' => sub {
+    my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
+
+    for my $case (
+        ['array mapping', []],
+        ['empty scalar mapping', ''],
+        ['empty hash source', { '' => '/internal' }],
+        ['undefined hash replacement', { $files => undef }],
+        ['reference hash replacement', { $files => [] }],
+    ) {
+        my ($label, $mapping) = @$case;
+        like(
+            dies {
+                PAGI::Middleware::XSendfile->new(
+                    type    => 'X-Accel-Redirect',
+                    mapping => $mapping,
+                );
+            },
+            qr/mapping.*(?:string|hash|source|replacement)/i,
+            "$label is rejected",
+        );
+    }
+};
+
+subtest 'unsafe response-derived header values safely decline' => sub {
+    my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
+    my $body = {
+        type => 'http.response.body',
+        file => File::Spec->catfile($files, "report\r\nx-evil: yes.pdf"),
+    };
+    my ($sent, $start) = record_file_response(
+        config => {
+            type    => 'X-Accel-Redirect',
+            mapping => { $files => '/internal/files' },
+        },
+        body => $body,
+    );
+
+    is $sent, [$start, $body],
+        'unsafe mapped suffix replays the original raw response exactly once';
+    is find_header($sent->[0]{headers}, 'X-Accel-Redirect'), undef,
+        'unsafe mapped suffix is not emitted as a header';
+
+    ($sent, $start) = record_file_response(
+        config => { type => 'X-Sendfile' },
+        body   => $body,
+    );
+    is $sent, [$start, $body],
+        'unsafe direct path also declines without altering the raw response';
+    is find_header($sent->[0]{headers}, 'X-Sendfile'), undef,
+        'unsafe direct path is not emitted as a header';
 };
 
 subtest 'no mapping passes path through' => sub {
