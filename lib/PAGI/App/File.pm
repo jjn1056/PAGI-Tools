@@ -6,9 +6,13 @@ use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Digest::MD5 qw(md5_hex);
+use Errno qw(EACCES ENOENT ENOTDIR EPERM);
+use Fcntl qw(S_ISDIR S_ISREG);
 use File::Spec;
-use Cwd ();  # For realpath
+use Cwd ();  # The pre-serve implementation still uses realpath.
+use PAGI::App::File::Result;
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -65,11 +69,50 @@ This module implements multiple layers of path traversal protection:
 
 =item * Backslash normalization (Windows path separator)
 
-=item * Hidden file blocking (dotfiles like .htaccess, .env)
+=item * Hidden file policy (dotfiles are blocked unless C<allow_hidden> is true)
 
-=item * Symlink escape detection via realpath verification
+=item * Lexically rooted request-path construction
 
 =back
+
+The synchronous L</locate> boundary does not use C<realpath>.  Symbolic links
+created by the administrator are trusted and may point outside the configured
+lexical root.  Use a dedicated tree that cannot be modified by untrusted
+principals when physical confinement is required.
+
+=head1 CONFIGURATION
+
+=head2 root
+
+The root defaults to the current directory.  It is converted to a lexical
+absolute path when the component is constructed, so a later C<chdir> does not
+change it.  Construction does not require the root to exist.
+
+=head2 allow_hidden
+
+Hidden request components and hidden configured indexes are forbidden by
+default.  Set C<allow_hidden =E<gt> 1> to make them eligible.
+
+=head2 index
+
+An array reference of index names, examined in declaration order.  The first
+regular candidate ends selection; an unreadable regular candidate is
+forbidden rather than bypassed in favor of a later index.
+
+=head1 METHODS
+
+=head2 locate
+
+    my $result = $files->locate($request_path);
+
+Synchronously constructs and inspects one request's lexical candidate and
+returns a L<PAGI::App::File::Result>.  The selected file's size and mtime are
+captured in the Result for response generation without another C<stat>.
+Index candidates may each be inspected while selecting in declaration order.
+
+C<locate> does not open a filehandle.  The PAGI server remains responsible for
+opening a later C<file> response event, leaving the normal trusted-tree pathname
+race between inspection and open.
 
 =cut
 
@@ -127,17 +170,124 @@ sub app_path {
 sub new {
     my ($class, %args) = @_;
 
-    my $root = $args{root} // '.';
-    # Resolve root to absolute path for security comparisons
-    my $abs_root = Cwd::realpath($root) // $root;
+    my $root = exists $args{root} ? $args{root} : '.';
+    croak 'File root must be a defined, nonempty, non-reference string'
+        unless defined($root) && !ref($root) && length($root);
+
+    my $index = $args{index} // ['index.html', 'index.htm'];
+    croak 'File index must be an array reference'
+        unless ref($index) eq 'ARRAY';
+    for my $name (@$index) {
+        croak 'File index entries must be defined non-reference strings'
+            unless defined($name) && !ref($name);
+    }
+
+    my $absolute_root = File::Spec->canonpath(File::Spec->rel2abs($root));
 
     my $self = bless {
-        root          => $abs_root,
+        root          => $absolute_root,
+        allow_hidden  => $args{allow_hidden} ? 1 : 0,
         default_type  => $args{default_type} // 'application/octet-stream',
-        index         => $args{index} // ['index.html', 'index.htm'],
+        index         => $index,
         handle_ranges => $args{handle_ranges} // 1,
     }, $class;
     return $self;
+}
+
+sub _has_hidden_component {
+    my ($path) = @_;
+    for my $component (split m{[\\/]}, $path, -1) {
+        next if $component eq '' || $component eq '.';
+        return 1 if substr($component, 0, 1) eq '.';
+    }
+    return 0;
+}
+
+sub _probe_path {
+    my ($self, $path) = @_;
+    my @stat = stat($path);
+    unless (@stat) {
+        my $errno = 0 + $!;
+        my $error = "$!";
+        return { errno => $errno, error => $error };
+    }
+
+    my $readable = -r _ ? 1 : 0;
+    return { stat => \@stat, readable => $readable };
+}
+
+sub _result {
+    my ($kind, $path, $probe) = @_;
+    my %args = (kind => $kind, path => $path);
+    if ($kind eq 'file') {
+        $args{size} = $probe->{stat}[7];
+        $args{mtime} = $probe->{stat}[9];
+    }
+    return PAGI::App::File::Result->new(%args);
+}
+
+sub _error_kind {
+    my ($probe) = @_;
+    my $errno = $probe->{errno};
+    return 'missing' if $errno == ENOENT || $errno == ENOTDIR;
+    return 'forbidden' if $errno == EACCES || $errno == EPERM;
+    return;
+}
+
+sub _unexpected_probe_error {
+    my ($path, $probe) = @_;
+    my $message = defined($probe->{error}) ? $probe->{error} : 'unknown error';
+    croak "Cannot inspect file candidate '$path': $message";
+}
+
+sub locate {
+    my ($self, $request_path) = @_;
+    croak 'locate requires exactly one request path' unless @_ == 2;
+
+    my $path = PAGI::Utils::path_from_root($self->{root}, $request_path);
+    return _result('forbidden', undef) unless defined $path;
+    return _result('forbidden', $path)
+        if !$self->{allow_hidden} && _has_hidden_component($request_path);
+
+    my $probe = $self->_probe_path($path);
+    if (exists $probe->{errno}) {
+        _development_file_attempt($path);
+        my $kind = _error_kind($probe);
+        return _result($kind, $path) if defined $kind;
+        _unexpected_probe_error($path, $probe);
+    }
+
+    my $mode = $probe->{stat}[2];
+    unless (S_ISDIR($mode)) {
+        _development_file_attempt($path);
+        return _result('missing', $path) unless S_ISREG($mode);
+        return _result('forbidden', $path) unless $probe->{readable};
+        return _result('file', $path, $probe);
+    }
+
+    for my $index (@{$self->{index}}) {
+        next if !$self->{allow_hidden} && _has_hidden_component($index);
+
+        my $index_path = File::Spec->catfile($path, $index);
+        my $index_probe = $self->_probe_path($index_path);
+        if (exists $index_probe->{errno}) {
+            my $kind = _error_kind($index_probe);
+            next if defined($kind) && $kind eq 'missing';
+            _development_file_attempt($index_path);
+            return _result('forbidden', $index_path)
+                if defined($kind) && $kind eq 'forbidden';
+            _unexpected_probe_error($index_path, $index_probe);
+        }
+
+        next unless S_ISREG($index_probe->{stat}[2]);
+        _development_file_attempt($index_path);
+        return _result('forbidden', $index_path)
+            unless $index_probe->{readable};
+        return _result('file', $index_path, $index_probe);
+    }
+
+    _development_file_attempt($path);
+    return _result('directory', $path);
 }
 
 sub _development_file_attempt {
@@ -154,7 +304,9 @@ sub _development_file_attempt {
 sub to_app {
     my ($self) = @_;
 
-    my $root = $self->{root};
+    # The existing HTTP path remains physical until it delegates location to
+    # the synchronous locate/serve boundary.
+    my $root = Cwd::realpath($self->{root}) // $self->{root};
 
     return async sub  {
         my ($scope, $receive, $send) = @_;

@@ -30,6 +30,7 @@ my @load_modules = qw(
     PAGI::App::Router::Builder
     PAGI::App::Router::Materializer
     PAGI::App::File
+    PAGI::App::File::Result
     PAGI::App::WrapPSGI
     PAGI::Endpoint::HTTP
     PAGI::Endpoint::Router
