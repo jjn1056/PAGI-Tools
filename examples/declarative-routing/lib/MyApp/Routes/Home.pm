@@ -3,6 +3,7 @@ package MyApp::Routes::Home;
 use strict;
 use warnings;
 use Future::AsyncAwait;
+use PAGI::Pages;
 
 async sub home {
     my ($c) = @_;
@@ -22,15 +23,15 @@ async sub show_item {
 
 async sub not_found {
     my ($c) = @_;
-    return $c->json({ error => 'No route matched' });
+    return PAGI::Pages->not_found($c,
+        detail => 'No route matched');
 }
 
 async sub method_not_allowed {
     my ($c, $trace) = @_;
-    return $c->json({
-        error => 'Method not allowed',
-        allow => join(', ', @{$trace->allowed_methods}),
-    });
+    return PAGI::Pages->method_not_allowed($c,
+        allow  => $trace->allowed_methods,
+        detail => 'Method not allowed');
 }
 
 1;

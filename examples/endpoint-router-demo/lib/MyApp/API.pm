@@ -3,6 +3,7 @@ use parent 'PAGI::Endpoint::Router';
 use strict;
 use warnings;
 use Future::AsyncAwait;
+use PAGI::Pages;
 
 use MyApp::API::Events;
 
@@ -38,10 +39,10 @@ sub require_demo_token {
         return await $inner->($scope, $receive, $send)
             if ($c->request->header('x-demo-token') // '') eq 'demo-token';
 
-        return await $c->text(
-            'demo token required',
-            status => 401,
-        )->respond($send);
+        my $response = PAGI::Pages->unauthorized($scope,
+            challenge => 'DemoToken realm="endpoint-router-demo"',
+            detail    => 'demo token required');
+        return await $response->respond($send);
     };
 }
 
@@ -66,7 +67,8 @@ async sub show {
     my $user_id = $c->path_param('user_id');
     my ($user) = grep { $_->{id} == $user_id } @USERS;
     return $c->html("<h1>$user->{name}</h1>") if $user;
-    return $c->text('User not found', status => 404);
+    return PAGI::Pages->not_found($c,
+        detail => 'User not found');
 }
 
 1;

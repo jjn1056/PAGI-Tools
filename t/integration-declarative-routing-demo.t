@@ -22,7 +22,7 @@ ok(!$load_error, 'the example app file loads cleanly')
 is(ref($app), 'CODE', 'the app file returns a compiled PAGI application');
 
 SKIP: {
-    skip 'the example app did not load', 18 unless ref($app) eq 'CODE';
+    skip 'the example app did not load', 24 unless ref($app) eq 'CODE';
 
     my $client = PAGI::Test::Client->new(app => $app);
 
@@ -43,21 +43,45 @@ SKIP: {
         'mounted handler receives its capture and generates path and absolute URL',
     );
 
-    my $constraint_miss = $client->get('/api/items/not-a-number');
+    my $constraint_miss = $client->get('/api/items/not-a-number',
+        headers => { Accept => 'application/problem+json' });
     is($constraint_miss->status, 404, 'failed route constraint reaches custom not-found');
-    is($constraint_miss->json, { error => 'No route matched' }, 'custom not-found body is used');
+    is($constraint_miss->content_type, 'application/problem+json',
+        'constraint miss negotiates a problem document');
+    is($constraint_miss->json, {
+        type   => 'about:blank',
+        title  => 'Not Found',
+        status => 404,
+        detail => 'No route matched',
+    }, 'custom not-found body uses the shared Pages representation');
 
-    my $missing = $client->get('/missing');
+    my $missing = $client->get('/missing',
+        headers => { Accept => 'application/problem+json' });
     is($missing->status, 404, 'unknown path uses custom not-found');
-    is($missing->json, { error => 'No route matched' }, 'custom not-found is application-owned');
+    is($missing->content_type, 'application/problem+json',
+        'unknown path negotiates a problem document');
+    is($missing->json, {
+        type   => 'about:blank',
+        title  => 'Not Found',
+        status => 404,
+        detail => 'No route matched',
+    }, 'custom not-found policy remains application-owned');
 
-    my $wrong_method = $client->post('/api/items/42');
+    my $wrong_method = $client->post('/api/items/42',
+        headers => { Accept => 'application/problem+json' });
     is($wrong_method->status, 405, 'wrong method uses custom method-not-allowed');
     is($wrong_method->header('Allow'), 'GET, HEAD', '405 publishes first-seen Allow');
+    is($wrong_method->content_type, 'application/problem+json',
+        'custom 405 negotiates a problem document');
     is(
         $wrong_method->json,
-        { error => 'Method not allowed', allow => 'GET, HEAD' },
-        'custom 405 handler renders the method union from routing evidence',
+        {
+            type   => 'about:blank',
+            title  => 'Method Not Allowed',
+            status => 405,
+            detail => 'Method not allowed',
+        },
+        'custom 405 handler renders Pages from routing evidence',
     );
 
     my $head = $client->head('/');

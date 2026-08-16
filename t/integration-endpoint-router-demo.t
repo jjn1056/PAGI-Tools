@@ -85,12 +85,16 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
         like($static->text, qr/Static file served!/, 'public file comes from the example root');
 
         my ($api_index_path) = $home->text =~ qr{href="(/api/index)"};
-        my $denied = $client->get($api_index_path);
+        my $denied = $client->get($api_index_path,
+            headers => { Accept => 'text/plain' });
         is($denied->status, 401, 'API middleware rejects a missing demo token');
-        is($denied->text, 'demo token required',
-            'API middleware returns the documented denial body');
+        is($denied->header('WWW-Authenticate'),
+            'DemoToken realm="endpoint-router-demo"',
+            'API middleware publishes its authentication challenge');
         is($denied->content_type, 'text/plain; charset=utf-8',
-            'API middleware denial uses the Context text response');
+            'API middleware denial negotiates the Pages text response');
+        like($denied->text, qr/demo token required/,
+            'API middleware includes the documented denial detail');
 
         my $index = $client->get($api_index_path,
             headers => { 'X-Demo-Token' => 'demo-token' });
@@ -102,6 +106,21 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
             headers => { 'X-Demo-Token' => 'demo-token' });
         is($show->status, 200, 'generated API item link resolves');
         like($show->text, qr/Alice/, 'item handler sees its typed path capture');
+
+        my $missing_user = $client->get('/api/show/999', headers => {
+            'X-Demo-Token' => 'demo-token',
+            Accept         => 'application/problem+json',
+        });
+        is($missing_user->status, 404,
+            'missing API user returns a resource-level 404');
+        is($missing_user->content_type, 'application/problem+json',
+            'missing API user negotiates a problem document');
+        is($missing_user->json, {
+            type   => 'about:blank',
+            title  => 'Not Found',
+            status => 404,
+            detail => 'User not found',
+        }, 'missing API user uses the shared Pages representation');
 
         $client->websocket('/status', sub {
             my ($ws) = @_;

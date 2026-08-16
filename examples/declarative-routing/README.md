@@ -9,7 +9,8 @@ ordinary shape without turning the example into a framework:
   logical address `/api/item`;
 - a numeric path constraint;
 - one bare pure route middleware factory, normalized to an inspectable description;
-- custom 404 and 405 routing middleware handlers;
+- custom 404 and 405 routing middleware handlers rendered through
+  `PAGI::Pages`;
 - absolute slash-addressed `path_for` and request-aware `url_for` generation
   (both return strings and perform no protocol I/O); and
 - a final `compose(app => $routing, middleware => [...])->to_app` expression,
@@ -19,9 +20,10 @@ ordinary shape without turning the example into a framework:
 The custom handlers receive an HTTP Context plus the routing snapshot for the
 boundary they enclose. In particular, the 405 renderer reads
 `$trace->allowed_methods`; Router exhaustion does not seed an `Allow` header or
-invoke a Router callback. Those handlers are the application's official policy
-inside Compose's mandatory plain outer safeguards, which remain inert once the
-custom response starts.
+invoke a Router callback. The handlers pass that evidence to `PAGI::Pages`,
+which supplies content negotiation and the required `Allow` response field.
+They remain the application's official policy inside Compose's mandatory plain
+outer safeguards, which stay inert once the custom response starts.
 
 Run it from the distribution root:
 
@@ -34,8 +36,10 @@ Then try:
 ```sh
 curl -i http://127.0.0.1:5000/
 curl -i http://127.0.0.1:5000/api/items/42
-curl -i -X POST http://127.0.0.1:5000/api/items/42
-curl -i http://127.0.0.1:5000/missing
+curl -i -H 'Accept: application/problem+json' \
+  -X POST http://127.0.0.1:5000/api/items/42
+curl -i -H 'Accept: application/problem+json' \
+  http://127.0.0.1:5000/missing
 ```
 
 The example stays HTTP-only on purpose. The complete `websocket`, `sse`, raw

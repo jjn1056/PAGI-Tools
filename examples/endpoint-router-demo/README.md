@@ -72,8 +72,14 @@ $r->get('/index' => [$self->middleware_as('require_demo_token')] => 'index');
 
 The factory is native PAGI middleware: it receives `($scope, $receive, $send)`
 and returns an application. It uses `$self->new_context(...)` only there to
-inspect the request header. Compiled Endpoint handlers receive the shared `$c`
-Context directly; they do not select a `context_class`.
+inspect the request header. Its denial response is constructed through
+`PAGI::Pages->unauthorized($scope, ...)` and explicitly sent through `$send`,
+including the required `WWW-Authenticate` challenge.
+
+Compiled Endpoint handlers receive the shared `$c` Context directly; they do
+not select a `context_class`. The missing-user branch demonstrates the other
+Pages form: `PAGI::Pages->not_found($c, ...)` returns an unsent Response value,
+which the Endpoint adapter sends after the handler returns it.
 
 The WebSocket and SSE methods also receive their protocol-aware shared Context,
 so they can call `$c->accept`, `$c->send_json`, and `$c->send_event` while
