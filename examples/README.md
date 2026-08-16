@@ -16,7 +16,8 @@ use Compose for complete 404, 405, and application-error safeguards; direct
 ## Requirements
 
 - Perl 5.18+ with `Future::AsyncAwait` for the distribution and most examples;
-  `15-large-application` deliberately requires Perl 5.40+ for signatures
+  `15-large-application` and `starlette-apples` deliberately require Perl
+  5.40+ for signatures
 - A PAGI server to run examples against:
   ```
   cpanm PAGI::Server
@@ -55,6 +56,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 16. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
 17. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
 18. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently
+19. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Compose-owned routing outcomes
 
 **Note on `websocket-chat-v2/public`:** this directory is a symlink to
 `10-chat-showcase/public`. It works in git checkouts but is omitted from the
