@@ -76,10 +76,11 @@ This module implements multiple layers of path traversal protection:
 
 =back
 
-The synchronous L</locate> boundary does not use C<realpath>.  Symbolic links
-created by the administrator are trusted and may point outside the configured
-lexical root.  Use a dedicated tree that cannot be modified by untrusted
-principals when physical confinement is required.
+The synchronous L</locate> boundary neither resolves symbolic links nor enforces
+physical containment.  Symbolic links created by the administrator are trusted
+and may point outside the configured lexical root.  Use a dedicated tree that
+cannot be modified by untrusted principals when physical confinement is
+required.
 
 =head1 CONFIGURATION
 
