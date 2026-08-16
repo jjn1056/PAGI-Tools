@@ -53,7 +53,6 @@ namespace:
 ```perl
 use v5.40;
 use Future::AsyncAwait;
-use JSON::MaybeXS ();
 use List::Util qw(max);
 use Types::Standard qw(Int);
 

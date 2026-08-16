@@ -2,7 +2,6 @@
 use v5.40;
 
 use Future::AsyncAwait;
-use JSON::MaybeXS ();
 use List::Util qw(max);
 use Types::Standard qw(Int);
 
@@ -55,7 +54,7 @@ async sub delete_apple($c) {
 
     my $deleted_apple = delete $apples_db{$apple_id};
     return $c->json({
-        success => JSON::MaybeXS::true(),
+        success => \1,
         deleted => $deleted_apple,
     });
 }
