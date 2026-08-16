@@ -122,8 +122,8 @@ race between inspection and open.
 
     await $files->serve($scope, $send, $result);
 
-Asynchronously renders any Result returned by L</locate>.  File Results retain
-the existing MIME, ETag, conditional-request, and range behavior.  The response
+Asynchronously renders any Result returned by L</locate>.  File Results use
+the shared MIME, ETag, conditional-request, and strict range behavior.  The response
 contains a PAGI C<file> body event, so the server owns the eventual open;
 C<serve> does not inspect or open the pathname again.
 
@@ -133,6 +133,12 @@ whether to pass it to C<serve>.  The method requires an explicit HTTP scope,
 owns only GET and HEAD, and renders a negotiated 405 with C<Allow: GET, HEAD>
 for other methods.  HEAD preserves the corresponding GET status and headers
 without emitting file or body bytes.
+
+Range handling accepts exactly one anchored ASCII C<bytes=start-end> interval,
+including open-ended and suffix forms.  An absent Range field selects the full
+representation.  Empty or repeated fields, empty or zero-length suffixes,
+malformed values, and multi-ranges receive 416; an end beyond the
+representation is clamped to its final byte.
 
 =cut
 
@@ -144,6 +150,7 @@ our %MIME_TYPES = (
     json => 'application/json',
     xml  => 'application/xml',
     txt  => 'text/plain',
+    csv  => 'text/csv',
     pl   => 'text/plain',
     md   => 'text/plain',
     png  => 'image/png',
@@ -156,11 +163,17 @@ our %MIME_TYPES = (
     woff => 'font/woff',
     woff2=> 'font/woff2',
     ttf  => 'font/ttf',
+    otf  => 'font/otf',
+    eot  => 'application/vnd.ms-fontobject',
     pdf  => 'application/pdf',
     zip  => 'application/zip',
+    gz   => 'application/gzip',
+    tar  => 'application/x-tar',
     mp3  => 'audio/mpeg',
     mp4  => 'video/mp4',
     webm => 'video/webm',
+    ogg  => 'audio/ogg',
+    wav  => 'audio/wav',
 );
 
 sub import {
@@ -260,11 +273,16 @@ sub _unexpected_probe_error {
     croak "Cannot inspect file candidate '$path': $message";
 }
 
+sub _path_from_root {
+    my ($self, $request_path) = @_;
+    return PAGI::Utils::path_from_root($self->{root}, $request_path);
+}
+
 sub locate {
     my ($self, $request_path) = @_;
     croak 'locate requires exactly one request path' unless @_ == 2;
 
-    my $path = PAGI::Utils::path_from_root($self->{root}, $request_path);
+    my $path = $self->_path_from_root($request_path);
     return _result('forbidden', undef) unless defined $path;
     return _result('forbidden', $path)
         if !$self->{allow_hidden} && _has_hidden_component($request_path);
@@ -308,6 +326,43 @@ sub locate {
 
     _development_file_attempt($path);
     return _result('directory', $path);
+}
+
+sub _single_byte_range {
+    my ($range, $size) = @_;
+    return undef unless defined $range;
+    return { invalid => 1 }
+        unless $range =~ /\Abytes=([0-9]*)-([0-9]*)\z/;
+
+    my ($start_text, $end_text) = ($1, $2);
+    return { invalid => 1 }
+        if $start_text eq '' && $end_text eq '';
+
+    my ($start, $end);
+    if ($start_text eq '') {
+        my $suffix_length = 0 + $end_text;
+        return { invalid => 1 } if $suffix_length == 0 || $size == 0;
+        $suffix_length = $size if $suffix_length > $size;
+        $start = $size - $suffix_length;
+        $end = $size - 1;
+    } else {
+        $start = 0 + $start_text;
+        return { invalid => 1 } if $start >= $size;
+
+        if ($end_text eq '') {
+            $end = $size - 1;
+        } else {
+            $end = 0 + $end_text;
+            return { invalid => 1 } if $start > $end;
+            $end = $size - 1 if $end >= $size;
+        }
+    }
+
+    return {
+        start  => $start,
+        end    => $end,
+        length => $end - $start + 1,
+    };
 }
 
 sub _development_file_attempt {
@@ -416,21 +471,27 @@ async sub serve {
     my $content_type = $MIME_TYPES{lc($ext // '')} // $self->{default_type};
 
     # Check for Range request (only if handle_ranges is enabled)
-    my $range = $self->{handle_ranges}
-        ? $self->_get_header($boundary_scope, 'range') : undef;
-    if ($range && $range =~ /bytes=(\d*)-(\d*)/) {
-        my ($start, $end) = ($1, $2);
-        $start = 0 if $start eq '';
-        $end = $size - 1 if $end eq '' || $end >= $size;
-
-        if ($start > $end || $start >= $size) {
+    my $range;
+    if ($self->{handle_ranges}) {
+        my @range_values = $self->_get_header_values(
+            $boundary_scope, 'range',
+        );
+        $range = join ',', map {
+            defined($_) && !ref($_) ? $_ : ''
+        } @range_values if @range_values;
+    }
+    my $parsed_range = _single_byte_range($range, $size);
+    if (defined $parsed_range) {
+        if ($parsed_range->{invalid}) {
             return await _respond_page(
                 $boundary_scope, $send, 'range_not_satisfiable',
                 length => $size,
             );
         }
 
-        my $length = $end - $start + 1;
+        my $start = $parsed_range->{start};
+        my $end = $parsed_range->{end};
+        my $length = $parsed_range->{length};
 
         await $send->({
             type => 'http.response.start',
@@ -472,14 +533,21 @@ async sub serve {
     return;
 }
 
-sub _get_header {
+sub _get_header_values {
     my ($self, $scope, $name) = @_;
 
     $name = lc($name);
+    my @values;
     for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
+        push @values, $h->[1] if lc($h->[0]) eq $name;
     }
-    return;
+    return @values;
+}
+
+sub _get_header {
+    my ($self, $scope, $name) = @_;
+    my @values = $self->_get_header_values($scope, $name);
+    return @values ? $values[0] : undef;
 }
 
 async sub _respond_page {

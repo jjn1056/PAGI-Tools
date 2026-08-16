@@ -5,6 +5,7 @@ use Cwd qw(getcwd);
 use Errno qw(EACCES EIO ENOENT ENOTDIR EPERM);
 use Fcntl qw(S_IFDIR S_IFREG);
 use File::Spec;
+use File::Spec::Win32;
 use File::Temp qw(tempdir);
 use Future;
 use Scalar::Util qw(refaddr);
@@ -65,6 +66,26 @@ sub stat_snapshot {
 {
     package Local::NotFileResult;
     sub new { return bless {}, shift }
+}
+
+{
+    package Local::Win32ProbeFile;
+    use parent -norequire, 'Local::ProbeFile';
+
+    sub new {
+        my ($class, %args) = @_;
+        my $win32_root = delete $args{win32_root};
+        my $self = $class->SUPER::new(%args);
+        $self->{_test_win32_root} = $win32_root;
+        return $self;
+    }
+
+    sub _path_from_root {
+        my ($self, $request_path) = @_;
+        return PAGI::Utils::_path_from_root_with_spec(
+            'File::Spec::Win32', $self->{_test_win32_root}, $request_path,
+        );
+    }
 }
 
 sub http_scope {
@@ -265,6 +286,36 @@ subtest 'locate classifies real files, directories, and request policy' => sub {
         'NUL rejection does not consult development diagnostics');
     ok($files->locate('/.silent')->is_forbidden,
         'hidden rejection does not consult development diagnostics');
+};
+
+subtest 'Win32 directory intent survives into locate classification' => sub {
+    my $separator = chr 92;
+    my $win32_root = 'C:' . $separator . 'www';
+    my $plain = File::Spec::Win32->catfile($win32_root, 'manual.pdf');
+    my ($volume, $directories, $filename)
+        = File::Spec::Win32->splitpath($plain);
+    my $intent = File::Spec::Win32->catpath(
+        $volume,
+        File::Spec::Win32->catdir($directories, $filename),
+        File::Spec::Win32->curdir,
+    );
+    my $files = Local::Win32ProbeFile->new(
+        root       => '.',
+        win32_root => $win32_root,
+        probes     => {
+            $plain  => stat_snapshot(S_IFREG() | 0644, 10, 20, 1),
+            $intent => { errno => ENOTDIR, error => 'simulated not a directory' },
+        },
+    );
+
+    ok($files->locate('/manual.pdf')->is_file,
+        'plain Win32 request still classifies the regular file');
+    ok($files->locate('/manual.pdf/')->is_missing,
+        'trailing separator cannot classify the Win32 regular file');
+    ok($files->locate('/manual.pdf/.')->is_missing,
+        'final dot cannot classify the Win32 regular file');
+    is($files->probe_calls, [$plain, $intent, $intent],
+        'locate probes the preserved Win32 directory-intent path');
 };
 
 subtest 'indexes are selected in declaration order under hidden policy' => sub {

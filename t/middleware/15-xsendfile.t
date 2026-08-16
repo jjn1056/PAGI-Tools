@@ -3,9 +3,11 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use File::Spec;
 use IO::Async::Loop;
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 
@@ -99,6 +101,7 @@ subtest 'X-Sendfile header added for file response' => sub {
         await $send->({
             type    => 'http.response.start',
             status  => 200,
+            extension_sentinel => 'kept',
             headers => [
                 ['content-type', 'application/octet-stream'],
                 ['content-disposition', 'attachment; filename="test.bin"'],
@@ -124,6 +127,8 @@ subtest 'X-Sendfile header added for file response' => sub {
     is scalar(@sent), 2, 'two events sent';
     is $sent[0]{type}, 'http.response.start', 'first event is response start';
     is $sent[0]{status}, 200, 'status preserved';
+    is $sent[0]{extension_sentinel}, 'kept',
+        'response-start extension fields are preserved';
 
     my $xsendfile = find_header($sent[0]{headers}, 'X-Sendfile');
     is $xsendfile, '/var/www/files/test.bin', 'X-Sendfile header set correctly';
@@ -602,6 +607,233 @@ subtest 'streaming response passes through' => sub {
     is scalar(@sent), 3, 'three events sent (start + 2 body chunks)';
     is $sent[1]{body}, 'chunk1', 'first chunk passed through';
     is $sent[2]{body}, 'chunk2', 'second chunk passed through';
+};
+
+subtest 'a streamed chunk commits exact pass-through before a later file' => sub {
+    my $middleware = PAGI::Middleware::XSendfile->new(type => 'X-Sendfile');
+    my @original = (
+        { type => 'http.response.start', status => 200, headers => [] },
+        { type => 'http.response.body', body => 'prefix', more => 1 },
+        { type => 'http.response.body', file => '/srv/final.bin', more => 0 },
+    );
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        for my $event (@original) {
+            await $send->($event);
+        }
+    };
+    my @sent;
+    run_async(async sub {
+        await $middleware->wrap($app)->(
+            { type => 'http', path => '/' },
+            async sub { { type => 'http.disconnect' } },
+            async sub { push @sent, $_[0] },
+        );
+    });
+
+    is(\@sent, \@original,
+        'start, streamed bytes, and later file are each preserved exactly once');
+    is(find_header($sent[0]{headers}, 'X-Sendfile'), undef,
+        'a later file cannot restart interception after body bytes');
+};
+
+subtest 'a nonterminal file event commits exact pass-through' => sub {
+    my $middleware = PAGI::Middleware::XSendfile->new(type => 'X-Sendfile');
+    my @original = (
+        { type => 'http.response.start', status => 200, headers => [] },
+        {
+            type => 'http.response.body', file => '/srv/first.bin',
+            more => 1,
+        },
+        { type => 'http.response.body', body => 'tail', more => 0 },
+    );
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        for my $event (@original) {
+            await $send->($event);
+        }
+    };
+    my @sent;
+    run_async(async sub {
+        await $middleware->wrap($app)->(
+            { type => 'http', path => '/' },
+            async sub { { type => 'http.disconnect' } },
+            async sub { push @sent, $_[0] },
+        );
+    });
+
+    is(\@sent, \@original,
+        'nonterminal file and tail are preserved instead of made terminal');
+    is(find_header($sent[0]{headers}, 'X-Sendfile'), undef,
+        'nonterminal file event cannot be intercepted');
+};
+
+subtest 'a trailer-bearing file response remains exact pass-through' => sub {
+    my $middleware = PAGI::Middleware::XSendfile->new(type => 'X-Sendfile');
+    my @original = (
+        {
+            type => 'http.response.start', status => 200, headers => [],
+            trailers => 1, extension_sentinel => 'kept',
+        },
+        {
+            type => 'http.response.body', file => '/srv/trailer.bin',
+            more => 0,
+        },
+        {
+            type => 'http.response.trailers',
+            headers => [['x-checksum', 'kept']],
+        },
+    );
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        for my $event (@original) {
+            await $send->($event);
+        }
+    };
+    my @sent;
+    run_async(async sub {
+        await $middleware->wrap($app)->(
+            { type => 'http', path => '/' },
+            async sub { { type => 'http.disconnect' } },
+            async sub { push @sent, $_[0] },
+        );
+    });
+
+    is(\@sent, \@original,
+        'declining interception preserves start, file, and trailers exactly');
+    is(find_header($sent[0]{headers}, 'X-Sendfile'), undef,
+        'a response that promises trailers is not intercepted');
+};
+
+subtest 'unsafe and unmatched declines remain committed for later events' => sub {
+    my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
+    for my $case (
+        [
+            'unsafe direct path',
+            { type => 'X-Sendfile' },
+            "/srv/unsafe\rname.bin",
+            '/srv/safe.bin',
+        ],
+        [
+            'unmatched hash path',
+            {
+                type => 'X-Accel-Redirect',
+                mapping => { $files => '/internal/files' },
+            },
+            File::Spec->catfile(File::Spec->rootdir, 'opt', 'first.bin'),
+            File::Spec->catfile($files, 'second.bin'),
+        ],
+    ) {
+        my ($label, $config, $first_path, $second_path) = @$case;
+        my $middleware = PAGI::Middleware::XSendfile->new(%$config);
+        my @original = (
+            { type => 'http.response.start', status => 200, headers => [] },
+            {
+                type => 'http.response.body', file => $first_path,
+                more => 0,
+            },
+            {
+                type => 'http.response.body', file => $second_path,
+                more => 0,
+            },
+        );
+        my $app = async sub {
+            my ($scope, $receive, $send) = @_;
+            for my $event (@original) {
+                await $send->($event);
+            }
+        };
+        my @sent;
+        run_async(async sub {
+            await $middleware->wrap($app)->(
+                { type => 'http', path => '/' },
+                async sub { { type => 'http.disconnect' } },
+                async sub { push @sent, $_[0] },
+            );
+        });
+        is(\@sent, \@original,
+            "$label preserves every subsequent event exactly once");
+        is(find_header($sent[0]{headers}, $config->{type}), undef,
+            "$label never resumes interception");
+    }
+};
+
+subtest 'failed pass-through start is committed before awaiting downstream' => sub {
+    my $middleware = PAGI::Middleware::XSendfile->new(type => 'X-Sendfile');
+    my $start = { type => 'http.response.start', status => 200, headers => [] };
+    my $chunk = { type => 'http.response.body', body => 'chunk', more => 1 };
+    my $tail = { type => 'http.response.body', body => 'tail', more => 0 };
+    my $caught;
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->($start);
+        eval { await $send->($chunk); 1 } or $caught = $@;
+        await $send->($tail);
+    };
+    my ($start_attempts, @attempted) = (0);
+    run_async(async sub {
+        await $middleware->wrap($app)->(
+            { type => 'http', path => '/' },
+            async sub { { type => 'http.disconnect' } },
+            sub {
+                my ($event) = @_;
+                push @attempted, $event;
+                if (refaddr($event) == refaddr($start)) {
+                    $start_attempts++;
+                    return Future->fail('simulated replay start failure')
+                        if $start_attempts == 1;
+                }
+                return Future->done;
+            },
+        );
+    });
+
+    like($caught, qr/simulated replay start failure/,
+        'application observes the downstream replay failure');
+    is($start_attempts, 1, 'failed original start is never retried');
+    is(scalar(grep { refaddr($_) == refaddr($tail) } @attempted), 1,
+        'a later event is still forwarded exactly once');
+};
+
+subtest 'failed interception never flushes the original buffered start' => sub {
+    for my $failure_call (1, 2) {
+        my $middleware = PAGI::Middleware::XSendfile->new(type => 'X-Sendfile');
+        my $start = {
+            type => 'http.response.start', status => 200,
+            headers => [['content-type', 'application/octet-stream']],
+        };
+        my $file = {
+            type => 'http.response.body', file => '/srv/file.bin', more => 0,
+        };
+        my $caught;
+        my $app = async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->($start);
+            eval { await $send->($file); 1 } or $caught = $@;
+        };
+        my ($calls, @attempted) = (0);
+        run_async(async sub {
+            await $middleware->wrap($app)->(
+                { type => 'http', path => '/' },
+                async sub { { type => 'http.disconnect' } },
+                sub {
+                    my ($event) = @_;
+                    $calls++;
+                    push @attempted, $event;
+                    return Future->fail("simulated interception failure $failure_call")
+                        if $calls == $failure_call;
+                    return Future->done;
+                },
+            );
+        });
+
+        like($caught, qr/simulated interception failure $failure_call/,
+            "application observes interception send failure $failure_call");
+        is(scalar(grep { refaddr($_) == refaddr($start) } @attempted), 0,
+            "failure $failure_call never flushes the original start");
+        is(scalar(@attempted), $failure_call,
+            "failure $failure_call performs no completion-time retry");
+    }
 };
 
 # =============================================================================

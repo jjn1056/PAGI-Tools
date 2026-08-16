@@ -12,6 +12,7 @@ use parent 'PAGI::App::File';
 use JSON::MaybeXS ();
 use File::Spec;
 use PAGI::Routing::HeadBoundary;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -41,18 +42,27 @@ sub _html_escape {
 
 sub _utf8_bytes {
     my $str = shift;
-    return $str unless utf8::is_utf8($str);
-    return encode('UTF-8', $str, FB_CROAK | LEAVE_SRC);
+    my $text = _utf8_text($str);
+    return undef unless defined $text;
+    return encode('UTF-8', $text, FB_CROAK | LEAVE_SRC);
 }
 
 sub _utf8_text {
     my $str = shift;
-    return $str if utf8::is_utf8($str);
+    return undef unless defined $str;
+
+    if (utf8::is_utf8($str)) {
+        my $valid = eval {
+            encode('UTF-8', $str, FB_CROAK | LEAVE_SRC);
+            1;
+        };
+        return $valid ? $str : undef;
+    }
 
     my $decoded = eval {
         decode('UTF-8', $str, FB_CROAK | LEAVE_SRC);
     };
-    return defined($decoded) ? $decoded : $str;
+    return $decoded;
 }
 
 # URL encode for href attributes
@@ -60,8 +70,40 @@ sub _url_encode {
     my $str = shift;
     return '' unless defined $str;
     $str = _utf8_bytes($str);
+    return '' unless defined $str;
     $str =~ s/([^A-Za-z0-9\-_.~\/])/sprintf("%%%02X", ord($1))/ge;
     return $str;
+}
+
+sub _listing_entry_name {
+    my ($self, $raw_name) = @_;
+    my $name = _utf8_text($raw_name);
+    return undef unless defined $name && length $name;
+
+    my ($parts, $directory_intent)
+        = PAGI::Utils::_validated_request_parts($name);
+    return undef unless defined($parts)
+        && @$parts == 1
+        && $parts->[0] eq $name
+        && !$directory_intent;
+    return undef if !$self->{allow_hidden}
+        && PAGI::App::File::_has_hidden_component($name);
+    return $name;
+}
+
+sub _public_listing_base {
+    my ($scope) = @_;
+    my @parts;
+    for my $fragment ($scope->{root_path} // '', $scope->{path} // '/') {
+        my $text = _utf8_text($fragment);
+        croak 'Directory request path must be valid decoded UTF-8'
+            unless defined $text;
+        push @parts, grep { length($_) && $_ ne '.' }
+            split m{[\\/]}, $text, -1;
+    }
+
+    return '/' unless @parts;
+    return '/' . join('/', map { _url_encode($_) } @parts) . '/';
 }
 
 sub to_app {
@@ -138,7 +180,8 @@ async sub _send_listing {
         }
 
         next if $entry eq '.' || $entry eq '..';
-        next if !$self->{allow_hidden} && $entry =~ /^\./;
+        my $name = $self->_listing_entry_name($entry);
+        next unless defined $name;
 
         my $full_path = File::Spec->catfile($dir_path, $entry);
         my @stat = stat($full_path);
@@ -148,7 +191,7 @@ async sub _send_listing {
             croak "Cannot inspect directory entry '$full_path': $stat_error";
         }
         push @entries, {
-            name  => $entry,
+            name  => $name,
             is_dir => S_ISDIR($stat[2]) ? 1 : 0,
             size  => $stat[7] // 0,
             mtime => $stat[9] // 0,
@@ -165,10 +208,7 @@ async sub _send_listing {
     # Check Accept header for JSON
     my $accept = $self->_get_header($scope, 'accept') // '';
     if ($accept =~ m{application/json}) {
-        my @json_entries = map {
-            +{ %$_, name => _utf8_text($_->{name}) }
-        } @entries;
-        my $json = JSON::MaybeXS::encode_json(\@json_entries);
+        my $json = JSON::MaybeXS::encode_json(\@entries);
         await $send->({
             type => 'http.response.start',
             status => 200,
@@ -184,6 +224,7 @@ async sub _send_listing {
     # HTML listing
     my $base_path = $rel_path eq '' ? '/' : "/$rel_path";
     $base_path =~ s{/+$}{};
+    my $public_base = _public_listing_base($scope);
 
     # Escape base_path for safe HTML output
     my $escaped_path = _utf8_bytes(_html_escape($base_path));
@@ -195,18 +236,23 @@ async sub _send_listing {
     $html .= "<body><h1>Index of $escaped_path/</h1><table><tr><th>Name</th><th>Size</th></tr>";
 
     if ($rel_path ne '') {
-        $html .= '<tr><td><a href="../">..</a></td><td>-</td></tr>';
+        my $parent_href = $public_base;
+        $parent_href =~ s{[^/]+/\z}{};
+        $html .= '<tr><td><a href="'
+            . _html_escape($parent_href)
+            . '">..</a></td><td>-</td></tr>';
     }
 
     for my $entry (@entries) {
         my $name = $entry->{name};
         my $display = $entry->{is_dir} ? "$name/" : $name;
-        my $href = "$name" . ($entry->{is_dir} ? '/' : '');
+        my $href = $public_base . _url_encode($name)
+            . ($entry->{is_dir} ? '/' : '');
         my $size = $entry->{is_dir} ? '-' : _format_size($entry->{size});
 
         # Escape all user-controlled values to prevent XSS
         my $escaped_display = _utf8_bytes(_html_escape($display));
-        my $escaped_href = _html_escape(_url_encode($href));
+        my $escaped_href = _html_escape($href);
         $html .= qq{<tr><td><a href="$escaped_href">$escaped_display</a></td><td>$size</td></tr>};
     }
 
@@ -264,7 +310,13 @@ HTML listings declare and emit UTF-8; JSON listings are likewise UTF-8 octets.
 All configuration is inherited from L<PAGI::App::File>.  In particular,
 C<allow_hidden> defaults to false and governs both direct file retrieval and
 entries included in a listing.  Set it to true to allow both.  The special
-C<.> and C<..> directory entries are never included.
+C<.> and C<..> directory entries are never included.  Listings also omit a
+filesystem name unless it is valid UTF-8 and round-trips as exactly one safe
+component under the shared request grammar.  In particular, separator-bearing,
+all-dot, platform-absolute, volumed, and non-UTF-8 byte names are omitted rather
+than linked under a changed identity.  Entry and parent links are absolute
+request paths built from C<root_path> and C<path>, so slashless and mounted
+listings remain navigable without leaving their mount.
 
 =over 4
 

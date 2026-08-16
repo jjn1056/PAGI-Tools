@@ -485,6 +485,12 @@ subtest 'Static middleware handles suffix range' => sub {
     });
 
     is $sent[0]{status}, 206, 'status is 206 for suffix range';
+    is event_header($sent[0], 'Content-Range'), 'bytes 7-11/12',
+        'suffix range reports the exact final five bytes';
+    is event_header($sent[0], 'Content-Length'), 5,
+        'suffix range reports the exact selected length';
+    is $sent[1]{offset}, 7, 'suffix range delegates the exact file offset';
+    is $sent[1]{length}, 5, 'suffix range delegates the exact file length';
 };
 
 subtest 'Static middleware returns 416 for invalid range' => sub {
@@ -1088,6 +1094,58 @@ subtest 'Static responses are byte-for-byte File-engine responses' => sub {
     is($wrapped_range->[1], $direct_range->[1],
         'range file event matches File exactly');
 
+    for my $case (
+        ['bytes=-5', 206],
+        ['bytes=-0', 416],
+        ['bytes=-', 416],
+        ['bytes=0-1,8-9', 416],
+        ['junkbytes=0-1', 416],
+    ) {
+        my ($range, $status) = @$case;
+        my $headers = [['range', $range]];
+        my $direct_case = capture_events(
+            $file_app, $scope_for->('GET', $headers),
+        );
+        my $wrapped_case = capture_events(
+            $static_app, $scope_for->('GET', $headers),
+        );
+        is($wrapped_case, $direct_case,
+            "Static exactly preserves File handling for $range");
+        is($wrapped_case->[0]{status}, $status,
+            "$range retains the strict shared status");
+    }
+
+    for my $case (
+        ['empty Range field', [['range', '']]],
+        ['Unicode digits', [['range', "bytes=\x{0661}-\x{0662}"]]],
+        ['repeated Range fields', [
+            ['range', 'bytes=0-1'], ['range', 'bytes=8-9'],
+        ]],
+    ) {
+        my ($label, $headers) = @$case;
+        my $direct_case = capture_events(
+            $file_app, $scope_for->('GET', $headers),
+        );
+        my $wrapped_case = capture_events(
+            $static_app, $scope_for->('GET', $headers),
+        );
+        is($wrapped_case, $direct_case,
+            "Static exactly preserves File handling for $label");
+        is($wrapped_case->[0]{status}, 416,
+            "$label retains the strict shared status");
+
+        my $direct_head_case = capture_events(
+            $file_app, $scope_for->('HEAD', $headers),
+        );
+        my $wrapped_head_case = capture_events(
+            $static_app, $scope_for->('HEAD', $headers),
+        );
+        is($wrapped_head_case, $direct_head_case,
+            "Static HEAD exactly preserves File handling for $label");
+        is($wrapped_head_case->[0]{status}, 416,
+            "$label HEAD retains the strict shared status");
+    }
+
     my $direct_head = capture_events($file_app, $scope_for->('HEAD'));
     my $wrapped_head = capture_events($static_app, $scope_for->('HEAD'));
     is($wrapped_head, $direct_head,
@@ -1104,6 +1162,34 @@ subtest 'Static responses are byte-for-byte File-engine responses' => sub {
     is(event_header($wrapped_default->[0], 'Content-Type'),
         event_header($direct_default->[0], 'Content-Type'),
         'Static preserves File default MIME behavior');
+
+    my %shared_types = (
+        csv => 'text/csv',
+        gz  => 'application/gzip',
+        tar => 'application/x-tar',
+        eot => 'application/vnd.ms-fontobject',
+        otf => 'font/otf',
+        ogg => 'audio/ogg',
+        wav => 'audio/wav',
+    );
+    for my $extension (sort keys %shared_types) {
+        write_test_file(
+            File::Spec->catfile($root, "sample.$extension"), $extension,
+        );
+        my $path = "/sample.$extension";
+        my $direct_type = capture_events(
+            $file_app, $scope_for->('GET', [], $path),
+        );
+        my $wrapped_type = capture_events(
+            $static_app, $scope_for->('GET', [], $path),
+        );
+        is(event_header($direct_type->[0], 'Content-Type'),
+            $shared_types{$extension},
+            "File retains the .$extension MIME mapping");
+        is(event_header($wrapped_type->[0], 'Content-Type'),
+            $shared_types{$extension},
+            "Static retains the .$extension MIME mapping through File");
+    }
 };
 
 subtest 'Static propagates File locate failures without sending a response' => sub {

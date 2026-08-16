@@ -111,6 +111,34 @@ PAGI::App::Directory->new(root => $root, allow_hidden => 1);
 default false value, hidden request components are forbidden and hidden index
 candidates are skipped.
 
+### Audit byte-range request assumptions
+
+**Before:** the File/Static parser searched for an unanchored range-shaped
+substring, treated `bytes=-N` as starting at byte zero, and could silently
+accept malformed or multi-range input.
+
+**After:** File owns one strict shared parser for exactly one ASCII
+`bytes=start-end` interval. Open-ended and last-`N` suffix forms are supported;
+an oversized end is clamped. Empty or repeated Range fields, empty or
+zero-length suffixes, non-ASCII digits, malformed values, reversed/beyond-end
+intervals, and comma-separated multi-ranges receive 416 with
+`Content-Range: bytes */N`. Static delegates the same behavior, and HEAD keeps
+the corresponding GET status and headers without file bytes. Applications that
+need multipart byte ranges must implement a separate response policy.
+
+### Audit directory-listing URLs and filename identity
+
+**Before:** relative entry links from a slashless or mounted directory could
+resolve against the wrong browser base, and a listing could expose a filesystem
+name that the public request grammar could not retrieve under the same identity.
+
+**After:** HTML entry and parent links are absolute, encoded request paths built
+from PAGI `root_path` plus `path`, so navigation remains inside the mount.
+Listings omit separator-bearing, all-dot, platform-absolute/volumed, and invalid
+UTF-8 byte names, while `allow_hidden` continues to govern ordinary dot names.
+JSON and HTML therefore expose only names that round-trip losslessly through the
+same public request grammar.
+
 ### Audit status, symlink, method, and mapping assumptions
 
 | Before | After |
@@ -284,7 +312,7 @@ and cache fields may change through consistent negotiation and encoding.
 | Component | Stock default now delegated to Pages | Facts or custom branch preserved |
 |---|---|---|
 | `PAGI::App::File` | 403, 404, 405, 416 | 405 supplies `Allow: GET, HEAD`; 416 supplies selected file length |
-| `PAGI::App::Directory` | pre-delegation 403; File defaults after a file/index target resolves | directory safety and listing decisions remain local |
+| `PAGI::App::Directory` | listing `opendir` permission 403 plus inherited File 403, 404, 405, and 416 | File owns request-path policy, location Results, indexes, and delegated responses; Directory owns only eligible listing rendering and listing I/O |
 | `PAGI::App::URLMap` | no-default HTTP 404 | mount selection and opaque ownership remain local |
 | `PAGI::App::Proxy` | backend-connect 502 | connection decision and demo warning remain local |
 | `PAGI::App::Loader` | HTTP load-failure 500 | loading, warnings, and reload policy remain local |

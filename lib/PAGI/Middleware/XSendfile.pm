@@ -168,6 +168,13 @@ request-derived path suffix introduces NUL, CR, LF, another C0 control byte, or
 DEL, the middleware safely declines interception and replays the original
 response start and file event without adding the proxy header.
 
+Only a terminal full-file body event can be intercepted, and only before any
+body event has been forwarded. A nonterminal file event, ordinary body,
+partial file, trailer-bearing response, unsafe value, or unmatched mapping
+commits the response to exact pass-through; all later events remain untouched
+and are forwarded once. Response-start extension fields are retained when an
+eligible response is intercepted.
+
 =head1 RANGE REQUESTS / PARTIAL CONTENT
 
 B<For best results with XSendfile, disable range handling in your app.>
@@ -381,16 +388,25 @@ sub wrap {
             return;
         }
 
+        my $state = 'candidate';
         my $pending_start;
 
         my $wrapped_send = async sub {
             my ($event) = @_;
-            my $type = $event->{type};
+            my $type = $event->{type} // '';
+
+            if ($state eq 'passthrough') {
+                await $send->($event);
+                return;
+            }
+            return if $state eq 'intercepted';
 
             if ($type eq 'http.response.start') {
-                # Buffer the start event - we might need to modify headers
-                $pending_start = $event;
-                return;
+                if (!$pending_start) {
+                    # Buffer the first start event - we might modify its headers.
+                    $pending_start = $event;
+                    return;
+                }
             }
 
             if ($type eq 'http.response.body') {
@@ -399,12 +415,19 @@ sub wrap {
                 # Skip XSendfile for partial content (offset/length) - proxies don't support it
                 my $is_partial = defined $event->{offset} || defined $event->{length};
 
-                if (defined $path && !$is_partial) {
+                my $is_terminal = !$event->{more};
+
+                if ($pending_start && defined($path)
+                        && !$is_partial && $is_terminal
+                        && !$pending_start->{trailers}) {
                     # We have a full file path - use X-Sendfile
                     my $mapped_path = $self->_map_path($path);
 
                     if (_valid_header_value($mapped_path)) {
-                        my @headers = @{$pending_start->{headers} // []};
+                        my $start = $pending_start;
+                        $pending_start = undef;
+                        $state = 'intercepted';
+                        my @headers = @{$start->{headers} // []};
 
                         # Add the X-Sendfile header
                         push @headers, [$self->{type}, $mapped_path];
@@ -416,25 +439,24 @@ sub wrap {
 
                         # Send response with empty body
                         await $send->({
-                            type    => 'http.response.start',
-                            status  => $pending_start->{status},
+                            %$start,
                             headers => \@headers,
                         });
                         await $send->({
                             type => 'http.response.body',
                             body => '',
                         });
-
-                        $pending_start = undef;
                         return;
                     }
                 }
             }
 
-            # Not a file response, or no path available - pass through
-            if ($pending_start) {
-                await $send->($pending_start);
-                $pending_start = undef;
+            # Any non-candidate event commits pass-through before awaiting I/O.
+            my $start = $pending_start;
+            $pending_start = undef;
+            $state = 'passthrough';
+            if ($start) {
+                await $send->($start);
             }
             await $send->($event);
         };
@@ -442,8 +464,11 @@ sub wrap {
         await $app->($scope, $receive, $wrapped_send);
 
         # Flush any pending start that wasn't followed by a body
-        if ($pending_start) {
-            await $send->($pending_start);
+        if ($state eq 'candidate' && $pending_start) {
+            my $start = $pending_start;
+            $pending_start = undef;
+            $state = 'passthrough';
+            await $send->($start);
         }
     };
 }

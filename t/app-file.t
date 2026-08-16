@@ -55,6 +55,14 @@ sub run_native {
     return \@events;
 }
 
+sub event_header {
+    my ($event, $name) = @_;
+    for my $header (@{$event->{headers} // []}) {
+        return $header->[1] if lc($header->[0]) eq lc($name);
+    }
+    return;
+}
+
 sub assert_head_parity {
     my ($component, $path, $headers, $label) = @_;
     my $get = run_native($component, 'GET', $path, $headers);
@@ -174,6 +182,103 @@ subtest 'stock file errors negotiate through Pages without changing file outcome
     assert_head_parity($component, '/sample.txt', [
         ['if-none-match', $full->header('ETag')],
     ], 'not-modified file');
+};
+
+subtest 'single byte ranges have strict grammar and exact suffix semantics' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $file = File::Spec->catfile($root, 'sample.txt');
+    open my $fh, '>', $file or die "cannot create $file: $!";
+    print {$fh} '0123456789';
+    close $fh or die "cannot close $file: $!";
+
+    my $component = PAGI::App::File->new(root => $root);
+    my $client = PAGI::Test::Client->new(
+        app => $component, raise_app_exceptions => 1,
+    );
+
+    for my $case (
+        ['bytes=-5',  '56789',      'bytes 5-9/10', 5],
+        ['bytes=-99', '0123456789', 'bytes 0-9/10', 10],
+        ['bytes=3-',  '3456789',    'bytes 3-9/10', 7],
+        ['bytes=3-99','3456789',    'bytes 3-9/10', 7],
+    ) {
+        my ($range, $content, $content_range, $length) = @$case;
+        my $response = $client->get('/sample.txt', headers => {
+            Range => $range,
+        });
+        is($response->status, 206, "$range is one satisfiable byte range");
+        is($response->content, $content, "$range selects the exact bytes");
+        is($response->header('Content-Range'), $content_range,
+            "$range reports the exact normalized interval");
+        is($response->content_length, $length,
+            "$range reports the exact selected length");
+    }
+
+    my $suffix_events = run_native(
+        $component, 'GET', '/sample.txt', [['range', 'bytes=-5']],
+    );
+    is($suffix_events->[1]{offset}, 5,
+        'suffix range delegates the exact server file offset');
+    is($suffix_events->[1]{length}, 5,
+        'suffix range delegates the exact server file length');
+
+    for my $range (
+        'bytes=-0', 'bytes=-', 'bytes=', 'bytes=0-1,8-9',
+        'junkbytes=0-1', 'bytes=7-3', 'bytes=10-', 'bytes= 0-1',
+    ) {
+        my $response = $client->get('/sample.txt', headers => {
+            Range => $range,
+        });
+        is($response->status, 416, "$range is rejected rather than guessed");
+        is($response->header('Content-Range'), 'bytes */10',
+            "$range rejection reports the representation length");
+    }
+
+    for my $case (
+        ['empty Range field', [['range', '']]],
+        ['Unicode digits', [['range', "bytes=\x{0661}-\x{0662}"]]],
+        ['repeated Range fields', [
+            ['range', 'bytes=0-1'], ['range', 'bytes=8-9'],
+        ]],
+    ) {
+        my ($label, $headers) = @$case;
+        my $events = run_native($component, 'GET', '/sample.txt', $headers);
+        is($events->[0]{status}, 416, "$label is rejected as malformed");
+        is(
+            event_header($events->[0], 'content-range'),
+            'bytes */10',
+            "$label rejection reports the representation length",
+        );
+        assert_head_parity($component, '/sample.txt', $headers, $label);
+    }
+};
+
+subtest 'File preserves the complete shared MIME table' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my %types = (
+        csv => 'text/csv',
+        gz  => 'application/gzip',
+        tar => 'application/x-tar',
+        eot => 'application/vnd.ms-fontobject',
+        otf => 'font/otf',
+        ogg => 'audio/ogg',
+        wav => 'audio/wav',
+    );
+    for my $extension (keys %types) {
+        my $path = File::Spec->catfile($root, "sample.$extension");
+        open my $fh, '>', $path or die "cannot create $path: $!";
+        print {$fh} $extension;
+        close $fh or die "cannot close $path: $!";
+    }
+
+    my $client = PAGI::Test::Client->new(
+        app => PAGI::App::File->new(root => $root),
+        raise_app_exceptions => 1,
+    );
+    for my $extension (sort keys %types) {
+        is($client->get("/sample.$extension")->content_type,
+            $types{$extension}, ".$extension retains its shared MIME type");
+    }
 };
 
 subtest 'class constructor returns a serving component and preserves subclasses' => sub {

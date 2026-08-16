@@ -99,7 +99,8 @@ sub _require_path_string {
 }
 
 sub _validated_request_parts {
-    my ($path) = @_;
+    my ($path, $spec_class) = @_;
+    $spec_class ||= 'File::Spec';
     my @components = split m{[\\/]}, $path, -1;
     my $directory_intent = $path =~ m{[\\/]\z}
         || @components && $components[-1] eq '.';
@@ -110,13 +111,37 @@ sub _validated_request_parts {
         return if $component =~ /\A\.{2,}\z/;
         next if $component eq '' || $component eq '.';
 
-        my ($volume) = File::Spec->splitpath($component);
+        my ($volume) = $spec_class->splitpath($component);
         return if defined $volume && length $volume;
-        return if File::Spec->file_name_is_absolute($component);
+        return if $spec_class->file_name_is_absolute($component);
         push @parts, $component;
     }
 
     return (\@parts, $directory_intent);
+}
+
+sub _path_from_root_with_spec {
+    my ($spec_class, $root, $request_path) = @_;
+
+    my ($parts, $directory_intent)
+        = _validated_request_parts($request_path, $spec_class);
+    return undef unless defined $parts;
+
+    my $absolute_root = $spec_class->canonpath(
+        $spec_class->rel2abs($root),
+    );
+    my $candidate = @$parts
+        ? $spec_class->catfile($absolute_root, @$parts)
+        : $absolute_root;
+
+    return $candidate unless $directory_intent && @$parts;
+
+    my ($volume, $directories, $filename)
+        = $spec_class->splitpath($candidate);
+    my $intent_directory = $spec_class->catdir($directories, $filename);
+    return $spec_class->catpath(
+        $volume, $intent_directory, $spec_class->curdir,
+    );
 }
 
 sub path_from_root {
@@ -125,36 +150,42 @@ sub path_from_root {
     _require_path_string('path_from_root root', $root, 0);
     _require_path_string('path_from_root request path', $request_path, 1);
 
-    my ($parts, $directory_intent) = _validated_request_parts($request_path);
-    return undef unless defined $parts;
-
-    my $absolute_root = File::Spec->canonpath(File::Spec->rel2abs($root));
-    my $candidate = @$parts
-        ? File::Spec->catfile($absolute_root, @$parts)
-        : $absolute_root;
-
-    return $candidate unless $directory_intent && @$parts;
-    return File::Spec->catfile($candidate, File::Spec->curdir);
+    return _path_from_root_with_spec('File::Spec', $root, $request_path);
 }
 
-sub replace_path_prefix {
-    croak 'replace_path_prefix requires path, source prefix, and replacement'
-        unless @_ == 3;
-    my ($path, $from, $to) = @_;
-    _require_path_string('replace_path_prefix path', $path, 0);
-    _require_path_string('replace_path_prefix source prefix', $from, 0);
-    _require_path_string('replace_path_prefix replacement', $to, 0);
+sub _path_components_with_spec {
+    my ($spec_class, $path) = @_;
+    my (undef, $directories) = $spec_class->splitpath($path, 1);
+    return grep {
+        length($_) && $_ ne $spec_class->curdir
+    } $spec_class->splitdir($directories);
+}
 
-    my $absolute_path = File::Spec->canonpath(File::Spec->rel2abs($path));
-    my $absolute_from = File::Spec->canonpath(File::Spec->rel2abs($from));
-    my ($path_volume) = File::Spec->splitpath($absolute_path);
-    my ($from_volume) = File::Spec->splitpath($absolute_from);
-    return undef unless _same_path_component($path_volume, $from_volume);
+sub _replace_path_prefix_with_spec {
+    my ($spec_class, $path, $from, $to) = @_;
 
-    my $relative = File::Spec->abs2rel($absolute_path, $absolute_from);
-    my @suffix = File::Spec->splitdir($relative);
-    return undef if grep { $_ eq File::Spec->updir } @suffix;
-    @suffix = grep { length && $_ ne File::Spec->curdir } @suffix;
+    my $absolute_path = $spec_class->canonpath(
+        $spec_class->rel2abs($path),
+    );
+    my $absolute_from = $spec_class->canonpath(
+        $spec_class->rel2abs($from),
+    );
+    my ($path_volume) = $spec_class->splitpath($absolute_path);
+    my ($from_volume) = $spec_class->splitpath($absolute_from);
+    return undef unless _same_path_component(
+        $path_volume, $from_volume, $spec_class,
+    );
+
+    my @path_parts = _path_components_with_spec($spec_class, $absolute_path);
+    my @from_parts = _path_components_with_spec($spec_class, $absolute_from);
+    return undef if @path_parts < @from_parts;
+    for my $index (0 .. $#from_parts) {
+        return undef unless _same_path_component(
+            $path_parts[$index], $from_parts[$index], $spec_class,
+        );
+    }
+    my @suffix = @path_parts[@from_parts .. $#path_parts];
+    return undef if grep { $_ eq $spec_class->updir } @suffix;
 
     my $slash_to = $to;
     $slash_to =~ tr{\\}{/};
@@ -167,10 +198,24 @@ sub replace_path_prefix {
     return $slash_to . '/' . join('/', @suffix);
 }
 
+sub replace_path_prefix {
+    croak 'replace_path_prefix requires path, source prefix, and replacement'
+        unless @_ == 3;
+    my ($path, $from, $to) = @_;
+    _require_path_string('replace_path_prefix path', $path, 0);
+    _require_path_string('replace_path_prefix source prefix', $from, 0);
+    _require_path_string('replace_path_prefix replacement', $to, 0);
+
+    return _replace_path_prefix_with_spec(
+        'File::Spec', $path, $from, $to,
+    );
+}
+
 sub _same_path_component {
-    my ($left, $right) = @_;
+    my ($left, $right, $spec_class) = @_;
+    $spec_class ||= 'File::Spec';
     return 0 unless defined $left && defined $right;
-    return lc($left) eq lc($right) if File::Spec->case_tolerant;
+    return lc($left) eq lc($right) if $spec_class->case_tolerant;
     return $left eq $right;
 }
 
@@ -324,7 +369,10 @@ PAGI::Utils - Shared utility helpers for PAGI
     use PAGI::Utils qw(:path);
 
     my $file = path_from_root($document_root, $request_path);
-    my $uri  = replace_path_prefix($file, $document_root, '/protected');
+    if (defined $file) {
+        my $uri = replace_path_prefix($file, $document_root, '/protected');
+        ...
+    }
 
     use PAGI::Utils qw(:env);
 

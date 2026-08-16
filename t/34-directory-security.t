@@ -14,6 +14,7 @@ use Test2::V0;
 use lib 'lib';
 use PAGI::App::Directory;
 use PAGI::App::File;
+use PAGI::App::URLMap;
 use PAGI::Test::Client;
 
 {
@@ -110,6 +111,18 @@ sub event_header {
         return $header->[1] if lc($header->[0]) eq lc($name);
     }
     return;
+}
+
+sub listing_href {
+    my ($html, $label) = @_;
+    my ($href) = $html =~ m{<a href="([^"]+)">\Q$label\E</a>};
+    return $href;
+}
+
+sub decoded_href_path {
+    my ($href) = @_;
+    $href =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
+    return decode('UTF-8', $href, FB_CROAK | LEAVE_SRC);
 }
 
 sub assert_listing_head_parity {
@@ -255,7 +268,7 @@ subtest 'allow_hidden is shared by listing and direct File retrieval' => sub {
     my $legacy_listing = $removed_legacy_option->get('/listing')->text;
     unlike($legacy_listing, qr/\.listed/,
         'removed show_hidden option does not split listing policy');
-    my @legacy_parent_links = $legacy_listing =~ /href="\.\.\/"/g;
+    my @legacy_parent_links = $legacy_listing =~ /href="\/"/g;
     is(scalar(@legacy_parent_links), 1,
         'removed show_hidden cannot expose dot directory entries');
 
@@ -266,11 +279,124 @@ subtest 'allow_hidden is shared by listing and direct File retrieval' => sub {
     my $allowed_listing = $allowed->get('/listing')->text;
     like($allowed_listing, qr/\.listed/,
         'allow_hidden includes a hidden listing entry');
-    my @allowed_parent_links = $allowed_listing =~ /href="\.\.\/"/g;
+    my @allowed_parent_links = $allowed_listing =~ /href="\/"/g;
     is(scalar(@allowed_parent_links), 1,
         'allow_hidden still renders exactly one explicit parent link');
     is($allowed->get('/.direct')->text, 'direct hidden',
         'allow_hidden permits direct inherited File retrieval');
+};
+
+subtest 'listing links are absolute, slashless-safe, and mount-aware' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $listing = File::Spec->catdir($root, 'listing');
+    mkdir $listing or die "Cannot create $listing: $!";
+    write_file(File::Spec->catfile($root, 'root.txt'), 'root body');
+    write_file(File::Spec->catfile($listing, 'listed.txt'), 'listed body');
+
+    my $component = PAGI::App::Directory->new(root => $root);
+    my $direct = PAGI::Test::Client->new(
+        app => $component, raise_app_exceptions => 1,
+    );
+    my $root_html = $direct->get('/')->text;
+    my $root_href = listing_href($root_html, 'root.txt');
+    is($root_href, '/root.txt', 'root entry link is rooted at the browser path');
+    is($direct->get(decoded_href_path($root_href))->text, 'root body',
+        'root entry link resolves through a real client');
+
+    my $slashless_html = $direct->get('/listing')->text;
+    my $slashless_href = listing_href($slashless_html, 'listed.txt');
+    is($slashless_href, '/listing/listed.txt',
+        'slashless directory entry link retains the directory component');
+    is($direct->get(decoded_href_path($slashless_href))->text, 'listed body',
+        'slashless entry link resolves through a real client');
+
+    my $map = PAGI::App::URLMap->new;
+    $map->mount('/files' => $component);
+    my $mounted = PAGI::Test::Client->new(
+        app => $map, raise_app_exceptions => 1,
+    );
+
+    my $mounted_root_html = $mounted->get('/files')->text;
+    my $mounted_root_href = listing_href($mounted_root_html, 'root.txt');
+    is($mounted_root_href, '/files/root.txt',
+        'mounted root entry stays inside the mount');
+    is($mounted->get(decoded_href_path($mounted_root_href))->text, 'root body',
+        'mounted root entry resolves through the mounted client');
+
+    my $mounted_listing = $mounted->get('/files/listing');
+    my $mounted_href = listing_href($mounted_listing->text, 'listed.txt');
+    is($mounted_href, '/files/listing/listed.txt',
+        'mounted slashless entry retains mount and directory components');
+    is($mounted->get(decoded_href_path($mounted_href))->text, 'listed body',
+        'mounted slashless entry resolves through the mounted client');
+    my $parent_href = listing_href($mounted_listing->text, '..');
+    is($parent_href, '/files/', 'mounted parent link stops at the mount root');
+    like($mounted->get(decoded_href_path($parent_href))->text, qr/root\.txt/,
+        'mounted parent link resolves to the mounted root listing');
+
+    my $mounted_head = $mounted->head('/files/listing');
+    is($mounted_head->status, $mounted_listing->status,
+        'mounted slashless HEAD retains listing status');
+    is($mounted_head->content_length, $mounted_listing->content_length,
+        'mounted slashless HEAD calculates the same representation length');
+    is($mounted_head->content, '',
+        'mounted slashless HEAD emits no listing bytes');
+};
+
+subtest 'listings omit names that cannot round-trip through request grammar' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $separator_name = 'a' . chr(92) . 'b';
+    my $hidden_separator = 'visible' . chr(92) . '.secret';
+    for my $name ($separator_name, $hidden_separator, '...', '.well-known') {
+        unless (eval {
+            write_file(File::Spec->catfile($root, $name), "raw $name");
+            1;
+        }) {
+            my $reason = $@ || $! || 'filename unavailable';
+            plan skip_all => "cannot create request-grammar fixture: $reason";
+        }
+    }
+    my $nested = File::Spec->catdir($root, 'a');
+    mkdir $nested or die "Cannot create $nested: $!";
+    write_file(File::Spec->catfile($nested, 'b'), 'nested target');
+
+    my $default = PAGI::Test::Client->new(
+        app => PAGI::App::Directory->new(root => $root, index => []),
+        raise_app_exceptions => 1,
+    );
+    my $default_names = $default->get('/', headers => {
+        Accept => 'application/json',
+    })->json;
+    my %default_listed = map { $_->{name} => 1 } @$default_names;
+    ok(!$default_listed{$separator_name},
+        'backslash name is omitted instead of linking to another object');
+    ok(!$default_listed{$hidden_separator},
+        'separator-hidden name is omitted under the default policy');
+    is($default->get('/' . $separator_name)->text, 'nested target',
+        'the omitted raw name would resolve to a different public object');
+    is($default->get('/' . $hidden_separator)->status, 403,
+        'the omitted separator-hidden name remains forbidden directly');
+
+    my $allowed = PAGI::Test::Client->new(
+        app => PAGI::App::Directory->new(
+            root => $root, index => [], allow_hidden => 1,
+        ),
+        raise_app_exceptions => 1,
+    );
+    my $allowed_names = $allowed->get('/', headers => {
+        Accept => 'application/json',
+    })->json;
+    my %allowed_listed = map { $_->{name} => 1 } @$allowed_names;
+    ok(!$allowed_listed{$separator_name},
+        'allow_hidden does not make a backslash name addressable');
+    ok(!$allowed_listed{'...'},
+        'allow_hidden does not list an all-dot unsafe name');
+    ok($allowed_listed{'.well-known'},
+        'allow_hidden still lists an ordinary addressable hidden name');
+    is($allowed->get('/...')->status, 403,
+        'all-dot direct retrieval remains forbidden');
+    is($allowed->get('/.well-known')->text, 'raw .well-known',
+        'ordinary listed hidden name remains directly addressable');
 };
 
 subtest 'file and index responses retain File ETag, range, and file events' => sub {
@@ -376,6 +502,12 @@ subtest 'escaping helpers protect HTML and encode URLs' => sub {
         'file%3Cscript%3E.txt', 'angle brackets are URL encoded');
     is(PAGI::App::Directory::_url_encode(undef), '',
         'undefined URL input is empty');
+
+    my $component = PAGI::App::Directory->new(
+        root => tempdir(CLEANUP => 1), index => [],
+    );
+    ok(!defined $component->_listing_entry_name("bad\xFF.txt"),
+        'an invalid UTF-8 byte name has no public listing identity');
 };
 
 subtest 'hostile filesystem names are safe where supported' => sub {
@@ -458,6 +590,14 @@ subtest 'non-ASCII filesystem names round-trip where supported' => sub {
         'HTML display name decodes exactly once');
     like($html_events->[1]{body}, qr/%E2%98%95\.txt/,
         'HTML href contains encoded UTF-8 bytes');
+    my ($encoded_href) = $html_events->[1]{body}
+        =~ m{href="([^"]*%E2%98%95\.txt)"};
+    ok(defined $encoded_href,
+        'valid UTF-8 filename has one browser-visible href identity');
+    is(PAGI::Test::Client->new(
+        app => $component, raise_app_exceptions => 1,
+    )->get(decoded_href_path($encoded_href))->text, 'coffee',
+        'decoded browser href retrieves the same UTF-8 filesystem entry');
 
     my $json_events = run_native(
         $component, 'GET', '/', [['accept', 'application/json']],
@@ -469,6 +609,40 @@ subtest 'non-ASCII filesystem names round-trip where supported' => sub {
         'JSON Content-Length matches emitted UTF-8 octets');
     is(JSON::MaybeXS::decode_json($json_events->[1]{body})->[0]{name},
         $name, 'JSON entry name decodes exactly once');
+};
+
+subtest 'non-UTF-8 byte filenames are omitted without corrupting listings' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $invalid = "bad\xFF.txt";
+    my $invalid_path = File::Spec->catfile($root, $invalid);
+    unless (eval { write_file($invalid_path, 'invalid bytes'); 1 }) {
+        my $reason = $@ || $! || 'byte filename unavailable';
+        plan skip_all => "filesystem rejects non-UTF-8 byte names: $reason";
+    }
+    opendir my $dh, $root
+        or plan skip_all => "cannot verify byte filename identity: $!";
+    my @raw_names = grep { $_ ne '.' && $_ ne '..' } readdir $dh;
+    closedir $dh or plan skip_all => "cannot close byte filename directory: $!";
+    plan skip_all => 'filesystem did not preserve the non-UTF-8 byte identity'
+        unless grep { $_ eq $invalid } @raw_names;
+    write_file(File::Spec->catfile($root, 'valid.txt'), 'valid');
+
+    my $component = PAGI::App::Directory->new(root => $root, index => []);
+    my $html_events = run_native($component, 'GET', '/');
+    my $decoded_html = decode(
+        'UTF-8', $html_events->[1]{body}, FB_CROAK | LEAVE_SRC,
+    );
+    like($decoded_html, qr/valid\.txt/,
+        'HTML remains valid UTF-8 and keeps representable entries');
+    unlike($html_events->[1]{body}, qr/%FF/i,
+        'HTML omits the invalid byte identity instead of linking it');
+
+    my $json_events = run_native(
+        $component, 'GET', '/', [['accept', 'application/json']],
+    );
+    my $decoded_json = JSON::MaybeXS::decode_json($json_events->[1]{body});
+    is([map { $_->{name} } @$decoded_json], ['valid.txt'],
+        'JSON deterministically omits the unrepresentable filename');
 };
 
 subtest 'listing permission failure uses Pages forbidden where supported' => sub {
