@@ -22,6 +22,12 @@ request to one `PAGI::App::File->app_path('public')->to_app`. This v2 example's
 `public/` symlink intentionally reuses the original frontend; the configured
 symlink is trusted application layout, not request input.
 
+The direct API dispatcher keeps its successful domain payloads as ordinary
+JSON. Missing rooms and unmatched API paths are generic HTTP failures, so those
+branches use `PAGI::Pages->not_found($scope, as => 'json', ...)` and explicitly
+send the returned Response through `$send`. This keeps the raw dispatcher
+small while giving its errors the same RFC 9457 shape as the rest of PAGI.
+
 See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)
 for the deployment boundary and changed status/mapping behavior.
 

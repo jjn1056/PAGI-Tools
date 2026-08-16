@@ -68,6 +68,32 @@ subtest 'HTTP integration preserves static, API, lifespan, and logging behavior'
         is($stats->status, 200, 'v2 existing HTTP API remains reachable');
         ok(exists $stats->json->{rooms_count},
             'v2 existing statistics payload remains intact');
+
+        my $api_missing = $client->get('/api/not-a-route',
+            headers => { Accept => 'application/problem+json' });
+        is($api_missing->status, 404,
+            'v2 unmatched API path returns a terminal 404');
+        is($api_missing->content_type, 'application/problem+json',
+            'v2 unmatched API path negotiates a problem document');
+        is($api_missing->json, {
+            type   => 'about:blank',
+            title  => 'Not Found',
+            status => 404,
+            detail => 'No API route matched',
+        }, 'v2 unmatched API path uses the shared Pages representation');
+
+        my $room_missing = $client->get('/api/room/missing/history',
+            headers => { Accept => 'application/problem+json' });
+        is($room_missing->status, 404,
+            'v2 absent room returns a resource-level 404');
+        is($room_missing->content_type, 'application/problem+json',
+            'v2 absent room negotiates a problem document');
+        is($room_missing->json, {
+            type   => 'about:blank',
+            title  => 'Not Found',
+            status => 404,
+            detail => 'Room not found',
+        }, 'v2 absent room uses the shared Pages representation');
     });
 
     like($stderr, qr/\[lifespan\] Application starting up/,

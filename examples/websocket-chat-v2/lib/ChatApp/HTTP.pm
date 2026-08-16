@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use JSON::MaybeXS;
 use PAGI::App::File;
+use PAGI::Pages;
 
 use ChatApp::State qw(
     get_all_rooms get_room get_room_messages get_room_users get_stats
@@ -58,8 +59,10 @@ async sub _handle_api {
             $data = get_room_messages($room_name, 100);
             $status = 200;
         } else {
-            $data = { error => 'Room not found' };
-            $status = 404;
+            my $response = PAGI::Pages->not_found($scope,
+                as     => 'json',
+                detail => 'Room not found');
+            return await $response->respond($send);
         }
     }
     elsif ($path =~ m{^/api/room/([^/]+)/users$} && $method eq 'GET') {
@@ -69,8 +72,10 @@ async sub _handle_api {
             $data = get_room_users($room_name);
             $status = 200;
         } else {
-            $data = { error => 'Room not found' };
-            $status = 404;
+            my $response = PAGI::Pages->not_found($scope,
+                as     => 'json',
+                detail => 'Room not found');
+            return await $response->respond($send);
         }
     }
     elsif ($path eq '/api/stats' && $method eq 'GET') {
@@ -78,8 +83,10 @@ async sub _handle_api {
         $status = 200;
     }
     else {
-        $data = { error => 'Not found' };
-        $status = 404;
+        my $response = PAGI::Pages->not_found($scope,
+            as     => 'json',
+            detail => 'No API route matched');
+        return await $response->respond($send);
     }
 
     my $body = $JSON->encode($data);
