@@ -6,6 +6,7 @@ use Errno qw(EACCES EIO ENOENT ENOTDIR EPERM);
 use Fcntl qw(S_IFDIR S_IFREG);
 use File::Spec;
 use File::Temp qw(tempdir);
+use Future;
 use Scalar::Util qw(refaddr);
 
 use lib 'lib';
@@ -54,6 +55,32 @@ sub stat_snapshot {
         my ($self) = @_;
         return [@{$self->{_test_probe_calls}}];
     }
+
+    sub probe_count {
+        my ($self) = @_;
+        return scalar @{$self->{_test_probe_calls}};
+    }
+}
+
+{
+    package Local::NotFileResult;
+    sub new { return bless {}, shift }
+}
+
+sub http_scope {
+    my (%overrides) = @_;
+    return {
+        type => 'http', method => 'GET', path => '/', headers => [],
+        %overrides,
+    };
+}
+
+sub event_header {
+    my ($event, $name) = @_;
+    for my $header (@{$event->{headers} // []}) {
+        return $header->[1] if lc($header->[0]) eq lc($name);
+    }
+    return;
 }
 
 subtest 'Result is a validated read-only request value' => sub {
@@ -343,6 +370,181 @@ subtest 'probe snapshots deterministically drive metadata and errno policy' => s
     like(dies { $files->locate('/failure.txt') },
         qr/Cannot inspect file candidate.*failure\.txt.*simulated probe failure/i,
         'an unexpected inspection error propagates its captured message');
+};
+
+subtest 'serve consumes every Result kind and reuses located file metadata' => sub {
+    my $file_path = File::Spec->catfile($root_abs, 'served.txt');
+    my $files = Local::ProbeFile->new(root => $root, probes => {
+        $file_path => stat_snapshot(S_IFREG() | 0644, 17, 1234, 1),
+    });
+    my $result = $files->locate('/served.txt');
+    my $after_locate = $files->probe_count;
+    my @events;
+
+    $files->serve(http_scope(path => '/served.txt'), sub {
+        push @events, $_[0];
+        return Future->done;
+    }, $result)->get;
+
+    is($files->probe_count, $after_locate,
+        'serve reuses located metadata without another stat');
+    is($events[0]{status}, 200, 'a file Result receives a successful response');
+    is(event_header($events[0], 'content-length'), 17,
+        'response length comes from the Result metadata');
+    is($events[1]{file}, $result->path,
+        'GET delegates opening to the server');
+    ok(!exists $events[1]{fh}, 'application does not open a filehandle');
+
+    for my $case (
+        [missing   => 404],
+        [directory => 404],
+        [forbidden => 403],
+    ) {
+        my ($kind, $status) = @$case;
+        my $other = PAGI::App::File::Result->new(
+            kind => $kind, path => "/not-disclosed/$kind",
+        );
+        my @other_events;
+        $files->serve(http_scope(path => "/$kind"), sub {
+            push @other_events, $_[0];
+            return Future->done;
+        }, $other)->get;
+        is($other_events[0]{status}, $status,
+            "$kind Result receives its owned Pages status");
+        unlike($other_events[1]{body}, qr/\Q$kind\E|not-disclosed/,
+            "$kind response does not disclose Result metadata");
+    }
+};
+
+subtest 'serve and to_app reject invalid scopes and Result objects before events' => sub {
+    my $files = Local::ProbeFile->new(root => $root, probes => {});
+    my $result = PAGI::App::File::Result->new(
+        kind => 'missing', path => '/not-disclosed/missing',
+    );
+    my $receive = sub { return Future->done({ type => 'http.disconnect' }) };
+
+    for my $case (
+        [missing => { method => 'GET', path => '/', headers => [] },
+            qr/scope type.*required/i],
+        [extension => http_scope(type => 'example.custom'),
+            qr/requires HTTP scope.*example\.custom/i],
+    ) {
+        my ($label, $scope, $error) = @$case;
+        my @serve_events;
+        like(dies {
+            $files->serve($scope, sub {
+                push @serve_events, $_[0];
+                return Future->done;
+            }, $result)->get;
+        }, $error, "serve rejects $label scope type");
+        is(\@serve_events, [],
+            "serve rejects $label scope before emitting events");
+
+        my @app_events;
+        like(dies {
+            $files->to_app->($scope, $receive, sub {
+                push @app_events, $_[0];
+                return Future->done;
+            })->get;
+        }, $error, "to_app rejects $label scope type");
+        is(\@app_events, [],
+            "to_app rejects $label scope before emitting events");
+    }
+
+    for my $case (
+        [undefined => undef],
+        [unblessed => {}],
+        [wrong_class => Local::NotFileResult->new],
+    ) {
+        my ($label, $wrong) = @$case;
+        my @events;
+        like(dies {
+            $files->serve(http_scope(), sub {
+                push @events, $_[0];
+                return Future->done;
+            }, $wrong)->get;
+        }, qr/Result.*PAGI::App::File::Result/i,
+            "$label Result object is rejected");
+        is(\@events, [], "$label Result is rejected before events");
+    }
+};
+
+subtest 'unsupported methods avoid location and receive the shared 405' => sub {
+    my $files = Local::ProbeFile->new(root => $root, probes => {});
+    my @events;
+    $files->to_app->(
+        http_scope(method => 'POST', path => '/must-not-probe'),
+        sub { return Future->done({ type => 'http.disconnect' }) },
+        sub { push @events, $_[0]; return Future->done },
+    )->get;
+    is($files->probe_count, 0,
+        'to_app does not locate a path for an unsupported owned method');
+    is($events[0]{status}, 405, 'unsupported owned method receives 405');
+    is(event_header($events[0], 'allow'), 'GET, HEAD',
+        '405 advertises the exact supported methods');
+
+    my $result = PAGI::App::File::Result->new(
+        kind => 'missing', path => '/must-not-disclose',
+    );
+    my @direct_events;
+    $files->serve(http_scope(method => 'POST'), sub {
+        push @direct_events, $_[0];
+        return Future->done;
+    }, $result)->get;
+    is($direct_events[0]{status}, 405,
+        'direct serve enforces its owned method boundary');
+    is(event_header($direct_events[0], 'allow'), 'GET, HEAD',
+        'direct serve uses the same exact Allow field');
+};
+
+subtest 'interleaved serve Futures retain request-local Result metadata' => sub {
+    my $files = PAGI::App::File->new(root => $root);
+    my $first = PAGI::App::File::Result->new(
+        kind => 'file', path => '/virtual/first.txt', size => 11, mtime => 101,
+    );
+    my $second = PAGI::App::File::Result->new(
+        kind => 'file', path => '/virtual/second.json', size => 22, mtime => 202,
+    );
+    my ($first_gate, $second_gate) = (Future->new, Future->new);
+    my (@first_events, @second_events);
+
+    my $first_future = $files->serve(http_scope(path => '/first.txt'), sub {
+        push @first_events, $_[0];
+        return @first_events == 1 ? $first_gate : Future->done;
+    }, $first);
+    my $second_future = $files->serve(http_scope(
+        path => '/second.json', headers => [['range', 'bytes=2-5']],
+    ), sub {
+        push @second_events, $_[0];
+        return @second_events == 1 ? $second_gate : Future->done;
+    }, $second);
+
+    ok(!$first_future->is_ready && !$second_future->is_ready,
+        'both requests suspend independently after response start');
+    is(event_header($first_events[0], 'content-length'), 11,
+        'first suspended response retains the first Result size');
+    is($second_events[0]{status}, 206,
+        'second suspended response retains its own range outcome');
+    is(event_header($second_events[0], 'content-range'), 'bytes 2-5/22',
+        'second suspended response retains the second Result size');
+
+    $second_gate->done;
+    $second_future->get;
+    ok(!$first_future->is_ready,
+        'completing the second request does not complete the first');
+    is($second_events[1]{file}, '/virtual/second.json',
+        'second body retains the second Result path');
+    is($second_events[1]{offset}, 2,
+        'second body retains its request-local range offset');
+    is($second_events[1]{length}, 4,
+        'second body retains its request-local range length');
+
+    $first_gate->done;
+    $first_future->get;
+    is($first_events[1]{file}, '/virtual/first.txt',
+        'first body retains the first Result path after interleaving');
+    ok(!exists $first_events[1]{offset} && !exists $first_events[1]{length},
+        'first full body does not inherit the second request range');
 };
 
 subtest 'index probing skips ineligible candidates and stops at forbidden' => sub {

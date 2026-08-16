@@ -9,9 +9,10 @@ use Digest::MD5 qw(md5_hex);
 use Errno qw(EACCES ENOENT ENOTDIR EPERM);
 use Fcntl qw(S_ISDIR S_ISREG);
 use File::Spec;
-use Cwd ();  # The pre-serve implementation still uses realpath.
+use Scalar::Util qw(blessed);
 use PAGI::App::File::Result;
 use PAGI::Pages;
+use PAGI::Routing::HeadBoundary;
 use PAGI::Utils ();
 
 =head1 NAME
@@ -115,6 +116,22 @@ Index candidates may each be inspected while selecting in declaration order.
 C<locate> does not open a filehandle.  The PAGI server remains responsible for
 opening a later C<file> response event, leaving the normal trusted-tree pathname
 race between inspection and open.
+
+=head2 serve
+
+    await $files->serve($scope, $send, $result);
+
+Asynchronously renders any Result returned by L</locate>.  File Results retain
+the existing MIME, ETag, conditional-request, and range behavior.  The response
+contains a PAGI C<file> body event, so the server owns the eventual open;
+C<serve> does not inspect or open the pathname again.
+
+Missing and directory Results render a negotiated 404, while forbidden Results
+render a negotiated 403.  Callers may intercept a Result before choosing
+whether to pass it to C<serve>.  The method requires an explicit HTTP scope,
+owns only GET and HEAD, and renders a negotiated 405 with C<Allow: GET, HEAD>
+for other methods.  HEAD preserves the corresponding GET status and headers
+without emitting file or body bytes.
 
 =cut
 
@@ -306,161 +323,152 @@ sub _development_file_attempt {
 sub to_app {
     my ($self) = @_;
 
-    # The existing HTTP path remains physical until it delegates location to
-    # the synchronous locate/serve boundary.
-    my $root = Cwd::realpath($self->{root}) // $self->{root};
-
     return async sub  {
         my ($scope, $receive, $send) = @_;
-        die "Unsupported scope type: $scope->{type}" if $scope->{type} ne 'http';
+        _validate_http_scope($scope);
 
-        my $method = uc($scope->{method} // '');
+        my $method = _scope_method($scope);
         unless ($method eq 'GET' || $method eq 'HEAD') {
-            await $self->_send_error($scope, $send, 405);
-            return;
+            my ($response_scope, $response_send)
+                = PAGI::Routing::HeadBoundary->prepare($scope, $send);
+            return await _respond_page(
+                $response_scope, $response_send, 'method_not_allowed',
+                allow => [qw(GET HEAD)],
+            );
         }
 
         my $path = $scope->{path} // '/';
+        my $result = $self->locate($path);
+        return await $self->serve($scope, $send, $result);
+    };
+}
 
-        # Security: Block null byte injection
-        if ($path =~ /\0/) {
-            await $self->_send_error($scope, $send, 400);
-            return;
-        }
+sub _validate_http_scope {
+    my ($scope) = @_;
+    croak 'PAGI::App::File scope must be an unblessed hashref'
+        unless ref($scope) eq 'HASH' && !blessed($scope);
 
-        # Security: Normalize backslashes to forward slashes
-        $path =~ s{\\}{/}g;
+    my $type = $scope->{type};
+    croak 'PAGI::App::File scope type is required'
+        unless defined($type) && !ref($type) && length($type);
+    croak "PAGI::App::File requires HTTP scope; received '$type'"
+        unless $type eq 'http';
+    return;
+}
 
-        # Security: Split path and validate each component
-        # Use -1 limit to preserve trailing empty strings
-        my @components = split m{/}, $path, -1;
-        for my $component (@components) {
-            # Block components with 2+ dots (.. , ..., ....)
-            if ($component =~ /^\.{2,}$/) {
-                await $self->_send_error($scope, $send, 403);
-                return;
-            }
-            # Block hidden files (dotfiles) - components starting with .
-            if ($component =~ /^\./ && $component ne '') {
-                await $self->_send_error($scope, $send, 403);
-                return;
-            }
-        }
+sub _scope_method {
+    my ($scope) = @_;
+    my $method = $scope->{method};
+    return '' unless defined($method) && !ref($method);
+    return uc($method);
+}
 
-        # Build file path using File::Spec for portability
-        $path =~ s{^/+}{};
-        my $file_path = File::Spec->catfile($root, $path);
+async sub serve {
+    my ($self, $scope, $send, $result) = @_;
+    croak 'serve requires a scope, send callback, and Result'
+        unless @_ == 4;
+    _validate_http_scope($scope);
+    croak 'PAGI::App::File serve send must be a coderef'
+        unless ref($send) eq 'CODE';
+    croak 'PAGI::App::File serve Result must be a PAGI::App::File::Result object'
+        unless blessed($result)
+            && $result->isa('PAGI::App::File::Result');
 
-        # Check for index files if directory
-        if (-d $file_path) {
-            for my $index (@{$self->{index}}) {
-                my $index_path = File::Spec->catfile($file_path, $index);
-                if (-f $index_path) {
-                    $file_path = $index_path;
-                    last;
-                }
-            }
-        }
+    my $method = _scope_method($scope);
+    my $boundary_scope = $scope;
+    $boundary_scope = { %$scope, method => $method }
+        if defined($scope->{method}) && !ref($scope->{method})
+            && $scope->{method} ne $method;
+    ($boundary_scope, $send)
+        = PAGI::Routing::HeadBoundary->prepare($boundary_scope, $send);
 
-        _development_file_attempt($file_path);
+    return await _respond_page(
+        $boundary_scope, $send, 'method_not_allowed',
+        allow => [qw(GET HEAD)],
+    ) unless $method eq 'GET' || $method eq 'HEAD';
+    return await _respond_page($boundary_scope, $send, 'not_found')
+        if $result->is_missing || $result->is_directory;
+    return await _respond_page($boundary_scope, $send, 'forbidden')
+        if $result->is_forbidden;
 
-        unless (-f $file_path && -r $file_path) {
-            await $self->_send_error($scope, $send, 404);
-            return;
-        }
+    my $file_path = $result->path;
+    my $size = $result->size;
+    my $mtime = $result->mtime;
+    my $etag = '"' . md5_hex("$mtime-$size") . '"';
 
-        # Security: Verify resolved path stays within root (prevents symlink escape)
-        my $real_path = Cwd::realpath($file_path);
-        unless ($real_path && index($real_path, $root) == 0) {
-            await $self->_send_error($scope, $send, 403);
-            return;
-        }
-
-        my @stat = stat($file_path);
-        my $size = $stat[7];
-        my $mtime = $stat[9];
-        my $etag = '"' . md5_hex("$mtime-$size") . '"';
-
-        # Check If-None-Match
-        my $if_none_match = $self->_get_header($scope, 'if-none-match');
-        if ($if_none_match && $if_none_match eq $etag) {
-            await $send->({
-                type => 'http.response.start',
-                status => 304,
-                headers => [['etag', $etag]],
-            });
-            await $send->({ type => 'http.response.body', body => '', more => 0 });
-            return;
-        }
-
-        # Determine MIME type
-        my ($ext) = $file_path =~ /\.([^.]+)$/;
-        my $content_type = $MIME_TYPES{lc($ext // '')} // $self->{default_type};
-
-        # Check for Range request (only if handle_ranges is enabled)
-        my $range = $self->{handle_ranges} ? $self->_get_header($scope, 'range') : undef;
-        if ($range && $range =~ /bytes=(\d*)-(\d*)/) {
-            my ($start, $end) = ($1, $2);
-            $start = 0 if $start eq '';
-            $end = $size - 1 if $end eq '' || $end >= $size;
-
-            if ($start > $end || $start >= $size) {
-                await $self->_send_error($scope, $send, 416, length => $size);
-                return;
-            }
-
-            my $length = $end - $start + 1;
-
-            await $send->({
-                type => 'http.response.start',
-                status => 206,
-                headers => [
-                    ['content-type', $content_type],
-                    ['content-length', $length],
-                    ['content-range', "bytes $start-$end/$size"],
-                    ['accept-ranges', 'bytes'],
-                    ['etag', $etag],
-                ],
-            });
-
-            # Use file response with offset/length for efficient streaming
-            if ($method eq 'HEAD') {
-                await $send->({ type => 'http.response.body', body => '', more => 0 });
-            }
-            else {
-                await $send->({
-                    type   => 'http.response.body',
-                    file   => $file_path,
-                    offset => $start,
-                    length => $length,
-                });
-            }
-            return;
-        }
-
-        # Full file response
+    # Check If-None-Match
+    my $if_none_match = $self->_get_header(
+        $boundary_scope, 'if-none-match',
+    );
+    if ($if_none_match && $if_none_match eq $etag) {
         await $send->({
             type => 'http.response.start',
-            status => 200,
+            status => 304,
+            headers => [['etag', $etag]],
+        });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+        return;
+    }
+
+    # Determine MIME type
+    my ($ext) = $file_path =~ /\.([^.]+)$/;
+    my $content_type = $MIME_TYPES{lc($ext // '')} // $self->{default_type};
+
+    # Check for Range request (only if handle_ranges is enabled)
+    my $range = $self->{handle_ranges}
+        ? $self->_get_header($boundary_scope, 'range') : undef;
+    if ($range && $range =~ /bytes=(\d*)-(\d*)/) {
+        my ($start, $end) = ($1, $2);
+        $start = 0 if $start eq '';
+        $end = $size - 1 if $end eq '' || $end >= $size;
+
+        if ($start > $end || $start >= $size) {
+            return await _respond_page(
+                $boundary_scope, $send, 'range_not_satisfiable',
+                length => $size,
+            );
+        }
+
+        my $length = $end - $start + 1;
+
+        await $send->({
+            type => 'http.response.start',
+            status => 206,
             headers => [
                 ['content-type', $content_type],
-                ['content-length', $size],
+                ['content-length', $length],
+                ['content-range', "bytes $start-$end/$size"],
                 ['accept-ranges', 'bytes'],
                 ['etag', $etag],
             ],
         });
 
-        # Use file response for efficient streaming (sendfile or worker pool)
-        if ($method eq 'HEAD') {
-            await $send->({ type => 'http.response.body', body => '', more => 0 });
-        }
-        else {
-            await $send->({
-                type => 'http.response.body',
-                file => $file_path,
-            });
-        }
-    };
+        await $send->({
+            type   => 'http.response.body',
+            file   => $file_path,
+            offset => $start,
+            length => $length,
+        });
+        return;
+    }
+
+    # Full file response
+    await $send->({
+        type => 'http.response.start',
+        status => 200,
+        headers => [
+            ['content-type', $content_type],
+            ['content-length', $size],
+            ['accept-ranges', 'bytes'],
+            ['etag', $etag],
+        ],
+    });
+
+    await $send->({
+        type => 'http.response.body',
+        file => $file_path,
+    });
+    return;
 }
 
 sub _get_header {
@@ -473,21 +481,10 @@ sub _get_header {
     return;
 }
 
-async sub _send_error {
-    my ($self, $scope, $send, $status, @options) = @_;
-    my %method_for = (
-        400 => 'bad_request',
-        403 => 'forbidden',
-        404 => 'not_found',
-        405 => 'method_not_allowed',
-        416 => 'range_not_satisfiable',
-    );
-    my $method = $method_for{$status}
-        or die "PAGI::App::File does not own status $status";
-    push @options, allow => [qw(GET HEAD)] if $status == 405;
-
+async sub _respond_page {
+    my ($scope, $send, $method, @options) = @_;
     my $response = PAGI::Pages->$method($scope, @options);
-    await Future->wrap($response->respond($send));
+    return await Future->wrap($response->respond($send));
 }
 
 1;
@@ -529,22 +526,22 @@ C<staging>, and C<production> values are silent. Any other nonempty value
 fails through L<PAGI::Utils/pagi_env>, so environment typos are not silently
 accepted. Requests rejected before this diagnostic boundary, including
 unsupported methods, null bytes, traversal components, and hidden components,
-do not inspect the environment and remain silent. A later realpath or symlink
-containment check can still reject a request after its in-root lexical
-candidate has been reported. ASCII control bytes in the displayed path are
-escaped as C<\xNN>, so every diagnostic remains one physical line. The record
-shows the lexical candidate rather than a resolved symlink path, can disclose
-absolute paths, is not access logging, and never changes a response or file
-event.
+do not inspect the environment and remain silent. ASCII control bytes in the
+displayed path are escaped as C<\xNN>, so every diagnostic remains one physical
+line. The record shows the lexical candidate rather than a resolved symlink
+path, can disclose absolute paths, is not access logging, and never changes a
+response or file event. The component performs no production logging.
 
 =head1 CONFIGURATION
 
-Stock 400, 403, 404, 405, and 416 errors are rendered by L<PAGI::Pages> and
-negotiate among HTML, problem JSON, and plain text from the request C<Accept>
-header. These defaults are non-cacheable; 405 responses advertise C<GET,
-HEAD>, and 416 responses include the known representation length. File MIME
-selection, streaming, caching, and range handling for successful responses
-remain owned by this component, including the C<default_type> seam.
+Stock 403, 404, 405, and 416 errors are rendered by L<PAGI::Pages> and negotiate
+among HTML, problem JSON, and plain text from the request C<Accept> header.
+Unsafe, hidden, or unreadable paths are 403; missing paths and unintercepted
+directories are 404; and unsupported methods are 405. These defaults are
+non-cacheable; 405 responses advertise C<GET, HEAD>, and 416 responses include
+the known representation length. File MIME selection, streaming, caching, and
+range handling for successful responses remain owned by this component,
+including the C<default_type> seam.
 
 =over 4
 

@@ -41,18 +41,31 @@ sub capture_output {
 }
 
 sub run_native {
-    my ($component, $method, $path) = @_;
+    my ($component, $method, $path, $headers) = @_;
     my @events;
     $component->to_app->(
         {
             type => 'http', method => $method, path => $path,
-            raw_path => $path, root_path => '', headers => [],
+            raw_path => $path, root_path => '', headers => $headers // [],
             path_params => {},
         },
         sub { return Future->done({ type => 'http.disconnect' }) },
         sub { push @events, $_[0]; return Future->done },
     )->get;
     return \@events;
+}
+
+sub assert_head_parity {
+    my ($component, $path, $headers, $label) = @_;
+    my $get = run_native($component, 'GET', $path, $headers);
+    my $head = run_native($component, 'HEAD', $path, $headers);
+
+    is($head->[0], $get->[0], "$label HEAD preserves GET status and headers");
+    is($head->[1], {
+        type => 'http.response.body', body => '', more => 0,
+    }, "$label HEAD emits one terminal empty body event");
+    is(scalar(@$head), 2, "$label HEAD emits no body or file bytes");
+    return;
 }
 
 subtest 'stock file errors negotiate through Pages without changing file outcomes' => sub {
@@ -62,8 +75,12 @@ subtest 'stock file errors negotiate through Pages without changing file outcome
     print {$fh} '0123456789';
     close $fh or die "cannot close $file: $!";
 
+    my $empty_dir = File::Spec->catdir($root, 'empty');
+    mkdir $empty_dir or die "cannot create $empty_dir: $!";
+
+    my $component = PAGI::App::File->new(root => $root);
     my $client = PAGI::Test::Client->new(
-        app => PAGI::App::File->new(root => $root),
+        app => $component,
         raise_app_exceptions => 1,
     );
 
@@ -100,11 +117,13 @@ subtest 'stock file errors negotiate through Pages without changing file outcome
 
     my $bad = $client->get("/bad\0name",
         headers => { Accept => 'text/plain' });
-    is($bad->status, 400, 'null byte keeps its bad-request status');
+    is($bad->status, 403, 'null byte is forbidden by request-path policy');
     is($bad->content_type, 'text/plain; charset=utf-8',
-        'bad request can negotiate stock text');
-    like($bad->text, qr/^400 Bad Request\n/,
+        'null-byte rejection can negotiate stock text');
+    like($bad->text, qr/^403 Forbidden\n/,
         'text response identifies the stock status safely');
+    unlike($bad->text, qr/bad|name|\Q$root\E/,
+        'null-byte response does not disclose request or filesystem paths');
 
     my $forbidden = $client->get('/.secret',
         headers => { Accept => 'text/html' });
@@ -137,6 +156,24 @@ subtest 'stock file errors negotiate through Pages without changing file outcome
         headers => { 'If-None-Match' => $full->header('ETag') });
     is($cached->status, 304, 'matching ETag still produces 304');
     is($cached->content, '', '304 remains bodyless');
+
+    assert_head_parity($component, '/sample.txt', [], 'full file');
+    assert_head_parity($component, '/private/missing.txt', [
+        ['accept', 'application/problem+json'],
+    ], 'missing file');
+    assert_head_parity($component, '/empty', [], 'indexless directory');
+    assert_head_parity($component, '/.secret', [
+        ['accept', 'text/html'],
+    ], 'forbidden path');
+    assert_head_parity($component, '/sample.txt', [
+        ['accept', 'application/problem+json'], ['range', 'bytes=20-30'],
+    ], 'invalid range');
+    assert_head_parity($component, '/sample.txt', [
+        ['range', 'bytes=2-5'],
+    ], 'partial file');
+    assert_head_parity($component, '/sample.txt', [
+        ['if-none-match', $full->header('ETag')],
+    ], 'not-modified file');
 };
 
 subtest 'class constructor returns a serving component and preserves subclasses' => sub {
@@ -311,7 +348,7 @@ subtest 'requests rejected before filesystem service stay silent' => sub {
         local $ENV{PAGI_ENV} = $mode;
         for my $case (
             ['POST', '/marker.txt', 405, 'unsupported method'],
-            ['GET', "/bad\0name", 400, 'null byte'],
+            ['GET', "/bad\0name", 403, 'null byte'],
             ['GET', '/../secret', 403, 'traversal component'],
             ['GET', '/.env', 403, 'hidden component'],
         ) {
@@ -370,7 +407,7 @@ subtest 'diagnostic escapes every accepted ASCII control byte' => sub {
     }
 };
 
-subtest 'symlink rejection logs only the in-root lexical candidate' => sub {
+subtest 'trusted outward symlink serves through its in-root lexical candidate' => sub {
     my $sandbox = tempdir(CLEANUP => 1);
     my $root = File::Spec->catdir($sandbox, 'root');
     mkdir $root or die "cannot create test root $root: $!";
@@ -390,12 +427,19 @@ subtest 'symlink rejection logs only the in-root lexical candidate' => sub {
 
     my $component = PAGI::App::File->new(root => $root);
     local $ENV{PAGI_ENV} = 'development';
-    my ($events, $stdout, $stderr) = capture_output(sub {
-        return run_native($component, 'GET', '/escape.txt');
+    my $client = PAGI::Test::Client->new(
+        app => $component, raise_app_exceptions => 1,
+    );
+    my ($response, $stdout, $stderr) = capture_output(sub {
+        return $client->get('/escape.txt');
     });
-    my $lexical = File::Spec->catfile(Cwd::realpath($root), 'escape.txt');
+    my $lexical = File::Spec->catfile(
+        File::Spec->canonpath(File::Spec->rel2abs($root)), 'escape.txt',
+    );
 
-    is($events->[0]{status}, 403, 'escaping symlink is rejected');
+    is($response->status, 200, 'trusted outward symlink is served');
+    is($response->content, "external secret\n",
+        'server opens and reads the trusted symlink target');
     is($stdout, "PAGI::App::File: attempting $lexical\n",
         'one record names the in-root lexical candidate');
     unlike($stdout, qr/\Q$outside\E/,
