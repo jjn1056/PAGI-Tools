@@ -3,13 +3,17 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use File::Spec;
+use File::Temp qw(tempdir);
 use Cwd 'abs_path';
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 
+use PAGI::App::File;
 use PAGI::Middleware::Static;
 use PAGI::Test::Client;
 
@@ -21,10 +25,68 @@ sub run_async {
     $loop->await($future);
 }
 
+sub capture_events {
+    my ($app, $scope) = @_;
+    my @events;
+    run_async(async sub {
+        await Future->wrap($app->(
+            $scope,
+            sub { return Future->done({ type => 'http.disconnect' }) },
+            sub { push @events, $_[0]; return Future->done },
+        ));
+    });
+    return \@events;
+}
+
+sub event_header {
+    my ($event, $name) = @_;
+    for my $header (@{$event->{headers} // []}) {
+        return $header->[1] if lc($header->[0]) eq lc($name);
+    }
+    return;
+}
+
+sub sentinel_app {
+    my ($calls, $label) = @_;
+    return sub {
+        my ($scope, $receive, $send) = @_;
+        push @$calls, $scope;
+        if ($scope->{type} ne 'http') {
+            $send->({ type => 'websocket.accept' });
+            $send->({ type => 'websocket.send', text => $label });
+            $send->({ type => 'websocket.close', code => 1000 });
+            return $label;
+        }
+        $send->({
+            type => 'http.response.start', status => 298,
+            headers => [['content-type', 'text/plain']],
+        });
+        $send->({
+            type => 'http.response.body', body => $label, more => 0,
+        });
+        return $label;
+    };
+}
+
+sub write_test_file {
+    my ($path, $contents) = @_;
+    open my $file, '>', $path or die "cannot create $path: $!";
+    print {$file} $contents;
+    close $file or die "cannot close $path: $!";
+    return;
+}
+
+{
+    package Local::StaticProbeFailure;
+
+    sub locate { die "simulated static probe failure\n" }
+    sub serve  { die "serve must not follow a failed static probe\n" }
+}
+
 # Get absolute path to test files
 my $test_root = abs_path('t/static_test_files');
 
-subtest 'Static owned errors negotiate through Pages without changing seams' => sub {
+subtest 'Static delegates owned errors to File without changing seams' => sub {
     my $inner = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({
@@ -770,7 +832,300 @@ subtest 'Static middleware does not double URL-decode paths' => sub {
     });
 
     # With no double-decode, %2e%2e stays literal - file won't exist, so 404 (not 403 from traversal)
-    ok $sent[0]{status} >= 400, 'double-encoded path traversal is blocked (not 200)';
+    is $sent[0]{status}, 404,
+        'double-encoded traversal text remains a literal missing path';
+};
+
+subtest 'eligibility and pass-through preserve the original downstream scope' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    write_test_file(File::Spec->catfile($root, 'served.txt'), 'served');
+    my $empty = File::Spec->catdir($root, 'empty');
+    mkdir $empty or die "cannot create $empty: $!";
+
+    my @cases = (
+        [
+            'non-HTTP scope',
+            PAGI::Middleware::Static->new(root => $root),
+            { type => 'websocket', path => '/served.txt' },
+        ],
+        [
+            'matching POST',
+            PAGI::Middleware::Static->new(root => $root),
+            {
+                type => 'http', method => 'POST', path => '/served.txt',
+                headers => [],
+            },
+        ],
+        [
+            'unmatched path',
+            PAGI::Middleware::Static->new(
+                root => $root, path => qr{^/assets/},
+            ),
+            {
+                type => 'http', method => 'GET', path => '/served.txt',
+                headers => [],
+            },
+        ],
+        [
+            'missing pass-through',
+            PAGI::Middleware::Static->new(
+                root => $root, pass_through => 1,
+            ),
+            {
+                type => 'http', method => 'GET', path => '/missing.txt',
+                headers => [],
+            },
+        ],
+        [
+            'indexless directory pass-through',
+            PAGI::Middleware::Static->new(
+                root => $root, pass_through => 1,
+            ),
+            {
+                type => 'http', method => 'GET', path => '/empty',
+                headers => [],
+            },
+        ],
+    );
+
+    for my $case (@cases) {
+        my ($label, $mw, $scope) = @$case;
+        my @calls;
+        my $events = capture_events(
+            $mw->wrap(sentinel_app(\@calls, $label)), $scope,
+        );
+        is(scalar @calls, 1, "$label reaches the inner app exactly once");
+        is(refaddr($calls[0]), refaddr($scope),
+            "$label preserves scope identity");
+        is($calls[0]{path}, $scope->{path},
+            "$label preserves the original request path");
+        if ($scope->{type} eq 'http') {
+            is($events->[0]{status}, 298,
+                "$label keeps the sentinel response status");
+            is($events->[1]{body}, $label,
+                "$label keeps the sentinel response body");
+        }
+        else {
+            is($events->[0], {
+                type => 'websocket.accept',
+            }, "$label keeps the protocol sentinel acceptance");
+            is($events->[1], {
+                type => 'websocket.send', text => $label,
+            }, "$label keeps the protocol sentinel event");
+            is($events->[2], {
+                type => 'websocket.close', code => 1000,
+            }, "$label keeps the protocol sentinel completion");
+        }
+    }
+
+    for my $path ('/missing.txt', '/empty') {
+        my @calls;
+        my $scope = {
+            type => 'http', method => 'GET', path => $path, headers => [],
+        };
+        my $events = capture_events(
+            PAGI::Middleware::Static->new(root => $root)
+                ->wrap(sentinel_app(\@calls, 'must not pass')),
+            $scope,
+        );
+        is($events->[0]{status}, 404, "$path is an owned 404");
+        is(scalar @calls, 0, "$path does not reach the inner app");
+    }
+};
+
+subtest 'hidden and unsafe paths use the shared File policy' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    write_test_file(File::Spec->catfile($root, '.secret'), 'secret');
+    write_test_file(File::Spec->catfile($root, 'visible.txt'), 'visible');
+
+    my @hidden_calls;
+    my $hidden_scope = {
+        type => 'http', method => 'GET', path => '/.secret', headers => [],
+    };
+    my $hidden = capture_events(
+        PAGI::Middleware::Static->new(
+            root => $root, pass_through => 1,
+        )->wrap(sentinel_app(\@hidden_calls, 'hidden passed')),
+        $hidden_scope,
+    );
+    is($hidden->[0]{status}, 403, 'hidden paths are forbidden by default');
+    is(scalar @hidden_calls, 0,
+        'a hidden forbidden result never passes through');
+
+    my $allowed = capture_events(
+        PAGI::Middleware::Static->new(
+            root => $root, allow_hidden => 1,
+        )->wrap(sub { die 'allowed hidden file reached inner app' }),
+        { %$hidden_scope },
+    );
+    is($allowed->[0]{status}, 200, 'allow_hidden permits the hidden file');
+    like($allowed->[1]{file}, qr/\.secret\z/,
+        'allowed hidden response identifies the hidden file');
+
+    for my $case (
+        ['traversal', '/../visible.txt'],
+        ['mixed separators', '/nested\\..\\visible.txt'],
+    ) {
+        my ($label, $path) = @$case;
+        my @calls;
+        my $events = capture_events(
+            PAGI::Middleware::Static->new(
+                root => $root, pass_through => 1,
+            )->wrap(sentinel_app(\@calls, "$label passed")),
+            {
+                type => 'http', method => 'GET', path => $path, headers => [],
+            },
+        );
+        is($events->[0]{status}, 403,
+            "$label is forbidden with pass_through enabled");
+        is(scalar @calls, 0, "$label never reaches the inner app");
+    }
+};
+
+subtest 'rewrites are local and preserve the caller scope' => sub {
+    my $scope = {
+        type => 'http', method => 'GET', path => '/assets/hello.txt',
+        headers => [],
+    };
+    my $mw = PAGI::Middleware::Static->new(
+        root => $test_root,
+        path => sub {
+            my ($path) = @_;
+            return unless $path =~ s{^/assets}{};
+            return $path;
+        },
+    );
+    my $events = capture_events(
+        $mw->wrap(sub { die 'rewritten file reached inner app' }), $scope,
+    );
+
+    is($events->[0]{status}, 200, 'rewritten local path serves the file');
+    like($events->[1]{file}, qr/hello\.txt\z/,
+        'the rewritten local path selects hello.txt');
+    is($scope->{path}, '/assets/hello.txt',
+        'serving the rewrite does not mutate the original scope path');
+
+    my $numeric_root = tempdir(CLEANUP => 1);
+    write_test_file(File::Spec->catfile($numeric_root, '2'), 'two');
+    my $numeric_scope = {
+        type => 'http', method => 'GET', path => '/original', headers => [],
+    };
+    my $numeric_events = capture_events(
+        PAGI::Middleware::Static->new(
+            root => $numeric_root, path => sub { return 2 },
+        )->wrap(sub { die 'numeric rewrite reached inner app' }),
+        $numeric_scope,
+    );
+    is($numeric_events->[0]{status}, 200,
+        'a true scalar other than exact 1 is a rewritten path');
+    like($numeric_events->[1]{file}, qr{/2\z},
+        'the non-1 true scalar selects its rewritten file');
+    is($numeric_scope->{path}, '/original',
+        'a scalar rewrite also leaves the original scope path unchanged');
+};
+
+subtest 'Static responses are byte-for-byte File-engine responses' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    write_test_file(File::Spec->catfile($root, 'hello.txt'), "Hello World\n");
+    write_test_file(File::Spec->catfile($root, 'opaque.unknown'), 'opaque');
+    my $file = PAGI::App::File->new(root => $root);
+    my $static = PAGI::Middleware::Static->new(root => $root);
+    my $file_app = $file->to_app;
+    my $static_app = $static->wrap(
+        sub { die 'existing static file reached inner app' },
+    );
+
+    my $scope_for = sub {
+        my ($method, $headers, $path) = @_;
+        $path //= '/hello.txt';
+        return {
+            type => 'http', method => $method, path => $path,
+            raw_path => $path, root_path => '',
+            headers => $headers // [], path_params => {},
+        };
+    };
+
+    my $direct = capture_events($file_app, $scope_for->('GET'));
+    my $wrapped = capture_events($static_app, $scope_for->('GET'));
+    is($wrapped->[0]{status}, $direct->[0]{status},
+        'full response status matches File');
+    for my $header (qw(Content-Type Content-Length ETag)) {
+        is(event_header($wrapped->[0], $header),
+            event_header($direct->[0], $header),
+            "full response $header matches File");
+    }
+    is($wrapped->[1], $direct->[1],
+        'full response file event matches File exactly');
+    ok(exists $wrapped->[1]{file}, 'successful raw body uses a file event');
+    ok(!exists $wrapped->[1]{fh}, 'successful raw body has no filehandle');
+    ok(!exists $wrapped->[1]{body},
+        'successful raw body has no in-memory body');
+
+    my $etag = event_header($direct->[0], 'ETag');
+    my $conditional_headers = [['if-none-match', $etag]];
+    my $direct_cached = capture_events(
+        $file_app, $scope_for->('GET', $conditional_headers),
+    );
+    my $wrapped_cached = capture_events(
+        $static_app, $scope_for->('GET', $conditional_headers),
+    );
+    is($wrapped_cached, $direct_cached,
+        'matching ETag produces the same 304 response as File');
+
+    my $range_headers = [['range', 'bytes=0-4']];
+    my $direct_range = capture_events(
+        $file_app, $scope_for->('GET', $range_headers),
+    );
+    my $wrapped_range = capture_events(
+        $static_app, $scope_for->('GET', $range_headers),
+    );
+    is($wrapped_range->[0]{status}, 206, 'Static retains range status');
+    for my $header (qw(Content-Type Content-Length Content-Range ETag)) {
+        is(event_header($wrapped_range->[0], $header),
+            event_header($direct_range->[0], $header),
+            "range response $header matches File");
+    }
+    is($wrapped_range->[1], $direct_range->[1],
+        'range file event matches File exactly');
+
+    my $direct_head = capture_events($file_app, $scope_for->('HEAD'));
+    my $wrapped_head = capture_events($static_app, $scope_for->('HEAD'));
+    is($wrapped_head, $direct_head,
+        'HEAD status, headers, and empty body match File exactly');
+
+    my $direct_default = capture_events(
+        $file_app, $scope_for->('GET', [], '/opaque.unknown'),
+    );
+    my $wrapped_default = capture_events(
+        $static_app, $scope_for->('GET', [], '/opaque.unknown'),
+    );
+    is(event_header($direct_default->[0], 'Content-Type'),
+        'application/octet-stream', 'File uses its default MIME type');
+    is(event_header($wrapped_default->[0], 'Content-Type'),
+        event_header($direct_default->[0], 'Content-Type'),
+        'Static preserves File default MIME behavior');
+};
+
+subtest 'Static propagates File locate failures without sending a response' => sub {
+    my $mw = PAGI::Middleware::Static->new(root => $test_root);
+    $mw->{file} = bless {}, 'Local::StaticProbeFailure';
+    my @events;
+    my @calls;
+    my $wrapped = $mw->wrap(sentinel_app(\@calls, 'probe passed'));
+    my $scope = {
+        type => 'http', method => 'GET', path => '/hello.txt', headers => [],
+    };
+
+    like(dies {
+        $wrapped->(
+            $scope,
+            sub { return Future->done({ type => 'http.disconnect' }) },
+            sub { push @events, $_[0]; return Future->done },
+        )->get;
+    }, qr/simulated static probe failure/,
+        'locate exception propagates from the shared engine');
+    is(\@events, [], 'failed locate emits no response events');
+    is(\@calls, [], 'failed locate does not invoke the inner app');
 };
 
 done_testing;
