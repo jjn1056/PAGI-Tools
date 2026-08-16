@@ -53,6 +53,29 @@ use PAGI::Test::Client;
     }
 }
 
+{
+    package Local::ClosedReadDirectory;
+    use parent 'PAGI::App::Directory';
+
+    sub _open_directory {
+        my ($self, @args) = @_;
+        my $dh = $self->SUPER::_open_directory(@args);
+        return unless $dh;
+        closedir $dh or die "cannot close injected directory handle: $!";
+        return $dh;
+    }
+}
+
+{
+    package Local::FailingCloseDirectory;
+    use parent 'PAGI::App::Directory';
+
+    sub _close_directory {
+        $! = Errno::EIO();
+        return;
+    }
+}
+
 sub write_file {
     my ($path, $contents) = @_;
     open my $fh, '>', $path or die "Cannot create $path: $!";
@@ -336,7 +359,7 @@ subtest 'trusted outward symlink file delegates successfully' => sub {
         'trusted outward symlink retains its target bytes');
 };
 
-subtest 'hostile names are escaped for HTML and encoded for URLs' => sub {
+subtest 'escaping helpers protect HTML and encode URLs' => sub {
     is(PAGI::App::Directory::_html_escape('<script>'), '&lt;script&gt;',
         'escapes angle brackets');
     is(PAGI::App::Directory::_html_escape('"quoted"'),
@@ -353,7 +376,9 @@ subtest 'hostile names are escaped for HTML and encoded for URLs' => sub {
         'file%3Cscript%3E.txt', 'angle brackets are URL encoded');
     is(PAGI::App::Directory::_url_encode(undef), '',
         'undefined URL input is empty');
+};
 
+subtest 'hostile filesystem names are safe where supported' => sub {
     my $root = tempdir(CLEANUP => 1);
     my $hostile = q{<script onclick="x">&'.txt};
     my $path = File::Spec->catfile($root, $hostile);
@@ -483,6 +508,45 @@ subtest 'unexpected listing open failure propagates' => sub {
     like(dies { run_native($unexpected, 'GET', '/') },
         qr/Cannot open directory.*Input\/output error/i,
         'unexpected opendir failure propagates');
+};
+
+subtest 'unexpected listing read failure propagates' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $unexpected = Local::ClosedReadDirectory->new(root => $root);
+    my $error;
+    {
+        local $SIG{__WARN__} = sub {
+            my ($warning) = @_;
+            return if $warning =~ /\A(?:readdir|closedir)\(\) attempted on invalid dirhandle/;
+            warn $warning;
+        };
+        $error = dies { run_native($unexpected, 'GET', '/') };
+    }
+    like($error,
+        qr/Cannot read directory.*Bad file descriptor/i,
+        'unexpected readdir failure propagates');
+};
+
+subtest 'unexpected listing stat failure propagates where supported' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $dangling = File::Spec->catfile($root, 'dangling.txt');
+    unless (eval { symlink('missing-target', $dangling) or die "$!"; 1 }) {
+        my $reason = $@ || $! || 'symlink unavailable';
+        plan skip_all => "cannot create dangling symlink: $reason";
+    }
+
+    my $component = PAGI::App::Directory->new(root => $root);
+    like(dies { run_native($component, 'GET', '/') },
+        qr/Cannot inspect directory entry.*dangling\.txt.*No such file/i,
+        'unexpected stat failure propagates');
+};
+
+subtest 'unexpected listing close failure propagates' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $unexpected = Local::FailingCloseDirectory->new(root => $root);
+    like(dies { run_native($unexpected, 'GET', '/') },
+        qr/Cannot close directory.*Input\/output error/i,
+        'unexpected closedir failure propagates');
 };
 
 subtest 'listing send failures propagate asynchronously' => sub {

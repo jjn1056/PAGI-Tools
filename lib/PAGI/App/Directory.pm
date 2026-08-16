@@ -104,6 +104,11 @@ sub _open_directory {
     return $dh;
 }
 
+sub _close_directory {
+    my ($self, $dh) = @_;
+    return closedir $dh;
+}
+
 async sub _send_listing {
     my ($self, $send, $scope, $dir_path, $rel_path) = @_;
 
@@ -149,7 +154,7 @@ async sub _send_listing {
             mtime => $stat[9] // 0,
         };
     }
-    unless (closedir $dh) {
+    unless ($self->_close_directory($dh)) {
         my $close_error = "$!";
         croak "Cannot close directory '$dir_path': $close_error";
     }
