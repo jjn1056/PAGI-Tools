@@ -299,6 +299,11 @@ subtest 'Win32 directory intent survives into locate classification' => sub {
         File::Spec::Win32->catdir($directories, $filename),
         File::Spec::Win32->curdir,
     );
+    my $constructed_intent = PAGI::Utils::_path_from_root_with_spec(
+        'File::Spec::Win32', $win32_root, '/manual.pdf/',
+    );
+    is($constructed_intent, $intent,
+        'the injected locate path is the exact Win32 utility scalar');
     my $files = Local::Win32ProbeFile->new(
         root       => '.',
         win32_root => $win32_root,
@@ -314,8 +319,8 @@ subtest 'Win32 directory intent survives into locate classification' => sub {
         'trailing separator cannot classify the Win32 regular file');
     ok($files->locate('/manual.pdf/.')->is_missing,
         'final dot cannot classify the Win32 regular file');
-    is($files->probe_calls, [$plain, $intent, $intent],
-        'locate probes the preserved Win32 directory-intent path');
+    is($files->probe_calls, [$plain, $constructed_intent, $constructed_intent],
+        'locate forwards that exact scalar unchanged to its stat probe boundary');
 };
 
 subtest 'indexes are selected in declaration order under hidden policy' => sub {

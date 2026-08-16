@@ -323,6 +323,29 @@ subtest 'listing links are absolute, slashless-safe, and mount-aware' => sub {
     is($mounted->get(decoded_href_path($mounted_root_href))->text, 'root body',
         'mounted root entry resolves through the mounted client');
 
+    for my $dot_root (
+        '/files/.', '/files/./', '/files//./', '/files/././',
+    ) {
+        my $dot_listing = $mounted->get($dot_root);
+        is($dot_listing->status, 200,
+            "$dot_root resolves to the mounted logical root listing");
+        is(listing_href($dot_listing->text, '..'), undef,
+            "$dot_root renders no parent link outside the mount");
+        my $dot_entry = listing_href($dot_listing->text, 'root.txt');
+        is($dot_entry, '/files/root.txt',
+            "$dot_root keeps root entries inside the mount");
+        is($mounted->get(decoded_href_path($dot_entry))->text, 'root body',
+            "$dot_root entry resolves through the mounted client");
+
+        my $dot_head = $mounted->head($dot_root);
+        is($dot_head->status, $dot_listing->status,
+            "$dot_root HEAD retains listing status");
+        is($dot_head->content_length, $dot_listing->content_length,
+            "$dot_root HEAD retains normalized representation length");
+        is($dot_head->content, '',
+            "$dot_root HEAD emits no listing bytes");
+    }
+
     my $mounted_listing = $mounted->get('/files/listing');
     my $mounted_href = listing_href($mounted_listing->text, 'listed.txt');
     is($mounted_href, '/files/listing/listed.txt',
@@ -333,6 +356,16 @@ subtest 'listing links are absolute, slashless-safe, and mount-aware' => sub {
     is($parent_href, '/files/', 'mounted parent link stops at the mount root');
     like($mounted->get(decoded_href_path($parent_href))->text, qr/root\.txt/,
         'mounted parent link resolves to the mounted root listing');
+
+    my $dotted_child = $mounted->get('/files/./listing/.');
+    is(listing_href($dotted_child->text, '..'), '/files/',
+        'dot-normalized child parent stops at the mount root');
+    my $dotted_child_href = listing_href($dotted_child->text, 'listed.txt');
+    is($dotted_child_href, '/files/listing/listed.txt',
+        'dot-normalized child entry retains its logical directory');
+    is($mounted->get(decoded_href_path($dotted_child_href))->text,
+        'listed body',
+        'dot-normalized child entry resolves through the mounted client');
 
     my $mounted_head = $mounted->head('/files/listing');
     is($mounted_head->status, $mounted_listing->status,

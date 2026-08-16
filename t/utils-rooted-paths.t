@@ -18,6 +18,17 @@ sub canonical {
     return File::Spec->canonpath(File::Spec->rel2abs($_[0]));
 }
 
+sub directory_intent_path {
+    my ($spec_class, $candidate) = @_;
+    my ($volume, $directories, $filename)
+        = $spec_class->splitpath($candidate);
+    return $spec_class->catpath(
+        $volume,
+        $spec_class->catdir($directories, $filename),
+        $spec_class->curdir,
+    );
+}
+
 my $root = tempdir(CLEANUP => 1);
 my $absolute_root = canonical($root);
 
@@ -45,15 +56,15 @@ subtest 'path_from_root validates request components and preserves intent' => su
     );
     is(
         path_from_root($root, '/css/'),
-        File::Spec->catfile(
-            File::Spec->catfile($absolute_root, 'css'), File::Spec->curdir,
+        directory_intent_path(
+            'File::Spec', File::Spec->catfile($absolute_root, 'css'),
         ),
         'a final separator retains directory intent',
     );
     is(
         path_from_root($root, '/css/.'),
-        File::Spec->catfile(
-            File::Spec->catfile($absolute_root, 'css'), File::Spec->curdir,
+        directory_intent_path(
+            'File::Spec', File::Spec->catfile($absolute_root, 'css'),
         ),
         'a final current-directory component retains directory intent',
     );
@@ -148,18 +159,21 @@ subtest 'path_from_root never lets a platform-specific component reset the root'
 subtest 'Win32 path construction preserves directory intent' => sub {
     my $win32_root = 'C:' . chr(92) . 'www';
     my $plain = File::Spec::Win32->catfile($win32_root, 'manual.pdf');
-    my ($volume, $directories, $filename)
-        = File::Spec::Win32->splitpath($plain);
-    my $expected_intent = File::Spec::Win32->catpath(
-        $volume,
-        File::Spec::Win32->catdir($directories, $filename),
-        File::Spec::Win32->curdir,
+    my $expected_intent = directory_intent_path(
+        'File::Spec::Win32', $plain,
     );
+    my $literal_intent = 'C:' . chr(92) . join(chr(92),
+        qw(www manual.pdf .));
 
-    isnt(
-        $expected_intent,
+    is(
         File::Spec::Win32->catfile($plain, File::Spec::Win32->curdir),
-        'the fixture catches Win32 catfile canonicalizing directory intent away',
+        $plain,
+        'Win32 catfile demonstrably canonicalizes directory intent away',
+    );
+    is(
+        $expected_intent,
+        $literal_intent,
+        'the platform-aware expected formula retains the exact Win32 dot path',
     );
     is(
         PAGI::Utils::_path_from_root_with_spec(

@@ -91,16 +91,19 @@ sub _listing_entry_name {
     return $name;
 }
 
+sub _listing_path_parts {
+    my ($fragment) = @_;
+    my $text = _utf8_text($fragment);
+    croak 'Directory request path must be valid decoded UTF-8'
+        unless defined $text;
+    return grep { length($_) && $_ ne '.' }
+        split m{[\\/]}, $text, -1;
+}
+
 sub _public_listing_base {
     my ($scope) = @_;
-    my @parts;
-    for my $fragment ($scope->{root_path} // '', $scope->{path} // '/') {
-        my $text = _utf8_text($fragment);
-        croak 'Directory request path must be valid decoded UTF-8'
-            unless defined $text;
-        push @parts, grep { length($_) && $_ ne '.' }
-            split m{[\\/]}, $text, -1;
-    }
+    my @parts = map { _listing_path_parts($_) }
+        ($scope->{root_path} // '', $scope->{path} // '/');
 
     return '/' unless @parts;
     return '/' . join('/', map { _url_encode($_) } @parts) . '/';
@@ -132,8 +135,7 @@ sub to_app {
         ($listing_scope, $send)
             = PAGI::Routing::HeadBoundary->prepare($listing_scope, $send);
 
-        my $relative_path = $request_path;
-        $relative_path =~ s{^/+}{};
+        my $relative_path = join '/', _listing_path_parts($request_path);
         return await $self->_send_listing(
             $send, $listing_scope, $result->path, $relative_path,
         );
