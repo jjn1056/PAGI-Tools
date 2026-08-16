@@ -318,26 +318,46 @@ subtest 'hash mapping exact roots map without a synthetic suffix' => sub {
 
 subtest 'equal normalized hash prefixes use a lexical tie breaker' => sub {
     my $files = File::Spec->catdir(File::Spec->rootdir, 'srv', 'files');
-    my $equivalent = File::Spec->catdir($files, File::Spec->curdir);
-    my ($sent) = record_file_response(
-        config => {
-            type => 'X-Accel-Redirect',
-            mapping => {
-                $equivalent => '/internal/second',
-                $files      => '/internal/first',
-            },
-        },
-        body => {
-            type => 'http.response.body',
-            file => File::Spec->catfile($files, 'a.pdf'),
-        },
+    my $equivalent =
+        $files . File::Spec->rootdir . File::Spec->curdir;
+
+    isnt $equivalent, $files, 'raw source aliases are genuinely distinct';
+    is(
+        File::Spec->canonpath(File::Spec->rel2abs($equivalent)),
+        File::Spec->canonpath(File::Spec->rel2abs($files)),
+        'raw source aliases normalize to the same absolute prefix',
     );
 
-    is(
-        find_header($sent->[0]{headers}, 'X-Accel-Redirect'),
-        '/internal/first/a.pdf',
-        'lexically first original prefix wins a normalized-length tie',
-    );
+    tie my %plain_first, 'Local::OrderedHash';
+    $plain_first{$files} = '/internal/first';
+    $plain_first{$equivalent} = '/internal/second';
+
+    tie my %alias_first, 'Local::OrderedHash';
+    $alias_first{$equivalent} = '/internal/second';
+    $alias_first{$files} = '/internal/first';
+
+    for my $case (
+        ['lexical winner enumerated first', \%plain_first],
+        ['lexical winner enumerated second', \%alias_first],
+    ) {
+        my ($label, $mapping) = @$case;
+        my ($sent) = record_file_response(
+            config => {
+                type    => 'X-Accel-Redirect',
+                mapping => $mapping,
+            },
+            body => {
+                type => 'http.response.body',
+                file => File::Spec->catfile($files, 'a.pdf'),
+            },
+        );
+
+        is(
+            find_header($sent->[0]{headers}, 'X-Accel-Redirect'),
+            '/internal/first/a.pdf',
+            "$label selects the same lexically first raw prefix",
+        );
+    }
 };
 
 subtest 'false prefix siblings safely decline interception' => sub {
