@@ -50,7 +50,7 @@ for my $case (@cases) {
         is(ref($app), 'CODE', 'returns a native PAGI application');
 
         SKIP: {
-            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 5 : 2)
+            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 8 : 2)
                 unless ref($app) eq 'CODE';
             my $client = PAGI::Test::Client->new(app => $app);
             my $response = $client->get('/');
@@ -65,6 +65,18 @@ for my $case (@cases) {
                     'unresolved root request includes a terminal body');
                 is($missing->content_length, length($missing->content),
                     'unresolved root response advertises its complete body');
+
+                my $unsupported = $client->post('/api/messages');
+                is($unsupported->status, 415,
+                    'message API rejects a request without JSON content type');
+                is($unsupported->content_type, 'application/problem+json',
+                    'content-type rejection uses a problem document');
+                is($unsupported->json, {
+                    type   => 'about:blank',
+                    title  => 'Unsupported Media Type',
+                    status => 415,
+                    detail => 'Content-Type must be application/json',
+                }, 'content-type rejection uses the shared Pages representation');
             }
         }
     };

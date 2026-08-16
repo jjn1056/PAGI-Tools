@@ -123,7 +123,7 @@
 
 - [ ] **Step 5: Create a failing lifespan-utils integration test**
 
-  Load `examples/14-lifespan-utils/app.pl` with `do`, run it through `PAGI::Test::Client`, GET `/` with `Accept: text/plain`, and assert status 200 plus text beginning `200 Welcome to PAGI` and containing the PAGI documentation URL.
+  Load `examples/14-lifespan-utils/app.pl` with `do`, run it through `PAGI::Test::Client`, GET `/` with `Accept: text/plain`, and assert status 200 plus text beginning `Welcome to PAGI` and containing the PAGI documentation URL.
 
 - [ ] **Step 6: Verify the lifespan-utils test fails for the placeholder response**
 

@@ -1,7 +1,7 @@
 # 14 – Lifespan Hooks via PAGI::Utils
 
 Minimal app that uses `PAGI::Utils::handle_lifespan` for startup/shutdown hooks
-and serves a plain-text HTTP response.
+and `PAGI::Pages` for its plain-text welcome response.
 
 ## Requirements
 
@@ -18,10 +18,16 @@ pagi-server --app examples/14-lifespan-utils/app.pl --port 5000
 
 ```bash
 curl http://localhost:5000/
-# => Hello from PAGI!
+# => Welcome to PAGI
+#    ...
+#    https://metacpan.org/pod/PAGI
 ```
 
 Stop the server with Ctrl+C to see the shutdown hook log message.
+
+`handle_lifespan` owns lifecycle scopes. Once the application reaches an HTTP
+scope, it constructs `PAGI::Pages->welcome($scope, as => 'text')` and explicitly
+sends that Response through the raw application's `$send` callback.
 
 ## Spec References
 

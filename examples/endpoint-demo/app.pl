@@ -15,7 +15,7 @@ use PAGI::App::File;
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::AccessLog;
-use PAGI::Response;
+use PAGI::Pages;
 
 
 #---------------------------------------------------------
@@ -160,11 +160,10 @@ my $require_json = sub {
             }
 
             unless ($content_type =~ m{application/json}i) {
-                my $res = PAGI::Response->new($scope);
-                await $res->status(415)->json({
-                    error => 'Content-Type must be application/json'
-                })->respond($send);
-                return;  # Short-circuit - don't call $app
+                my $response = PAGI::Pages->unsupported_media_type($scope,
+                    as     => 'json',
+                    detail => 'Content-Type must be application/json');
+                return await $response->respond($send);
             }
         }
 

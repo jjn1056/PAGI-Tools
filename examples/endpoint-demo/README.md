@@ -47,6 +47,20 @@ sub on_disconnect { ... }
 - `PAGI::Middleware::AccessLog` - Request logging
 - Coderef middleware - Request timing, JSON validation
 
+The JSON-validation middleware is a raw PAGI application, so its terminal
+branch constructs a stock response from the request scope and sends it
+explicitly:
+
+```perl
+my $response = PAGI::Pages->unsupported_media_type($scope,
+    as     => 'json',
+    detail => 'Content-Type must be application/json');
+return await $response->respond($send);
+```
+
+Successful endpoint payloads remain application-owned JSON. `PAGI::Pages`
+handles only the generic HTTP failure.
+
 The three Endpoint applications are already compiled native PAGI components,
 so the App Router attaches them as explicit opaque mounts. The `/` static-file
 mount is last because the shared routing engine preserves written order and a
