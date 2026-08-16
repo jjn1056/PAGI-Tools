@@ -63,6 +63,20 @@
     it prints each valid candidate path to STDOUT. All example applications
     using PAGI::App::File now use this constructor. The Perl 5.40 large
     application relies on its version declaration for strictures and warnings.
+  - BREAKING: rooted File, Directory, and Static request paths now share one
+    lexical/no-I/O contract. Configured symlinks are trusted administrator
+    layout rather than rejected outward targets; hidden files are forbidden by
+    default, and the historical `show_hidden` listing-only option is replaced
+    by the `allow_hidden` serving/listing policy. Directory missing and method
+    results now distinguish 404 from 403 and return 405 with `Allow: GET, HEAD`
+    for unsupported methods. See UPGRADING.md for the exact behavior table and
+    deployment threat model.
+  - XSendfile hash mappings now match filesystem components, choose the most
+    specific normalized source prefix deterministically, and leave unmatched
+    original PAGI response/file events unintercepted. The chat examples now
+    delegate non-API HTTP requests to one caller-relative PAGI::App::File;
+    Cookbook and Tutorial custom download recipes validate lexical paths,
+    authorization, and request-derived response headers separately.
   - BREAKING: PAGI::App::Router and PAGI::Endpoint::Router are now mutable and
     method-oriented frontends over the immutable PAGI::Routing engine. The old
     App matcher, native-by-default route handlers, route-first/mount-fallback

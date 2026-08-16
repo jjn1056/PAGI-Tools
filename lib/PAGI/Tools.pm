@@ -62,6 +62,23 @@ ordinary negotiated Response or a terminal endpoint:
     my $response = PAGI::Pages->not_found($context);
     my $endpoint = PAGI::Pages->welcome;
 
+For a conventional static tree, use the rooted file component rather than
+constructing paths or reading files in a handler:
+
+    use PAGI::App::File;
+
+    my $static = PAGI::App::File->app_path('public')->to_app;
+
+Its request-path construction is lexical and performs no I/O; the PAGI server
+opens the resulting C<file> event. Configured symlinks extend administrator
+authority, so keep the root dedicated and non-attacker-writable and enforce
+appropriate filesystem ownership and permissions. These are deployment best
+practices, not physical confinement enforced by the component. Custom access
+control remains a separate application decision. See
+L<PAGI::Tools::Cookbook> for the authenticated XSendfile recipe and the
+L<rooted file-serving upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#rooted-file-serving-security-contract>
+for the intentionally changed statuses, hidden-file policy, and mapping rules.
+
 Routing has three public frontends over that same immutable snapshot and
 compiler:
 
@@ -159,7 +176,7 @@ PAGI applications without hand-emitting protocol events:
 
 =item * L<PAGI::Middleware> and the C<PAGI::Middleware::*> suite
 
-=item * C<PAGI::App::*> - ready-made apps (static files, the mutable router
+=item * C<PAGI::App::*> - ready-made apps (rooted static files, the mutable router
 frontend, proxies,
 WebSocket chat/echo, PSGI bridging)
 
@@ -184,8 +201,8 @@ mandatory HTTP routing/error failsafes
 =item * L<PAGI::Test::Client> and friends - in-process test utilities for
 PAGI applications
 
-=item * L<PAGI::Utils> - composition and lifespan helpers, including explicit
-component-to-application coercion
+=item * L<PAGI::Utils> - composition, lifespan, and lexical path helpers,
+including explicit component-to-application coercion
 
 =back
 
@@ -204,7 +221,7 @@ L<PAGI::Tutorial> (the protocol tutorial, in the C<PAGI> distribution),
 L<PAGI::Tools::Tutorial> (this distribution's helpers guide),
 L<PAGI::Tools::Cookbook> (this distribution's recipes), L<PAGI::Compose>,
 L<PAGI::Routing>, L<PAGI::Pages>, L<PAGI::Response>, L<PAGI::App::Router>,
-L<PAGI::Endpoint::Router>, L<PAGI::Spec>,
+L<PAGI::Endpoint::Router>, L<PAGI::App::File>, L<PAGI::Utils>, L<PAGI::Spec>,
 L<router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>,
 L<PAGI::Server::Runner> - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)

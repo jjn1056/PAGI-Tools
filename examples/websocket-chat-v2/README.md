@@ -13,8 +13,17 @@ Then open http://localhost:5000 in your browser.
 
 ## Comparison
 
-The HTTP, SSE, and State modules are **identical** to the original.
-Only the WebSocket handler is rewritten.
+The SSE and State modules are shared with the original design. The HTTP module
+preserves the same API and frontend behavior while keeping its direct API
+dispatcher. Only the WebSocket handler is the subject of the comparison below.
+
+Both chat examples dispatch `/api/...` first and delegate every other HTTP
+request to one `PAGI::App::File->app_path('public')->to_app`. This v2 example's
+`public/` symlink intentionally reuses the original frontend; the configured
+symlink is trusted application layout, not request input.
+
+See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)
+for the deployment boundary and changed status/mapping behavior.
 
 ### Original (raw protocol)
 
@@ -73,7 +82,7 @@ await $ws->each_json(async sub {
 
 - `app.pl` - Main application with routing
 - `lib/ChatApp/WebSocket.pm` - **PAGI::WebSocket version** (compare with original)
-- `lib/ChatApp/HTTP.pm` - Same as original
+- `lib/ChatApp/HTTP.pm` - API dispatch plus `PAGI::App::File` frontend serving
 - `lib/ChatApp/SSE.pm` - Same as original
 - `lib/ChatApp/State.pm` - Same as original
-- `public/` - Symlink to original frontend
+- `public/` - Administrator-configured symlink to the original frontend

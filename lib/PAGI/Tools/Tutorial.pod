@@ -1203,7 +1203,7 @@ L<PAGI::App::File> serves static files with security, caching, and streaming:
 
   use PAGI::App::File;
 
-  my $static = PAGI::App::File->new(root => './public');
+  my $static = PAGI::App::File->app_path('public');
   $router->mount('/static' => $static);
 
 Features:
@@ -1218,9 +1218,64 @@ Features:
 
 =item * Automatic MIME type detection
 
-=item * Security: path traversal protection
+=item * Lexically rooted request paths and hidden files forbidden by default
 
 =back
+
+Use this component by default. It selects indexes and MIME types, streams with
+C<file> events, negotiates errors, and handles conditional and Range requests
+without loading file bodies into application memory.
+
+If custom authorization or response headers require a raw handler, begin with
+the same lexical boundary:
+
+  use Future;
+  use Future::AsyncAwait;
+  use PAGI::Pages;
+  use PAGI::Utils qw(path_from_root);
+
+  my $download = async sub {
+      my ($scope, $receive, $send) = @_;
+      my $untrusted_path = $scope->{path};
+
+      my $path = path_from_root('/var/www/files', $untrusted_path);
+      unless (defined $path) {
+          my $response = PAGI::Pages->forbidden($scope);
+          return await Future->wrap($response->respond($send));
+      }
+
+      # Replace the safe default with application-specific authorization.
+      my $authorized = 0;
+      unless ($authorized) {
+          my $response = PAGI::Pages->forbidden($scope);
+          return await Future->wrap($response->respond($send));
+      }
+
+      unless (-f $path && -r $path) {
+          my $response = PAGI::Pages->not_found($scope);
+          return await Future->wrap($response->respond($send));
+      }
+
+      await Future->wrap($send->({
+          type    => 'http.response.start',
+          status  => 200,
+          headers => [['content-type', 'application/octet-stream']],
+      }));
+      return await Future->wrap($send->({
+          type => 'http.response.body', file => $path, more => 0,
+      }));
+  };
+
+C<path_from_root> performs no I/O and does not resolve symlinks. The server
+opens the later C<file> event. A configured symlink therefore extends
+administrator authority beyond the lexical root. Keep rooted file trees
+dedicated and non-attacker-writable, enforce suitable ownership and
+permissions, and treat those controls as deployment practice rather than a
+physical-confinement guarantee. See
+L<PAGI::Tools::Cookbook/Serving Large Files with X-Sendfile> for the complete
+authenticated download recipe and the
+L<upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#rooted-file-serving-security-contract>
+for changed status and option behavior.
 
 =head2 7.2 PAGI::App::Healthcheck - Health Endpoints
 

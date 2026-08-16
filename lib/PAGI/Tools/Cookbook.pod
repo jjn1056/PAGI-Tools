@@ -411,11 +411,56 @@ handler. The same rules select normal/raw HTTP, WebSocket, SSE, and all mount
 forms, and C<path_for>/C<url_for> enforce them for named routes.
 
 C<*path> captures decoded values including C<..>, repeated separators, and
-backslashes. Never concatenate that value with a filesystem root. Canonicalize
-the candidate, verify containment at a path-component boundary, and decide how
-symlinks are handled. Prefer L<PAGI::App::File> or
-L<PAGI::Middleware::Static> to treating a wildcard capture as a filesystem
-path.
+backslashes. Never concatenate that value with a filesystem root. When no
+custom authorization or response headers are needed, mount
+L<PAGI::App::File> and let it own the complete file response:
+
+  use PAGI::App::File;
+
+  my $files = PAGI::App::File->app_path('public')->to_app;
+
+For a raw handler that genuinely needs custom policy, validate the request
+path before any filesystem check and emit only the returned lexical path:
+
+  use Future;
+  use Future::AsyncAwait;
+  use PAGI::Pages;
+  use PAGI::Utils qw(path_from_root);
+
+  my $files = async sub {
+      my ($scope, $receive, $send) = @_;
+      my $untrusted_path = $scope->{path};
+
+      my $path = path_from_root('/var/www/files', $untrusted_path);
+      unless (defined $path) {
+          my $response = PAGI::Pages->forbidden($scope);
+          return await Future->wrap($response->respond($send));
+      }
+
+      unless (-f $path && -r $path) {
+          my $response = PAGI::Pages->not_found($scope);
+          return await Future->wrap($response->respond($send));
+      }
+
+      await Future->wrap($send->({
+          type    => 'http.response.start',
+          status  => 200,
+          headers => [['content-type', 'application/octet-stream']],
+      }));
+      return await Future->wrap($send->({
+          type => 'http.response.body', file => $path, more => 0,
+      }));
+  };
+
+L<PAGI::Utils/path_from_root> is lexical and performs no I/O. It neither
+resolves symlinks nor grants access; run authentication and authorization as
+separate policy after it returns. The PAGI server opens the eventual C<file>
+event. Configured symlinks extend administrator authority, so use a dedicated
+root that attackers cannot modify and enforce suitable filesystem ownership
+and permissions. Those are deployment best practices, not physical
+confinement enforced by the helper. See the
+L<rooted file-serving upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#rooted-file-serving-security-contract>
+for changed status and option behavior.
 
 =head2 Normal, Raw, WebSocket, and SSE Handler Lifecycles
 
@@ -2148,37 +2193,57 @@ handle Range requests more efficiently using its native sendfile.
 
 For more control (authentication, logging, custom headers):
 
+  use Future;
+  use Future::AsyncAwait;
   use PAGI::App::Router;
+  use PAGI::Pages;
   use PAGI::Request;
-  use PAGI::Response;
+  use PAGI::Utils qw(path_from_root);
 
   my $router = PAGI::App::Router->new;
 
   $router->get('/download/{filename}', raw => async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = $req->response;
 
       my $filename = $req->path_param('filename');
-      my $filepath = "/var/www/files/$filename";
+      my $filepath = path_from_root('/var/www/files', $filename);
+      unless (defined $filepath) {
+          my $response = PAGI::Pages->forbidden($scope);
+          return await Future->wrap($response->respond($send));
+      }
 
-      # Validate file exists and user has access
-      return await $res->status(404)->text('Not found')->respond($send)
-          unless -f $filepath;
+      # Authentication and authorization are separate from path validation.
+      my $user = authenticate($scope);
+      unless ($user && can_download($user, $filepath)) {
+          my $response = PAGI::Pages->forbidden($scope);
+          return await Future->wrap($response->respond($send));
+      }
+
+      unless (-f $filepath && -r $filepath) {
+          my $response = PAGI::Pages->not_found($scope);
+          return await Future->wrap($response->respond($send));
+      }
+
+      # Validate request-derived header data independently.
+      my ($download_name) = $filename =~ /\A([A-Za-z0-9][A-Za-z0-9._-]*)\z/;
+      unless (defined $download_name) {
+          my $response = PAGI::Pages->forbidden($scope);
+          return await Future->wrap($response->respond($send));
+      }
 
       # Send file response directly via raw protocol events (XSendfile middleware will intercept)
-      await $send->({
+      await Future->wrap($send->({
           type    => 'http.response.start',
           status  => 200,
           headers => [
               ['content-type', 'application/octet-stream'],
-              ['content-disposition', qq{attachment; filename="$filename"}],
+              ['content-disposition', qq{attachment; filename="$download_name"}],
           ],
-      });
-      await $send->({
-          type => 'http.response.body',
-          file => $filepath,
-      });
+      }));
+      return await Future->wrap($send->({
+          type => 'http.response.body', file => $filepath, more => 0,
+      }));
   });
 
   my $app = builder {
@@ -2187,6 +2252,13 @@ For more control (authentication, logging, custom headers):
           mapping => { '/var/www/files/' => '/protected/' };
       $router;
   };
+
+Replace C<authenticate> and C<can_download> with application policy. The
+request filename is used only after independent path and header validation;
+the validated lexical C<$filepath> is the C<file> event intercepted by
+XSendfile. Hash mappings are component-aware, use the most-specific source
+prefix, and leave an unmatched original C<file> event unchanged rather than
+publishing a raw proxy path.
 
 =head3 Apache Configuration (mod_xsendfile)
 

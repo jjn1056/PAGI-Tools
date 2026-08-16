@@ -43,6 +43,7 @@ PAGI::Compose
       -> opaque HTTP handler
         -> PAGI::Compose
           -> internal API Router
+        -> PAGI::App::File
       -> WebSocket / SSE handlers
 ```
 
@@ -63,6 +64,16 @@ owns dispatch at that position. `ChatApp::HTTP` therefore gives its internal
 API Router a Compose boundary of its own. An unknown `/api/...` path receives
 that child's complete 404 instead of leaking an unanswered decline through the
 opaque mount or falling through to static serving.
+
+Inside that HTTP boundary, `/api/...` dispatch runs first. Every other HTTP
+request is delegated to one caller-relative
+`PAGI::App::File->app_path('public')->to_app`, which owns index selection,
+streaming, MIME types, ranges, conditional requests, and negotiated errors.
+The example does not duplicate filesystem path filtering or read static files
+into application memory.
+
+See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)
+for the status, hidden-file, symlink, and XSendfile migration contract.
 
 ```
 examples/10-chat-showcase/

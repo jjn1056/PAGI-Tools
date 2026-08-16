@@ -49,6 +49,23 @@ ordinary negotiated Response or a terminal endpoint:
     my $response = PAGI::Pages->not_found($context);
     my $endpoint = PAGI::Pages->welcome;
 
+For a conventional static tree, use the rooted file component rather than
+constructing paths or reading files in a handler:
+
+    use PAGI::App::File;
+
+    my $static = PAGI::App::File->app_path('public')->to_app;
+
+Its request-path construction is lexical and performs no I/O; the PAGI server
+opens the resulting `file` event. Configured symlinks extend administrator
+authority, so keep the root dedicated and non-attacker-writable and enforce
+appropriate filesystem ownership and permissions. These are deployment best
+practices, not physical confinement enforced by the component. Custom access
+control remains a separate application decision. See
+[PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook) for the authenticated XSendfile recipe and the
+[rooted file-serving upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#rooted-file-serving-security-contract)
+for the intentionally changed statuses, hidden-file policy, and mapping rules.
+
 Routing has three public frontends over that same immutable snapshot and
 compiler:
 
@@ -143,7 +160,7 @@ the ergonomics an author reaches for again and again, so you can build real
 PAGI applications without hand-emitting protocol events:
 
 - [PAGI::Middleware](https://metacpan.org/pod/PAGI%3A%3AMiddleware) and the `PAGI::Middleware::*` suite
-- `PAGI::App::*` - ready-made apps (static files, the mutable router
+- `PAGI::App::*` - ready-made apps (rooted static files, the mutable router
 frontend, proxies,
 WebSocket chat/echo, PSGI bridging)
 - [PAGI::Endpoint::HTTP](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AHTTP), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter),
@@ -161,8 +178,8 @@ one request target, application middleware, explicit lifecycle callbacks, and
 mandatory HTTP routing/error failsafes
 - [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and friends - in-process test utilities for
 PAGI applications
-- [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils) - composition and lifespan helpers, including explicit
-component-to-application coercion
+- [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils) - composition, lifespan, and lexical path helpers,
+including explicit component-to-application coercion
 
 It is the author's hope that these tools serve two audiences: people
 _exploring_ PAGI, who get going with far less friction than the raw protocol
@@ -179,7 +196,7 @@ protocol specification lives in the `PAGI` distribution.
 [PAGI::Tools::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ATutorial) (this distribution's helpers guide),
 [PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook) (this distribution's recipes), [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose),
 [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter),
-[PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
+[PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter), [PAGI::App::File](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3AFile), [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
 [router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md),
 [PAGI::Server::Runner](https://metacpan.org/pod/PAGI%3A%3AServer%3A%3ARunner) - runs PAGI applications from the command line
 (ships with the PAGI-Server distribution)

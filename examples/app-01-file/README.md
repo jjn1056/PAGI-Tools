@@ -31,7 +31,25 @@ pagi-server --app examples/app-01-file/app.pl --port 5000
 - MIME type detection
 - ETag caching (304 Not Modified)
 - Range requests for partial content
-- Path traversal protection
+- Lexically rooted request-path validation
+- Hidden files forbidden by default
+
+## Security Boundary
+
+`PAGI::App::File` validates request paths lexically. Its path helper performs no
+I/O and does not resolve symlinks; the PAGI server opens the later `file` event.
+Configured symlinks therefore extend the administrator's authority and may
+lead outside the lexical root. Use a dedicated static tree that is not writable
+by attackers, and enforce appropriate filesystem ownership and permissions.
+Those deployment practices reduce pathname races and unintended exposure; the
+component does not claim physical confinement.
+
+Authorization is a separate application policy. If access depends on the
+current user or resource record, perform that check explicitly or follow the
+authenticated XSendfile recipe in
+[`PAGI::Tools::Cookbook`](../../lib/PAGI/Tools/Cookbook.pod); do not infer
+authorization from lexical path validity. Existing deployments should also
+review the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract).
 
 ## Test URLs
 

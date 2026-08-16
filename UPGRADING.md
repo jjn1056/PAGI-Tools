@@ -1,8 +1,9 @@
 # Upgrading PAGI-Tools
 
 This guide is the standalone handoff for existing applications moving to the
-current PAGI::Tools release. It covers both the shipped routing-fallback and
-application-error boundary and the earlier unification of the
+current PAGI::Tools release. It covers the shipped routing-fallback and
+application-error boundary, the rooted file-serving security contract, and the
+earlier unification of the
 `PAGI::App::Router` and `PAGI::Endpoint::Router` frontends. Contracts shown in
 Before examples have been removed. There is no compatibility mode and there
 are no compatibility aliases.
@@ -10,6 +11,129 @@ are no compatibility aliases.
 Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
+
+## Rooted file-serving security contract
+
+Rooted file components now share one lexical request-path contract. The
+following Before material is migration history, not current security advice.
+
+### Replace manual request-path deletion
+
+**Before (historical and unsafe; do not copy):** handlers commonly deleted
+dot text, concatenated the result with a root, guessed a MIME type, and read
+the complete file into memory.
+
+```perl
+my $path = $scope->{path};
+$path =~ s/\.\.//g;
+my $file = "$root/$path";
+open my $fh, '<:raw', $file or die $!;
+```
+
+**After (shipped default):** give conventional static-file ownership to one
+`PAGI::App::File`.
+
+```perl
+use PAGI::App::File;
+
+my $app = PAGI::App::File->app_path('public')->to_app;
+```
+
+It owns validation, index and MIME selection, conditional and Range requests,
+streaming `file` events, and negotiated stock errors.
+
+**After (shipped custom raw boundary):** when authorization or response headers
+require a custom handler, validate before any filesystem policy and emit only
+the returned lexical path.
+
+```perl
+use Future;
+use Future::AsyncAwait;
+use PAGI::Pages;
+use PAGI::Utils qw(path_from_root);
+
+my $app = async sub {
+    my ($scope, $receive, $send) = @_;
+    my $untrusted_path = $scope->{path};
+
+    my $path = path_from_root('/var/www/files', $untrusted_path);
+    unless (defined $path) {
+        my $response = PAGI::Pages->forbidden($scope);
+        return await Future->wrap($response->respond($send));
+    }
+
+    # Replace the safe default with application-specific authorization.
+    my $authorized = 0;
+    unless ($authorized) {
+        my $response = PAGI::Pages->forbidden($scope);
+        return await Future->wrap($response->respond($send));
+    }
+
+    unless (-f $path && -r $path) {
+        my $response = PAGI::Pages->not_found($scope);
+        return await Future->wrap($response->respond($send));
+    }
+
+    await Future->wrap($send->({
+        type    => 'http.response.start',
+        status  => 200,
+        headers => [['content-type', 'application/octet-stream']],
+    }));
+    return await Future->wrap($send->({
+        type => 'http.response.body', file => $path, more => 0,
+    }));
+};
+```
+
+`path_from_root` performs no I/O, does not require the result to exist, and
+does not resolve symlinks. The PAGI server opens a later `file` event.
+Configured symlinks therefore extend administrator authority beyond the
+lexical root. Use a dedicated root that attackers cannot modify and enforce
+appropriate ownership and permissions. Those practices reduce unintended
+exposure and pathname races; neither the helper nor the file components claim
+physical confinement.
+
+### Rename the hidden-file policy
+
+**Before (removed option):**
+
+```perl
+PAGI::App::Directory->new(root => $root, show_hidden => 1);
+```
+
+**After (shipped):**
+
+```perl
+PAGI::App::Directory->new(root => $root, allow_hidden => 1);
+```
+
+`allow_hidden` governs both direct serving and directory listings. With the
+default false value, hidden request components are forbidden and hidden index
+candidates are skipped.
+
+### Audit status, symlink, method, and mapping assumptions
+
+| Before | After |
+|---|---|
+| File NUL request -> 400 | common unsafe-path 403 |
+| outward symlink rejected | trusted configured symlink served |
+| Directory missing -> failed-realpath 403 | missing 404 |
+| Directory POST listing -> 200 | 405, `Allow: GET, HEAD` |
+| `show_hidden` listing-only option | `allow_hidden` serving/listing policy |
+| Static hidden files allowed | hidden files forbidden by default |
+| textual/hash-order XSendfile mapping | component-aware most-specific mapping |
+| unmatched hash emits raw proxy path | original PAGI file event continues |
+
+The XSendfile source mapping is normalized as a filesystem path, matches at
+component boundaries, chooses the longest normalized source prefix, and uses
+lexical source-prefix order only to break equal-specificity ties. An unmatched
+hash mapping declines interception and forwards the original response start
+and `file` event. Review proxy mappings as trusted administrator configuration,
+not as authorization.
+
+See `PAGI::App::File`, `PAGI::App::Directory`, `PAGI::Middleware::Static`,
+`PAGI::Middleware::XSendfile`, and the authenticated recipe in
+`PAGI::Tools::Cookbook` for the live contracts.
 
 ## Pages response factory and default response migrations
 
@@ -159,14 +283,14 @@ and cache fields may change through consistent negotiation and encoding.
 
 | Component | Stock default now delegated to Pages | Facts or custom branch preserved |
 |---|---|---|
-| `PAGI::App::File` | 400, 403, 404, 405, 416 | 405 supplies `Allow: GET, HEAD`; 416 supplies selected file length |
+| `PAGI::App::File` | 403, 404, 405, 416 | 405 supplies `Allow: GET, HEAD`; 416 supplies selected file length |
 | `PAGI::App::Directory` | pre-delegation 403; File defaults after a file/index target resolves | directory safety and listing decisions remain local |
 | `PAGI::App::URLMap` | no-default HTTP 404 | mount selection and opaque ownership remain local |
 | `PAGI::App::Proxy` | backend-connect 502 | connection decision and demo warning remain local |
 | `PAGI::App::Loader` | HTTP load-failure 500 | loading, warnings, and reload policy remain local |
 | `PAGI::App::WrapCGI` | HTTP process-start 500 | CGI execution and parsed CGI responses remain literal |
 | `PAGI::App::Throttle` | default HTTP 429 | `retry_after`, enabled rate-limit fields, and `on_limit` |
-| `PAGI::Middleware::Static` | 403, 404, 500, 416 | pass-through remains local; 416 supplies selected file length |
+| `PAGI::Middleware::Static` | 403, 404, 416 | pass-through remains local; 416 supplies selected file length |
 | `PAGI::Middleware::Auth::Basic` | default 401 | generated Basic challenge and configured realm |
 | `PAGI::Middleware::Auth::Bearer` | default 401 | generated Bearer challenge, realm, and safe failure detail |
 | `PAGI::Middleware::CSRF` | enforced default 403 | validation and `enforce => 'app'` application responses |
