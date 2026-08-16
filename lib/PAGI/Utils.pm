@@ -15,14 +15,19 @@ my %VALID_PAGI_ENV = map { $_ => 1 } @PAGI_ENVIRONMENTS;
 my @ENV_EXPORTS = qw(
     pagi_env is_development is_test is_staging is_production
 );
+my @PATH_EXPORTS = qw(
+    app_path path_from_root replace_path_prefix
+);
 
 our @EXPORT_OK = (
-    qw(handle_lifespan to_app is_response app_path),
+    qw(handle_lifespan to_app is_response),
     @ENV_EXPORTS,
+    @PATH_EXPORTS,
 );
 our %EXPORT_TAGS = (
     all => \@EXPORT_OK,
     env => \@ENV_EXPORTS,
+    path => \@PATH_EXPORTS,
 );
 our %APP_PATH_SOURCE;
 
@@ -81,6 +86,85 @@ sub is_production {
 sub app_path {
     my ($package, $source) = caller;
     return _app_path_from_origin($package, $source, @_);
+}
+
+sub _require_path_string {
+    my ($name, $value, $allow_empty) = @_;
+    my $description = $allow_empty
+        ? 'a defined, non-reference string'
+        : 'a defined, nonempty, non-reference string';
+    croak "$name must be $description"
+        unless defined $value && !ref($value) && ($allow_empty || length $value);
+    return;
+}
+
+sub _validated_request_parts {
+    my ($path) = @_;
+    my @components = split m{[\\/]}, $path, -1;
+    my $directory_intent = $path =~ m{[\\/]\z}
+        || @components && $components[-1] eq '.';
+    my @parts;
+
+    for my $component (@components) {
+        return unless index($component, "\0") < 0;
+        return if $component =~ /\A\.{2,}\z/;
+        next if $component eq '' || $component eq '.';
+
+        my ($volume) = File::Spec->splitpath($component);
+        return if defined $volume && length $volume;
+        return if File::Spec->file_name_is_absolute($component);
+        push @parts, $component;
+    }
+
+    return (\@parts, $directory_intent);
+}
+
+sub path_from_root {
+    croak 'path_from_root requires a root and request path' unless @_ == 2;
+    my ($root, $request_path) = @_;
+    _require_path_string('path_from_root root', $root, 0);
+    _require_path_string('path_from_root request path', $request_path, 1);
+
+    my ($parts, $directory_intent) = _validated_request_parts($request_path);
+    return undef unless defined $parts;
+
+    my $absolute_root = File::Spec->canonpath(File::Spec->rel2abs($root));
+    my $candidate = @$parts
+        ? File::Spec->catfile($absolute_root, @$parts)
+        : $absolute_root;
+
+    return $candidate unless $directory_intent && @$parts;
+    return File::Spec->catfile($candidate, File::Spec->curdir);
+}
+
+sub replace_path_prefix {
+    croak 'replace_path_prefix requires path, source prefix, and replacement'
+        unless @_ == 3;
+    my ($path, $from, $to) = @_;
+    _require_path_string('replace_path_prefix path', $path, 0);
+    _require_path_string('replace_path_prefix source prefix', $from, 0);
+    _require_path_string('replace_path_prefix replacement', $to, 0);
+
+    my $absolute_path = File::Spec->canonpath(File::Spec->rel2abs($path));
+    my $absolute_from = File::Spec->canonpath(File::Spec->rel2abs($from));
+    my ($path_volume) = File::Spec->splitpath($absolute_path);
+    my ($from_volume) = File::Spec->splitpath($absolute_from);
+    return undef unless _same_path_component($path_volume, $from_volume);
+
+    my $relative = File::Spec->abs2rel($absolute_path, $absolute_from);
+    my @suffix = File::Spec->splitdir($relative);
+    return undef if grep { $_ eq File::Spec->updir } @suffix;
+    @suffix = grep { length && $_ ne File::Spec->curdir } @suffix;
+
+    my $slash_to = $to;
+    $slash_to =~ tr{\\}{/};
+    $slash_to =~ s{/+}{/}g;
+    $slash_to =~ s{/+\z}{} unless $slash_to =~ m{\A/+\z};
+    $slash_to = '/' if $slash_to =~ m{\A/+\z};
+
+    return $slash_to unless @suffix;
+    return '/' . join('/', @suffix) if $slash_to eq '/';
+    return $slash_to . '/' . join('/', @suffix);
 }
 
 sub _same_path_component {
@@ -237,6 +321,11 @@ PAGI::Utils - Shared utility helpers for PAGI
     my $static     = app_path('static');
     my $stylesheet = app_path('static', 'css', 'app.css');
 
+    use PAGI::Utils qw(:path);
+
+    my $file = path_from_root($document_root, $request_path);
+    my $uri  = replace_path_prefix($file, $document_root, '/protected');
+
     use PAGI::Utils qw(:env);
 
     if (is_development()) {
@@ -296,8 +385,9 @@ strict C<PAGI_ENV> contract as C<pagi_env()> and accepts no arguments.
 =head2 EXPORTS
 
 C<:env> exports exactly C<pagi_env>, C<is_development>, C<is_test>,
-C<is_staging>, and C<is_production>. C<:all> exports every optional helper in
-C<PAGI::Utils>.
+C<is_staging>, and C<is_production>. C<:path> exports exactly C<app_path>,
+C<path_from_root>, and C<replace_path_prefix>. C<:all> exports every optional
+helper in C<PAGI::Utils>.
 
 =head2 app_path
 
@@ -332,6 +422,42 @@ The helper does not check whether a path exists, create it, resolve symlinks, or
 provide a sandbox guarantee. Root-level C<use lib> configuration remains a
 separate bootstrap concern; C<app_path> derives paths only after the caller has
 already been loaded.
+
+=head2 path_from_root
+
+    use PAGI::Utils qw(path_from_root);
+
+    my $file = path_from_root($document_root, $request_path);
+    return unless defined $file;
+
+Builds an absolute, platform-native filesystem path from a root and an HTTP-like
+request path. It splits both slash styles into logical components, ignores empty
+and C<.> components, and rejects traversal components (C<..> and longer
+all-dot components), NUL bytes, and components that are absolute or volumed on
+the current platform. Unsafe request content returns C<undef>; an undefined,
+reference-valued, or empty root, or an undefined or reference-valued request
+path, is a programmer error and croaks.
+
+A final slash or C<.> retains directory intent by appending the native current
+directory component. The function performs no I/O, does not require the result
+to exist, and neither resolves symlinks nor claims to enforce a symlink
+sandboxing policy.
+
+=head2 replace_path_prefix
+
+    use PAGI::Utils qw(replace_path_prefix);
+
+    my $uri = replace_path_prefix($file, $document_root, '/protected');
+    return unless defined $uri;
+
+Returns a slash-separated path formed by replacing an exact filesystem path
+prefix with C<$to>. Matching is component-aware after platform-native absolute
+normalization, so a sibling such as C</srv/files-old> does not match a prefix
+of C</srv/files>. It returns C<undef> when C<$path> is not C<$from> or a
+descendant, including paths on different volumes. Undefined, empty, or
+reference-valued arguments are programmer errors and croak.
+
+The helper performs no I/O and does not resolve or apply policy to symlinks.
 
 =head2 handle_lifespan
 
