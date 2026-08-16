@@ -1,0 +1,121 @@
+use strict;
+use warnings;
+
+use Test2::V0;
+use FindBin qw($Bin);
+use JSON::PP ();
+use lib "$Bin/../lib";
+use PAGI::Test::Client;
+
+if ($] < 5.040) {
+    plan skip_all => 'examples/starlette-apples requires Perl 5.40';
+    exit 0;
+}
+
+my $app_file = "$Bin/../examples/starlette-apples/app.pl";
+my $app = do $app_file;
+my $load_error = $@ || $!;
+ok(!$load_error, 'Starlette comparison example loads cleanly')
+    or diag($load_error);
+is(ref($app), 'CODE', 'example returns one Compose-rooted PAGI app');
+
+subtest 'welcome, routing outcomes, and apples CRUD' => sub {
+    plan skip_all => 'example did not load' unless ref($app) eq 'CODE';
+
+    my $client = PAGI::Test::Client->new(app => $app);
+
+    my $welcome = $client->get('/', headers => { Accept => 'text/html' });
+    is($welcome->status, 200, 'welcome route responds');
+    like($welcome->text, qr/<title>200 Welcome to PAGI<\/title>/,
+        'root uses the shared Pages welcome endpoint');
+
+    my $list = $client->get('/apples');
+    is($list->status, 200, 'apple collection responds');
+    is($list->json, [
+        { id => 1, name => 'Gala', color => 'Red/Yellow' },
+        { id => 2, name => 'Honeycrisp', color => 'Rosy Red' },
+    ], 'collection preserves numeric ID order');
+
+    my $gala = $client->get('/apples/1');
+    is($gala->status, 200, 'apple detail responds');
+    is($gala->json,
+        { id => 1, name => 'Gala', color => 'Red/Yellow' },
+        'detail returns the selected apple');
+
+    my $missing_apple = $client->get('/apples/999');
+    is($missing_apple->status, 404,
+        'missing database record is an application 404');
+    is($missing_apple->content_type, 'application/json',
+        'resource miss retains the application JSON representation');
+    is($missing_apple->json, { error => 'Apple not found' },
+        'resource miss retains the application error shape');
+
+    my $invalid_id = $client->get('/apples/not-an-int',
+        headers => { Accept => 'application/problem+json' });
+    is($invalid_id->status, 404,
+        'failed Int constraint is a routing 404');
+    is($invalid_id->content_type, 'application/problem+json',
+        'routing miss uses Compose negotiation');
+    is($invalid_id->json->{title}, 'Not Found',
+        'routing miss uses the stock Pages title');
+    ok(!exists $invalid_id->json->{error},
+        'routing miss never reaches the application error branch');
+
+    my $negative_id = $client->get('/apples/-1');
+    is($negative_id->status, 404,
+        'Types::Standard Int accepts negative integer text');
+    is($negative_id->json, { error => 'Apple not found' },
+        'negative integer reaches the resource handler unchanged');
+
+    my $wrong_method = $client->patch('/apples',
+        headers => { Accept => 'application/problem+json' });
+    is($wrong_method->status, 405,
+        'known collection with unsupported method is 405');
+    is($wrong_method->header('Allow'), 'GET, HEAD, POST',
+        'Compose preserves the child Router method union');
+    is($wrong_method->json->{title}, 'Method Not Allowed',
+        'Compose renders the stock method response');
+
+    my $created = $client->post('/apples', json => {
+        name  => 'Fuji',
+        color => 'Red',
+    });
+    is($created->status, 201, 'create returns 201');
+    is($created->json,
+        { id => 3, name => 'Fuji', color => 'Red' },
+        'create assigns the next numeric ID');
+
+    my $updated = $client->put('/apples/3', json => {
+        color => 'Crimson',
+    });
+    is($updated->status, 200, 'update responds');
+    is($updated->json,
+        { id => 3, name => 'Fuji', color => 'Crimson' },
+        'update merges supplied members into the stored record');
+
+    my $deleted = $client->delete('/apples/3');
+    is($deleted->status, 200, 'delete responds');
+    my $deleted_json = $deleted->json;
+    ok(JSON::PP::is_bool($deleted_json->{success}),
+        'delete success is a real JSON boolean');
+    ok($deleted_json->{success}, 'delete success is true');
+    is($deleted_json->{deleted},
+        { id => 3, name => 'Fuji', color => 'Crimson' },
+        'delete returns the removed record');
+
+    my $after_delete = $client->get('/apples/3');
+    is($after_delete->status, 404,
+        'deleted record is no longer available');
+    is($after_delete->json, { error => 'Apple not found' },
+        'post-delete miss remains application output');
+
+    my $unknown = $client->get('/elsewhere',
+        headers => { Accept => 'application/problem+json' });
+    is($unknown->status, 404, 'unknown root path uses Compose NotFound');
+    is($unknown->content_type, 'application/problem+json',
+        'root routing miss negotiates problem JSON');
+    is($unknown->json->{title}, 'Not Found',
+        'root routing miss uses the stock Pages response');
+};
+
+done_testing;
