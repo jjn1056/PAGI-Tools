@@ -79,6 +79,8 @@ sub new {
         unless defined $args{scope_type};
     croak "PAGI::SendValidation->new: unknown scope_type '$args{scope_type}'"
         unless $args{scope_type} eq 'lifespan' || exists $INITIAL_STATE{$args{scope_type}};
+    croak "PAGI::SendValidation->new: 'extensions' must be a hash reference"
+        if defined $args{extensions} && ref $args{extensions} ne 'HASH';
 
     return bless {
         scope_type        => $args{scope_type},
@@ -86,6 +88,7 @@ sub new {
         state              => $INITIAL_STATE{$args{scope_type}}, # undef for lifespan
         trailers_declared  => 0,
         phase              => 'startup', # lifespan only
+        result_sent        => 0,         # lifespan only; reset by enter_phase
     }, $class;
 }
 
@@ -142,7 +145,8 @@ sub enter_phase {
     croak "PAGI::SendValidation->enter_phase: unknown phase '" . (defined $phase ? $phase : 'undef') . "'"
         unless defined $phase && ($phase eq 'startup' || $phase eq 'shutdown');
 
-    $self->{phase} = $phase;
+    $self->{phase}       = $phase;
+    $self->{result_sent} = 0;
     return;
 }
 
@@ -184,6 +188,83 @@ scopes.
 
 =cut
 
+=head1 RULES
+
+The enforced send-sequencing rules, one per scope type. These are what
+C<check> and C<finalize> actually enforce; read this section rather than the
+implementation to know what is legal to send.
+
+=head2 http
+
+States: C<initial>, C<started>, C<started_t> (trailers declared),
+C<awaiting_trailers>, C<complete>. Starting state is C<initial>.
+
+Illegal: an unrecognized event type; an event with no C<type>; a duplicate
+C<http.response.start>; C<http.response.body> before C<http.response.start>;
+a body chunk after the body is already terminal (C<more =E<gt> 0> is what
+keeps it non-terminal -- C<more =E<gt> 0> absent, false, or a C<file>/C<fh>
+body all count as terminal); C<http.response.trailers> without
+C<trailers =E<gt> 1> declared on start, or before the body has reached its
+terminal chunk; any event at all once trailers have been sent;
+C<http.fullflush> when C<fullflush> is not in the scope's C<extensions>, or
+when sent before C<http.response.start> or once C<complete>.
+
+C<http.fullflush>, when the C<fullflush> extension is declared, is legal in
+any non-C<initial>, non-C<complete> state -- including C<awaiting_trailers>
+-- and never changes the state.
+
+Legal terminal state for C<finalize>: C<complete>.
+
+=head2 websocket
+
+States: C<connecting>, C<accepted>, C<closed>. Starting state is
+C<connecting>.
+
+Illegal: C<websocket.send>/C<websocket.keepalive> before
+C<websocket.accept>; any event once C<websocket.close> has been sent
+(including a second close -- close is not idempotent here); a second
+C<websocket.accept> once already accepted.
+
+Legal: C<websocket.close> before C<websocket.accept> is a denial, not an
+error -- it moves straight to C<closed>.
+
+Legal terminal state for C<finalize>: C<closed>.
+
+=head2 sse
+
+States: C<initial>, C<streaming>, C<declining>, C<decline_complete>,
+C<closed>. Starting state is C<initial>.
+
+Illegal: any stream event (C<sse.start>, C<sse.send>, C<sse.comment>,
+C<sse.keepalive>, C<sse.close>) or decline event
+(C<sse.http.response.start>, C<sse.http.response.body>) once a decline has
+reached its terminal body chunk; a duplicate C<sse.start>; a decline
+(C<sse.http.response.start>) after C<sse.start>; C<http.fullflush> when
+C<fullflush> is not in C<extensions>, or when sent outside the
+C<streaming> state.
+
+Legal: C<sse.close> is idempotent once C<closed>. C<http.fullflush>, when
+declared, is legal only while C<streaming> and never changes the state.
+
+Legal terminal state for C<finalize>: C<closed> or C<decline_complete>.
+
+=head2 lifespan
+
+No event-driven state machine -- instead, C<enter_phase('startup'|
+'shutdown')> declares which phase is current (starting phase:
+C<startup>), driven externally by whatever is running the lifespan
+protocol, not by C<check>.
+
+Illegal: C<lifespan.startup.complete>/C<.failed> while the current phase is
+not C<startup>; C<lifespan.shutdown.complete>/C<.failed> while the current
+phase is not C<shutdown>; a second result event (of either kind) for the
+same phase without an intervening C<enter_phase> call.
+
+C<finalize> always returns C<undef> for lifespan scopes -- this module has
+no terminal-state concept for the lifespan protocol.
+
+=cut
+
 sub started {
     my ($self) = @_;
     return 0 if $self->{scope_type} eq 'lifespan';
@@ -216,7 +297,7 @@ sub _error {
 sub check {
     my ($self, $event) = @_;
 
-    return $self->_error(unknown_type => 'event must be a hash reference')
+    return $self->_error(malformed => 'event must be a hash reference')
         unless ref $event eq 'HASH';
 
     my $type = $self->{scope_type};
@@ -238,16 +319,7 @@ sub finalize {
 }
 
 # =============================================================================
-# HTTP
-#
-# Rules: unknown event type; missing type; http.response.start twice; body
-# before start; body after terminal (more=>0, or a file/fh body); trailers
-# without trailers=>1 declared on start; trailers before a terminal body;
-# any event after trailers sent; http.fullflush when 'fullflush' is not in
-# extensions.
-#
-# States: initial, started, started_t (trailers declared), awaiting_trailers,
-# complete. Starting state is initial.
+# HTTP -- see "=head2 http" in RULES above for the enforced rules.
 # =============================================================================
 
 sub _http_body_is_terminal {
@@ -260,7 +332,7 @@ sub _check_http {
     my ($self, $event) = @_;
     my $type = defined $event->{type} ? $event->{type} : '';
 
-    return $self->_error(unknown_type => "http send event missing 'type' field")
+    return $self->_error(malformed => "http send event missing 'type' field")
         if $type eq '';
 
     if ($type eq 'http.fullflush') {
@@ -321,19 +393,14 @@ sub _finalize_http {
 }
 
 # =============================================================================
-# WebSocket
-#
-# Rules: send/close before accept -- except that a close before accept is a
-# legal denial and marks the scope closed; send after an app-sent close.
-#
-# States: connecting, accepted, closed. Starting state is connecting.
+# WebSocket -- see "=head2 websocket" in RULES above for the enforced rules.
 # =============================================================================
 
 sub _check_websocket {
     my ($self, $event) = @_;
     my $type = defined $event->{type} ? $event->{type} : '';
 
-    return $self->_error(unknown_type => "websocket send event missing 'type' field")
+    return $self->_error(malformed => "websocket send event missing 'type' field")
         if $type eq '';
     return $self->_error(unknown_type => "unrecognized event type '$type' for websocket protocol")
         unless $type eq 'websocket.accept' || $type eq 'websocket.send'
@@ -365,14 +432,7 @@ sub _finalize_websocket {
 }
 
 # =============================================================================
-# SSE
-#
-# Rules: stream events (sse.start, sse.send, sse.comment, sse.keepalive,
-# sse.close) after a completed decline (sse.http.response.start + a terminal
-# sse.http.response.body); sse.start twice; decline events after sse.start.
-#
-# States: initial, streaming, declining, decline_complete, closed. Starting
-# state is initial.
+# SSE -- see "=head2 sse" in RULES above for the enforced rules.
 # =============================================================================
 
 my %SSE_RECOGNIZED = map { $_ => 1 } qw(
@@ -384,8 +444,16 @@ sub _check_sse {
     my ($self, $event) = @_;
     my $type = defined $event->{type} ? $event->{type} : '';
 
-    return $self->_error(unknown_type => "sse send event missing 'type' field")
+    return $self->_error(malformed => "sse send event missing 'type' field")
         if $type eq '';
+
+    if ($type eq 'http.fullflush') {
+        return $self->_error(extension => 'Extension not enabled: fullflush')
+            unless exists $self->{extensions}{fullflush};
+        return undef if $self->{state} eq 'streaming'; # legal, no state change
+        return $self->_error(sequence => "cannot send http.fullflush in sse state '$self->{state}'");
+    }
+
     return $self->_error(unknown_type => "unrecognized event type '$type' for sse protocol")
         unless $SSE_RECOGNIZED{$type};
 
@@ -434,12 +502,7 @@ sub _finalize_sse {
 }
 
 # =============================================================================
-# Lifespan
-#
-# Rules: lifespan.startup.complete/.failed legal only while the current
-# phase is 'startup'; lifespan.shutdown.complete/.failed legal only while
-# the current phase is 'shutdown'. Phase is advanced externally via
-# enter_phase, not by check itself. Starting phase is 'startup'.
+# Lifespan -- see "=head2 lifespan" in RULES above for the enforced rules.
 # =============================================================================
 
 my %LIFESPAN_RECOGNIZED = map { $_ => 1 } qw(
@@ -451,7 +514,7 @@ sub _check_lifespan {
     my ($self, $event) = @_;
     my $type = defined $event->{type} ? $event->{type} : '';
 
-    return $self->_error(unknown_type => "lifespan send event missing 'type' field")
+    return $self->_error(malformed => "lifespan send event missing 'type' field")
         if $type eq '';
     return $self->_error(unknown_type => "unrecognized event type '$type' for lifespan protocol")
         unless $LIFESPAN_RECOGNIZED{$type};
@@ -459,15 +522,21 @@ sub _check_lifespan {
     my $expected_phase = ($type =~ /^lifespan\.startup\./) ? 'startup' : 'shutdown';
     return $self->_error(sequence => "cannot send '$type' during lifespan phase '$self->{phase}'")
         unless $self->{phase} eq $expected_phase;
+    return $self->_error(sequence => "cannot send '$type': a result was already sent for lifespan phase '$self->{phase}'")
+        if $self->{result_sent};
 
-    return undef; # legal; no internal state to advance
+    $self->{result_sent} = 1;
+    return undef;
 }
 
 package PAGI::SendValidation::Error;
 
 use strict;
 use warnings;
-use overload q{""} => 'message', fallback => 1;
+use overload
+    q{""} => 'message',
+    bool  => sub { 1 }, # an Error is always true, even with an empty message
+    fallback => 1;
 
 =head1 NAME
 
@@ -500,11 +569,37 @@ A human-readable string describing what was illegal.
 
 =head2 category
 
-One of C<unknown_type> (the event's C<type> is missing or not recognized
-for the scope), C<sequence> (the event or finalize state is out of order
-for what has already been sent), C<extension> (the event's type requires an
-advertised extension that is not present), or C<incomplete> (from
-C<finalize> only: the scope has not reached a legal terminal state).
+One of:
+
+=over 4
+
+=item * C<malformed> -- the argument to C<check> was not even a usable
+event: not a hash reference, or a hash reference with no C<type> field
+(missing key, or an undefined/empty value). There is no type string to
+evaluate at all.
+
+=item * C<unknown_type> -- C<type> is a defined, non-empty string, but not
+one this scope recognizes (and, where applicable, not a declared
+extension's type either).
+
+=item * C<sequence> -- the event's C<type> is recognized, but it is out of
+order for what has already been sent (or, for lifespan, sent in the wrong
+phase, or a second result for a phase already reported).
+
+=item * C<extension> -- the event's type requires an advertised extension
+(currently just C<http.fullflush>) that is not present in this scope's
+C<extensions>.
+
+=item * C<incomplete> -- C<finalize> only: the scope has not reached a
+legal terminal state.
+
+=back
+
+C<malformed> and C<unknown_type> are deliberately distinct: C<malformed>
+is a structurally broken event (nothing to dispatch on), while
+C<unknown_type> is an event with a real, but wrong, type string -- callers
+that want to distinguish "app sent garbage" from "app sent a genuinely
+unrecognized event type" can branch on this.
 
 =cut
 
