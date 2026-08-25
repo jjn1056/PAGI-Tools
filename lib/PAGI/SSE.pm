@@ -260,11 +260,59 @@ async sub start {
 async sub keepalive {
     my ($self, $interval, $comment) = @_;
 
+    # Safe no-op once closed (including via decline) -- there is no live
+    # connection left for the server to time a ping against.
+    return $self if $self->is_closed;
+
+    $interval //= 0;
+
     await $self->{send}->({
         type     => 'sse.keepalive',
-        interval => $interval // 0,
+        interval => $interval,
         comment  => $comment // '',
     });
+
+    $self->{_keepalive_armed} = $interval > 0 ? 1 : 0;
+
+    return $self;
+}
+
+# Decline the request with a real HTTP response instead of starting the SSE
+# stream (auth gate, not-found, etc.). Parity with PAGI::WebSocket->deny.
+# Sends sse.http.response.start + sse.http.response.body (single terminal
+# chunk, more => 0) and marks the connection closed; start/run/send* methods
+# become safe no-ops afterward. See PAGI::Spec::Www "SSE Response Denial".
+async sub decline {
+    my ($self, %opts) = @_;
+
+    my $status  = $opts{status}  // 403;
+    my $headers = $opts{headers} // [];
+    my $body    = defined $opts{body} ? $opts{body} : '';
+
+    # A keepalive armed before this connection was ever accepted (e.g. the
+    # Endpoint::SSE keepalive_interval, sent before on_connect runs) must be
+    # disarmed here: the server's periodic timer would otherwise keep
+    # firing sse.comment pings after the response terminal, the same
+    # first-send-wins violation a stray sse.start would be. Sent directly
+    # (not via keepalive(), which is about to become a no-op below).
+    if ($self->{_keepalive_armed}) {
+        await $self->{send}->({ type => 'sse.keepalive', interval => 0, comment => '' });
+        $self->{_keepalive_armed} = 0;
+    }
+
+    await $self->{send}->({
+        type    => 'sse.http.response.start',
+        status  => $status,
+        headers => $headers,
+    });
+    await $self->{send}->({
+        type => 'sse.http.response.body',
+        body => $body,
+        more => 0,
+    });
+
+    $self->{_declined} = 1;
+    $self->_set_state('closed');
 
     return $self;
 }
@@ -312,6 +360,7 @@ sub last_event_id {
 async sub send {
     my ($self, $data) = @_;
 
+    return $self if $self->{_declined};
     croak "Cannot send on closed SSE connection" if $self->is_closed;
 
     # Auto-start if not started
@@ -329,6 +378,7 @@ async sub send {
 async sub send_json {
     my ($self, $data) = @_;
 
+    return $self if $self->{_declined};
     croak "Cannot send on closed SSE connection" if $self->is_closed;
 
     await $self->start unless $self->is_started;
@@ -347,6 +397,7 @@ async sub send_json {
 async sub send_event {
     my ($self, %opts) = @_;
 
+    return $self if $self->{_declined};
     croak "Cannot send on closed SSE connection" if $self->is_closed;
     croak "send_event requires 'data' parameter" unless exists $opts{data};
 
@@ -416,6 +467,7 @@ async sub try_send_json {
 async sub send_comment {
     my ($self, $comment) = @_;
 
+    return $self if $self->{_declined};
     croak "Cannot send on closed SSE connection" if $self->is_closed;
 
     await $self->start unless $self->is_started;
@@ -826,6 +878,8 @@ boilerplate and provides:
 
 =item * Multiple send methods (send, send_json, send_event)
 
+=item * Declining a request with a real HTTP response instead of streaming (decline)
+
 =item * Connection state tracking (is_started, is_closed, is_connected)
 
 =item * Cleanup callback registration (on_close)
@@ -976,6 +1030,64 @@ and configuration. Returns empty hashref if no state was injected.
 Starts the SSE stream. Called automatically on first send.
 Idempotent - only sends sse.start once.
 
+=head2 decline
+
+    await $sse->decline;
+    await $sse->decline(
+        status  => 401,
+        headers => [ [ 'content-type', 'text/plain' ], [ 'www-authenticate', 'Bearer' ] ],
+        body    => 'Unauthorized',
+    );
+
+Declines the request with a real HTTP response instead of starting the SSE
+stream -- an auth gate, a not-found, a rate limit, anything that should
+return an ordinary response rather than open an event stream. This is the
+SSE parity of L<PAGI::WebSocket/deny>.
+
+Sends C<sse.http.response.start> (with C<status> and C<headers>) followed by
+C<sse.http.response.body> as a single terminal chunk (C<< more => 0 >>), then
+marks the connection closed. Per the B<first-send-wins> rule (see
+L<PAGI::Spec::Www/"SSE Response Denial">), this must happen B<before>
+C<start> or any send method has run -- declining after the stream has
+already started is a protocol violation the server will raise on.
+
+Options (all optional):
+
+=over 4
+
+=item * C<status> - HTTP status code. Defaults to C<403>.
+
+=item * C<headers> - Arrayref of C<< [name, value] >> pairs. Defaults to C<[]>.
+
+=item * C<body> - Response body string. Defaults to C<''>.
+
+=back
+
+After C<decline>, C<start>, C<run>, and the send methods (C<send>,
+C<send_json>, C<send_event>, C<send_comment>, C<keepalive>) all become B<safe
+no-ops> -- they return without touching the wire instead of croaking, since
+the response is already complete and there is no longer a stream to write
+to. If a keepalive was armed (via L</keepalive>) before C<decline> was
+called -- for example L<PAGI::Endpoint::SSE>'s C<keepalive_interval>, which
+is configured before C<on_connect> runs -- C<decline> disarms it first, so
+the server's periodic timer does not keep firing pings after the response
+terminal.
+
+B<The supported auth-gate pattern> is to call C<decline> from inside
+C<on_connect> (see L<PAGI::Endpoint::SSE/on_connect>):
+
+    async sub on_connect {
+        my ($self, $ctx) = @_;
+        my $sse = $ctx->sse;
+
+        unless (authorized($ctx)) {
+            await $sse->decline(status => 401, body => 'Unauthorized');
+            return;
+        }
+
+        await $sse->send_event(event => 'connected', data => { ok => 1 });
+    }
+
 =head2 close
 
     await $sse->close;
@@ -996,6 +1108,9 @@ asynchronous C<on_close> callbacks complete before C<close> resolves.
 
 Waits for client disconnect. Use this at the end of your
 handler to keep the connection open.
+
+Safe no-op if the connection is already closed -- notably after L</decline>,
+where there was never a stream to wait on.
 
 =head1 CONNECTION STATE ACCESSORS
 
@@ -1091,6 +1206,12 @@ JSON-encodes data before sending.
 
 Sends a full SSE event with all fields.
 
+C<send>, C<send_json>, and C<send_event> normally croak (C<"Cannot send on
+closed SSE connection">) if the connection is closed -- except after
+L</decline>, where they instead become safe no-ops (return C<$self> without
+sending anything), since a declined connection was never a stream to write
+to in the first place.
+
 =head2 try_send, try_send_json, try_send_event
 
     my $ok = await $sse->try_send_json($data);
@@ -1112,6 +1233,10 @@ Useful for broadcasting to multiple clients.
 Sends an C<sse.keepalive> event to the server, which then handles sending
 periodic SSE comments to keep the connection alive and prevent proxy timeouts.
 The server manages the timer internally - this method is loop-agnostic.
+
+Safe no-op once the connection is closed (including by L</decline>) -- there
+is no live connection left for the server to time a ping against, so the
+call returns C<$self> without sending anything.
 
 =head1 ITERATION
 

@@ -44,6 +44,12 @@ async sub handle {
         await $sse->start;
     }
 
+    # If on_connect already ended the exchange (e.g. $sse->decline for an
+    # auth-gate 401), there is no stream to wait on: run() would no-op on
+    # its own (it's gated on is_closed too), but guard explicitly so intent
+    # is clear and a post-decline sse.start can never be sent from here.
+    return if $sse->is_closed;
+
     # Wait for disconnect
     await $sse->run;
 }
@@ -114,9 +120,33 @@ Server-Sent Events connections with lifecycle hooks.
         await $ctx->sse->send_event(data => 'Hello!');
     }
 
-Called when a client connects. The SSE stream is automatically
-started before this is called. Use this to send initial events
-and set up subscriptions.
+Called before the SSE stream starts -- I<not> after. C<handle()> calls
+C<on_connect> in place of its own default (which just calls C<< $sse->start
+>>), so the stream is B<not> already running when C<on_connect> runs; it
+starts lazily the first time you call C<start>, C<send>, C<send_json>, or
+C<send_event> inside it (or explicitly via C<< await $ctx->sse->start >>).
+Use this to send initial events and set up subscriptions.
+
+Because the stream has not started yet, C<on_connect> is also the supported
+place to reject the request outright with a real HTTP response instead of
+streaming -- an auth gate, for example:
+
+    async sub on_connect {
+        my ($self, $ctx) = @_;
+        my $sse = $ctx->sse;
+
+        unless (authorized($ctx)) {
+            await $sse->decline(status => 401, body => 'Unauthorized');
+            return;
+        }
+
+        await $sse->send_event(event => 'connected', data => { ok => 1 });
+    }
+
+See L<PAGI::SSE/decline>. C<handle()> checks C<< $sse->is_closed >> after
+C<on_connect> returns and skips waiting for disconnect when it's already
+true, so declining is a clean, single response -- C<sse.start> is never
+sent.
 
 =head2 on_disconnect
 

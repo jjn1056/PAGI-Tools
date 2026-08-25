@@ -49,6 +49,19 @@
   - PAGI::Middleware::Head is now a thin delegate to the shared HEAD wire
     boundary implementation (one implementation, two entry points); using
     it under Compose remains harmless but redundant.
+  - [BUGFIX] PAGI::Endpoint::SSE no longer sends `sse.start` after
+    `on_connect` has already declined the request -- previously `handle()`
+    unconditionally awaited `run()` regardless of what `on_connect` did, so
+    a Cookbook-style raw decline left a stray `sse.start` on the wire after
+    the response was already complete, a first-send-wins violation the
+    server must raise on. New PAGI::SSE::decline(status/headers/body) gives
+    apps a real API for this (parity with PAGI::WebSocket::deny): it sends
+    the HTTP response, marks the connection closed, disarms any keepalive
+    armed before `on_connect` ran, and turns `start`/`run`/`send`/
+    `send_json`/`send_event`/`send_comment`/`keepalive` into safe no-ops
+    afterward. `handle()` also now skips `run()` outright once the
+    connection is already closed. Declining from `on_connect` is documented
+    as the supported auth-gate pattern.
 
   - New PAGI::Pages constructs ordinary negotiated Responses and coderef terminal
     endpoints for the fixed PAGI welcome page, registered or strict custom
