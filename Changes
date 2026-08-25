@@ -72,6 +72,16 @@
     three now recognize such events via the new shared
     `PAGI::Middleware::body_event_is_opaque` predicate and disengage,
     forwarding the file/fh event through untouched instead.
+  - [BUGFIX, user-visible] PAGI::Middleware::ContentLength no longer skips
+    Content-Length synthesis just because the wrapped application set its
+    own `Transfer-Encoding: chunked` header on a single-shot (non-streamed)
+    response. An app cannot actually produce chunked framing itself -- that
+    is a server/transport concern, and the server strips any app-supplied
+    `Transfer-Encoding` header before the wire -- so honoring that header
+    only left such a response with neither a Content-Length nor real
+    chunked framing. A single-shot body now gets an accurate
+    Content-Length regardless; use `auto_chunked` or a streamed (`more =>
+    1`) body to opt out of synthesis.
   - PAGI::Middleware::Head is now a thin delegate to the shared HEAD wire
     boundary implementation (one implementation, two entry points); using
     it under Compose remains harmless but redundant.
