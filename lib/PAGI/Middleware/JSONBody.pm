@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
+use Carp qw(croak);
 use JSON::MaybeXS ();
 use PAGI::Pages;
 
@@ -36,7 +37,9 @@ parsed data available in C<< $scope->{'pagi.parsed_body'} >>. Successful
 requests retain the parsed and raw body scope values. Body-limit and invalid
 JSON failures receive negotiated L<PAGI::Pages> responses based on the
 original request scope. Decoder diagnostics are never included in the client
-response.
+response. A client that disconnects mid-body makes this middleware croak
+rather than parsing the partial body as if it were complete; the exception
+propagates (there is no client left to answer).
 
 =head1 CONFIGURATION
 
@@ -100,7 +103,9 @@ sub wrap {
                 last unless $event->{more};
             }
             elsif ($event->{type} eq 'http.disconnect') {
-                last;
+                last unless length $body;  # no bytes ever arrived -- an empty body, not a truncation
+                my $reason = $scope->{'pagi.connection'} ? $scope->{'pagi.connection'}->disconnect_reason : undef;
+                croak "Request body incomplete: client disconnected mid-body (" . ($reason // 'disconnect') . ")";
             }
         }
 

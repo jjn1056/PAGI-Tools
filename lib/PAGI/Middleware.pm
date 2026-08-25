@@ -3,6 +3,7 @@ package PAGI::Middleware;
 use strict;
 use warnings;
 use Future::AsyncAwait;
+use Carp qw(croak);
 
 =head1 NAME
 
@@ -164,6 +165,9 @@ sub intercept_send {
 Collect all request body chunks into a single string.
 Returns the complete body and the final http.request event.
 
+Croaks if the client disconnects mid-body rather than returning the partial
+body as if it were complete.
+
 =cut
 
 async sub buffer_request_body {
@@ -179,7 +183,8 @@ async sub buffer_request_body {
             $body .= $event->{body} // '';
             last unless $event->{more};
         } elsif ($event->{type} eq 'http.disconnect') {
-            last;
+            last unless length $body;  # no bytes ever arrived -- an empty body, not a truncation
+            croak "Request body incomplete: client disconnected mid-body";
         }
     }
 

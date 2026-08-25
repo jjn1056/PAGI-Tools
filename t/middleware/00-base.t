@@ -428,4 +428,22 @@ subtest 'buffer_request_body helper' => sub {
     is $final_event->{more}, 0, 'final event has more => 0';
 };
 
+subtest 'buffer_request_body croaks on mid-body disconnect' => sub {
+    my $mw = PAGI::Middleware->new;
+
+    my @events = (
+        { type => 'http.request', body => 'Hello, ', more => 1 },
+        { type => 'http.disconnect' },
+    );
+    my $idx = 0;
+    my $receive = async sub { $events[$idx++] };
+
+    my $future = $mw->buffer_request_body($receive);
+    $loop->await($future);
+
+    ok $future->is_failed, 'fails rather than returning the partial body as complete';
+    like scalar($future->failure), qr/Request body incomplete: client disconnected mid-body/,
+        'names the truncation';
+};
+
 done_testing;

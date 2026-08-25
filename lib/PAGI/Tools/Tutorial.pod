@@ -412,6 +412,20 @@ L<PAGI::Request::BodyStream> you consume incrementally:
   while (defined(my $chunk = await $stream->next_chunk)) {
       # ... process $chunk ...
   }
+  if ($stream->truncated) {
+      # Client disconnected before the body finished -- whatever chunks
+      # you already saw were only part of the intended upload.
+      warn "upload cut short: " . ($req->disconnect_reason // 'unknown');
+  }
+
+C<next_chunk> returns C<undef> both at a legitimate end of body and after a
+client disconnect -- C<undef> alone doesn't tell you which happened. Check
+C<< $stream->truncated >> after the loop to distinguish "the body really
+ended here" from "the client hung up early", and C<< $req->disconnect_reason
+>> for why. The buffered methods (C<body>/C<text>/C<json>/C<form_params>)
+take the opposite stance: they croak on a mid-body disconnect rather than
+handing back a partial body as if it were complete, since nothing downstream
+of those methods ever sees raw chunks to make that judgment call itself.
 
   # Or drain straight to a file (never holds the whole body in memory)
   await $req->body_stream->stream_to_file('/uploads/data.bin');

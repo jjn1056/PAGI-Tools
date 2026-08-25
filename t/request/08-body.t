@@ -6,6 +6,7 @@ use Future::AsyncAwait;
 
 use lib 'lib';
 use PAGI::Request;
+use PAGI::Test::ConnectionState;
 
 # Helper to create a mock receive that returns body in chunks
 sub mock_receive {
@@ -96,6 +97,67 @@ subtest 'json dies on invalid JSON' => sub {
     $died = 1 if $@;
 
     ok($died, 'json dies on invalid JSON');
+};
+
+subtest 'body croaks on mid-body disconnect, not silent EOF' => sub {
+    my $conn = PAGI::Test::ConnectionState->new;
+    my $scope = {
+        type    => 'http',
+        method  => 'POST',
+        headers => [],
+        'pagi.connection' => $conn,
+    };
+    my $calls = 0;
+    my $sent  = 0;
+    my $receive = async sub {
+        $calls++;
+        if (!$sent) {
+            $sent = 1;
+            return { type => 'http.request', body => 'Hel', more => 1 };
+        }
+        $conn->_mark_disconnected('client_closed');
+        return { type => 'http.disconnect' };
+    };
+    my $req = PAGI::Request->new($scope, $receive);
+
+    my $err1;
+    eval { (async sub { await $req->body })->()->get; 1 } or $err1 = $@;
+    like $err1, qr/Request body incomplete: client disconnected mid-body \(client_closed\)/,
+        'body croaks naming the disconnect reason instead of returning the partial body';
+    is $calls, 2, 'receive called exactly twice (partial chunk + disconnect)';
+    ok !$scope->{'pagi.request.body.read'}, 'the partial body is never cached as a complete read';
+    ok $scope->{'pagi.request.body.truncated'}, 'truncation is recorded on the scope';
+
+    my $err2;
+    eval { (async sub { await $req->body })->()->get; 1 } or $err2 = $@;
+    like $err2, qr/Request body incomplete: client disconnected mid-body \(client_closed\)/,
+        'a second call fails identically';
+    is $calls, 2, 'the second call does not re-await receive (entry guard, avoids parking)';
+};
+
+subtest 'json/text fail the same way as body on mid-body disconnect' => sub {
+    my $conn = PAGI::Test::ConnectionState->new;
+    my $scope = {
+        type    => 'http',
+        method  => 'POST',
+        headers => [['content-type', 'application/json']],
+        'pagi.connection' => $conn,
+    };
+    my $sent = 0;
+    my $receive = async sub {
+        if (!$sent) {
+            $sent = 1;
+            return { type => 'http.request', body => '{"a":', more => 1 };
+        }
+        $conn->_mark_disconnected('client_closed');
+        return { type => 'http.disconnect' };
+    };
+    my $req = PAGI::Request->new($scope, $receive);
+
+    my $err;
+    eval { (async sub { await $req->json })->()->get; 1 } or $err = $@;
+    like $err, qr/Request body incomplete: client disconnected mid-body \(client_closed\)/,
+        'json() fails with the truncation reason rather than parsing the partial JSON';
 };
 
 subtest 'empty body' => sub {

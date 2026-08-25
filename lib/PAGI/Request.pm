@@ -460,6 +460,13 @@ async sub body {
     # Return cached body if already read
     return $self->{scope}{'pagi.request.body'} if $self->{scope}{'pagi.request.body.read'};
 
+    # A prior call already hit a mid-body disconnect: fail identically instead
+    # of re-awaiting a receive that will never resolve normally again.
+    if ($self->{scope}{'pagi.request.body.truncated'}) {
+        my $reason = $self->disconnect_reason // 'disconnect';
+        croak "Request body incomplete: client disconnected mid-body ($reason)";
+    }
+
     my $receive = $self->{receive};
     die "No receive callback provided" unless $receive;
 
@@ -467,7 +474,12 @@ async sub body {
     while (1) {
         my $message = await $receive->();
         last unless $message && $message->{type};
-        last if $message->{type} eq 'http.disconnect';
+        if ($message->{type} eq 'http.disconnect') {
+            last unless length $body;  # no bytes ever arrived -- an empty body, not a truncation
+            $self->{scope}{'pagi.request.body.truncated'} = 1;
+            my $reason = $self->disconnect_reason // 'disconnect';
+            croak "Request body incomplete: client disconnected mid-body ($reason)";
+        }
 
         $body .= $message->{body} // '';
         last unless $message->{more};
@@ -1041,6 +1053,16 @@ See L<PAGI::Request::MultipartStream> for full documentation.
 Read raw body bytes. Cached after first read.
 
 B<Important:> Cannot be used after C<body_stream()> has been called.
+
+B<Truncation:> if the client disconnects after sending some but not all of
+the body, C<body> croaks with
+C<< "Request body incomplete: client disconnected mid-body ($reason)" >>
+instead of silently returning whatever bytes had arrived -- a partial body is
+never cached or handed back as if it were complete. A second call croaks
+identically without re-awaiting the connection. An immediate disconnect
+before any bytes ever arrive is treated as an empty body, not a truncation.
+C<text>, C<json>, and C<form_params> all read the body through this method,
+so they fail the same way.
 
 =head2 text
 

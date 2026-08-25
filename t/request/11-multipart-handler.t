@@ -62,6 +62,29 @@ subtest 'parse simple form fields' => sub {
     is([$uploads->keys], [], 'no uploads');
 };
 
+subtest 'mid-body disconnect fails loudly, not silent EOF' => sub {
+    my $boundary = '----TestBoundary';
+    my $full = build_multipart($boundary,
+        { name => 'title', data => 'Hello World' },
+    );
+    my $partial = substr($full, 0, int(length($full) / 2));
+
+    my $sent = 0;
+    my $receive = async sub {
+        return { type => 'http.request', body => $partial, more => 1 } unless $sent++;
+        return { type => 'http.disconnect' };
+    };
+    my $handler = PAGI::Request::MultiPartHandler->new(
+        boundary => $boundary,
+        receive  => $receive,
+    );
+
+    my $err;
+    eval { (async sub { await $handler->parse })->()->get; 1 } or $err = $@;
+    like $err, qr/Request body incomplete: client disconnected mid-body/,
+        'parse dies on mid-body disconnect rather than returning partial fields as complete';
+};
+
 subtest 'parse file upload' => sub {
     my $boundary = '----TestBoundary';
     my $body = build_multipart($boundary,

@@ -172,12 +172,21 @@ async sub parse {
             },
         );
 
-        # Feed chunks from receive
+        # Feed chunks from receive. A disconnect only means the body is
+        # truncated if it leaves the parser mid-part -- finish() below (like
+        # PAGI::Request::MultipartStream's _finish_parser) is what actually
+        # decides that: a clean no-op if the closing boundary already arrived
+        # (some receive implementations signal completion via disconnect
+        # without ever sending a final more=>0 chunk), an error otherwise.
         my $receive = $self->{receive};
+        my $disconnected = 0;
         while (1) {
             my $message = await $receive->();
             last unless $message && $message->{type};
-            last if $message->{type} eq 'http.disconnect';
+            if ($message->{type} eq 'http.disconnect') {
+                $disconnected = 1;
+                last;
+            }
 
             if (defined $message->{body} && length $message->{body}) {
                 $parser->parse($message->{body});
@@ -186,7 +195,10 @@ async sub parse {
             last unless $message->{more};
         }
 
-        $parser->finish;
+        eval { $parser->finish; 1 } or do {
+            die "Request body incomplete: client disconnected mid-body" if $disconnected;
+            die $@;
+        };
         $finish_part->();  # Handle last part
     };
     if (my $err = $@) {
@@ -241,6 +253,10 @@ PAGI::Request::MultiPartHandler - Async multipart/form-data parser
 
 Parses multipart/form-data requests asynchronously. Applies separate size
 limits to form fields (C<max_field_size>) and file uploads (C<max_file_size>).
+If the client disconnects mid-body, C<parse> dies with
+C<"Request body incomplete: client disconnected mid-body"> instead of
+parsing whatever partial data had arrived as if it were the complete
+request; any spooled temp files are cleaned up first.
 
 =head1 OPTIONS
 

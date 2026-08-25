@@ -117,6 +117,7 @@ sub new {
         _bytes_read   => 0,
         _done         => 0,
         _error        => undef,
+        _truncated    => 0,
         _buffer       => '',  # For incomplete UTF-8 sequences
     }, $class;
 
@@ -150,6 +151,8 @@ async sub next_chunk {
     # Handle disconnect
     if (!$message || $message->{type} eq 'http.disconnect') {
         $self->{_done} = 1;
+        # No bytes ever arrived -- an empty stream, not a truncated one.
+        $self->{_truncated} = 1 if $self->{_bytes_read} > 0;
         # Flush any remaining buffered data from incomplete UTF-8 sequences
         if ($self->{decode} && length($self->{_buffer})) {
             my $final = $self->_decode_chunk('', 1);  # flush=1
@@ -222,6 +225,26 @@ Returns any error that occurred during streaming, or undef.
 sub error {
     my ($self) = @_;
     return $self->{_error};
+}
+
+=head2 truncated
+
+    if ($stream->truncated) { ... }
+
+Returns true if the stream ended because the client disconnected after
+sending some but not all of the body, rather than because the body was fully
+delivered. C<next_chunk> still returns C<undef> in this case -- streaming
+consumers may have legitimate uses for whatever partial data they already
+collected -- so C<truncated> is how you tell "the client hung up early"
+apart from "the body really ended here". An immediate disconnect before any
+bytes ever arrive is treated as an empty stream, not a truncation. Check
+C<< $req->disconnect_reason >> for why the client disconnected.
+
+=cut
+
+sub truncated {
+    my ($self) = @_;
+    return $self->{_truncated};
 }
 
 =head2 stream_to_file

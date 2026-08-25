@@ -72,10 +72,38 @@ subtest 'disconnect handling' => sub {
 
     my $chunk1 = $stream->next_chunk->get;
     is $chunk1, 'Hello', 'first chunk';
+    ok !$stream->truncated, 'not truncated before the disconnect is observed';
 
     my $chunk2 = $stream->next_chunk->get;
-    is $chunk2, undef, 'undef on disconnect';
+    is $chunk2, undef, 'undef on disconnect -- streaming consumers may still handle partial data';
     ok $stream->is_done, 'done after disconnect';
+    ok $stream->truncated, 'truncated flag records that this was a mid-body disconnect';
+};
+
+subtest 'truncated stays false on an immediate disconnect with no bytes ever read' => sub {
+    my $receive = mock_receive(
+        { type => 'http.disconnect' },
+    );
+
+    my $stream = PAGI::Request::BodyStream->new(receive => $receive);
+
+    my $chunk = $stream->next_chunk->get;
+    is $chunk, undef, 'undef -- no data was ever sent';
+    ok $stream->is_done, 'done';
+    ok !$stream->truncated, 'an immediate disconnect with zero bytes is an empty stream, not a truncation';
+};
+
+subtest 'truncated stays false after a clean completion' => sub {
+    my $receive = mock_receive(
+        { type => 'http.request', body => 'Hello', more => 0 },
+    );
+
+    my $stream = PAGI::Request::BodyStream->new(receive => $receive);
+
+    my $chunk = $stream->next_chunk->get;
+    is $chunk, 'Hello', 'chunk read';
+    ok $stream->is_done, 'done';
+    ok !$stream->truncated, 'a clean end-of-body is not a truncation';
 };
 
 subtest 'UTF-8 boundary handling - split multi-byte sequence' => sub {

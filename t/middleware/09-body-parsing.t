@@ -229,6 +229,28 @@ subtest 'JSONBody - body limit delegates a negotiated 413' => sub {
     is $downstream_calls, 0, 'JSON limit does not call downstream';
 };
 
+subtest 'JSONBody - mid-body disconnect fails loudly, not silent EOF' => sub {
+    my $json_mw = PAGI::Middleware::JSONBody->new();
+    my $downstream_calls = 0;
+    my $wrapped = $json_mw->wrap(async sub { $downstream_calls++ });
+    my $scope = make_scope(headers => [['Content-Type', 'application/json']]);
+
+    my $sent = 0;
+    my $receive = async sub {
+        return { type => 'http.request', body => '{"partial":', more => 1 } unless $sent++;
+        return { type => 'http.disconnect' };
+    };
+    my $send = async sub { };
+
+    my $future = $wrapped->($scope, $receive, $send);
+    $loop->await($future);
+
+    ok $future->is_failed, 'the app future fails instead of parsing the partial body';
+    like scalar($future->failure), qr/Request body incomplete: client disconnected mid-body/,
+        'names the truncation';
+    is $downstream_calls, 0, 'does not call downstream with a truncated body';
+};
+
 subtest 'JSONBody - skips non-JSON content types' => sub {
     my $json_mw = PAGI::Middleware::JSONBody->new();
 
@@ -416,6 +438,28 @@ subtest 'FormBody - body limit delegates a negotiated 413' => sub {
     is response_header(\@events, 'Content-Type'), 'text/plain; charset=utf-8',
         'form limit honors the original text Accept header';
     is $downstream_calls, 0, 'form limit does not call downstream';
+};
+
+subtest 'FormBody - mid-body disconnect fails loudly, not silent EOF' => sub {
+    my $form_mw = PAGI::Middleware::FormBody->new();
+    my $downstream_calls = 0;
+    my $wrapped = $form_mw->wrap(async sub { $downstream_calls++ });
+    my $scope = make_scope(headers => [['Content-Type', 'application/x-www-form-urlencoded']]);
+
+    my $sent = 0;
+    my $receive = async sub {
+        return { type => 'http.request', body => 'name=Jo', more => 1 } unless $sent++;
+        return { type => 'http.disconnect' };
+    };
+    my $send = async sub { };
+
+    my $future = $wrapped->($scope, $receive, $send);
+    $loop->await($future);
+
+    ok $future->is_failed, 'the app future fails instead of parsing the partial body';
+    like scalar($future->failure), qr/Request body incomplete: client disconnected mid-body/,
+        'names the truncation';
+    is $downstream_calls, 0, 'does not call downstream with a truncated body';
 };
 
 subtest 'FormBody - skips non-form content types' => sub {

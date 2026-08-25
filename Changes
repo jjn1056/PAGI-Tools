@@ -310,6 +310,21 @@
     completion -- per L<PAGI::Spec::Www>, C<undef> signals the fixed
     capability "server does not track completion", not a per-request
     state), C<0> before the response reaches its terminal state, C<1> after.
+  - [BREAKING] Body readers no longer treat a mid-body C<http.disconnect> as
+    a clean end of body. C<< PAGI::Request->body >>/C<text>/C<json>/
+    C<form_params> now croak with C<"Request body incomplete: client
+    disconnected mid-body ($reason)"> instead of silently handing back
+    whatever bytes had arrived as if the body were complete; a second call
+    fails identically without re-awaiting the connection. The same fix
+    applies to L<PAGI::Middleware>'s C<buffer_request_body>,
+    L<PAGI::Middleware::FormBody>, L<PAGI::Middleware::JSONBody>, and
+    L<PAGI::Request::MultiPartHandler>. An immediate disconnect before any
+    body bytes ever arrive is still treated as a legitimate empty body, not
+    a truncation. L<PAGI::Request::BodyStream> gets a new C<truncated>
+    accessor for the streaming API (C<next_chunk> still returns C<undef> on
+    disconnect -- streaming consumers may have legitimate uses for partial
+    data -- so C<truncated> plus C<< $req->disconnect_reason >> is how you
+    tell that apart from a real end of body).
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key
