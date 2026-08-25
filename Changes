@@ -339,6 +339,16 @@
     server observes it as C<on_disconnect> with reason C<server_error>) --
     but the writer is now marked closed and its C<on_close> callbacks run
     for local cleanup before the exception propagates.
+  - PAGI::App::Proxy (demo-only) now dehops both directions and speaks
+    HTTP/1.0 with an explicit C<Connection: close> to the backend: client
+    request headers are dehopped via L<PAGI::Headers/dehop> before
+    forwarding, the backend request line is downgraded from HTTP/1.1 to
+    HTTP/1.0, and the backend response headers are dehopped before
+    C<http.response.start>. HTTP/1.0+close rules out a chunked backend
+    response (chunked is HTTP/1.1-only) and any backend keep-alive, so the
+    existing read-to-EOF is now provably the correct response framing
+    (previously a backend that kept the connection open per HTTP/1.1
+    defaults could hang the proxy's read forever).
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key

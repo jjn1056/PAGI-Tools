@@ -5,6 +5,7 @@ use warnings;
 use Future;
 use Future::AsyncAwait;
 use IO::Socket::INET;
+use PAGI::Headers;
 use PAGI::Pages;
 
 =head1 NAME
@@ -62,13 +63,24 @@ sub to_app {
             last unless $event->{more};
         }
 
-        # Build headers
+        # Build headers. Hop-by-hop headers (and any header the client's own
+        # Connection value names) are dropped before forwarding -- they are
+        # meaningful only for the client's connection to this proxy, not for
+        # the proxy's own connection to the backend below.
+        my $client_headers = PAGI::Headers->new($scope->{headers} // [])->dehop;
+
         my @headers;
-        for my $h (@{$scope->{headers} // []}) {
+        for my $h (@{$client_headers->to_pairs}) {
             next if lc($h->[0]) eq 'host';  # Replace host
             push @headers, "$h->[0]: $h->[1]";
         }
         push @headers, "Host: $host:$port";
+
+        # The backend request is always HTTP/1.0 with an explicit close: it
+        # rules out chunked backend responses (chunked is HTTP/1.1-only) and
+        # any backend keep-alive, so the read-to-EOF below is always the
+        # correct response framing.
+        push @headers, "Connection: close";
 
         # Add X-Forwarded headers
         push @headers, "X-Forwarded-For: $scope->{client}[0]" if $scope->{client};
@@ -83,7 +95,7 @@ sub to_app {
             push @headers, "Content-Length: " . length($body);
         }
 
-        my $request = "$method $path HTTP/1.1\r\n" . join("\r\n", @headers) . "\r\n\r\n" . $body;
+        my $request = "$method $path HTTP/1.0\r\n" . join("\r\n", @headers) . "\r\n\r\n" . $body;
 
         # Connect to backend
         my $sock = $self->_connect_backend($host, $port, $timeout);
@@ -113,11 +125,12 @@ sub to_app {
             next unless $name;
             push @resp_headers, [lc($name), $value];
         }
+        my $response_headers = PAGI::Headers->new(\@resp_headers)->dehop;
 
         await $send->({
             type => 'http.response.start',
             status => $status,
-            headers => \@resp_headers,
+            headers => $response_headers->to_pairs,
         });
         await $send->({ type => 'http.response.body', body => $resp_body // '', more => 0 });
     };
@@ -168,6 +181,11 @@ the entire event loop during backend requests. This defeats the purpose of
 async and severely limits throughput.
 
 =item * B<No Connection Pooling> - Creates a new connection for every request.
+Each backend request is sent as C<HTTP/1.0> with an explicit C<Connection:
+close>, so the backend never keeps a connection alive across requests --
+even a future connection-reuse feature could not pool without first raising
+the request line to HTTP/1.1 and handling chunked and keep-alive response
+framing correctly.
 
 =item * B<Limited Error Handling> - A negotiated generic 502 response is the
 only local connection-failure handling.
