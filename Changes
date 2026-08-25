@@ -325,6 +325,20 @@
     disconnect -- streaming consumers may have legitimate uses for partial
     data -- so C<truncated> plus C<< $req->disconnect_reason >> is how you
     tell that apart from a real end of body).
+  - [BUGFIX] PAGI::Response::Writer's C<close> no longer skips C<on_close>
+    cleanup when the terminal send fails: callbacks now fire (and the
+    callback array is cleared) whether the send succeeds or fails, and the
+    C<Future> C<close> returns fails with the original send error instead of
+    swallowing it. A second C<close()> call remains a safe no-op either way.
+  - [BUGFIX] C<respond()>'s streaming path no longer leaves the writer open
+    and its C<on_close> callbacks unrun when the stream callback throws.
+    Per L<PAGI::Spec::Www/Application Left a Response Incomplete>, sending
+    the terminal event on that path would falsely certify a truncated
+    response as complete, so C<respond> still sends B<no> terminal event and
+    still re-raises the exception (the wire abort is deliberate, and the
+    server observes it as C<on_disconnect> with reason C<server_error>) --
+    but the writer is now marked closed and its C<on_close> callbacks run
+    for local cleanup before the exception propagates.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key

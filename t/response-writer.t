@@ -243,6 +243,56 @@ subtest 'on_close array cleared after close (breaks cycles)' => sub {
     is scalar @{$writer_ref->{_on_close}}, 0, '_on_close array cleared after close';
 };
 
+subtest 'close finally-shape: on_close fires and error re-raised when terminal send fails' => sub {
+    my @sent;
+    my $send = sub {
+        my ($msg) = @_;
+        if ($msg->{type} eq 'http.response.body' && !$msg->{more}) {
+            return Future->fail('terminal send exploded');
+        }
+        push @sent, $msg;
+        return Future->done;
+    };
+    my $res = PAGI::Response->new({});
+    my @fired;
+
+    my $writer = $res->writer($send)->get;
+    $writer->on_close(sub { push @fired, 'cleanup' });
+
+    my $f = $writer->close;
+    ok $f->is_failed, 'close Future failed';
+    like [$f->failure]->[0], qr/terminal send exploded/, 'failure preserves original error';
+    is \@fired, ['cleanup'], 'on_close callback ran despite terminal send failure';
+
+    # Second close is a no-op: entry dedup means no re-fire, no re-throw.
+    my $f2 = $writer->close;
+    ok $f2->is_done, 'second close is a no-op (already closed)';
+    is \@fired, ['cleanup'], 'on_close callback did not fire again on second close';
+};
+
+subtest 'stream callback exception aborts without terminal event; writer closed + on_close fires' => sub {
+    my ($res, $sent, $send) = make_response();
+    my @fired;
+    my $writer_ref;
+
+    $res->stream(async sub {
+        my ($writer) = @_;
+        $writer_ref = $writer;
+        $writer->on_close(sub { push @fired, 'cleanup' });
+        await $writer->write("partial");
+        die "stream blew up mid-write\n";
+    });
+
+    like dies { $res->respond($send)->get }, qr/stream blew up mid-write/,
+        'exception propagates out of respond()';
+
+    ok $writer_ref->is_closed, 'writer marked closed on unwind';
+    is \@fired, ['cleanup'], 'on_close callbacks ran for local cleanup';
+
+    my @terminal = grep { $_->{type} eq 'http.response.body' && !$_->{more} } @$sent;
+    is scalar @terminal, 0, 'no terminal event sent -- wire abort is deliberate';
+};
+
 subtest 'Writer GCd after close when callback captured object' => sub {
     use Scalar::Util qw(weaken);
     my @sent;

@@ -393,6 +393,26 @@ For streaming responses (set up via the C<_stream> slot), C<respond>
 sends the start event, runs the stream callback with a
 L<PAGI::Response::Writer>, and ensures the writer is closed.
 
+B<If the stream callback throws>, the exception propagates out of
+C<respond> -- it is not converted into a clean close. Sending the
+terminal event at that point would certify a truncated stream as
+complete to the client, which is exactly what
+L<PAGI::Spec::Www/Application Left a Response Incomplete> forbids: a
+response that reached C<http.response.start> but not its terminal
+event MUST surface to the client as an abnormal end (connection
+reset/torn down), not a normal close. So on a throwing callback,
+C<respond> sends B<no> terminal event and lets the abort ride the wire
+as-is; the caller (the server/transport) is the one that observes the
+truncation and fires C<on_disconnect> with reason C<server_error>.
+
+Locally, though, the writer still needs to release its resources: its
+C<is_closed> flips true and its C<on_close> callbacks run, exactly as
+they would on a normal C<close()> -- marking the writer closed for
+local cleanup is not the same claim as telling the wire the response
+completed. See L</close> and L</on_close> under L</WRITER OBJECT> for
+the exactly-once guarantee shared by both the normal-close and
+unwind paths.
+
 Returns a L<Future>.
 
 =head2 to_app
@@ -913,6 +933,16 @@ gracefully via C<await>.
 Close the stream. Returns a L<Future>. Calling close multiple times is
 safe — subsequent calls are no-ops.
 
+If sending the terminal event fails, C<on_close> callbacks still run
+before the error is re-raised: the C<Future> C<close> returns fails
+with the original send error, but local cleanup (releasing
+subscriptions, timers, etc.) is not skipped just because the peer is
+already gone -- that is exactly the case cleanup exists for. Either
+way -- clean close or failed terminal send -- callbacks fire exactly
+once; a stream callback that dies (see L</respond>'s unwind contract)
+marks the writer closed and fires C<on_close> the same way, so a
+following explicit C<close()> is then a no-op too.
+
 =head3 bytes_written
 
     my $n = $writer->bytes_written;
@@ -1164,7 +1194,12 @@ async sub respond {
             headers => $self->_render_headers(undef),
         });
         my $writer = PAGI::Response::Writer->new($send);
-        await $self->{_stream}->($writer);
+        my $ok = eval { await $self->{_stream}->($writer); 1 };
+        unless ($ok) {
+            my $err = $@;
+            await $writer->_mark_aborted;    # local cleanup only; no terminal event -- wire abort is deliberate
+            die $err;                        # re-raise: caller still sees the original error
+        }
         await $writer->close() unless $writer->is_closed;
         return;
     }
@@ -1528,11 +1563,41 @@ package PAGI::Response::Writer {
         my ($self) = @_;
         return if $self->{closed};
         $self->{closed} = 1;
-        await $self->{send}->({
-            type => 'http.response.body',
-            body => '',
-            more => 0,
-        });
+
+        my $ok = eval {
+            await $self->{send}->({
+                type => 'http.response.body',
+                body => '',
+                more => 0,
+            });
+            1;
+        };
+        unless ($ok) {
+            my $err = $@;
+            await $self->_fire_on_close;    # cleanup still runs even though the wire send failed
+            die $err;                       # re-raise: caller still sees the original error
+        }
+
+        await $self->_fire_on_close;
+    }
+
+    # Marks the writer closed for an abnormal (exception) unwind, without
+    # sending the terminal event -- the wire abort is deliberate: completing
+    # the terminal event here would certify a truncated stream as complete.
+    # Local on_close cleanup still runs exactly once, same as a normal close().
+    async sub _mark_aborted {
+        my ($self) = @_;
+        return if $self->{closed};
+        $self->{closed} = 1;
+        await $self->_fire_on_close;
+    }
+
+    # Runs registered on_close callbacks and clears the array afterward, so a
+    # second call (e.g. an explicit close() following an unwind, or vice
+    # versa) is a no-op. Individual callback failures are warned, not fatal,
+    # so one bad callback can't block the others.
+    async sub _fire_on_close {
+        my ($self) = @_;
         for my $cb (@{$self->{_on_close}}) {
             eval {
                 my $r = $cb->();
