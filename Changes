@@ -14,6 +14,23 @@
   - PAGI::App::WebSocket::Echo's on_disconnect callback now receives
     ($scope, $code, $reason) instead of ($scope, $code), so handlers can see
     why the peer disconnected.
+  - HEAD requests to routes that declare trailers (trailers => 1) no longer
+    abort the connection: both HEAD wire boundaries (the automatic
+    Compose/routing boundary and PAGI::Middleware::Head) now strip the
+    trailers declaration from the forwarded response start when they
+    suppress the trailers themselves, so the response reaches a legal
+    terminal state instead of promising trailers that never arrive.
+  - PAGI::Middleware::ConditionalGet now suppresses every event the wrapped
+    application sends after its synthesized 304 (previously only body
+    events), so a trailer-bearing cacheable route no longer fails on
+    revalidation hits.
+  - PAGI::Middleware::ETag no longer emits a malformed response start with
+    an undefined status when the wrapped application never started a
+    response; it now emits nothing and lets the server's no-response 500
+    backstop report the real problem.
+  - PAGI::Middleware::Head is now a thin delegate to the shared HEAD wire
+    boundary implementation (one implementation, two entry points); using
+    it under Compose remains harmless but redundant.
 
   - New PAGI::Pages constructs ordinary negotiated Responses and coderef terminal
     endpoints for the fixed PAGI welcome page, registered or strict custom
