@@ -140,6 +140,16 @@ representation.  Empty or repeated fields, empty or zero-length suffixes,
 malformed values, and multi-ranges receive 416; an end beyond the
 representation is clamped to its final byte.
 
+Because C<serve> hands the file off as an opaque C<file> body event, the
+server -- not this module -- owns the actual open and read. The returned
+Future does not settle until that streaming completes, so a read failure
+partway through the file (permissions change, device error, file truncated
+or removed mid-stream) now fails the Future instead of silently completing
+as if the file had ended -- a mid-body read error is not the same as
+reaching EOF. Callers awaiting C<serve> should treat a failed Future as an
+aborted response, the same way they would treat any other abnormal
+disconnect, rather than assuming the file was necessarily delivered in full.
+
 =cut
 
 our %MIME_TYPES = (

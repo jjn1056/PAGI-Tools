@@ -78,11 +78,6 @@ sub wrap {
                         $has_content_length = 1;
                         last;
                     }
-                    # If Transfer-Encoding is chunked, don't add Content-Length
-                    if (lc($h->[0]) eq 'transfer-encoding' && lc($h->[1]) eq 'chunked') {
-                        $is_streaming = 1;
-                        last;
-                    }
                 }
 
                 # If already has Content-Length or is streaming, pass through
@@ -163,7 +158,15 @@ this middleware switches to pass-through mode to avoid buffering.
 
 =item * Responses that already have Content-Length are passed through unchanged.
 
-=item * Responses with Transfer-Encoding: chunked are passed through unchanged.
+=item * An app-set C<Transfer-Encoding> header has no effect on this middleware
+and does not suppress Content-Length synthesis. Apps can no longer set
+Transfer-Encoding meaningfully -- actual chunked framing is a server/transport
+concern, and the server strips any app-supplied C<Transfer-Encoding> header
+before the response reaches the wire -- so a single-shot body still gets an
+accurate Content-Length even if the app also (harmlessly, and now
+pointlessly) declared C<Transfer-Encoding: chunked>. To skip Content-Length
+synthesis for a large or genuinely streamed response, use C<auto_chunked> or
+send the body with C<< more => 1 >>.
 
 =item * SSE and WebSocket responses should not use this middleware.
 

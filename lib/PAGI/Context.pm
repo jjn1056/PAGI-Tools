@@ -712,6 +712,13 @@ Delegates to C<< $scope->{'pagi.connection'} >>. C<on_disconnect> fires only on
 an abnormal end and C<on_complete> only on a clean finish -- exactly one per
 request.
 
+C<disconnect_future> is not among the delegated methods above -- reach it via
+C<< $ctx->connection->disconnect_future >> (C<undef> if C<connection> itself
+is C<undef>). It resolves B<only> on an abnormal disconnect, with the
+disconnect reason string; a request that instead completes cleanly leaves it
+pending forever if first requested after that completion, so use
+C<on_complete> for that case rather than racing against it unconditionally.
+
 C<< $ctx->buffered_amount >>, C<< $ctx->high_water_mark >>, and
 C<< $ctx->low_water_mark >> expose outbound flow control via the server's
 C<pagi.transport> handle (see L<PAGI::Spec::Www/"Transport Flow Control">):

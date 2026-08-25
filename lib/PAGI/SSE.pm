@@ -169,7 +169,8 @@ sub is_connected {
 }
 
 # Disconnect reason - why the connection closed
-# Common values: 'client_closed', 'write_error', 'send_timeout', 'idle_timeout'
+# Common values: 'client_closed', 'write_error', 'write_timeout', 'idle_timeout',
+# 'read_error', 'protocol_error', 'server_shutdown', 'server_error'
 sub disconnect_reason {
     my $self = shift;
     return $self->{_disconnect_reason};
@@ -1148,13 +1149,23 @@ Returns the reason for disconnect, if available. Common values:
 
 =item * C<write_error> - Failed to write data (network error)
 
-=item * C<send_timeout> - Send operation timed out
+=item * C<write_timeout> - Response write timed out
+
+=item * C<read_error> - Socket read failed
 
 =item * C<idle_timeout> - Connection closed due to inactivity
 
+=item * C<protocol_error> - HTTP parse error, invalid request
+
+=item * C<server_shutdown> - Server shutting down gracefully
+
+=item * C<server_error> - Unhandled server-side error aborted the request
+
 =back
 
-Returns C<undef> if connection is still open or reason is unknown.
+See L<PAGI::Spec::Www/"Standard Disconnect Reasons"> for the full,
+authoritative vocabulary. Returns C<undef> if connection is still open or
+reason is unknown.
 
 =head2 buffered_amount, high_water_mark, low_water_mark
 

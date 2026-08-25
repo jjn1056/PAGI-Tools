@@ -1220,8 +1220,8 @@ This is a synchronous, non-destructive check.
 Returns the disconnect reason string, or C<undef> if still connected.
 
 Standard reasons include: C<client_closed>, C<client_timeout>, C<idle_timeout>,
-C<write_error>, C<read_error>, C<protocol_error>, C<server_shutdown>,
-C<body_too_large>.
+C<keepalive_timeout>, C<write_error>, C<read_error>, C<protocol_error>,
+C<server_shutdown>, C<server_error>, C<body_too_large>.
 
 See L<PAGI::Server::ConnectionState/disconnect_reason> for the full list.
 
@@ -1260,10 +1260,20 @@ L</on_disconnect>.
         await Future->wait_any($disconnect_future, $event_future);
     }
 
-Returns a Future that resolves when the client disconnects, or C<undef>
-if not supported. The Future resolves with the disconnect reason string.
+Returns a Future that resolves B<only> on an abnormal disconnect, with the
+disconnect reason string, or C<undef> if not supported. It does B<not>
+resolve when the request completes cleanly -- if first requested B<after>
+a clean completion, it stays pending forever, since there is no longer any
+disconnect left to wait for. Use L</on_complete> to detect that case; the
+two events remain mutually exclusive, exactly as with L</on_disconnect> and
+L</on_complete>.
 
-This is useful for racing against other async operations.
+This is useful for racing against other async operations, for example
+C<< Future->wait_any($req->disconnect_future, $event_future) >> to abandon
+work early when the client goes away. Don't race it unconditionally against
+work that legitimately outlives the response -- once the response completes,
+this Future will never fire, so nothing left waiting on it alone will
+resolve.
 
 =head2 buffered_amount, high_water_mark, low_water_mark
 

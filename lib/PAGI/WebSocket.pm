@@ -497,9 +497,13 @@ async sub try_send_text {
             text => $text,
         });
     };
-    # A failed send is not a disconnect (a send after close is a silent no-op per
-    # spec), so return false per the try_* contract without fabricating a 1006
-    # close or mutating connection state.
+    # A failed send is not a disconnect. A send after the app's OWN close is
+    # already turned away above via is_closed; a send after the PEER already
+    # closed is a tolerated no-op per spec (dropped, not delivered, but does
+    # not fail the Future), so neither case reaches here as an error. This
+    # eval only catches a genuine send failure, which per the try_* contract
+    # still returns false without fabricating a 1006 close or mutating
+    # connection state.
     return 0 if $@;
     return 1;
 }
@@ -514,9 +518,13 @@ async sub try_send_bytes {
             bytes => $bytes,
         });
     };
-    # A failed send is not a disconnect (a send after close is a silent no-op per
-    # spec), so return false per the try_* contract without fabricating a 1006
-    # close or mutating connection state.
+    # A failed send is not a disconnect. A send after the app's OWN close is
+    # already turned away above via is_closed; a send after the PEER already
+    # closed is a tolerated no-op per spec (dropped, not delivered, but does
+    # not fail the Future), so neither case reaches here as an error. This
+    # eval only catches a genuine send failure, which per the try_* contract
+    # still returns false without fabricating a 1006 close or mutating
+    # connection state.
     return 0 if $@;
     return 1;
 }
@@ -532,9 +540,13 @@ async sub try_send_json {
             text => $json,
         });
     };
-    # A failed send is not a disconnect (a send after close is a silent no-op per
-    # spec), so return false per the try_* contract without fabricating a 1006
-    # close or mutating connection state.
+    # A failed send is not a disconnect. A send after the app's OWN close is
+    # already turned away above via is_closed; a send after the PEER already
+    # closed is a tolerated no-op per spec (dropped, not delivered, but does
+    # not fail the Future), so neither case reaches here as an error. This
+    # eval only catches a genuine send failure, which per the try_* contract
+    # still returns false without fabricating a 1006 close or mutating
+    # connection state.
     return 0 if $@;
     return 1;
 }

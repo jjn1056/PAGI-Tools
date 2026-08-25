@@ -7,8 +7,11 @@ use PAGI::WebSocket;
 # try_send_* must honor its contract — returns false on a failed send, never
 # throws — WITHOUT fabricating a 1006 "Connection lost" disconnect or marking a
 # live socket closed. A real send error (encoding/validation/bug) is NOT a
-# disconnect (per spec a send after close is a silent no-op, never raises), so
-# the connection state must be left untouched.
+# disconnect, so the connection state must be left untouched. This is
+# distinct from a send after close: a send after the app's OWN close never
+# reaches the transport (is_closed short-circuits it below); a send after the
+# PEER already closed is a tolerated no-op per spec (dropped, not delivered,
+# but does not raise) — neither of those is the failure this test exercises.
 
 sub connected_ws_that_dies {
     my $scope = { type => 'websocket', path => '/ws', headers => [] };

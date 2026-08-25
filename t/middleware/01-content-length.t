@@ -293,4 +293,54 @@ subtest 'ContentLength auto_chunked option' => sub {
     is scalar(@lengths), 0, 'no Content-Length with auto_chunked';
 };
 
+subtest 'ContentLength ignores an app-declared Transfer-Encoding: chunked' => sub {
+    my $mw = PAGI::Middleware::ContentLength->new;
+
+    # An app cannot actually produce chunked framing itself -- that's a
+    # server/transport concern -- and the server strips any app-supplied
+    # Transfer-Encoding header before the response reaches the wire. So a
+    # single-shot (more => 0) body with a stray app-set TE: chunked header
+    # must still get a synthesized Content-Length, exactly as if the header
+    # were absent.
+    my $app = async sub  {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [
+                ['content-type', 'text/plain'],
+                ['transfer-encoding', 'chunked'],
+            ],
+        });
+        await $send->({
+            type => 'http.response.body',
+            body => 'Hello',
+            more => 0,
+        });
+    };
+
+    my $wrapped = $mw->wrap($app);
+
+    my @sent;
+    run_async(async sub {
+        await $wrapped->(
+            { type => 'http', path => '/' },
+            async sub { { type => 'http.disconnect' } },
+            async sub  {
+        my ($event) = @_; push @sent, $event },
+        );
+    });
+
+    my $found_length;
+    for my $h (@{$sent[0]{headers}}) {
+        if (lc($h->[0]) eq 'content-length') {
+            $found_length = $h->[1];
+            last;
+        }
+    }
+
+    is $found_length, 5,
+        'Content-Length is synthesized despite the app-set Transfer-Encoding header';
+};
+
 done_testing;

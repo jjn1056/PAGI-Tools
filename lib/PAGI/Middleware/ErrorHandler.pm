@@ -338,12 +338,20 @@ exhaustion does not.
 
 If a database call throws or returns a failed Future before response start,
 C<on_error> settles before the custom or built-in renderer runs. If the same
-failure happens after a streaming start, rendering is no longer safe:
-ErrorHandler settles C<on_error>, emits no second start, and rethrows the
-original database exception. Put an author ErrorHandler inside request-ID,
-access-log, and security middleware when those wrappers must observe the
-official 500. Compose keeps its own stock outer ErrorHandler installed as the
-last recovery boundary if author policy itself fails.
+failure happens after a streaming start but B<before> the response reaches a
+legal terminal state, rendering is no longer safe: ErrorHandler settles
+C<on_error>, emits no second start, and rethrows the original database
+exception, which forces an abnormal closure (disconnect reason
+C<server_error>, C<on_disconnect> fires) since the response was left
+incomplete. If instead the failure happens B<after> the response has already
+reached a legal terminal state, nothing on the wire was corrupted: the
+already-complete response stands as-is (C<on_complete> fires, not
+C<on_disconnect>, and with no disconnect reason to report), and ErrorHandler
+still settles C<on_error> and rethrows so the exception is not silently
+swallowed. Put an author ErrorHandler inside request-ID, access-log, and
+security middleware when those wrappers must observe the official 500.
+Compose keeps its own stock outer ErrorHandler installed as the last recovery
+boundary if author policy itself fails.
 
 =head1 EXCEPTION HANDLING
 
@@ -377,9 +385,27 @@ propagates without another response attempt.
 
 =item * If the response has already started when an error occurs, no renderer
 is invoked and no replacement response is started. The middleware awaits
-C<on_error> and then rethrows the original exception so the server can abort
-the incomplete response. This intentionally reverses the earlier behavior
-that warned and swallowed post-start failures.
+C<on_error> and then rethrows the original exception either way, but what
+that rethrow does to the connection depends on whether the response had
+already reached a legal terminal state:
+
+=over 4
+
+=item * B<Started but incomplete> -- the response was left mid-stream. The
+server can't fabricate a legal ending, so it aborts the connection: an
+abnormal closure with disconnect reason C<server_error>, not a clean
+C<on_complete>.
+
+=item * B<Started and already complete> -- the response had already reached
+its terminal state before the exception. Nothing on the wire was corrupted,
+so the already-complete response stands and C<on_complete> fires normally
+(no disconnect reason to report); the rethrow surfaces the exception to the
+caller/logs without touching what was already sent.
+
+=back
+
+This intentionally reverses the earlier behavior that warned and swallowed
+post-start failures.
 
 =item * In development mode, a successfully stringified original exception is
 used as detail. In production, Pages' catalog-safe detail is used and the
