@@ -6,7 +6,7 @@ use Carp qw(croak);
 use overload q{""} => 'message', fallback => 1;
 
 my %KNOWN_STAGE = map { $_ => 1 }
-    qw(before_start after_start body_before_start);
+    qw(before_start after_start body_before_start awaiting_trailers);
 
 sub new {
     my ($class, @args) = @_;
@@ -69,11 +69,11 @@ composition boundaries and stringifies to its diagnostic message.
         message => $message,
     );
 
-C<stage> is required and must be exactly C<before_start>, C<after_start>, or
-C<body_before_start>. C<message> is required and must be a defined non-reference
-scalar. Unknown options, missing values, unknown stages, and reference messages
-are rejected. The returned blessed value stringifies to C<message> and can be
-thrown directly.
+C<stage> is required and must be exactly C<before_start>, C<after_start>,
+C<body_before_start>, or C<awaiting_trailers>. C<message> is required and must
+be a defined non-reference scalar. Unknown options, missing values, unknown
+stages, and reference messages are rejected. The returned blessed value
+stringifies to C<message> and can be thrown directly.
 
 =head1 ACCESSORS
 

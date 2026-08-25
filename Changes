@@ -354,6 +354,16 @@
     warning) instead of re-running startup handlers or attempting shutdown
     before startup -- hardening against a misbehaving server or client,
     mirroring PAGI::Compose::Compiler::_run_lifespan's existing guard.
+  - PAGI::Compose::ResponseGuard: a response that declares C<http.response.start>
+    C<trailers =E<gt> 1> but completes after its terminal body chunk without
+    ever sending C<http.response.trailers> is now a typed incomplete-response
+    failure (new C<awaiting_trailers> stage on
+    PAGI::Exception::IncompleteResponse) instead of silently passing the
+    guard. Also, rejecting a response body sent before response start is now
+    a failed C<Future> handed back from the C<send> call, not a synchronous
+    C<die> -- contract parity with how the real server rejects an invalid
+    send; the typed exception and reject-without-forwarding behavior are
+    unchanged.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key

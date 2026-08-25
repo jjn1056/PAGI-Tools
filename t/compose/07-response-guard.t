@@ -36,7 +36,7 @@ subtest 'typed incomplete response validates and exposes lifecycle facts' => sub
         'message accessor preserves the scalar message');
     is("$error", 'response stopped early', 'stringification is the message');
 
-    for my $stage (qw(before_start after_start body_before_start)) {
+    for my $stage (qw(before_start after_start body_before_start awaiting_trailers)) {
         my $accepted = PAGI::Exception::IncompleteResponse->new(
             stage => $stage, message => 0,
         );
@@ -130,6 +130,67 @@ subtest 'normal incomplete completion throws the exact typed stage' => sub {
         is($error->stage, $case->{stage}, "$case->{label} has the exact stage");
         is("$error", $case->{message}, "$case->{label} has the exact message");
     }
+};
+
+subtest 'declared trailers are required before completion' => sub {
+    my $start = {
+        type => 'http.response.start', status => 200, headers => [], trailers => 1,
+    };
+    my $body = { type => 'http.response.body', body => 'ok', more => 0 };
+    my $trailers = { type => 'http.response.trailers', headers => [['x-checksum', 'abc']] };
+
+    my $events = run_guard(sub {
+        my ($request_scope, $receive, $send) = @_;
+        $send->($start)->get;
+        $send->($body)->get;
+        return $send->($trailers);
+    });
+    is($events, [$start, $body, $trailers],
+        'start, body, and trailers all pass through when trailers are sent');
+
+    my $error = guard_error(sub {
+        my ($request_scope, $receive, $send) = @_;
+        $send->($start)->get;
+        return $send->($body);
+    });
+    isa_ok($error, ['PAGI::Exception::IncompleteResponse']);
+    is($error->stage, 'awaiting_trailers',
+        'declaring trailers and completing without sending them is a typed failure');
+    is("$error", 'HTTP application completed after declaring trailers without sending them',
+        'the awaiting_trailers stage has its own diagnostic message');
+};
+
+subtest 'body before start rejects via a failed Future, not a synchronous die' => sub {
+    my $invalid = {
+        type => 'http.response.body', body => 'out of order', more => 0,
+    };
+    my ($send, $events) = capture_send();
+    my $captured;
+    my $app = PAGI::Compose::ResponseGuard->wrap(sub {
+        my ($request_scope, $receive, $guard_send) = @_;
+        # Call guard_send but don't await/get its result: proves the call
+        # itself does not die synchronously -- it must hand back a rejected
+        # Future instead, for contract parity with how the real server
+        # rejects an invalid send.
+        $captured = $guard_send->($invalid);
+        return Future->done;
+    });
+    # The app itself ignores the failed Future and completes normally, but
+    # the guard still preserves reject-without-forwarding overall: it
+    # re-raises the same typed exception once the application completes,
+    # which is not what this subtest is checking (see the next subtest).
+    eval {
+        Future->wrap($app->(
+            scope(), sub { return Future->done }, $send,
+        ))->get;
+    };
+
+    isa_ok($captured, ['Future']);
+    ok($captured->is_failed, 'guard_send returned an already-failed Future');
+    my ($failure) = $captured->failure;
+    isa_ok($failure, ['PAGI::Exception::IncompleteResponse']);
+    is($failure->stage, 'body_before_start', 'the failed Future carries the typed exception');
+    is($events, [], 'the invalid event never reached the outer send');
 };
 
 subtest 'body before start is rejected without reaching the outer send' => sub {
