@@ -1,8 +1,7 @@
 # Revision history for PAGI-Tools
 
 0.002003 - UNRELEASED
-  [campaign notes]
-  - [BREAKING] PAGI::Middleware::Lint no longer keeps its own copy of
+  - BREAKING: PAGI::Middleware::Lint no longer keeps its own copy of
     send-sequencing state; it delegates event-order legality (duplicate
     http.response.start, body before start, sends after completion,
     illegal trailers, and so on) to the shared PAGI::SendValidation core
@@ -28,11 +27,11 @@
     key was validated for presence -- it never was; the real more-key rule
     (absent/false/file/fh marks a chunk terminal, and a further body event
     after that is illegal) is now genuinely enforced, via the shared core.
-  - [BREAKING] Removed PAGI::Middleware::WebSocket::RateLimit: it impersonated
+  - BREAKING: Removed PAGI::Middleware::WebSocket::RateLimit: it impersonated
     server lifecycle events it could not keep faithful (ghost reason-less
     repeated disconnects, fire-and-forget close). Rate limiting is app
     policy; a receive-loop recipe is coming in a later Cookbook pass.
-  - [BREAKING] Removed PAGI::App::SSE::Pubsub, PAGI::App::WebSocket::Broadcast,
+  - BREAKING: Removed PAGI::App::SSE::Pubsub, PAGI::App::WebSocket::Broadcast,
     and PAGI::App::WebSocket::Chat: they taught a send pattern the PAGI spec
     now rules out (holding and calling another scope's send). Real fan-out
     belongs to the coming PAGI-Channels distribution (own-scope
@@ -54,7 +53,7 @@
     an undefined status when the wrapped application never started a
     response; it now emits nothing and lets the server's no-response 500
     backstop report the real problem.
-  - [BUGFIX, user-visible] PAGI::Middleware::GZip hardcoded `status => 200`
+  - PAGI::Middleware::GZip hardcoded `status => 200`
     on every response it compressed -- a 404, a 500, a redirect, anything --
     any response through GZip with a gzip-negotiating client went out as a
     silent 200. It now captures and replays the wrapped application's real
@@ -72,7 +71,7 @@
     three now recognize such events via the new shared
     `PAGI::Middleware::body_event_is_opaque` predicate and disengage,
     forwarding the file/fh event through untouched instead.
-  - [BUGFIX, user-visible] PAGI::Middleware::ContentLength no longer skips
+  - PAGI::Middleware::ContentLength no longer skips
     Content-Length synthesis just because the wrapped application set its
     own `Transfer-Encoding: chunked` header on a single-shot (non-streamed)
     response. An app cannot actually produce chunked framing itself -- that
@@ -82,7 +81,7 @@
     chunked framing. A single-shot body now gets an accurate
     Content-Length regardless; use `auto_chunked` or a streamed (`more =>
     1`) body to opt out of synthesis.
-  - [BUGFIX] PAGI::SSE's `every()` could cancel the live protocol receive.
+  - PAGI::SSE's `every()` could cancel the live protocol receive.
     Its background disconnect monitor directly awaits `$receive->()`;
     `every()` used to race that same future against a sleep timer via
     `Future->wait_any`, which cancels whichever subfuture loses -- so on
@@ -96,7 +95,7 @@
   - PAGI::Middleware::Head is now a thin delegate to the shared HEAD wire
     boundary implementation (one implementation, two entry points); using
     it under Compose remains harmless but redundant.
-  - [BUGFIX] PAGI::Endpoint::SSE no longer sends `sse.start` after
+  - PAGI::Endpoint::SSE no longer sends `sse.start` after
     `on_connect` has already declined the request -- previously `handle()`
     unconditionally awaited `run()` regardless of what `on_connect` did, so
     a Cookbook-style raw decline left a stray `sse.start` on the wire after
@@ -258,7 +257,7 @@
     toolkit-internal infrastructure (not a public application-facing API) --
     it exists so PAGI::Test::Client's strict mode and the development Lint
     middleware share one validation core instead of each reimplementing it.
-  - [BREAKING] PAGI::Test::Client's HTTP C<$send> is now strict, with no
+  - BREAKING: PAGI::Test::Client's HTTP C<$send> is now strict, with no
     lenient mode: illegal events (unrecognized or missing type, out-of-order
     events such as a duplicate http.response.start or a body before it,
     undeclared http.response.trailers -- the malformed/unknown_type/sequence
@@ -272,7 +271,7 @@
     backstop (was a phantom empty 200). Every scope now advertises
     pagi.version 0.4 / spec_version 0.3 (was 0.2), matching the released
     server.
-  - [BREAKING] direction change: when an app throws B<after> its HTTP
+  - BREAKING: direction change: when an app throws B<after> its HTTP
     response already reached a legal terminal state, PAGI::Test::Client now
     returns the real, already-complete response (firing on_complete, not
     on_disconnect) instead of overwriting it with a synthetic 500 --
@@ -287,11 +286,11 @@
     everywhere else. A completed extension denial reports C<complete> true but
     C<closed> false -- it is not a C<websocket.close> -- matching how SSE's
     C<decline_complete> state already behaves.
-  - [BREAKING] PAGI::Test::WebSocket's C<$send> is now strict, on the same
+  - BREAKING: PAGI::Test::WebSocket's C<$send> is now strict, on the same
     terms as the HTTP path: illegal events (per the websocket rules above,
     plus the pre-existing accept/send/close ordering) fail the returned
     Future instead of being silently accepted.
-  - [BREAKING] PAGI::Test::WebSocket's synthesized C<websocket.disconnect>
+  - BREAKING: PAGI::Test::WebSocket's synthesized C<websocket.disconnect>
     is now delivered exactly once, carrying a truthful C<code> and
     C<reason> (previously repeated on every subsequent C<receive> call, and
     dropped the reason). An app that keeps calling C<receive> after
@@ -300,13 +299,13 @@
     New C<< $ws->simulate_abnormal_close(code => ..., reason => ...) >>
     injects an abnormal close (default code 1006) the same way, for testing
     a specific abnormal-close reason token.
-  - [BREAKING] An app C<websocket.send> after the app's own
+  - BREAKING: An app C<websocket.send> after the app's own
     C<websocket.close> now fails the Future (was silently appended to the
     client's readable stream). A C<websocket.send> after the test (peer)
     side closed is now a tolerated no-op instead -- dropped, not delivered,
     but does not fail the app's Future -- mirroring how a real server
     tolerates a write racing a peer that already went away.
-  - [BREAKING] An app that sends C<websocket.close> before
+  - BREAKING: An app that sends C<websocket.close> before
     C<websocket.accept> (a portable denial) no longer croaks
     "WebSocket connection not accepted"; L<PAGI::Test::WebSocket> reports
     the closed/denied state instead, and a completed
@@ -316,24 +315,24 @@
     L<PAGI::SendValidation>'s sse rules, and now recognizes an
     app-initiated C<sse.close> (previously ignored: the app could send it
     and nothing happened).
-  - [BREAKING] PAGI::Test::SSE's decline (C<sse.http.response.start> /
+  - BREAKING: PAGI::Test::SSE's decline (C<sse.http.response.start> /
     C<.body>) is now recognized, mirroring the server:
     L<PAGI::Test::Client>'s C<sse> method returns a L<PAGI::Test::Response>
     with the declined status/body instead of croaking "SSE connection not
     started". No C<sse.disconnect> is delivered for a decline -- the stream
     never started.
-  - [BREAKING] PAGI::Test::SSE's synthesized C<sse.disconnect> is now
+  - BREAKING: PAGI::Test::SSE's synthesized C<sse.disconnect> is now
     delivered exactly once, carrying an explicit C<reason> (default
     C<client_closed>) instead of being repeated reason-less on every
     subsequent C<receive> call. C<< $sse->close >> now takes an optional
     C<$reason> argument.
-  - [BREAKING] PAGI::Test::Client's HTTP responses are now H1-flavored:
+  - BREAKING: PAGI::Test::Client's HTTP responses are now H1-flavored:
     app-supplied C<Transfer-Encoding>/C<Connection> headers are stripped
     (warned once per occurrence), mirroring PAGI::Server::Connection's HTTP/1.1
     rule -- C<Upgrade>/C<TE>/C<Keep-Alive> are untouched (deliberately narrower
     than the server's HTTP/2 six-name strip). A C<Date> header is added when
     the app didn't supply one; an app-supplied C<Date> is preserved verbatim.
-  - [BREAKING] Every PAGI::Test::Client scope now advertises an C<extensions>
+  - BREAKING: Every PAGI::Test::Client scope now advertises an C<extensions>
     key: C<{}> for C<http> and C<sse> (this mock has no transport to flush, so
     C<http.fullflush> stays genuinely unadvertised and unreachable through it),
     and C<{ 'websocket.http.response' => {} }> for C<websocket> -- the SAME
@@ -341,14 +340,14 @@
     PAGI::Test::WebSocket's previously independently-hardcoded advertisement
     of that extension (single source of truth; see
     L<PAGI::Test::Client/SCOPE EXTENSIONS>).
-  - [BREAKING] PAGI::Test::Client's lifespan C<$send> is now strict too: a
+  - BREAKING: PAGI::Test::Client's lifespan C<$send> is now strict too: a
     result reported for the wrong phase (for example C<lifespan.shutdown.complete>
     sent during the startup phase) fails the app's C<await $send-E<gt>(...)>
     instead of being silently accepted. C<stop> now waits for and C<die>s on
     C<lifespan.shutdown.failed>, symmetric with how C<start> already handled
     C<lifespan.startup.failed> -- a failing shutdown hook previously failed
     silently.
-  - [BREAKING] PAGI::Test::ConnectionState's C<disconnect_future> is now
+  - BREAKING: PAGI::Test::ConnectionState's C<disconnect_future> is now
     modeled fully (was always C<undef>): pending before any end, resolves with
     the reason on an abnormal disconnect, and -- the sharpest break from a
     naive always-a-Future implementation -- stays pending forever if first
@@ -357,7 +356,7 @@
     completion -- per L<PAGI::Spec::Www>, C<undef> signals the fixed
     capability "server does not track completion", not a per-request
     state), C<0> before the response reaches its terminal state, C<1> after.
-  - [BREAKING] Body readers no longer treat a mid-body C<http.disconnect> as
+  - BREAKING: Body readers no longer treat a mid-body C<http.disconnect> as
     a clean end of body. C<< PAGI::Request->body >>/C<text>/C<json>/
     C<form_params> now croak with C<"Request body incomplete: client
     disconnected mid-body ($reason)"> instead of silently handing back
@@ -372,12 +371,12 @@
     disconnect -- streaming consumers may have legitimate uses for partial
     data -- so C<truncated> plus C<< $req->disconnect_reason >> is how you
     tell that apart from a real end of body).
-  - [BUGFIX] PAGI::Response::Writer's C<close> no longer skips C<on_close>
+  - PAGI::Response::Writer's C<close> no longer skips C<on_close>
     cleanup when the terminal send fails: callbacks now fire (and the
     callback array is cleared) whether the send succeeds or fails, and the
     C<Future> C<close> returns fails with the original send error instead of
     swallowing it. A second C<close()> call remains a safe no-op either way.
-  - [BUGFIX] C<respond()>'s streaming path no longer leaves the writer open
+  - C<respond()>'s streaming path no longer leaves the writer open
     and its C<on_close> callbacks unrun when the stream callback throws.
     Per L<PAGI::Spec::Www/Application Left a Response Incomplete>, sending
     the terminal event on that path would falsely certify a truncated
