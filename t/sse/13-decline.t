@@ -97,32 +97,36 @@ subtest 'send_event after decline is a safe no-op (no croak, nothing sent)' => s
     ok($result == $sse, 'send_event after decline still returns $self for chaining');
 };
 
-subtest 'an armed keepalive is disarmed by decline' => sub {
+# DEVIATION D-1 (signed off by John 2026-08-25): keepalive() called before
+# the stream has started now defers -- it records the interval/comment
+# instead of sending (sse.keepalive is illegal pre-start), and start() arms
+# it afterward. So a keepalive requested before decline() is only ever a
+# pending record, never something actually on the wire -- decline() drops
+# it rather than disarming it. See t/sse/14-keepalive-deferred-arm.t for the
+# full deferred-arm behavior; these subtests cover decline()'s side of it.
+
+subtest 'a pending (pre-start) keepalive is dropped by decline, never sent at all' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
     my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
 
     $sse->keepalive(25)->get;
-    is($sent[-1]{type}, 'sse.keepalive', 'keepalive armed');
-    is($sent[-1]{interval}, 25, 'armed at 25s');
+    is(scalar @sent, 0, 'keepalive() pre-start recorded, did not send');
 
     $sse->decline(status => 401, body => 'no')->get;
 
-    # A disarm (interval => 0) must appear on the wire before the decline
-    # response terminal -- otherwise the server's still-armed timer keeps
-    # firing sse.comment pings after the response is done.
     my @keepalive_events = grep { $_->{type} eq 'sse.keepalive' } @sent;
-    is(scalar @keepalive_events, 2, 'a disarm keepalive event was sent');
-    is($keepalive_events[-1]{interval}, 0, 'disarm sets interval to 0');
+    is(scalar @keepalive_events, 0, 'no sse.keepalive ever reaches the wire -- nothing to disarm');
+    is(scalar @sent, 2, 'only the decline response events were sent');
 
     # Once declined, keepalive() itself becomes a safe no-op -- calling it
-    # again must not put a live timer back on the wire.
+    # again must not put a live timer on the wire.
     my $before = scalar @sent;
     $sse->keepalive(10)->get;
-    is(scalar @sent, $before, 'keepalive after decline sent nothing (stays disarmed)');
+    is(scalar @sent, $before, 'keepalive after decline sent nothing');
 };
 
-subtest 'decline with no keepalive ever armed sends no disarm event' => sub {
+subtest 'decline with no keepalive ever requested sends no keepalive event' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
     my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
@@ -130,7 +134,7 @@ subtest 'decline with no keepalive ever armed sends no disarm event' => sub {
     $sse->decline(status => 401)->get;
 
     my @keepalive_events = grep { $_->{type} eq 'sse.keepalive' } @sent;
-    is(scalar @keepalive_events, 0, 'no keepalive event when none was ever armed');
+    is(scalar @keepalive_events, 0, 'no keepalive event when none was ever requested');
 };
 
 subtest 'a keepalive explicitly disabled (interval 0) before decline stays quiet' => sub {
@@ -142,7 +146,7 @@ subtest 'a keepalive explicitly disabled (interval 0) before decline stays quiet
     $sse->decline(status => 401)->get;
 
     my @keepalive_events = grep { $_->{type} eq 'sse.keepalive' } @sent;
-    is(scalar @keepalive_events, 1, 'only the original interval=>0 call -- decline does not re-disarm an already-disabled keepalive');
+    is(scalar @keepalive_events, 0, 'interval=>0 never sends pre-start either -- decline has nothing to drop');
 };
 
 subtest 'keepalive after ordinary close (not decline) is a safe no-op too' => sub {

@@ -102,12 +102,25 @@
     the response was already complete, a first-send-wins violation the
     server must raise on. New PAGI::SSE::decline(status/headers/body) gives
     apps a real API for this (parity with PAGI::WebSocket::deny): it sends
-    the HTTP response, marks the connection closed, disarms any keepalive
-    armed before `on_connect` ran, and turns `start`/`run`/`send`/
+    the HTTP response, marks the connection closed, drops any keepalive
+    requested before `on_connect` ran, and turns `start`/`run`/`send`/
     `send_json`/`send_event`/`send_comment`/`keepalive` into safe no-ops
     afterward. `handle()` also now skips `run()` outright once the
     connection is already closed. Declining from `on_connect` is documented
     as the supported auth-gate pattern.
+  - [BUGFIX] Every PAGI::Endpoint::SSE endpoint using `keepalive_interval`
+    was broken against any server enforcing the SSE send-sequencing rules
+    (both the reference server's `EventValidator` and PAGI::SendValidation
+    reject `sse.keepalive` sent before `sse.start`), because `handle()`
+    configures the keepalive before `on_connect`/`start` ever runs --
+    silently tolerated by older, non-validating servers, but a hard failure
+    on every request against a conforming one. PAGI::SSE::keepalive() now
+    defers: called before the stream has started, it records the requested
+    interval/comment instead of sending, and `start()` arms the recording
+    (sends the real event) immediately afterward, where it is legal.
+    API-compatible -- existing callers are unaffected, the wire event just
+    moves to after `sse.start`. A decline (see above) drops an unarmed
+    recording instead of needing to disarm it, since it was never sent.
 
   - New PAGI::Pages constructs ordinary negotiated Responses and coderef terminal
     endpoints for the fixed PAGI welcome page, registered or strict custom

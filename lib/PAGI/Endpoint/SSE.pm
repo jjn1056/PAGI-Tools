@@ -21,9 +21,14 @@ async sub handle {
     my ($self, $ctx) = @_;
     my $sse = $ctx->sse;
 
-    # Configure keepalive if specified. keepalive() is async (it sends an
-    # sse.keepalive event); await it so the send completes rather than being a
-    # fire-and-forget Future (PAGI applications must await all $send calls).
+    # Configure keepalive if specified. This runs before the stream has
+    # started, so keepalive() defers rather than sending immediately --
+    # sse.keepalive is illegal pre-start (DEVIATION D-1); PAGI::SSE records
+    # it here and arms it (sends the real event) itself once start() runs,
+    # whether that's on_connect's default start below or a start triggered
+    # from inside on_connect. keepalive() is still async (it may send), so
+    # await it rather than leaving a fire-and-forget Future (PAGI
+    # applications must await all $send calls).
     my $keepalive = $self->keepalive_interval;
     if ($keepalive > 0) {
         await $sse->keepalive($keepalive);
@@ -164,6 +169,12 @@ Called when connection closes. This is synchronous (not async).
     sub keepalive_interval { 30 }
 
 Seconds between keepalive pings. Set to 0 to disable (default).
+
+C<handle> requests this keepalive before the stream has started (before
+C<on_connect> runs), which is otherwise illegal on the wire -- see
+L<PAGI::SSE/keepalive>'s deferred-arm behavior, which is what makes this
+safe. If C<on_connect> declines instead of starting the stream, the request
+is silently dropped rather than sent (see L<PAGI::SSE/decline>).
 
 =head2 context_class
 

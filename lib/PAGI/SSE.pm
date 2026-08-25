@@ -253,11 +253,31 @@ async sub start {
     await $self->{send}->($event);
     $self->_set_state('started');
 
+    # Arm any keepalive requested before the stream started (see
+    # keepalive()'s deferred-arm note below) -- illegal before sse.start,
+    # now legal immediately after it.
+    if (my $pending = delete $self->{_pending_keepalive}) {
+        await $self->{send}->({
+            type     => 'sse.keepalive',
+            interval => $pending->{interval},
+            comment  => $pending->{comment},
+        });
+        $self->{_keepalive_armed} = 1;
+    }
+
     return $self;
 }
 
 # Enable keepalive - sends sse.keepalive event to server
 # Server handles the timer; this is loop-agnostic
+#
+# DEFERRED ARM: sse.keepalive is illegal before sse.start (both
+# PAGI::SendValidation and the reference server's EventValidator reject it
+# from the pre-start state -- see DEVIATION D-1). Calling this before the
+# stream has started does not send anything; it records the interval/comment
+# and start() arms it (sends the real event) immediately afterward, where
+# it is legal. This is what lets PAGI::Endpoint::SSE configure
+# keepalive_interval before on_connect runs without violating the protocol.
 async sub keepalive {
     my ($self, $interval, $comment) = @_;
 
@@ -266,11 +286,21 @@ async sub keepalive {
     return $self if $self->is_closed;
 
     $interval //= 0;
+    $comment  //= '';
+
+    unless ($self->is_started) {
+        if ($interval > 0) {
+            $self->{_pending_keepalive} = { interval => $interval, comment => $comment };
+        } else {
+            delete $self->{_pending_keepalive};
+        }
+        return $self;
+    }
 
     await $self->{send}->({
         type     => 'sse.keepalive',
         interval => $interval,
-        comment  => $comment // '',
+        comment  => $comment,
     });
 
     $self->{_keepalive_armed} = $interval > 0 ? 1 : 0;
@@ -290,12 +320,21 @@ async sub decline {
     my $headers = $opts{headers} // [];
     my $body    = defined $opts{body} ? $opts{body} : '';
 
-    # A keepalive armed before this connection was ever accepted (e.g. the
-    # Endpoint::SSE keepalive_interval, sent before on_connect runs) must be
-    # disarmed here: the server's periodic timer would otherwise keep
-    # firing sse.comment pings after the response terminal, the same
-    # first-send-wins violation a stray sse.start would be. Sent directly
-    # (not via keepalive(), which is about to become a no-op below).
+    # A keepalive requested before this connection was ever accepted (e.g.
+    # the Endpoint::SSE keepalive_interval, requested before on_connect
+    # runs) must not survive a decline. In the normal case that's just a
+    # deferred, never-armed record (see keepalive()'s DEFERRED ARM note) --
+    # nothing was ever sent, so there's nothing to disarm, just drop it.
+    delete $self->{_pending_keepalive};
+
+    # Defensive: if a keepalive somehow WAS already armed (sent live) before
+    # decline() was called, disarm it -- the server's periodic timer would
+    # otherwise keep firing sse.comment pings after the response terminal,
+    # the same first-send-wins violation a stray sse.start would be. Sent
+    # directly (not via keepalive(), which is about to become a no-op
+    # below). This path shouldn't be reachable through the documented API
+    # (decline is only legal pre-start, and keepalive only arms live once
+    # started), but is kept as a defense-in-depth backstop.
     if ($self->{_keepalive_armed}) {
         await $self->{send}->({ type => 'sse.keepalive', interval => 0, comment => '' });
         $self->{_keepalive_armed} = 0;
@@ -1052,6 +1091,11 @@ and configuration. Returns empty hashref if no state was injected.
 Starts the SSE stream. Called automatically on first send.
 Idempotent - only sends sse.start once.
 
+If L</keepalive> was called before C<start> (for example
+L<PAGI::Endpoint::SSE>'s C<keepalive_interval>, which is configured before
+C<on_connect> runs), C<start> arms it immediately after sending C<sse.start>
+-- see L</keepalive>'s B<DEFERRED ARM> note.
+
 =head2 decline
 
     await $sse->decline;
@@ -1089,11 +1133,12 @@ After C<decline>, C<start>, C<run>, and the send methods (C<send>,
 C<send_json>, C<send_event>, C<send_comment>, C<keepalive>) all become B<safe
 no-ops> -- they return without touching the wire instead of croaking, since
 the response is already complete and there is no longer a stream to write
-to. If a keepalive was armed (via L</keepalive>) before C<decline> was
-called -- for example L<PAGI::Endpoint::SSE>'s C<keepalive_interval>, which
-is configured before C<on_connect> runs -- C<decline> disarms it first, so
-the server's periodic timer does not keep firing pings after the response
-terminal.
+to. If L</keepalive> was called before C<decline> -- for example
+L<PAGI::Endpoint::SSE>'s C<keepalive_interval>, which is configured before
+C<on_connect> runs -- it was only ever a deferred, never-sent recording (see
+L</keepalive>'s B<DEFERRED ARM> note); C<decline> simply drops it. There is
+therefore no C<sse.keepalive> event on the wire at all in the normal case:
+nothing was ever armed, so there's nothing to disarm.
 
 B<The supported auth-gate pattern> is to call C<decline> from inside
 C<on_connect> (see L<PAGI::Endpoint::SSE/on_connect>):
@@ -1269,6 +1314,20 @@ The server manages the timer internally - this method is loop-agnostic.
 Safe no-op once the connection is closed (including by L</decline>) -- there
 is no live connection left for the server to time a ping against, so the
 call returns C<$self> without sending anything.
+
+B<DEFERRED ARM:> C<sse.keepalive> is illegal before C<sse.start> -- both
+L<PAGI::SendValidation> and the reference server's C<EventValidator> reject
+it from the pre-start state. Calling C<keepalive> before L</start> does
+B<not> send anything: it records the interval/comment, and C<start> arms
+the recording (sends the real event) immediately afterward, where it is
+legal. A subsequent pre-start call with C<< interval => 0 >> clears the
+recording instead of arming anything. This is transparent to callers --
+C<< await $sse->keepalive($n) >> still "just works" whether called before or
+after C<start> -- and it's specifically what lets
+L<PAGI::Endpoint::SSE/keepalive_interval> be configured before C<on_connect>
+runs without violating the protocol. If C<on_connect> then calls
+L</decline>, the recording (never having been sent) is simply dropped --
+see L</decline>.
 
 =head1 ITERATION
 

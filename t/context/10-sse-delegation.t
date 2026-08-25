@@ -208,7 +208,13 @@ subtest 'last_event_id delegates' => sub {
 subtest 'keepalive delegates' => sub {
     my ($ctx, $sent) = make_sse_ctx();
 
-    (async sub { await $ctx->keepalive(25, 'ping') })->()->get;
+    # sse.keepalive is illegal before sse.start (DEVIATION D-1): keepalive()
+    # called pre-start defers rather than sending, so start() runs first
+    # here to exercise the delegation's actual send.
+    (async sub {
+        await $ctx->start;
+        await $ctx->keepalive(25, 'ping');
+    })->()->get;
 
     my @ka = grep { $_->{type} eq 'sse.keepalive' } @$sent;
     is(scalar @ka, 1, 'keepalive event sent');
