@@ -6,6 +6,8 @@ use Future::AsyncAwait;
 use Future;
 use Carp qw(croak);
 
+use PAGI::SendValidation;
+
 
 sub new {
     my ($class, %args) = @_;
@@ -23,11 +25,20 @@ sub new {
         close_code  => undef,
         close_reason => '',
         _pending_receives => [],  # Pending receive futures
+        _disconnect_delivered => 0,
     }, $class;
 }
 
 sub _start {
     my ($self) = @_;
+
+    # websocket.http.response is always available on this path, mirroring
+    # the reference server: the extension denial is a portable escape hatch
+    # from an in-process test double, not something a test opts into.
+    my $sv = PAGI::SendValidation->new(
+        scope_type => 'websocket',
+        extensions => { 'websocket.http.response' => {} },
+    );
 
     # Create receive coderef for the app
     my $receive = async sub {
@@ -42,9 +53,17 @@ sub _start {
             return shift @{$self->{send_queue}};
         }
 
-        # Return disconnect if closed
-        if ($self->{closed}) {
-            return { type => 'websocket.disconnect', code => $self->{close_code} // 1000 };
+        # Deliver the synthesized disconnect exactly once (truthful code and
+        # reason). Any receive after that stays pending forever -- matching
+        # a real transport that has gone silent; a hang is the correct
+        # diagnosis for an app that keeps calling receive() past disconnect.
+        if ($self->{closed} && !$self->{_disconnect_delivered}) {
+            $self->{_disconnect_delivered} = 1;
+            return {
+                type   => 'websocket.disconnect',
+                code   => $self->{close_code} // 1000,
+                reason => $self->{close_reason} // 'client_closed',
+            };
         }
 
         # Create a future that will be resolved when data arrives
@@ -53,20 +72,41 @@ sub _start {
         return await $future;
     };
 
-    # Create send coderef for the app
+    # Create send coderef for the app. Strict: illegal events (per
+    # PAGI::SendValidation's websocket rules) fail the returned Future --
+    # a canonical test double must not accept what a real server would
+    # reject -- and are never appended to the client's readable stream.
     my $send = async sub {
         my ($event) = @_;
 
-        if ($event->{type} eq 'websocket.accept') {
+        if (my $err = $sv->check($event)) {
+            die $err->message . "\n";
+        }
+
+        my $type = $event->{type} // '';
+
+        if ($type eq 'websocket.accept') {
             $self->{accepted} = 1;
         }
-        elsif ($event->{type} eq 'websocket.send') {
-            push @{$self->{recv_queue}}, $event;
+        elsif ($type eq 'websocket.send') {
+            # If the peer (the test side) already closed -- not the app's
+            # own websocket.close, which sv already rejected above -- a real
+            # server just drops writes to a dead socket: tolerated no-op,
+            # nothing reaches the client's readable stream.
+            push @{$self->{recv_queue}}, $event unless $self->{closed};
         }
-        elsif ($event->{type} eq 'websocket.close') {
+        elsif ($type eq 'websocket.close') {
             $self->{closed} = 1;
             $self->{close_code} = $event->{code} // 1000;
             $self->{close_reason} = $event->{reason} // '';
+        }
+        elsif ($type eq 'websocket.http.response.start' || $type eq 'websocket.http.response.body') {
+            # Extension denial (websocket.http.response extension): the app
+            # rejects the handshake with a real HTTP response instead of a
+            # close frame. No RFC6455 close code applies here; the
+            # connection is closed once the denial's terminal body chunk
+            # lands (sv tracks completion for us).
+            $self->{closed} = 1 if $sv->complete;
         }
 
         return;
@@ -79,7 +119,13 @@ sub _start {
     # This is a bit hacky but works: we need to let the app run until it accepts
     $self->_pump_app;
 
-    croak "WebSocket connection not accepted" unless $self->{accepted};
+    unless ($self->{accepted}) {
+        # A denial (portable close-before-accept, or a completed extension
+        # denial) is not an error -- it moves straight to a legal terminal
+        # state without ever accepting. Only an app that neither accepted
+        # nor reached a legal terminal state is a real bug.
+        croak "WebSocket connection not accepted" unless $sv->complete;
+    }
 
     return $self;
 }
@@ -95,11 +141,18 @@ sub _pump_app {
         $future->done($event);
     }
 
-    # If closed and there are pending receives, resolve them with disconnect
-    if ($self->{closed} && @{$self->{_pending_receives}}) {
-        while (my $future = shift @{$self->{_pending_receives}}) {
-            $future->done({ type => 'websocket.disconnect', code => $self->{close_code} // 1000 });
-        }
+    # If closed, resolve exactly one pending receive with the synthesized
+    # disconnect (truthful code and reason). Any later receive stays
+    # pending forever -- see the exactly-once contract on the receive
+    # coderef in _start.
+    if ($self->{closed} && !$self->{_disconnect_delivered} && @{$self->{_pending_receives}}) {
+        my $future = shift @{$self->{_pending_receives}};
+        $self->{_disconnect_delivered} = 1;
+        $future->done({
+            type   => 'websocket.disconnect',
+            code   => $self->{close_code} // 1000,
+            reason => $self->{close_reason} // 'client_closed',
+        });
     }
 }
 
@@ -196,24 +249,28 @@ sub receive_json {
 
 sub close {
     my ($self, $code, $reason) = @_;
+    return $self->_deliver_disconnect($code // 1000, $reason // 'client_closed');
+}
 
-    return if $self->{closed};
+sub simulate_abnormal_close {
+    my ($self, %opts) = @_;
+    return $self->_deliver_disconnect($opts{code} // 1006, $opts{reason} // 'client_closed');
+}
 
-    $code //= 1000;
-    $reason //= '';
+# Shared by close() and simulate_abnormal_close(): marks the connection
+# closed with the given code/reason and lets the app observe it exactly
+# once, whichever way it's currently waiting (see the exactly-once
+# contract in _start/_pump_app).
+sub _deliver_disconnect {
+    my ($self, $code, $reason) = @_;
+
+    return $self if $self->{closed};
 
     $self->{closed} = 1;
     $self->{close_code} = $code;
     $self->{close_reason} = $reason;
 
-    # Push disconnect event
-    push @{$self->{send_queue}}, {
-        type => 'websocket.disconnect',
-        code => $code,
-        reason => $reason,
-    };
-
-    # Pump the app to let it process the disconnect
+    # Let the app process the disconnect if it's already waiting on receive
     $self->_pump_app;
 
     return $self;
@@ -277,7 +334,37 @@ method rather than directly.
 
 B<This module is a simplified in-process model of a WebSocket connection.>
 It is useful for testing application-level message flow, but it does B<not>
-fully emulate transport timing, protocol validation, or network buffering.
+fully emulate transport timing or network buffering.
+
+=head1 SEND STRICTNESS
+
+The C<$send> coderef given to your app is strict: it validates every event
+against the PAGI websocket send-sequencing rules via
+L<PAGI::SendValidation> and fails the returned Future (the app's C<await
+$send-E<gt>(...)> dies) for anything a real server would reject -- a
+C<websocket.send>/C<websocket.keepalive> before C<websocket.accept>, any
+event once C<websocket.close> has been sent, a second C<websocket.accept>,
+or a C<websocket.http.response.*> event out of place. A rejected event is
+never appended to the client's readable stream. There is no lenient mode --
+see L<PAGI::SendValidation/RULES> for the exact websocket rule set.
+
+C<websocket.close> before C<websocket.accept> is a legal portable denial
+(no croak; the connection object reports the closed state -- see
+L</close_code>/L</close_reason>). The C<websocket.http.response> extension
+denial (C<websocket.http.response.start>/C<.body>) is always recognized by
+this test double, mirroring the reference server: the app can reject the
+handshake with a full HTTP response instead of a close frame, without
+opting into anything. A completed extension denial likewise sets
+L</is_closed> true without a croak, but -- unlike a portable denial -- does
+B<not> populate L</close_code> (there is no RFC 6455 close code for an HTTP
+response).
+
+An app that sends C<websocket.send> after the peer (the test side, via
+L</close> or L</simulate_abnormal_close>) has already closed sees the write
+silently dropped instead of failing: a real server tolerates writes racing
+a peer that has already gone away. A send after the B<app>'s own
+C<websocket.close>, by contrast, fails the Future -- the app closed the
+connection itself and knows it.
 
 =head1 CONSTRUCTOR
 
@@ -374,7 +461,26 @@ test against L<PAGI::Server> and a real WebSocket client.
     $ws->close($code);
     $ws->close($code, $reason);
 
-Closes the WebSocket connection. Default close code is 1000 (normal closure).
+Closes the WebSocket connection from the test (peer) side. Default close
+code is 1000 (normal closure); default reason is C<client_closed>. Delivers
+a truthful C<websocket.disconnect> (carrying this code and reason) to the
+app exactly once -- whether the app is already waiting on C<receive> or
+calls it later. Idempotent: a second C<close> call is a no-op. See
+L</simulate_abnormal_close> to inject an abnormal close instead.
+
+=head2 simulate_abnormal_close
+
+    $ws->simulate_abnormal_close;
+    $ws->simulate_abnormal_close(code => 1006, reason => 'keepalive_timeout');
+
+Simulates the transport disappearing abruptly (a TCP reset, a keepalive
+timeout, or similar), rather than the test cleanly closing the connection.
+Mechanically identical to L</close> -- the app sees exactly one
+C<websocket.disconnect> carrying the given code and reason -- but defaults
+C<code> to C<1006> (RFC 6455 "abnormal closure") instead of C<1000>, and
+its default C<reason> is likewise C<client_closed>. This is the only way to
+exercise an app's handling of a specific abnormal-close reason token
+through this test double. Idempotent, like C<close>.
 
 =head2 close_code
 
@@ -421,9 +527,16 @@ This module implements the PAGI WebSocket protocol:
 
 =item 4. App sends C<websocket.send> events with C<text> or C<bytes>
 
-=item 5. Either side sends C<websocket.disconnect> or C<websocket.close>
+=item 5. Either side ends the connection: the test via L</close> or
+L</simulate_abnormal_close> (delivering exactly one C<websocket.disconnect>
+to the app, carrying a truthful code and reason -- see L</SEND
+STRICTNESS>), or the app via C<websocket.close>
 
 =back
+
+A denial -- C<websocket.close> before C<websocket.accept>, or a completed
+C<websocket.http.response.*> extension denial -- ends the connection
+without ever reaching step 2; see L</SEND STRICTNESS>.
 
 =head1 EXAMPLE
 

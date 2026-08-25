@@ -185,6 +185,53 @@
     already sent to the wire. A stray warning documents the post-completion
     exception. An exception before the response is complete keeps the
     existing 500 + server_error behavior.
+  - PAGI::SendValidation's websocket rules gained the
+    C<websocket.http.response> denial extension (C<websocket.http.response.start>
+    / C<.body>), mirroring the reference server's C<denial>/C<denial_complete>
+    states: recognized as a legal denial before C<websocket.accept>, illegal
+    everywhere else. A completed extension denial reports C<complete> true but
+    C<closed> false -- it is not a C<websocket.close> -- matching how SSE's
+    C<decline_complete> state already behaves.
+  - [BREAKING] PAGI::Test::WebSocket's C<$send> is now strict, on the same
+    terms as the HTTP path: illegal events (per the websocket rules above,
+    plus the pre-existing accept/send/close ordering) fail the returned
+    Future instead of being silently accepted.
+  - [BREAKING] PAGI::Test::WebSocket's synthesized C<websocket.disconnect>
+    is now delivered exactly once, carrying a truthful C<code> and
+    C<reason> (previously repeated on every subsequent C<receive> call, and
+    dropped the reason). An app that keeps calling C<receive> after
+    disconnect now hangs (the correct failure mode -- a real transport has
+    gone silent) rather than getting a phantom disconnect on every call.
+    New C<< $ws->simulate_abnormal_close(code => ..., reason => ...) >>
+    injects an abnormal close (default code 1006) the same way, for testing
+    a specific abnormal-close reason token.
+  - [BREAKING] An app C<websocket.send> after the app's own
+    C<websocket.close> now fails the Future (was silently appended to the
+    client's readable stream). A C<websocket.send> after the test (peer)
+    side closed is now a tolerated no-op instead -- dropped, not delivered,
+    but does not fail the app's Future -- mirroring how a real server
+    tolerates a write racing a peer that already went away.
+  - [BREAKING] An app that sends C<websocket.close> before
+    C<websocket.accept> (a portable denial) no longer croaks
+    "WebSocket connection not accepted"; L<PAGI::Test::WebSocket> reports
+    the closed/denied state instead, and a completed
+    C<websocket.http.response.*> extension denial is now recognized the
+    same way.
+  - PAGI::Test::SSE's C<$send> is likewise now strict via
+    L<PAGI::SendValidation>'s sse rules, and now recognizes an
+    app-initiated C<sse.close> (previously ignored: the app could send it
+    and nothing happened).
+  - [BREAKING] PAGI::Test::SSE's decline (C<sse.http.response.start> /
+    C<.body>) is now recognized, mirroring the server:
+    L<PAGI::Test::Client>'s C<sse> method returns a L<PAGI::Test::Response>
+    with the declined status/body instead of croaking "SSE connection not
+    started". No C<sse.disconnect> is delivered for a decline -- the stream
+    never started.
+  - [BREAKING] PAGI::Test::SSE's synthesized C<sse.disconnect> is now
+    delivered exactly once, carrying an explicit C<reason> (default
+    C<client_closed>) instead of being repeated reason-less on every
+    subsequent C<receive> call. C<< $sse->close >> now takes an optional
+    C<$reason> argument.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key

@@ -171,6 +171,66 @@ subtest 'websocket: send after app-sent close' => sub {
     is $err->category, 'sequence', 'category sequence';
 };
 
+subtest 'websocket: http.response.* denial rejected without the extension declared' => sub {
+    my $sv = PAGI::SendValidation->new(scope_type => 'websocket');
+    my $err = $sv->check({ type => 'websocket.http.response.start', status => 401 });
+    ok $err, 'undeclared extension denial start is illegal';
+    is $err->category, 'extension', 'category extension';
+    $err = $sv->check({ type => 'websocket.http.response.body', body => 'no' });
+    ok $err, 'undeclared extension denial body is illegal';
+    is $err->category, 'extension', 'category extension';
+};
+
+subtest 'websocket: http.response.* legal happy denial path when declared' => sub {
+    my $sv = PAGI::SendValidation->new(
+        scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
+    );
+    ok $sv->finalize, 'finalize illegal before accept/close/denial';
+    is $sv->check({ type => 'websocket.http.response.start', status => 401 }), undef, 'denial start legal';
+    is $sv->complete, 0, 'not complete yet: denial started but no terminal body chunk';
+    is $sv->closed, 0, 'not closed: denial is not websocket.close';
+    is $sv->check({ type => 'websocket.http.response.body', body => 'more', more => 1 }), undef, 'non-terminal denial chunk legal';
+    is $sv->complete, 0, 'still not complete after more=>1 chunk';
+    is $sv->check({ type => 'websocket.http.response.body', body => 'no' }), undef, 'terminal denial chunk legal';
+    is $sv->complete, 1, 'complete once denial body is terminal';
+    is $sv->closed, 0, 'closed still false: a completed denial is not websocket.close';
+    is $sv->finalize, undef, 'finalize legal once denial complete';
+};
+
+subtest 'websocket: http.response.* denial after accept is illegal' => sub {
+    my $sv = PAGI::SendValidation->new(
+        scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
+    );
+    $sv->check({ type => 'websocket.accept' });
+    my $err = $sv->check({ type => 'websocket.http.response.start', status => 401 });
+    ok $err, 'denial start after accept is illegal';
+    is $err->category, 'sequence', 'category sequence';
+};
+
+subtest 'websocket: non-body event after denial started is illegal' => sub {
+    my $sv = PAGI::SendValidation->new(
+        scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
+    );
+    $sv->check({ type => 'websocket.http.response.start', status => 401 });
+    my $err = $sv->check({ type => 'websocket.send', text => 'nope' });
+    ok $err, 'send after denial start is illegal';
+    is $err->category, 'sequence', 'category sequence';
+};
+
+subtest 'websocket: any event after a completed denial is illegal' => sub {
+    my $sv = PAGI::SendValidation->new(
+        scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
+    );
+    $sv->check({ type => 'websocket.http.response.start', status => 401 });
+    $sv->check({ type => 'websocket.http.response.body', body => 'no' });
+    for my $event ({ type => 'websocket.http.response.body', body => 'extra' },
+                    { type => 'websocket.accept' }, { type => 'websocket.close' }) {
+        my $err = $sv->check($event);
+        ok $err, "$event->{type} after completed denial is illegal";
+        is $err->category, 'sequence', 'category sequence';
+    }
+};
+
 # ==========================================================================
 # SSE
 # ==========================================================================

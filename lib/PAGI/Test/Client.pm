@@ -536,6 +536,18 @@ sub sse {
     my $sse = PAGI::Test::SSE->new(app => $self->{app}, scope => $scope);
     $sse->_start;
 
+    if ($sse->_declined) {
+        # The app declined (sse.http.response.*) instead of starting a
+        # stream -- mirror the server: hand back the real HTTP response it
+        # sent, not an SSE connection object. There is no stream to hand a
+        # callback either, so the callback (if any) is never invoked.
+        return PAGI::Test::Response->new(
+            status  => $sse->_decline_status,
+            headers => $sse->_decline_headers,
+            body    => $sse->_decline_body,
+        );
+    }
+
     if ($callback) {
         eval { $callback->($sse) };
         my $err = $@;
@@ -1141,7 +1153,9 @@ Clears all session cookies.
         # ...
     });
 
-See L<PAGI::Test::WebSocket> for the WebSocket connection API.
+See L<PAGI::Test::WebSocket> for the WebSocket connection API, including
+its send strictness (L<PAGI::Test::WebSocket/SEND STRICTNESS>), the
+portable and extension denial paths, and C<simulate_abnormal_close>.
 
 =head1 SSE (Server-Sent Events)
 
@@ -1170,7 +1184,14 @@ See L<PAGI::Test::WebSocket> for the WebSocket connection API.
         # ...
     });
 
-See L<PAGI::Test::SSE> for the SSE connection API.
+    # A decline (sse.http.response.*) returns a PAGI::Test::Response, not
+    # an SSE connection object -- there is no stream to hand a callback,
+    # so any callback given is not invoked.
+    my $res = $client->sse('/nope');
+    is $res->status, 404;
+
+See L<PAGI::Test::SSE> for the SSE connection API and its send strictness
+(L<PAGI::Test::SSE/SEND STRICTNESS>).
 
 =head1 LIFESPAN
 

@@ -217,18 +217,32 @@ Legal terminal state for C<finalize>: C<complete>.
 
 =head2 websocket
 
-States: C<connecting>, C<accepted>, C<closed>. Starting state is
-C<connecting>.
+States: C<connecting>, C<accepted>, C<denial>, C<denial_complete>,
+C<closed>. Starting state is C<connecting>.
 
 Illegal: C<websocket.send>/C<websocket.keepalive> before
 C<websocket.accept>; any event once C<websocket.close> has been sent
 (including a second close -- close is not idempotent here); a second
-C<websocket.accept> once already accepted.
+C<websocket.accept> once already accepted; C<websocket.http.response.start>
+or C<websocket.http.response.body> when the C<websocket.http.response>
+extension is not in the scope's C<extensions>; any non-body event once a
+denial has started (both while still C<denial> and once
+C<denial_complete>); C<websocket.http.response.start> once already
+C<accepted>.
 
-Legal: C<websocket.close> before C<websocket.accept> is a denial, not an
-error -- it moves straight to C<closed>.
+Legal: C<websocket.close> before C<websocket.accept> is a portable denial,
+not an error -- it moves straight to C<closed>. When the
+C<websocket.http.response> extension is declared,
+C<websocket.http.response.start> before C<websocket.accept> is an
+extension denial -- it moves to C<denial>, mirroring the SSE decline
+mechanism; C<websocket.http.response.body> from C<denial> keeps C<denial>
+while C<more> is true, and advances to C<denial_complete> on its terminal
+chunk.
 
-Legal terminal state for C<finalize>: C<closed>.
+Legal terminal state for C<finalize>: C<closed> or C<denial_complete>. A
+completed extension denial (C<denial_complete>) reports C<complete> true
+but C<closed> false -- it is not a C<websocket.close>, matching how SSE's
+C<decline_complete> state behaves.
 
 =head2 sse
 
@@ -281,7 +295,7 @@ sub complete {
     my ($self) = @_;
     my $type = $self->{scope_type};
     return $self->{state} eq 'complete' ? 1 : 0                                  if $type eq 'http';
-    return $self->{state} eq 'closed' ? 1 : 0                                    if $type eq 'websocket';
+    return ($self->{state} eq 'closed' || $self->{state} eq 'denial_complete') ? 1 : 0  if $type eq 'websocket';
     return ($self->{state} eq 'closed' || $self->{state} eq 'decline_complete') ? 1 : 0 if $type eq 'sse';
     return 0;
 }
@@ -408,32 +422,56 @@ sub _check_websocket {
 
     return $self->_error(malformed => "websocket send event missing 'type' field")
         if $type eq '';
-    return $self->_error(unknown_type => "unrecognized event type '$type' for websocket protocol")
-        unless $type eq 'websocket.accept' || $type eq 'websocket.send'
-            || $type eq 'websocket.close'  || $type eq 'websocket.keepalive';
+
+    if ($type eq 'websocket.http.response.start' || $type eq 'websocket.http.response.body') {
+        return $self->_error(extension => "Extension not enabled: websocket.http.response")
+            unless exists $self->{extensions}{'websocket.http.response'};
+    }
+    else {
+        return $self->_error(unknown_type => "unrecognized event type '$type' for websocket protocol")
+            unless $type eq 'websocket.accept' || $type eq 'websocket.send'
+                || $type eq 'websocket.close'  || $type eq 'websocket.keepalive';
+    }
 
     if ($self->{state} eq 'closed') {
         return $self->_error(sequence => "cannot send '$type' after websocket.close");
     }
+    if ($self->{state} eq 'denial_complete') {
+        return $self->_error(sequence => "cannot send '$type': denial response already complete");
+    }
 
     if ($self->{state} eq 'connecting') {
         if ($type eq 'websocket.accept') { $self->{state} = 'accepted'; return undef; }
-        if ($type eq 'websocket.close')  { $self->{state} = 'closed';   return undef; } # denial
+        if ($type eq 'websocket.close')  { $self->{state} = 'closed';   return undef; } # portable denial
+        if ($type eq 'websocket.http.response.start') { $self->{state} = 'denial'; return undef; } # extension denial
         return $self->_error(sequence => "cannot send '$type' before websocket.accept");
+    }
+
+    if ($self->{state} eq 'denial') {
+        if ($type eq 'websocket.http.response.body') {
+            my $more = $event->{more} // 0;
+            $self->{state} = $more ? 'denial' : 'denial_complete';
+            return undef;
+        }
+        return $self->_error(sequence => "cannot send '$type' after websocket.http.response.start");
     }
 
     # $self->{state} eq 'accepted'
     return undef if $type eq 'websocket.send' || $type eq 'websocket.keepalive';
     if ($type eq 'websocket.close') { $self->{state} = 'closed'; return undef; }
-    return $self->_error(sequence => 'cannot send duplicate websocket.accept');
+    return $self->_error(sequence => 'cannot send duplicate websocket.accept')
+        if $type eq 'websocket.accept';
+    return $self->_error(sequence => "cannot send '$type' after websocket.accept"); # http.response.* after accept
 }
 
 sub _finalize_websocket {
     my ($self) = @_;
 
-    return undef if $self->{state} eq 'closed';
+    return undef if $self->{state} eq 'closed' || $self->{state} eq 'denial_complete';
     return $self->_error(incomplete => 'websocket connection awaiting websocket.accept or websocket.close')
         if $self->{state} eq 'connecting';
+    return $self->_error(incomplete => 'websocket denial awaiting a terminal body chunk')
+        if $self->{state} eq 'denial';
     return $self->_error(incomplete => 'websocket connection awaiting websocket.close'); # accepted
 }
 

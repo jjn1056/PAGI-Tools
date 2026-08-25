@@ -6,6 +6,8 @@ use Future::AsyncAwait;
 use Future;
 use Carp qw(croak);
 
+use PAGI::SendValidation;
+
 
 sub new {
     my ($class, %args) = @_;
@@ -19,37 +21,73 @@ sub new {
         recv_queue => [],      # Events from app -> test
         closed     => 0,
         started    => 0,
+        declined   => 0,
+        close_reason => undef,
+        _pending_receives => [],
+        _disconnect_delivered => 0,
     }, $class;
 }
 
 sub _start {
     my ($self) = @_;
 
+    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+
     # Create receive coderef for the app (always returns disconnect when closed)
     my $receive = async sub {
-        if ($self->{closed}) {
-            return { type => 'sse.disconnect' };
+        # Deliver the synthesized disconnect exactly once (truthful
+        # reason). Any receive after that stays pending forever -- matching
+        # a real transport that has gone silent.
+        if ($self->{closed} && !$self->{_disconnect_delivered}) {
+            $self->{_disconnect_delivered} = 1;
+            return { type => 'sse.disconnect', reason => $self->{close_reason} // 'client_closed' };
         }
 
         # SSE only receives disconnects from client, so we wait indefinitely
         # until the connection is closed
         my $future = Future->new;
         # This future will be resolved when close() is called
-        push @{$self->{_pending_receives} //= []}, $future;
+        push @{$self->{_pending_receives}}, $future;
         return await $future;
     };
 
-    # Create send coderef for the app
+    # Create send coderef for the app. Strict: illegal events (per
+    # PAGI::SendValidation's sse rules) fail the returned Future -- a
+    # canonical test double must not accept what a real server would
+    # reject -- and are never appended to the client's readable stream.
     my $send = async sub {
         my ($event) = @_;
 
-        if ($event->{type} eq 'sse.start') {
+        if (my $err = $sv->check($event)) {
+            die $err->message . "\n";
+        }
+
+        my $type = $event->{type} // '';
+
+        if ($type eq 'sse.start') {
             $self->{started} = 1;
             $self->{status} = $event->{status} // 200;
             $self->{headers} = $event->{headers} // [];
         }
-        elsif ($event->{type} eq 'sse.send') {
-            push @{$self->{recv_queue}}, $event;
+        elsif ($type eq 'sse.send') {
+            # If the peer (the test side) already closed, a real server
+            # just drops writes to a dead connection: tolerated no-op,
+            # nothing reaches the client's readable stream.
+            push @{$self->{recv_queue}}, $event unless $self->{closed};
+        }
+        elsif ($type eq 'sse.close') {
+            # App-initiated close: the app is proactively ending the
+            # stream. No disconnect is delivered back to the app -- it
+            # already knows it closed.
+            $self->{closed} = 1;
+        }
+        elsif ($type eq 'sse.http.response.start') {
+            $self->{decline_status}  = $event->{status} // 200;
+            $self->{decline_headers} = $event->{headers} // [];
+        }
+        elsif ($type eq 'sse.http.response.body') {
+            $self->{decline_body} = ($self->{decline_body} // '') . ($event->{body} // '');
+            $self->{declined} = 1 if $sv->complete;
         }
 
         return;
@@ -62,7 +100,9 @@ sub _start {
     # We need to let the app run until it starts
     $self->_pump_app;
 
-    croak "SSE connection not started" unless $self->{started};
+    # A decline (sse.http.response.*) is not an error -- it moves straight
+    # to a legal terminal state without ever streaming.
+    croak "SSE connection not started" unless $self->{started} || $self->{declined};
 
     return $self;
 }
@@ -70,13 +110,28 @@ sub _start {
 sub _pump_app {
     my ($self) = @_;
 
-    # If closed and there are pending receives, resolve them with disconnect
-    if ($self->{closed} && $self->{_pending_receives}) {
-        while (my $future = shift @{$self->{_pending_receives}}) {
-            $future->done({ type => 'sse.disconnect' }) unless $future->is_ready;
-        }
+    # If closed, resolve exactly one pending receive with the synthesized
+    # disconnect (truthful reason). Any later receive stays pending
+    # forever -- see the exactly-once contract on the receive coderef in
+    # _start.
+    if ($self->{closed} && !$self->{_disconnect_delivered} && @{$self->{_pending_receives}}) {
+        my $future = shift @{$self->{_pending_receives}};
+        $self->{_disconnect_delivered} = 1;
+        $future->done({ type => 'sse.disconnect', reason => $self->{close_reason} // 'client_closed' });
     }
 }
+
+# ---------------------------------------------------------------------------
+# Internal accessors used by PAGI::Test::Client to build a PAGI::Test::Response
+# when the app declines instead of starting a stream. Not part of the public
+# API -- a declined connection is never handed back to test code as an SSE
+# object at all (see PAGI::Test::Client's sse method).
+# ---------------------------------------------------------------------------
+
+sub _declined { return $_[0]->{declined} ? 1 : 0 }
+sub _decline_status  { return $_[0]->{decline_status}  // 200 }
+sub _decline_headers { return $_[0]->{decline_headers} // [] }
+sub _decline_body    { return $_[0]->{decline_body}    // '' }
 
 sub receive_event {
     my ($self, %opts) = @_;
@@ -113,13 +168,14 @@ sub receive_json {
 }
 
 sub close {
-    my ($self) = @_;
+    my ($self, $reason) = @_;
 
-    return if $self->{closed};
+    return $self if $self->{closed};
 
-    $self->{closed} = 1;
+    $self->{closed}       = 1;
+    $self->{close_reason} = $reason // 'client_closed';
 
-    # Pump the app to let it process the disconnect
+    # Let the app process the disconnect if it's already waiting on receive
     $self->_pump_app;
 
     return $self;
@@ -179,6 +235,31 @@ Unlike WebSocket, the client cannot send messages back (except for disconnect).
 B<This module is a simplified in-process model of an SSE connection.> It is
 well-suited to application-level event testing, but it does B<not> emulate
 transport timing, buffering, or wire-format behavior.
+
+If the app declines instead of starting a stream (C<sse.http.response.*>),
+L<PAGI::Test::Client>'s C<sse> method never hands you an SSE connection
+object at all -- it returns a L<PAGI::Test::Response> instead, mirroring
+the server. See L<PAGI::Test::Client/sse>.
+
+=head1 SEND STRICTNESS
+
+The C<$send> coderef given to your app is strict: it validates every event
+against the PAGI sse send-sequencing rules via L<PAGI::SendValidation> and
+fails the returned Future (the app's C<await $send-E<gt>(...)> dies) for
+anything a real server would reject -- a duplicate C<sse.start>, a decline
+event after C<sse.start>, any stream event after a decline has started, or
+any event once a decline is complete. A rejected event is never appended
+to the client's readable stream. There is no lenient mode -- see
+L<PAGI::SendValidation/RULES> for the exact sse rule set.
+
+C<sse.close> is recognized as legal for the app to send proactively (it
+ends the stream from the server side; no C<sse.disconnect> is delivered
+back, since the app already knows it closed) and is idempotent once
+C<closed>, matching the reference server.
+
+An app that sends C<sse.send> after the peer (the test side, via L</close>)
+has already closed sees the write silently dropped instead of failing: a
+real server tolerates writes racing a peer that has already gone away.
 
 =head1 CONSTRUCTOR
 
@@ -280,9 +361,13 @@ Example:
 =head2 close
 
     $sse->close;
+    $sse->close($reason);
 
-Closes the SSE connection. This sends a C<sse.disconnect> event to the
-application, allowing it to clean up resources.
+Closes the SSE connection from the test (peer) side. Delivers a truthful
+C<sse.disconnect> (carrying this reason, default C<client_closed>) to the
+application exactly once -- whether the app is already waiting on
+C<receive> or calls it later. Idempotent: a second C<close> call is a
+no-op.
 
 =head2 is_closed
 
@@ -299,7 +384,12 @@ Returns true if the SSE connection has been closed.
     $sse->_start;
 
 Internal method called by L<PAGI::Test::Client> to start the SSE connection,
-send the initial scope to the app, and wait for the C<sse.start> event.
+send the initial scope to the app, and wait for either the C<sse.start>
+event or a completed decline (C<sse.http.response.*>). Does not croak on a
+decline; L<PAGI::Test::Client> checks C<_declined> afterward to decide
+whether to hand back this object or build a L<PAGI::Test::Response> from
+C<_decline_status>/C<_decline_headers>/C<_decline_body> instead. These are
+not part of the public API.
 
 =head1 SSE PROTOCOL
 
@@ -307,11 +397,14 @@ This module implements the PAGI SSE protocol:
 
 =over 4
 
-=item 1. App sends C<sse.start> event with status and headers
+=item 1. App sends C<sse.start> event with status and headers -- or, instead,
+declines with C<sse.http.response.start>/C<.body> (see L</SEND STRICTNESS>)
 
 =item 2. App sends C<sse.send> events with event/data/id/retry fields
 
-=item 3. Test sends C<sse.disconnect> event when connection is closed
+=item 3. Either side ends the connection: the test via L</close> (delivering
+exactly one C<sse.disconnect> to the app, carrying a truthful reason), or
+the app via C<sse.close>
 
 =back
 
