@@ -155,29 +155,28 @@ subtest 'exception after response started' => sub {
 # =============================================================================
 # Test: App returns without sending response (common async mistake)
 # =============================================================================
+#
+# B2 ruling (PAGI-Tools alignment): Test::Client mirrors the server here --
+# an app that never reaches a legal terminal state is an abnormal
+# disconnect (server_error), not a hard die. It warns instead, the same way
+# the real server would.
 
-subtest 'app returns without sending response dies' => sub {
+subtest 'app returns without sending response warns and disconnects' => sub {
     my $empty_app = async sub {
         my ($scope, $receive, $send) = @_;
         # Forgot to send anything!
         return;
     };
 
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+
     my $client = PAGI::Test::Client->new(app => $empty_app);
+    my $res = $client->get('/');
 
-    my $died = 0;
-    my $error;
-    eval {
-        $client->get('/');
-    };
-    if ($@) {
-        $died = 1;
-        $error = $@;
-    }
-
-    ok $died, 'request died when no response sent';
-    like $error, qr/App returned without sending response/, 'error message is helpful';
-    like $error, qr/await/, 'error mentions await';
+    ok $res, 'request completes rather than dying';
+    is scalar(@warnings), 1, 'exactly one warning';
+    like $warnings[0], qr/incomplete/i, 'warning documents the incomplete response';
 };
 
 subtest 'app with only response.start (no body) still works' => sub {

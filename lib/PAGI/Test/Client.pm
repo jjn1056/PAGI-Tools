@@ -5,6 +5,7 @@ use warnings;
 use Future::AsyncAwait;
 use Carp qw(croak);
 
+use PAGI::SendValidation;
 use PAGI::Test::ConnectionState;
 use PAGI::Test::Response;
 use PAGI::Utils ();
@@ -100,10 +101,19 @@ sub _request {
         return { type => 'http.disconnect' };
     };
 
-    # Build send (captures response)
+    # Build send (captures response). Strict: illegal events (per
+    # PAGI::SendValidation's http rules) fail the returned Future -- a
+    # canonical test client must not accept what a real server would reject
+    # -- and are never appended to @events.
+    my $sv = PAGI::SendValidation->new(scope_type => 'http', extensions => {});
     my @events;
     my $send = async sub {
         my ($event) = @_;
+
+        if (my $err = $sv->check($event)) {
+            die $err->message . "\n";
+        }
+
         my %captured = %$event;
 
         if (my $conn = $scope->{'pagi.connection'}) {
@@ -135,6 +145,19 @@ sub _request {
         if ($self->{raise_app_exceptions}) {
             die $exception;
         }
+
+        if ($sv->complete) {
+            # The wire contract was already satisfied (terminal body chunk,
+            # any declared trailers) before the app threw -- mirror the
+            # server: the response stands and this is a clean completion,
+            # not a disconnect.
+            if (my $conn = $scope->{'pagi.connection'}) {
+                $conn->_mark_complete;
+            }
+            warn "exception after response completed: $exception";
+            return $self->_build_response(\@events);
+        }
+
         # Mimic server behavior: return 500 response
         if (my $conn = $scope->{'pagi.connection'}) {
             $conn->_mark_response_started;            # the 500 IS a response
@@ -148,12 +171,16 @@ sub _request {
         );
     }
 
-    # Check for incomplete response (common async mistake)
-    my $has_response_start = grep { $_->{type} eq 'http.response.start' } @events;
-    unless ($has_response_start) {
-        die "App returned without sending response. "
-          . "Did you forget to 'await' your \$send calls? "
-          . "See PAGI::Tutorial section on async patterns.\n";
+    # Verify the app satisfied the wire contract before returning -- mirror
+    # the server: an incomplete response (no terminal body chunk, or
+    # declared trailers never sent) is an abnormal disconnect, not a clean
+    # completion.
+    if (my $err = $sv->finalize) {
+        if (my $conn = $scope->{'pagi.connection'}) {
+            $conn->_mark_disconnected('server_error');
+        }
+        warn "incomplete response: $err\n";
+        return $self->_build_response(\@events);
     }
 
     if (my $conn = $scope->{'pagi.connection'}) {
@@ -191,7 +218,8 @@ sub _build_scope {
 
     my $scope = {
         type         => 'http',
-        pagi         => { version => '0.2', spec_version => '0.2' },
+        # source of truth: released PAGI::Server scope advertisement
+        pagi         => { version => '0.4', spec_version => '0.3' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -386,7 +414,8 @@ sub websocket {
 
     my $scope = {
         type         => 'websocket',
-        pagi         => { version => '0.2', spec_version => '0.2' },
+        # source of truth: released PAGI::Server scope advertisement
+        pagi         => { version => '0.4', spec_version => '0.3' },
         http_version => '1.1',
         scheme       => 'ws',
         path         => $path,
@@ -477,7 +506,8 @@ sub sse {
 
     my $scope = {
         type         => 'sse',
-        pagi         => { version => '0.2', spec_version => '0.2' },
+        # source of truth: released PAGI::Server scope advertisement
+        pagi         => { version => '0.4', spec_version => '0.3' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -514,7 +544,8 @@ sub start {
 
     my $scope = {
         type          => 'lifespan',
-        pagi          => { version => '0.2', spec_version => '0.2' },
+        # source of truth: released PAGI::Server scope advertisement
+        pagi          => { version => '0.4', spec_version => '0.3' },
         state  => $self->{state},
     };
 
@@ -806,6 +837,37 @@ cookies, and basic protocol flows. For behavior that depends on real socket I/O,
 HTTP framing, backpressure, or server lifecycle semantics, prefer testing
 against L<PAGI::Server>.
 
+=head1 SEND STRICTNESS (http)
+
+The C<$send> coderef given to your app during an HTTP request is strict: it
+validates every event against the PAGI http send-sequencing rules via
+L<PAGI::SendValidation> and fails the returned Future (the app's C<await
+$send->(...)> dies) for anything a real server would reject -- an
+unrecognized or missing event C<type> (C<malformed>/C<unknown_type>), an
+out-of-order event such as a duplicate C<http.response.start> or a body
+chunk before it (C<sequence>), or undeclared C<http.response.trailers>
+(C<sequence>). A rejected event is never appended to the assembled
+response. There is no lenient mode -- a canonical test client must not
+accept what the server would fail; see L<PAGI::SendValidation/RULES> for
+the exact http rule set.
+
+An app that returns without reaching a legal terminal state (no terminal
+body chunk, or declared trailers never sent -- the C<incomplete> category)
+is treated as an abnormal disconnect, not a clean completion: C<finalize>
+reports it, C<pagi.connection> fires C<on_disconnect('server_error')>
+instead of C<on_complete>, and a warning is issued, mirroring how a real
+server logs an incomplete response.
+
+An exception the app throws is likewise judged against how much of the
+wire contract was already satisfied: if it happens before the response
+reached a legal terminal state, the existing synthetic 500 +
+C<server_error> disconnect behavior applies (see L</raise_app_exceptions>
+below). If it happens B<after> the response is already complete, the real
+response stands, C<on_complete> fires (not C<on_disconnect>), and a
+warning documents the stray post-completion exception -- the response the
+app actually sent to the wire is not retroactively invalidated by a bug in
+cleanup code that runs after it.
+
 =head1 CONSTRUCTOR
 
 =head2 new
@@ -860,9 +922,13 @@ lifespan.shutdown when stopped. Default is false (most tests don't need it).
 
 Controls how application exceptions are handled. Default is B<false>.
 
-When B<false> (default): Exceptions are trapped and converted to a 500 response,
-mimicking how a real server behaves. The exception is available via
-C<< $response->exception >>:
+When B<false> (default): Exceptions are trapped. If the response had not yet
+reached a legal terminal state, this converts to a 500 response, mimicking
+how a real server behaves; the exception is available via
+C<< $response->exception >>. If the response had B<already> completed (see
+L</SEND STRICTNESS (http)> above), the real response is returned instead --
+the exception did not corrupt anything already sent to the wire, so
+inventing a 500 in its place would misreport what happened.
 
     my $res = $client->get('/broken');
     is $res->status, 500;

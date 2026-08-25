@@ -163,6 +163,26 @@
     toolkit-internal infrastructure (not a public application-facing API) --
     it exists so PAGI::Test::Client's strict mode and the development Lint
     middleware share one validation core instead of each reimplementing it.
+  - [BREAKING] PAGI::Test::Client's HTTP C<$send> is now strict, with no
+    lenient mode: illegal events (unrecognized or missing type, out-of-order
+    events such as a duplicate http.response.start or a body before it,
+    undeclared http.response.trailers -- the malformed/unknown_type/sequence
+    categories) now fail the returned Future instead of being silently
+    absorbed. An app that returns without reaching a legal terminal state
+    (no terminal body chunk, or declared trailers never sent -- incomplete)
+    is now reported as an abnormal server_error disconnect with a warning,
+    not a clean completion; it previously hard-died with a generic
+    "forgot to await" message instead. Every scope now advertises
+    pagi.version 0.4 / spec_version 0.3 (was 0.2), matching the released
+    server.
+  - [BREAKING] direction change: when an app throws B<after> its HTTP
+    response already reached a legal terminal state, PAGI::Test::Client now
+    returns the real, already-complete response (firing on_complete, not
+    on_disconnect) instead of overwriting it with a synthetic 500 --
+    mirroring the server, since the exception did not corrupt anything
+    already sent to the wire. A stray warning documents the post-completion
+    exception. An exception before the response is complete keeps the
+    existing 500 + server_error behavior.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key
