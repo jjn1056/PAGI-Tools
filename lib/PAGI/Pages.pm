@@ -823,7 +823,9 @@ sub _assembled_headers {
         my $version = PAGI::Request->new($scope)->http_version;
         croak 'PAGI::Pages status 426 Upgrade requires HTTP/1.1'
             unless defined($version) && !ref($version) && $version eq '1.1';
-        push @headers, Connection => 'Upgrade';
+        # No Connection header: connection-level headers belong to the
+        # server, and the PAGI spec's Upgrade companion rule has the server
+        # supply the RFC 9110 'Connection: upgrade' pair itself.
     }
 
     push @headers, 'Cache-Control' => $page->{cache_control}
@@ -1471,7 +1473,9 @@ C<instance>.
 
 The emitted mappings are C<challenge> to C<WWW-Authenticate> for 401 or
 C<Proxy-Authenticate> for 407, C<allow> to normalized C<Allow> for 405, and
-C<upgrade> to C<Upgrade> plus C<Connection: Upgrade> for HTTP/1.1-only 426.
+C<upgrade> to C<Upgrade> for the HTTP/1.1-only 426 (connection-level headers
+belong to the server: a PAGI server supplies the RFC 9110
+C<Connection: upgrade> companion itself).
 Those four inputs are mandatory. C<length> emits
 C<Content-Range: bytes */N>; C<retry_after> applies to 413, 429, 503, and
 redirects; C<blocked_by> emits a C<blocked-by> Link; C<login_url> becomes the

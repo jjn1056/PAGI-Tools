@@ -175,8 +175,10 @@ subtest 'mandatory and cache fields survive response event emission' => sub {
     my $upgrade = send_response(PAGI::Pages->upgrade_required(
         http_scope(), as => 'text', upgrade => 'websocket',
     ));
-    is([event_header_all($upgrade, 'Connection')], ['Upgrade'],
-        '426 emits HTTP/1.1 connection signaling on http.response.start');
+    is([event_header_all($upgrade, 'Connection')], [],
+        '426 emits no Connection header (a PAGI server supplies the RFC 9110 companion itself)');
+    is([event_header_all($upgrade, 'Upgrade')], ['websocket'],
+        '426 still emits its mandatory Upgrade header');
 
     my $override = send_response(PAGI::Pages->gone(
         http_scope(), as => 'text', cache_control => 'public, max-age=60',
@@ -219,7 +221,7 @@ subtest 'mandatory fields and Upgrade request versions are enforced' => sub {
     my $default = PAGI::Pages->upgrade_required(
         $default_version, as => 'text', upgrade => 'websocket',
     );
-    is($default->header('Connection'), 'Upgrade',
+    is($default->header('Upgrade'), 'websocket',
         'an absent HTTP version uses the request default of HTTP/1.1');
 
     for my $version ('1.0', '2', '3') {
