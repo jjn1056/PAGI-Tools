@@ -156,6 +156,13 @@
     one rewritten pair, and invalidates the request-header cache. Its proxy
     trust and HTTP-only gates are unchanged; this release does not extend these
     middleware behaviors to other protocols.
+  - New Features: new internal PAGI::SendValidation validates send-sequencing
+    for HTTP, WebSocket, SSE, and lifespan scopes (unknown/missing event
+    types, illegal ordering, undeclared extensions), mirroring the reference
+    server's PAGI::Server::EventValidator categories and intent. This is
+    toolkit-internal infrastructure (not a public application-facing API) --
+    it exists so PAGI::Test::Client's strict mode and the development Lint
+    middleware share one validation core instead of each reimplementing it.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key
