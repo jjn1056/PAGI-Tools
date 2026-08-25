@@ -2,6 +2,32 @@
 
 0.002003 - UNRELEASED
   [campaign notes]
+  - [BREAKING] PAGI::Middleware::Lint no longer keeps its own copy of
+    send-sequencing state; it delegates event-order legality (duplicate
+    http.response.start, body before start, sends after completion,
+    illegal trailers, and so on) to the shared PAGI::SendValidation core
+    also used by PAGI::Test::Client. Lint's previous hand-written warnings
+    for these cases ("http.response.start sent multiple times",
+    "http.response.body sent after response finished (more=0)") are gone;
+    the same violations are now caught with a core-derived, app-contextual
+    message instead (e.g. "app sent 'http.response.body' out of order
+    (cannot send http.response.body: response already complete) -- check
+    the order your app calls $send in for this response"). In strict mode,
+    a shared-core violation now rejects the event outright (never
+    forwarded, the call fails) instead of warning and forwarding it as
+    before. Lint's own remaining checks are the complementary ones a
+    server can't give: a connection-specific header (connection,
+    transfer-encoding) set by the app on http.response.start warns with
+    app context before forwarding (always forwarded -- the server
+    enforces the strip); trailers declared via trailers => 1 but never
+    sent by app return get a friendly diagnostic distinct from the core's
+    bare "incomplete" error; and overlapping in-flight sends (a second
+    $send issued before the previous one was awaited) warn in both strict
+    and non-strict mode, since PAGI leaves overlap unspecified rather than
+    illegal. Also fixed a stale POD claim that http.response.body's more
+    key was validated for presence -- it never was; the real more-key rule
+    (absent/false/file/fh marks a chunk terminal, and a further body event
+    after that is illegal) is now genuinely enforced, via the shared core.
   - [BREAKING] Removed PAGI::Middleware::WebSocket::RateLimit: it impersonated
     server lifecycle events it could not keep faithful (ghost reason-less
     repeated disconnects, fire-and-forget close). Rate limiting is app
