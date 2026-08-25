@@ -29,6 +29,25 @@ subtest 'generated IDs are unique' => sub {
     }
 };
 
+subtest 'custom generator is stored and invoked' => sub {
+    my $custom_called = 0;
+    my $custom_scope;
+
+    my $mid = PAGI::Middleware::RequestId->new(
+        generator => sub {
+            my ($scope) = @_;
+            $custom_called = 1;
+            $custom_scope = $scope;
+            return 'custom-id';
+        },
+    );
+
+    my $id = $mid->{generator}->({ type => 'http' });
+    ok($custom_called, 'custom generator callback was invoked');
+    is($custom_scope, { type => 'http' }, 'scope passed correctly');
+    is($id, 'custom-id', 'return value passed correctly');
+};
+
 subtest 'middleware adds request ID to scope and response' => sub {
     my $mid = PAGI::Middleware::RequestId->new(
         header => 'X-Request-ID',
