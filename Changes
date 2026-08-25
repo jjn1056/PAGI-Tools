@@ -1,6 +1,20 @@
 # Revision history for PAGI-Tools
 
-0.002003
+0.002003 - UNRELEASED
+  [campaign notes]
+  - [BREAKING] Removed PAGI::Middleware::WebSocket::RateLimit: it impersonated
+    server lifecycle events it could not keep faithful (ghost reason-less
+    repeated disconnects, fire-and-forget close). Rate limiting is app
+    policy; a receive-loop recipe is coming in a later Cookbook pass.
+  - [BREAKING] Removed PAGI::App::SSE::Pubsub, PAGI::App::WebSocket::Broadcast,
+    and PAGI::App::WebSocket::Chat: they taught a send pattern the PAGI spec
+    now rules out (holding and calling another scope's send). Real fan-out
+    belongs to the coming PAGI-Channels distribution (own-scope
+    receive-multiplexed messaging).
+  - PAGI::App::WebSocket::Echo's on_disconnect callback now receives
+    ($scope, $code, $reason) instead of ($scope, $code), so handlers can see
+    why the peer disconnected.
+
   - New PAGI::Pages constructs ordinary negotiated Responses and coderef terminal
     endpoints for the fixed PAGI welcome page, registered or strict custom
     4xx/5xx problems, and 301/302/303/307/308 redirects. It supports HTML,

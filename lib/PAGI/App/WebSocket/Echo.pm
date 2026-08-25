@@ -58,7 +58,7 @@ sub to_app {
                     });
                 }
             } elsif ($event->{type} eq 'websocket.disconnect') {
-                $on_disconnect->($scope, $event->{code}) if $on_disconnect;
+                $on_disconnect->($scope, $event->{code}, $event->{reason}) if $on_disconnect;
                 last;
             }
         }
@@ -80,7 +80,9 @@ the sender, preserving message type (text or binary).
 
 =item * C<on_connect> - Callback when client connects
 
-=item * C<on_disconnect> - Callback when client disconnects
+=item * C<on_disconnect> - Callback when client disconnects. Receives
+C<($scope, $code, $reason)>: the WebSocket close code and, when the
+peer supplied one, the disconnect reason string.
 
 =back
 

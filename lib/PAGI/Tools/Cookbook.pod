@@ -1574,56 +1574,16 @@ that hashref with a convenient (and typo-catching) API.
 
 =head1 REAL-TIME PATTERNS
 
-=head2 PubSub for WebSocket Chat
+=head2 Real-Time Fan-Out (Pub/Sub)
 
-For real-time features with multiple WebSocket clients:
-
-  use strict;
-  use warnings;
-  use Future::AsyncAwait;
-  use PAGI::App::Router;
-  use PAGI::WebSocket;
-
-  # Simple in-memory room tracking
-  my %rooms;  # room => { client_id => $ws }
-  my $next_id = 1;
-
-  my $router = PAGI::App::Router->new;
-
-  $router->websocket('/chat/{room}', raw => async sub {
-      my ($scope, $receive, $send) = @_;
-      my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-      my $room = $scope->{path_params}{room};
-      my $client_id = $next_id++;
-
-      await $ws->accept;
-
-      # Keep connection alive through proxies/NAT (protocol-level ping every 25s)
-      await $ws->keepalive(25);
-
-      # Join room
-      $rooms{$room}{$client_id} = $ws;
-
-      # Broadcast received messages to all clients in room
-      await $ws->each_text(async sub {
-          my ($text) = @_;
-          for my $id (keys %{$rooms{$room}}) {
-              next if $id == $client_id;  # Don't echo back to sender
-              await $rooms{$room}{$id}->try_send_text($text);
-          }
-      });
-
-      # Leave room on disconnect
-      delete $rooms{$room}{$client_id};
-      delete $rooms{$room} unless keys %{$rooms{$room}};
-  });
-
-  $router->to_app;
-
-B<Important:> This in-memory approach works within a single process. For
-multi-worker or multi-server deployments, use Redis pub/sub or a message broker.
-
-See L<PAGI::App::WebSocket::Chat> for a full-featured chat application.
+Fanning a message out to other WebSocket or SSE connections means one
+scope's handler holding and calling C<send> for a different scope. PAGI's
+sequential-sends contract only covers a single scope's own C<send>, so an
+architecture that holds other scopes' sends cannot earn full fidelity to it
+without its own multiplexing layer. That layer is the scope of the coming
+B<PAGI-Channels> distribution (own-scope receive-multiplexed messaging,
+with in-memory and Redis backends) rather than this Cookbook. Reach for it
+when you need chat rooms, live dashboards, or any other fan-out pattern.
 
 =head2 SSE Dashboard
 
@@ -2485,8 +2445,6 @@ See L<PAGI::Test::Client> for the full API including WebSocket and SSE testing.
 =item * L<PAGI::Endpoint::Router> - Method-oriented routing frontend
 
 =item * L<PAGI::Middleware::Session> - Session management
-
-=item * L<PAGI::App::WebSocket::Chat> - Multi-room chat application
 
 =item * L<PAGI::Middleware::XSendfile> - Delegate file serving to reverse proxy
 

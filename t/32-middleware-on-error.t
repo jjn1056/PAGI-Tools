@@ -1,10 +1,10 @@
 #!/usr/bin/env perl
 
 # =============================================================================
-# Test: Middleware on_error callbacks
+# Test: Middleware callback config storage
 #
-# Verifies that WebSocket::RateLimit properly invokes on_error callbacks
-# when send operations fail.
+# Verifies that RequestId properly stores and invokes its generator
+# callback config, both the default and a custom override.
 # =============================================================================
 
 use strict;
@@ -14,36 +14,35 @@ use Future;
 use Future::AsyncAwait;
 
 # =============================================================================
-# Test: WebSocket::RateLimit on_error configuration
+# Test: RequestId generator config
 # =============================================================================
 
-subtest 'WebSocket::RateLimit on_error config' => sub {
-    require PAGI::Middleware::WebSocket::RateLimit;
+subtest 'RequestId generator config' => sub {
+    require PAGI::Middleware::RequestId;
 
-    # Test default on_error exists
-    my $mw = PAGI::Middleware::WebSocket::RateLimit->new();
-    ok($mw->{on_error}, 'default on_error callback exists');
-    is(ref($mw->{on_error}), 'CODE', 'on_error is a coderef');
+    # Test default generator exists
+    my $mw = PAGI::Middleware::RequestId->new();
+    ok($mw->{generator}, 'default generator callback exists');
+    is(ref($mw->{generator}), 'CODE', 'generator is a coderef');
 
-    # Test custom on_error is stored
+    # Test custom generator is stored
     my $custom_called = 0;
-    my $custom_error;
-    my $custom_event;
+    my $custom_scope;
 
-    my $mw2 = PAGI::Middleware::WebSocket::RateLimit->new(
-        on_error => sub {
-            my ($error, $event) = @_;
+    my $mw2 = PAGI::Middleware::RequestId->new(
+        generator => sub {
+            my ($scope) = @_;
             $custom_called = 1;
-            $custom_error = $error;
-            $custom_event = $event;
+            $custom_scope = $scope;
+            return 'custom-id';
         },
     );
 
     # Invoke the callback manually to verify it's wired up
-    $mw2->{on_error}->('rate limit error', { type => 'websocket.close' });
-    ok($custom_called, 'custom on_error callback was invoked');
-    is($custom_error, 'rate limit error', 'error passed correctly');
-    is($custom_event, { type => 'websocket.close' }, 'event passed correctly');
+    my $id = $mw2->{generator}->({ type => 'http' });
+    ok($custom_called, 'custom generator callback was invoked');
+    is($custom_scope, { type => 'http' }, 'scope passed correctly');
+    is($id, 'custom-id', 'return value passed correctly');
 };
 
 done_testing;
