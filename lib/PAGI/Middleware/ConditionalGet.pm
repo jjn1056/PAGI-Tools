@@ -63,6 +63,12 @@ sub wrap {
 
         my $wrapped_send = async sub  {
         my ($event) = @_;
+            # Once we've sent our own 304, the wrapped app's remaining
+            # events (any further body chunks, or declared trailers) are
+            # for a representation the client never receives -- swallow
+            # all of them instead of forwarding a stray post-terminal send.
+            return if $sent_304;
+
             if ($event->{type} eq 'http.response.start') {
                 $response_status = $event->{status};
                 $response_headers = $event->{headers};
@@ -104,7 +110,6 @@ sub wrap {
                 await $send->($event);
             }
             elsif ($event->{type} eq 'http.response.body') {
-                return if $sent_304;  # Skip body if we sent 304
                 await $send->($event);
             }
             else {

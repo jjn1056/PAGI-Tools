@@ -9,6 +9,7 @@ use IO::Async::Loop;
 use lib 'lib';
 
 use PAGI::Middleware::Head;
+use PAGI::Test::Client;
 
 my $loop = IO::Async::Loop->new;
 
@@ -264,6 +265,32 @@ subtest 'Head middleware preserves other HTTP methods' => sub {
         is $received_method, $method, "$method request passed through unchanged";
         is $sent[1]{body}, 'Response', "body preserved for $method";
     }
+};
+
+subtest 'A1: HEAD with declared trailers never triggers the strict client incomplete-response warning' => sub {
+    my $mw = PAGI::Middleware::Head->new;
+
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type     => 'http.response.start',
+            status   => 200,
+            headers  => [['content-type', 'text/plain'], ['trailer', 'x-checksum']],
+            trailers => 1,
+        });
+        await $send->({ type => 'http.response.body', body => 'Hello, World!', more => 0 });
+        await $send->({ type => 'http.response.trailers', headers => [['x-checksum', 'abc123']] });
+    };
+
+    my $wrapped = $mw->wrap($app);
+
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+    my $res = PAGI::Test::Client->new(app => $wrapped)->head('/');
+
+    is $res->status, 200, 'clean bodyless response';
+    is $res->text, '', 'body is suppressed';
+    is scalar(@warnings), 0, 'no incomplete-response warning' or diag(@warnings);
 };
 
 done_testing;

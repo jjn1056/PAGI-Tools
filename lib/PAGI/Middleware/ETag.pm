@@ -82,6 +82,10 @@ sub wrap {
 
                 # If streaming, can't generate ETag
                 if ($event->{more}) {
+                    # No start was ever observed (a malformed inner app sent
+                    # a body chunk first) -- don't invent one to carry it.
+                    return unless defined $status;
+
                     $is_streaming = 1;
                     await $send->({
                         type    => 'http.response.start',
@@ -106,6 +110,11 @@ sub wrap {
         await $app->($scope, $receive, $wrapped_send);
 
         return if $is_streaming;
+
+        # The inner app never sent a start event at all -- don't invent a
+        # response it never gave us; let the server's no-response backstop
+        # fire with its accurate diagnostic.
+        return unless defined $status;
 
         # Generate ETag from body
         my $body = join('', @body_parts);

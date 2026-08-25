@@ -361,12 +361,17 @@ similar headers survive for target, fallback, error, and sendfile responses.
 The boundary never rewrites HEAD to GET. Custom HEAD routes still receive
 method C<HEAD>, so they can avoid an expensive GET handler. At the wire it
 suppresses byte bodies, every chunk of a streaming body, file/sendfile body
-events, and trailers, then emits one empty terminal body event. Response start
-and other non-body events pass through.
+events, and trailers, then emits one empty terminal body event. Response
+start and other non-body events pass through unchanged, except that a start
+event declaring C<< trailers => 1 >> is forwarded as a copy with that key
+removed, since the suppressed wire never sends the trailers event it
+promised.
 
-L<PAGI::Middleware::Head> is an older explicit middleware that rewrites HEAD
-to GET. It is unnecessary under Compose and can bypass a custom HEAD route; do
-not enable it accidentally.
+L<PAGI::Middleware::Head> is an older explicit middleware that delegates its
+own wire suppression to this same boundary, so stacking it under Compose is
+harmless but redundant. It still unconditionally rewrites HEAD to GET before
+the inner app runs, though, so it can bypass a custom HEAD route; do not
+enable it accidentally.
 
 =head1 ERRORS
 

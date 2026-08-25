@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Routing::HeadBoundary;
 
 =head1 NAME
 
@@ -39,54 +40,23 @@ sub wrap {
 
     return async sub  {
         my ($scope, $receive, $send) = @_;
-        # Skip for non-HTTP requests
-        if ($scope->{type} ne 'http') {
-            await $app->($scope, $receive, $send);
-            return;
+
+        # Wire-level suppression is delegated to the shared boundary (the
+        # same one Compose and automatic routing HEAD handling use). For
+        # non-HTTP or non-HEAD scopes, and for a scope already owned by an
+        # outer boundary, prepare() returns the original arguments unchanged.
+        my ($inner_scope, $wire_send)
+            = PAGI::Routing::HeadBoundary->prepare($scope, $send);
+
+        # Unlike the shared boundary (which preserves HEAD so custom HEAD
+        # routes can see it), this middleware changes the method to GET so
+        # the inner app can compute the full representation normally.
+        if (($inner_scope->{type} // '') eq 'http'
+            && ($inner_scope->{method} // '') eq 'HEAD') {
+            $inner_scope = $self->modify_scope($inner_scope, { method => 'GET' });
         }
 
-        # Only handle HEAD requests
-        my $is_head = $scope->{method} eq 'HEAD';
-
-        if (!$is_head) {
-            await $app->($scope, $receive, $send);
-            return;
-        }
-
-        # Change HEAD to GET for inner app
-        my $modified_scope = $self->modify_scope($scope, { method => 'GET' });
-
-        # Intercept send to suppress body
-        my $wrapped_send = async sub  {
-        my ($event) = @_;
-            my $type = $event->{type};
-
-            if ($type eq 'http.response.start') {
-                # Pass through headers as-is (including Content-Length)
-                await $send->($event);
-            }
-            elsif ($type eq 'http.response.body') {
-                # Suppress body content but preserve the event structure
-                # Send an empty body with more => 0 to complete the response
-                if (!$event->{more}) {
-                    await $send->({
-                        type => 'http.response.body',
-                        body => '',
-                        more => 0,
-                    });
-                }
-                # Otherwise, skip the event entirely (streaming chunks)
-            }
-            elsif ($type eq 'http.response.trailers') {
-                # Skip trailers for HEAD requests
-            }
-            else {
-                # Pass through other events
-                await $send->($event);
-            }
-        };
-
-        await $app->($modified_scope, $receive, $wrapped_send);
+        await $app->($inner_scope, $receive, $wire_send);
     };
 }
 
@@ -107,6 +77,16 @@ app can calculate Content-Length normally.
 in the stack, so Content-Length is calculated from the GET response.
 
 =item * Trailers are also suppressed for HEAD requests.
+
+=item * Wire suppression is delegated to L<PAGI::Routing::HeadBoundary>, the
+same boundary L<PAGI::Compose> and automatic routing HEAD handling use.
+Enabling this middleware under a Compose-managed stack is harmless but
+redundant: the shared boundary's scope marker means only the first owner
+wires suppression, so nothing is suppressed twice. This middleware still
+unconditionally rewrites the request method from HEAD to GET before running
+the inner app, though, so placing it in front of a router with an explicit
+HEAD route can still bypass that route; prefer Compose's or Routing's
+automatic HEAD handling there instead.
 
 =back
 

@@ -50,6 +50,12 @@ sub _wire_send {
             });
         }
 
+        if ($type eq 'http.response.start' && $event->{trailers}) {
+            my %copy = %$event;
+            delete $copy{trailers};
+            return $send->(\%copy);
+        }
+
         return $send->($event);
     };
 }

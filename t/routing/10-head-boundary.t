@@ -3,8 +3,10 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 use PAGI::Routing::HeadBoundary;
+use PAGI::Test::Client;
 
 sub capture_send {
     my @events;
@@ -69,5 +71,58 @@ like(
     qr/HEAD boundary send must be a coderef/,
     'invalid send fails synchronously',
 );
+
+subtest 'A1: a declared-trailers start is forwarded as a copy with the key stripped' => sub {
+    my ($transport, $events) = capture_send();
+    my (undef, $send) = PAGI::Routing::HeadBoundary->prepare(
+        { type => 'http', method => 'HEAD' }, $transport,
+    );
+    my $start = {
+        type    => 'http.response.start',
+        status  => 200,
+        headers => [['trailer', 'x-checksum']],
+        trailers => 1,
+    };
+    $send->($start)->get;
+    $send->({ type => 'http.response.body', body => 'hi', more => 0 })->get;
+    $send->({ type => 'http.response.trailers', headers => [['x-checksum', 'abc']] })->get;
+
+    is(scalar(@$events), 2, 'start plus one empty terminal body reach transport');
+    is($events->[0], {
+        type    => 'http.response.start',
+        status  => 200,
+        headers => [['trailer', 'x-checksum']],
+    }, 'the forwarded start no longer declares trailers');
+    isnt(refaddr($events->[0]), refaddr($start), 'the forwarded start is a copy, not the original');
+    is($start->{trailers}, 1, 'the caller-owned start event is untouched');
+};
+
+subtest 'A1: HEAD through the boundary never triggers the strict client incomplete-response warning' => sub {
+    my $inner_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type     => 'http.response.start',
+            status   => 200,
+            headers  => [['content-type', 'text/plain'], ['trailer', 'x-checksum']],
+            trailers => 1,
+        });
+        await $send->({ type => 'http.response.body', body => 'hi', more => 0 });
+        await $send->({ type => 'http.response.trailers', headers => [['x-checksum', 'abc123']] });
+    };
+    my $boundary_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        my ($inner_scope, $wire_send)
+            = PAGI::Routing::HeadBoundary->prepare($scope, $send);
+        await $inner_app->($inner_scope, $receive, $wire_send);
+    };
+
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+    my $res = PAGI::Test::Client->new(app => $boundary_app)->head('/');
+
+    is $res->status, 200, 'clean bodyless response';
+    is $res->text, '', 'body is suppressed';
+    is scalar(@warnings), 0, 'no incomplete-response warning' or diag(@warnings);
+};
 
 done_testing;
