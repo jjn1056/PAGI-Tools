@@ -201,9 +201,9 @@ C<awaiting_trailers>, C<complete>. Starting state is C<initial>.
 
 Illegal: an unrecognized event type; an event with no C<type>; a duplicate
 C<http.response.start>; C<http.response.body> before C<http.response.start>;
-a body chunk after the body is already terminal (C<more =E<gt> 0> is what
-keeps it non-terminal -- C<more =E<gt> 0> absent, false, or a C<file>/C<fh>
-body all count as terminal); C<http.response.trailers> without
+a body chunk after the body is already terminal (C<more =E<gt> 1> is what
+keeps it non-terminal -- C<more> absent, false, or a C<file>/C<fh> body all
+count as terminal); C<http.response.trailers> without
 C<trailers =E<gt> 1> declared on start, or before the body has reached its
 terminal chunk; any event at all once trailers have been sent;
 C<http.fullflush> when C<fullflush> is not in the scope's C<extensions>, or
@@ -236,7 +236,9 @@ States: C<initial>, C<streaming>, C<declining>, C<decline_complete>,
 C<closed>. Starting state is C<initial>.
 
 Illegal: any stream event (C<sse.start>, C<sse.send>, C<sse.comment>,
-C<sse.keepalive>, C<sse.close>) or decline event
+C<sse.keepalive>, C<sse.close>) once a decline has started -- both while
+still C<declining> (before its terminal body chunk) and once
+C<decline_complete> -- and likewise any decline event
 (C<sse.http.response.start>, C<sse.http.response.body>) once a decline has
 reached its terminal body chunk; a duplicate C<sse.start>; a decline
 (C<sse.http.response.start>) after C<sse.start>; C<http.fullflush> when
@@ -253,7 +255,11 @@ Legal terminal state for C<finalize>: C<closed> or C<decline_complete>.
 No event-driven state machine -- instead, C<enter_phase('startup'|
 'shutdown')> declares which phase is current (starting phase:
 C<startup>), driven externally by whatever is running the lifespan
-protocol, not by C<check>.
+protocol, not by C<check>. C<enter_phase> is trusted input: this module's
+phase-matching guarantees hold only when the driver calls it on real
+phase transitions (a real driver never opens C<shutdown> after
+C<lifespan.startup.failed> -- lifespan is finished at that point, not
+mid-startup); C<enter_phase> itself does not, and cannot, verify that.
 
 Illegal: C<lifespan.startup.complete>/C<.failed> while the current phase is
 not C<startup>; C<lifespan.shutdown.complete>/C<.failed> while the current
