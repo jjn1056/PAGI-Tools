@@ -97,12 +97,17 @@ sub handler {
             interval => 25,  # Ping every 25 seconds (under typical 30s proxy timeout)
             on_tick  => sub {
                 return unless $connected && $weak_send;
-                eval {
-                    $weak_send->({
-                        type => 'websocket.send',
-                        text => $JSON->encode({ type => 'ping', ts => time() }),
-                    });
-                };
+                # on_tick is a plain synchronous IO::Async callback, so this
+                # send can't be awaited here. $send returns a Future either
+                # way -- fire-and-forget it bare would swallow a genuine
+                # write failure silently, so handle it explicitly instead.
+                $weak_send->({
+                    type => 'websocket.send',
+                    text => $JSON->encode({ type => 'ping', ts => time() }),
+                })->on_fail(sub {
+                    my ($error) = @_;
+                    warn "Ping send to session $session_id failed: $error\n";
+                })->retain;
             },
         );
         $loop->add($ping_timer);
@@ -115,14 +120,18 @@ sub handler {
             for my $other (@$room_users) {
                 my $other_session = get_session($other->{id});
                 next unless $other_session && $other_session->{send_cb};
-                eval {
-                    _send_json_sync($other_session->{send_cb}, {
-                        type  => 'user_left',
-                        room  => $room_name,
-                        user  => $username,
-                        users => get_room_users($room_name),
-                    });
-                };
+                # This runs from the grace-period timer's on_expire (a plain
+                # synchronous callback), so it can't await -- handle the
+                # returned Future explicitly instead of firing it bare.
+                _send_json_sync($other_session->{send_cb}, {
+                    type  => 'user_left',
+                    room  => $room_name,
+                    user  => $username,
+                    users => get_room_users($room_name),
+                })->on_fail(sub {
+                    my ($error) = @_;
+                    warn "Failed to notify $other->{id} that $username left $room_name: $error\n";
+                })->retain;
             }
         };
 

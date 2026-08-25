@@ -105,7 +105,11 @@ sub handler {
             interval => 25,
             on_tick  => sub {
                 return unless $connected && $weak_ws;
-                eval { $weak_ws->try_send_json({ type => 'ping', ts => time() }) };
+                # on_tick is a plain synchronous IO::Async callback, so this
+                # can't be awaited. try_send_json never dies, but the
+                # returned Future still needs handling rather than being
+                # fired bare (a dropped, unawaited Future warns).
+                $weak_ws->try_send_json({ type => 'ping', ts => time() })->retain;
             },
         );
         $loop->add($ping_timer);
@@ -126,14 +130,18 @@ sub handler {
                 for my $other (@$room_users) {
                     my $other_session = get_session($other->{id});
                     next unless $other_session && $other_session->{send_cb};
-                    eval {
-                        $other_session->{send_cb}->({
-                            type  => 'user_left',
-                            room  => $room_name,
-                            user  => $username,
-                            users => get_room_users($room_name),
-                        });
-                    };
+                    # Runs from the grace-period timer's on_expire (a plain
+                    # synchronous callback), so it can't await -- handle the
+                    # returned Future explicitly instead of firing it bare.
+                    $other_session->{send_cb}->({
+                        type  => 'user_left',
+                        room  => $room_name,
+                        user  => $username,
+                        users => get_room_users($room_name),
+                    })->on_fail(sub {
+                        my ($error) = @_;
+                        warn "Failed to notify $other->{id} that $username left $room_name: $error\n";
+                    })->retain;
                 }
             };
 
@@ -404,7 +412,7 @@ async sub _handle_private_message {
 
     if ($target->{send_cb}) {
         eval {
-            $target->{send_cb}->({
+            await $target->{send_cb}->({
                 type => 'pm',
                 from => $session->{name},
                 text => $text,
@@ -499,7 +507,7 @@ async sub _broadcast_to_room {
         my $session = get_session($room_user->{id});
         next unless $session && $session->{send_cb};
 
-        eval { $session->{send_cb}->($data) };
+        eval { await $session->{send_cb}->($data) };
     }
 }
 

@@ -260,13 +260,20 @@ $router->mount('/ws' => async sub {
     await $ws->accept;
     await $ws->send_text('Connected! Send a message.');
 
-    await $ws->each_text(sub {
+    await $ws->each_text(async sub {
         my ($text) = @_;
 
-        # Respond immediately
-        $ws->try_send_text("Got: $text");
+        # Respond -- awaited, unlike the background tasks below. This is a
+        # PAGI protocol send on the live socket, not background work: each_text
+        # only serializes this callback against the next incoming message if
+        # the callback itself awaits what it sends, otherwise a second
+        # message could arrive and fire its own reply while this one is
+        # still in flight, overlapping sends on the same socket.
+        await $ws->try_send_text("Got: $text");
 
-        # For async I/O processing:
+        # For async I/O processing (genuinely fire-and-forget: this is
+        # background work, not a protocol send, so on_fail + retain is the
+        # right call here):
         fire_and_forget(log_to_analytics('ws_message', { text => $text }));
 
         # For CPU-intensive processing (e.g., NLP, image analysis):

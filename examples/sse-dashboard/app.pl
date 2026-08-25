@@ -46,12 +46,27 @@ sub start_metrics_broadcaster {
                 timestamp => time(),
             };
 
-            for my $sub (values %subscribers) {
+            # on_tick is a plain synchronous IO::Async callback, not an async
+            # sub, so these sends can't be awaited here -- each try_send_event
+            # returns a Future that must still be handled, not fired and
+            # forgotten. try_send_event never dies (it always resolves 0 or
+            # 1), but a failed send does NOT run on_close, so broadcast
+            # reaping has to be Future-aware: check the result and reap a
+            # dead subscriber right here instead of leaving it in
+            # %subscribers forever. ->retain keeps the Future from warning
+            # about being dropped unawaited.
+            for my $sub_id (keys %subscribers) {
+                my $sub = $subscribers{$sub_id};
                 $sub->{sse}->try_send_event(
                     event => 'metrics',
                     data  => $metrics,
                     id    => $event_id,
-                );
+                )->on_done(sub {
+                    my ($ok) = @_;
+                    return if $ok;
+                    delete $subscribers{$sub_id};
+                    stop_metrics_broadcaster();
+                })->retain;
             }
         },
     );

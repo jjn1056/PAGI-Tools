@@ -65,10 +65,14 @@ sub handler {
             interval => 10,  # Send stats every 10 seconds
             on_tick  => sub {
                 return unless $connected && $weak_send;
-                eval {
-                    # Fire and forget - send stats asynchronously
-                    _send_stats_sync($weak_send);
-                };
+                # on_tick is a plain synchronous IO::Async callback, so this
+                # send can't be awaited here. Handle the returned Future
+                # explicitly (on_fail + retain) instead of firing it bare,
+                # so a write failure doesn't vanish silently.
+                _send_stats_sync($weak_send)->on_fail(sub {
+                    my ($error) = @_;
+                    warn "SSE stats send to $sub_id failed: $error\n";
+                })->retain;
             },
         );
 
@@ -107,7 +111,11 @@ sub _send_stats_sync {
     });
 }
 
-# Background broadcaster - call this when system events occur
+# Background broadcaster - call this when system events occur. Called from
+# synchronous contexts (event hooks, timers), so it can't await -- every send
+# is handled explicitly instead of fired bare, and reaping a dead subscriber
+# is Future-aware: it happens when the send's Future actually fails, not from
+# a synchronous eval that a non-awaited async call could never trip.
 sub broadcast_event {
     my ($event) = @_;
 
@@ -117,19 +125,16 @@ sub broadcast_event {
         my $sub = $subscribers->{$sub_id};
         next unless $sub && $sub->{send_cb};
 
-        eval {
-            $sub->{send_cb}->({
-                type  => 'sse.send',
-                event => $event->{type},
-                data  => $JSON->encode($event->{data}),
-                id    => $event->{id},
-            });
-        };
-
-        if ($@) {
-            # Remove dead subscriber
+        $sub->{send_cb}->({
+            type  => 'sse.send',
+            event => $event->{type},
+            data  => $JSON->encode($event->{data}),
+            id    => $event->{id},
+        })->on_fail(sub {
+            my ($error) = @_;
+            warn "SSE broadcast to $sub_id failed: $error\n";
             remove_sse_subscriber($sub_id);
-        }
+        })->retain;
     }
 }
 

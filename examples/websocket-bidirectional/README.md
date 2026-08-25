@@ -36,6 +36,40 @@ cancel is the right call here because the losers are *our own branches* — unli
 a receive-multiplex, where the raced future is the live `$receive` that must not
 be cancelled.)
 
+## The queue: THE rule for more than one send-producer
+
+`incoming` and `outgoing` are two independent producers writing to the
+**same socket** at once. PAGI leaves overlapping in-flight sends
+unspecified — issuing a second send before the first has been awaited is
+exactly what the development `Lint` middleware's overlap check warns about —
+so this handler never calls `$ctx->send_text_if_connected` directly from more
+than one place. Instead, both branches route through one small serializing
+queue:
+
+```perl
+my $send_queue = Future->done;
+my $queue_send = sub {
+    my (@text) = @_;
+    my $prev = $send_queue;
+    $send_queue = (async sub {
+        await $prev;
+        await $ctx->send_text_if_connected(@text);
+    })->();
+    return $send_queue;
+};
+```
+
+Every call chains after the one before it, so only one send is ever in
+flight on this socket regardless of which branch queued it; awaiting the
+returned Future both confirms the send went out and naturally paces a
+producer against a slow or backpressured connection.
+
+This is **the** pattern for a full-duplex handler with more than one
+send-producer — every other example in this repo that faces the same
+problem (`sse-dashboard`, `endpoint-demo`, `background-tasks`,
+`10-chat-showcase`, `websocket-chat-v2`) points back to this same queue
+shape rather than inventing its own variant.
+
 ## Run
 
 ```bash

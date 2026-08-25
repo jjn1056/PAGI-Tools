@@ -55,7 +55,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 15. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
 16. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
 17. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
-18. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently
+18. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
 19. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Compose-owned routing outcomes
 
 **Note on `websocket-chat-v2/public`:** this directory is a symlink to

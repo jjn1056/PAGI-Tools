@@ -42,8 +42,8 @@ package MessageAPI {
         my $message = { id => $next_id++, text => $data->{text} };
         push @messages, $message;
 
-        # Notify SSE subscribers
-        MessageEvents::broadcast($message);
+        # Notify SSE subscribers -- awaited, not fired and forgotten.
+        await MessageEvents::broadcast($message);
 
         return $ctx->json($message, status => 201);
     }
@@ -93,11 +93,24 @@ package MessageEvents {
     my %subscribers; # In memory so has to be single process, no workers
     my $sub_id = 0;
 
-    sub broadcast {
+    # Awaited, not fired and forgotten -- the caller (MessageAPI::post) awaits
+    # this before responding, so a POST doesn't return before its own
+    # notification has gone out. try_send_json never dies (it always
+    # resolves 0 or 1), but a failed send does NOT run on_disconnect, so
+    # reaping a dead subscriber has to be Future-aware too: check the result
+    # per subscriber and drop it here rather than relying on a close
+    # callback that a send failure alone won't trigger.
+    async sub broadcast {
         my ($message) = @_;
-        for my $sse (values %subscribers) {
-            $sse->try_send_json($message);
+        my @sends;
+        for my $id (keys %subscribers) {
+            my $sse = $subscribers{$id};
+            push @sends, $sse->try_send_json($message)->on_done(sub {
+                my ($ok) = @_;
+                delete $subscribers{$id} unless $ok;
+            });
         }
+        await Future->wait_all(@sends) if @sends;
     }
 
     async sub on_connect {

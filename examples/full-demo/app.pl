@@ -193,7 +193,13 @@ $router->sse('/events', raw => async sub {
         });
     }
 
-    $disconnect->cancel if $disconnect->can('cancel') && !$disconnect->is_ready;
+    # Never cancel the live protocol receive: $disconnect is built directly
+    # from awaiting $receive->() in a loop, so cancelling it here would
+    # cancel the SSE scope's own receive call, not some internal detail of
+    # ours. If the stream finished on its own (never actually disconnected),
+    # just retain the still-pending watcher instead -- it resolves on its
+    # own whenever the transport eventually reports the real disconnect.
+    $disconnect->retain unless $disconnect->is_ready;
 })->name('sse_events');
 
 # ============================================================================
