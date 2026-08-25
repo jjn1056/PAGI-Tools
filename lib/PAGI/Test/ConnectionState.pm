@@ -1,6 +1,7 @@
 package PAGI::Test::ConnectionState;
 use strict;
 use warnings;
+use Future;
 
 =head1 NAME
 
@@ -9,31 +10,105 @@ PAGI::Test::ConnectionState - the pagi.connection object provided by PAGI::Test
 =head1 DESCRIPTION
 
 PAGI::Test is a test server, so it provides the per-request C<pagi.connection>
-object. It implements the surface L<PAGI::Request>/L<PAGI::Context> delegate to
-(C<is_connected>, C<disconnect_reason>, C<disconnect_future>, C<on_disconnect>,
-C<on_complete>) plus C<response_started>, mirroring production
-C<PAGI::Server::ConnectionState>: a clean completion ends the request and fires
-C<on_complete> but is not a disconnect; exactly one of C<on_complete> /
-C<on_disconnect> fires.
+object. It implements the full surface L<PAGI::Request>/L<PAGI::Context>
+delegate to (C<is_connected>, C<disconnect_reason>, C<disconnect_future>,
+C<on_disconnect>, C<on_complete>) plus C<response_started> and
+C<response_complete>, mirroring production C<PAGI::Server::ConnectionState>:
+a clean completion ends the request and fires C<on_complete> but is not a
+disconnect; exactly one of C<on_complete> / C<on_disconnect> fires.
+C<disconnect_future> is modeled fully, not left always-C<undef> -- see
+L</disconnect_future> below for how its behavior differs from production only
+in that this test double can actually resolve it.
 
 =cut
 
 sub new {
     my ($class) = @_;
     return bless {
-        _connected        => 1,
-        _response_started => 0,
-        _completed        => 0,           # explicit terminal-state flag, like production
-        _reason           => undef,
-        _disc_cbs         => [],
-        _comp_cbs         => [],
+        _connected          => 1,
+        _response_started   => 0,
+        _response_complete  => 0,
+        _completed          => 0,           # explicit terminal-state flag, like production
+        _reason             => undef,
+        _disc_cbs           => [],
+        _comp_cbs           => [],
+        _future             => undef,       # lazy disconnect_future, like production
     }, $class;
 }
 
 sub is_connected      { return $_[0]->{_connected} ? 1 : 0 }
 sub response_started  { return $_[0]->{_response_started} ? 1 : 0 }
 sub disconnect_reason { return $_[0]->{_reason} }
-sub disconnect_future { return undef }   # not supported by the test double (spec: undef = unsupported)
+
+=head2 response_complete
+
+    my $done = $conn->response_complete;   # undef or true
+
+True once this request's HTTP response has reached its legal terminal state
+(the terminal body chunk, or trailers if declared -- the same instant
+L<PAGI::SendValidation/complete> reports true for the scope). C<undef> before
+that. Unlike production (which always returns C<undef> -- see
+L<PAGI::Server::ConnectionState/response_complete> -- because a real socket
+server cannot always pin down the exact instant the last byte reached the
+client), this in-process mock knows precisely when the wire contract was
+satisfied and reports it, simplified to two states rather than production's
+three (C<undef>/false/true): C<undef> until complete, then C<1>. As with
+production, test C<defined> before relying on this if you want code that
+degrades gracefully against a server that can't track it.
+
+=cut
+
+sub response_complete { return $_[0]->{_response_complete} ? 1 : undef }
+
+# Server-internal: called from the send path once the response reaches its
+# legal terminal state (mirrors _mark_response_started's shape).
+sub _mark_response_complete { $_[0]->{_response_complete} = 1; return }
+
+=head2 disconnect_future
+
+    my $future = $conn->disconnect_future;  # always a Future
+    my $reason = await $future;
+
+Returns a Future that resolves, with the reason, on an B<abnormal>
+disconnect; stays pending forever after a B<clean> completion (use
+C<on_complete> to observe that case instead). The Future is created lazily on
+first call, exactly like production L<PAGI::Server::ConnectionState>:
+
+=over 4
+
+=item * B<connected> -- a fresh, pending Future is returned; it resolves
+later if C<_mark_disconnected> occurs.
+
+=item * B<disconnected (abnormal)> -- a Future already resolved with the
+disconnect reason is returned.
+
+=item * B<completed (clean)> -- a Future is returned and left pending
+forever; the completion already happened and was not a disconnect, so there
+is nothing for it to resolve with. This is the sharpest divergence from a
+naive "always returns a Future" implementation: calling this for the first
+time after a clean completion does B<not> retroactively synthesize a
+disconnect.
+
+=back
+
+=cut
+
+sub disconnect_future {
+    my ($self) = @_;
+
+    return $self->{_future} if $self->{_future};
+
+    $self->{_future} = Future->new;
+
+    # Resolve immediately only for an already-abnormal end. A clean
+    # completion leaves this pending forever -- on_complete is the signal
+    # for that case.
+    if (!$self->{_connected} && !$self->{_completed}) {
+        $self->{_future}->done($self->{_reason});
+    }
+
+    return $self->{_future};
+}
 
 # Late registration fires immediately for the terminal state that occurred —
 # distinguished by _completed (clean) vs a set _reason (abnormal), like production.
@@ -84,6 +159,9 @@ sub _mark_disconnected {
     return unless $self->{_connected};
     $self->{_connected} = 0;
     $self->{_reason}    = $reason // 'unknown';   # coerce like production
+    if ($self->{_future} && !$self->{_future}->is_ready) {
+        $self->{_future}->done($self->{_reason});
+    }
     _fire($_, $self->{_reason}) for @{$self->{_disc_cbs}};
     @{$self->{_disc_cbs}} = ();
     @{$self->{_comp_cbs}} = ();

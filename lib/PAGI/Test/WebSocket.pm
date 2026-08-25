@@ -32,12 +32,15 @@ sub new {
 sub _start {
     my ($self) = @_;
 
-    # websocket.http.response is always available on this path, mirroring
-    # the reference server: the extension denial is a portable escape hatch
-    # from an in-process test double, not something a test opts into.
+    # extensions is the SAME hashref PAGI::Test::Client advertised on the
+    # scope's `extensions` key -- one source of truth, not two independently
+    # hardcoded lists that can drift (B10). PAGI::Test::Client always sets
+    # this to { 'websocket.http.response' => {} }; the // {} guards direct
+    # construction of this class (bypassing Test::Client) with a scope that
+    # omits the key.
     my $sv = PAGI::SendValidation->new(
         scope_type => 'websocket',
-        extensions => { 'websocket.http.response' => {} },
+        extensions => $self->{scope}{extensions} // {},
     );
 
     # Create receive coderef for the app
@@ -351,10 +354,11 @@ see L<PAGI::SendValidation/RULES> for the exact websocket rule set.
 C<websocket.close> before C<websocket.accept> is a legal portable denial
 (no croak; the connection object reports the closed state -- see
 L</close_code>/L</close_reason>). The C<websocket.http.response> extension
-denial (C<websocket.http.response.start>/C<.body>) is always recognized by
-this test double, mirroring the reference server: the app can reject the
-handshake with a full HTTP response instead of a close frame, without
-opting into anything. A completed extension denial likewise sets
+denial (C<websocket.http.response.start>/C<.body>) is recognized whenever the
+scope advertises it -- L<PAGI::Test::Client> always does (see
+L<PAGI::Test::Client/SCOPE EXTENSIONS>), so in practice the app can reject
+the handshake with a full HTTP response instead of a close frame without
+opting into anything further. A completed extension denial likewise sets
 L</is_closed> true without a croak, but -- unlike a portable denial -- does
 B<not> populate L</close_code> (there is no RFC 6455 close code for an HTTP
 response).

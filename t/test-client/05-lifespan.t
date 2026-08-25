@@ -198,7 +198,9 @@ subtest 'startup awaiting real off-loop I/O completes (loop is driven)' => sub {
                 $hook_finished = 1;
                 await $send->({ type => 'lifespan.startup.complete' });
             }
-            await $receive->();   # block until shutdown
+            $event = await $receive->();   # block until shutdown
+            await $send->({ type => 'lifespan.shutdown.complete' })
+                if $event->{type} eq 'lifespan.shutdown';
             return;
         }
         return;
@@ -217,6 +219,61 @@ subtest 'startup awaiting real off-loop I/O completes (loop is driven)' => sub {
         sprintf('completes promptly (%.3fs), not a ~5s deadline spin', $elapsed);
 
     $client->stop;
+};
+
+# ---------------------------------------------------------------------------
+# B11: wrong-phase lifespan results fail via the B1 send-sequencing machine,
+# and stop() dies on lifespan.shutdown.failed symmetric with how start()
+# already dies on lifespan.startup.failed.
+# ---------------------------------------------------------------------------
+
+subtest 'B11: lifespan.shutdown.complete sent during the startup phase fails the send' => sub {
+    my $send_err;
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $event = await $receive->();
+        if ($event->{type} eq 'lifespan.startup') {
+            eval { await $send->({ type => 'lifespan.shutdown.complete' }); 1 }
+                or do { $send_err = $@ };
+            await $send->({ type => 'lifespan.startup.complete' });
+        }
+        $event = await $receive->();
+        if ($event->{type} eq 'lifespan.shutdown') {
+            await $send->({ type => 'lifespan.shutdown.complete' });
+        }
+    };
+
+    my $client = PAGI::Test::Client->new(app => $app, lifespan => 1);
+    ok lives { with_timeout(5, sub { $client->start }) },
+        'start() still succeeds -- the app recovers by sending the right result after';
+
+    ok $send_err, 'the wrong-phase send failed';
+    like $send_err, qr/phase/i, 'error names the phase mismatch';
+
+    $client->stop;
+};
+
+subtest 'B11: stop() dies when the app reports lifespan.shutdown.failed' => sub {
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $event = await $receive->();
+        await $send->({ type => 'lifespan.startup.complete' })
+            if $event->{type} eq 'lifespan.startup';
+        $event = await $receive->();
+        await $send->({ type => 'lifespan.shutdown.failed', message => 'cleanup blew up' })
+            if $event->{type} eq 'lifespan.shutdown';
+    };
+
+    my $client = PAGI::Test::Client->new(app => $app, lifespan => 1);
+    ok lives { with_timeout(5, sub { $client->start }) }, 'start() succeeds';
+
+    my $t0 = Time::HiRes::time();
+    my $err = dies { with_timeout(20, sub { $client->stop }) };
+    my $elapsed = Time::HiRes::time() - $t0;
+
+    ok $err, 'stop() dies when shutdown fails';
+    like $err, qr/cleanup blew up/, 'the shutdown failure message is surfaced';
+    ok $elapsed < 2, sprintf('fails promptly (%.3fs), not a ~5s silent deadline spin', $elapsed);
 };
 
 done_testing;

@@ -232,6 +232,34 @@
     C<client_closed>) instead of being repeated reason-less on every
     subsequent C<receive> call. C<< $sse->close >> now takes an optional
     C<$reason> argument.
+  - [BREAKING] PAGI::Test::Client's HTTP responses are now H1-flavored:
+    app-supplied C<Transfer-Encoding>/C<Connection> headers are stripped
+    (warned once per occurrence), mirroring PAGI::Server::Connection's HTTP/1.1
+    rule -- C<Upgrade>/C<TE>/C<Keep-Alive> are untouched (deliberately narrower
+    than the server's HTTP/2 six-name strip). A C<Date> header is added when
+    the app didn't supply one; an app-supplied C<Date> is preserved verbatim.
+  - [BREAKING] Every PAGI::Test::Client scope now advertises an C<extensions>
+    key: C<{}> for C<http> and C<sse> (this mock has no transport to flush, so
+    C<http.fullflush> stays genuinely unadvertised and unreachable through it),
+    and C<{ 'websocket.http.response' => {} }> for C<websocket> -- the SAME
+    shared hashref now threaded into L<PAGI::SendValidation> too, replacing
+    PAGI::Test::WebSocket's previously independently-hardcoded advertisement
+    of that extension (single source of truth; see
+    L<PAGI::Test::Client/SCOPE EXTENSIONS>).
+  - [BREAKING] PAGI::Test::Client's lifespan C<$send> is now strict too: a
+    result reported for the wrong phase (for example C<lifespan.shutdown.complete>
+    sent during the startup phase) fails the app's C<await $send-E<gt>(...)>
+    instead of being silently accepted. C<stop> now waits for and C<die>s on
+    C<lifespan.shutdown.failed>, symmetric with how C<start> already handled
+    C<lifespan.startup.failed> -- a failing shutdown hook previously failed
+    silently.
+  - [BREAKING] PAGI::Test::ConnectionState's C<disconnect_future> is now
+    modeled fully (was always C<undef>): pending before any end, resolves with
+    the reason on an abnormal disconnect, and -- the sharpest break from a
+    naive always-a-Future implementation -- stays pending forever if first
+    requested B<after> a clean completion (use C<on_complete> for that case).
+    New C<response_complete> method: C<undef> before the response reaches its
+    terminal state, true after.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key

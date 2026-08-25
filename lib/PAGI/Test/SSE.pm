@@ -31,7 +31,15 @@ sub new {
 sub _start {
     my ($self) = @_;
 
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+    # extensions is the SAME hashref PAGI::Test::Client advertised on the
+    # scope's `extensions` key -- one source of truth (B10), not a separately
+    # hardcoded list. PAGI::Test::Client always sets this (currently to {}:
+    # the mock implements no sse extensions); the // {} guards direct
+    # construction of this class with a scope that omits the key.
+    my $sv = PAGI::SendValidation->new(
+        scope_type => 'sse',
+        extensions => $self->{scope}{extensions} // {},
+    );
 
     # Create receive coderef for the app (always returns disconnect when closed)
     my $receive = async sub {
