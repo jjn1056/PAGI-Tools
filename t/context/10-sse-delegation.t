@@ -400,6 +400,21 @@ subtest 'on_close() croaks with a pointer to the underlying object' => sub {
 # sse() accessor still works
 # ---------------------------------------------------------------------------
 
+subtest 'decline() delegates to the underlying object' => sub {
+    my ($ctx, $sent) = make_sse_ctx();
+
+    (async sub {
+        await $ctx->decline(status => 401, body => 'Unauthorized');
+    })->()->get;
+
+    is(scalar @$sent, 2, 'decline sent exactly the two decline events');
+    is($sent->[0]{type}, 'sse.http.response.start', 'decline response start');
+    is($sent->[0]{status}, 401, 'decline status passed through');
+    is($sent->[1]{type}, 'sse.http.response.body', 'decline terminal body');
+    is($sent->[1]{body}, 'Unauthorized', 'decline body passed through');
+    ok($ctx->is_closed, 'context reports closed after decline');
+};
+
 subtest 'sse() still returns underlying object' => sub {
     my ($ctx) = make_sse_ctx();
 

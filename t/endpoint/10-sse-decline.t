@@ -24,7 +24,7 @@ package DeclineOnConnect {
 
     async sub on_connect {
         my ($self, $ctx) = @_;
-        await $ctx->sse->decline(
+        await $ctx->decline(
             status  => 401,
             headers => [['content-type', 'text/plain'], ['www-authenticate', 'Bearer']],
             body    => 'Unauthorized',

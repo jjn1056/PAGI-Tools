@@ -95,6 +95,11 @@
   - PAGI::Middleware::Head is now a thin delegate to the shared HEAD wire
     boundary implementation (one implementation, two entry points); using
     it under Compose remains harmless but redundant.
+  - PAGI::Context::SSE gained the decline() delegation it was missing: the
+    documented on_connect auth-gate pattern failed with a method-not-found
+    error for endpoints running under a Context (the normal to_app path),
+    forcing a reach-through to $ctx->sse->decline. Found by a live probe
+    against PAGI::Server 0.002008.
   - PAGI::Endpoint::SSE no longer sends `sse.start` after
     `on_connect` has already declined the request -- previously `handle()`
     unconditionally awaited `run()` regardless of what `on_connect` did, so

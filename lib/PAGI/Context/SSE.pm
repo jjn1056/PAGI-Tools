@@ -36,8 +36,9 @@ sub on_close { croak "on_close() is on the underlying object: call \$c->sse->on_
 
 # ── Connection lifecycle ─────────────────────────────────────────────
 
-sub start { shift->sse->start(@_) }
-sub close { shift->sse->close(@_) }
+sub start   { shift->sse->start(@_) }
+sub close   { shift->sse->close(@_) }
+sub decline { shift->sse->decline(@_) }
 
 # ── Send methods ─────────────────────────────────────────────────────
 
@@ -219,6 +220,18 @@ Ends the SSE stream by sending an C<sse.close> event, then runs C<on_close>
 callbacks. The optional C<reason> is server-side metadata only -- passed to
 C<on_close> but B<never> written to the wire. Delegates to L<PAGI::SSE/close>;
 returns a Future and is asynchronous, so C<await> it.
+
+=head2 decline
+
+    await $ctx->decline(status => 401);
+    await $ctx->decline(status => 401, headers => [['www-authenticate', 'Bearer']], body => 'Unauthorized');
+
+Declines the SSE request with a normal HTTP response instead of starting an
+event stream -- the auth-gate pattern for C<on_connect>. Valid only before
+the stream starts. Marks the connection closed on return; C<start>, C<run>,
+and every send become safe no-ops afterward, and any keepalive recorded
+before the decline is dropped unsent. Delegates to L<PAGI::SSE/decline> for
+the full option list.
 
 =head1 SEND METHODS
 
