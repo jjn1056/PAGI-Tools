@@ -104,11 +104,22 @@ async sub handle {
     my $state = $scope->{state} //= {};
     $self->{_state} = $state;
 
+    # pending -> started -> shutdown. A message that arrives out of phase
+    # (a duplicate lifespan.startup, or a shutdown before any startup) is
+    # ignored rather than re-run: it's hardening against a misbehaving
+    # server/client, not a demonstrated failure, mirroring
+    # PAGI::Compose::Compiler::_run_lifespan's $started guard.
+    my $phase = 'pending';
+
     while (1) {
         my $msg = await $receive->();
         my $type = $msg->{type} // '';
 
         if ($type eq 'lifespan.startup') {
+            if ($phase ne 'pending') {
+                warn "PAGI::Lifespan: ignoring out-of-phase $type (phase is '$phase')";
+                next;
+            }
             for my $handler (@handlers) {
                 next unless $handler->{startup};
                 eval { await $handler->{startup}->($state) };
@@ -121,8 +132,13 @@ async sub handle {
                 }
             }
             await $send->({ type => 'lifespan.startup.complete' });
+            $phase = 'started';
         }
         elsif ($type eq 'lifespan.shutdown') {
+            if ($phase ne 'started') {
+                warn "PAGI::Lifespan: ignoring out-of-phase $type (phase is '$phase')";
+                next;
+            }
             # Run every shutdown handler (best-effort cleanup: one failing
             # handler must not prevent the others from releasing resources),
             # collecting any errors so they can be reported rather than swallowed.
@@ -141,6 +157,7 @@ async sub handle {
             else {
                 await $send->({ type => 'lifespan.shutdown.complete' });
             }
+            $phase = 'shutdown';
             return 1;
         }
     }

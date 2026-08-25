@@ -349,6 +349,11 @@
     existing read-to-EOF is now provably the correct response framing
     (previously a backend that kept the connection open per HTTP/1.1
     defaults could hang the proxy's read forever).
+  - PAGI::Lifespan now tracks a pending/started/shutdown phase and ignores
+    an out-of-phase lifespan.startup or lifespan.shutdown message (with one
+    warning) instead of re-running startup handlers or attempting shutdown
+    before startup -- hardening against a misbehaving server or client,
+    mirroring PAGI::Compose::Compiler::_run_lifespan's existing guard.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key

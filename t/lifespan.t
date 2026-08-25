@@ -197,6 +197,48 @@ subtest 'shutdown runs all handlers despite a failure' => sub {
     })->()->get;
 };
 
+subtest 'out-of-phase lifespan messages are ignored with a warning' => sub {
+    my $startup_calls = 0;
+    my $shutdown_calls = 0;
+
+    my $inner_app = async sub { };
+    my $lifespan = PAGI::Lifespan->new(
+        app      => $inner_app,
+        startup  => async sub { $startup_calls++ },
+        shutdown => async sub { $shutdown_calls++ },
+    );
+    my $app = $lifespan->to_app;
+
+    (async sub {
+        my @sent;
+        my $send = sub { push @sent, $_[0]; Future->done };
+
+        # A duplicate lifespan.startup after the first one has already
+        # completed must not run the startup handlers again or send a
+        # second lifespan.startup.complete -- it is out of phase and must
+        # be ignored (with a warning), not treated as a fresh startup.
+        my $msg_index = 0;
+        my @messages = (
+            { type => 'lifespan.startup' },
+            { type => 'lifespan.startup' },  # duplicate: out of phase
+            { type => 'lifespan.shutdown' },
+        );
+        my $receive = sub { Future->done($messages[$msg_index++]) };
+
+        my @warnings;
+        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+        await $app->({ type => 'lifespan' }, $receive, $send);
+
+        is($startup_calls, 1, 'the startup handler ran exactly once, not twice');
+        is($shutdown_calls, 1, 'shutdown still ran normally afterward');
+        is([map { $_->{type} } @sent],
+            ['lifespan.startup.complete', 'lifespan.shutdown.complete'],
+            'exactly one startup.complete was sent despite the duplicate message');
+        is(scalar(@warnings), 1, 'the out-of-phase message produced exactly one warning');
+        like($warnings[0], qr/lifespan\.startup/, 'the warning names the ignored message type');
+    })->()->get;
+};
+
 subtest 'Lifespan->wrap coerces its app argument' => sub {
     require TestApps::Component;
 
