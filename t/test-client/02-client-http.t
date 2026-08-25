@@ -179,7 +179,8 @@ subtest 'HEAD suppresses response body transport semantics' => sub {
     is $client->head('/')->content, '', 'HEAD response body suppressed';
 };
 
-subtest 'ignores duplicate response.start events' => sub {
+subtest 'duplicate response.start fails the send; first response stands' => sub {
+    my $dup_err;
     my $dup_start_app = async sub {
         my ($scope, $receive, $send) = @_;
 
@@ -189,11 +190,14 @@ subtest 'ignores duplicate response.start events' => sub {
             headers => [['content-type', 'text/plain']],
         });
 
-        await $send->({
-            type    => 'http.response.start',
-            status  => 500,
-            headers => [['content-type', 'application/json']],
-        });
+        eval {
+            await $send->({
+                type    => 'http.response.start',
+                status  => 500,
+                headers => [['content-type', 'application/json']],
+            });
+            1;
+        } or do { $dup_err = $@ };
 
         await $send->({
             type => 'http.response.body',
@@ -204,12 +208,15 @@ subtest 'ignores duplicate response.start events' => sub {
     my $client = PAGI::Test::Client->new(app => $dup_start_app);
     my $res = $client->get('/');
 
+    ok $dup_err, 'the duplicate start failed its send Future';
+    like $dup_err, qr/duplicate/i, 'error names the duplicate start';
     is $res->status, 201, 'first status preserved';
     is $res->header('content-type'), 'text/plain', 'first headers preserved';
     is $res->content, 'first start wins', 'body still captured';
 };
 
-subtest 'ignores body events after response completion' => sub {
+subtest 'body events after response completion fail the send' => sub {
+    my $extra_err;
     my $extra_body_app = async sub {
         my ($scope, $receive, $send) = @_;
 
@@ -225,16 +232,21 @@ subtest 'ignores body events after response completion' => sub {
             more => 0,
         });
 
-        await $send->({
-            type => 'http.response.body',
-            body => 'ignored',
-            more => 0,
-        });
+        eval {
+            await $send->({
+                type => 'http.response.body',
+                body => 'ignored',
+                more => 0,
+            });
+            1;
+        } or do { $extra_err = $@ };
     };
 
     my $client = PAGI::Test::Client->new(app => $extra_body_app);
     my $res = $client->get('/');
 
+    ok $extra_err, 'the post-completion body send failed its Future';
+    like $extra_err, qr/complete/i, 'error names the already-complete response';
     is $res->content, 'done', 'body after completion ignored';
 };
 

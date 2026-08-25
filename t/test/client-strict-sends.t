@@ -138,6 +138,26 @@ subtest 'B2: trailers declared, never sent' => sub {
     like $warnings[0], qr/incomplete/i, 'warning documents the incomplete response';
 };
 
+subtest 'B2: response never started at all (mirrors the server no-response backstop)' => sub {
+    my (@events);
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $conn = $scope->{'pagi.connection'};
+        $conn->on_complete(sub { push @events, 'complete' });
+        $conn->on_disconnect(sub { push @events, "disc:$_[0]" });
+        # returns having never sent anything at all
+    };
+
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+    my $res = PAGI::Test::Client->new(app => $app)->get('/');
+
+    is $res->status, 500, 'synthesized 500, same as the server\'s no-response backstop';
+    is_deeply \@events, ['disc:server_error'], 'on_disconnect(server_error) fires; on_complete does not';
+    is scalar(@warnings), 1, 'exactly one warning';
+    like $warnings[0], qr/incomplete/i, 'warning documents the incomplete response';
+};
+
 # ---------------------------------------------------------------------------
 # B3: an exception after the response is fully complete stands the real
 # response and fires on_complete; an exception before completion keeps the

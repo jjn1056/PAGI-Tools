@@ -180,6 +180,18 @@ sub _request {
             $conn->_mark_disconnected('server_error');
         }
         warn "incomplete response: $err\n";
+
+        unless ($sv->started) {
+            # The app never sent http.response.start at all -- mirror the
+            # server's "Application Produced No Response" backstop: the
+            # synthesized 500, not an empty 200.
+            return PAGI::Test::Response->new(
+                status  => 500,
+                headers => [['content-type', 'text/plain']],
+                body    => 'Internal Server Error',
+            );
+        }
+
         return $self->_build_response(\@events);
     }
 

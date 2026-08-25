@@ -160,10 +160,18 @@ subtest 'exception after response started' => sub {
 # an app that never reaches a legal terminal state is an abnormal
 # disconnect (server_error), not a hard die. It warns instead, the same way
 # the real server would.
+#
+# A never-started response (the app sent nothing at all) additionally
+# mirrors the server's "Application Produced No Response" backstop: the
+# synthesized 500, not an empty 200.
 
-subtest 'app returns without sending response warns and disconnects' => sub {
+subtest 'app returns without sending response synthesizes a 500' => sub {
+    my (@events, $conn);
     my $empty_app = async sub {
         my ($scope, $receive, $send) = @_;
+        $conn = $scope->{'pagi.connection'};
+        $conn->on_complete(sub { push @events, 'complete' });
+        $conn->on_disconnect(sub { push @events, "disc:$_[0]" });
         # Forgot to send anything!
         return;
     };
@@ -174,7 +182,8 @@ subtest 'app returns without sending response warns and disconnects' => sub {
     my $client = PAGI::Test::Client->new(app => $empty_app);
     my $res = $client->get('/');
 
-    ok $res, 'request completes rather than dying';
+    is $res->status, 500, 'synthesized 500, mirroring the server no-response backstop';
+    is \@events, ['disc:server_error'], 'on_disconnect(server_error) fires; on_complete does not';
     is scalar(@warnings), 1, 'exactly one warning';
     like $warnings[0], qr/incomplete/i, 'warning documents the incomplete response';
 };
