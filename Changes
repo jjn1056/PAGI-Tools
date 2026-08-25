@@ -28,6 +28,24 @@
     an undefined status when the wrapped application never started a
     response; it now emits nothing and lets the server's no-response 500
     backstop report the real problem.
+  - [BUGFIX, user-visible] PAGI::Middleware::GZip hardcoded `status => 200`
+    on every response it compressed -- a 404, a 500, a redirect, anything --
+    any response through GZip with a gzip-negotiating client went out as a
+    silent 200. It now captures and replays the wrapped application's real
+    status at all three of its response-start emission sites.
+  - PAGI::Middleware::GZip mirrors ETag's no-start guard: it no longer
+    emits a response start with an undefined status when the wrapped
+    application never started a response (emits nothing instead, same
+    backstop as ETag), and defaults headers to an empty arrayref rather
+    than undef when a start event omits them.
+  - PAGI::Middleware::ETag, ::GZip, and ::ContentLength no longer destroy or
+    mis-frame opaque (file/fh) response bodies. A body event carrying a
+    `file` or `fh` key has no `body` string to buffer -- previously ETag
+    hashed the empty string, GZip silently dropped the file entirely, and
+    ContentLength declared `content-length: 0` beside a real file body. All
+    three now recognize such events via the new shared
+    `PAGI::Middleware::body_event_is_opaque` predicate and disengage,
+    forwarding the file/fh event through untouched instead.
   - PAGI::Middleware::Head is now a thin delegate to the shared HEAD wire
     boundary implementation (one implementation, two entry points); using
     it under Compose remains harmless but redundant.

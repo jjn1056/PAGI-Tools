@@ -186,6 +186,30 @@ async sub buffer_request_body {
     return ($body, $event);
 }
 
+=head2 body_event_is_opaque
+
+    if (PAGI::Middleware::body_event_is_opaque($event)) { ... }
+
+Plain function (not a method -- call it fully qualified). True when
+C<$event> is an C<http.response.body> event carrying a defined C<file> or
+C<fh> key: an opaque body the server streams directly (from disk, or from
+a filehandle) rather than one carried in the event's C<body> string.
+
+Body-buffering middleware (ETag, GZip, ContentLength, and similar) MUST
+check this before treating C<< $event->{body} >> as "the whole body" --
+an opaque event has no C<body> key at all, so buffering it would silently
+throw the real content away. The correct response is to disengage:
+forward the opaque event verbatim, without attempting to hash, compress,
+or re-frame content it never received.
+
+=cut
+
+sub body_event_is_opaque {
+    my ($event) = @_;
+
+    return 0 unless ($event->{type} // '') eq 'http.response.body';
+    return (defined $event->{file} || defined $event->{fh}) ? 1 : 0;
+}
 
 1;
 

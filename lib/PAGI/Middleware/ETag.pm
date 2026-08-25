@@ -78,6 +78,31 @@ sub wrap {
                     return;
                 }
 
+                # Opaque (file/fh) bodies have no body string to hash --
+                # flush anything buffered so far as streaming chunks and
+                # forward the opaque event verbatim, without an ETag.
+                if (PAGI::Middleware::body_event_is_opaque($event)) {
+                    # No start was ever observed -- don't invent one to carry it.
+                    return unless defined $status;
+
+                    $is_streaming = 1;
+                    await $send->({
+                        type    => 'http.response.start',
+                        status  => $status,
+                        headers => $original_headers // [],
+                    });
+                    for my $part (@body_parts) {
+                        await $send->({
+                            type => 'http.response.body',
+                            body => $part,
+                            more => 1,
+                        });
+                    }
+                    @body_parts = ();
+                    await $send->($event);
+                    return;
+                }
+
                 push @body_parts, $event->{body} // '';
 
                 # If streaming, can't generate ETag

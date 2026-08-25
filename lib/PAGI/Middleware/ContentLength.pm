@@ -101,8 +101,11 @@ sub wrap {
                     return;
                 }
 
-                # Check if this is a streaming response (more => 1)
-                if ($event->{more}) {
+                # Opaque (file/fh) bodies have no body string to measure --
+                # flush any buffered events unchanged (no Content-Length
+                # synthesized) and switch to pass-through, same as the
+                # streaming (more => 1) case below.
+                if ($event->{more} || PAGI::Middleware::body_event_is_opaque($event)) {
                     $is_streaming = 1;
 
                     # Flush buffered events and switch to pass-through

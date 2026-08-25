@@ -107,6 +107,38 @@ subtest 'GZip middleware - skips when client does not accept gzip' => sub {
     is $events[1]{body}, 'Hello World! This is a longer response body.', 'body unchanged';
 };
 
+subtest 'GZip middleware - preserves non-200 status (C1)' => sub {
+    for my $status (404, 500) {
+        my $gzip = PAGI::Middleware::GZip->new(min_size => 10);
+
+        my $app = async sub  {
+            my ($scope, $receive, $send) = @_;
+            await $send->({
+                type    => 'http.response.start',
+                status  => $status,
+                headers => [['Content-Type', 'text/plain']],
+            });
+            await $send->({
+                type => 'http.response.body',
+                body => 'Error response body long enough to compress.',
+                more => 0,
+            });
+        };
+
+        my $wrapped = $gzip->wrap($app);
+        my $scope = make_scope(headers => [['Accept-Encoding', 'gzip']]);
+
+        my @events;
+        my $send = async sub  {
+            my ($event) = @_; push @events, $event };
+        my $receive = async sub { { type => 'http.request', body => '', more => 0 } };
+
+        run_async { $wrapped->($scope, $receive, $send) };
+
+        is $events[0]{status}, $status, "status $status survives gzip compression";
+    }
+};
+
 subtest 'GZip middleware - skips small responses' => sub {
     my $gzip = PAGI::Middleware::GZip->new(min_size => 1000);
 

@@ -79,11 +79,13 @@ sub wrap {
         my $response_started = 0;
         my $content_type = '';
         my $original_headers;
+        my $status;
         my $headers_sent = 0;  # Request-local state (NOT on $self!)
 
         my $wrapped_send = async sub  {
         my ($event) = @_;
             if ($event->{type} eq 'http.response.start') {
+                $status = $event->{status};
                 $original_headers = $event->{headers};
                 # Get content type
                 for my $h (@{$event->{headers} // []}) {
@@ -102,15 +104,43 @@ sub wrap {
                     return;
                 }
 
+                # Opaque (file/fh) bodies have no body string to buffer or
+                # compress -- flush anything buffered so far as streaming
+                # chunks and forward the opaque event verbatim.
+                if (PAGI::Middleware::body_event_is_opaque($event)) {
+                    # No start was ever observed -- don't invent one to carry it.
+                    return unless defined $status;
+
+                    await $send->({
+                        type    => 'http.response.start',
+                        status  => $status,
+                        headers => $original_headers // [],
+                    });
+                    $headers_sent = 1;
+                    for my $part (@body_parts) {
+                        await $send->({
+                            type => 'http.response.body',
+                            body => $part,
+                            more => 1,
+                        });
+                    }
+                    @body_parts = ();
+                    await $send->($event);
+                    return;
+                }
+
                 push @body_parts, $event->{body} // '';
 
                 # If streaming (more => 1), switch to pass-through mode
                 if ($event->{more}) {
                     if (!$headers_sent) {
+                        # No start was ever observed -- don't invent one to carry it.
+                        return unless defined $status;
+
                         await $send->({
                             type    => 'http.response.start',
-                            status  => 200,
-                            headers => $original_headers,
+                            status  => $status,
+                            headers => $original_headers // [],
                         });
                         $headers_sent = 1;
                     }
@@ -126,6 +156,11 @@ sub wrap {
 
         # If headers already sent (streaming), we're done
         return if $headers_sent;
+
+        # The inner app never sent a start event at all -- don't invent a
+        # response it never gave us; let the server's no-response backstop
+        # fire with its accurate diagnostic.
+        return unless defined $status;
 
         # Combine body
         my $body = join('', @body_parts);
@@ -149,7 +184,7 @@ sub wrap {
 
             await $send->({
                 type    => 'http.response.start',
-                status  => 200,
+                status  => $status,
                 headers => \@new_headers,
             });
             await $send->({
@@ -161,8 +196,8 @@ sub wrap {
         else {
             await $send->({
                 type    => 'http.response.start',
-                status  => 200,
-                headers => $original_headers,
+                status  => $status,
+                headers => $original_headers // [],
             });
             await $send->({
                 type => 'http.response.body',
