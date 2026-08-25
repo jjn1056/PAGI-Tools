@@ -82,6 +82,17 @@
     chunked framing. A single-shot body now gets an accurate
     Content-Length regardless; use `auto_chunked` or a streamed (`more =>
     1`) body to opt out of synthesis.
+  - [BUGFIX] PAGI::SSE's `every()` could cancel the live protocol receive.
+    Its background disconnect monitor directly awaits `$receive->()`;
+    `every()` used to race that same future against a sleep timer via
+    `Future->wait_any`, which cancels whichever subfuture loses -- so on
+    nearly every tick (sleep wins almost always, since the monitor's
+    future only resolves on a real disconnect), the in-flight
+    `$receive->()` call was cancelled. `_watch_for_disconnect` now returns
+    a decoupled signal future that it resolves manually once the monitor
+    stops, instead of returning the receive-suspended future itself;
+    racing, losing, or cancelling that signal no longer touches the live
+    receive.
   - PAGI::Middleware::Head is now a thin delegate to the shared HEAD wire
     boundary implementation (one implementation, two entry points); using
     it under Compose remains harmless but redundant.

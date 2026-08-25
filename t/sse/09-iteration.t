@@ -130,4 +130,64 @@ subtest 'every() re-raises and runs on_close when callback dies (no longer swall
     ok($cleanup_ran, 'on_close ran when the every() callback died');
 };
 
+subtest 'every(): a callback that throws does not cancel the live protocol receive' => sub {
+    unless (eval { require Future::IO::Impl::IOAsync; 1 }) {
+        skip_all('Future::IO::Impl::IOAsync required for every() tests');
+    }
+
+    # _watch_for_disconnect awaits this receive future directly. If every()
+    # cancels its own disconnect-monitor Future while it is suspended here,
+    # Future::AsyncAwait's cancel propagation cascades into cancelling THIS
+    # future too -- the live protocol receive, which must never happen.
+    my $receive_cancelled = 0;
+    my $receive_future;
+    my $sse = PAGI::SSE->new(
+        { type => 'sse' },
+        sub {
+            $receive_future = Future->new;
+            $receive_future->on_cancel(sub { $receive_cancelled = 1 });
+            return $receive_future;
+        },
+        sub { Future->done },
+    );
+    $sse->start->get;
+
+    like(
+        dies { $sse->every(0.01, async sub { die "boom in every\n" })->get; },
+        qr/boom in every/,
+        'the callback exception still propagates',
+    );
+
+    ok($receive_future, 'the disconnect monitor actually called receive');
+    ok(!$receive_cancelled, 'the live protocol receive was NOT cancelled');
+};
+
+subtest 'every(): loop-exit cleanup does not cancel the live protocol receive' => sub {
+    unless (eval { require Future::IO::Impl::IOAsync; 1 }) {
+        skip_all('Future::IO::Impl::IOAsync required for every() tests');
+    }
+
+    my $receive_cancelled = 0;
+    my $receive_future;
+    my $sse = PAGI::SSE->new(
+        { type => 'sse' },
+        sub {
+            $receive_future = Future->new;
+            $receive_future->on_cancel(sub { $receive_cancelled = 1 });
+            return $receive_future;
+        },
+        sub { Future->done },
+    );
+    $sse->start->get;
+
+    my $ticks = 0;
+    $sse->every(0.01, async sub {
+        $ticks++;
+        await $sse->close(reason => 'done_ticking') if $ticks >= 2;
+    })->get;
+
+    ok($receive_future, 'the disconnect monitor actually called receive');
+    ok(!$receive_cancelled, 'the live protocol receive was NOT cancelled at loop exit');
+};
+
 done_testing;

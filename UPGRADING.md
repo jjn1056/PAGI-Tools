@@ -84,6 +84,32 @@ synthetic 500 -- nothing on the wire was corrupted, so nothing is replaced.
 An exception before the response is complete keeps the existing 500 +
 `server_error` behavior.
 
+The strictness pass also tightened several `PAGI::Test::WebSocket`/
+`PAGI::Test::SSE` behaviors that hit test-writing users directly -- a test
+that used to rely on the old lenient shape now hangs or fails instead of
+silently passing:
+
+- **`Test::WebSocket`'s synthesized `websocket.disconnect` is delivered
+  exactly once**, with a truthful `code` and `reason` (previously repeated
+  on every subsequent `receive` call, with the reason dropped). A test app
+  that keeps calling `receive` after disconnect now hangs -- correctly,
+  since a real transport has gone silent -- instead of getting a phantom
+  disconnect on every call.
+- **An app `websocket.send` after the app's own `websocket.close` now fails
+  the Future** (was silently appended to the client's readable stream). A
+  send after the *test/peer* side closed is now a tolerated no-op instead --
+  dropped, not delivered, but does not fail the app's Future.
+- **`websocket.close` sent before `websocket.accept` (a portable denial) no
+  longer croaks** `"WebSocket connection not accepted"`; `Test::WebSocket`
+  reports the closed/denied state instead.
+- **`Test::SSE` recognizes an app's decline** (`sse.http.response.start` /
+  `.body`) instead of croaking `"SSE connection not started"` -- `sse`
+  returns a `Test::Response` with the declined status/body, and no
+  `sse.disconnect` is delivered (the stream never started).
+- **`Test::SSE`'s synthesized `sse.disconnect` is delivered exactly once**,
+  with an explicit `reason` (default `client_closed`), instead of being
+  repeated reason-less on every subsequent `receive` call.
+
 ### The rest of this release's breaking changes
 
 Everything else `[BREAKING]` in this release, in one place. Several of these

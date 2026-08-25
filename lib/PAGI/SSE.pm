@@ -768,6 +768,9 @@ async sub every {
             # Callback failed - connection likely closed or error occurred
             $self->_set_closed;
             await $self->_run_close_callbacks;
+            # $disconnect_future is _watch_for_disconnect's decoupled signal
+            # (see its comment), not the live receive itself, so cancelling
+            # it here is safe -- it never reaches the in-flight receive call.
             $disconnect_future->cancel if $disconnect_future->can('cancel') && !$disconnect_future->is_ready;
             die $err;    # re-raise: caller still sees the error, matching each()/each_*
         }
@@ -783,13 +786,26 @@ async sub every {
         }
     }
 
-    # Clean up disconnect monitor if still running
+    # Clean up disconnect monitor if still running. Safe to cancel: it is
+    # the decoupled signal, not the live receive itself (see
+    # _watch_for_disconnect's comment).
     $disconnect_future->cancel if $disconnect_future->can('cancel') && !$disconnect_future->is_ready;
 
     return $self;
 }
 
-# Background future that completes when disconnect is detected
+# Background future that completes when disconnect is detected.
+#
+# Returns a SIGNAL future, not the live receive itself. every() races this
+# against a sleep future via Future->wait_any -- and wait_any cancels
+# whichever subfuture loses the race. If the returned future were the one
+# directly suspended on `await $receive->()`, every tick where sleep wins
+# (i.e. nearly every tick) would cancel that in-flight receive call: the
+# live protocol receive, which must never be cancelled. So the watcher loop
+# below runs on its own retained future, awaiting $receive->() same as
+# before, and manually resolves a separate $signal future when it stops
+# (disconnect observed, or receive() itself ends/fails). Callers may safely
+# race, lose, or cancel $signal -- none of that reaches the live receive.
 sub _watch_for_disconnect {
     my ($self) = @_;
 
@@ -798,7 +814,9 @@ sub _watch_for_disconnect {
     my $weak_self = $self;
     Scalar::Util::weaken($weak_self);
 
-    return (async sub {
+    my $signal = Future->new;
+
+    (async sub {
         while ($weak_self && !$weak_self->is_closed) {
             my $event = eval { await $receive->() };
             last unless $event;
@@ -813,7 +831,10 @@ sub _watch_for_disconnect {
                 last;
             }
         }
-    })->();
+        $signal->done unless $signal->is_ready;
+    })->()->retain;
+
+    return $signal;
 }
 
 1;
