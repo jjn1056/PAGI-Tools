@@ -1585,6 +1585,62 @@ B<PAGI-Channels> distribution (own-scope receive-multiplexed messaging,
 with in-memory and Redis backends) rather than this Cookbook. Reach for it
 when you need chat rooms, live dashboards, or any other fan-out pattern.
 
+=head2 In-Loop WebSocket Rate Limiting
+
+Rate limiting used to be middleware that wrapped C<receive> and injected a
+synthetic C<websocket.disconnect> when a client went over budget. That shape
+cannot be made faithful to the protocol: the server, not middleware, owns
+disconnect delivery, so a middleware-fabricated disconnect is a ghost event
+with a made-up reason, and closing from inside a wrapped C<receive> means
+the close send races whatever the real handler does next, unawaited.
+
+Enforce the limit where the real receive loop already lives instead -- a
+token bucket checked against each incoming message, with a real, awaited
+C<< $ws->close >> when the budget is blown:
+
+  use PAGI::WebSocket;
+  use Time::HiRes qw(time);
+
+  $router->websocket('/chat', raw => async sub {
+      my ($scope, $receive, $send) = @_;
+      my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+      await $ws->accept;
+
+      my $limit  = 10;               # messages per second
+      my $burst  = 2;                # allow short bursts up to limit * burst
+      my $tokens = $limit * $burst;
+      my $last   = time();
+
+      await $ws->each_text(async sub {
+          my ($text) = @_;
+
+          my $now = time();
+          $tokens += ($now - $last) * $limit;
+          $tokens = $limit * $burst if $tokens > $limit * $burst;
+          $last = $now;
+
+          if ($tokens < 1) {
+              return await $ws->close(code => 1008, reason => 'Rate limit exceeded');
+          }
+          $tokens -= 1;
+
+          await $ws->send_text("you said: $text");
+      });
+  });
+
+C<each_text> already serializes callback invocations against the receive
+loop -- the next message is not read until this callback's Future settles --
+so the token check and the reply share the same natural ordering the old
+middleware wrapper had to fake with a synthetic event. Closing from inside
+the loop is a real, awaited C<websocket.close> that the server delivers
+exactly once, with the real code and reason -- no synthesized disconnect,
+and nothing races it.
+
+If several routes need the same limiter, factor the token-bucket state and
+check into a small helper function and call it from each route's loop --
+ordinary code reuse, not middleware pretending to own protocol lifecycle
+events it can't actually generate.
+
 =head2 SSE Dashboard
 
 Server-Sent Events are ideal for real-time dashboards:
@@ -1602,16 +1658,26 @@ Server-Sent Events are ideal for real-time dashboards:
 
       my $sse = PAGI::SSE->new($scope, $receive, $send);
 
+      # Start the stream explicitly before anything else touches it --
+      # don't lean on a method's own implicit auto-start.
+      await $sse->start;
+
       # Enable keepalive to prevent proxy timeout
       await $sse->keepalive(15);
 
-      # Subscribe to metrics updates (your pub/sub system)
+      # Subscribe to metrics updates (your pub/sub system). The callback
+      # comes from an external, synchronous pub/sub API, so it can't await
+      # here -- handle the returned Future explicitly (on_fail + retain)
+      # instead of firing it and forgetting it.
       my $sub_id = subscribe_metrics(sub {
           my ($metrics) = @_;
           $sse->try_send_event(
               event => 'metrics',
               data  => $metrics,
-          );
+          )->on_fail(sub {
+              my ($error) = @_;
+              warn "metrics send failed: $error";
+          })->retain;
       });
 
       $sse->on_close(sub { unsubscribe_metrics($sub_id) });
@@ -1740,9 +1806,8 @@ raw form.
 
 An SSE request is an ordinary C<GET> with C<Accept: text/event-stream>. Before
 you start the stream you can B<decline> it and return a normal HTTP response
-instead -- no event stream. Send C<sse.http.response.start> followed by
-C<sse.http.response.body> on the raw C<$send> (the same one you passed to
-C<< PAGI::SSE->new >>), instead of calling C<< $sse->start >>:
+instead -- no event stream. Use C<< $sse->decline >>, which is how most
+application code should write this:
 
   $router->sse('/feed', raw => async sub {
       my ($scope, $receive, $send) = @_;
@@ -1750,13 +1815,11 @@ C<< PAGI::SSE->new >>), instead of calling C<< $sse->start >>:
 
       # Auth check before we commit to a stream.
       unless (authorized($sse->query_param('token'))) {
-          await $send->({
-              type    => 'sse.http.response.start',
+          return await $sse->decline(
               status  => 401,
               headers => [['content-type', 'text/plain']],
-          });
-          await $send->({ type => 'sse.http.response.body', body => 'Unauthorized', more => 0 });
-          return;
+              body    => 'Unauthorized',
+          );
       }
 
       await $sse->start;
@@ -1781,15 +1844,37 @@ good.
 =back
 
   # Tell EventSource to stop reconnecting: a bare 204.
-  await $send->({ type => 'sse.http.response.start', status => 204, headers => [] });
-  await $send->({ type => 'sse.http.response.body', body => '', more => 0 });
+  await $sse->decline(status => 204);
+
+A decline is not a disconnect: no C<sse.disconnect> event ever follows it,
+because the stream never started. If your code calls C<< $sse->receive >> (or
+anything that reads C<$receive> directly) after a decline expecting to
+observe that non-event, it parks forever instead -- there is nothing left to
+receive. Return right after declining, as above.
 
 First-send-wins picks the mode: once you have sent C<sse.start> a decline
 raises, and once you have sent C<sse.http.response.start> a stream event
 (C<sse.send>, C<sse.start>, ...) raises. Decide before you start.
 
-See L<PAGI::Spec::Www/"Decline SSE - C<send> event"> for the protocol events and
+See L<PAGI::SSE/decline> for the method and
+L<PAGI::Spec::Www/"Decline SSE - C<send> event"> for the protocol events and
 the full state machine.
+
+=head3 Under the hood
+
+C<decline> sends C<sse.http.response.start> followed by
+C<sse.http.response.body> on the raw C<$send> (the same one you passed to
+C<< PAGI::SSE->new >>), then marks the connection closed. This is what it is
+doing on your behalf -- shown so the underlying contract is explicit, not as
+a recommended application style:
+
+  # Equivalent to: await $sse->decline(status => 401, headers => [...], body => 'Unauthorized');
+  await $send->({
+      type    => 'sse.http.response.start',
+      status  => 401,
+      headers => [['content-type', 'text/plain']],
+  });
+  await $send->({ type => 'sse.http.response.body', body => 'Unauthorized', more => 0 });
 
 =head1 BACKGROUND WORK
 

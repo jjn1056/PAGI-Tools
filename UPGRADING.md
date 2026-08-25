@@ -12,6 +12,117 @@ Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Running against PAGI-Server 0.002007
+
+`PAGI::Test::Client` and its `PAGI::Test::WebSocket`/`PAGI::Test::SSE`/
+`PAGI::Test::ConnectionState` companions are meant to be a faithful mock of a
+real PAGI server. This release closes the gaps between them and the
+released `PAGI-Server` 0.002007: the mock used to be looser than the real
+server across most of the send path, which let a test suite pass against
+behavior a live server would reject or handle differently. If your own tests
+exercise apps through the test kit, expect some of them to start failing --
+correctly, because they were passing on a mock server that was wrong.
+
+### `disconnect_future` no longer resolves after a clean completion
+
+**Before (unreliable):** `disconnect_future` on `PAGI::Test::ConnectionState`
+was always `undef`, so any code that raced it against other work silently
+never took that branch. Application code written against the documented
+contract but only ever tested against the mock could reach production having
+never actually exercised its disconnect-race path.
+
+**After (shipped):** `disconnect_future` is modeled fully, matching
+`PAGI::Request`/`PAGI::Context`'s own documented contract (see
+`PAGI::Request`'s `disconnect_future` POD): it resolves with the reason on an
+abnormal disconnect, and stays pending forever if first requested *after* a
+clean completion, since there is no disconnect left to report.
+
+```perl
+# Before: this raced a Future that could never resolve on the mock, hiding
+# a bug that would only surface against a real server.
+await Future->wait_any($req->disconnect_future, $work);
+
+# After: request it before the response completes, or use on_complete
+# instead when you specifically need the "finished cleanly" case.
+if ($req->is_connected) {
+    await Future->wait_any($req->disconnect_future, $work);
+}
+```
+
+### Sends are strict -- no lenient mode
+
+**Before (silently absorbed):** an illegal event on the HTTP, WebSocket, SSE,
+or lifespan `$send` -- a duplicate `http.response.start`, a body before
+start, an undeclared `http.response.trailers`, a result reported for the
+wrong lifespan phase -- was silently accepted by the test kit. An app that
+returned without reaching a legal terminal state hard-died with a generic
+"forgot to await" message instead of being reported the way a live server
+reports it.
+
+**After (shipped):** every `PAGI::Test::*` `$send` now fails the returned
+`Future` for an illegal event, mirroring the shared `PAGI::SendValidation`
+core also used by the development `Lint` middleware. An app that returns
+without reaching a legal terminal state is now reported as an abnormal
+`server_error` disconnect with a warning, not a hard die; an app that never
+sends `http.response.start` at all now yields the server's synthesized 500
+backstop instead of a phantom empty 200.
+
+```perl
+# Before: a bug like this passed silently under test.
+await $send->({ type => 'http.response.start', status => 200, headers => [] });
+await $send->({ type => 'http.response.start', status => 200, headers => [] }); # duplicate -- ignored
+
+# After: the second call's Future fails, the way a real server rejects it.
+await $send->({ type => 'http.response.start', status => 200, headers => [] });
+await $send->({ type => 'http.response.start', status => 200, headers => [] }); # dies here
+```
+
+If an application throws *after* its HTTP response already reached a legal
+terminal state, the test kit now returns the real, already-complete response
+(`on_complete` fires, not `on_disconnect`) instead of overwriting it with a
+synthetic 500 -- nothing on the wire was corrupted, so nothing is replaced.
+An exception before the response is complete keeps the existing 500 +
+`server_error` behavior.
+
+### The rest of this release's breaking changes
+
+Everything else `[BREAKING]` in this release, in one place. Several of these
+have their own dedicated section elsewhere in this guide (linked below); the
+rest are covered only here.
+
+- **Development middleware.** `PAGI::Middleware::Lint` no longer keeps its
+  own copy of send-sequencing state -- it delegates to the shared
+  `PAGI::SendValidation` core. In strict mode a shared-core violation now
+  rejects the event outright instead of warning and forwarding it.
+- **Removed middleware and apps.** `PAGI::Middleware::WebSocket::RateLimit`,
+  `PAGI::App::SSE::Pubsub`, `PAGI::App::WebSocket::Broadcast`, and
+  `PAGI::App::WebSocket::Chat` are removed outright, with no replacement
+  shipped in this release -- they impersonated server lifecycle events they
+  could not keep faithful, or taught a send pattern (holding and calling
+  another scope's `send`) the PAGI spec now rules out. See the Cookbook's
+  "In-Loop WebSocket Rate Limiting" recipe for the in-loop replacement and
+  its "Real-Time Fan-Out (Pub/Sub)" section for the fan-out guidance; real
+  multi-scope fan-out is the scope of the coming PAGI-Channels distribution,
+  not this toolkit.
+- **`PAGI::App::WebSocket::Echo`'s `on_disconnect`** now receives `($scope,
+  $code, $reason)` instead of `($scope, $code)`.
+- **Request bodies.** `PAGI::Request`'s `body`/`text`/`json`/`form_params`
+  (and the equivalent `PAGI::Middleware` body helpers) no longer treat a
+  mid-body `http.disconnect` as a clean end of body -- they now croak with
+  `"Request body incomplete: client disconnected mid-body ($reason)"`. An
+  immediate disconnect before any body bytes ever arrive is still a
+  legitimate empty body.
+- **`PAGI::Test::Client` HTTP responses** are now H1-flavored: app-supplied
+  `Transfer-Encoding`/`Connection` headers are stripped with a warning, and
+  every scope now advertises an `extensions` key.
+- **`PAGI::Compose::ResponseGuard`** now fails a response typed
+  `awaiting_trailers` if it declares `trailers => 1` but never sends them,
+  and rejects a body sent before response start as a failed `Future` from
+  `send` (was a synchronous `die`).
+- Also see the dedicated sections below for the Pages/NotFound/Redirect
+  migration, the Router/Endpoint::Router frontend rewrite, and the rooted
+  file-serving contract -- all `[BREAKING]` in this same release.
+
 ## Rooted file-serving security contract
 
 Rooted file components now share one lexical request-path contract. The
