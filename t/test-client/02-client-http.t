@@ -247,6 +247,7 @@ subtest 'body events after response completion fail the send' => sub {
 
     ok $extra_err, 'the post-completion body send failed its Future';
     like $extra_err, qr/complete/i, 'error names the already-complete response';
+    is $res->status, 200, 'first response status stands';
     is $res->content, 'done', 'body after completion ignored';
 };
 

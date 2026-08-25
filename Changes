@@ -172,7 +172,9 @@
     (no terminal body chunk, or declared trailers never sent -- incomplete)
     is now reported as an abnormal server_error disconnect with a warning,
     not a clean completion; it previously hard-died with a generic
-    "forgot to await" message instead. Every scope now advertises
+    "forgot to await" message instead. An app that returns without ever
+    sending http.response.start now yields the server's synthesized 500
+    backstop (was a phantom empty 200). Every scope now advertises
     pagi.version 0.4 / spec_version 0.3 (was 0.2), matching the released
     server.
   - [BREAKING] direction change: when an app throws B<after> its HTTP
