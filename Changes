@@ -258,8 +258,10 @@
     the reason on an abnormal disconnect, and -- the sharpest break from a
     naive always-a-Future implementation -- stays pending forever if first
     requested B<after> a clean completion (use C<on_complete> for that case).
-    New C<response_complete> method: C<undef> before the response reaches its
-    terminal state, true after.
+    New C<response_complete> method: always defined (this mock always tracks
+    completion -- per L<PAGI::Spec::Www>, C<undef> signals the fixed
+    capability "server does not track completion", not a per-request
+    state), C<0> before the response reaches its terminal state, C<1> after.
 
 0.002002 - 2026-07-15
   - PAGI::Middleware::Session: non-'http' scopes that carry a headers key

@@ -42,23 +42,27 @@ sub disconnect_reason { return $_[0]->{_reason} }
 
 =head2 response_complete
 
-    my $done = $conn->response_complete;   # undef or true
+    my $done = $conn->response_complete;   # 0 or 1, always defined
 
-True once this request's HTTP response has reached its legal terminal state
-(the terminal body chunk, or trailers if declared -- the same instant
-L<PAGI::SendValidation/complete> reports true for the scope). C<undef> before
-that. Unlike production (which always returns C<undef> -- see
-L<PAGI::Server::ConnectionState/response_complete> -- because a real socket
-server cannot always pin down the exact instant the last byte reached the
-client), this in-process mock knows precisely when the wire contract was
-satisfied and reports it, simplified to two states rather than production's
-three (C<undef>/false/true): C<undef> until complete, then C<1>. As with
-production, test C<defined> before relying on this if you want code that
-degrades gracefully against a server that can't track it.
+True (C<1>) once this request's HTTP response has reached its legal terminal
+state (the terminal body chunk, or trailers if declared -- the same instant
+L<PAGI::SendValidation/complete> reports true for the scope); false (C<0>)
+before that (streaming, or not yet started). Per L<PAGI::Spec::Www>'s
+"Connection State" section, C<undef> is not a per-request progress value --
+it signals a fixed B<capability>: "C<undef> if the server does not track
+completion" at all. This mock always tracks completion, so
+C<response_complete> is B<always defined> for the whole request, unlike
+production L<PAGI::Server::ConnectionState>, whose C<response_complete>
+always returns C<undef> because a real socket server cannot always pin down
+the exact instant the last byte reached the client -- production's C<undef>
+there is exactly that capability signal, correctly constant across the
+request. (Test C<defined> before relying on this against an arbitrary PAGI
+server, since not every server tracks it -- but against this mock, it will
+always be true.)
 
 =cut
 
-sub response_complete { return $_[0]->{_response_complete} ? 1 : undef }
+sub response_complete { return $_[0]->{_response_complete} ? 1 : 0 }
 
 # Server-internal: called from the send path once the response reaches its
 # legal terminal state (mirrors _mark_response_started's shape).

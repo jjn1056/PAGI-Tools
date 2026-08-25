@@ -92,19 +92,25 @@ sub still_pending_after {
         'stays pending forever -- on_complete is the signal for this case, not disconnect_future';
 }
 
-# response_complete: undef before terminal, true after.
+# response_complete: this mock DOES track completion, so per Www.pod
+# (definedness signals CAPABILITY, a constant property -- "undef if the
+# server does not track completion" -- not a per-request lifecycle state),
+# response_complete must be defined for the entire request: 0 before/while
+# streaming, 1 once complete. It must never itself be undef.
 {
     my $c = PAGI::Test::ConnectionState->new;
-    is $c->response_complete, undef, 'undef before the response is complete';
+    ok defined $c->response_complete, 'defined before the response starts (this mock always tracks completion)';
+    is $c->response_complete, 0, '0 before the response is complete';
     $c->_mark_response_complete;
-    is $c->response_complete, 1, 'true once the response is complete';
+    ok defined $c->response_complete, 'still defined once complete';
+    is $c->response_complete, 1, '1 once the response is complete';
 }
 
 {
     my $c = PAGI::Test::ConnectionState->new;
-    is $c->response_complete, undef, 'undef while only started, not yet complete';
     $c->_mark_response_started;
-    is $c->response_complete, undef, 'still undef after response_started alone';
+    ok defined $c->response_complete, 'defined while only started, not yet complete';
+    is $c->response_complete, 0, 'still 0 after response_started alone (streaming, not complete)';
 }
 
 done_testing;
