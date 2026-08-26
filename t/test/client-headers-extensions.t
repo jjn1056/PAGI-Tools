@@ -10,12 +10,12 @@ async sub try_send {
 }
 
 # ---------------------------------------------------------------------------
-# B9: this mock is H1-flavored -- it mirrors PAGI::Server::Connection's H1
+# This mock is H1-flavored -- it mirrors PAGI::Server::Connection's H1
 # rule (transfer-encoding + connection stripped, warned once per occurrence),
 # NOT the H2 six-name strip, and supplies Date only when the app didn't.
 # ---------------------------------------------------------------------------
 
-subtest 'B9: transfer-encoding and connection are stripped, warned once each' => sub {
+subtest 'transfer-encoding and connection are stripped, warned once each' => sub {
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({
@@ -42,7 +42,7 @@ subtest 'B9: transfer-encoding and connection are stripped, warned once each' =>
     like $warnings[1], qr/connection/i, 'second warning names connection';
 };
 
-subtest 'B9: two connection headers warn twice (not deduplicated by name)' => sub {
+subtest 'two connection headers warn twice (not deduplicated by name)' => sub {
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({
@@ -63,7 +63,7 @@ subtest 'B9: two connection headers warn twice (not deduplicated by name)' => su
     is scalar(@warnings), 2, 'each occurrence warns separately';
 };
 
-subtest 'B9: upgrade/te/keep-alive survive -- narrower than the H2 six-name strip' => sub {
+subtest 'upgrade/te/keep-alive survive -- narrower than the H2 six-name strip' => sub {
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({
@@ -85,7 +85,7 @@ subtest 'B9: upgrade/te/keep-alive survive -- narrower than the H2 six-name stri
     is $res->header('keep-alive'), 'timeout=5', 'keep-alive survives';
 };
 
-subtest 'B9: server supplies Date when the app did not' => sub {
+subtest 'server supplies Date when the app did not' => sub {
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
@@ -100,7 +100,7 @@ subtest 'B9: server supplies Date when the app did not' => sub {
         'RFC 7231 IMF-fixdate shape';
 };
 
-subtest "B9: the app's own Date header is preserved, not overwritten" => sub {
+subtest "the app's own Date header is preserved, not overwritten" => sub {
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({
@@ -120,11 +120,40 @@ subtest "B9: the app's own Date header is preserved, not overwritten" => sub {
         "app-supplied Date preserved verbatim, not superseded by a synthesized one";
 };
 
+subtest 'a response carrying Upgrade gains the Connection: upgrade companion' => sub {
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type    => 'http.response.start',
+            status  => 426,
+            headers => [
+                ['upgrade',    'websocket'],
+                ['connection', 'upgrade'],   # app-supplied: still stripped
+            ],
+        });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    };
+
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+    my $res = PAGI::Test::Client->new(app => $app)->get('/');
+
+    # RFC 9110 obliges any Upgrade sender to pair it with Connection:
+    # upgrade; per the PAGI spec the server supplies the token itself
+    # after stripping the app's own Connection header.
+    my @conn = grep { lc($_->[0]) eq 'connection' } @{ $res->{headers} };
+    is scalar @conn, 1, 'exactly one Connection header';
+    is $conn[0][1], 'upgrade', 'it carries the server-supplied upgrade token';
+    is $res->header('upgrade'), 'websocket', 'the Upgrade header itself survives';
+    is scalar(grep { /connection-specific header/ } @warnings), 1,
+        "the app's own Connection header still warned once when stripped";
+};
+
 # ---------------------------------------------------------------------------
-# B10: each scope advertises exactly the extension set this mock implements.
+# Each scope advertises exactly the extension set this mock implements.
 # ---------------------------------------------------------------------------
 
-subtest 'B10: http scope advertises no extensions' => sub {
+subtest 'http scope advertises no extensions' => sub {
     my $scope;
     my $app = async sub {
         my ($s, $receive, $send) = @_;
@@ -138,7 +167,7 @@ subtest 'B10: http scope advertises no extensions' => sub {
     is_deeply $scope->{extensions}, {}, 'http advertises no extensions';
 };
 
-subtest 'B10: an unadvertised http extension fails its send' => sub {
+subtest 'an unadvertised http extension fails its send' => sub {
     my $err;
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
@@ -153,7 +182,7 @@ subtest 'B10: an unadvertised http extension fails its send' => sub {
     is $res->status, 200, 'assembled response unaffected by the rejected fullflush';
 };
 
-subtest 'B10: websocket scope advertises exactly websocket.http.response' => sub {
+subtest 'websocket scope advertises exactly websocket.http.response' => sub {
     my $scope;
     my $app = async sub {
         my ($s, $receive, $send) = @_;
@@ -167,7 +196,7 @@ subtest 'B10: websocket scope advertises exactly websocket.http.response' => sub
         'websocket advertises exactly websocket.http.response -- the mock genuinely implements the denial path';
 };
 
-subtest 'B10: sse scope advertises no extensions' => sub {
+subtest 'sse scope advertises no extensions' => sub {
     my $scope;
     my $app = async sub {
         my ($s, $receive, $send) = @_;

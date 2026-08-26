@@ -148,6 +148,13 @@ sub _request {
             unless (grep { lc($_->[0]) eq 'date' } @$headers) {
                 push @$headers, ['date', _format_http_date()];
             }
+            # Upgrade companion: RFC 9110 obliges any Upgrade sender to pair
+            # it with Connection: upgrade, and per the PAGI spec the server
+            # supplies that token itself (the app's own Connection header
+            # was stripped above). Mirrors PAGI::Server's H1 response path.
+            if (grep { lc($_->[0]) eq 'upgrade' } @$headers) {
+                push @$headers, ['connection', 'upgrade'];
+            }
             $captured{headers} = $headers;
         }
         elsif (($captured{type} // '') eq 'http.response.body') {
@@ -1040,6 +1047,13 @@ pass through untouched.
 
 A C<Date> header is added if the app didn't supply its own; an app-supplied
 C<Date> is preserved verbatim, not overwritten.
+
+=item *
+
+A response carrying an C<Upgrade> header gains C<Connection: upgrade> --
+RFC 9110 obliges any C<Upgrade> sender to send the pair, and per the PAGI
+spec the server supplies that token itself (the app's own C<Connection>
+header having been stripped above).
 
 =back
 

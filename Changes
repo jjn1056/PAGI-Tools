@@ -92,6 +92,11 @@
     stops, instead of returning the receive-suspended future itself;
     racing, losing, or cancelling that signal no longer touches the live
     receive.
+  - PAGI::Test::Client's H1-flavored response pass now supplies the
+    Connection: upgrade companion when an application response carries an
+    Upgrade header, matching the real server's RFC 9110 obligation (added
+    to PAGI::Server in 0.002008); previously the mock omitted it, so the
+    426 Upgrade Required pattern looked different under test than live.
   - PAGI::Middleware::Head is now a thin delegate to the shared HEAD wire
     boundary implementation (one implementation, two entry points); using
     it under Compose remains harmless but redundant.
