@@ -39,7 +39,7 @@ sub new {
     }, $class;
 
     if (exists $opts{router}) {
-        $self->_visit_router(
+        $self->_walk_router(
             $opts{router}, '', [], [], {}, [], {},
         );
     }
@@ -51,7 +51,7 @@ sub new {
     return $self;
 }
 
-sub _visit_router {
+sub _walk_router {
     my ($self, $router, $path_prefix, $address_segments, $outer_names,
         $outer_predicates, $location_prefix, $active_routers) = @_;
 
@@ -113,37 +113,25 @@ sub _visit_nodes {
                     name => $node->name,
                     desc => $node->desc,
                 },
-                is_raw => $node->is_raw ? 1 : 0,
                 source => $node,
                 predicate_records => _copy_predicate_records($predicates),
                 location => [@location],
                 logical_namespace => _logical_namespace(\@child_segments),
             };
 
-            next if $node->is_raw;
-
-            if (defined $node->router) {
-                $self->_visit_router(
-                    $node->router,
-                    $effective_path,
-                    \@child_segments,
-                    $names,
-                    $predicates,
-                    \@location,
-                    $active_routers,
-                );
-            }
-            else {
-                $self->_visit_nodes(
-                    $node->routes,
-                    $effective_path,
-                    \@child_segments,
-                    $names,
-                    $predicates,
-                    \@location,
-                    $active_routers,
-                );
-            }
+            my $child = $node->app;
+            my $inspectable = blessed($child)
+                && $child->isa('PAGI::Routing::Router');
+            next unless $inspectable;
+            $self->_walk_router(
+                $child,
+                $effective_path,
+                \@child_segments,
+                $names,
+                $predicates,
+                \@location,
+                $active_routers,
+            );
             next;
         }
 
@@ -168,7 +156,6 @@ sub _visit_nodes {
                 desc  => $node->desc,
             },
             mount  => undef,
-            is_raw => 0,
             source => $node,
             predicate_records => _copy_predicate_records($predicates),
             location => [@location],
@@ -213,7 +200,6 @@ sub _metadata_for_location {
     return {
         match  => { %{$record->{match}} },
         mount  => defined $record->{mount} ? { %{$record->{mount}} } : undef,
-        is_raw => $record->{is_raw},
         logical_namespace => $record->{logical_namespace},
     };
 }
@@ -589,23 +575,24 @@ PAGI::Routing::Resolver - Composed slash addresses and reverse paths
 
 =head1 DESCRIPTION
 
-This internal routing value traverses direct routes, inline mounts, and
-explicit C<< router => $router >> children. It indexes named leaves by
+This internal routing value traverses direct routes and mounted first-party
+L<PAGI::Routing::Router> base applications. It indexes named leaves by
 canonical absolute slash addresses, retains each original leaf identity for
-inspection, and renders application-relative paths for the outer placement.
-Positional application mounts remain opaque, including positional Router
-targets.
+inspection, and renders application-relative paths for each outer placement.
+All other mounted applications remain opaque to reverse inspection, even when
+they happen to provide methods named C<routes>, C<path_for>, or C<to_app>.
 
 Construction validates/builds the effective address, path, predicate, and
 location index once and does no request I/O. Each source Pattern's normalized
 predicate records are copied through its ancestry while retaining the original
 check and explanation coderefs. Effective named-route Patterns install those
 records directly; they do not reparse inline syntax, reinvoke providers, or
-renormalize explicit constraints. Every known mount prefix is
-validated before opacity ends traversal. Duplicate canonical addresses report
-both effective paths, and a path parameter may occur only once along one
-ancestor-to-descendant effective path. Router identity is tracked only in the
-active ancestry, rejecting cycles while allowing sibling placement reuse.
+renormalize explicit constraints. Every known Mount prefix is validated and
+receives placement metadata before opacity ends traversal. A named opaque
+Mount publishes no route target by itself. Duplicate canonical addresses
+report both effective paths, and a path parameter may occur only once along
+one ancestor-to-descendant effective path. Router identity is tracked only in
+the active ancestry, rejecting cycles while allowing sibling placement reuse.
 
 Child Router descriptions remain placement-free: traversal calls their
 C<routes> method and never reuses their local resolver as an outer placement

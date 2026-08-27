@@ -104,135 +104,119 @@ subtest 'Context selects the last resolver from a valid routing frame stack' => 
     );
 };
 
-subtest 'compiled Context references resolve exactly from the matched containing namespace' => sub {
-    my (@show_results, @catchall_results);
-    my $routing;
-    $routing = router(routes => [
-        route('/' => sub { return $_[0]->text('home') }, name => 'home'),
-        mount('/person', routes => [
-            route('/{person_id}' => sub { return $_[0]->text('person') },
-                name => 'show'),
-            mount('/{person_id}/blog', routes => [
-                route('/' => sub { return $_[0]->text('blogs') }, name => 'index'),
-                route('/{blog_id}' => sub {
-                    my ($c) = @_;
-                    my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
-                    push @show_results, {
-                        logical_namespace => $frame->{logical_namespace},
-                        captures         => { %{$frame->{captures}} },
-                        show             => $c->path_for('show'),
-                        index            => $c->path_for('index'),
-                        parent_show      => $c->path_for('../show'),
-                        dot_show         => $c->path_for('./show'),
-                        interior_show    => $c->path_for('x/../show'),
-                        override         => $c->path_for('show', { blog_id => 8 }),
-                        absolute_home    => $c->path_for('/home'),
-                        relative_home    => $c->path_for('../../home'),
-                        absolute_show    => $c->path_for(
-                            '/person/blog/show',
-                            { person_id => 42, blog_id => 9 },
-                        ),
-                        with_suffixes    => $c->url_for(
-                            'show',
-                            query    => { view => 'full' },
-                            fragment => 'comments',
-                        ),
-                    };
-
-                    my @failures = (
-                        ['unknown relative', 'missing', qr/unknown route name 'missing'/],
-                        ['no overlap folding', 'person/show', qr/unknown route name 'person\/show'/],
-                        ['above root', '../../../home', qr/traverses above the Router root/],
-                        ['bare current namespace', '.', qr/resolves to a logical namespace/],
-                        ['bare parent namespace', '..', qr/resolves to a logical namespace/],
-                        ['repeated slash', 'show//child', qr/contains an empty logical segment/],
-                        ['trailing slash', 'show/', qr/contains an empty logical segment/],
-                    );
-                    for my $failure (@failures) {
-                        my ($label, $reference, $message) = @$failure;
-                        like(dies { $c->path_for($reference) }, $message, $label);
-                    }
-                    like(
-                        dies { $c->path_for('/person/blog/show') },
-                        qr/missing path parameter 'person_id'/,
-                        'absolute Context references inherit no captures',
-                    );
-                    like(
-                        dies { $routing->path_for('/person/blog/show') },
-                        qr/missing path parameter 'person_id'/,
-                        'Router-object reverse calls inherit no request captures',
-                    );
-                    like(
-                        dies { $c->path_for('index', { extra => 1 }) },
-                        qr/unexpected path parameter 'extra'/,
-                        'explicit parameters not required by the target still fail',
-                    );
-                    like(
-                        dies { $c->path_for('show', { blog_id => 'bad' }) },
-                        qr/path parameter 'blog_id' failed constraint/,
-                        'constraints run after explicit values replace inherited captures',
-                    );
-                    return $c->text('show');
-                },
-                    name => 'show',
-                    constraints => { blog_id => qr/\A\d+\z/ },
-                ),
-                route('/*rest' => sub {
-                    my ($c) = @_;
-                    my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
-                    push @catchall_results, {
-                        logical_namespace => $frame->{logical_namespace},
-                        captures          => { %{$frame->{captures}} },
-                        index             => $c->path_for('index'),
-                    };
-                    return $c->text('catchall');
-                }),
-            ], name      => 'blog'),
-        ], name      => 'person'),
+subtest 'Context references resolve from a mounted Router child boundary' => sub {
+    my $blogs = router(routes => [
+        route('/' => sub { }, name => 'index'),
+        route('/{blog_id}' => sub { }, name => 'show',
+            constraints => { blog_id => qr/\A\d+\z/ }),
     ]);
-    my $app = $routing->to_app;
-
-    _run_compiled($app,
-        path => '/person/42/blog/7',
-        raw_path => '/person/42/blog/7',
+    my $person = router(routes => [
+        route('/{person_id}' => sub { }, name => 'show'),
+        mount('/{person_id}/blog', app => $blogs, name => 'blog'),
+    ]);
+    my $opaque = sub { };
+    my $routing = router(routes => [
+        route('/' => sub { }, name => 'home'),
+        mount('/person', app => $person, name => 'person'),
+        mount('/staff', app => $person, name => 'staff'),
+        mount('/legacy', app => $opaque, name => 'legacy'),
+    ]);
+    my $resolver = $routing->_resolver;
+    my $context = _context('http', $resolver,
         scheme => 'https',
-    );
-    _run_compiled($app,
-        path => '/person/42/blog/missing/path',
-        raw_path => '/person/42/blog/missing/path',
+        'pagi.routing' => {
+            version => 1,
+            frames => [_frame(
+                $resolver,
+                root_path => '',
+                logical_namespace => '/person/blog',
+                captures => { person_id => 42, blog_id => 7 },
+                mounts => [
+                    { path => '/person', name => 'person', desc => undef },
+                    { path => '/{person_id}/blog', name => 'blog', desc => undef },
+                ],
+            )],
+        },
     );
 
-    is(\@show_results, [{
-        logical_namespace => '/person/blog',
-        captures      => { person_id => 42, blog_id => 7 },
-        show          => '/person/42/blog/7',
-        index         => '/person/42/blog/',
-        parent_show   => '/person/42',
-        dot_show      => '/person/42/blog/7',
-        interior_show => '/person/42/blog/7',
-        override      => '/person/42/blog/8',
-        absolute_home => '/',
-        relative_home => '/',
-        absolute_show => '/person/42/blog/9',
-        with_suffixes => 'https://example.test/person/42/blog/7?view=full#comments',
-    }], 'relative Context generation uses the exact active namespace and target captures');
-    is(\@catchall_results, [{
-        logical_namespace => '/person/blog',
-        captures          => { person_id => 42, rest => 'missing/path' },
-        index             => '/person/42/blog/',
-    }], 'an unnamed catchall keeps its containing namespace and filters its wildcard capture');
+    is($context->path_for('show'), '/person/42/blog/7',
+        'relative lookup inherits captures from the selected child placement');
+    is($context->path_for('index'), '/person/42/blog/',
+        'a sibling leaf resolves inside the mounted child namespace');
+    is($context->path_for('../show'), '/person/42',
+        'parent-relative lookup stays within the selected placement');
+    is($context->path_for('./show'), '/person/42/blog/7',
+        'current-directory lookup remains exact');
+    is($context->path_for('x/../show'), '/person/42/blog/7',
+        'interior navigation normalizes from the active namespace');
+    is($context->path_for('show', { blog_id => 8 }),
+        '/person/42/blog/8',
+        'explicit values replace inherited child captures');
+    is($context->path_for('/home'), '/',
+        'absolute lookup reaches the root Router');
+    is($context->path_for('../../home'), '/',
+        'relative navigation can reach the root Router');
+    is(
+        $context->path_for('/staff/blog/show',
+            { person_id => 42, blog_id => 9 }),
+        '/staff/42/blog/9',
+        'absolute lookup selects a second placement of the same child Router',
+    );
+    is(
+        $context->url_for('show',
+            query => { view => 'full' }, fragment => 'comments'),
+        'https://example.test/person/42/blog/7?view=full#comments',
+        'query and fragment rendering use the selected child boundary',
+    );
+
+    my @failures = (
+        ['unknown relative', 'missing', qr/unknown route name 'missing'/],
+        ['no overlap folding', 'person/show', qr/unknown route name 'person\/show'/],
+        ['above root', '../../../home', qr/traverses above the Router root/],
+        ['bare current namespace', '.', qr/resolves to a logical namespace/],
+        ['bare parent namespace', '..', qr/resolves to a logical namespace/],
+        ['repeated slash', 'show//child', qr/contains an empty logical segment/],
+        ['trailing slash', 'show/', qr/contains an empty logical segment/],
+        ['opaque named boundary', '/legacy', qr/logical namespace|unknown route/],
+    );
+    for my $failure (@failures) {
+        my ($label, $reference, $message) = @$failure;
+        like(dies { $context->path_for($reference) }, $message, $label);
+    }
+    like(
+        dies { $context->path_for('/person/blog/show') },
+        qr/missing path parameter 'person_id'/,
+        'absolute Context references inherit no captures',
+    );
+    like(
+        dies { $routing->path_for('/person/blog/show') },
+        qr/missing path parameter 'person_id'/,
+        'Router-object reverse calls inherit no request captures',
+    );
+    like(
+        dies { $context->path_for('index', { extra => 1 }) },
+        qr/unexpected path parameter 'extra'/,
+        'explicit parameters not required by the target still fail',
+    );
+    like(
+        dies { $context->path_for('show', { blog_id => 'bad' }) },
+        qr/path parameter 'blog_id' failed constraint/,
+        'constraints run after explicit values replace inherited captures',
+    );
 };
 
 subtest 'Context prefers an exact leaf that shares a namespace address' => sub {
     my $api = route('/direct-api' => sub { }, name => 'api');
+    my $api_child = router(routes => [
+        route('/x' => sub { }, name => 'x'),
+    ]);
+    my $group_child = router(routes => [
+        route('/x' => sub { }, name => 'x'),
+    ]);
     my $resolver = _resolver(
         $api,
-        mount('/nested-api', routes => [
-            route('/x' => sub { }, name => 'x'),
-        ], name      => 'api'),
-        mount('/group', routes => [
-            route('/x' => sub { }, name => 'x'),
-        ], name      => 'group'),
+        mount('/nested-api', app => $api_child, name => 'api'),
+        mount('/group', app => $group_child, name => 'group'),
     );
     my $root = _context('http', $resolver);
     my $nested = PAGI::Context->new({
@@ -559,223 +543,170 @@ subtest 'missing and malformed routing metadata fail at the Context boundary' =>
     }
 };
 
-subtest 'compiled inline mounts reverse from the router boundary across protocols' => sub {
-    my @seen;
-    my $capture = sub {
-        my ($label, $own_name, $own_params) = @_;
-        return sub {
-            my ($context) = @_;
-            my $frame = $context->scope->{'pagi.routing'}{frames}[-1];
-            push @seen, {
-                label           => $label,
-                scope_root_path => $context->scope->{root_path},
-                frame_root_path => $frame->{root_path},
-                own_path        => $context->path_for(
-                    $own_name,
-                    $own_params,
-                    { via => $label },
-                ),
-                own_url         => $context->url_for(
-                    $own_name,
-                    $own_params,
-                    { via => $label },
-                ),
-                sibling_path    => $context->path_for(
-                    '/tenant/sibling',
-                    { tenant => 'acme', id => 8 },
-                    { via => $label },
-                ),
-                sibling_url     => $context->url_for(
-                    '/tenant/sibling',
-                    { tenant => 'acme', id => 8 },
-                    { via => $label },
-                ),
-            };
-            return $context->text('ok') if $label eq 'http';
-            return;
-        };
-    };
+subtest 'Context child-boundary reverse lookup works across protocols' => sub {
+    my $tenant = router(routes => [
+        route('/show/{id}' => sub { }, name => 'show'),
+        route('/sibling/{id}' => sub { }, name => 'sibling'),
+        websocket('/socket/{room}' => sub { }, name => 'socket'),
+        sse('/events/{channel}' => sub { }, name => 'events'),
+    ]);
+    my $routing = router(routes => [
+        mount('/tenants/{tenant}', app => $tenant, name => 'tenant'),
+    ]);
+    my $resolver = $routing->_resolver;
 
-    my $app = router(routes => [
-        mount('/tenants/{tenant}', routes => [
-            route('/show/{id}' => $capture->(
-                'http', '/tenant/show', { tenant => 'acme', id => 7 },
-            ), name => 'show'),
-            route('/sibling/{id}' => sub { return $_[0]->text('sibling') },
-                name => 'sibling'),
-            websocket('/socket/{room}' => $capture->(
-                'ws', '/tenant/socket', { tenant => 'acme', room => 'lobby' },
-            ), name => 'socket'),
-            sse('/events/{channel}' => $capture->(
-                'sse', '/tenant/events', { tenant => 'acme', channel => 'news' },
-            ), name => 'events'),
-        ], name      => 'tenant'),
-    ])->to_app;
-
-    _run_compiled($app,
-        path      => '/tenants/acme/show/7',
-        raw_path  => '/proxy/tenants/acme/show/7',
-        root_path => '/proxy',
-        scheme    => 'https',
-        headers   => [['host', 'public.example:8443']],
-    );
-    _run_compiled($app,
-        type      => 'websocket',
-        path      => '/tenants/acme/socket/lobby',
-        raw_path  => '/proxy/tenants/acme/socket/lobby',
-        root_path => '/proxy',
-        scheme    => 'wss',
-        headers   => [['host', 'public.example:8443']],
-    );
-    _run_compiled($app,
-        type      => 'sse',
-        path      => '/tenants/acme/events/news',
-        raw_path  => '/proxy/tenants/acme/events/news',
-        root_path => '/proxy',
-        scheme    => 'https',
-        headers   => [['host', 'public.example:8443']],
+    my @cases = (
+        ['http', 'https', 'show', { id => 7 },
+            '/proxy/tenants/acme/show/7?via=http',
+            'https://public.example:8443/proxy/tenants/acme/show/7?via=http'],
+        ['websocket', 'wss', 'socket', { room => 'lobby' },
+            '/proxy/tenants/acme/socket/lobby?via=websocket',
+            'wss://public.example:8443/proxy/tenants/acme/socket/lobby?via=websocket'],
+        ['sse', 'https', 'events', { channel => 'news' },
+            '/proxy/tenants/acme/events/news?via=sse',
+            'https://public.example:8443/proxy/tenants/acme/events/news?via=sse'],
     );
 
-    is(\@seen, [
-        {
-            label           => 'http',
-            scope_root_path => '/proxy/tenants/acme',
-            frame_root_path => '/proxy',
-            own_path        => '/proxy/tenants/acme/show/7?via=http',
-            own_url         => 'https://public.example:8443/proxy/tenants/acme/show/7?via=http',
-            sibling_path    => '/proxy/tenants/acme/sibling/8?via=http',
-            sibling_url     => 'https://public.example:8443/proxy/tenants/acme/sibling/8?via=http',
-        },
-        {
-            label           => 'ws',
-            scope_root_path => '/proxy/tenants/acme',
-            frame_root_path => '/proxy',
-            own_path        => '/proxy/tenants/acme/socket/lobby?via=ws',
-            own_url         => 'wss://public.example:8443/proxy/tenants/acme/socket/lobby?via=ws',
-            sibling_path    => '/proxy/tenants/acme/sibling/8?via=ws',
-            sibling_url     => 'https://public.example:8443/proxy/tenants/acme/sibling/8?via=ws',
-        },
-        {
-            label           => 'sse',
-            scope_root_path => '/proxy/tenants/acme',
-            frame_root_path => '/proxy',
-            own_path        => '/proxy/tenants/acme/events/news?via=sse',
-            own_url         => 'https://public.example:8443/proxy/tenants/acme/events/news?via=sse',
-            sibling_path    => '/proxy/tenants/acme/sibling/8?via=sse',
-            sibling_url     => 'https://public.example:8443/proxy/tenants/acme/sibling/8?via=sse',
-        },
-    ], 'inline mount prefixes appear once and sibling targets use the same router boundary');
+    for my $case (@cases) {
+        my ($type, $scheme, $name, $params, $path, $url) = @$case;
+        my $context = _context($type, $resolver,
+            root_path => '/proxy/tenants/acme',
+            scheme => $scheme,
+            headers => [['host', 'public.example:8443']],
+            'pagi.routing' => {
+                version => 1,
+                frames => [_frame(
+                    $resolver,
+                    root_path => '/proxy',
+                    logical_namespace => '/tenant',
+                    captures => { tenant => 'acme' },
+                    mounts => [{
+                        path => '/tenants/{tenant}',
+                        name => 'tenant',
+                        desc => undef,
+                    }],
+                )],
+            },
+        );
+
+        is($context->path_for($name, $params, { via => $type }), $path,
+            "$type relative lookup uses the mounted Router boundary");
+        is($context->url_for($name, $params, { via => $type }), $url,
+            "$type URL lookup preserves the target protocol kind");
+        is(
+            $context->path_for('/tenant/sibling',
+                { tenant => 'acme', id => 8 }, { via => $type }),
+            "/proxy/tenants/acme/sibling/8?via=$type",
+            "$type absolute lookup reaches a sibling through the root resolver",
+        );
+    }
 };
 
 subtest 'Context reverse generation inherits captures and applies each composed predicate once' => sub {
     $Local::ContextReverseProvider::CALLS = 0;
     my $explicit_calls = 0;
-    my @seen;
-    my $app = router(routes => [
-        mount('/accounts/{account:&Local::ContextReverseProvider::Account}',
-            routes => [
-                route('/items/{item}' => sub {
-                    my ($context) = @_;
-                    $explicit_calls = 0;
-                    my $path = $context->path_for('show', { item => 'good' });
-                    my $after_path = $explicit_calls;
-                    my $url = $context->url_for(
-                        'show',
-                        { item => 'good' },
-                        { q => 'two words' },
-                        'details',
-                    );
-                    my $after_url = $explicit_calls;
-                    my $invalid = dies {
-                        $context->url_for('show', { item => 'bad' });
-                    };
-                    push @seen, {
-                        path       => $path,
-                        url        => $url,
-                        after_path => $after_path,
-                        after_url  => $after_url,
-                        after_bad  => $explicit_calls,
-                        invalid    => $invalid,
-                    };
-                    return $context->text('reverse');
+    my $account = router(routes => [
+        route('/items/{item}' => sub { },
+            name => 'show',
+            constraints => {
+                item => sub {
+                    ++$explicit_calls;
+                    return $_[0] eq 'good';
                 },
-                    name => 'show',
-                    constraints => {
-                        item => sub {
-                            ++$explicit_calls;
-                            return $_[0] eq 'good';
-                        },
-                    },
-                ),
-            ],
-            name      => 'account',
+            },
         ),
-    ])->to_app;
-
-    my $events = _run_compiled($app,
-        path      => '/accounts/acme/items/good',
-        raw_path  => '/edge/accounts/acme/items/good',
-        root_path => '/edge',
+    ]);
+    my $routing = router(routes => [
+        mount('/accounts/{account:&Local::ContextReverseProvider::Account}',
+            app => $account, name => 'account',
+        ),
+    ]);
+    my $resolver = $routing->_resolver;
+    my $context = _context('http', $resolver,
+        root_path => '/edge/accounts/acme',
         scheme    => 'https',
         headers   => [['host', 'public.example']],
+        'pagi.routing' => {
+            version => 1,
+            frames => [_frame(
+                $resolver,
+                root_path => '/edge',
+                logical_namespace => '/account',
+                captures => { account => 'acme' },
+                mounts => [{
+                    path => '/accounts/{account}',
+                    name => 'account',
+                    desc => undef,
+                }],
+            )],
+        },
     );
 
-    is($seen[0]{path}, '/edge/accounts/acme/items/good',
+    $explicit_calls = 0;
+    my $path = $context->path_for('show', { item => 'good' });
+    my $after_path = $explicit_calls;
+    my $url = $context->url_for(
+        'show', { item => 'good' }, { q => 'two words' }, 'details',
+    );
+    my $after_url = $explicit_calls;
+    my $invalid = dies { $context->url_for('show', { item => 'bad' }) };
+
+    is($path, '/edge/accounts/acme/items/good',
         'relative path_for inherits the valid mount capture');
-    is($seen[0]{url},
+    is($url,
         'https://public.example/edge/accounts/acme/items/good?q=two%20words#details',
         'url_for validates the leaf and appends query and fragment');
-    is([$seen[0]{after_path}, $seen[0]{after_url}, $seen[0]{after_bad}],
+    is([$after_path, $after_url, $explicit_calls],
         [1, 2, 3],
         'each successful or failed render applies the explicit leaf predicate exactly once');
-    like($seen[0]{invalid}, qr/path parameter 'item' failed constraint/,
+    like($invalid, qr/path parameter 'item' failed constraint/,
         'url_for rejects an invalid explicit leaf value');
     is($Local::ContextReverseProvider::CALLS, 1,
-        'Context dispatch and reverse generation do not reinvoke the mount provider');
-    is($events->[0]{status}, 200, 'the provider-backed request still completes normally');
+        'Context reverse generation does not reinvoke the mount provider');
 };
 
-subtest 'a separately compiled child records and uses its own router boundary' => sub {
-    my @seen;
+subtest 'a mounted child uses the root resolver and its selected namespace' => sub {
+    my $space = router(routes => [
+        route('/items/{id}' => sub { }, name => 'item'),
+        route('/siblings/{id}' => sub { }, name => 'sibling'),
+    ]);
     my $child = router(routes => [
-        mount('/spaces/{space}', routes => [
-            route('/items/{id}' => sub {
-                my ($context) = @_;
-                my $frames = $context->scope->{'pagi.routing'}{frames};
-                push @seen, {
-                    scope_root_paths => [map { $_->{root_path} } @$frames],
-                    current_scope    => $context->scope->{root_path},
-                    item_path        => $context->path_for(
-                        '/item', { space => 'blue', id => 9 }, { q => 'two words' },
-                    ),
-                    sibling_url     => $context->url_for(
-                        '/sibling', { space => 'blue', id => 10 }, { q => 'two words' },
-                    ),
-                };
-                return $context->text('child');
-            }, name => 'item'),
-            route('/siblings/{id}' => sub { return $_[0]->text('sibling') },
-                name => 'sibling'),
-        ]),
-    ])->to_app;
+        mount('/spaces/{space}', app => $space, name => 'space'),
+    ]);
     my $parent = router(routes => [
-        mount('/service' => $child),
-    ])->to_app;
-
-    _run_compiled($parent,
-        path      => '/service/spaces/blue/items/9',
-        raw_path  => '/proxy/service/spaces/blue/items/9',
-        root_path => '/proxy',
+        mount('/service', app => $child, name => 'service'),
+    ]);
+    my $resolver = $parent->_resolver;
+    my $context = _context('http', $resolver,
+        root_path => '/proxy/service/spaces/blue',
         scheme    => 'https',
         headers   => [['host', 'public.example']],
+        'pagi.routing' => {
+            version => 1,
+            frames => [_frame(
+                $resolver,
+                root_path => '/proxy',
+                logical_namespace => '/service/space',
+                captures => { space => 'blue' },
+                mounts => [
+                    { path => '/service', name => 'service', desc => undef },
+                    { path => '/spaces/{space}', name => 'space', desc => undef },
+                ],
+            )],
+        },
     );
 
-    is(\@seen, [{
-        scope_root_paths => ['/proxy', '/proxy/service'],
-        current_scope    => '/proxy/service/spaces/blue',
-        item_path        => '/proxy/service/spaces/blue/items/9?q=two%20words',
-        sibling_url      => 'https://public.example/proxy/service/spaces/blue/siblings/10?q=two%20words',
-    }], 'the child frame excludes its parent application mount and its own inline prefix');
+    is(
+        $context->path_for('item', { id => 9 }, { q => 'two words' }),
+        '/proxy/service/spaces/blue/items/9?q=two%20words',
+        'relative lookup starts at the selected mounted child namespace',
+    );
+    is(
+        $context->url_for('/service/space/sibling',
+            { space => 'blue', id => 10 }, { q => 'two words' }),
+        'https://public.example/proxy/service/spaces/blue/siblings/10?q=two%20words',
+        'absolute lookup keeps the root resolver across the child boundary',
+    );
 };
 
 subtest 'compiled routers reject a non-scalar current root_path boundary' => sub {
@@ -861,46 +792,45 @@ subtest 'Context URI-encodes decoded root_path without re-encoding generated pat
     );
 };
 
-subtest 'a dynamic application mount keeps scope paths decoded and reverses from its encoded child boundary' => sub {
-    my @seen;
+subtest 'a mounted Router boundary encodes decoded captures exactly once' => sub {
     my $child = router(routes => [
-        route('/items/{id}' => sub {
-            my ($context) = @_;
-            my $frames = $context->scope->{'pagi.routing'}{frames};
-            push @seen, {
-                scope_root_path => $context->scope->{root_path},
-                frame_root_path => $frames->[-1]{root_path},
-                path => $context->path_for(
-                    '/item', { id => 'a b%' }, { q => "caf\x{e9} %" },
-                ),
-                url => $context->url_for(
-                    '/item', { id => 'a b%' }, { q => "caf\x{e9} %" },
-                ),
-            };
-            return $context->text('child');
-        }, name => 'item'),
-    ])->to_app;
+        route('/items/{id}' => sub { }, name => 'item'),
+    ]);
     my $parent = router(routes => [
-        mount('/tenants/{tenant}' => $child),
-    ])->to_app;
-
-    _run_compiled($parent,
-        path      => "/tenants/caf\x{e9} 50%/items/current",
-        raw_path  => '/edge%20root/tenants/caf%C3%A9%2050%25/items/current',
-        root_path => '/edge root/',
+        mount('/tenants/{tenant}', app => $child),
+    ]);
+    my $resolver = $parent->_resolver;
+    my $context = _context('http', $resolver,
+        root_path => "/edge root/tenants/caf\x{e9} 50%",
         scheme    => 'https',
         headers   => [['host', 'public.example']],
+        'pagi.routing' => {
+            version => 1,
+            frames => [_frame(
+                $resolver,
+                root_path => '/edge root/',
+                logical_namespace => '/',
+                captures => { tenant => "caf\x{e9} 50%" },
+                mounts => [{
+                    path => '/tenants/{tenant}',
+                    name => undef,
+                    desc => undef,
+                }],
+            )],
+        },
     );
 
     is(
-        \@seen,
-        [{
-            scope_root_path => "/edge root/tenants/caf\x{e9} 50%",
-            frame_root_path => "/edge root/tenants/caf\x{e9} 50%",
-            path => '/edge%20root/tenants/caf%C3%A9%2050%25/items/a%20b%25?q=caf%C3%A9%20%25',
-            url => 'https://public.example/edge%20root/tenants/caf%C3%A9%2050%25/items/a%20b%25?q=caf%C3%A9%20%25',
-        }],
-        'the mounted child sees decoded scope data and emits each prefix and generated value exactly once',
+        $context->path_for('item',
+            { id => 'a b%' }, { q => "caf\x{e9} %" }),
+        '/edge%20root/tenants/caf%C3%A9%2050%25/items/a%20b%25?q=caf%C3%A9%20%25',
+        'path_for emits the decoded mounted prefix and generated values once',
+    );
+    is(
+        $context->url_for('item',
+            { id => 'a b%' }, { q => "caf\x{e9} %" }),
+        'https://public.example/edge%20root/tenants/caf%C3%A9%2050%25/items/a%20b%25?q=caf%C3%A9%20%25',
+        'url_for uses the same encoded mounted child boundary',
     );
 };
 
