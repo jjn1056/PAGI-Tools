@@ -6,12 +6,14 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
-use PAGI::Context;
 use PAGI::Pages ();
+use PAGI::Request;
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
+use PAGI::SSE;
 use PAGI::Utils ();
+use PAGI::WebSocket;
 
 my $ALLOW_STATE_KEY = "\0PAGI::Routing::Compiler::allow";
 my $ALLOW_STATE_TOKEN = sub { return };
@@ -310,10 +312,13 @@ sub _compile_protocol_leaf {
     }
     else {
         my $handler = $route->target;
+        my $kind = $route->kind;
         $app = async sub {
             my ($scope, $receive, $send) = @_;
-            my $context = PAGI::Context->new($scope, $receive, $send);
-            my $returned = $handler->($context);
+            my $protocol = $kind eq 'websocket'
+                ? PAGI::WebSocket->new($scope, $receive, $send)
+                : PAGI::SSE->new($scope, $receive, $send);
+            my $returned = $handler->($protocol);
             await Future->wrap($returned);
             return;
         };
@@ -353,14 +358,14 @@ sub _compile_http_handler {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
-        my $context = PAGI::Context->new($scope, $receive, $send);
-        my $returned = $handler->($context);
+        my $request = PAGI::Request->new($scope, $receive);
+        my $returned = $handler->($request);
         my $result = await Future->wrap($returned);
 
         croak 'handler did not return a response'
             unless PAGI::Utils::is_response($result);
 
-        await Future->wrap($context->respond($result));
+        await Future->wrap($result->respond($send));
         return;
     };
 }

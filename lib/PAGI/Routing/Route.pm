@@ -172,13 +172,15 @@ PAGI::Routing::Route - Immutable declarative route description
 A route represents an HTTP, WebSocket, or SSE leaf. Its C<name>, when supplied,
 is one local logical address segment: it is nonempty, contains no slash, and
 is not C<.> or C<..>; dots are literal characters. The ordinary target is a
-coderef handler; C<raw> targets remain explicit native apps or instantiated
-objects with C<to_app> for the compiler to coerce through
-L<PAGI::Utils/to_app>. Raw application positions never load package names;
-middleware positions retain their separate explicit class-loading contract.
-Its path pattern is compiled during construction, and constructor validation
-performs no request I/O. The description never stores a request match or
-handler result. Collection and hash accessors return shallow copies.
+coderef handler: HTTP receives one L<PAGI::Request>, WebSocket receives one
+L<PAGI::WebSocket>, and SSE receives one L<PAGI::SSE>. C<raw> targets remain
+explicit native apps or instantiated objects with C<to_app> for the compiler
+to coerce through L<PAGI::Utils/to_app>. Raw application positions never load
+package names; middleware positions retain their separate explicit
+class-loading contract. Its path pattern is compiled during construction, and
+constructor validation performs no request I/O. The description never stores
+a request match, protocol object, or handler result. Collection and hash
+accessors return shallow copies.
 
 An inline provider such as C<{id:&Int}> is resolved in the package that
 directly called C<route>, C<websocket>, C<sse>, or C<new>. Re-exporting a
@@ -207,7 +209,9 @@ pass before the normal or raw target is selected.
 Synchronously compiles this route through a fresh complete one-node router on
 every call. Compilation resolves middleware and raw components but emits no
 events. The returned app performs matching and invokes the handler later;
-normal HTTP dispatch emits the returned Response, while raw dispatch leaves
-event ownership with the target.
+normal HTTP dispatch awaits and emits the returned Response exactly once,
+normal WebSocket/SSE dispatch awaits the direct protocol handler's completion,
+and raw dispatch leaves event ownership with the target. Every middleware
+wrapper remains a native C<($scope, $receive, $send)> application.
 
 =cut

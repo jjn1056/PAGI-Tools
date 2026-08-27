@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
+use PAGI::Response;
 use PAGI::Routing qw(router route mount middleware);
 
 sub scope {
@@ -70,9 +71,9 @@ subtest 'automatic HEAD keeps request metadata and GET-equivalent response metad
     my @seen_methods;
     my $app = router(routes => [
         route('/representation' => sub {
-            my ($context) = @_;
-            push @seen_methods, $context->request->method;
-            return $context->response
+            my ($request) = @_;
+            push @seen_methods, $request->method;
+            return PAGI::Response->new($request->scope)
                 ->status(203)
                 ->text('representation');
         }),
@@ -102,13 +103,13 @@ subtest 'HEAD selection retains declaration order and constraint fallthrough' =>
             'explicit HEAD before GET wins',
             [
                 route('/choice' => sub {
-                    push @invoked, ['explicit', $_[0]->request->method];
-                    return $_[0]->text('explicit');
+                    push @invoked, ['explicit', $_[0]->method];
+                    return PAGI::Response->text('explicit');
                 }, methods => 'HEAD'),
                 route('/choice' => sub {
                     ++$expensive_get_calls;
-                    push @invoked, ['automatic', $_[0]->request->method];
-                    return $_[0]->text('automatic');
+                    push @invoked, ['automatic', $_[0]->method];
+                    return PAGI::Response->text('automatic');
                 }, methods => 'GET'),
             ],
             'explicit',
@@ -117,12 +118,12 @@ subtest 'HEAD selection retains declaration order and constraint fallthrough' =>
             'GET before explicit HEAD wins through automatic HEAD',
             [
                 route('/choice' => sub {
-                    push @invoked, ['automatic', $_[0]->request->method];
-                    return $_[0]->text('automatic');
+                    push @invoked, ['automatic', $_[0]->method];
+                    return PAGI::Response->text('automatic');
                 }, methods => 'GET'),
                 route('/choice' => sub {
-                    push @invoked, ['explicit', $_[0]->request->method];
-                    return $_[0]->text('explicit');
+                    push @invoked, ['explicit', $_[0]->method];
+                    return PAGI::Response->text('explicit');
                 }, methods => 'HEAD'),
             ],
             'automatic',
@@ -131,13 +132,13 @@ subtest 'HEAD selection retains declaration order and constraint fallthrough' =>
             'a rejected explicit HEAD constraint falls through to automatic HEAD',
             [
                 route('/choice/{id}' => sub {
-                    push @invoked, ['must-not-run', $_[0]->request->method];
-                    return $_[0]->text('must-not-run');
+                    push @invoked, ['must-not-run', $_[0]->method];
+                    return PAGI::Response->text('must-not-run');
                 },
                     methods => 'HEAD', constraints => { id => sub { return 0 } }),
                 route('/choice/{id}' => sub {
-                    push @invoked, ['fallback', $_[0]->request->method];
-                    return $_[0]->text('fallback');
+                    push @invoked, ['fallback', $_[0]->method];
+                    return PAGI::Response->text('fallback');
                 }, methods => 'GET'),
             ],
             'fallback',
@@ -365,7 +366,7 @@ subtest 'Router-generated HEAD outcomes preserve GET-equivalent metadata and sup
     my $app = router(
         middleware => [middleware('ContentLength')],
         routes => [
-            route('/post' => sub { return $_[0]->text('post') }, methods => 'POST'),
+            route('/post' => sub { return PAGI::Response->text('post') }, methods => 'POST'),
         ],
     )->to_app;
 

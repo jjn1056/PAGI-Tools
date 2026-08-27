@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
+use PAGI::Response;
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::URL qw(path_for);
 
@@ -176,10 +177,10 @@ subtest 'a Router Mount transfers child HTTP outcome ownership' => sub {
             }));
         },
         routes => [
-            route('/item' => sub { return $_[0]->text('child GET') },
+            route('/item' => sub { return PAGI::Response->text('child GET') },
                 methods => 'GET'),
             route('/application-404' => sub {
-                return $_[0]->response
+                return PAGI::Response->new($_[0]->scope)
                     ->status(404)
                     ->header('X-Origin' => 'handler')
                     ->text('handler missing');
@@ -191,11 +192,11 @@ subtest 'a Router Mount transfers child HTTP outcome ownership' => sub {
             mount('/api', app => $child, name => 'child'),
             route('/api/item' => sub {
                 push @parent_calls, 'later full item';
-                return $_[0]->text('parent PUT');
+                return PAGI::Response->text('parent PUT');
             }, methods => 'PUT'),
             route('/api/missing' => sub {
                 push @parent_calls, 'later full missing';
-                return $_[0]->text('parent resumed');
+                return PAGI::Response->text('parent resumed');
             }),
         ],
     )->to_app;
@@ -264,10 +265,12 @@ subtest 'mounted Router middleware order, metadata, compilation freshness, and i
         routes => [
             mount('/inline', routes => [
                 route('/item' => sub {
-                    my ($c) = @_;
+                    my ($request) = @_;
                     push @trace, 'handler';
-                    push @metadata, snapshot_frame($c->scope);
-                    return $c->text($c->scope->{'router-mount.build'});
+                    push @metadata, snapshot_frame($request->scope);
+                    return PAGI::Response->text(
+                        $request->scope->{'router-mount.build'},
+                    );
                 }, name => 'item', middleware => [tracing_middleware('route', \@trace)]),
             ], name      => 'inline', middleware => [tracing_middleware('shorthand mount', \@trace)]),
         ],
@@ -385,7 +388,7 @@ subtest 'reused child Router has occurrence-local outcome middleware' => sub {
             }));
         },
         routes => [
-            route('/item' => sub { return $_[0]->text('item') }, methods => 'GET'),
+            route('/item' => sub { return PAGI::Response->text('item') }, methods => 'GET'),
         ],
     );
     my $occurrence_middleware = sub {
@@ -394,7 +397,7 @@ subtest 'reused child Router has occurrence-local outcome middleware' => sub {
     };
     my $app = router(
         routes => [
-            route('/left/item' => sub { return $_[0]->text('parent PATCH') },
+            route('/left/item' => sub { return PAGI::Response->text('parent PATCH') },
                 methods => 'PATCH'),
             mount('/left', app => $child, name => 'left',
                 middleware => $occurrence_middleware->('left')),
@@ -426,14 +429,14 @@ subtest 'relative child links follow the active Router placement without mutatin
     my @seen;
     my $child = router(routes => [
         route('/{person_id}' => sub {
-            my ($c) = @_;
-            my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
+            my ($request) = @_;
+            my $frame = $request->scope->{'pagi.routing'}{frames}[-1];
             push @seen, {
-                path              => path_for($c, 'show'),
+                path              => path_for($request, 'show'),
                 logical_namespace => $frame->{logical_namespace},
                 captures          => { %{$frame->{captures}} },
             };
-            return $c->text('person');
+            return PAGI::Response->text('person');
         }, name => 'show'),
     ]);
     my $outer = router(routes => [
@@ -465,13 +468,13 @@ subtest 'mounted application runtime boundaries retain root frames and decoded p
     my @service_seen;
     my $space = router(routes => [
         route('/items/{id}' => sub {
-            my ($c) = @_;
+            my ($request) = @_;
             push @service_seen, {
                 frame_roots => [map { $_->{root_path} }
-                    @{$c->scope->{'pagi.routing'}{frames}}],
-                scope_root => $c->scope->{root_path},
+                    @{$request->scope->{'pagi.routing'}{frames}}],
+                scope_root => $request->scope->{root_path},
             };
-            return $c->text('service');
+            return PAGI::Response->text('service');
         }, name => 'item'),
     ]);
     my $service = router(routes => [
@@ -497,15 +500,15 @@ subtest 'mounted application runtime boundaries retain root frames and decoded p
     my @tenant_seen;
     my $tenant = router(routes => [
         route('/items/{id}' => sub {
-            my ($c) = @_;
+            my ($request) = @_;
             push @tenant_seen, {
-                scope_root => $c->scope->{root_path},
-                frame_root => $c->scope->{'pagi.routing'}{frames}[-1]{root_path},
-                captures => { %{$c->scope->{'pagi.routing'}{frames}[-1]{captures}} },
-                reverse => path_for($c, 'item', { id => 'a b%' },
+                scope_root => $request->scope->{root_path},
+                frame_root => $request->scope->{'pagi.routing'}{frames}[-1]{root_path},
+                captures => { %{$request->scope->{'pagi.routing'}{frames}[-1]{captures}} },
+                reverse => path_for($request, 'item', { id => 'a b%' },
                     { q => "caf\x{e9} %" }),
             };
-            return $c->text('tenant');
+            return PAGI::Response->text('tenant');
         }, name => 'item'),
     ]);
     my $tenant_app = router(routes => [
@@ -534,9 +537,9 @@ subtest 'mounted Routers share the one outer HEAD edge and root Mounts consume n
         ],
         routes => [
             route('/body' => sub {
-                my ($c) = @_;
-                push @seen_scopes, snapshot_frame($c->scope);
-                return $c->text('representation');
+                my ($request) = @_;
+                push @seen_scopes, snapshot_frame($request->scope);
+                return PAGI::Response->text('representation');
             }),
             route('/file', raw => async sub {
                 my ($request_scope, $receive, $send) = @_;
@@ -591,9 +594,10 @@ subtest 'mounted Routers share the one outer HEAD edge and root Mounts consume n
     my $root = router(routes => [
         mount('/', app => router(routes => [
             route('/item' => sub {
-                my ($c) = @_;
-                push @root_scope, [@{$c->scope}{qw(path root_path)}];
-                return $c->text('root child');
+                my ($request) = @_;
+                push @root_scope,
+                    [@{$request->scope}{qw(path root_path)}];
+                return PAGI::Response->text('root child');
             }),
         ]), name      => 'root'),
     ])->to_app;

@@ -7,8 +7,10 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
+use PAGI::Response;
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::Resolver;
+use PAGI::Routing::URL qw(path_for);
 
 our $CONCURRENT_PROVIDER_CALLS = 0;
 sub ConcurrentId {
@@ -121,9 +123,10 @@ subtest 'metadata is installed before middleware and records effective mounted l
                     mount('/api',
                         routes => [
                             route('/users/{id}' => sub {
-                                my ($c) = @_;
-                                push @observations, snapshot('handler', $c->scope);
-                                return $c->text('ok');
+                                my ($request) = @_;
+                                push @observations,
+                                    snapshot('handler', $request->scope);
+                                return PAGI::Response->text('ok');
                             },
                                 name => 'show',
                                 desc => 'Show one user',
@@ -225,7 +228,7 @@ subtest 'Router outcomes, short circuits, and application mounts publish only se
         middleware => [observing_middleware('declined router', \@declined)],
         routes => [
             mount('/api', routes => [
-                route('/items' => sub { return $_[0]->text('items') }, methods => 'GET'),
+                route('/items' => sub { return PAGI::Response->text('items') }, methods => 'GET'),
             ]),
         ],
     )->to_app;
@@ -276,7 +279,7 @@ subtest 'Router outcomes, short circuits, and application mounts publish only se
     });
     my $short_app = route('/short' => sub {
         ++$handler_calls;
-        return $_[0]->text('must not run');
+        return PAGI::Response->text('must not run');
     },
         name => 'short',
         desc => 'Short-circuited route',
@@ -333,9 +336,9 @@ subtest 'separately compiled routers append frames without overwriting legacy me
     my @child_scopes;
     my $child = router(routes => [
         route('/items/{id}' => sub {
-            my ($c) = @_;
-            push @child_scopes, $c->scope;
-            return $c->text('child');
+            my ($request) = @_;
+            push @child_scopes, $request->scope;
+            return PAGI::Response->text('child');
         }, name => 'show', desc => 'Child item'),
     ])->to_app;
 
@@ -403,12 +406,12 @@ subtest 'a path-only ancestor resolver forms an incompatible routing boundary' =
     };
     my @seen;
     my $app = route('/inside' => sub {
-        my ($c) = @_;
+        my ($request) = @_;
         push @seen, {
-            scope => $c->scope,
-            reverse_path => $c->path_for('inside'),
+            scope => $request->scope,
+            reverse_path => path_for($request, 'inside'),
         };
-        return $c->text('inside');
+        return PAGI::Response->text('inside');
     }, name => 'inside')->to_app;
     my $incoming = scope(
         path => '/inside',
@@ -423,7 +426,7 @@ subtest 'a path-only ancestor resolver forms an incompatible routing boundary' =
     isnt(refaddr($fresh->{frames}[0]{resolver}), refaddr($path_only),
         'the new current frame uses the compiled Router resolver');
     is($seen[0]{reverse_path}, '/inside',
-        'Context reverse generation works from the new current frame');
+        'Request-bound URL generation works from the new current frame');
     is(response_body($events), 'inside', 'dispatch completes through the fresh boundary');
     is(refaddr($incoming->{'pagi.routing'}), refaddr($foreign_container),
         'the incompatible incoming container remains untouched');
@@ -442,9 +445,9 @@ subtest 'supported ancestry composes while foreign routing values form fresh bou
     my $ancestor_container = { version => 1, frames => $ancestor_frames };
     my @seen;
     my $app = route('/inside' => sub {
-        my ($c) = @_;
-        push @seen, $c->scope;
-        return $c->text('inside');
+        my ($request) = @_;
+        push @seen, $request->scope;
+        return PAGI::Response->text('inside');
     }, name => 'inside')->to_app;
     my $incoming = scope(
         path => '/inside',
@@ -549,9 +552,9 @@ subtest 'matched capture snapshots do not alias mutable scope path parameters' =
     my $app = router(routes => [
         mount('/api/{account_id}', routes => [
             route('/items/{item_id}' => sub {
-                my ($c) = @_;
-                my $frame = current_frame($c->scope);
-                my $original_scope_params = $c->scope->{path_params};
+                my ($request) = @_;
+                my $frame = current_frame($request->scope);
+                my $original_scope_params = $request->scope->{path_params};
                 push @seen, {
                     frame_id => refaddr($frame),
                     scope_params_id => refaddr($original_scope_params),
@@ -562,14 +565,14 @@ subtest 'matched capture snapshots do not alias mutable scope path parameters' =
 
                 $original_scope_params->{account_id} = 'mutated';
                 $original_scope_params->{item_id} = 'mutated';
-                $c->scope->{path_params} = {
+                $request->scope->{path_params} = {
                     account_id => 'replaced',
                     item_id => 'replaced',
                 };
 
                 $seen[-1]{captures_after} = { %{$frame->{captures}} };
-                $seen[-1]{link_after} = $c->path_for('show');
-                return $c->text('snapshot');
+                $seen[-1]{link_after} = path_for($request, 'show');
+                return PAGI::Response->text('snapshot');
             }, name => 'show'),
         ], name      => 'api', middleware => [$mutate_prefix_params]),
     ])->to_app;
@@ -606,9 +609,9 @@ subtest 'compiled middleware state follows documented ownership boundaries' => s
     my $routing = router(
         middleware => [$stateful],
         routes => [route('/state' => sub {
-            my ($c) = @_;
-            push @ordinary_counts, $c->scope->{ordinary_count};
-            return $c->text('state');
+            my ($request) = @_;
+            push @ordinary_counts, $request->scope->{ordinary_count};
+            return PAGI::Response->text('state');
         })],
     );
     my $first_app = $routing->to_app;
@@ -624,9 +627,9 @@ subtest 'compiled middleware state follows documented ownership boundaries' => s
     my $object_routing = router(
         middleware => [middleware($shared_object)],
         routes => [route('/object' => sub {
-            my ($c) = @_;
-            push @object_counts, $c->scope->{shared_object_count};
-            return $c->text('object');
+            my ($request) = @_;
+            push @object_counts, $request->scope->{shared_object_count};
+            return PAGI::Response->text('object');
         })],
     );
     my $object_first = $object_routing->to_app;
@@ -648,9 +651,9 @@ subtest 'compiled middleware state follows documented ownership boundaries' => s
     my $closure_routing = router(
         middleware => [$capturing],
         routes => [route('/closure' => sub {
-            my ($c) = @_;
-            push @closure_counts, $c->scope->{shared_closure_count};
-            return $c->text('closure');
+            my ($request) = @_;
+            push @closure_counts, $request->scope->{shared_closure_count};
+            return PAGI::Response->text('closure');
         })],
     );
     my $closure_first = $closure_routing->to_app;
@@ -671,9 +674,9 @@ subtest 'compiled middleware state follows documented ownership boundaries' => s
     });
     my @subtree = (
         route('/item' => sub {
-            my ($c) = @_;
-            push @subtree_instances, $c->scope->{subtree_instance};
-            return $c->text('item');
+            my ($request) = @_;
+            push @subtree_instances, $request->scope->{subtree_instance};
+            return PAGI::Response->text('item');
         }, middleware => [$per_occurrence]),
     );
     my $twice = router(routes => [
@@ -688,13 +691,13 @@ subtest 'compiled middleware state follows documented ownership boundaries' => s
 };
 
 subtest 'opposite-order concurrent completion isolates selected metadata and Allow authority state' => sub {
-    my (@contexts, @gates);
+    my (@requests, @gates);
     $CONCURRENT_PROVIDER_CALLS = 0;
     my $app = router(routes => [
         mount('/api', routes => [
             route('/items/{id:&ConcurrentId}' => sub {
-                my ($c) = @_;
-                push @contexts, $c;
+                my ($request) = @_;
+                push @requests, $request;
                 my $gate = Future->new;
                 push @gates, $gate;
                 return $gate;
@@ -716,10 +719,12 @@ subtest 'opposite-order concurrent completion isolates selected metadata and All
         sub { push @second_events, $_[0]; return Future->done },
     );
 
-    is(scalar @contexts, 2, 'both handlers start before either pending response resolves');
+    is(scalar @requests, 2, 'both handlers start before either pending response resolves');
     ok(!$first->is_ready && !$second->is_ready, 'both request Futures remain independently pending');
-    my $first_scope = $contexts[0]->scope;
-    my $second_scope = $contexts[1]->scope;
+    isa_ok($requests[0], ['PAGI::Request']);
+    isa_ok($requests[1], ['PAGI::Request']);
+    my $first_scope = $requests[0]->scope;
+    my $second_scope = $requests[1]->scope;
     my $first_container = $first_scope->{'pagi.routing'};
     my $second_container = $second_scope->{'pagi.routing'};
     my $first_frame = current_frame($first_scope);
@@ -750,9 +755,9 @@ subtest 'opposite-order concurrent completion isolates selected metadata and All
         ['/', '/'], 'concurrent requests retain their own current namespaces');
     is([$first_frame->{captures}{id}, $second_frame->{captures}{id}],
         ['one', 'two'], 'concurrent frames retain distinct capture values');
-    is([$contexts[0]->path_for('show'), $contexts[1]->path_for('show')],
+    is([map { path_for($_, 'show') } @requests],
         ['/api/items/one', '/api/items/two'],
-        'concurrent Context links use only their own request captures');
+        'concurrent Request links use only their own request captures');
     is($CONCURRENT_PROVIDER_CALLS, 1,
         'concurrent matching and reverse generation reuse the normalized provider predicate');
     is(refaddr($first_frame->{resolver}), refaddr($second_frame->{resolver}),
@@ -761,7 +766,7 @@ subtest 'opposite-order concurrent completion isolates selected metadata and All
         'the first match uses the effective provider-backed mounted pattern');
     is($second_frame->{match}{route}, '/api/items/{id:&ConcurrentId}',
         'the second match uses the same immutable provider-backed pattern');
-    $gates[1]->done($contexts[1]->text('two'));
+    $gates[1]->done(PAGI::Response->text('two'));
     $second->get;
     ok(!$first->is_ready, 'the first request remains pending after the second completes');
     is(response_body(\@second_events), 'two',
@@ -772,13 +777,13 @@ subtest 'opposite-order concurrent completion isolates selected metadata and All
         '/api/items/{id:&ConcurrentId}',
         'the pending request retains its effective match');
 
-    $gates[0]->done($contexts[0]->text('one'));
+    $gates[0]->done(PAGI::Response->text('one'));
     $first->get;
     is(response_body(\@first_events), 'one',
         'the first request completes later with its own response');
-    is([map { current_frame($_->scope)->{captures}{id} } @contexts],
+    is([map { current_frame($_->scope)->{captures}{id} } @requests],
         ['one', 'two'], 'both final frames retain request-local captures');
-    is([map { $_->path_for('show') } @contexts],
+    is([map { path_for($_, 'show') } @requests],
         ['/api/items/one', '/api/items/two'],
         'both final frames retain correct request-local reverse metadata');
 };
@@ -787,10 +792,10 @@ subtest 'reentrant dispatch appends a frame without changing the outer invocatio
     my ($app, $inner_scope, $outer_scope_after);
     my $routing = router(routes => [
         route('/outer' => async sub {
-            my ($c) = @_;
+            my ($request) = @_;
             my @events;
             my $inner_request = {
-                %{$c->scope},
+                %{$request->scope},
                 path => '/inner',
                 raw_path => '/inner',
             };
@@ -799,13 +804,13 @@ subtest 'reentrant dispatch appends a frame without changing the outer invocatio
                 \&receive,
                 sub { push @events, $_[0]; return Future->done },
             );
-            $outer_scope_after = $c->scope;
-            return $c->text('outer');
+            $outer_scope_after = $request->scope;
+            return PAGI::Response->text('outer');
         }, name => 'outer'),
         route('/inner' => sub {
-            my ($c) = @_;
-            $inner_scope = $c->scope;
-            return $c->text('inner');
+            my ($request) = @_;
+            $inner_scope = $request->scope;
+            return PAGI::Response->text('inner');
         }, name => 'inner'),
     ]);
     $app = $routing->to_app;

@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
+use PAGI::Response;
 use PAGI::Routing qw(router route mount middleware);
 use PAGI::Routing::Compiler;
 
@@ -79,7 +80,7 @@ sub response_header {
 }
 
 sub text_handler {
-    return $_[0]->text('matched');
+    return PAGI::Response->text('matched');
 }
 
 sub mangle_allow_middleware {
@@ -138,11 +139,11 @@ subtest 'later FULL and Mount FULL selections retain declaration-order ownership
     my $app = router(routes => [
         route('/items' => sub {
             push @runs, 'discarded GET';
-            return $_[0]->text('get');
+            return PAGI::Response->text('get');
         }, methods => 'GET'),
         route('/items' => sub {
             push @runs, 'later POST';
-            return $_[0]->text('post');
+            return PAGI::Response->text('post');
         }, methods => 'POST'),
         mount('/owned', app => async sub {
             my ($request_scope, $receive, $send) = @_;
@@ -157,7 +158,7 @@ subtest 'later FULL and Mount FULL selections retain declaration-order ownership
         }),
         route('/owned/resource' => sub {
             push @runs, 'later parent';
-            return $_[0]->text('parent');
+            return PAGI::Response->text('parent');
         }),
     ])->to_app;
 
@@ -179,11 +180,11 @@ subtest 'later FULL and Mount FULL selections retain declaration-order ownership
 subtest 'selected endpoint 404 and 405 responses pass through unchanged' => sub {
     my $app = router(routes => [
         route('/explicit-404' => sub {
-            return $_[0]->text('application missing', status => 404,
+            return PAGI::Response->text('application missing', status => 404,
                 headers => ['X-Origin' => 'handler']);
         }),
         route('/explicit-405' => sub {
-            return $_[0]->text('application method', status => 405,
+            return PAGI::Response->text('application method', status => 405,
                 headers => ['Allow' => 'PATCH', 'X-Origin' => 'handler']);
         }),
     ])->to_app;
@@ -237,7 +238,7 @@ subtest 'custom HTTP default receives NONE only inside selected middleware bound
             route('/item' => \&text_handler, methods => 'GET'),
             route('/throws' => sub { die "selected explosion\n" }),
             route('/returned-404' => sub {
-                return $_[0]->text('selected missing', status => 404);
+                return PAGI::Response->text('selected missing', status => 404);
             }),
         ],
     );
@@ -246,7 +247,7 @@ subtest 'custom HTTP default receives NONE only inside selected middleware bound
         mount('/right', app => $child),
         route('/left/missing' => sub {
             push @parent_runs, 'later parent';
-            return $_[0]->text('parent');
+            return PAGI::Response->text('parent');
         }),
     ])->to_app;
     is($builds, 2, 'the default component is compiled once per Router occurrence');
@@ -314,7 +315,7 @@ subtest 'the root boundary repairs Router-generated Allow after all routing midd
             route('/item' => \&text_handler, methods => 'GET'),
             route('/item' => \&text_handler, methods => 'POST'),
             route('/endpoint' => sub {
-                return $_[0]->text('endpoint', status => 405,
+                return PAGI::Response->text('endpoint', status => 405,
                     headers => ['Allow' => 'PATCH']);
             }),
         ],
@@ -343,14 +344,14 @@ subtest 'the root boundary repairs Router-generated Allow after all routing midd
 
 subtest 'standalone compilation owns Router outcomes and middleware graphs remain fresh' => sub {
     my $description = router(routes => [
-        route('/standalone' => sub { return $_[0]->text('standalone') }),
+        route('/standalone' => sub { return PAGI::Response->text('standalone') }),
     ]);
     is(ref(PAGI::Routing::Compiler->compile($description)), 'CODE',
         'Compiler compiles a Router to CODE');
     is(ref($description->to_app), 'CODE', 'Router to_app returns CODE');
 
     my $standalone = route('/standalone' => sub {
-        return $_[0]->text('standalone');
+        return PAGI::Response->text('standalone');
     })->to_app;
     is(response_body(run_app($standalone, path => '/standalone')), 'standalone',
         'standalone Route handles FULL');
@@ -371,7 +372,7 @@ subtest 'standalone compilation owns Router outcomes and middleware graphs remai
         };
     });
     my $routing = router(routes => [
-        route('/fresh' => sub { return $_[0]->text('fresh') },
+        route('/fresh' => sub { return PAGI::Response->text('fresh') },
             middleware => [$descriptor]),
     ]);
     my $first = $routing->to_app;

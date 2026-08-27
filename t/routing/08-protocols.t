@@ -7,7 +7,11 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
+use PAGI::Response;
 use PAGI::Routing qw(router route websocket sse mount middleware);
+use PAGI::Routing::URL qw(path_for);
+use PAGI::SSE;
+use PAGI::WebSocket;
 
 sub ProtocolProvider { return qr/accepted/ }
 
@@ -45,65 +49,101 @@ sub run_scope {
     return \@events;
 }
 
-subtest 'normal WebSocket and SSE handlers use protocol Contexts and ignore completion values' => sub {
+subtest 'normal WebSocket and SSE handlers use direct cached protocol objects' => sub {
     my @seen;
+    my @selected_channels;
+    my @middleware_argument_counts;
+    my $capture_channels = middleware(sub {
+        my ($inner) = @_;
+        return sub {
+            push @middleware_argument_counts, scalar @_;
+            push @selected_channels, [@_];
+            return $inner->(@_);
+        };
+    });
     my $app = router(routes => [
         mount('/api/{tenant}', routes => [
             websocket('/socket/{room}' => async sub {
-                my ($c) = @_;
+                my ($websocket) = @_;
                 push @seen, {
-                    kind        => ref($c),
-                    path        => $c->path,
-                    root_path   => $c->scope->{root_path},
-                    raw_path    => $c->raw_path,
-                    path_params => $c->path_params,
-                    frame_root  => $c->scope->{'pagi.routing'}{frames}[-1]{root_path},
-                    namespace   => $c->scope->{'pagi.routing'}{frames}[-1]{logical_namespace},
-                    captures    => { %{$c->scope->{'pagi.routing'}{frames}[-1]{captures}} },
+                    argument_count => scalar @_,
+                    kind        => ref($websocket),
+                    object_id   => refaddr($websocket),
+                    scope_id    => refaddr($websocket->scope),
+                    cached_id   => refaddr(
+                        PAGI::WebSocket->new(@{$selected_channels[-1]}),
+                    ),
+                    path        => $websocket->path,
+                    root_path   => $websocket->scope->{root_path},
+                    raw_path    => $websocket->raw_path,
+                    path_params => $websocket->path_params,
+                    frame_root  => $websocket->scope->{'pagi.routing'}{frames}[-1]{root_path},
+                    namespace   => $websocket->scope->{'pagi.routing'}{frames}[-1]{logical_namespace},
+                    captures    => { %{$websocket->scope->{'pagi.routing'}{frames}[-1]{captures}} },
+                    link        => path_for($websocket, 'socket'),
                 };
-                await $c->accept(subprotocol => 'chat');
-                await $c->send_text('welcome');
-                await $c->close(1000, 'done');
+                await $websocket->accept(subprotocol => 'chat');
+                await $websocket->send_text('welcome');
+                await $websocket->close(1000, 'done');
                 return { this => 'is not a wire event' };
-            }),
+            }, name => 'socket', middleware => [$capture_channels]),
             sse('/events/{channel}' => sub {
-                my ($c) = @_;
+                my ($sse) = @_;
                 push @seen, {
-                    kind        => ref($c),
-                    path        => $c->path,
-                    root_path   => $c->scope->{root_path},
-                    raw_path    => $c->raw_path,
-                    path_params => $c->path_params,
-                    frame_root  => $c->scope->{'pagi.routing'}{frames}[-1]{root_path},
-                    namespace   => $c->scope->{'pagi.routing'}{frames}[-1]{logical_namespace},
-                    captures    => { %{$c->scope->{'pagi.routing'}{frames}[-1]{captures}} },
+                    argument_count => scalar @_,
+                    kind        => ref($sse),
+                    object_id   => refaddr($sse),
+                    scope_id    => refaddr($sse->scope),
+                    cached_id   => refaddr(
+                        PAGI::SSE->new(@{$selected_channels[-1]}),
+                    ),
+                    path        => $sse->path,
+                    root_path   => $sse->scope->{root_path},
+                    raw_path    => $sse->raw_path,
+                    path_params => $sse->path_params,
+                    frame_root  => $sse->scope->{'pagi.routing'}{frames}[-1]{root_path},
+                    namespace   => $sse->scope->{'pagi.routing'}{frames}[-1]{logical_namespace},
+                    captures    => { %{$sse->scope->{'pagi.routing'}{frames}[-1]{captures}} },
+                    link        => path_for($sse, 'events'),
                 };
-                $c->start(status => 201)->get;
-                $c->send('ready')->get;
-                $c->close->get;
+                $sse->start(status => 201)->get;
+                $sse->send('ready')->get;
+                $sse->close->get;
                 return 'plain synchronous completion';
-            }),
+            }, name => 'events', middleware => [$capture_channels]),
         ], name => 'tenant'),
     ])->to_app;
 
-    my $ws_events = run_scope($app, scope(
+    my (@ws_events, @sse_events);
+    my $ws_receive = sub { return Future->done({ type => 'websocket.connect' }) };
+    my $ws_send = sub { push @ws_events, $_[0]; return Future->done };
+    $app->(scope(
         type        => 'websocket',
         path        => '/api/acme/socket/lobby',
         root_path   => '/edge',
         raw_path    => '/edge/api/acme/socket/lobby',
         path_params => { retained => 'yes' },
-    ));
-    my $sse_events = run_scope($app, scope(
+    ), $ws_receive, $ws_send)->get;
+    my $sse_receive = sub { return Future->done({ type => 'sse.disconnect' }) };
+    my $sse_send = sub { push @sse_events, $_[0]; return Future->done };
+    $app->(scope(
         type        => 'sse',
         path        => '/api/acme/events/news',
         root_path   => '/edge',
         raw_path    => '/edge/api/acme/events/news',
         path_params => { retained => 'yes' },
-    ));
+    ), $sse_receive, $sse_send)->get;
 
-    is(\@seen, [
+    is([map {
+        my $record = $_;
+        +{ map { $_ => $record->{$_} } qw(
+            argument_count kind path root_path raw_path path_params
+            frame_root namespace captures link
+        ) }
+    } @seen], [
         {
-            kind        => 'PAGI::Context::WebSocket',
+            argument_count => 1,
+            kind        => 'PAGI::WebSocket',
             path        => '/socket/lobby',
             root_path   => '/edge/api/acme',
             raw_path    => '/edge/api/acme/socket/lobby',
@@ -111,9 +151,11 @@ subtest 'normal WebSocket and SSE handlers use protocol Contexts and ignore comp
             frame_root  => '/edge',
             namespace   => '/tenant',
             captures    => { tenant => 'acme', room => 'lobby' },
+            link        => '/edge/api/acme/socket/lobby',
         },
         {
-            kind        => 'PAGI::Context::SSE',
+            argument_count => 1,
+            kind        => 'PAGI::SSE',
             path        => '/events/news',
             root_path   => '/edge/api/acme',
             raw_path    => '/edge/api/acme/events/news',
@@ -121,14 +163,22 @@ subtest 'normal WebSocket and SSE handlers use protocol Contexts and ignore comp
             frame_root  => '/edge',
             namespace   => '/tenant',
             captures    => { tenant => 'acme', channel => 'news' },
+            link        => '/edge/api/acme/events/news',
         },
-    ], 'mounted protocol handlers receive the right Context subclass and rewritten scope');
-    is($ws_events, [
+    ], 'mounted handlers receive one direct protocol object after routing metadata is installed');
+    is([map { $_->{scope_id} } @seen],
+        [map { refaddr($_->[0]) } @selected_channels],
+        'protocol objects retain the exact selected scopes seen by middleware');
+    is([map { $_->{cached_id} } @seen], [map { $_->{object_id} } @seen],
+        'constructing each protocol helper again returns the exact cached object');
+    is(\@middleware_argument_counts, [3, 3],
+        'protocol route middleware remains an exact three-argument native app');
+    is(\@ws_events, [
         { type => 'websocket.accept', subprotocol => 'chat' },
         { type => 'websocket.send', text => 'welcome' },
         { type => 'websocket.close', code => 1000, reason => 'done' },
     ], 'Future-backed WebSocket completion adds no wire interpretation');
-    is($sse_events, [
+    is(\@sse_events, [
         { type => 'sse.start', status => 201 },
         { type => 'sse.send', data => 'ready' },
         { type => 'sse.close' },
@@ -143,6 +193,7 @@ subtest 'raw HTTP, WebSocket, and SSE leaves own their exact matched channels' =
             my ($request_scope, $receive, $send) = @_;
             push @seen, {
                 label      => $label,
+                argument_count => scalar @_,
                 scope      => $request_scope,
                 receive_id => refaddr($receive),
                 send_id    => refaddr($send),
@@ -186,13 +237,16 @@ subtest 'raw HTTP, WebSocket, and SSE leaves own their exact matched channels' =
     }
 
     is(
-        [map { [$_->{label}, $_->{scope}{type}, $_->{scope}{path_params}] } @seen],
+        [map {
+            [$_->{label}, $_->{argument_count}, $_->{scope}{type},
+                $_->{scope}{path_params}]
+        } @seen],
         [
-            ['http', 'http', { id => '1' }],
-            ['websocket', 'websocket', { id => '2' }],
-            ['sse', 'sse', { id => '3' }],
+            ['http', 3, 'http', { id => '1' }],
+            ['websocket', 3, 'websocket', { id => '2' }],
+            ['sse', 3, 'sse', { id => '3' }],
         ],
-        'raw leaves receive matched child scopes without Context adaptation',
+        'raw leaves receive exactly three native values and matched child scopes',
     );
     is($event_sets[0], [{ type => 'http.response.start', status => 204, headers => [] }],
         'raw HTTP leaf owns HTTP emission');
@@ -268,7 +322,10 @@ subtest 'normal and raw protocols apply inline providers and explicit constraint
 
 subtest 'protocol adapters await pending completion and propagate failures' => sub {
     my $normal_completion = Future->new;
+    my ($normal_object, $normal_argument_count);
     my $normal_app = websocket('/wait' => sub {
+        $normal_argument_count = scalar @_;
+        $normal_object = $_[0];
         return $normal_completion;
     })->to_app;
     my @normal_events;
@@ -278,6 +335,9 @@ subtest 'protocol adapters await pending completion and propagate failures' => s
         sub { push @normal_events, $_[0]; return Future->done },
     );
     ok(!$normal_running->is_ready, 'normal protocol dispatch waits for handler completion');
+    isa_ok($normal_object, ['PAGI::WebSocket']);
+    is($normal_argument_count, 1,
+        'pending normal protocol handler receives exactly one direct object');
     $normal_completion->done({ ignored => 'handler value' });
     is($normal_running->get, undef, 'normal completion resolves to inert router completion');
     is(\@normal_events, [], 'normal resolved value is not interpreted as an event');
@@ -334,7 +394,7 @@ subtest 'protocol selection is declaration ordered, protocol local, and mount aw
     my $app = router(routes => [
         route('/shared' => sub {
             push @trace, 'http';
-            return $_[0]->text('http');
+            return PAGI::Response->text('http');
         }),
         websocket('/shared' => async sub {
             push @trace, 'first websocket';
@@ -410,7 +470,7 @@ subtest 'the first prefix Mount owns every protocol and middleware boundary' => 
         };
     });
     my $first = router(routes => [
-        route('/http' => sub { return $_[0]->text('first http') }),
+        route('/http' => sub { return PAGI::Response->text('first http') }),
         websocket('/socket' => async sub {
             await $_[0]->close(1000, 'first websocket');
         }),
@@ -477,7 +537,7 @@ subtest 'HTTP selection ignores WebSocket and SSE leaves without warnings' => su
         sse('/sse-only' => sub { return 'inert' }),
         websocket('/shared' => sub { return 'inert' }),
         sse('/shared' => sub { return 'inert' }),
-        route('/shared' => sub { return $_[0]->text('http leaf') }),
+        route('/shared' => sub { return PAGI::Response->text('http leaf') }),
     ])->to_app;
 
     my @warnings;
