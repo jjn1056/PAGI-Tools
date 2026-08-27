@@ -36,13 +36,21 @@ Reverse lookup may inspect a mounted application's declared routes, but that
 inspection never changes dispatch ownership.
 
 Router once again completes HTTP routing outcomes itself. It invokes a normal
-default application when no path matches and emits a compliant 405 when paths
-match but methods do not. Compose no longer reconstructs those outcomes from a
-routing trace. This makes a nested Router useful by itself and makes a matched
-Mount's ownership final and unsurprising.
+HTTP-default application when no path matches and emits a compliant 405 when
+paths match but methods do not. Compose no longer reconstructs those outcomes
+from a routing trace. This makes a nested Router a self-contained routing
+boundary and makes a matched Mount's ownership final and unsurprising. It does
+not make the Router a complete deployed application root.
 
 This is an intentional breaking redesign of unreleased PAGI-Tools APIs. No
 compatibility aliases or dual semantic modes are required.
+
+This redesign lands before the next PAGI-Tools CPAN release. Version 0.002003
+remains unreleased while the routing and composition surface is realigned, so
+users absorb one documented breaking transition rather than an alignment
+release followed immediately by another routing redesign. GitHub users testing
+`main` are testing work-in-progress APIs; no compatibility layer is retained
+for the superseded forms.
 
 ## 2. Work map
 
@@ -131,7 +139,7 @@ It also requires considerable machinery:
 - Compose ordering rules for automatic fallback layers; and
 - special treatment of applications that complete silently.
 
-Router defaults remove this machinery. A Router is a complete routing
+Router-owned outcomes remove this machinery. A Router is a complete routing
 application; an arbitrary application that completes without starting a
 response is an application error, not an implicit decline.
 
@@ -151,7 +159,7 @@ Compose
   |
   v
 Router
-  ordered selection + NONE default + PARTIAL 405
+  ordered selection + HTTP NONE default + PARTIAL 405
   |
   +-- Route ---------- exact leaf + methods + endpoint
   |
@@ -165,8 +173,8 @@ runtime call graph remains the graph above. Inspection does not flatten it.
 
 ## 6. Shared application contract
 
-Every option named `app`, every raw route target, and every Router `default`
-accepts one of these values:
+Every option named `app`, every raw route target, and every Router
+`http_default` accepts one of these values:
 
 1. a native PAGI coderef; or
 2. an instantiated object with a `to_app` method.
@@ -193,9 +201,9 @@ one. It also prevents `app` from becoming an implicit package loader. Class
 names remain valid in middleware positions where the middleware API explicitly
 defines that convenience.
 
-The public component boundaries use one shared validator/coercer so Route,
-Mount, Router, and Compose cannot drift into different accepted application
-shapes.
+Native application positions--`app`, `raw`, and `http_default`--use one shared
+validator/coercer. Normal Route handler positions remain coderef-only and are
+not application-coercion points.
 
 ## 7. Public API at a glance
 
@@ -229,6 +237,12 @@ route('/raw', raw => $native_app,
 `websocket(...)` and `sse(...)` have the same path, target, name,
 constraints, middleware, and description concepts, but do not accept HTTP
 methods.
+
+`PAGI::Pages` factories work in normal handler positions because they return
+dual-invocation coderefs whose one-argument form is a Context handler returning
+a Response. Their three-argument form also makes the same coderef usable in a
+native application position. This does not extend handler positions to
+arbitrary PAGI applications or instantiated `to_app` objects.
 
 ### 7.2 Mount
 
@@ -266,22 +280,26 @@ A structural `routes` list contains Route and Mount nodes, never a bare Router
 object. A Router is already an application and therefore belongs in
 `app => $router`.
 
+In the functional declarative API, `routes` accepts an arrayref only. Builder
+callbacks are declaration convenience belonging exclusively to
+`PAGI::App::Router` and `PAGI::Endpoint::Router`.
+
 ### 7.3 Router
 
 ```perl
 router(
-    routes     => \@routes,
-    default    => PAGI::Pages->not_found,
-    middleware => [],
-    desc       => 'Public routes',
+    routes       => \@routes,
+    http_default => PAGI::Pages->not_found,
+    middleware   => [],
+    desc         => 'Public routes',
 );
 ```
 
 | Parameter | Required | Meaning |
 | --- | --- | --- |
 | `routes` | no | Ordered Routes and Mounts; defaults to `[]` |
-| `default` | no | Native application invoked for NONE |
-| `middleware` | no | Middleware around selection, 405, and default |
+| `http_default` | no | Native HTTP application invoked for HTTP NONE |
+| `middleware` | no | Middleware around selection, 405, and protocol outcomes |
 | `desc` | no | Human-readable Router annotation |
 
 There is no `not_found`, `method_not_allowed`, lifespan, schema, or route-prefix
@@ -312,7 +330,7 @@ compose(
 | `middleware` | no | Application-wide middleware |
 | `lifespan` | no | Root startup and shutdown callbacks |
 
-Compose does not accept Router defaults, route descriptions, route
+Compose does not accept `http_default`, route descriptions, route
 constraints, OpenAPI schemas, or status-specific callbacks.
 
 ## 8. Route semantics
@@ -354,9 +372,20 @@ are suppressed.
 
 After a Mount prefix matches, Mount:
 
-1. merges prefix captures into a fresh child `path_params` hash;
+1. merges prefix captures into a fresh child `path_params` hash. Mount and
+   Route capture merges require disjoint parameter names; a PAGI Router never
+   silently overwrites an incoming `path_params` entry. Inspectable collisions
+   fail during construction. When an opaque wrapper hides a nested PAGI Router,
+   a collision that Router discovers at dispatch fails before it invokes its
+   selected leaf. Under Compose, this application-structure error follows the
+   normal safe-500 path;
 2. appends the consumed prefix to `root_path`;
-3. rewrites `path` to the unconsumed child path;
+3. rewrites `path` to the unconsumed child path. When the Mount consumes the
+   complete request path, the child path is `/`, never the empty string.
+   Consequently, both `/apples` and `/apples/` enter
+   `mount('/apples', ...)` with child `path => '/'`, and a child `route('/')`
+   matches both. This is Mount-boundary normalization, not a slash redirect:
+   no redirect response is emitted and the browser-visible URL is unchanged;
 4. preserves `raw_path` under the existing PAGI contract;
 5. records the selected mount occurrence for route metadata;
 6. invokes Mount middleware; and
@@ -387,10 +416,11 @@ mount('/api', app => router(routes => [
 ```
 
 The child Router is a real application boundary. It owns its middleware,
-default, 405 calculation, selected metadata, and compilation state. The
+HTTP default, 405 calculation, selected metadata, protocol misses, and
+compilation state. The
 `routes` spelling does not create a transparent inline subtree.
 
-The shorthand child uses the stock Router default and no child Router
+The shorthand child uses the stock Router protocol defaults and no child Router
 middleware or description. A caller that needs those Router-level options
 constructs it explicitly and supplies it through `app`. Mount-level
 middleware and `desc` still describe the placement rather than the child.
@@ -490,7 +520,22 @@ mount('/person/{id}', app => router(routes => [
 The application instead uses distinct names such as `person_id` and
 `blog_id`. Parameter remapping is deferred. If a coderef intentionally hides
 an external router, the parent cannot validate names or parameter collisions
-inside that opaque boundary.
+inside that opaque boundary. A hidden `PAGI::Routing::Router` still rejects a
+duplicate when it attempts to merge its own captures with the incoming
+`path_params` at dispatch time.
+
+An arbitrary opaque application receives parent captures in
+`scope->{path_params}` and owns any subsequent interpretation, mutation, or
+replacement. Hiding an application forfeits parent-side validation of its
+internals; it does not weaken collision checks performed by a nested PAGI
+Router itself.
+
+Reverse inspection tracks Router identity only within the active ancestry.
+Encountering the same Router again before leaving that ancestry croaks with the
+effective URL and logical namespace; reusing it in completed sibling branches
+remains legal. Public immutable construction does not ordinarily permit a
+cycle, so this is a defensive requirement for subclass-provided route views or
+otherwise malformed Router objects.
 
 ## 10. Router matching and outcomes
 
@@ -505,38 +550,48 @@ For HTTP, a Router scans direct children in declaration order:
    has selected the child application.
 4. If no FULL child exists and at least one PARTIAL exists, the Router emits
    405 with the unioned `Allow` header.
-5. If no FULL or PARTIAL child exists, the Router invokes its default app.
+5. If no FULL or PARTIAL child exists, the Router invokes its HTTP-default
+   app.
 
 Routes are never sorted by path, specificity, name, kind, or mount-prefix
 length.
 
 For WebSocket and SSE, the Router likewise scans in declaration order for the
 first Mount prefix or same-protocol Route match. There is no method PARTIAL for
-those protocols. If nothing matches, the Router invokes the same configured
-default application or its stock protocol-specific default.
+those protocols. If nothing matches, the Router always invokes its stock
+protocol-specific miss behavior. `http_default` does not receive WebSocket or
+SSE scopes.
 
-### 10.2 Default application
+### 10.2 HTTP-default application
 
-`default` is a native PAGI application, not a Context-handler callback. It is
-invoked only after a complete direct Router search finds NONE. The stock
-default uses `PAGI::Pages` to produce the normal negotiated HTTP 404 and the
-existing safe protocol-specific miss for WebSocket and SSE.
+`http_default` is a native PAGI HTTP application, not a Context-handler
+callback. It is invoked only after a complete direct HTTP Router search finds
+NONE. The stock HTTP default uses `PAGI::Pages` to produce the normal
+negotiated 404. WebSocket and SSE keep their existing safe stock misses and
+never invoke this option.
 
 ```perl
 my $api = router(
     routes => \@api_routes,
-    default => PAGI::Pages->not_found(
+    http_default => PAGI::Pages->not_found(
         detail => 'No API route matched this request path.',
     ),
 );
 ```
 
-A custom default must support each scope type that can reach that Router. A
-Pages endpoint is HTTP-only; use a small multiprotocol application when the
-same Router also needs custom WebSocket or SSE miss behavior.
+This deliberately differs from Starlette. Starlette exposes one
+multiprotocol `default` application, whose stock implementation branches
+between HTTP and WebSocket; replacing it makes the custom application own both
+protocols. PAGI instead names the narrower option `http_default` because it
+also has first-class SSE scopes and the common `PAGI::Pages` customization is
+HTTP-only. The narrower contract prevents an ordinary custom 404 page from
+breaking unmatched WebSocket or SSE requests. This decision should be
+revisited if PAGI later gains a coherent public use case for custom
+protocol-specific Router misses.
 
-Router middleware surrounds both the default and normal selections, so it can
-add subsystem headers, logging, or presentation policy to a custom default.
+Router middleware surrounds the HTTP default, stock WebSocket/SSE misses, and
+normal selections, so it can add subsystem logging or other protocol-valid
+policy at the Router boundary.
 
 ### 10.3 Method Not Allowed
 
@@ -548,7 +603,18 @@ There is no `method_not_allowed` Router option in this design. Applications
 that need a different representation apply ordinary Router or Mount
 middleware that transforms the 405 response. This keeps response
 customization in middleware without retaining a trace interpreter or adding a
-second callback API.
+second callback API. Such replacement is advanced PAGI middleware: it must
+intercept `http.response.start`, preserve the authoritative `Allow` value,
+suppress the original body or opaque-body events, and emit exactly one complete
+replacement response. This design does not disguise that work as a trivial
+callback recipe or add a stock transformer without a concrete consumer.
+
+PAGI also does not turn NONE or PARTIAL into exceptions. Perl can carry blessed
+exception objects, but a public HTTP-condition system would require its own
+handler registry, catcher-ordering rules, post-response-start behavior, and
+clear separation from application failures. Introducing only the 405 fragment
+of that system would add action at a distance without solving the general
+problem.
 
 ### 10.4 Nested ownership
 
@@ -565,8 +631,8 @@ my $root = router(routes => [
 
 `PUT /api/item` selects the Mount before the later parent Route. The child
 emits its own 405 with `Allow: GET, HEAD`. The parent does not resume and does
-not add PUT. `GET /api/missing` receives the child's default 404, not the
-parent's default.
+not add PUT. `GET /api/missing` receives the child's HTTP-default 404, not the
+parent's HTTP default.
 
 An explicit 404 or 405 produced by a selected endpoint or mounted application
 passes through untouched except for normal surrounding middleware.
@@ -577,6 +643,13 @@ Once a Route or Mount selects an app, normal completion without a complete
 response is an application contract failure. Compose's response guard turns
 that into a safe 500. There is no scope flag, exception sentinel, or hidden
 `$next` operation that resumes routing.
+
+Direct Router compilation retains the outer HEAD wire boundary, so its HTTP
+HEAD responses suppress body, file, and trailer events without requiring
+Compose. It does not install lifespan handling, ErrorHandler, or ResponseGuard.
+An application deployed directly as a Router therefore remains responsible for
+failures and incomplete selected applications; Compose supplies those root
+lifecycle and safety guarantees.
 
 ## 11. Middleware ownership and order
 
@@ -603,9 +676,9 @@ final HEAD wire boundary
               endpoint
 ```
 
-The child Router default and 405 pass through child Router middleware, Mount
-middleware, root Router middleware, and Compose middleware. They do not pass
-through Route middleware because no Route was selected.
+The child Router HTTP default and 405 pass through child Router middleware,
+Mount middleware, root Router middleware, and Compose middleware. They do not
+pass through Route middleware because no Route was selected.
 
 Mount middleware sees every protocol delegated through that Mount. It is not
 silently HTTP-only; middleware that only handles HTTP must explicitly pass
@@ -690,9 +763,11 @@ metrics, diagnostics, and Context reverse routing:
 - route kind and description; and
 - root-path boundary.
 
-Inline Router entry replaces leaf match information only when a leaf is
-selected. Middleware may inspect the selected result after awaiting downstream.
-No mutable metadata container is shared between concurrent requests.
+When a selected Mount delegates to an inspectable child Router, the
+request-local frame stack records that child boundary. Leaf match information
+is published only when the child selects a leaf. Middleware may inspect the
+selected result after awaiting downstream. No mutable metadata container is
+shared between concurrent requests.
 
 ### 12.5 Remove fallback trace machinery
 
@@ -747,14 +822,14 @@ native coderef.
 ### 14.1 `PAGI::App::Router`
 
 The mutable builder continues to materialize the same immutable Router model.
-Its root configuration accepts `default`, `middleware`, and `desc`.
+Its root configuration accepts `http_default`, `middleware`, and `desc`.
 
 `group` is removed. `mount` uses the same two concepts as declarative Mount:
 
 ```perl
 my $r = PAGI::App::Router->new(
-    default => PAGI::Pages->not_found,
-    desc    => 'Public application',
+    http_default => PAGI::Pages->not_found,
+    desc         => 'Public application',
 );
 
 $r->mount('/api',
@@ -775,10 +850,10 @@ child App Router, returns no runtime value, and is invoked only while building
 the immutable snapshot. It is Perlish declaration convenience, not another
 routing abstraction.
 
-The builder also exposes `default($app)` for method-oriented construction. A
-Router default may be configured once, either in the constructor or through
-that method; a second configuration croaks rather than silently overriding
-policy.
+The builder also exposes `http_default($app)` for method-oriented
+construction. A Router HTTP default may be configured once, either in the
+constructor or through that method; a second configuration croaks rather than
+silently overriding policy.
 
 Positional application mounts and `router =>` are removed:
 
@@ -812,7 +887,7 @@ the explicit `app_as` and `middleware_as` helpers.
 
 ```perl
 sub routes ($self, $r) {
-    $r->default($self->app_as('not_found'));
+    $r->http_default($self->app_as('not_found'));
 
     $r->get('/' => 'index')->name('index');
 
@@ -920,13 +995,13 @@ Compared with the current PAGI example:
 - Compose is no longer involved in interpreting routing evidence; and
 - the app file returns a Compose object directly to a conforming PAGI server.
 
-A custom application-wide 404 is an explicit root Router default, not a final
-wildcard Route:
+A custom application-wide 404 is an explicit root Router HTTP default, not a
+final wildcard Route:
 
 ```perl
 compose(app => router(
-    routes  => \@routes,
-    default => PAGI::Pages->not_found(
+    routes       => \@routes,
+    http_default => PAGI::Pages->not_found(
         detail => 'The application has no route for this path.',
     ),
 ));
@@ -938,14 +1013,14 @@ FULL/PARTIAL candidate and can intentionally affect 405 selection.
 
 ## 16. Additional examples
 
-### 16.1 Separate mounted Router with local default
+### 16.1 Separate mounted Router with local HTTP default
 
 ```perl
 my $admin = router(
     routes => [
         route('/users' => \&users, name => 'users'),
     ],
-    default => PAGI::Pages->not_found(
+    http_default => PAGI::Pages->not_found(
         detail => 'No admin route matched this request path.',
     ),
 );
@@ -956,9 +1031,10 @@ my $root = router(routes => [
 ]);
 ```
 
-`/admin/missing` uses the admin default and passes through the Mount's
-authorization middleware. A missing path outside `/admin` uses the root
-default.
+`/admin/missing` uses the admin HTTP default and passes through the Mount's
+authorization middleware. A missing HTTP path outside `/admin` uses the root
+HTTP default. WebSocket and SSE misses at either boundary retain their stock
+protocol behavior.
 
 ### 16.2 Static application
 
@@ -1004,8 +1080,8 @@ compose(
 
 Compose middleware sees the whole application. Router middleware sees every
 Router outcome. Mount middleware sees only the selected `/api` occurrence,
-including its child's default and 405. Route middleware sees only one selected
-leaf.
+including its child's HTTP default, protocol misses, and 405. Route middleware
+sees only one selected leaf.
 
 ## 17. Removed public surface
 
@@ -1020,9 +1096,9 @@ The implementation and migration guide remove or replace:
 | `Mount->router` | `Mount->app` / base application accessor |
 | `Mount->target` for positional apps | `Mount->app` |
 | `Mount->is_raw` | no mode flag; every Mount composes an app |
-| Router HTTP silent decline | Router default or built-in 405 |
+| Router HTTP silent decline | Router `http_default` or built-in 405 |
 | `PAGI::Routing::Trace` family | selected `pagi.routing` metadata only |
-| `PAGI::Middleware::Routing::NotFound` | Router `default` |
+| `PAGI::Middleware::Routing::NotFound` | Router `http_default` |
 | `PAGI::Middleware::Routing::MethodNotAllowed` | Router's compliant 405 plus ordinary response middleware |
 | Compose automatic routing fallback middleware | root Router outcomes |
 | package-name values in `app` positions | instantiate the object explicitly |
@@ -1030,6 +1106,25 @@ The implementation and migration guide remove or replace:
 References throughout `lib/`, tests, examples, README, Cookbook, Tutorial,
 Changes, and `UPGRADING.md` must be updated. Historical design documents remain
 historical and are not rewritten.
+
+The upgrade guide must address the intentional difference between application
+and middleware strings directly:
+
+```perl
+# Rejected: `app` does not load, construct, or call packages.
+mount('/legacy', app => 'MyApp::Legacy');
+
+# Accepted: supply an instantiated application object.
+mount('/legacy', app => MyApp::Legacy->new);
+
+# Still accepted: middleware defines an explicit class-loading contract.
+middleware('RequestId', header => 'X-Request-ID');
+```
+
+Application strings are rejected because `app` does not define whether a
+package should be instantiated, called as a class, or treated as a singleton.
+Middleware class strings remain supported because middleware descriptors
+explicitly define loading, construction, configuration, and `wrap` behavior.
 
 ## 18. OpenAPI and schema support
 
@@ -1092,11 +1187,12 @@ version. The resolver never guesses names from an arbitrary app, introspects
 closures, calls an Endpoint declaration hook, or calls `path_for` as a
 discovery protocol.
 
-### 19.7 Do not make default an exception handler
+### 19.7 Do not make `http_default` an exception handler
 
-Router default handles NONE only. Handler exceptions continue outward to
-ErrorHandler. A selected handler-returned 404 is not replaced. PARTIAL remains
-the Router's 405 path.
+Router `http_default` handles HTTP NONE only. Handler exceptions continue
+outward to ErrorHandler. A selected handler-returned 404 is not replaced.
+PARTIAL remains the Router's 405 path. WebSocket and SSE NONE retain their
+stock protocol-specific outcomes.
 
 ### 19.8 Do not add schema placeholders
 
@@ -1110,21 +1206,27 @@ The eventual implementation plan must cover at least:
 
 1. constructor validation for the exact Route, Mount, Router, and Compose
    option sets;
-2. `app` acceptance of coderefs and instantiated `to_app` objects, and
-   rejection of package strings;
+2. acceptance of coderefs and instantiated `to_app` objects in `app`, `raw`,
+   and `http_default` positions, and rejection of package strings;
 3. exact declaration-order FULL/PARTIAL/Mount selection;
 4. deterministic 405 `Allow` union, GET/HEAD behavior, and custom HEAD
    precedence;
-5. default invocation only for NONE across HTTP, WebSocket, and SSE;
+5. `http_default` invocation only for HTTP NONE, plus stock WebSocket and SSE
+   miss behavior even when `http_default` is customized;
 6. child Router ownership of nested 404 and 405 without parent resumption;
 7. selected app silence becoming a guarded 500 rather than fallback;
-8. `routes` shorthand behaving as a real mounted Router application;
-9. middleware visibility and onion order for normal leaves, child default,
-   child 405, and exceptions;
+8. `routes` shorthand behaving as a real mounted Router application, with
+   both an exact Mount prefix and its trailing-slash spelling reaching the
+   child `/` route;
+9. middleware visibility and onion order for normal leaves, child HTTP
+   default, protocol misses, child 405, and exceptions;
 10. named and unnamed mounted Router reverse lookup through base-app
     inspection;
 11. reuse of one child Router at multiple named placements;
-12. duplicate name, duplicate effective parameter, and Router-cycle failures;
+12. duplicate name, duplicate effective parameter, and defensive Router-cycle
+    failures. The cycle test uses a test-only `PAGI::Routing::Router` subclass
+    whose `routes` accessor returns a Mount whose `app` is that same Router
+    instance;
 13. request-local metadata isolation under concurrent in-flight requests;
 14. absolute and relative Context `path_for`/`url_for`, capture inheritance,
     query, and fragment behavior from a separately compiled child Router;
@@ -1161,6 +1263,7 @@ This work does not add:
 - package-name app loading;
 - value-flow `$next` middleware;
 - a general HTTP exception hierarchy;
+- a stock 405 response-transformer middleware;
 - per-route 404 or 405 callbacks; or
 - compatibility modes for removed APIs.
 
@@ -1177,7 +1280,7 @@ The public documentation should lead with one rule per abstraction:
 
 The docs must include the complete apples application, a mutable App Router
 version, an Endpoint Router version, a separately mounted Router, static files,
-custom defaults at root and child boundaries, middleware at every level,
+custom HTTP defaults at root and child boundaries, middleware at every level,
 `route(raw => ...)` versus `mount(app => ...)`, named and unnamed reverse
 lookup, and nested 404/405 ownership.
 
@@ -1188,6 +1291,8 @@ than imply API identity:
 - PAGI constraints validate without coercion;
 - PAGI retains slash logical names and relative lookup;
 - PAGI supports SSE as a first-class scope;
+- PAGI deliberately exposes `http_default` rather than Starlette's single
+  multiprotocol `default`, preserving stock WebSocket and SSE miss behavior;
 - PAGI middleware is pure PAGI app-to-app wrapping;
 - PAGI Compose separates root lifespan from Router; and
 - schema generation remains deferred until a real consumer is designed.
