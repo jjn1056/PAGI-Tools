@@ -21,10 +21,11 @@ my $events = MyApp::API::Events->new;
 my $api    = MyApp::API->new(events => $events);
 my $main   = MyApp::Main->new(api => $api);
 
-my $app = compose(app => $main->to_router, lifespan => { ... })->to_app;
+my $app = compose(app => $main->to_router, lifespan => { ... });
 ```
 
-That Compose is also the complete deployed HTTP boundary: the selected
+`app.pl` returns that to_app-capable Compose object for the server to compile.
+It is also the complete deployed HTTP boundary: the selected
 Endpoint Router owns its negotiated 404 and 405, while Compose supplies
 response-completion and application-error safeguards.
 

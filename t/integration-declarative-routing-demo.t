@@ -22,7 +22,7 @@ ok(!$load_error, 'the example app file loads cleanly')
 isa_ok($app, 'PAGI::Compose');
 
 SKIP: {
-    skip 'the example app did not load', 24
+    skip 'the example app did not load', 21
         unless ref($app) eq 'PAGI::Compose';
 
     my $client = PAGI::Test::Client->new(app => $app);

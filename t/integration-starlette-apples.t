@@ -62,7 +62,7 @@ subtest 'welcome, routing outcomes, and apples CRUD' => sub {
     is($invalid_id->status, 404,
         'failed Int constraint is a routing 404');
     is($invalid_id->content_type, 'application/problem+json',
-        'routing miss uses Compose negotiation');
+        'selected child Router negotiates the routing miss');
     is($invalid_id->json->{title}, 'Not Found',
         'routing miss uses the stock Pages title');
     ok(!exists $invalid_id->json->{error},

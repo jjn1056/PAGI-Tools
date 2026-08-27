@@ -2,10 +2,10 @@ use strict;
 use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
+use Scalar::Util qw(blessed);
 use lib "$Bin/../examples/endpoint-router-demo/lib";
 use lib "$Bin/../lib";
 
-use PAGI::Compose qw(compose);
 use PAGI::Test::Client;
 
 use MyApp::Main;
@@ -57,26 +57,19 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
         /home /status_socket
     )], 'nested local names form canonical absolute addresses');
 
-    my $resource;
-    my $app = compose(
-        app => $router,
-        lifespan => {
-            startup => sub {
-                my ($state) = @_;
-                $resource = $state->{resource} = { name => 'demo-resource', open => 1 };
-                $state->{metrics} = { requests => 0, websocket_messages => 0 };
-            },
-            shutdown => sub {
-                my ($state) = @_;
-                $state->{resource}{open} = 0;
-                $state->{resource}{closed} = 1;
-            },
-        },
-    );
+    my $app_file = "$Bin/../examples/endpoint-router-demo/app.pl";
+    my $app = do $app_file;
+    my $load_error = $@ || $!;
+    ok(!$load_error, 'the real Endpoint demo app file loads cleanly')
+        or diag($load_error);
     isa_ok($app, 'PAGI::Compose');
+    ok(blessed($app) && $app->can('to_app'),
+        'the real app file returns a to_app-capable object');
 
+    my $resource;
     PAGI::Test::Client->run($app, sub {
         my ($client) = @_;
+        $resource = $client->state->{resource};
 
         my $home = $client->get('/');
         is($home->status, 200, 'home responds through Main');
