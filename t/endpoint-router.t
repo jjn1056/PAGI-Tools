@@ -249,6 +249,43 @@ sub run_scope {
 }
 
 {
+    package Local::CallbackContractEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+
+    sub new { return bless { mode => $_[1], trace => [] }, $_[0] }
+
+    sub routes {
+        my ($self, $r) = @_;
+        if ($self->{mode} eq 'normal') {
+            push @{$self->{trace}}, 'before';
+            my $future = Future->done('ignored callback return');
+            $self->{callback_future} = $future;
+            $r->mount('/callback', routes => sub {
+                my ($child) = @_;
+                push @{$self->{trace}}, 'callback';
+                $child->get('/leaf' => 'leaf')->name('leaf');
+                return $future;
+            })->name('callback');
+            push @{$self->{trace}}, 'after';
+            return;
+        }
+        return $r->mount('/bad', routes => sub {
+            die "callback explosion\n";
+        }) if $self->{mode} eq 'throws';
+        return $r->mount('/bad', routes => sub { }, 'dangling')
+            if $self->{mode} eq 'odd';
+        return $r->mount('/bad',
+            routes => sub { ++$self->{duplicate_calls} },
+            routes => sub { ++$self->{duplicate_calls} },
+        ) if $self->{mode} eq 'duplicate';
+        my $non_string = [];
+        return $r->mount('/bad', $non_string => sub { });
+    }
+
+    sub leaf { return $_[1]->text('callback leaf') }
+}
+
+{
     package Local::InlinePathEndpoint;
     use parent 'PAGI::Endpoint::Router';
 
@@ -276,6 +313,16 @@ subtest 'the public surface is method-oriented and has no legacy machinery' => s
         'base new rejects silently discarded configuration');
     isa_ok($base->to_router, 'PAGI::Routing::Router');
     is(ref($base->to_app), 'CODE', 'an empty Endpoint compiles to an app');
+    my $missing = PAGI::Test::Client->new(app => $base->to_app)->get(
+        '/missing', headers => { Accept => 'text/plain' },
+    );
+    is($missing->status, 404,
+        'direct Endpoint to_app emits the Router stock HTTP NONE response');
+    is($missing->header('Content-Type'), 'text/plain; charset=utf-8',
+        'the stock HTTP NONE response negotiates its representation');
+    is($missing->text,
+        "404 Not Found\n\nThe requested resource was not found.\n",
+        'the direct Router response contains the stock not-found document');
 };
 
 subtest 'the Endpoint facade follows the App Router composition grammar' => sub {
@@ -347,6 +394,40 @@ subtest 'Endpoint native positions do not bind handler strings or old Mount form
         my ($mode, $pattern) = @$case;
         like(dies { Local::BadCompositionEndpoint->new($mode)->to_router },
             $pattern, "$mode declaration is rejected without method magic");
+    }
+};
+
+subtest 'Endpoint callback wrapping preserves synchronous App builder semantics' => sub {
+    my $endpoint = Local::CallbackContractEndpoint->new('normal');
+    my $routing = $endpoint->to_router;
+    is($endpoint->{trace}, ['before', 'callback', 'after'],
+        'the routes callback executes synchronously during declaration');
+    isa_ok($endpoint->{callback_future}, 'Future');
+    is($endpoint->{callback_future}->get, 'ignored callback return',
+        'a Future callback return remains caller-owned and ignored');
+    is($routing->path_for('/callback/leaf'), '/callback/leaf',
+        'the callback child declaration is retained instead of its return value');
+    is(PAGI::Test::Client->new(app => $routing->to_app)
+            ->get('/callback/leaf')->text,
+        'callback leaf', 'the retained child handler remains Endpoint-bound');
+
+    like(dies {
+        Local::CallbackContractEndpoint->new('throws')->to_router;
+    }, qr/callback explosion/,
+        'a thrown callback error propagates during declaration');
+
+    my @diagnostics = (
+        [odd => qr/mount option list must be key\/value pairs/],
+        [duplicate => qr/duplicate mount option 'routes'/],
+        ['non-string' => qr/mount option names must be strings/],
+    );
+    for my $case (@diagnostics) {
+        my ($mode, $pattern) = @$case;
+        my $bad = Local::CallbackContractEndpoint->new($mode);
+        like(dies { $bad->to_router }, $pattern,
+            "$mode options retain the App builder diagnostic");
+        is(0 + ($bad->{duplicate_calls} || 0), 0,
+            "$mode options fail before a callback executes");
     }
 };
 

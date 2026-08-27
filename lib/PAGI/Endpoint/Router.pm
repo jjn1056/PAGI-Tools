@@ -201,10 +201,13 @@ C<to_app>, while the outer reverse resolver does not guess its route names.
 Materializes one fresh snapshot and compiles it through the shared compiler.
 Retain the returned native PAGI routing component for its intended lifetime. A
 class call constructs one Endpoint instance; an object call keeps its receiver.
-Direct C<to_app> is legal low-level compilation, but an exhausted HTTP search
-emits no response. Use an enclosing L<PAGI::Compose> for a complete deployed
-application, or attach routing fallback middleware at the enclosing Router or
-Mount boundary.
+Direct C<to_app> is legal low-level compilation. HTTP NONE invokes the
+Router's declared C<http_default>, or its stock negotiated 404 when none was
+declared; HTTP PARTIAL likewise retains the Router's negotiated 405. It never
+completes HTTP exhaustion silently. L<PAGI::Compose> remains an optional
+application-root composer for application middleware, lifespan callbacks, and
+its HTTP safety boundary; it is not required merely to produce Router-owned
+404 or 405 responses.
 
 =head1 ROUTE DECLARATIONS
 
