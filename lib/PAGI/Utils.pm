@@ -312,35 +312,28 @@ async sub handle_lifespan {
 }
 
 sub to_app {
-    my ($thing) = @_;
+    my ($value) = @_;
+    _validate_app_value($value, 'to_app() application');
+    return $value if ref($value) eq 'CODE';
+    my $app = $value->to_app;
+    croak ref($value) . '->to_app must return a coderef'
+        unless ref($app) eq 'CODE';
+    return $app;
+}
 
-    croak "to_app() requires an app, component, or class name"
-        unless defined $thing;
+sub _validate_app_value {
+    my ($value, $label) = @_;
+    $label = 'application' unless defined $label && length $label;
 
-    return $thing if ref($thing) eq 'CODE';
-
-    if (blessed($thing)) {
-        return $thing->to_app if $thing->can('to_app');
-        croak ref($thing) . " looks like middleware, not an app"
-            . " - pass it to enable(), or wrap an app with ->wrap(\$app)"
-            if $thing->can('wrap');
-        croak "Cannot coerce " . ref($thing) . " object to a PAGI app (no to_app method)";
+    if (blessed($value) && $value->can('wrap') && !$value->can('to_app')) {
+        croak "$label middleware object is not an app";
     }
 
-    if (!ref($thing)) {
-        croak "Cannot coerce '$thing' to a PAGI app"
-            unless $thing =~ /\A\w+(?:::\w+)*\z/;
-        unless ($thing->can('to_app')) {
-            local $@;
-            eval "require $thing; 1" or croak "Failed to load '$thing': $@";
-        }
-        return $thing->to_app if $thing->can('to_app');
-        croak "'$thing' looks like middleware, not an app - pass it to enable()"
-            if $thing->can('wrap');
-        croak "'$thing' does not have a to_app() method";
-    }
-
-    croak "Cannot coerce " . ref($thing) . " reference to a PAGI app";
+    croak "$label must be a coderef or instantiated object with to_app"
+        unless defined $value
+            && (ref($value) eq 'CODE'
+                || (blessed($value) && $value->can('to_app')));
+    return $value;
 }
 
 1;
@@ -537,21 +530,22 @@ Coerce C<$thing> into a PAGI application (an async coderef). Accepts:
 
 =item * an object with a C<to_app> method - compiled by calling it
 
-=item * a class name with a C<to_app> method - auto-required if needed,
-then compiled by calling C<< $class->to_app >>
-
 =back
 
-Anything else croaks. A middleware object or class (something with C<wrap>
-but no C<to_app>) gets a croak pointing at C<enable()> instead, since
-middleware belongs in middleware position, not app position.
+Application positions accept native coderefs and instantiated component objects
+only. They never load package names. Anything else croaks. A middleware object
+(something with C<wrap> but no C<to_app>) gets a middleware-specific croak,
+since middleware belongs in middleware position, not app position.
 
 All composition points in this distribution (builder mounts, router
-targets, cascades, the test client) call this for you, so user code can
-pass components and class names directly:
+targets, cascades, the test client) call this for you, so user code can pass
+native apps and instantiated components directly:
 
     mount '/static' => PAGI::App::File->new(root => $dir);
-    mount '/api'    => 'MyApp::API';
+    mount '/api'    => MyApp::API->new;
+
+Middleware positions have a separate explicit class-loading contract; pass a
+middleware class name there, not in an application position.
 
 =cut
 

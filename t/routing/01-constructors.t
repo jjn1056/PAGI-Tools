@@ -30,8 +30,9 @@ use PAGI::Routing qw(:ALL);
 
 {
     package TestRoutingApp;
+    our $CALLS = 0;
     sub new { bless { app => $_[1] }, $_[0] }
-    sub to_app { $_[0]->{app} }
+    sub to_app { $CALLS++; return $_[0]->{app} }
 }
 
 {
@@ -280,8 +281,10 @@ subtest 'raw and protocol-specific route descriptions' => sub {
     is($raw->methods, ['GET', 'HEAD'], 'raw HTTP routes retain default methods');
 
     my $component = TestRoutingApp->new($app);
+    $TestRoutingApp::CALLS = 0;
     my $raw_component = route '/component', raw => $component;
     is(refaddr($raw_component->target), refaddr($component), 'raw component identity is retained for compiler coercion');
+    is($TestRoutingApp::CALLS, 0, 'raw component is not compiled at description construction');
 
     my $ws_regex = qr/ws/;
     my $ws_code = sub { return $_[0] eq 'code' };
@@ -553,6 +556,16 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
     like dies { route '/not-code' => 'not a handler' }, qr/handler must be a coderef/, 'normal route handler must be a coderef';
     like dies { route '/not-component' => TestRoutingApp->new($handler) }, qr/handler must be a coderef/, 'normal route does not coerce component targets';
+    for my $invalid (
+        [undef, qr/raw application must be a coderef or instantiated object with to_app/],
+        ['Local::App', qr/raw application must be a coderef or instantiated object with to_app/],
+        [[], qr/raw application must be a coderef or instantiated object with to_app/],
+        [bless({}, 'RouteObjectWithoutToApp'), qr/raw application must be a coderef or instantiated object with to_app/],
+    ) {
+        my ($value, $pattern) = @$invalid;
+        like dies { route '/invalid-raw', raw => $value }, $pattern,
+            'raw route rejects a non-native application value synchronously';
+    }
     like dies { mount '/missing' }, qr/mount requires exactly one of target, routes, or router/, 'mount requires one selector';
     like dies { mount '/both' => $handler, routes => [] }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects target plus routes';
     like dies { mount '/target-router' => $handler, router => $child_router, name      => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects target plus router';

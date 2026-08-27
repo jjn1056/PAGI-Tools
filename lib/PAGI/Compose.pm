@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Exporter 'import';
-use Scalar::Util qw(blessed);
+use PAGI::Utils ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Router ();
 
@@ -36,7 +36,7 @@ sub new {
         $routes = $validated->routes;
     }
     else {
-        _validate_app_shape($opts{app});
+        PAGI::Utils::_validate_app_value($opts{app}, 'compose app');
     }
 
     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
@@ -53,14 +53,6 @@ sub new {
         middleware => $middleware,
         lifespan   => $lifespan,
     }, $class;
-}
-
-sub _validate_app_shape {
-    my ($app) = @_;
-    croak 'compose app must be defined' unless defined $app;
-    return if ref($app) eq 'CODE' || blessed($app);
-    return if !ref($app) && $app =~ /\A[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/;
-    croak 'compose app must be a coderef, object, or class name';
 }
 
 sub _validate_lifespan {
@@ -201,9 +193,10 @@ its inspection API available while Compose still owns the deployed boundary:
     compose(app => $component)
 
 C<app> accepts the component forms supported by L<PAGI::Utils/to_app>: a
-native coderef, an object with C<to_app>, or a loadable class with C<to_app>.
-It must be defined and have a plausible component shape. Final component
-coercion and class loading occur once during each C<to_app>, never per request.
+native coderef or an instantiated object with C<to_app>. Application positions
+never load package names. Final component coercion occurs once during each
+C<to_app>, never per request. Middleware positions separately retain their
+explicit class-loading contract.
 
 This target receives every non-lifespan scope after application middleware.
 It never receives the lifespan scope owned by Compose.
@@ -462,10 +455,10 @@ or other target-specific methods.
 
 L<PAGI::Routing>, L<PAGI::App::Router>, and L<PAGI::Endpoint::Router> are
 functional, mutable, and method-oriented frontends over one immutable routing
-engine. Any compiled frontend, native app, or component object/class can be the
-single Compose target. Compose remains the optional deployed root that can own
-application middleware and server-provided lifespan state; it is not a fourth
-router. L<PAGI::Lifespan> and
+engine. Any compiled frontend, native app, or instantiated component object can
+be the single Compose target; a package name is never loaded in that position.
+Compose remains the optional deployed root that can own application middleware
+and server-provided lifespan state; it is not a fourth router. L<PAGI::Lifespan> and
 L<PAGI::Utils/handle_lifespan> remain the low-level choices for hand-built
 native applications or their existing hook-registration behavior.
 

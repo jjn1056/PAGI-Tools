@@ -3,6 +3,7 @@ package PAGI::Routing::Route;
 use strict;
 use warnings;
 use Carp qw(croak);
+use PAGI::Utils ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Pattern ();
 
@@ -38,8 +39,10 @@ sub _new_from {
         croak "unknown route option '$key'" unless $allowed{$key};
     }
 
-    croak 'route requires exactly one of handler or raw' unless defined $target;
+    croak 'route requires exactly one of handler or raw'
+        unless $is_raw || defined $target;
     croak 'handler must be a coderef' unless $is_raw || ref($target) eq 'CODE';
+    PAGI::Utils::_validate_app_value($target, 'raw application') if $is_raw;
 
     _validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     _validate_logical_segment('name', $opts{name}) if exists $opts{name};
@@ -169,11 +172,13 @@ PAGI::Routing::Route - Immutable declarative route description
 A route represents an HTTP, WebSocket, or SSE leaf. Its C<name>, when supplied,
 is one local logical address segment: it is nonempty, contains no slash, and
 is not C<.> or C<..>; dots are literal characters. The ordinary target is a
-coderef handler; C<raw> targets remain explicit applications for the compiler
-to coerce through L<PAGI::Utils/to_app>. Its path pattern is compiled during
-construction, and constructor validation performs no request I/O. The
-description never stores a request match or handler result. Collection and
-hash accessors return shallow copies.
+coderef handler; C<raw> targets remain explicit native apps or instantiated
+objects with C<to_app> for the compiler to coerce through
+L<PAGI::Utils/to_app>. Raw application positions never load package names;
+middleware positions retain their separate explicit class-loading contract.
+Its path pattern is compiled during construction, and constructor validation
+performs no request I/O. The description never stores a request match or
+handler result. Collection and hash accessors return shallow copies.
 
 An inline provider such as C<{id:&Int}> is resolved in the package that
 directly called C<route>, C<websocket>, C<sse>, or C<new>. Re-exporting a
