@@ -1353,14 +1353,19 @@ Compose preserves its status and headers and suppresses the final wire body.
         app => $routing,
         middleware => [
             middleware('ErrorHandler',
-                handler => PAGI::Pages->internal_server_error),
+                handler => sub {
+                    my ($context, $error) = @_;
+                    return PAGI::Pages->internal_server_error($context);
+                }),
         ],
     )->to_app;
 
 The HTTP default handles only Router NONE. ErrorHandler's separate handler API
 still supplies a standalone Context plus the thrown application error. A Pages
-endpoint accepts that Context source and ignores trailing callback metadata;
-use a wrapper when that metadata must choose copy or extensions.
+endpoint accepts one request source and does not accept arbitrary trailing
+callback metadata, so the wrapper passes only that Context. It may inspect the
+error when it deliberately chooses safe copy or extensions. Passing a Pages
+endpoint directly rejects ErrorHandler's two-argument callback invocation.
 
 =head2 12. Router-owned MethodNotAllowed union
 

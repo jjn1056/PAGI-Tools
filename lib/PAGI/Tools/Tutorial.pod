@@ -1116,12 +1116,22 @@ a Pages endpoint through the existing handler seam to fix its representation:
   use PAGI::Pages;
 
   enable 'ErrorHandler',
-      handler => PAGI::Pages->internal_server_error(as => 'json');
+      handler => sub {
+          my ($context, $error) = @_;
+          return PAGI::Pages->internal_server_error(
+              $context,
+              as => 'json',
+          );
+      };
 
 Use C<< as => 'html' >> or C<'text'> for the other fixed forms. Ordinary
 construction has static C<development =E<gt> 0> behavior and
 does not consult C<PAGI_ENV>. Its optional C<handler> receives
 C<($context, $error)> and returns an immediate or Future-backed Response.
+The wrapper is required because a Pages endpoint accepts one request source,
+not ErrorHandler's two-argument callback. It may inspect C<$error> to choose
+safe page fields, but Pages does not consume the exception as trailing
+metadata.
 C<on_error> is awaited reporting, not rendering; reporter failure is contained.
 Before response start, ErrorHandler reports and renders. After start it reports,
 emits no replacement response, and rethrows the original exception so the

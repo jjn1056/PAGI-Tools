@@ -72,7 +72,19 @@ type and cache policy unchanged.
 
 Use the handler seam to force a fixed Pages representation:
 
-    handler => PAGI::Pages->internal_server_error(as => 'json')
+    handler => sub {
+        my ($context, $error) = @_;
+        return PAGI::Pages->internal_server_error(
+            $context,
+            as => 'json',
+        );
+    }
+
+The wrapper is required: ErrorHandler supplies C<($context, $error)>, while a
+Pages endpoint accepts one request source plus page options. Passing the Pages
+endpoint directly therefore rejects the two-argument callback invocation. The
+wrapper may inspect C<$error> when it deliberately chooses safe page fields,
+but Pages does not consume that callback metadata itself.
 
 =back
 

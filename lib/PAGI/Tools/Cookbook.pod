@@ -444,7 +444,18 @@ The built-in renderer negotiates through Pages. To fix one representation, use
 the existing handler seam:
 
   middleware('ErrorHandler',
-      handler => PAGI::Pages->internal_server_error(as => 'json'))
+      handler => sub {
+          my ($context, $error) = @_;
+          return PAGI::Pages->internal_server_error(
+              $context,
+              as => 'json',
+          );
+      })
+
+The wrapper adapts ErrorHandler's C<($context, $error)> callback to the single
+request source accepted by a Pages endpoint. A direct Pages endpoint is not a
+two-argument ErrorHandler callback; the wrapper may use C<$error> to choose
+safe page fields when needed.
 
 A custom renderer remains authoritative for its own content and headers.
 

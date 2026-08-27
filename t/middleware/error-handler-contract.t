@@ -172,6 +172,32 @@ subtest 'configured built-in statuses must be complete registered Pages errors' 
     }
 };
 
+subtest 'Pages integration adapts the two-argument ErrorHandler seam' => sub {
+    my $middleware = PAGI::Middleware::ErrorHandler->new(
+        handler => sub {
+            my ($context, $error) = @_;
+            return PAGI::Pages->internal_server_error(
+                $context,
+                as => 'json',
+            );
+        },
+    );
+    my ($future, $events) = invoke(
+        $middleware,
+        async sub { die "database failed\n" },
+    );
+    settle($future);
+
+    ok $future->is_done, 'wrapped Pages renderer completes successfully';
+    is scalar(@$events), 2, 'wrapped Pages renderer completes the response';
+    is $events->[0]{status}, 500, 'Pages renderer emits the error status';
+    is header_value($events->[0], 'content-type'),
+        'application/problem+json', 'configured Pages representation is used';
+    is $events->[1]{type}, 'http.response.body',
+        'Pages renderer emits the response body';
+    is $events->[1]{more}, 0, 'Pages renderer emits a terminal body event';
+};
+
 subtest 'immediate custom renderer receives and preserves exception status' => sub {
     my $error = Local::StatusError->new(418, 'teapot');
     my ($seen_context, $seen_error, $seeded_status);
