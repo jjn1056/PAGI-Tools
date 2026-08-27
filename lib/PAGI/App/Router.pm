@@ -239,4 +239,10 @@ effective path and constraints, encodes parameter/query/fragment values, and
 performs no protocol I/O. Inside a selected handler, Context C<path_for> can
 resolve relative to the active placement and inherit captures.
 
+=head1 SEE ALSO
+
+L<PAGI::Routing>, L<PAGI::Routing::Router>, L<PAGI::Routing::Mount>,
+L<PAGI::Compose>, L<PAGI::Endpoint::Router>, and the
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
+
 =cut

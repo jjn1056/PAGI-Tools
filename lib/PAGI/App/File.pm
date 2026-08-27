@@ -35,8 +35,12 @@ The component can be mounted directly in a declarative router:
     use PAGI::Routing qw(router mount);
 
     my $routing = router(routes => [
-        mount('/static' => PAGI::App::File->app_path('static')),
+        mount('/static', app => PAGI::App::File->app_path('static')),
     ]);
+
+The named C<app> option matters: Route is a complete URL leaf, while this Mount
+composes the file application under a prefix and passes the remaining child
+path to it.
 
 =head1 DESCRIPTION
 
@@ -621,6 +625,9 @@ non-cacheable; 405 responses advertise C<GET, HEAD>, and 416 responses include
 the known representation length. File MIME selection, streaming, caching, and
 range handling for successful responses remain owned by this component,
 including the C<default_type> seam.
+
+See L<PAGI::Routing::Mount> for prefix composition and L<PAGI::Compose> for
+root ErrorHandler, response-completion, and lifespan ownership.
 
 =over 4
 

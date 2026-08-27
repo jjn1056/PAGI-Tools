@@ -173,4 +173,10 @@ and response lifecycle safety; it is not required to make Router 404 or 405
 responses complete. WebSocket and SSE retain their protocol-specific miss
 behavior.
 
+Unlike L<PAGI::Compose>, a bare Router does not own root ErrorHandler,
+response-completion guarding, or lifespan. See L<PAGI::Routing>,
+L<PAGI::Routing::Mount>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, and
+the
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
+
 =cut

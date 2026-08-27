@@ -1284,7 +1284,7 @@ this endpoint, and normal route diagnostics still apply.
     use PAGI::Routing qw(mount);
 
     my $app = compose(routes => [
-        mount('/gone' => PAGI::Pages->gone),
+        mount('/gone', app => PAGI::Pages->gone),
     ])->to_app;
 
 C<mount> is an opaque prefix owner. It transfers C</gone> and the complete
@@ -1331,7 +1331,7 @@ Compose consumes root lifespan and places the final HEAD wire boundary outside
 Pages. Pages still constructs the full GET-equivalent representation for HEAD;
 Compose preserves its status and headers and suppresses the final wire body.
 
-=head2 11. NotFound and ErrorHandler middleware endpoints
+=head2 11. Router HTTP default and ErrorHandler endpoints
 
     use PAGI::Compose qw(compose);
     use PAGI::Pages;
@@ -1342,48 +1342,39 @@ Compose preserves its status and headers and suppresses the final wire body.
         return $context->text('Home');
     }
 
-    my $routing = router(routes => [route('/' => \&home)]);
+    my $routing = router(
+        routes       => [route('/' => \&home)],
+        http_default => PAGI::Pages->not_found,
+    );
     my $app = compose(
         app => $routing,
         middleware => [
-            middleware('Routing::NotFound',
-                handler => PAGI::Pages->not_found),
             middleware('ErrorHandler',
                 handler => PAGI::Pages->internal_server_error),
         ],
     )->to_app;
 
-Pages ignores the routing snapshot or original exception passed as trailing
-callback metadata. Use a wrapper when that metadata must choose copy or
-extensions.
+The HTTP default handles only Router NONE. The ErrorHandler endpoint handles a
+thrown application error. Pages ignores trailing callback metadata; use a
+wrapper when that metadata must choose copy or extensions.
 
-=head2 12. MethodNotAllowed with the snapshot method union
+=head2 12. Router-owned MethodNotAllowed union
 
     use PAGI::Compose qw(compose);
     use PAGI::Pages;
-    use PAGI::Routing qw(router route middleware);
+    use PAGI::Routing qw(router route);
 
     sub items {
         my ($context) = @_;
         return $context->text('Items');
     }
 
-    my $pages = PAGI::Pages->new;
     my $routing = router(routes => [
         route('/items' => \&items, methods => ['GET', 'POST']),
     ]);
-    my $app = compose(
-        app => $routing,
-        middleware => [
-            middleware('Routing::MethodNotAllowed', handler => sub {
-                my ($context, $snapshot) = @_;
-                return $pages->method_not_allowed(
-                    $context,
-                    allow => $snapshot->allowed_methods,
-                );
-            }),
-        ],
-    )->to_app;
+    my $app = compose(app => $routing)->to_app;
+
+    # POST is accepted; PUT receives 405 with Allow: GET, HEAD, POST.
 
 =head2 13. HTML, JSON/problem JSON, and text negotiation
 

@@ -4,6 +4,10 @@
 
 PAGI::Tools::Tutorial - Optional convenience helpers for PAGI applications
 
+Route matches a complete URL leaf. Mount composes an application under a
+prefix. Router selects and owns routing outcomes. Middleware wraps behavior.
+Compose owns the application root and lifespan.
+
 =head1 DESCRIPTION
 
 PAGI itself is a protocol; see L<PAGI::Tutorial> for the protocol tutorial.
@@ -136,21 +140,19 @@ L<PAGI::Routing/Path parameters, wildcards, and constraints> for provider
 lookup, escaping, and reverse-routing behavior.
 
 GET includes HEAD automatically. Paths are exact, with no slash redirect or
-automatic OPTIONS. Mounts have three contracts:
+automatic OPTIONS. Mount has one composition contract and exactly one named
+target:
 
   mount('/api', routes => \@nodes, name => 'api')
-  mount('/people', router => $people, name => 'person')
-  mount('/static' => $static_app)
+  mount('/people', app => $people, name => 'person')
+  mount('/static', app => $static_app)
 
-The first is an inline structural subtree. The second keeps a separately
-configured Router as an inspectable child and requires a local name. The third
-is an opaque application prefix. Passing a Router positionally still chooses
-opacity; C<< mount('/x' => $router) >> is not shorthand for the named
-C<< router => $router >> form.
-After a Router-mount prefix matches, the child owns its full match and any
-unanswered decline. The parent never resumes scanning; the decline unwinds
-through child Router, Mount-occurrence, enclosing Router, and application
-fallback middleware until one responds.
+C<routes> constructs a complete child Router application. C<app> retains a
+native application or instantiated component; an immutable Router remains
+inspectable while other applications are opaque. A local C<name> is optional
+for either form. After a prefix matches, the child owns its full match, 404,
+and 405. Those responses flow through child, Mount-occurrence, and parent
+middleware, but the parent never resumes scanning.
 
 Route and structural-mount names are local segments; slash constructs absolute
 logical addresses such as C</api/user>. Context reverse calls may resolve from
@@ -223,10 +225,6 @@ application component already exists, pass it through C<app> instead:
       app => $routing,
       middleware => [
           middleware('RequestId'),
-          middleware('Routing::NotFound',
-              handler => \&not_found),
-          middleware('Routing::MethodNotAllowed',
-              handler => \&method_not_allowed),
       ],
       lifespan => { startup => \&startup },
   )->to_app;
@@ -237,13 +235,12 @@ WebSocket, SSE, and extension scopes. The first listed middleware is outermost.
 Only the deployed root runs lifecycle callbacks; mounting or nesting a Compose
 description retains request dispatch but does not run that inner lifecycle.
 
-For HTTP, Compose also installs one mandatory outer graph: final HEAD wire
-suppression, a fresh routing Trace, ErrorHandler, response-completion guard,
-Routing::NotFound, Routing::MethodNotAllowed, then the author middleware and
-target. An author response makes the outer defaults inert. Keep official
-fallback and error policy inside request-ID, access-log, and security
-middleware when those layers should observe or decorate it. Compose does not
-add callback, disable, or replacement-detection options for these safeguards.
+For HTTP, Compose installs final HEAD wire suppression, ErrorHandler, and a
+response-completion guard outside author middleware and the target. The Router
+already owns 404 and 405. Configure its C<http_default> when the application
+needs custom missing-route presentation; method mismatches retain the
+Router-generated 405 and authoritative C<Allow>. A selected native app that
+sends nothing is incomplete output and becomes 500, never an implicit miss.
 
 C<compose(...)> returns an immutable description. The final C<to_app> compiles
 the native three-channel PAGI coderef once. Compose is not a base class and it
@@ -299,8 +296,9 @@ routing, and compilation must refer to the same route identities.
 For handlers bound to a configured object, subclass
 L<PAGI::Endpoint::Router>. Its C<routes($builder)> method uses the same verb
 surface but accepts local unqualified method names. Construct nested Endpoint
-objects explicitly and mount them with C<< router => $child >> and local
-C<name>; package strings do not load routing behavior.
+objects explicitly and mount C<< app => $child->to_router >> when their names
+must remain discoverable. Mounting C<< app => $child >> is valid opaque
+application composition. Package strings do not load routing behavior.
 
 =head2 2.4 Choosing a Router
 
@@ -312,16 +310,16 @@ The three APIs are declaration frontends at different abstraction boundaries:
 
 All three materialize L<PAGI::Routing::Router> and share Pattern parsing,
 Resolver slash addresses, Compiler matching, route metadata, constraints,
-GET/HEAD behavior, nonterminal HTTP declines, first-seen method evidence,
+GET/HEAD behavior, Router-owned HTTP outcomes, first-seen method evidence,
 reverse routing, pure native middleware, and exact written order. The first
 full match wins; declarations are never separated by kind or sorted by mount
 prefix.
 
-The routing Trace contains facts rather than a status decision. Ordinary
-fallback middleware receives its checkpoint snapshot and decides whether to
-render. Context intentionally has no C<routing_trace>, C<not_found>, or
-C<method_not_allowed> convenience method: Context also serves applications
-and routers that do not publish this first-party contract.
+The selected Router owns NONE and PARTIAL. NONE invokes its HTTP-only
+C<http_default> or stock Pages 404; PARTIAL emits its compliant Pages 405.
+WebSocket and first-class SSE misses keep their stock protocol behavior.
+Compose remains the application root for lifespan, error handling, and
+response-completion safety.
 
 Choose C<PAGI::Routing> for functional immutable declarations,
 C<PAGI::App::Router> for incremental mutation with closures, and
@@ -622,7 +620,7 @@ normal route target or native HTTP app:
 
   route('/' => PAGI::Pages->welcome);
   route('/old' => PAGI::Pages->redirect('/new', status => 308));
-  mount('/gone' => PAGI::Pages->gone);
+  mount('/gone', app => PAGI::Pages->gone);
 
 The route forms are exact and method-aware. The mount owns C</gone> and its
 entire subtree for every HTTP method; a terminal Pages app ignores the
@@ -1218,7 +1216,7 @@ L<PAGI::App::File> serves static files with security, caching, and streaming:
   use PAGI::App::File;
 
   my $static = PAGI::App::File->app_path('public');
-  $router->mount('/static' => $static);
+  $router->mount('/static', app => $static);
 
 Features:
 
@@ -1305,7 +1303,7 @@ L<PAGI::App::Healthcheck> creates health check endpoints:
       },
   );
 
-  $router->mount('/health' => $health);
+  $router->mount('/health', app => $health);
 
 =head2 7.3 PAGI::App::URLMap - Mount Applications
 
@@ -1319,17 +1317,15 @@ L<PAGI::App::URLMap> routes requests to different apps based on URL prefix:
   $urlmap->mount('/static' => $static);
   compose(app => $urlmap)->to_app;
 
-Each selected mount and C<default> is opaque. A naked compiled Router can
-decline silently inside that boundary, and an outer Compose reports the result
-as incomplete output (500), not as 404. Wrap that Router with
-C<< compose(app => $router)->to_app >> when the URLMap child should complete
-its own routing fallback.
+Each selected mount and C<default> is opaque. A Router child is nevertheless a
+complete application for its own 404 and 405 outcomes. URLMap does not inspect
+its names or allow parent routing to resume; use a declarative Mount with an
+immutable Router C<app> when reverse discovery matters.
 
 =head2 7.4 PAGI::App::Cascade - Try Apps in Sequence
 
 L<PAGI::App::Cascade> tries apps in order using two independent rules:
-explicit non-final statuses in C<catch>, and trusted unanswered Router
-declines:
+explicit non-final statuses in C<catch>, while silence is always an error:
 
   use PAGI::App::Cascade;
 
@@ -1342,9 +1338,9 @@ declines:
 
 A non-caught response streams after its start event. A caught response is
 suppressed and awaited through its terminal body before the next child runs.
-An arbitrary silent HTTP child is an application error. A final Router decline
-remains unanswered, so a deployed Cascade ending that way needs routing
-fallback middleware or Compose.
+An arbitrary silent HTTP child is an application error. Routers emit ordinary
+404/405 responses, so those statuses advance only when listed in C<catch>; a
+final Router response passes through unchanged.
 
 =head2 7.5 PAGI::App::Proxy - Reverse Proxy
 
@@ -1356,7 +1352,7 @@ L<PAGI::App::Proxy> forwards requests to backend servers:
       backend => 'http://localhost:8080',
       timeout => 30,
   );
-  $router->mount('/api' => $proxy);
+  $router->mount('/api', app => $proxy);
 
 =head2 7.6 PAGI::App::WrapPSGI - Use Existing PSGI Apps
 
@@ -1365,15 +1361,13 @@ L<PAGI::App::WrapPSGI> lets you use existing PSGI applications:
   use PAGI::App::WrapPSGI;
 
   my $wrapped = PAGI::App::WrapPSGI->new(psgi_app => $legacy_app);
-  $router->mount('/legacy' => $wrapped);
+  $router->mount('/legacy', app => $wrapped);
 
 Useful for incremental migration from PSGI to PAGI.
 
 =head2 7.7 Application Composition
 
-Every place this toolkit accepts an application coerces its argument
-through L<PAGI::Utils/to_app>, so three forms are interchangeable in
-app position:
+Application positions accept two explicit native forms:
 
 =over 4
 
@@ -1383,11 +1377,11 @@ app position:
 compiled once at composition time:
 C<< PAGI::App::File->new(root => 'public') >>
 
-=item * A B<class name string> — auto-required if needed, then compiled
-via the class-method C<to_app>: C<'MyApp::API'>
-
 =back
 
+These positions accept coderefs or instantiated C<to_app> objects; package
+strings are rejected because an application position does not define whether a
+package should be constructed, called as a class, or treated as a singleton.
 App positions include opaque mounts and explicit C<raw> leaves in
 L<PAGI::App::Router> and
 L<PAGI::Routing>, C<mount> and the final block value in
@@ -1405,8 +1399,9 @@ C<app> argument to L<PAGI::Test::Client>. Put together:
 Compilation happens exactly once, when the composition point receives
 the component — never per request. Routing-aware App/Endpoint children are
 deliberately stricter: load their packages normally, construct configured
-objects explicitly, and pass them to
-C<< mount('/prefix', router => $child) >>. Ordinary route targets receive
+objects explicitly, and pass immutable snapshots to
+C<< mount('/prefix', app => $child->to_router) >> when reverse discovery is
+required. Ordinary route targets receive
 C<$c>; native coderefs and class/component apps belong only behind explicit
 C<raw> or opaque mount boundaries.
 
@@ -1423,11 +1418,27 @@ composition time with a message pointing at the right position.
 
 The value F<app.pl> hands to the server must still be a native coderef. For a
 Router or a routing-capable Cascade, end the file with
-C<< compose(app => $routing)->to_app >> so the deployed HTTP application has
-complete fallbacks. Direct C<< $routing->to_app >> is the lower-level spelling
-when an explicit enclosing component supplies that policy. A C<builder {}>
+C<< compose(app => $routing)->to_app >> when the deployed application also
+needs root ErrorHandler, response-completion guarding, and lifespan. Direct
+C<< $routing->to_app >> already owns Router 404/405 but not those root
+boundaries. A C<builder {}>
 block already returns a native coderef; whether it is complete depends on the
 applications it composes.
+
+=head2 7.8 Starlette Vocabulary, PAGI Boundaries
+
+PAGI borrows the Route/Mount/Router distinction without copying Starlette's
+API. Ordinary handlers receive an explicit Context, while C<raw>, Mount
+C<app>, Router C<http_default>, and Compose C<app> receive the native three
+channels. Constraints validate without coercion. Names use slash logical
+addresses and relative Context lookup. SSE is a first-class scope, and all
+middleware is pure PAGI app-to-app wrapping.
+
+Starlette's single multiprotocol Router C<default> was considered and
+deliberately not copied. PAGI C<http_default> affects only HTTP NONE, leaving
+the stock WebSocket and SSE miss paths intact. Compose, not Router, owns the
+root lifespan. OpenAPI/schema generation and C<include_in_schema> remain
+deferred until a concrete consumer exists; no placeholder option is shipped.
 
 =head1 SEE ALSO
 

@@ -348,11 +348,17 @@ nor injects that key and has no C<state> or C<context_class> method.
 =head1 SNAPSHOTS AND ORDER
 
 Each C<to_router> returns a fresh immutable snapshot, and each C<to_app>
-compiles one retained snapshot. Matching, middleware folds, nonterminal HTTP
-exhaustion, first-seen method evidence, route metadata, reverse resolution, and
+compiles one retained snapshot. Matching, middleware folds, Router-owned HTTP
+outcomes, first-seen method evidence, route metadata, reverse resolution, and
 request-local scope cloning are exactly those documented by
 L<PAGI::App::Router>. Endpoint adds only method binding over that machinery and
 forwards the Router's one-shot native C<http_default> declaration without
 adding separate fallback callback accessors.
+
+=head1 SEE ALSO
+
+L<PAGI::Routing>, L<PAGI::Routing::Router>, L<PAGI::Routing::Mount>,
+L<PAGI::Compose>, L<PAGI::App::Router>, and the
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
 
 =cut

@@ -1,8 +1,8 @@
 # Upgrading PAGI-Tools
 
 This guide is the standalone handoff for existing applications moving to the
-current PAGI::Tools release. It covers the shipped routing-fallback and
-application-error boundary, the rooted file-serving security contract, and the
+current PAGI::Tools release. It covers the shipped routing-composition and
+application-error boundaries, the rooted file-serving security contract, and the
 earlier unification of the
 `PAGI::App::Router` and `PAGI::Endpoint::Router` frontends. Contracts shown in
 Before examples have been removed. There is no compatibility mode and there
@@ -425,19 +425,22 @@ obsoleted, non-error, malformed, reference-valued, throwing, or failed-Future
 claims. A configured `status` follows the same restriction unless a custom
 handler is supplied; with a handler it remains that handler's seed value.
 
-### Update Compose fallback appearance assertions
+### Update Router and Compose default appearance assertions
 
-Compose still installs mandatory 404, 405, and 500 failsafes, but their stock
-representations now negotiate through Pages instead of using fixed plain or
-ErrorHandler-configured bodies. Status choice and `no-store` behavior remain;
-405 still carries the authoritative `Allow` union. Tests that asserted a
-built-in English body should assert status, required fields, and selected media
-type, or install an explicit handler for literal application copy.
+Router now owns mandatory HTTP 404 and 405 outcomes; Compose owns the root 500
+failsafe. Their stock representations negotiate through Pages instead of using
+fixed plain or ErrorHandler-configured bodies. Status choice and `no-store`
+behavior remain, and Router's 405 carries the authoritative `Allow` union.
+Tests that asserted a built-in English body should assert status, required
+fields, and selected media type, or install an explicit handler at a supported
+policy seam.
 
-There is no `pages` option on Compose and no Pages shortcut on Context. To use
-a Pages subclass, install ordinary inner NotFound, MethodNotAllowed, and
-ErrorHandler middleware. Compose's stock outer failsafes remain installed and
-recover if that application renderer fails.
+There is no `pages` option on Compose and no Pages shortcut on Context. Supply
+a Pages endpoint as Router `http_default` to customize HTTP NONE, and install
+ordinary ErrorHandler middleware for application exception policy. Router's
+built-in PARTIAL/405 outcome has no fallback-middleware override. Compose's
+stock outer ErrorHandler remains installed and recovers if an inner application
+renderer fails before response start.
 
 ### Audit changed first-party defaults
 
@@ -521,13 +524,18 @@ empty, or reference-valued scope types now croak as malformed. Applications
 supporting an extension protocol should map it explicitly or deliberately
 handle the generic Context; generic Contexts have no HTTP response API.
 
-## Routing fallbacks and application error handling
+## Routing composition redesign
 
-### Replace Router callbacks with ordinary middleware
+This redesign lands inside unreleased `0.002003`, before the next CPAN release,
+with no compatibility layer. Route matches a complete URL leaf. Mount composes
+an application under a prefix. Router selects and owns routing outcomes.
+Middleware wraps behavior. Compose owns the application root and lifespan.
 
-Routers now discover routes; they do not own an application's 404 or 405
-representation. An exhausted HTTP search records request-local routing facts
-and completes normally without starting a response.
+### Replace Router callbacks with Router outcomes
+
+Routers now own HTTP NONE and PARTIAL. NONE invokes `http_default`, or the
+stock negotiated Pages 404 when no custom default is declared. PARTIAL emits
+the built-in negotiated 405 with one authoritative `Allow` union.
 
 **Before (removed):** Router construction accepted response callbacks.
 
@@ -539,97 +547,77 @@ my $routing = router(
 );
 ```
 
-**After (shipped):** install the same policy as application middleware.
+**After (shipped):** configure the Router's HTTP-only default. Method Not
+Allowed remains Router-owned.
 
 ```perl
-use PAGI::Compose qw(compose);
-use PAGI::Routing qw(router middleware);
+use PAGI::Routing qw(router);
 
-my $routing = router(routes => \@routes);
-
-my $app = compose(
-    app => $routing,
-    middleware => [
-        middleware('Routing::NotFound',
-            handler => \&not_found),
-        middleware('Routing::MethodNotAllowed',
-            handler => \&method_not_allowed),
-    ],
-)->to_app;
+my $routing = router(
+    routes       => \@routes,
+    http_default => $not_found_app,
+);
+my $app = $routing->to_app;
 ```
 
 Those removed names are rejected as unknown Router options. They are not
 ignored, warned about, or retained as aliases. The removal applies equally to
 the immutable, App, and Endpoint Router frontends.
 
-Use Router middleware when the policy belongs to one reusable subsystem
-instead of the whole application:
+Use a different `http_default` when one reusable subsystem owns different 404
+presentation:
 
 ```perl
 my $api = router(
-    routes => \@api_routes,
-    middleware => [
-        middleware('Routing::NotFound',
-            handler => \&api_not_found),
-        middleware('Routing::MethodNotAllowed',
-            handler => \&api_method_not_allowed),
-    ],
+    routes       => \@api_routes,
+    http_default => $api_not_found_app,
 );
 ```
 
-Both handlers receive `($context, $snapshot)` and may return an immediate or
-Future-backed Response. The Context status is seeded to 404 or 405. The
-MethodNotAllowed handler reads `allowed_methods` from the snapshot; `Allow` is
-not seeded into mutable Context state. If that handler returns status 405, the
-middleware replaces every conflicting `Allow` field with exactly one
-authoritative, first-seen method union. GET contributes HEAD. Returning a
-different status, such as a deliberate 404, suppresses that computed field.
+The default is a native app coderef or instantiated `to_app` object. It runs
+only for HTTP NONE—not PARTIAL, WebSocket, SSE, selected exceptions, or a
+handler-returned 404. GET contributes HEAD to the generated 405 union.
 
-### Treat a Router as a nonterminal component
+### Distinguish direct Router safety from the application root
 
-**Before (removed deployment assumption):** a compiled Router's generated
-fallback made it look like a complete server application.
+**Before (removed behavior):** a bare Router could finish an unmatched request
+without sending any response.
 
 ```perl
 my $app = $routing->to_app;
 ```
 
-**After (shipped):** direct compilation remains the lower-level component
-boundary, while Compose supplies a complete public HTTP application.
+**After (shipped):** direct compilation sends the Router's own 404 and 405.
+Compose supplies the separate root safety and lifecycle boundary.
 
 ```perl
-# Low-level routing component: a miss sends no response events.
+# Router-complete outcomes: HTTP NONE/405 are sent here.
 my $routing_app = $routing->to_app;
 
-# Complete deployed application: mandatory 404, 405, and 500 failsafes.
+# Deployed application: adds ErrorHandler, response guard, HEAD, and lifespan.
 my $app = compose(app => $routing)->to_app;
 ```
 
-Deploying the naked component can produce an empty reply, hang, or
-server-specific protocol failure when no enclosing fallback responds. Use it
-only when an explicit outer composition supplies the missing application
-policy.
+The bare Router still lacks the root ErrorHandler, response-completion guard,
+and lifespan driver. It also does not turn silence from a selected raw app or
+Mount target into a miss. Compose reports that silence as incomplete output
+and renders 500 before response start.
 
 For every HTTP target, Compose installs this exact outer-to-inner graph:
 
 ```text
 HEAD wire boundary
-  fresh routing Trace
-    Compose ErrorHandler failsafe
-      response-completion guard
-        Compose Routing::NotFound failsafe
-          Compose Routing::MethodNotAllowed failsafe
-            author Compose middleware, in listed order
-              target Router or application
+  Compose ErrorHandler failsafe
+    response-completion guard
+      author Compose middleware, in listed order
+        target Router or application
 ```
 
-These automatic layers are mandatory and deliberately stock. Their
-representations negotiate through Pages. Compose has no
+These automatic layers are mandatory and deliberately stock. Compose has no
 `not_found`, `method_not_allowed`, `server_error`, disable, or replacement-
-detection options. Author middleware never suppresses them; an inner author
-response simply makes every outer failsafe inert. Install official policy
-inside request IDs, access logging, and security-header middleware so those
-wrappers observe and decorate application 404/405/500 responses:
+detection options. Router 404/405 responses travel outward through author
+middleware. Install official error policy inside request IDs, access logging,
+and security-header middleware so those wrappers observe its 500 response:
 
 ```perl
 middleware => [
@@ -639,10 +627,6 @@ middleware => [
     middleware('ErrorHandler',
         handler  => \&site_server_error,
         on_error => \&report_error),
-    middleware('Routing::NotFound',
-        handler => \&site_not_found),
-    middleware('Routing::MethodNotAllowed',
-        handler => \&site_method_not_allowed),
 ]
 ```
 
@@ -652,25 +636,24 @@ not travel inward through it. Their production output is safe and generic.
 ### Choose routing-aware or opaque Mount ownership explicitly
 
 Once any Mount prefix wins, that occurrence owns the request; the parent never
-resumes later route scanning. The difference is whether the boundary can carry
-trusted routing evidence outward.
+resumes later route scanning. Every Mount now has exactly one named target:
+`app` or `routes`.
 
-**Before (now incomplete):** compiling a Router before mounting it selected an
-opaque application that happened to provide its own generated fallback.
+**Before (removed positional target):**
 
 ```perl
 mount('/legacy' => $legacy_router->to_app)
 ```
 
-**After (shipped, routing-aware):** retain the Router object. A child decline
-can reach child Router middleware, this Mount occurrence, enclosing Routers,
-and Compose in that order.
+**After (shipped, inspectable Router application):** retain the immutable
+Router object under `app`. Its 404/405 responses remain child-owned and its
+names remain visible to the parent resolver.
 
 ```perl
 mount(
     '/legacy',
-    router => $legacy_router,
-    name   => 'legacy',
+    app  => $legacy_router,
+    name => 'legacy',
 )
 ```
 
@@ -679,56 +662,57 @@ Occurrence-specific policy belongs directly on the Mount:
 ```perl
 mount(
     '/legacy',
-    router     => $legacy_router,
+    app        => $legacy_router,
     name       => 'legacy',
     middleware => [
-        middleware('Routing::NotFound',
-            handler => \&legacy_not_found),
+        $legacy_headers,
     ],
 )
 ```
 
-**After (shipped, intentionally opaque):** give the child its own complete
-application boundary before passing the native app.
+**After (shipped, intentionally opaque):** pass a native app coderef or another
+instantiated component through the same `app` option.
 
 ```perl
-mount('/legacy' => compose(app => $legacy_router)->to_app)
+mount('/legacy', app => $legacy_app)
 ```
 
-An opaque Mount shields its parent's routing Trace. A naked compiled Router
-behind it can decline only into its private child trace, so an outer Compose
-cannot reinterpret that silence as 404; its response guard produces 500.
-Wrapping the child makes the child's fallback response cross the opaque
-boundary normally. Raw route targets use the same evidence shielding, although
-they remain exact method-aware leaves rather than prefix mounts.
+An opaque Mount hides child names but still owns its selected output. Silence
+is an application lifecycle error, not a signal to resume the parent. Raw
+route targets remain exact method-aware leaves rather than prefix mounts.
+
+`routes => [...]` and mutable `routes => sub { my ($child) = @_; ... }` are
+exact shorthand for a real child Router application. The callback runs once
+during declaration, receives a fresh child builder, and ignores its return
+value. Both `/legacy` and `/legacy/` normalize to child path `/`.
 
 ### Complete Router children placed in URLMap
 
 `PAGI::App::URLMap` mounts and its `default` target are always opaque.
 
-**Before (now incomplete):**
+**Before:**
 
 ```perl
 my $map = PAGI::App::URLMap->new;
 $map->mount('/api' => $api_router->to_app);
 ```
 
-**After (shipped):**
+**After (also shipped):** the spelling remains valid because URLMap has its
+own opaque two-argument API.
 
 ```perl
 my $map = PAGI::App::URLMap->new;
-$map->mount('/api' => compose(app => $api_router)->to_app);
+$map->mount('/api' => $api_router->to_app);
 ```
 
-The same rule applies to `default`. Compose around URLMap sees a selected
-naked Router as incomplete opaque output and renders 500. Compose around the
-child Router renders the child's 404 or 405 before URLMap returns. URLMap does
-not inspect the target class or merge a child's private Trace into its parent.
+The same rule applies to `default`. Routers now render their own 404/405, but
+URLMap does not inspect their names or resume a parent route scan. Use
+declarative `mount('/api', app => $api_router)` when reverse discovery matters.
 
-### Distinguish Cascade status catching from trusted decline
+### Cascade catches responses, not Router decline
 
-**Before:** Router entries advanced only because their generated 404/405
-responses appeared in `catch`.
+Router entries advance only when their ordinary 404/405 response status appears
+in `catch`.
 
 ```perl
 my $routing = PAGI::App::Cascade->new(
@@ -737,8 +721,7 @@ my $routing = PAGI::App::Cascade->new(
 );
 ```
 
-**After (shipped):** the spellings stay valid, but the two advance rules are
-separate. A non-final Router may advance by trusted unanswered decline; an
+**After (shipped):** the spelling stays valid and there is one rule: an
 explicit non-final response advances only when its status appears in `catch`.
 
 ```perl
@@ -749,9 +732,9 @@ my $routing = PAGI::App::Cascade->new(
 my $app = compose(app => $routing)->to_app;
 ```
 
-A final Router decline remains unanswered for the enclosing routing fallback.
-An arbitrary silent child is an incomplete-application error, not an implicit
-miss. Non-caught responses now stream their start and body chunks as they
+A final Router response passes through unchanged. An arbitrary silent child is
+an incomplete-application error, not an implicit miss. Non-caught responses
+stream their start and body chunks as they
 arrive instead of waiting for whole-child completion. A later exception is
 therefore observably after response start and must propagate. Caught responses
 are suppressed, awaited through their terminal body, and only then advance.
@@ -818,17 +801,13 @@ to manufacture the application's missing-page response.
 route('/*path' => \&missing_page, methods => ['GET'])
 ```
 
-**After (shipped application policy):** let an ordinary fallback run after the
-search declines.
+**After (shipped application policy):** use the owning Router's HTTP default.
 
 ```perl
-compose(
-    app => $routing,
-    middleware => [
-        middleware('Routing::NotFound',
-            handler => \&missing_page),
-    ],
-)
+my $routing = router(
+    routes       => \@routes,
+    http_default => $missing_page_app,
+);
 ```
 
 Retain an ordinary catch-all when it really is a selected resource, such as an
@@ -842,8 +821,7 @@ It participates in declaration order, captures, method matching, and route
 middleware. A GET-only catch-all gives an unknown POST a method partial; a
 `methods => '*'` catch-all can deliberately supersede earlier partials.
 
-`Routing::NotFound` instead runs only after its enclosed trusted search
-declines. Use it for application or subsystem error policy. It does not make a
+`http_default` runs only after its Router reaches NONE. It does not make a
 parent catch-all resume after a selected Mount already owns the path.
 
 Router exhaustion is now an ordinary application outcome: HTTP NONE uses the
@@ -888,7 +866,7 @@ incremental closure declarations, and `PAGI::Endpoint::Router` for handlers
 bound to one configured object.
 
 Why: one compiler now gives all three frontends the same matching, middleware,
-metadata, reverse-routing, and nonterminal HTTP-decline behavior.
+metadata, reverse-routing, and Router-owned HTTP outcomes.
 
 ## App handlers now receive `$c`
 
@@ -982,7 +960,7 @@ my $path = $r->uri_for('people.show', { id => 42 });
 nested references use canonical slash addresses.
 
 ```perl
-$r->group('/people' => sub {
+$r->mount('/people', routes => sub {
     my ($people) = @_;
     $people->get('/{id}' => sub { return $_[0]->text('person') })
         ->name('show');
@@ -991,8 +969,8 @@ $r->group('/people' => sub {
 my $path = $r->path_for('/people/show', { id => 42 });
 ```
 
-Why: slash addresses provide one unambiguous logical path for routes, groups,
-and inspectable mounts.
+Why: slash addresses provide one unambiguous logical path for routes and
+inspectable mounts.
 
 ## `name` replaces `as` and mount `namespace`
 
@@ -1007,18 +985,18 @@ my $path = $r->uri_for('api.people.show', { id => 42 });
 **Removed metadata vocabulary:** public mount `namespace` values and accessors
 are not part of the new description model.
 
-**After (shipped):** declare a known router boundary with `router =>` and give
-that mount its local name with the universal modifier.
+**After (shipped):** put the immutable child Router in `app` and give that
+Mount its local name with the universal modifier.
 
 ```perl
-$r->mount('/api', router => $child_router)->name('api');
+$r->mount('/api', app => $child_router)->name('api');
 my $path = $r->path_for('/api/people/show', { id => 42 });
 ```
 
-Why: one `name` operation now assigns local logical segments to routes, groups,
-and known mounts without a second import mechanism.
+Why: one `name` operation now assigns local logical segments to routes and
+Mounts without a second import mechanism.
 
-## Groups receive a fresh child builder
+## Replace `group` with a real child Router Mount
 
 **Before (removed):** a group callback received its parent builder, and its
 declarations were flattened into the parent's protocol collections.
@@ -1030,19 +1008,19 @@ $r->group('/api' => sub {
 });
 ```
 
-**After (shipped):** the callback receives a fresh child builder retained as
-one structural subtree at the group's declaration position.
+**After (shipped):** `routes` receives a fresh child builder retained as one
+real Router application at the Mount's declaration position.
 
 ```perl
-$r->group('/api' => sub {
+$r->mount('/api', routes => sub {
     my ($api) = @_;
     $api->get('/people' => sub { return $_[0]->json($people->all) })
         ->name('people');
 })->name('api');
 ```
 
-Why: a distinct child preserves group boundaries, local names, middleware,
-constraints, and declaration order during materialization.
+The callback return value is ignored. The child owns its own stock/custom 404
+and built-in 405; this is no longer transparent inline dispatch.
 
 ## Load and construct packages explicitly
 
@@ -1064,8 +1042,8 @@ use MyApp::Endpoint::Admin;
 my $users = MyApp::Endpoint::Users->new(repository => $repository);
 my $admin = MyApp::Endpoint::Admin->new(policy => $policy);
 
-$r->mount('/users', router => $users)->name('users');
-$r->mount('/admin', router => $admin)->name('admin');
+$r->mount('/users', app => $users->to_router)->name('users');
+$r->mount('/admin', app => $admin->to_router)->name('admin');
 ```
 
 Why: explicit loading and construction make configuration, object identity,
@@ -1086,8 +1064,8 @@ $r->mount('/api/v2' => $v2_app);  # tried first because its prefix is longer
 first full match owns dispatch.
 
 ```perl
-$r->mount('/api'    => $broad_app);
-$r->mount('/api/v2' => $v2_app);  # unreachable below /api while broad is first
+$r->mount('/api',    app => $broad_app);
+$r->mount('/api/v2', app => $v2_app);  # unreachable below /api while broad is first
 
 # Reverse these declarations when /api/v2 must win.
 ```
@@ -1107,7 +1085,7 @@ $r->get('/admin' => [
 ] => $admin_app);
 ```
 
-**After (shipped):** every router, group, mount, and protocol route accepts a
+**After (shipped):** every Router, Mount, route, and protocol route accepts a
 class name, factory coderef, configured wrapping object, or explicit
 description.
 
@@ -1123,7 +1101,7 @@ $r->get('/admin' => [
 ```
 
 Why: one native app-to-app middleware contract can wrap HTTP, WebSocket, SSE,
-mount, group, and whole-router boundaries consistently.
+Mount, Route, Router, and Compose boundaries consistently.
 
 ## Endpoint middleware is native PAGI middleware
 
@@ -1253,7 +1231,7 @@ $r->get('/normal' => sub {
 Why: removing the compiler override keeps Context construction identical across
 all frontends while leaving manual Context construction available locally.
 
-## Mount nested Endpoint objects with `router =>`
+## Mount nested Endpoint objects through `app`
 
 **Before (removed):** compiling a nested Endpoint to an app first made it an
 opaque mount whose routes and names were hidden from its parent.
@@ -1262,12 +1240,12 @@ opaque mount whose routes and names were hidden from its parent.
 $r->mount('/people' => MyApp::People->to_app);
 ```
 
-**After (shipped):** construct the child and mount that object as a known
-router.
+**After (shipped):** construct the child and mount its immutable Router
+snapshot when the parent must discover names.
 
 ```perl
 my $people = MyApp::People->new(repository => $repository);
-$r->mount('/people', router => $people)->name('people');
+$r->mount('/people', app => $people->to_router)->name('people');
 
 my $show = $endpoint->to_router
     ->path_for('/people/show', { id => 42 });
@@ -1392,7 +1370,7 @@ opaque mount for a protocol-wide prefix boundary.
 
 ```perl
 $r->get('/health', raw => $native_health_app);
-$r->mount('/legacy' => $legacy_app);
+$r->mount('/legacy', app => $legacy_app);
 ```
 
 A raw route keeps `path` and `root_path` unchanged, participates in HTTP 405
@@ -1401,3 +1379,94 @@ extends `root_path`, owns every protocol at that prefix, and hides its internals
 
 Why: choosing between a leaf and a prefix boundary determines matching,
 methods, path rewriting, metadata visibility, and downstream ownership.
+
+## Mount accessors now describe one application
+
+**Before (removed):** callers inspected dispatch mode through `router`,
+`target`, or `is_raw`.
+
+```perl
+my $router = $mount->router;
+my $target = $mount->target;
+my $raw    = $mount->is_raw;
+```
+
+**After (shipped):** every Mount has one base application.
+
+```perl
+my $app = $mount->app;
+my $middleware = $mount->middleware;
+```
+
+There is no mode flag. `routes` constructs a child Router and stores it as the
+same `app` value used by explicit application Mounts.
+
+## Application strings and middleware strings are different contracts
+
+**Before (rejected):** an application position does not load, construct, or
+call a package.
+
+```perl
+mount('/legacy', app => 'MyApp::Legacy');
+```
+
+**After (shipped):** instantiate the application explicitly.
+
+```perl
+use MyApp::Legacy;
+mount('/legacy', app => MyApp::Legacy->new);
+```
+
+Middleware strings remain accepted because the middleware descriptor defines
+loading, construction, configuration, and `wrap` behavior:
+
+```perl
+middleware('RequestId', header => 'X-Request-ID');
+```
+
+This distinction applies to Mount `app`, `raw`, Router `http_default`, and
+Compose `app`. A package-name application is rejected synchronously rather
+than guessed.
+
+## Removed routing fallback machinery
+
+`PAGI::Routing::Trace`, its Recorder/Snapshot family, and
+`PAGI::Middleware::Routing::NotFound` /
+`PAGI::Middleware::Routing::MethodNotAllowed` are removed, not deprecated.
+The `pagi.routing` scope convention now carries only selected route and reverse
+lookup metadata. It is not a decline channel. Compose no longer creates a
+Trace or installs automatic 404/405 middleware; the selected Router owns
+those outcomes.
+
+## Exact current Mount spellings
+
+These accepted forms are deliberately explicit:
+
+```perl
+mount('/x', app => $app);
+mount('/x', routes => sub {
+    my ($child) = @_;
+    $child->get('/' => sub { return $_[0]->text('child') });
+});
+```
+
+The callback form is available in the mutable App and Endpoint frontends. It
+runs once during declaration, receives a fresh child builder bound to the same
+Endpoint object when applicable, and ignores its return value. Both `/x` and
+`/x/` reach the child `/` leaf without redirecting.
+
+## Deliberate Starlette differences and deferred schema work
+
+PAGI adopts the Route/Mount/Router concepts, not Starlette API identity.
+Ordinary handlers receive an explicit Context; `raw`, Mount `app`, Router
+`http_default`, and Compose `app` are native three-channel application
+positions. Constraints validate without coercion. Logical names use slash
+addresses and relative Context lookup. SSE is first-class. Middleware is pure
+PAGI app-to-app wrapping at Route, Mount, Router, and Compose boundaries.
+
+Starlette's single multiprotocol Router `default` was considered and
+deliberately not copied. PAGI's HTTP-only default preserves stock WebSocket
+and SSE misses. Compose, not Router, owns root lifespan.
+OpenAPI and schema support remain deferred until a concrete consumer is
+designed; `schema`,
+`include_in_schema`, registries, and placeholder metadata are not shipped.

@@ -300,8 +300,8 @@ __END__
 
 =head1 BOUNDARIES AND DATABASE FAILURES
 
-ErrorHandler is ordinary middleware and uses the same placement rules as the
-routing fallbacks. Application middleware provides whole-application policy:
+ErrorHandler is ordinary middleware and uses the same placement rules as every
+pure PAGI wrapper. Application middleware provides whole-application policy:
 
     compose(
         app => $routing,
@@ -324,7 +324,7 @@ Mount middleware list changes only one mounted occurrence:
     );
 
     mount('/api/v1',
-        router     => $api,
+        app        => $api,
         name       => 'v1',
         middleware => [
             middleware('ErrorHandler',
@@ -332,9 +332,9 @@ Mount middleware list changes only one mounted occurrence:
         ],
     )
 
-Unlike Routing::NotFound and Routing::MethodNotAllowed, ErrorHandler is also
-useful on a Route: exceptions happen after that Route is selected, while route
-exhaustion does not.
+ErrorHandler is also useful on a Route: exceptions happen after that Route is
+selected. Router NONE and PARTIAL are already ordinary 404/405 responses, not
+exceptions; customize NONE with Router C<http_default>.
 
 If a database call throws or returns a failed Future before response start,
 C<on_error> settles before the custom or built-in renderer runs. If the same
@@ -420,5 +420,8 @@ transformation.
 =head1 SEE ALSO
 
 L<PAGI::Middleware> - Base class for middleware
+
+L<PAGI::Routing>, L<PAGI::Routing::Mount>, and L<PAGI::Compose> - routing,
+placement, and application-root ownership
 
 =cut

@@ -159,9 +159,14 @@ the child. C<raw_path> remains unchanged. A root mount consumes no prefix and
 leaves C<path>, C<root_path>, and C<raw_path> unchanged.
 
 The selected base application remains the routing boundary after its prefix
-matches. A C<FULL> child dispatch is handled there. Unanswered C<NONE> or
-C<PARTIAL> evidence can reach routing fallback middleware or L<PAGI::Compose>
-at an enclosing boundary. The parent does not resume sibling scanning or union
-methods after selecting the Mount.
+matches. A child Router renders its own NONE as a custom or stock 404 and its
+own PARTIAL as the built-in 405. Those responses unwind through Mount and
+parent Router middleware, but the parent does not resume sibling scanning or
+union methods after selecting the Mount. An opaque application is equally
+authoritative; silence there is an application lifecycle error, not a parent
+routing miss.
+
+See L<PAGI::Routing>, L<PAGI::Routing::Router>, L<PAGI::Compose>, and the
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
 
 =cut

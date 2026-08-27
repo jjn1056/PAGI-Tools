@@ -100,6 +100,10 @@ __END__
 
 PAGI::Compose - Immutable application-root composition
 
+Route matches a complete URL leaf. Mount composes an application under a
+prefix. Router selects and owns routing outcomes. Middleware wraps behavior.
+Compose owns the application root and lifespan.
+
 =head1 SYNOPSIS
 
     use PAGI::Compose qw(compose);
@@ -452,9 +456,19 @@ and server-provided lifespan state; it is not a fourth router. L<PAGI::Lifespan>
 L<PAGI::Utils/handle_lifespan> remain the low-level choices for hand-built
 native applications or their existing hook-registration behavior.
 
+This separation is deliberate. Starlette's application object combines its
+Router and root lifespan, while PAGI keeps the immutable Router useful as a
+standalone application component and gives the one deployed lifecycle to
+Compose. Starlette's multiprotocol Router C<default> was also considered but
+not copied: PAGI Router C<http_default> changes only HTTP NONE and preserves
+stock WebSocket and first-class SSE misses.
+
 =head1 SEE ALSO
 
-L<PAGI::Routing>, L<PAGI::Routing::Middleware>, L<PAGI::Pages>, L<PAGI::Lifespan>,
-L<PAGI::Utils>, L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>
+L<PAGI::Routing>, L<PAGI::Routing::Router>, L<PAGI::Routing::Mount>,
+L<PAGI::Routing::Middleware>, L<PAGI::App::Router>,
+L<PAGI::Endpoint::Router>, L<PAGI::Pages>, L<PAGI::Lifespan>, L<PAGI::Utils>,
+L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>,
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>
 
 =cut

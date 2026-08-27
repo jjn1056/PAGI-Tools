@@ -45,8 +45,9 @@ PAGI::Response - Fluent response builder for PAGI applications
     my $res = PAGI::Response->json({ error => 'not found' }, status => 404);
     my $res = PAGI::Response->redirect('/login');
 
-    # Because it's a value, it works anywhere an app does:
-    $router->mount('/health' => PAGI::Response->json({ ok => \1 }));
+    # to_app makes the value a native app for an explicit Mount position:
+    $router->mount('/health',
+        app => PAGI::Response->json({ ok => \1 }));
 
     # Streaming: the callback runs at send time (auto-closes when done)
     await PAGI::Response->new($scope)
@@ -427,7 +428,7 @@ a response value directly as a PAGI app:
         ->status(404)
         ->_set_body('Not Found', 'text/plain');
 
-    # Mount as a fallback app
+    # Use as a native app or an explicit Mount app target
     my $app = $not_found->to_app;
 
 =head1 BODY METHODS
@@ -1050,7 +1051,8 @@ connection is available.
 
 =head1 SEE ALSO
 
-L<PAGI>, L<PAGI::Request>, L<PAGI::Pages>, L<PAGI::Server>
+L<PAGI>, L<PAGI::Request>, L<PAGI::Pages>, L<PAGI::Routing::Mount>,
+L<PAGI::Compose>, L<PAGI::Server>
 
 =head1 AUTHOR
 

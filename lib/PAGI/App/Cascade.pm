@@ -184,6 +184,10 @@ Cascade behavior and do not use HTTP catch or lifecycle logic. Routers now emit
 their own HTTP 404 and 405 responses, so they participate in the same C<catch>
 contract as any other HTTP application.
 
+Cascade is status-driven application coordination, not Router decline or Mount
+composition. A selected Router 404/405 may advance only because its status is
+listed in C<catch>; parent route scanning never resumes.
+
     my $routing = PAGI::App::Cascade->new(
         apps => [
             $static_app,          # explicit caught 404 may advance
@@ -216,6 +220,7 @@ Add an app to the cascade.
 
 =head1 SEE ALSO
 
-L<PAGI::Compose>, L<PAGI::Exception::IncompleteResponse>
+L<PAGI::Compose>, L<PAGI::Routing>, L<PAGI::Routing::Mount>,
+L<PAGI::Exception::IncompleteResponse>
 
 =cut

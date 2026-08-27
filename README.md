@@ -2,6 +2,10 @@
 
 PAGI::Tools - Application toolkit for the PAGI specification
 
+Route matches a complete URL leaf. Mount composes an application under a
+prefix. Router selects and owns routing outcomes. Middleware wraps behavior.
+Compose owns the application root and lifespan.
+
 # SYNOPSIS
 
 Raw PAGI is deliberately minimal — an application is just an `async` sub that
@@ -89,21 +93,23 @@ Use the functional frontend when the declarations are already immutable:
 
     my $app = compose(app => $routing)->to_app;
 
-Functional routing distinguishes inline `routes => [...]`, inspectable
-`router => $child` mounts with a required local `name`, and positional opaque
-application mounts. Named routes compose into slash addresses such as
+Every Mount names its target: `routes => [...]` constructs a complete child
+Router, while `app => $child` composes a native application or instantiated
+component. An immutable Router in `app` remains inspectable; other applications
+are opaque. Named routes compose into slash addresses such as
 `/person/show`; request Contexts can generate relative links from the active
 placement, with compact or named path/query/fragment arguments. These helpers
 return strings or croak, perform no protocol I/O, and do not replace normal
 authorization checks.
 
 The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
-route metadata, constraints, GET/HEAD behavior, nonterminal HTTP decline
-evidence, first-seen method unions, written declaration order, and reverse
+route metadata, constraints, GET/HEAD behavior, Router-owned 404/405 outcomes,
+first-seen method unions, written declaration order, and reverse
 routing. Ordinary HTTP handlers receive `$c` and return a Response. Native
-channel ownership is always explicit with `raw`. A naked `to_app` Router is
-a low-level routing component: a miss sends no response. Compose supplies the
-complete deployed boundary and mandatory inert 404, 405, and 500 failsafes.
+channel ownership is always explicit with `raw`. A bare Router sends its own
+negotiated 404 and compliant 405, but it deliberately has no root ErrorHandler,
+response-completion guard, or lifespan driver. Compose supplies those deployed
+application boundaries.
 See the
 [router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md)
 for the intentionally breaking migration from the previous App and Endpoint
@@ -133,10 +139,10 @@ description:
 
 [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) is an optional application-root composer, not a base class or
 a replacement router. Build an explicit router and pass it through `app` when
-router-specific configuration or inspection is needed. Official fallback and
-error representations are ordinary middleware inside request IDs, access
-logging, and security middleware; the outer automatic Pages-backed responses
-remain a stock last resort.
+router-specific configuration or inspection is needed. Configure a Router
+`http_default` for custom missing-route presentation and ordinary ErrorHandler
+middleware for official application errors. Compose keeps its stock error and
+response-lifecycle boundary outside author middleware as the final safety net.
 
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
@@ -144,6 +150,16 @@ behavior. Its request-aware URLs consume normalized scope data; the shipped
 ReverseProxy and TrustedHosts middleware still process HTTP only, so
 WebSocket/SSE deployments must normalize and validate those scopes outside
 routing.
+
+The Starlette influence is conceptual, not API identity. PAGI distinguishes
+Context handlers from native three-channel application positions, validates
+constraints without coercion, uses slash logical names and relative lookup,
+treats SSE as a first-class scope, and exposes an HTTP-only `http_default`.
+Starlette's single multiprotocol Router `default` was considered and not copied,
+so PAGI retains its stock WebSocket and SSE miss behavior. PAGI middleware is
+pure app-to-app wrapping; Compose, rather than Router, owns root lifespan.
+OpenAPI and schema generation remain deferred until a concrete consumer is
+designed.
 
 Run it with any PAGI server (such as `pagi-server` from the `PAGI-Server`
 distribution), or mount it inside a larger PAGI application.

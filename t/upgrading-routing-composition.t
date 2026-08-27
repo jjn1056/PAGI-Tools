@@ -10,7 +10,28 @@ use lib 'lib';
 
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
-use PAGI::Routing qw(mount route router);
+use PAGI::Routing qw(middleware mount route router);
+
+{
+    package Local::UpgradeEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+
+    sub routes {
+        my ($self, $r) = @_;
+        $r->http_default($self->app_as('not_found_app'));
+        $r->mount('/child', routes => sub {
+            my ($child) = @_;
+            $child->get('/' => sub { return $_[0]->text('endpoint child') });
+        })->name('child');
+    }
+
+    sub not_found_app {
+        my ($self, $scope, $receive, $send) = @_;
+        return main::response_app(404, 'endpoint missing')->(
+            $scope, $receive, $send,
+        );
+    }
+}
 
 sub http_scope {
     my (%changes) = @_;
@@ -104,6 +125,191 @@ sub response_app {
         }));
     };
 }
+
+sub slurp_file {
+    my ($file) = @_;
+    open my $handle, '<', $file or die "Cannot read $file: $!";
+    local $/;
+    my $source = <$handle>;
+    close $handle or die "Cannot close $file: $!";
+    return $source;
+}
+
+subtest 'executable routing-composition migration matrix' => sub {
+    my $native = response_app(200, 'native');
+
+    ok(lives { mount('/current', app => $native) },
+        'functional Mount accepts a named application');
+    ok(lives { mount('/current', routes => []) },
+        'functional Mount accepts a structural route list');
+    ok(lives { middleware('RequestId', header => 'X-Request-ID') },
+        'middleware package strings retain their explicit loading contract');
+
+    like(dies { mount('/legacy' => $native) },
+        qr/mount option list must be key\/value pairs|unknown mount option/,
+        'the positional Mount before-form is executable and rejected');
+    like(dies { mount('/legacy', router => router(routes => [])) },
+        qr/unknown mount option 'router'/,
+        'the router-option before-form is executable and rejected');
+    like(dies { mount('/legacy', app => 'Local::LegacyApp') },
+        qr/mount app must be a coderef or instantiated object with to_app/,
+        'the package-name application before-form is executable and rejected');
+
+    my $callback_calls = 0;
+    my $mutable = PAGI::App::Router->new;
+    ok(lives {
+        $mutable->mount('/mutable', routes => sub {
+            my ($child) = @_;
+            ++$callback_calls;
+            $child->get('/' => sub { return $_[0]->text('mutable child') });
+            return 'ignored';
+        })->name('mutable');
+    }, 'mutable Mount routes callback is accepted');
+    is($callback_calls, 1,
+        'mutable callback runs once during declaration and receives its child');
+    my ($mutable_events, $mutable_error) = run_http(
+        $mutable->to_app, path => '/mutable', raw_path => '/mutable',
+    );
+    is($mutable_error, undef, 'mutable callback child constructs and dispatches');
+    is(response_body($mutable_events), 'mutable child',
+        'the exact Mount spelling normalizes to the child root');
+
+    my $endpoint = Local::UpgradeEndpoint->new;
+    ok(lives { $endpoint->to_router },
+        'Endpoint routes callback and app_as default construct');
+    my ($endpoint_child, $endpoint_child_error) = run_http(
+        $endpoint->to_app, path => '/child/', raw_path => '/child/',
+    );
+    is($endpoint_child_error, undef, 'Endpoint callback child dispatches');
+    is(response_body($endpoint_child), 'endpoint child',
+        'Endpoint callback stays bound to the same Endpoint object');
+    my ($endpoint_missing, $endpoint_missing_error) = run_http(
+        $endpoint->to_app, path => '/missing', raw_path => '/missing',
+    );
+    is($endpoint_missing_error, undef, 'Endpoint app_as HTTP default dispatches');
+    is([response_status($endpoint_missing), response_body($endpoint_missing)],
+        [404, 'endpoint missing'], 'app_as supplies a native application');
+};
+
+subtest 'Mount normalization and raw versus mounted application positions' => sub {
+    my @seen;
+    my $capture = sub {
+        my ($kind) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            push @seen, [$kind, $scope->{path}, $scope->{root_path}];
+            await Future->wrap(response_app(200, $kind)->(@_));
+        };
+    };
+    my $app = router(routes => [
+        route('/exact', raw => $capture->('raw')),
+        mount('/prefix', app => $capture->('mount')),
+        mount('/normalized', routes => [
+            route('/' => sub { return $_[0]->text('normalized') }),
+        ]),
+    ])->to_app;
+
+    for my $path ('/normalized', '/normalized/') {
+        my ($events, $error) = run_http(
+            $app, path => $path, raw_path => $path,
+        );
+        is($error, undef, "$path reaches the constructed child Router");
+        is(response_body($events), 'normalized',
+            "$path selects the same child root leaf");
+    }
+
+    run_http($app, path => '/exact', raw_path => '/exact');
+    run_http($app, path => '/prefix/tail', raw_path => '/prefix/tail');
+    is(\@seen, [
+        ['raw', '/exact', ''],
+        ['mount', '/tail', '/prefix'],
+    ], 'raw keeps an exact leaf while Mount consumes and records its prefix');
+};
+
+subtest 'public documentation publishes one final routing model' => sub {
+    my $lead = qr/Route\s+matches\s+a\s+complete\s+URL\s+leaf\.\s+Mount\s+composes\s+an\s+application\s+under\s+a\s+prefix\.\s+Router\s+selects\s+and\s+owns\s+routing\s+outcomes\.\s+Middleware\s+wraps\s+behavior\.\s+Compose\s+owns\s+the\s+application\s+root\s+and\s+lifespan\./s;
+    for my $file (
+        'README.md',
+        'lib/PAGI/Tools.pm',
+        'lib/PAGI/Tools/Tutorial.pod',
+        'lib/PAGI/Tools/Cookbook.pod',
+        'lib/PAGI/Routing.pm',
+    ) {
+        like(slurp_file($file), $lead, "$file leads with the five-part model");
+    }
+
+    my @live_docs = (
+        'README.md',
+        'lib/PAGI/Tools.pm',
+        'lib/PAGI/Tools/Tutorial.pod',
+        'lib/PAGI/Tools/Cookbook.pod',
+        'lib/PAGI/Routing.pm',
+        'lib/PAGI/Routing/Mount.pm',
+        'lib/PAGI/Routing/Router.pm',
+        'lib/PAGI/Routing/Compiler.pm',
+        'lib/PAGI/Compose.pm',
+        'lib/PAGI/App/Router.pm',
+        'lib/PAGI/Endpoint/Router.pm',
+        'lib/PAGI/App/Cascade.pm',
+        'lib/PAGI/App/File.pm',
+        'lib/PAGI/App/URLMap.pm',
+        'lib/PAGI/Middleware/ErrorHandler.pm',
+        'lib/PAGI/Pages.pm',
+        'lib/PAGI/Response.pm',
+    );
+    my $retired_live_api = qr/PAGI::Routing::Trace|pagi\.routing\.trace|PAGI::Middleware::Routing::(?:NotFound|MethodNotAllowed)|mount\('\/[^']*'\s*=>|router\s*=>|\bgroup\s*\(/;
+    my %classified_non_routing_api = (
+        'lib/PAGI/Tools/Tutorial.pod' => [
+            qr/\$urlmap->mount\('\/(?:api|admin|static)' =>/,
+        ],
+        'lib/PAGI/Routing/Router.pm' => [
+            qr/PAGI::Routing::Resolver->new\(router => \$self\)/,
+        ],
+        'lib/PAGI/Routing/Compiler.pm' => [
+            qr/inspectable_router => blessed\(\$node->app\)/,
+        ],
+        'lib/PAGI/App/Router.pm' => [
+            qr/There is no positional Mount target, C<< router => >> form, or C<group>/,
+        ],
+        'lib/PAGI/App/URLMap.pm' => [
+            qr/\$map->mount\('\/(?:api|static)'\s*=>/,
+        ],
+    );
+    for my $file (@live_docs) {
+        my @unclassified;
+        for my $line (split /\n/, slurp_file($file)) {
+            next unless $line =~ $retired_live_api;
+            my $allowed = 0;
+            for my $pattern (@{$classified_non_routing_api{$file} || []}) {
+                $allowed = 1 if $line =~ $pattern;
+            }
+            push @unclassified, $line unless $allowed;
+        }
+        is(\@unclassified, [],
+            "$file has no unclassified retired routing API");
+    }
+
+    my $upgrading = slurp_file('UPGRADING.md');
+    like($upgrading, qr/^## Routing composition redesign$/m,
+        'upgrade guide has one complete routing-composition section');
+    for my $replacement (
+        'mount(\'/x\', app => $app)',
+        'mount(\'/x\', routes => sub',
+        'Router `http_default`',
+        'Compose',
+        'package-name application',
+        'OpenAPI and schema support remain deferred',
+    ) {
+        like($upgrading, qr/\Q$replacement\E/,
+            "upgrade guide covers $replacement");
+    }
+
+    my $changes = slurp_file('Changes');
+    like($changes, qr/\A# Revision history for PAGI-Tools\s+0\.002003 - UNRELEASED\b/s,
+        'release note stays inside unreleased 0.002003');
+    like($changes, qr/Route matches a complete URL leaf/,
+        'release note records the routing composition redesign');
+};
 
 subtest 'Router http_default replaces application 404 middleware' => sub {
     my $default_calls = 0;

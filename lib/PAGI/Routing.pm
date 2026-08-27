@@ -55,6 +55,10 @@ __END__
 
 PAGI::Routing - Immutable declarative routing with Context handlers
 
+Route matches a complete URL leaf. Mount composes an application under a
+prefix. Router selects and owns routing outcomes. Middleware wraps behavior.
+Compose owns the application root and lifespan.
+
 =head1 SYNOPSIS
 
     use PAGI::Routing qw(:routes :middleware);
@@ -208,20 +212,12 @@ wrapper or method was defined.
 Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions. An
 optional C<http_default> declares an HTTP application; construction validates
-it but does not compile it. Directly compiled Routers publish request-local trusted routing evidence for
-HTTP selection. Unmatched and method-mismatched requests complete normally
-without sending a response. Install ordinary C<Routing::NotFound> and
-C<Routing::MethodNotAllowed> middleware at a Router, routing-aware Mount, or
-enclosing application boundary to render that evidence. WebSocket, SSE, and
-lifespan scopes do not install or alter HTTP routing evidence.
-
-The evidence snapshot reports facts: whether routing declined, whether a path
-or method matched, the first-seen allowed-method union, and bounded development
-attempts. It never reports a status or outcome decision. The trace is passed
-explicitly to fallback handlers. L<PAGI::Context> intentionally gains no
-C<routing_trace>, C<not_found>, or C<method_not_allowed> method because Context
-also serves native applications and third-party routers that do not publish
-this first-party contract.
+it but does not compile it. A directly compiled Router owns normal routing
+outcomes. HTTP NONE invokes C<http_default>, or the stock negotiated Pages 404
+when it is absent. HTTP PARTIAL emits the built-in negotiated 405 with one
+authoritative C<Allow> union. The HTTP default never handles PARTIAL,
+WebSocket, or SSE misses. Router ignores lifespan; L<PAGI::Compose> owns that
+scope at a deployed root.
 
 =head2 route, websocket, sse
 
@@ -307,7 +303,7 @@ Middleware factories run once per compiled graph, not per request. Two
 C<to_app> calls therefore get ordinary independent middleware instances.
 Explicitly reused objects and closures still share the state their caller
 chose to share. One compiled app safely keeps request paths, method unions,
-Context objects, routing Trace objects, and metadata in request-local scope or
+Context objects, routing metadata, and outcome state in request-local scope or
 lexicals during concurrent requests.
 
 At request time a normal HTTP handler builds and returns a Response. Routing
@@ -325,12 +321,12 @@ Nodes are scanned strictly in declaration order; there is no specificity sort.
 For HTTP, a path-and-method match dispatches immediately. A path match with a
 wrong method contributes its normalized methods to a request-local method union
 and scanning continues, so a later full match still wins. If no full match
-exists, routing records a PARTIAL decline with the nonempty method union;
-otherwise it records a NONE decline. Both complete without calling C<$send>.
-The method union retains first-seen order and GET contributes HEAD.
+exists, PARTIAL emits the Router's 405 with the nonempty method union;
+otherwise NONE invokes the Router's HTTP default or stock 404. The method
+union retains first-seen order and GET contributes HEAD.
 
-A matching Mount owns the request immediately, including an unanswered child
-decline. An earlier broad Mount can therefore preempt a later narrow Mount or
+A matching Mount owns the request immediately, including a child Router's 404
+or 405. An earlier broad Mount can therefore preempt a later narrow Mount or
 route. A failed Mount constraint is no match and scanning continues.
 
 Paths are exact: C</users> and C</users/> differ. There is no slash redirect or
@@ -499,32 +495,31 @@ choose an explicit symlink policy; route matching is not filesystem security.
 Prefer L<PAGI::App::File> or L<PAGI::Middleware::Static> to using a wildcard
 capture as a filesystem path.
 
-=head1 HTTP DECLINES, FALLBACK MIDDLEWARE, AND CATCH-ALLS
+=head1 ROUTER OUTCOMES, APPLICATION ERRORS, AND CATCH-ALLS
 
 A selected route's 404 or 405 is application output and passes through
 untouched. A selected raw route or Mount application that sends nothing is also a
-selected application completion, not a routing decline. A selected normal
+selected application completion error, not a routing miss. A selected normal
 HTTP handler must still return a Response; an invalid return remains an
 application error.
 
-When MethodNotAllowed renders a trusted method partial as 405, it emits exactly
-one authoritative C<Allow> field from the snapshot's deterministic first-seen
-union; GET contributes HEAD. The renderer reads C<allowed_methods> from the
-snapshot rather than mutable Context headers. An explicit handler/native 405
-remains application output and is never repaired by an outer fallback.
+Router PARTIAL emits exactly one authoritative C<Allow> field from its
+deterministic first-seen union; GET contributes HEAD. An explicit
+handler/native 405 remains application output and is not rewritten.
 
-Router middleware surrounds that Router's own decline. Mount middleware
-surrounds the selected child application boundary, and the parent never
-resumes scanning. Put C<Routing::NotFound> or
-C<Routing::MethodNotAllowed> middleware at the boundary that owns response
-policy. Route placement is inert for exhaustion because route middleware runs
-only after that route fully matches.
+Router middleware surrounds every outcome owned by that Router. Mount
+middleware surrounds the selected child application boundary, and the parent
+never resumes scanning. Route middleware runs only after its route fully
+matches. Configure C<http_default> at the Router whose HTTP NONE presentation
+needs to differ; the default is not an exception handler and never replaces a
+selected handler's 404.
 
-Direct C<< $routing->to_app >> is therefore a lower-level component spelling.
-Use C<< compose(app => $routing)->to_app >> for a complete deployed HTTP
-application. An application Mount or raw route shields the parent
-routing-evidence channel; if its selected native target sends nothing, Compose
-treats that as incomplete output and renders 500 rather than inventing a 404.
+Direct C<< $routing->to_app >> is safe for Router outcomes, but remains a
+low-level deployed root: it has no root ErrorHandler, response-completion guard,
+or lifespan driver. Use C<< compose(app => $routing)->to_app >> when those
+application boundaries are required. If a selected native target sends
+nothing, Compose treats that as incomplete output and renders 500 rather than
+inventing a routing 404.
 
 L<PAGI::Pages> supplies terminal negotiated endpoints without a Router-specific
 adapter:
@@ -550,11 +545,9 @@ deliberately.
 Every Mount is a selected application boundary within its containing Router.
 C<routes> is shorthand for a child Router application; C<app> retains a
 declared base application. Once its prefix matches, the child owns FULL,
-PARTIAL, and NONE: unanswered child completion bubbles outward through child,
+PARTIAL, and NONE: child 404 and 405 responses flow outward through child,
 occurrence, and enclosing Router middleware, while the parent neither resumes
-sibling scanning nor unions method evidence. A child or occurrence fallback
-response makes later outer fallback middleware inert. A raw route is different
-again:
+sibling scanning nor unions method evidence. A raw route is different again:
 
     route('/files/*path', raw => $app)
     mount('/files', app => $app)
@@ -594,10 +587,9 @@ The first entry listed is outermost. Placement is:
 
 Route middleware runs only after a full route match. Scope rewriting and
 matched-route metadata are installed before the matching mount/route wrapper.
-A child-owned NONE/PARTIAL decline unwinds through the selected child Router
-and Mount middleware without resuming the parent scan. When fallback
-middleware renders it, the response crosses the remaining enclosing
-middleware but no route middleware. The one outermost
+A child-owned 404/405 response unwinds through the selected child Router and
+Mount middleware without resuming the parent scan. The response crosses the
+remaining enclosing middleware but no route middleware. The one outermost
 L<PAGI::Routing::HeadBoundary> removes the final HEAD body, including sendfile
 events, only after every Router/mount/route middleware has observed the
 unsuppressed GET representation. WebSocket and SSE retain their existing
@@ -645,9 +637,9 @@ segment, such as C<v1.1>, stays literal.
 
 For a named leaf, the current containing namespace is its absolute address
 without the final local name. An unnamed leaf, including a catch-all, uses the
-namespace contributed by its enclosing known Mounts. An unanswered decline
-uses the owning Router placement and captures only prefixes actually consumed;
-it does not borrow an arbitrary partial leaf.
+namespace contributed by its enclosing known Mounts. A Router-owned NONE
+outcome uses the owning Router placement and captures only prefixes actually
+consumed; it does not borrow an arbitrary partial leaf.
 
 All reverse helpers accept compact and named argument forms:
 
@@ -777,11 +769,10 @@ A selected application mount uses the same match shape:
         desc              => 'Tenant admin app',   # declared value or undef
     }
 
-C<match> is the selected mount's terminal record. Unanswered NONE/PARTIAL
-declines leave
-C<match> undefined while retaining the namespace and consumed-prefix capture
-snapshot of their owning placement. Routing fallback middleware may render
-that trusted decline without changing the match metadata.
+C<match> is the selected mount's terminal record. Router NONE/PARTIAL outcomes
+leave C<match> undefined while retaining the namespace and consumed-prefix
+capture snapshot of their owning placement. The Router renders the resulting
+404 or 405 without inventing a selected leaf.
 
 Router base applications share their containing resolver frame. A separately
 compiled Router reached through an application mount appends a compatible child
@@ -824,7 +815,7 @@ before an application exists to wrap.
 These are three declaration surfaces over one immutable Router, not separate
 matchers. They share Pattern parsing, Resolver slash addresses, Compiler
 matching and dispatch, route metadata, constraints, GET/HEAD qualification and
-wire suppression, nonterminal HTTP exhaustion, first-seen method evidence,
+wire suppression, Router-owned HTTP outcomes, first-seen method evidence,
 reverse routing, pure native middleware, and exact written declaration order.
 
 C<PAGI::Routing> is already immutable. C<PAGI::App::Router> incrementally
@@ -836,10 +827,35 @@ snapshots, while C<to_app> compiles one retained snapshot. All middleware uses
 the same four compile-time factory/C<wrap> forms and a request-time native app
 phase; there is no response-valued Endpoint middleware chain.
 
+=head1 DELIBERATE DIFFERENCES FROM STARLETTE
+
+Starlette supplied the useful Route/Mount/Router vocabulary, but PAGI does not
+claim API identity. Ordinary PAGI route handlers receive an explicit Context;
+C<raw>, Mount C<app>, Router C<http_default>, and Compose C<app> are native
+three-channel application positions. Package strings are not coerced in those
+positions. Middleware strings remain supported because middleware descriptors
+define an explicit loading, construction, configuration, and C<wrap> contract.
+
+PAGI constraints validate a decoded scalar without coercing it. Logical names
+use slash addresses with relative Context lookup rather than Starlette's colon
+mount namespace. SSE is a first-class routed scope. Middleware is pure PAGI
+app-to-app wrapping at Router, Mount, Route, and Compose boundaries.
+
+Starlette's single multiprotocol Router C<default> was considered and
+deliberately not copied. PAGI's C<http_default> handles only HTTP NONE, leaving
+stock WebSocket and SSE miss behavior intact. Router ignores lifespan;
+L<PAGI::Compose> owns the one deployed root lifecycle. OpenAPI generation,
+C<schema>, C<include_in_schema>, and arbitrary route metadata remain deferred
+until a concrete consumer is designed; the immutable route tree preserves the
+future inspection seam without advertising an unshipped schema API.
+
 =head1 SEE ALSO
 
 L<PAGI::Tools::Cookbook>, L<PAGI::Context>, L<PAGI::Authority>,
 L<PAGI::Compose>, L<PAGI::Pages>, L<PAGI::Response>,
-L<PAGI::Middleware::Helpers>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>
+L<PAGI::Middleware::Helpers>, L<PAGI::Routing::Mount>,
+L<PAGI::Routing::Router>, L<PAGI::App::Router>,
+L<PAGI::Endpoint::Router>,
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>
 
 =cut

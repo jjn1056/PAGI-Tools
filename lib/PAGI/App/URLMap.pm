@@ -121,6 +121,11 @@ Routers render their own HTTP 404 and 405 outcomes, so a mounted or default
 Router application is complete without an additional wrapper. URLMap does not
 recognize Router classes or offer a routing-aware mount form.
 
+This C<mount($prefix, $app)> method is URLMap's own two-argument API. It is not
+the declarative L<PAGI::Routing::Mount> constructor, whose current spelling is
+C<< mount('/prefix', app => $app) >> and whose immutable Router applications
+remain visible to reverse inspection.
+
 When no mount matches and no C<default> is configured, an HTTP request receives
 a 404 response negotiated by L<PAGI::Pages> from the original request scope.
 WebSocket, SSE, lifespan, and other non-HTTP exhaustion croak with the scope
@@ -149,6 +154,6 @@ Mount multiple apps from a hashref of prefix => app pairs.
 
 =head1 SEE ALSO
 
-L<PAGI::Compose>, L<PAGI::App::Cascade>
+L<PAGI::Compose>, L<PAGI::Routing::Mount>, L<PAGI::App::Cascade>
 
 =cut
