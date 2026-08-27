@@ -151,6 +151,9 @@ subtest 'canonical apples block stays synchronized with the runnable example' =>
 };
 
 subtest 'Cookbook publishes the representative final forms' => sub {
+    unlike($cookbook,
+        qr/\b(?:mount|route|Router)\s+or\s+group\s+level\b/i,
+        'Cookbook never recommends the removed group routing boundary');
     like($cookbook,
         qr/\$main_router->mount\('\/api', app => \$api_router->to_router\)/,
         'mutable App Router shows an explicit application Mount');

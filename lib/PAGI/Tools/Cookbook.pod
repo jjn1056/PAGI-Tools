@@ -1933,7 +1933,7 @@ handler:
       };
   }
 
-Apply it at the mount or group level (event middleware). See L<PAGI::SSE/close>
+Apply it at the mount or Router level (event middleware). See L<PAGI::SSE/close>
 for the method, L<PAGI::Spec::Www/"Close SSE - C<send> event"> for the protocol
 event, and L<PAGI::Cookbook/"Ending a stream: return vs C<sse.close>"> for the
 raw form.
