@@ -215,6 +215,14 @@ subtest 'Request and scope-bearing sources return unsent responses' => sub {
     like(dies { $endpoint->($request, bless({}, 'Local::Snapshot')) },
         qr/invalid PAGI::Pages endpoint invocation/,
         'Request endpoint rejects arbitrary callback metadata');
+    like(dies {
+        $endpoint->($request, sub { Future->done }, sub { Future->done });
+    }, qr/invalid PAGI::Pages endpoint invocation/,
+        'Request triplet is not a native sending invocation');
+    like(dies {
+        $endpoint->($bearer, sub { Future->done }, sub { Future->done });
+    }, qr/invalid PAGI::Pages endpoint invocation/,
+        'scope-bearing object triplet is not a native sending invocation');
 };
 
 subtest 'class calls are fresh and retain subclass class dispatch' => sub {

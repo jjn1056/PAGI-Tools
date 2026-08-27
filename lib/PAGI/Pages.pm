@@ -196,19 +196,20 @@ sub _endpoint {
     return sub {
         my @call = @_;
 
-        if (@call && PAGI::Utils::Scope::is_scope_source($call[0])) {
+        if (@call == 1 && PAGI::Utils::Scope::is_scope_source($call[0])) {
             my $scope = _scope_from_source($call[0]);
-            if (@call == 1) {
-                return $self->_response_for($scope, $descriptor_factory->($scope));
-            }
-            if (@call == 3
-                    && ref($call[1]) eq 'CODE'
-                    && ref($call[2]) eq 'CODE') {
-                my $response = $self->_response_for(
-                    $scope, $descriptor_factory->($scope),
-                );
-                return Future->wrap($response->respond($call[2]));
-            }
+            return $self->_response_for($scope, $descriptor_factory->($scope));
+        }
+
+        if (@call == 3
+                && ref($call[0]) eq 'HASH' && !blessed($call[0])
+                && ref($call[1]) eq 'CODE'
+                && ref($call[2]) eq 'CODE') {
+            my $scope = _scope_from_source($call[0]);
+            my $response = $self->_response_for(
+                $scope, $descriptor_factory->($scope),
+            );
+            return Future->wrap($response->respond($call[2]));
         }
 
         croak 'invalid PAGI::Pages endpoint invocation';
@@ -1168,9 +1169,10 @@ route when the handler must own C<$receive>, C<$send>, and protocol events.
 
 Without a request source, a page call returns a plain unblessed coderef. It
 accepts exactly one request source and returns a response, or the native HTTP
-triplet C<($scope, $receive, $send)>, which sends and returns a Future. The
-native triplet is a retained arity-interoperability exception for raw PAGI
-applications; ordinary handlers should use the one-argument Request form.
+triplet C<($scope, $receive, $send)> with an unblessed scope, which sends and
+returns a Future. The native triplet is a retained arity-interoperability
+exception for raw PAGI applications; ordinary handlers should use the
+one-argument Request form.
 Other invocation shapes, callback metadata, and non-HTTP scopes croak before
 response construction.
 
