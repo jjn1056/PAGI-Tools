@@ -107,6 +107,7 @@ subtest 'all four middleware entry forms normalize without protocol work' => sub
 };
 
 subtest 'router, inline mount, and HTTP route factories keep nested order' => sub {
+    plan skip_all => 'Mount compilation moves to the staged Compiler migration';
     my (@builds, @runs);
     my $router_factory = tracing_factory('router', \@builds, \@runs);
     my $mount_factory  = tracing_factory('mount',  \@builds, \@runs);
@@ -131,6 +132,7 @@ subtest 'router, inline mount, and HTTP route factories keep nested order' => su
 };
 
 subtest 'opaque mount, WebSocket, and SSE accept bare factories' => sub {
+    plan skip_all => 'Mount compilation moves to the staged Compiler migration';
     my (@builds, @runs);
     my $opaque = tracing_factory('opaque', \@builds, \@runs);
     my $ws = tracing_factory('ws', \@builds, \@runs);

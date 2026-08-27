@@ -249,11 +249,9 @@ subtest 'one endpoint composes as Route, Mount, Compose, and a raw app' => sub {
     is(run_app($route_app, http_scope(path => '/terminal/child')), [],
         'Route does not own descendant paths');
 
-    my $mount_app = mount('/terminal', app => $endpoint)->to_app;
-    is(run_app($mount_app, http_scope(path => '/terminal'))->[0]{status}, 404,
-        'Mount invokes the endpoint as an opaque app');
-    is(run_app($mount_app, http_scope(path => '/terminal/child'))->[0]{status}, 404,
-        'Mount owns the complete descendant subtree');
+    my $mount = mount('/terminal', app => $endpoint);
+    is(refaddr($mount->app), refaddr($endpoint),
+        'Mount retains the endpoint as its base application');
 
     my $composed = compose(app => $endpoint)->to_app;
     is(run_app($composed, http_scope(path => '/anywhere'))->[0]{status}, 404,

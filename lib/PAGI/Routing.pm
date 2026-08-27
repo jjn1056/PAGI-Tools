@@ -445,8 +445,8 @@ C<path_for>, or C<url_for>. Providers should therefore be deterministic and
 free of request-specific side effects.
 
 All three returned shapes and all explicit constraints normalize once to a
-private predicate coderef with an optional error explainer. Composed inline or
-Router mounts preserve those exact predicates rather than reparsing paths,
+private predicate coderef with an optional error explainer. Composed Mounts and
+Router base applications preserve those exact predicates rather than reparsing paths,
 calling providers again, or applying explicit constraints twice.
 
 =head3 Validation semantics and Type::Tiny
@@ -562,13 +562,13 @@ again:
 The raw route is one HTTP leaf: it participates in methods, automatic HEAD,
 partial matching, and named reverse routing, and keeps the routed path. The
 mount is a protocol-capable prefix owner with an implicit remainder, no method
-filter, rewritten child scope, and no inspectable child names.
+filter, and a rewritten child scope.
 
 After a non-root mount prefix matches, the child scope receives the remainder
 in C<path>, the actual decoded prefix appended to C<root_path>, and merged
 captures in C<path_params>; C<raw_path> remains the original wire path. An
-exact prefix produces child path C</>. A root inline, Router, or opaque mount
-consumes no prefix and leaves C<path>, C<root_path>, and C<raw_path> unchanged.
+exact prefix produces child path C</>. A root Mount consumes no prefix and
+leaves C<path>, C<root_path>, and C<raw_path> unchanged.
 
 The decoded C<root_path> and consumed prefix are joined with exactly one slash
 at their boundary; existing internal slashes are not normalized.
@@ -588,20 +588,20 @@ The first entry listed is outermost. Placement is:
     router middleware
       -> mount middleware
         -> child Router middleware
-          -> inline-mount middleware
+          -> child Mount middleware
             -> route middleware
               -> handler adapter
 
 Route middleware runs only after a full route match. Scope rewriting and
 matched-route metadata are installed before the matching mount/route wrapper.
 A child-owned NONE/PARTIAL decline unwinds through the selected child Router
-and Router-mount middleware without resuming the parent scan. When fallback
+and Mount middleware without resuming the parent scan. When fallback
 middleware renders it, the response crosses the remaining enclosing
 middleware but no route middleware. The one outermost
 L<PAGI::Routing::HeadBoundary> removes the final HEAD body, including sendfile
 events, only after every Router/mount/route middleware has observed the
 unsuppressed GET representation. WebSocket and SSE retain their existing
-protocol ownership; Router mounts do not adapt their events.
+protocol ownership; Mounts do not adapt their events.
 See L<PAGI::Middleware::Helpers> for small channel wrappers that keep this
 contract explicit.
 
@@ -611,22 +611,22 @@ Every route and mount C<name> is one local logical segment. Slash
 is the only hierarchy separator. For example:
 
     mount('/people/{person_id}',
-        router    => $people,
+        app       => $people,
         name      => 'person',
     )
 
 and a child C<< route('/{item_id}' =E<gt> ..., name =E<gt> 'show') >> publish
 C</person/show>. Logical addresses and URL paths are independent. An unnamed
-inline mount contributes no address segment; every Router mount requires one;
-opaque mounts expose no child addresses.
+mount contributes no address segment. A Mount has exactly one base application:
+C<app> retains a declared application, while C<routes> constructs a child
+Router application. A name is optional for either form.
 
-The composed resolver visits direct routes, inline subtrees, and explicit
-Router children. Named leaves must have unique absolute addresses. It croaks
-during Router construction when two leaves claim one address (naming both
-effective URL patterns), when a path parameter repeats along one effective
-ancestry (including a known opaque prefix), or when a pathological Router
-subclass creates a cycle (naming its URL and logical mount ancestry). Sibling
-branches may reuse a parameter name or child Router.
+The composed resolver visits direct routes and Router base applications. Named
+leaves must have unique absolute addresses. It croaks during Router
+construction when two leaves claim one address (naming both effective URL
+patterns), when a path parameter repeats along one effective ancestry, or when
+a pathological Router subclass creates a cycle (naming its URL and logical
+mount ancestry). Sibling branches may reuse a parameter name or child Router.
 
 References use exact filesystem-like normalization:
 
@@ -740,7 +740,7 @@ prefixes are not added twice during reverse generation. Older/manual v1 frames
 may omit it, in which case Context reverse routing falls back to the current
 scope C<root_path>. C<logical_namespace> is the active containing namespace;
 C<captures> is a fresh, unaliased working snapshot used only for relative
-Context reverse routing. Inline and Router mounts append this public record to
+Context reverse routing. Nested Mounts append this public record to
 C<mounts>:
 
     {
@@ -749,7 +749,7 @@ C<mounts>:
         desc      => 'Tenant routes',         # declared value or undef
     }
 
-All three keys are present. Nested known mounts append these records in
+All three keys are present. Nested Mounts append these records in
 outer-to-inner match order. The exact C<match> record for a selected leaf is:
 
     {

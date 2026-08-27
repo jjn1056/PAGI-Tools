@@ -411,7 +411,7 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
     is(refaddr($known->app), refaddr($child), 'Router application identity is preserved');
     is($known->name, 'known', 'Router mount exposes its local name');
 
-    my $routes = [$inline, $raw];
+    my $routes = [$leaf];
     my $router_middleware = middleware('Top');
     my $router_middleware_input = [$router_middleware];
     my $router = router(
@@ -423,10 +423,11 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
     is($router->kind, 'router', 'router kind');
     is($router->name, undef, 'name is inapplicable to router');
     is($router->desc, 'Root routes', 'router description');
-    is($router->routes, [$inline, $raw], 'router routes');
+    is($router->routes, [$leaf], 'router routes');
     is($router->http_default, undef, 'Router omits an HTTP default by default');
     my $default = sub { };
     my $component_default = TestRoutingApp->new($default);
+    local $TestRoutingApp::CALLS = 0;
     my $with_default = router(routes => [], http_default => $default);
     my $with_component_default = router(
         routes => [], http_default => $component_default,
@@ -435,6 +436,8 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
         'Router retains HTTP default coderef identity without compilation');
     is(refaddr($with_component_default->http_default), refaddr($component_default),
         'Router retains HTTP default component identity without compilation');
+    is($TestRoutingApp::CALLS, 0,
+        'Router construction does not compile its declared HTTP default');
     is($router->middleware, [$router_middleware], 'router middleware preserves descriptor');
     push @$routes, $leaf;
     push @$router_middleware_input, middleware('RouterInputMutation');
@@ -442,7 +445,7 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
     my $returned_router_middleware = $router->middleware;
     push @$returned_router_routes, $leaf;
     push @$returned_router_middleware, middleware('RouterResultMutation');
-    is($router->routes, [$inline, $raw], 'router route arrays are copied');
+    is($router->routes, [$leaf], 'router route arrays are copied');
     is($router->middleware, [$router_middleware], 'router middleware arrays are copied');
     is($router->path, undef, 'path is inapplicable to router');
     is($router->methods, undef, 'methods are inapplicable to router');
@@ -550,6 +553,11 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { mount '/both', app => $handler, routes => [] }, qr/mount requires exactly one of app or routes/, 'mount rejects app plus routes';
     like dies { mount '/positional' => $handler }, qr/mount option list must be key\/value pairs/, 'mount rejects positional targets';
     like dies { mount '/router', router => $child_router }, qr/unknown mount option 'router'/, 'mount rejects legacy router option';
+    for my $key (qw(methods schema lifespan fallback)) {
+        like dies { mount '/removed-option', routes => [], $key => sub { } },
+            qr/unknown mount option '\Q$key\E'/,
+            "mount rejects removed '$key' option";
+    }
     like dies { mount '/undefined-app', app => undef }, qr/mount app must be a coderef or instantiated object with to_app/, 'mount validates app through the strict app validator';
     like dies { mount '/bad-app', app => [] }, qr/mount app must be a coderef or instantiated object with to_app/, 'mount rejects non-app values';
     ok(lives { mount '/valid-name', app => $handler, name => 'x' },

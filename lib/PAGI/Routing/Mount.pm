@@ -92,30 +92,6 @@ sub methods     { undef }
 
 sub _pattern    { $_[0]->{_pattern} }
 
-our $AUTOLOAD;
-sub AUTOLOAD {
-    my ($self) = @_;
-    (my $method = $AUTOLOAD) =~ s/.*:://;
-    return if $method eq 'DESTROY';
-
-    croak "Can't locate object method \"$method\" via package \""
-        . ref($self) . '"'
-        unless $method =~ /\A(?:target|router|is_raw|routes)\z/;
-
-    my $caller = caller;
-    croak "$method is not a public Mount accessor"
-        unless $caller eq 'PAGI::Routing::Compiler'
-            || $caller eq 'PAGI::Routing::Resolver';
-
-    my $app = $self->app;
-    my $is_router = blessed($app) && $app->isa('PAGI::Routing::Router');
-    return $is_router ? undef : $app if $method eq 'target';
-    return $is_router ? $app : undef if $method eq 'router';
-    return $is_router ? 0 : 1 if $method eq 'is_raw';
-    return $is_router ? $app->routes : undef if $method eq 'routes';
-    return;
-}
-
 sub to_app {
     my ($self) = @_;
     require PAGI::Routing::Compiler;
