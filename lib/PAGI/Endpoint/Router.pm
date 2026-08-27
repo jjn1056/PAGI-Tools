@@ -50,9 +50,9 @@ sub app_as {
 }
 
 sub new_request {
-    my ($self, $scope, $receive) = @_;
+    my ($self, @arguments) = @_;
     require PAGI::Request;
-    return PAGI::Request->new($scope, $receive);
+    return PAGI::Request->new(@arguments);
 }
 
 sub app_path {
@@ -326,6 +326,8 @@ an opaque mount owns and rewrites a matched prefix.
 
 This explicit convenience method calls C<PAGI::Request-E<gt>new>. It accepts
 only an HTTP scope and the receive channel used for request-body consumption.
+All arguments are forwarded to that constructor, so a C<$send> callback or any
+other extra argument is rejected by the one Request validator.
 It is not the routing compiler's Request factory. Overriding it affects only
 explicit calls to the helper, never compiled route dispatch. WebSocket and SSE
 objects are supplied directly by compiled handlers rather than through this

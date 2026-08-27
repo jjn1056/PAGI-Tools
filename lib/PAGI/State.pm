@@ -133,7 +133,7 @@ sub _deprecated_hashref {
         my ($package, $file, $line) = _external_callsite();
         my $key = join("\x1e", $package, $file, $line);
         if (!$WARNED{$key}++) {
-            warn "Direct hash dereference of PAGI::State is deprecated; use ->data at $file line $line.\n";
+            warn "Direct hash dereference of PAGI::State is deprecated; use ->get for values or ->data when a raw hashref is required at $file line $line.\n";
         }
     }
 

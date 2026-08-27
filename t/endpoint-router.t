@@ -620,12 +620,18 @@ subtest 'new_request is explicit and is not the compiler Request factory' => sub
     like(dies {
         $endpoint->new_request(scope(type => 'sse'), $receive);
     }, qr/HTTP scope/i, 'new_request rejects non-HTTP scopes');
-    is($endpoint->{new_request_calls}, 2, 'override applies to explicit helper calls');
+    like(dies {
+        $endpoint->new_request(
+            scope(type => 'http'), $receive, sub { Future->done },
+        );
+    }, qr/exactly.*scope.*receive/i,
+        'new_request forwards extra arguments to Request validation');
+    is($endpoint->{new_request_calls}, 3, 'override applies to explicit helper calls');
 
     PAGI::Test::Client->new(app => $endpoint->to_app)->get('/request');
     is($endpoint->{compiled_request}, 'PAGI::Request',
         'compiled handler receives the shared compiler Request');
-    is($endpoint->{new_request_calls}, 2,
+    is($endpoint->{new_request_calls}, 3,
         'routing compilation and dispatch do not call the override');
 };
 

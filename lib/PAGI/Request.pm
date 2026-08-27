@@ -17,6 +17,8 @@ use PAGI::Request::Negotiate;
 use PAGI::Request::BodyStream;
 
 sub new {
+    croak 'PAGI::Request->new requires exactly scope and receive arguments'
+        if @_ > 3;
     my ($class, $scope, $receive) = @_;
     croak 'PAGI::Request requires an unblessed scope hashref'
         unless ref($scope) eq 'HASH' && !blessed($scope);
@@ -664,7 +666,8 @@ work with C<$scope> and C<$receive> directly.
 Creates an HTTP request object. C<$scope> must be an unblessed hashref with
 C<< $scope->{type} eq 'http' >>, and C<$receive> must be a coderef. The
 receive callback is retained for deferred body consumption; construction never
-reads from it.
+reads from it. These are the constructor's exact two arguments after the
+invocant; a C<$send> callback or any other extra argument is rejected.
 
 =head1 PROPERTIES
 
@@ -1137,9 +1140,15 @@ reports connected, and C<undef> when no C<pagi.connection> is available.
 
 For advanced lifecycle, disconnect-reason, callback, or Future operations,
 obtain the server-provided object with L</connection> and use its explicit
-interface directly. Outbound transport is separate from connection lifecycle:
-when the server provides it, access the raw transport handle through
-C<< $req->scope->{'pagi.transport'} >>.
+interface directly. Outbound transport is separate from connection lifecycle.
+Use the L<PAGI::Transport> factory for its optional flow-control facade:
+
+    use PAGI::Transport qw(transport);
+    my $flow = transport($req);
+
+Raw PAGI applications may likewise call C<transport($scope)>. Reach through
+C<< $req->scope->{'pagi.transport'} >> only as an explicit jailbreak when an
+integration truly requires the server's raw transport handle.
 
 =head1 AUTH HELPERS
 

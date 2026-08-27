@@ -318,13 +318,20 @@ sub _compile_protocol_leaf {
             my $cache_key = $kind eq 'websocket'
                 ? 'pagi.websocket'
                 : 'pagi.sse';
+            my $expected_class = $kind eq 'websocket'
+                ? 'PAGI::WebSocket'
+                : 'PAGI::SSE';
             my $cached = $scope->{$cache_key};
-            if (blessed($cached) && $cached->can('scope')) {
-                my $cached_scope = $cached->scope;
-                delete $scope->{$cache_key}
-                    unless ref($cached_scope)
-                        && refaddr($cached_scope) == refaddr($scope);
+            my $reusable = (blessed($cached) // '') eq $expected_class
+                && $cached->can('scope');
+            if ($reusable) {
+                my $cached_scope = eval { $cached->scope };
+                $reusable = 0
+                    if $@
+                        || !ref($cached_scope)
+                        || refaddr($cached_scope) != refaddr($scope);
             }
+            delete $scope->{$cache_key} unless $reusable;
             my $protocol = $kind eq 'websocket'
                 ? PAGI::WebSocket->new($scope, $receive, $send)
                 : PAGI::SSE->new($scope, $receive, $send);

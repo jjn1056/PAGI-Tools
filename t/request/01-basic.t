@@ -277,6 +277,11 @@ subtest 'constructor requires an HTTP scope and receive callback' => sub {
         qr/requires HTTP scope.*sse/i, 'only HTTP scopes are accepted');
     like(dies { PAGI::Request->new(bless({}, 'Local::Scope'), $receive) },
         qr/unblessed scope hashref/i, 'scope must be an unblessed hashref');
+    like(
+        dies { PAGI::Request->new($scope, $receive, sub { Future->done }) },
+        qr/exactly.*scope.*receive/i,
+        'a send callback or any other third constructor argument is rejected',
+    );
     is(PAGI::Request->new({ type => 'http', server => ['127.0.0.1', 8080] }, $receive)->server,
         ['127.0.0.1', 8080], 'server returns the local endpoint tuple');
     is(PAGI::Request->new({ type => 'http' }, $receive)->server, undef,

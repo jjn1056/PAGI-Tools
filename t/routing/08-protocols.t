@@ -22,6 +22,12 @@ sub ProtocolProvider { return qr/accepted/ }
     sub get_message { return "expected $_[0]{expected}, got $_[1]" }
 }
 
+{
+    package Local::WrongProtocolCache;
+    sub new { return bless { scope => $_[1] }, $_[0] }
+    sub scope { return $_[0]{scope} }
+}
+
 sub scope {
     my (%changes) = @_;
     return {
@@ -192,6 +198,69 @@ subtest 'normal WebSocket and SSE handlers use direct cached protocol objects' =
     ], 'plain SSE completion adds no wire interpretation');
 };
 
+subtest 'normal protocol leaves reuse only an exact expected-class cache' => sub {
+    for my $protocol (
+        [websocket => 'PAGI::WebSocket', 'pagi.websocket'],
+        [sse       => 'PAGI::SSE',       'pagi.sse'],
+    ) {
+        my ($kind, $expected_class, $cache_key) = @$protocol;
+        for my $variant (qw(scalar hash wrong-class exact)) {
+            subtest "$kind $variant cache" => sub {
+                my ($seeded, $handled);
+                my $seed_cache = middleware(sub {
+                    my ($inner) = @_;
+                    return sub {
+                        my ($selected_scope, $receive, $send) = @_;
+                        if ($variant eq 'scalar') {
+                            $selected_scope->{$cache_key} = 1;
+                        }
+                        elsif ($variant eq 'hash') {
+                            $selected_scope->{$cache_key} = {};
+                        }
+                        elsif ($variant eq 'wrong-class') {
+                            $seeded = Local::WrongProtocolCache->new(
+                                $selected_scope,
+                            );
+                            $selected_scope->{$cache_key} = $seeded;
+                        }
+                        else {
+                            $seeded = $expected_class->new(
+                                $selected_scope, $receive, $send,
+                            );
+                        }
+                        return $inner->(@_);
+                    };
+                });
+                my $handler = sub {
+                    ($handled) = @_;
+                    return;
+                };
+                my $leaf = $kind eq 'websocket'
+                    ? websocket('/stream' => $handler,
+                        middleware => [$seed_cache])
+                    : sse('/stream' => $handler,
+                        middleware => [$seed_cache]);
+
+                run_scope(
+                    $leaf->to_app,
+                    scope(type => $kind, path => '/stream'),
+                );
+
+                isa_ok($handled, [$expected_class],
+                    'handler receives the expected protocol class');
+                if ($variant eq 'exact') {
+                    is(refaddr($handled), refaddr($seeded),
+                        'the exact selected-scope expected-class cache is reused');
+                }
+                elsif (ref($seeded)) {
+                    isnt(refaddr($handled), refaddr($seeded),
+                        'a wrong-class cache is discarded');
+                }
+            };
+        }
+    }
+};
+
 subtest 'normal protocol leaves discard live caches inherited from outer scopes' => sub {
     my @cases = (
         {
@@ -211,7 +280,7 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
             class    => 'PAGI::SSE',
             cache_at => 'incoming',
             id       => 'incoming-sse',
-            event    => { type => 'sse.close', reason => 'selected' },
+            event    => { type => 'sse.start', status => 200 },
         },
         {
             label    => 'Router-middleware WebSocket cache',
@@ -238,7 +307,7 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
         subtest $case->{label} => sub {
             my (@old_events, @selected_events, @wire_events);
             my ($stale, $handled, $selected_scope, $handled_params,
-                $handled_frame);
+                $handled_frame, $received_from);
 
             my $capture_selected = middleware(sub {
                 my ($inner) = @_;
@@ -259,7 +328,17 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                     ? $frames->[-1]
                     : undef;
 
-                if ($case->{kind} eq 'websocket') {
+                if ($case->{cache_at} eq 'incoming'
+                        && $case->{kind} eq 'websocket') {
+                    my $event = await $protocol->receive;
+                    $received_from = $event->{text};
+                    await $protocol->close(1000, 'selected');
+                }
+                elsif ($case->{cache_at} eq 'incoming') {
+                    await $protocol->run;
+                    $received_from = $protocol->disconnect_reason;
+                }
+                elsif ($case->{kind} eq 'websocket') {
                     await $protocol->close(1000, 'selected');
                 }
                 else {
@@ -313,7 +392,11 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                 type => $case->{kind}, path => $path, raw_path => $path,
             );
             my $receive = sub {
-                return Future->done({ type => "$case->{kind}.receive" });
+                return Future->done(
+                    $case->{kind} eq 'websocket'
+                        ? { type => 'websocket.receive', text => 'selected' }
+                        : { type => 'sse.disconnect', reason => 'selected' },
+                );
             };
             my $wire_send = sub {
                 push @wire_events, $_[0];
@@ -322,7 +405,11 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
 
             if ($case->{cache_at} eq 'incoming') {
                 my $old_receive = sub {
-                    return Future->done({ type => "$case->{kind}.old" });
+                    return Future->done(
+                        $case->{kind} eq 'websocket'
+                            ? { type => 'websocket.receive', text => 'old' }
+                            : { type => 'sse.disconnect', reason => 'old' },
+                    );
                 };
                 $stale = $case->{class}->new(
                     $incoming,
@@ -351,6 +438,9 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
             is($handled_frame && $handled_frame->{captures},
                 { id => $case->{id} },
                 'handler object sees the selected routing frame');
+            is($received_from, 'selected',
+                'an incoming stale cache cannot retain the old receive callback')
+                if $case->{cache_at} eq 'incoming';
             is(\@old_events, [],
                 'handler emits nothing through the inherited callback');
             is(\@selected_events, [$case->{event}],

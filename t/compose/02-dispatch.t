@@ -41,12 +41,12 @@ subtest 'routes mode dispatches HTTP WebSocket and SSE' => sub {
         { type => 'websocket.accept' },
         { type => 'websocket.send', text => 'hello' },
         { type => 'websocket.close', code => 1000, reason => '' },
-    ], 'WebSocket route runs through its Context');
+    ], 'WebSocket route receives its direct protocol object');
     is(run_scope($app, scope(type => 'sse', path => '/events')), [
         { type => 'sse.start', status => 200 },
         { type => 'sse.send', data => 'ready' },
         { type => 'sse.close' },
-    ], 'SSE route runs through its Context');
+    ], 'SSE route receives its direct protocol object');
 };
 
 {
