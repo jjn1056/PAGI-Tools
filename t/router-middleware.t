@@ -192,7 +192,7 @@ subtest 'middleware can short circuit or wrap native channels' => sub {
     is($wrapped, 'yes', 'wrapped send changes the emitted Response');
 };
 
-subtest 'group, known mount, opaque mount, and route middleware stack once' => sub {
+subtest 'callback Mount, Router app, and route middleware stack once' => sub {
     my (@trace, $builds);
     my $child = PAGI::App::Router->new(
         middleware => [factory('child router', \@trace, \$builds)],
@@ -205,19 +205,21 @@ subtest 'group, known mount, opaque mount, and route middleware stack once' => s
     my $root = PAGI::App::Router->new(
         middleware => [factory('root router', \@trace, \$builds)],
     );
-    $root->group('/api' => [factory('group', \@trace, \$builds)] => sub {
+    $root->mount('/api', routes => sub {
         my ($api) = @_;
-        $api->mount('/v1' => [factory('known mount', \@trace, \$builds)],
-            router => $child)->name('v1');
-    });
+        $api->mount('/v1',
+            app => $child->to_router,
+            middleware => [factory('known mount', \@trace, \$builds)],
+        )->name('v1');
+    }, middleware => [factory('callback Mount', \@trace, \$builds)]);
 
     my $events = request($root->to_app, path => '/api/v1/data')->get;
     is(event_body($events), 'data', 'nested public middleware graph responds');
     is(\@trace, [
-        'root router before', 'group before', 'known mount before',
+        'root router before', 'callback Mount before', 'known mount before',
         'child router before', 'route before', 'handler',
         'route after', 'child router after', 'known mount after',
-        'group after', 'root router after',
+        'callback Mount after', 'root router after',
     ], 'every structural layer retains native onion order');
     is($builds, 5, 'each declared occurrence wraps once');
 };

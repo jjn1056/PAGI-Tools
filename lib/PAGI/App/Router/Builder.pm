@@ -3,17 +3,17 @@ package PAGI::App::Router::Builder;
 use strict;
 use warnings;
 use Carp qw(croak);
-use Scalar::Util qw(blessed);
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Mount ();
 use PAGI::Routing::Route ();
 use PAGI::Routing::Router ();
+use PAGI::Utils ();
 
 sub new {
     my ($class, @args) = @_;
     my $opts = _option_hash('router', @args);
 
-    my %allowed = map { $_ => 1 } qw(desc middleware);
+    my %allowed = map { $_ => 1 } qw(desc middleware http_default);
     for my $key (keys %$opts) {
         croak "unknown router option '$key'" unless $allowed{$key};
     }
@@ -24,11 +24,19 @@ sub new {
         exists $opts->{middleware} ? $opts->{middleware} : [],
         'middleware',
     );
+    my $has_http_default = exists $opts->{http_default};
+    my $http_default = $has_http_default
+        ? PAGI::Utils::_validate_app_value(
+            $opts->{http_default}, 'router http_default',
+        )
+        : undef;
 
     return bless {
-        declarations => [],
-        desc         => $opts->{desc},
-        middleware   => $middleware,
+        declarations    => [],
+        desc            => $opts->{desc},
+        middleware      => $middleware,
+        has_http_default => $has_http_default,
+        http_default    => $http_default,
     }, $class;
 }
 
@@ -98,42 +106,6 @@ sub sse {
     return $self->_add_route_from($package, 'sse', undef, @args);
 }
 
-sub group {
-    my ($self, @args) = @_;
-    my $package = caller;
-    return $self->_group_from($package, @args);
-}
-
-sub _group_from {
-    my ($self, $package, $path, @args) = @_;
-
-    croak 'group path must be a string' unless defined $path && !ref($path);
-    my $middleware = [];
-    $middleware = shift @args if @args && ref($args[0]) eq 'ARRAY';
-    croak 'group requires a callback'
-        unless @args == 1 && ref($args[0]) eq 'CODE';
-    my $callback = $args[0];
-    my $descriptions = PAGI::Routing::Middleware->_normalize_descriptors(
-        $middleware,
-        'middleware',
-    );
-    my $child = ref($self)->new;
-
-    push @{$self->{declarations}}, {
-        node_kind           => 'group',
-        declaration_package => $package,
-        path                => $path,
-        child               => $child,
-        middleware          => $descriptions,
-        name                => undef,
-        desc                => undef,
-        constraints         => undef,
-    };
-
-    $callback->($child);
-    return $self;
-}
-
 sub mount {
     my ($self, @args) = @_;
     my $package = caller;
@@ -144,44 +116,48 @@ sub _mount_from {
     my ($self, $package, $path, @args) = @_;
 
     croak 'mount path must be a string' unless defined $path && !ref($path);
-    my $middleware = [];
-    $middleware = shift @args if @args && ref($args[0]) eq 'ARRAY';
-
-    my ($is_raw, $target, $router);
-    if (@args == 1) {
-        croak 'mount target must be defined' unless defined $args[0];
-        croak 'opaque mount target must be a coderef or object with to_app'
-            unless ref($args[0]) eq 'CODE'
-                || (blessed($args[0]) && $args[0]->can('to_app'));
-        _reject_mutable_frontend_target($args[0], 'opaque mount');
-        ($is_raw, $target) = (1, $args[0]);
+    my $opts = _option_hash('mount', @args);
+    my %allowed = map { $_ => 1 } qw(app routes middleware);
+    for my $key (keys %$opts) {
+        croak "unknown mount option '$key'" unless $allowed{$key};
     }
-    elsif (@args == 2 && defined $args[0] && !ref($args[0])
-            && $args[0] eq 'router') {
-        $router = $args[1];
-        _validate_router_target($router);
-        $is_raw = 0;
-    }
-    else {
-        croak 'mount requires an opaque target or router => target';
-    }
+    my $has_app = exists $opts->{app};
+    my $has_routes = exists $opts->{routes};
+    croak 'mount requires exactly one of app or routes'
+        unless $has_app != $has_routes;
 
     my $descriptions = PAGI::Routing::Middleware->_normalize_descriptors(
-        $middleware,
+        exists $opts->{middleware} ? $opts->{middleware} : [],
         'middleware',
     );
-    push @{$self->{declarations}}, {
+    my $record = {
         node_kind           => 'mount',
         declaration_package => $package,
         path                => $path,
-        target              => $target,
-        router              => $router,
-        is_raw              => $is_raw,
         middleware          => $descriptions,
         name                => undef,
         desc                => undef,
         constraints         => undef,
     };
+
+    if ($has_app) {
+        $record->{app} = PAGI::Utils::_validate_app_value(
+            $opts->{app}, 'mount app',
+        );
+    }
+    elsif (ref($opts->{routes}) eq 'CODE') {
+        my $child = ref($self)->new;
+        $record->{child} = $child;
+        $opts->{routes}->($child);
+    }
+    elsif (ref($opts->{routes}) eq 'ARRAY') {
+        $record->{child} = [@{$opts->{routes}}];
+    }
+    else {
+        croak 'mount routes must be an arrayref or callback';
+    }
+
+    push @{$self->{declarations}}, $record;
     return $self;
 }
 
@@ -202,9 +178,7 @@ sub _add_route_from {
         shift @args;
         croak 'raw target must be defined' unless @args && defined $args[0];
         $target = shift @args;
-        _reject_mutable_frontend_target($target, 'raw route');
-        croak 'raw target must be an explicitly compiled coderef'
-            unless ref($target) eq 'CODE';
+        PAGI::Utils::_validate_app_value($target, 'raw application');
         $is_raw = 1;
     }
     else {
@@ -263,6 +237,19 @@ sub name {
     return $self;
 }
 
+sub http_default {
+    my ($self, @args) = @_;
+    croak 'http_default requires exactly one application' unless @args == 1;
+    croak 'http_default may only be configured once'
+        if $self->{has_http_default};
+    my $app = PAGI::Utils::_validate_app_value(
+        $args[0], 'router http_default',
+    );
+    $self->{http_default} = $app;
+    $self->{has_http_default} = 1;
+    return $self;
+}
+
 sub desc {
     my ($self, @args) = @_;
     croak 'desc requires exactly one value' unless @args == 1;
@@ -284,17 +271,12 @@ sub constraints {
 sub _last_record_for {
     my ($self, $modifier) = @_;
     my $record = $self->{declarations}[-1];
-    croak 'opaque mounts cannot be named'
-        if $record && $modifier eq 'name'
-            && $record->{node_kind} eq 'mount' && $record->{is_raw};
     croak "$modifier called without a preceding compatible declaration"
         unless $record
             && (($record->{node_kind} eq 'route'
                 || $record->{node_kind} eq 'websocket'
                 || $record->{node_kind} eq 'sse')
-                || ($record->{node_kind} eq 'group')
-                || ($record->{node_kind} eq 'mount'
-                    && ($modifier ne 'name' || !$record->{is_raw})));
+                || $record->{node_kind} eq 'mount');
     return $record;
 }
 
@@ -306,8 +288,10 @@ sub _declarations {
 sub _router_options {
     my ($self) = @_;
     return {
-        desc       => $self->{desc},
-        middleware => [@{$self->{middleware}}],
+        desc             => $self->{desc},
+        middleware       => [@{$self->{middleware}}],
+        has_http_default => $self->{has_http_default},
+        http_default     => $self->{http_default},
     };
 }
 
@@ -315,32 +299,30 @@ sub _materialize_nodes {
     my ($self, $materializer) = @_;
     my @nodes;
     for my $record (@{$self->{declarations}}) {
-        if ($record->{node_kind} eq 'group') {
-            push @nodes, PAGI::Routing::Mount->_new_from(
-                $record->{declaration_package}, $record->{path},
-                routes => $record->{child}->_materialize_nodes($materializer),
-                _common_mount_options($record),
-            );
-            next;
-        }
-
         if ($record->{node_kind} eq 'mount') {
-            if ($record->{is_raw}) {
+            if (exists $record->{app}) {
                 push @nodes, PAGI::Routing::Mount->_new_from(
                     $record->{declaration_package}, $record->{path},
-                    $record->{target},
+                    app => $record->{app},
+                    _common_mount_options($record),
+                );
+            }
+            elsif (ref($record->{child}) eq 'ARRAY') {
+                push @nodes, PAGI::Routing::Mount->_new_from(
+                    $record->{declaration_package}, $record->{path},
+                    routes => [@{$record->{child}}],
                     _common_mount_options($record),
                 );
             }
             else {
                 my $child = $materializer->materialize(
-                    $record->{router},
+                    $record->{child},
                     $record->{path} . ':'
                         . (defined $record->{name} ? $record->{name} : ''),
                 );
                 push @nodes, PAGI::Routing::Mount->_new_from(
                     $record->{declaration_package}, $record->{path},
-                    router => $child,
+                    app => $child,
                     _common_mount_options($record),
                 );
             }
@@ -372,6 +354,8 @@ sub _materialize_with {
         routes     => $self->_materialize_nodes($materializer),
         middleware => $options->{middleware},
         (defined $options->{desc} ? (desc => $options->{desc}) : ()),
+        ($options->{has_http_default}
+            ? (http_default => $options->{http_default}) : ()),
     );
 }
 
@@ -399,33 +383,6 @@ sub _common_mount_options {
     );
 }
 
-sub _validate_router_target {
-    my ($target) = @_;
-    return if blessed($target)
-        && $target->isa('PAGI::Routing::Router');
-
-    my $is_app = blessed($target)
-        && ($target->isa('PAGI::App::Router::Builder')
-            || $target->isa('PAGI::App::Router'));
-    my $is_endpoint = blessed($target)
-        && $target->isa('PAGI::Endpoint::Router');
-    return if ($is_app || $is_endpoint)
-        && $target->can('_materialize_with');
-
-    croak 'router target must be an immutable Router, App Router, or Endpoint Router';
-}
-
-sub _reject_mutable_frontend_target {
-    my ($target, $position) = @_;
-    return unless blessed($target)
-        && ($target->isa('PAGI::App::Router::Builder')
-            || $target->isa('PAGI::App::Router')
-            || $target->isa('PAGI::Endpoint::Router'));
-
-    croak "mutable router frontend cannot be used as a $position target; "
-        . 'use router => or an explicitly compiled app coderef';
-}
-
 sub _copy_record {
     my ($record) = @_;
     my %copy = %$record;
@@ -434,6 +391,8 @@ sub _copy_record {
     $copy{middleware} = [@{$record->{middleware}}];
     $copy{constraints} = { %{$record->{constraints}} }
         if defined $record->{constraints};
+    $copy{child} = [@{$record->{child}}]
+        if ref($record->{child}) eq 'ARRAY';
     return \%copy;
 }
 
@@ -459,23 +418,30 @@ PAGI::App::Router::Builder - Internal ordered declaration storage for App Router
 
 This private module records mutable App Router declarations only. It keeps one
 ordered declaration list at each level, captures the package that made each
-public-style declaration, and materializes immutable routing leaves and
-structural Mounts in that same order. It does not match requests, retain
-request state, or emit protocol events.
+public declaration, and materializes immutable Routes and Mounts in that same
+order. It does not match requests, retain request state, or emit protocol
+events.
 
-The Router-level constructor surface is C<desc> and C<middleware>. Routing
-fallback policy is ordinary middleware rather than Builder callback storage.
+The constructor stores C<desc>, normalized C<middleware>, and the optional
+native C<http_default>. An explicit boolean distinguishes omission from the
+one configured value and enforces the shared constructor/method one-shot
+contract.
 
-Middleware is normalized when a declaration is recorded. Normal targets are
-Context handlers; a native three-channel application must be supplied through
-the explicit C<raw> tag. Mutable router frontends are accepted only through a
-known C<< router => >> mount, never as opaque or raw targets; callers that need
-an opaque application boundary must compile the frontend explicitly first.
-Each C<to_router> call uses a fresh root-local Materializer, so later Builder
-mutations cannot alter an existing snapshot. C<to_app> compiles one such
-retained snapshot as a low-level routing component; HTTP exhaustion remains
-unanswered until routing fallback middleware or an enclosing
-L<PAGI::Compose> boundary handles it. The public C<PAGI::App::Router> facade is
-layered on this core.
+Mount records contain either C<app> or C<child>. C<child> is a callback-created
+Builder or a copied immutable-node arrayref. There is no group record, router
+target, or Mount mode flag. Callback children materialize through the same
+root-local Materializer; arrays are passed to declarative Mount C<routes> so
+that Mount constructs their real child Router.
+
+Middleware and native application shapes normalize when declarations are
+recorded. Normal targets remain Context-handler coderefs. Explicit C<raw>,
+Mount C<app>, and C<http_default> positions use the shared coderef-or-
+instantiated-C<to_app> contract. Mutable frontend objects are valid opaque
+application values; callers explicitly use C<to_router> when parent reverse
+inspection must discover their names.
+
+Each C<to_router> call creates an independent immutable root snapshot.
+C<to_app> compiles exactly one retained snapshot. The public
+L<PAGI::App::Router> facade layers convenience inspection on this core.
 
 =cut

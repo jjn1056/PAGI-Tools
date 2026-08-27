@@ -66,10 +66,10 @@ use PAGI::App::Router::Builder ();
     sub Int { return qr/prefix/ }
     sub declare {
         my ($builder, $child) = @_;
-        $builder->group('/group/{group:&Int}' => sub {
+        $builder->mount('/group/{group:&Int}', routes => sub {
             $_[0]->get('/leaf' => sub { });
         });
-        $builder->mount('/mount/{mount:&Int}', router => $child)->name('mount');
+        $builder->mount('/mount/{mount:&Int}', app => $child)->name('mount');
     }
 }
 
@@ -117,24 +117,24 @@ subtest 'wrappers and role methods remain declaration-package boundaries' => sub
         'a role method does not rebind to its consuming class provider');
 };
 
-subtest 'group and routing-aware mount prefixes retain the App declaration package' => sub {
+subtest 'routes and app Mount prefixes retain the App declaration package' => sub {
     my $child = PAGI::App::Router::Builder->new;
     $child->get('/leaf' => sub { });
     my $builder = PAGI::App::Router::Builder->new;
-    Local::BuilderPrefixes::declare($builder, $child);
+    Local::BuilderPrefixes::declare($builder, $child->to_router);
     my $nodes = $builder->to_router->routes;
 
     is([map {
         $_->_pattern->match_mount($_->path =~ s/\{(?:group|mount):&Int\}/prefix/r)
             ->{captures}
     } @$nodes], [{ group => 'prefix' }, { mount => 'prefix' }],
-        'group and routing-aware mount providers resolve in their declaring package');
+        'both Mount forms resolve providers in their declaring package');
     is([map {
         my $match = $_->_pattern->match_mount(
             $_->path =~ s/\{(?:group|mount):&Int\}/other/r);
         $match;
     } @$nodes], [undef, undef],
-        'both App prefix providers reject values outside that package constraint');
+        'both Mount prefix providers reject values outside that package constraint');
 };
 
 done_testing;

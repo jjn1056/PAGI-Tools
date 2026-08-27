@@ -27,45 +27,46 @@ __END__
 
 =head1 NAME
 
-PAGI::App::Router - Mutable frontend for the shared immutable PAGI router
+PAGI::App::Router - Mutable declarations for the immutable PAGI router
 
 =head1 SYNOPSIS
 
     use PAGI::App::Router;
     use PAGI::Compose qw(compose);
-    use PAGI::Routing qw(middleware);
+    use PAGI::Pages ();
 
-    my $r = PAGI::App::Router->new;
-    $r->head('/report' => \&head_report);
-    $r->get('/report' => [\&audit] => \&get_report)->name('report');
-    $r->get('/raw', raw => $native_app);
-    $r->mount('/people', router => $people)->name('people');
-    my $routing = $r->to_router;
-    my $app = compose(app => $routing)->to_app;
+    my $people = PAGI::App::Router->new;
+    $people->get('/{id}' => \&show)->name('show');
+
+    my $r = PAGI::App::Router->new(
+        desc         => 'Public routes',
+        middleware   => [\&request_log],
+        http_default => PAGI::Pages->not_found(
+            detail => 'No public route matched.',
+        ),
+    );
+
+    $r->get('/health' => \&health);
+    $r->mount('/api', routes => sub {
+        my ($api) = @_;
+        $api->get('/people' => \&people)->name('people');
+    })->name('api');
+    $r->mount('/people', app => $people->to_router)->name('people');
+    $r->mount('/static', app => $static_app);
+
+    my $app = compose(app => $r)->to_app;
 
 =head1 DESCRIPTION
 
-C<PAGI::App::Router> is the public mutable builder for the immutable
-L<PAGI::Routing::Router> model. It inherits the complete declaration contract
-from L<PAGI::App::Router::Builder>, materializes public routing descriptions,
-and delegates matching and dispatch entirely to the shared
-L<PAGI::Routing::Compiler>. It contains no matcher and keeps no request state.
+C<PAGI::App::Router> is a mutable declaration frontend for
+L<PAGI::Routing::Router>. It stores declarations in their written order and
+creates a fresh immutable Router snapshot through C<to_router>. Matching,
+dispatch, HTTP outcomes, middleware compilation, metadata, and reverse routing
+belong to the shared immutable routing implementation.
 
-The Router-level constructor accepts only C<desc> and C<middleware>. HTTP route
-exhaustion is nonterminal: it records trusted routing evidence and completes
-without emitting a response. Application, Router, or Mount policy uses
-L<PAGI::Middleware::Routing::NotFound> and
-L<PAGI::Middleware::Routing::MethodNotAllowed>; a deployed application commonly
-uses L<PAGI::Compose> for complete automatic 404, 405, and error failsafes.
-
-=head1 MIGRATING
-
-This release intentionally replaces the previous App Router declaration,
-handler, ordering, middleware, naming, and inspection contracts without a
-compatibility layer. See the
-L<standalone router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>
-in the source distribution for concrete before-and-after examples with
-exercised shipped replacements.
+The constructor accepts C<desc>, C<middleware>, and optional
+C<http_default>. It performs configuration validation only and invokes no
+application or protocol channel.
 
 =head1 DECLARATIONS
 
@@ -81,67 +82,77 @@ exercised shipped replacements.
     $r->any('/health' => \&health);
     $r->route('/rpc' => \&rpc, methods => ['RPC']);
 
-An ordinary HTTP target is called with one L<PAGI::Context::HTTP> and must
-return an immediate L<PAGI::Response> or a Future that resolves to one. The
-shared compiler adapts and emits that Response. The generic C<route> form puts
-the path first and requires C<methods>; C<any> uses all methods.
-
-C<get> includes the shared automatic HEAD qualification. An explicit C<head>
-is an ordinary declaration, not an option attached to C<get>. Declare it
-before C<get> when it should win:
-
-    $r->head('/report' => \&head_report);
-    $r->get('/report' => \&get_report);
-
-For HEAD the first route is FULL. For GET it is PARTIAL and scanning continues
-to the GET route. There is no C<auto_head> option.
+An ordinary HTTP target must be a coderef. It receives exactly one
+L<PAGI::Context::HTTP> and returns an immediate or Future-backed
+L<PAGI::Response>. GET includes automatic HEAD qualification. An explicit
+HEAD is an ordinary declaration; place it before GET when it should win.
 
 =head2 WebSocket and SSE routes
 
     $r->websocket('/chat/{room}' => \&chat);
     $r->sse('/events/{stream}' => \&events);
 
-Normal protocol targets receive exactly one L<PAGI::Context::WebSocket> or
-L<PAGI::Context::SSE>. They perform protocol work through that Context. An
-immediate or Future-backed completion is awaited, and its resolved value is
-not interpreted as a wire event.
+Ordinary protocol handlers likewise receive exactly one
+L<PAGI::Context::WebSocket> or L<PAGI::Context::SSE>. Their completion value is
+awaited but is not interpreted as a wire event.
 
-=head2 Raw routes and opaque mounts
+=head2 Raw routes
 
     $r->get('/raw', raw => $native_http_app);
-    $r->websocket('/raw-ws', raw => $native_ws_app);
-    $r->sse('/raw-events', raw => $native_sse_app);
-    $r->mount('/legacy' => $native_multiprotocol_app);
+    $r->websocket('/raw-ws', raw => $websocket_component);
+    $r->sse('/raw-events', raw => $sse_component);
 
-An explicit C<raw> route gives its target the native
-C<($scope, $receive, $send)> channels after an exact route match. A raw HTTP
-route participates in its declared methods and 405 calculation, records leaf
-metadata, and does not rewrite C<path> or C<root_path>.
+A raw target receives the native C<($scope, $receive, $send)> channels. It must
+be a coderef or an instantiated object with C<to_app>. Package-name strings
+are never loaded as applications. An object is compiled once per enclosing
+C<to_app> call and its C<to_app> method must return a coderef.
 
-An opaque C<mount>, by contrast, owns a matched prefix for every protocol. It
-rewrites the child C<path> and C<root_path>, is not method-limited by its
-parent, and hides its internal routes and names. Raw routes and mounts are not
-interchangeable merely because both eventually invoke a native PAGI app.
+Raw changes only the selected exact leaf's invocation contract. It does not
+make ordinary handlers application objects, and it does not consume a path
+prefix.
 
-=head2 Groups and routing-aware mounts
+=head2 Mounts
 
-    $r->group('/api' => sub {
-        my ($api) = @_;
-        $api->get('/people' => \&people)->name('people');
-    })->name('api');
+    $r->mount('/legacy',
+        app        => $legacy_app,
+        middleware => [\&audit],
+    )->desc('Legacy application');
 
-    $r->mount('/people', router => $people)->name('people');
+    $r->mount('/api',
+        routes => sub {
+            my ($api) = @_;
+            $api->get('/people' => \&people)->name('people');
+        },
+        middleware => [\&api_headers],
+    )->name('api');
 
-A group callback receives a fresh child C<PAGI::App::Router>. The group stays
-at one position in its parent's declaration list and materializes as an inline
-structural subtree. It is not flattened and is not a separately configured
-Router boundary.
+    $r->mount('/public', routes => [
+        PAGI::Routing::Route->new(route => '/status', \&status),
+    ]);
 
-C<< router => >> creates a routing-aware mount. Its target may be an immutable
-L<PAGI::Routing::Router>, another C<PAGI::App::Router>, or a constructed
-L<PAGI::Endpoint::Router> instance. Mutable targets are recursively
-materialized in the same root snapshot. Package loading, string targets, and
-mutable routers used as opaque or raw applications are not supported.
+C<mount> accepts exactly one named target: C<app> or C<routes>. C<app> uses
+the native application contract. C<routes> accepts an arrayref of immutable
+routing nodes or a synchronous callback. A callback receives a fresh App
+Router, its return value is ignored, and it runs once while the mutable
+declaration is made. Each C<to_router> snapshots that retained child through
+the same root-local materializer.
+
+There is no positional Mount target, C<< router => >> form, or C<group>.
+C<name>, C<desc>, and C<constraints> remain chained modifiers rather than
+Mount options.
+
+An immutable L<PAGI::Routing::Router> supplied through C<app> remains
+discoverable for nested reverse names. Other application objects are opaque to
+parent inspection but dispatch normally. To expose names from another mutable
+frontend, take the boundary explicitly:
+
+    $r->mount('/people',
+        app => $people_builder->to_router,
+    )->name('people');
+
+Passing C<$people_builder> itself is also a valid opaque application, but the
+parent does not guess that object's declarations or call an arbitrary
+C<routes> method.
 
 =head2 Modifiers and patterns
 
@@ -150,103 +161,82 @@ mutable routers used as opaque or raw applications are not supported.
         ->desc('Show one person')
         ->constraints(id => qr/\A\d+\z/);
 
-C<name>, C<desc>, and C<constraints> modify the most recent compatible
-declaration. A name is one local logical segment. Nested addresses use slash
-components such as C</people/show>; dotted effective names and the old C<as>
-and C<namespace> vocabulary do not exist.
+C<name>, C<desc>, and C<constraints> modify the most recent compatible Route
+or Mount. Names are one local slash-address segment. Paths use the shared
+L<PAGI::Routing::Pattern> grammar, including C<{id}>, inline constraints,
+provider constraints, and terminal wildcards.
 
-Paths use the shared L<PAGI::Routing::Pattern> grammar: C<{id}> for one
-segment, C<{id:\d+}> for an inline constraint, C<{id:&Int}> for a declaration-
-package provider, and C<*path> for a wildcard segment. Chained constraints are
-also enforced during both dispatch and reverse routing.
+=head1 HTTP DEFAULT
+
+    $r->http_default($not_found_app);
+
+C<http_default> configures the Router's native HTTP NONE application. It may
+be configured exactly once, either in the constructor or through this method;
+a second configuration croaks. The application is retained unchanged and is
+not compiled or invoked during declaration or C<to_router>.
+
+At compilation it is built once for that Router occurrence. It receives only
+HTTP requests for which the complete direct Router scan found neither FULL nor
+PARTIAL. It never receives Router-generated 405 outcomes, WebSocket or SSE
+misses, or selected handler exceptions. When omitted, the immutable Router
+uses the stock negotiated Pages 404.
 
 =head1 MIDDLEWARE
 
-Every Router, route, WebSocket, SSE, group, and mount middleware list accepts
-the same four entry forms:
+Router, Route, and Mount middleware lists accept the shared
+L<PAGI::Routing::Middleware> descriptor forms: class-name strings, coderef
+factories, configured objects with C<wrap>, and existing descriptions.
+Entries normalize at declaration time and build once per C<to_app>
+compilation. The first listed entry is outermost at runtime.
 
-=over 4
+Router middleware surrounds every Router outcome. Mount middleware surrounds
+the selected child application. Route middleware surrounds only its selected
+leaf. A C<routes> callback creates a real child Router application boundary,
+not a transparent inline group.
 
-=item * a nonempty middleware class-name string;
+=head1 ORDER AND SNAPSHOTS
 
-=item * a coderef factory called synchronously with C<($inner_app)>;
-
-=item * a blessed configured object with C<< ->wrap($inner_app) >>; or
-
-=item * an existing L<PAGI::Routing::Middleware> description.
-
-=back
-
-For example:
-
-    $r->get('/admin' => [
-        'RequestId',
-        \&with_logging,
-        $configured_auth,
-        middleware('Session', cookie_name => 'sid'),
-    ] => \&admin);
-
-Entries are normalized at declaration time. Factories and C<wrap> methods run
-once per C<to_app> compilation, in onion order with the first listed entry
-outermost. These are native app-to-app middleware, not response-valued
-C<($context, $next)> callbacks.
-
-=head1 ORDER AND MATCH OWNERSHIP
-
-All direct routes, groups, WebSocket routes, SSE routes, and mounts remain in
-the exact order declared. Nothing is sorted by kind, path specificity, name,
-hash order, or mount-prefix length. The first FULL match wins.
-
-An HTTP path match for the wrong method is PARTIAL rather than final. Scanning
-continues for a later FULL route; if none exists, all active PARTIAL
-declarations contribute methods to the deterministic first-seen method union
-recorded in routing evidence. A search with no complete path candidate records
-that matching fact as a decline. In either case the Router emits no HTTP
-response itself.
-A matched mount prefix owns dispatch at its written position, including an
-unanswered decline from its routing-aware child; the parent does not resume
-later declarations.
-
-=head1 SNAPSHOTS AND COMPILATION
+Routes and Mounts remain in exact declaration order. Nothing sorts by kind,
+path specificity, name, or Mount prefix length. The first FULL declaration
+wins. A matching Mount is FULL at its written position and transfers ownership
+to its child application; the parent never resumes after that child returns a
+404 or 405.
 
 =head2 to_router
 
     my $routing = $r->to_router;
 
-Returns a fresh immutable L<PAGI::Routing::Router> on every call. Materializing
-again repeats validation and creates independent immutable node identities.
-Later builder mutations cannot alter an existing snapshot.
-
-Retain the returned Router when inspection identity matters or several
-reverse-routing calls belong to one configuration view.
+Returns a fresh immutable L<PAGI::Routing::Router> snapshot on every call.
+Later parent or callback-child mutations cannot alter an existing snapshot.
+Within one snapshot operation, repeated structural frontend identities reuse
+one completed Router identity and malformed active cycles croak with their
+placement chain.
 
 =head2 to_app
 
-    my $app = $r->to_app;
+    my $routing_app = $r->to_app;
 
-Materializes exactly one fresh Router snapshot and compiles that retained
-snapshot through the shared compiler. Each call returns another middleware
-graph. Build and retain the app for its intended lifetime rather than calling
-C<to_app> per request.
+Creates exactly one fresh Router snapshot and compiles that retained snapshot.
+Each call builds a fresh middleware and application graph; requests reuse that
+graph and never compile per request.
 
-The returned coderef is deliberately a low-level routing component. A matched
-handler response is complete, while an exhausted HTTP search sends no events.
-Wrap a deployed Router with L<PAGI::Compose>, or install the routing fallback
-middleware explicitly at every required boundary.
+A direct Router owns normal routing outcomes: HTTP NONE is its custom or stock
+default, PARTIAL is its negotiated 405 with authoritative C<Allow>, and
+protocol misses use stock protocol behavior. Direct compilation deliberately
+does not install lifespan handling, error handling, or a response guard.
+L<PAGI::Compose> supplies those root lifecycle and safety boundaries for a
+deployed application.
 
 =head1 INSPECTION AND REVERSE ROUTING
 
-=head2 named_routes, route_named, and path_for
+C<named_routes>, C<route_named>, and C<path_for> delegate through a fresh
+C<to_router> snapshot on every call. Retain one immutable Router when stable
+snapshot identity matters.
 
-These convenience methods delegate through a fresh C<to_router> snapshot on
-every call. They therefore repeat materialization and validation; immutable
-route object identity is not stable across calls. Use one retained Router for
-stable C<route_named> or C<named_routes> identities.
-
-C<path_for> uses canonical slash addresses, validates the complete effective
-path and all constraints, percent-encodes parameter, query, and fragment
-values, and performs no protocol I/O. Inside a matched handler, Context
-C<path_for> can resolve relative to the active logical namespace and inherit
-matched captures. There is no C<uri_for> alias.
+Names use canonical slash addresses. Nested names are discovered only through
+mounted immutable Router applications. C<path_for> validates the complete
+effective path and constraints, encodes parameter/query/fragment values, and
+performs no protocol I/O. Inside a selected handler, Context C<path_for> can
+resolve relative to the active placement and inherit captures.
 
 =cut

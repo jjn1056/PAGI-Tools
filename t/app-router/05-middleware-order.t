@@ -106,7 +106,7 @@ sub handler {
 sub router_methods_exist {
     my ($builder) = @_;
     my $ok = 1;
-    for my $method (qw(group mount to_router to_app)) {
+    for my $method (qw(mount to_router to_app)) {
         $ok = 0 unless ok($builder->can($method), "Builder provides $method");
     }
     return $ok;
@@ -178,33 +178,40 @@ subtest 'all levels preserve first-listed-outermost and build inner-to-outer' =>
             trace_factory('root Router second', \@build, \@runtime),
         ],
     );
-    $root->group('/group' => [
-        trace_factory('group first', \@build, \@runtime),
-        trace_factory('group second', \@build, \@runtime),
-    ] => sub {
-        $_[0]->mount('/mount' => [
-            trace_factory('mount first', \@build, \@runtime),
-            trace_factory('mount second', \@build, \@runtime),
-        ] => router => $child)->name('child');
-    });
+    $root->mount('/group',
+        routes => sub {
+            $_[0]->mount('/mount',
+                app => $child->to_router,
+                middleware => [
+                    trace_factory('mount first', \@build, \@runtime),
+                    trace_factory('mount second', \@build, \@runtime),
+                ],
+            )->name('child');
+        },
+        middleware => [
+            trace_factory('callback Mount first', \@build, \@runtime),
+            trace_factory('callback Mount second', \@build, \@runtime),
+        ],
+    );
 
     my $app = $root->to_app;
     is(\@build, [
         'route explicit', 'route object', 'route factory', 'route class',
         'child Router second', 'child Router first',
         'mount second', 'mount first',
-        'group second', 'group first',
+        'callback Mount second', 'callback Mount first',
         'root Router second', 'root Router first',
     ], 'compile-time wrappers build from the innermost route outward');
-    is(scalar(grep { $_ eq 'group first' || $_ eq 'group second' } @build), 2,
-        'each group middleware occurrence wraps exactly once');
+    is(scalar(grep {
+        $_ eq 'callback Mount first' || $_ eq 'callback Mount second'
+    } @build), 2, 'each callback Mount middleware occurrence wraps exactly once');
 
     my $client = PAGI::Test::Client->new(app => $app);
     is($client->get('/group/mount/item')->text, 'ok',
         'the fully wrapped nested handler responds');
     is(\@runtime, [
         'root Router first before', 'root Router second before',
-        'group first before', 'group second before',
+        'callback Mount first before', 'callback Mount second before',
         'mount first before', 'mount second before',
         'child Router first before', 'child Router second before',
         'route class before', 'route factory before',
@@ -214,15 +221,16 @@ subtest 'all levels preserve first-listed-outermost and build inner-to-outer' =>
         'route factory after', 'route class after',
         'child Router second after', 'child Router first after',
         'mount second after', 'mount first after',
-        'group second after', 'group first after',
+        'callback Mount second after', 'callback Mount first after',
         'root Router second after', 'root Router first after',
-    ], 'runtime order is first-listed-outermost at Router, group, mount, and route levels');
+    ], 'runtime order is first-listed-outermost at Router, both Mounts, and route');
 
     @runtime = ();
     is($client->get('/group/mount/item')->text, 'ok',
         'one compiled wrapper graph is reusable for another request');
-    is(scalar(grep { $_ eq 'group first' || $_ eq 'group second' } @build), 2,
-        'requests never rebuild group middleware');
+    is(scalar(grep {
+        $_ eq 'callback Mount first' || $_ eq 'callback Mount second'
+    } @build), 2, 'requests never rebuild callback Mount middleware');
 };
 
 subtest 'outer native middleware may short circuit every inner level' => sub {
@@ -248,20 +256,23 @@ subtest 'outer native middleware may short circuit every inner level' => sub {
         middleware => [$outer, $short, $inner],
     );
     return unless router_methods_exist($builder);
-    $builder->group('/group' => [
-        trace_factory('group must not execute', \@build, \@runtime),
-    ] => sub {
-        $_[0]->get('/item' => [
-            trace_factory('route must not execute', \@build, \@runtime),
-        ] => handler('handler', undef, \@runtime));
-    });
+    $builder->mount('/group',
+        routes => sub {
+            $_[0]->get('/item' => [
+                trace_factory('route must not execute', \@build, \@runtime),
+            ] => handler('handler', undef, \@runtime));
+        },
+        middleware => [
+            trace_factory('Mount must not execute', \@build, \@runtime),
+        ],
+    );
 
     my $response = PAGI::Test::Client->new(app => $builder->to_app)
         ->get('/group/item');
     is([$response->status, $response->text], [202, 'short'],
         'the short circuit owns the response through native app-to-app middleware');
     is(\@runtime, ['outer before', 'short', 'outer after'],
-        'no inner Router, group, route, or handler runtime executes after short circuit');
+        'no inner Router, Mount, route, or handler executes after short circuit');
 };
 
 done_testing;

@@ -14,13 +14,26 @@ use PAGI::Routing::Middleware ();
     use overload '""' => sub { return 'methods' }, fallback => 1;
 }
 
+{
+    package Local::BuilderApp;
+
+    sub new { return bless { builds => 0 }, $_[0] }
+    sub to_app {
+        my ($self) = @_;
+        ++$self->{builds};
+        return sub { return };
+    }
+}
+
 subtest 'constructor copies and normalizes router configuration' => sub {
     my $factory = sub { return $_[0] };
     my $middleware = [$factory];
+    my $default = Local::BuilderApp->new;
 
     my $builder = PAGI::App::Router::Builder->new(
         desc       => 'root routes',
         middleware => $middleware,
+        http_default => $default,
     );
 
     my $options = $builder->_router_options;
@@ -31,6 +44,26 @@ subtest 'constructor copies and normalizes router configuration' => sub {
         'materialized Router options have no method-not-allowed callback key');
     ok($options->{middleware}[0]->isa('PAGI::Routing::Middleware'),
         'normalizes top-level middleware immediately');
+    is(refaddr($options->{http_default}), refaddr($default),
+        'retains the original HTTP default application');
+    ok($options->{has_http_default}, 'records that HTTP default was configured');
+    is($default->{builds}, 0, 'constructor configuration performs no compilation');
+    is(refaddr($builder->to_router->http_default), refaddr($default),
+        'the configured application reaches the immutable Router unchanged');
+    is($default->{builds}, 0, 'materialization performs no application compilation');
+    like(dies { $builder->http_default(sub { }) },
+        qr/http_default.*only.*once|already configured/i,
+        'constructor and method forms share one-shot configuration');
+
+    my $method_default = Local::BuilderApp->new;
+    my $method_builder = PAGI::App::Router::Builder->new;
+    is($method_builder->http_default($method_default), $method_builder,
+        'the method form returns its builder');
+    is(refaddr($method_builder->to_router->http_default), refaddr($method_default),
+        'the method form propagates the original application');
+    like(dies { $method_builder->http_default($default) },
+        qr/http_default.*only.*once|already configured/i,
+        'a second method configuration croaks');
 
     push @$middleware, sub { return $_[0] };
     push @{$options->{middleware}}, PAGI::Routing::Middleware->new(sub { return $_[0] });
@@ -118,11 +151,13 @@ subtest 'leaf grammar distinguishes Context targets from explicit raw targets' =
     my $handler = sub { };
     my $raw = sub { };
     my $factory = sub { return $_[0] };
+    my $raw_object = Local::BuilderApp->new;
 
     $builder->get('/normal' => $handler);
     $builder->get('/wrapped' => [$factory] => $handler);
     $builder->get('/raw', raw => $raw);
     $builder->get('/raw-wrapped' => [$factory], raw => $raw);
+    $builder->get('/raw-object', raw => $raw_object);
     $builder->route('/rpc' => $handler, methods => ['RPC']);
 
     like dies { $builder->get('/missing') }, qr/requires a target/,
@@ -146,6 +181,14 @@ subtest 'leaf grammar distinguishes Context targets from explicit raw targets' =
         'raw tags require their target';
     like dies { $builder->get('/normal' => 'native') }, qr/handler must be a coderef/,
         'ordinary targets must be Context handler coderefs';
+    like(dies { $builder->get('/normal-object' => $raw_object) },
+        qr/handler must be a coderef/,
+        'application objects do not widen ordinary handler arity');
+    like(dies { $builder->get('/raw-package', raw => 'Local::BuilderApp') },
+        qr/raw application must be a coderef or instantiated object with to_app/,
+        'raw package strings are rejected through the shared app validator');
+    is($raw_object->{builds}, 0,
+        'raw application objects are retained without compilation at declaration');
     like dies { $builder->get('/bad-middleware' => [undef] => $handler) },
         qr/middleware entry 0 must be/,
         'invalid positional middleware entries are rejected';

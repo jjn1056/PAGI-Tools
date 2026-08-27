@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
@@ -120,6 +121,51 @@ subtest 'route information lives in pagi.routing rather than pagi.router' => sub
         captures => { id => 123 },
         has_old => 0,
     }, 'the shared metadata frame records the effective route');
+};
+
+subtest 'App Router HTTP default is one-shot, retained, and HTTP NONE only' => sub {
+    my @default_calls;
+    my $default = sub {
+        my ($scope, $receive, $send) = @_;
+        push @default_calls, [$scope->{type}, scalar @_];
+        $send->({
+            type => 'http.response.start', status => 404, headers => [],
+        })->get;
+        $send->({
+            type => 'http.response.body', body => 'custom', more => 0,
+        })->get;
+        return Future->done;
+    };
+
+    my $constructor = PAGI::App::Router->new(http_default => $default);
+    my $first = $constructor->to_router;
+    is(refaddr($first->http_default), refaddr($default),
+        'constructor retains the exact native application');
+    like(dies { $constructor->http_default(sub { }) },
+        qr/http_default.*only.*once|already configured/i,
+        'constructor configuration consumes the one method slot');
+
+    my $method = PAGI::App::Router->new;
+    is($method->http_default($default), $method,
+        'method configuration returns the mutable Router');
+    my $method_snapshot = $method->to_router;
+    $method->get('/late' => sub { return $_[0]->text('late') });
+    is($method_snapshot->routes, [],
+        'later parent mutation cannot alter an old snapshot');
+    is(refaddr($method_snapshot->http_default), refaddr($default),
+        'the old snapshot retains its configured default identity');
+    like(dies { $method->http_default($default) },
+        qr/http_default.*only.*once|already configured/i,
+        'a second method configuration croaks');
+
+    my $app = $constructor->to_app;
+    is(body(invoke($app, path => '/missing')), 'custom',
+        'HTTP NONE invokes the custom default');
+    invoke($app, type => 'websocket', method => undef, path => '/missing',
+        extensions => { 'websocket.http.response' => {} });
+    invoke($app, type => 'sse', method => undef, path => '/missing');
+    is(\@default_calls, [['http', 3]],
+        'WebSocket and SSE misses never invoke the HTTP default');
 };
 
 done_testing;

@@ -7,8 +7,27 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
-use PAGI::Routing qw(middleware);
 use PAGI::Test::Client;
+
+{
+    package Local::RawAppObject;
+
+    sub new {
+        my ($class, $app) = @_;
+        return bless { app => $app, builds => 0 }, $class;
+    }
+    sub to_app {
+        my ($self) = @_;
+        ++$self->{builds};
+        return $self->{app};
+    }
+}
+
+{
+    package Local::BrokenRawAppObject;
+    sub new { return bless {}, $_[0] }
+    sub to_app { return bless {}, 'Local::NotACoderef' }
+}
 
 sub raw_http_app {
     my ($argument_counts) = @_;
@@ -59,15 +78,28 @@ subtest 'ordinary HTTP targets receive Context and emit immediate or Future Resp
 
 subtest 'explicit raw HTTP targets retain all three native channels' => sub {
     my @raw_argument_counts;
+    my $raw_object = Local::RawAppObject->new(
+        raw_http_app(\@raw_argument_counts),
+    );
     my $router = PAGI::App::Router->new;
-    $router->get('/raw/{id}', raw => raw_http_app(\@raw_argument_counts));
+    $router->get('/raw/{id}', raw => $raw_object);
 
-    my $client = PAGI::Test::Client->new(app => $router->to_app);
+    is($raw_object->{builds}, 0, 'raw object is not compiled at declaration');
+    my $app = $router->to_app;
+    is($raw_object->{builds}, 1, 'raw HTTP object compiles once per to_app');
+    my $client = PAGI::Test::Client->new(app => $app);
     my $raw = $client->get('/raw/7');
 
     is([$raw->status, $raw->content], [209, 'raw 7'],
         'an explicit raw HTTP route owns native response events');
     is(\@raw_argument_counts, [3], 'a raw HTTP route receives all three PAGI channels');
+    is($raw_object->{builds}, 1, 'requests never recompile the raw object');
+    like(dies {
+        PAGI::App::Router->new
+            ->get('/broken', raw => Local::BrokenRawAppObject->new)
+            ->to_app;
+    }, qr/to_app must return a coderef/,
+        'a broken raw application object fails at compilation');
 };
 
 subtest 'ordinary and raw WebSocket targets receive their declared contracts' => sub {
@@ -80,7 +112,7 @@ subtest 'ordinary and raw WebSocket targets receive their declared contracts' =>
         $c->send_text('normal ' . $c->path_param('room'))->get;
         return $c->close(1000, 'done');
     });
-    $router->websocket('/raw-ws/{room}', raw => sub {
+    my $raw_object = Local::RawAppObject->new(sub {
         my ($scope, $receive, $send) = @_;
         push @raw, [scalar @_, $scope->{path_params}{room}];
         $receive->()->get;
@@ -89,8 +121,11 @@ subtest 'ordinary and raw WebSocket targets receive their declared contracts' =>
         $send->({ type => 'websocket.close', code => 1000, reason => 'done' })->get;
         return Future->done;
     });
+    $router->websocket('/raw-ws/{room}', raw => $raw_object);
 
-    my $client = PAGI::Test::Client->new(app => $router->to_app);
+    my $app = $router->to_app;
+    is($raw_object->{builds}, 1, 'raw WebSocket object compiles once');
+    my $client = PAGI::Test::Client->new(app => $app);
     $client->websocket('/ws/lobby', sub {
         my ($ws) = @_;
         is($ws->receive_text, 'normal lobby', 'normal WebSocket Context emitted text');
@@ -115,7 +150,7 @@ subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
         $c->send_event(event => 'normal', data => $c->path_param('stream'))->get;
         return $c->close;
     });
-    $router->sse('/raw-events/{stream}', raw => sub {
+    my $raw_object = Local::RawAppObject->new(sub {
         my ($scope, $receive, $send) = @_;
         push @raw, [scalar @_, $scope->{path_params}{stream}];
         $send->({ type => 'sse.start', status => 200, headers => [] })->get;
@@ -127,8 +162,11 @@ subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
         $send->({ type => 'sse.close' })->get;
         return Future->done;
     });
+    $router->sse('/raw-events/{stream}', raw => $raw_object);
 
-    my $client = PAGI::Test::Client->new(app => $router->to_app);
+    my $app = $router->to_app;
+    is($raw_object->{builds}, 1, 'raw SSE object compiles once');
+    my $client = PAGI::Test::Client->new(app => $app);
     $client->sse('/events/news', sub {
         my ($sse) = @_;
         my $event = $sse->receive_event;
@@ -150,9 +188,9 @@ subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
 subtest 'slash names, relative Context links, constraints, and metadata share one resolver' => sub {
     my @seen;
     my $router = PAGI::App::Router->new;
-    $router->group('/orgs/{org}' => sub {
+    $router->mount('/orgs/{org}', routes => sub {
         my ($org) = @_;
-        $org->group('/people' => sub {
+        $org->mount('/people', routes => sub {
             my ($people) = @_;
             $people->get('/{id}' => sub {
                 my ($c) = @_;
@@ -226,28 +264,21 @@ subtest 'slash names, relative Context links, constraints, and metadata share on
     }], 'dispatch publishes shared pagi.routing metadata and no pagi.router key');
 };
 
-subtest 'custom routing policy and explicit HEAD use the shared compiler' => sub {
-    my @generated;
-    my $router = PAGI::App::Router->new(
-        middleware => [
-            middleware('Routing::NotFound', handler => sub {
-                my ($c, $trace) = @_;
-                push @generated, [
-                    'not_found', $c->response->status,
-                    $c->response->header('Allow'), $trace->allowed_methods,
-                ];
-                return $c->text('custom missing');
-            }),
-            middleware('Routing::MethodNotAllowed', handler => sub {
-                my ($c, $trace) = @_;
-                push @generated, [
-                    'method_not_allowed', $c->response->status,
-                    $c->response->header('Allow'), $trace->allowed_methods,
-                ];
-                return $c->text('custom method');
-            }),
-        ],
-    );
+subtest 'custom HTTP default and explicit HEAD use the shared compiler' => sub {
+    my @default_scopes;
+    my $default = Local::RawAppObject->new(sub {
+        my ($scope, $receive, $send) = @_;
+        push @default_scopes, [$scope->{type}, scalar @_];
+        $send->({
+            type => 'http.response.start', status => 404,
+            headers => [['content-type', 'text/plain']],
+        })->get;
+        $send->({
+            type => 'http.response.body', body => 'custom missing', more => 0,
+        })->get;
+        return Future->done;
+    });
+    my $router = PAGI::App::Router->new(http_default => $default);
     $router->get('/only' => sub { return $_[0]->text('only') });
     $router->head('/report' => sub {
         return $_[0]->response->status(203)->text('explicit');
@@ -256,25 +287,28 @@ subtest 'custom routing policy and explicit HEAD use the shared compiler' => sub
         return $_[0]->response->status(200)->text('automatic');
     });
 
-    my $client = PAGI::Test::Client->new(app => $router->to_app);
+    my $app = $router->to_app;
+    is($default->{builds}, 1, 'HTTP default object compiles once');
+    my $client = PAGI::Test::Client->new(app => $app);
     my $missing = $client->get('/missing');
     my $wrong_method = $client->post('/only');
     my $head = $client->head('/report');
     my $get = $client->get('/report');
 
     is([$missing->status, $missing->content], [404, 'custom missing'],
-        'custom NotFound middleware receives and returns the seeded response');
-    is([$wrong_method->status, $wrong_method->header('Allow'), $wrong_method->content],
-        [405, 'GET, HEAD', 'custom method'],
-        'custom MethodNotAllowed middleware keeps the first-seen Allow outcome');
-    is(\@generated, [
-        ['not_found', 404, undef, []],
-        ['method_not_allowed', 405, undef, ['GET', 'HEAD']],
-    ], 'fallback handlers receive Context state and routing evidence separately');
+        'custom HTTP default owns NONE');
+    is([$wrong_method->status, $wrong_method->header('Allow')],
+        [405, 'GET, HEAD'],
+        'PARTIAL remains the Router stock 405 rather than invoking the default');
+    like($wrong_method->content, qr/Method Not Allowed/,
+        'the PARTIAL body comes from the stock negotiated page');
+    is(\@default_scopes, [['http', 3]],
+        'the custom default receives exactly the three HTTP channels for NONE only');
     is([$head->status, $head->content_length, $head->content], [203, 8, ''],
         'an explicit HEAD declared before GET wins and is body-suppressed');
     is([$get->status, $get->content], [200, 'automatic'],
         'GET skips the earlier HEAD partial and reaches its own route');
+    is($default->{builds}, 1, 'requests never recompile the HTTP default');
 };
 
 done_testing;
