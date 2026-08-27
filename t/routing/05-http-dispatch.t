@@ -10,7 +10,6 @@ use PAGI::App::Router;
 use PAGI::Response;
 use PAGI::Routing qw(router route middleware);
 use PAGI::Routing::Compiler;
-use PAGI::Routing::Trace;
 
 sub HttpProvider { return qr/accepted/ }
 
@@ -197,8 +196,8 @@ subtest 'provider constraints select normal and raw HTTP leaves before invocatio
         'a rejected provider route lets declaration-order scanning continue');
     is($run->('/raw/accepted')->[0]{status}, 204,
         'an accepted provider capture selects the raw HTTP application');
-    is($run->('/raw/rejected'), [],
-        'a rejected raw provider route leaves the Router unanswered');
+    is($run->('/raw/rejected')->[0]{status}, 404,
+        'a rejected raw provider route reaches the Router HTTP default');
     is(\@normal, ['accepted'],
         'the constrained normal handler runs only for its accepted capture');
     is(\@raw, ['accepted'],
@@ -526,7 +525,7 @@ subtest 'partial decisions preserve first-seen method order without sharing arra
     );
 };
 
-subtest 'PAGI::App::Router decline evidence retains first-seen method order' => sub {
+subtest 'PAGI::App::Router emits first-seen authoritative Allow order' => sub {
     my @cases = (
         [
             'POST declared before GET',
@@ -554,15 +553,14 @@ subtest 'PAGI::App::Router decline evidence retains first-seen method order' => 
         $declare->($router);
         my $app = $router->to_app;
         my ($receive, $send, $events) = channels();
-        my ($request_scope, $trace) = PAGI::Routing::Trace->_ensure_http_scope(
+        $app->(
             scope(method => 'TRACE', path => '/ordered'),
-        );
-        my $checkpoint = $trace->checkpoint;
-
-        $app->($request_scope, $receive, $send)->get;
-        is($events, [], "$label leaves the Router unanswered");
-        is($trace->snapshot($checkpoint)->allowed_methods, $want,
-            "$label controls the decline method order");
+            $receive,
+            $send,
+        )->get;
+        is($events->[0]{status}, 405, "$label emits Method Not Allowed");
+        is(allow_header($events), join(', ', @$want),
+            "$label controls the authoritative Allow order");
     }
 };
 

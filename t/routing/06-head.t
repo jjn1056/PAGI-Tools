@@ -45,6 +45,12 @@ sub response_start {
     return (grep { ($_->{type} // '') eq 'http.response.start' } @$events)[0];
 }
 
+sub response_status {
+    my ($events) = @_;
+    my $start = response_start($events);
+    return defined($start) ? $start->{status} : undef;
+}
+
 sub response_header {
     my ($events, $name) = @_;
     my $start = response_start($events);
@@ -90,6 +96,7 @@ subtest 'automatic HEAD keeps request metadata and GET-equivalent response metad
 
 subtest 'HEAD selection retains declaration order and constraint fallthrough' => sub {
     my @invoked;
+    my $expensive_get_calls = 0;
     my @cases = (
         [
             'explicit HEAD before GET wins',
@@ -99,6 +106,7 @@ subtest 'HEAD selection retains declaration order and constraint fallthrough' =>
                     return $_[0]->text('explicit');
                 }, methods => 'HEAD'),
                 route('/choice' => sub {
+                    ++$expensive_get_calls;
                     push @invoked, ['automatic', $_[0]->request->method];
                     return $_[0]->text('automatic');
                 }, methods => 'GET'),
@@ -149,6 +157,8 @@ subtest 'HEAD selection retains declaration order and constraint fallthrough' =>
         is(response_bodies($events), [{ type => 'http.response.body', body => '', more => 0 }],
             "$label still receives HEAD wire suppression");
     }
+    is($expensive_get_calls, 0,
+        'an explicit HEAD route before GET avoids the expensive GET handler');
 };
 
 subtest 'the outer HEAD boundary lets router middleware observe the full representation' => sub {
@@ -187,7 +197,7 @@ subtest 'one outer HEAD owner covers separately compiled child routers' => sub {
             sub {
                 my ($child) = @_;
                 return router(
-                    routes => [mount('/api' => $child)],
+                    routes => [mount('/api', app => $child)],
                     middleware => [middleware('ContentLength')],
                 )->to_app;
             },
@@ -199,7 +209,7 @@ subtest 'one outer HEAD owner covers separately compiled child routers' => sub {
             sub {
                 my ($child) = @_;
                 return router(routes => [
-                    mount('/api' => $child,
+                    mount('/api', app => $child,
                         middleware => [middleware('ContentLength')]),
                 ])->to_app;
             },
@@ -351,56 +361,71 @@ subtest 'HEAD suppression consumes terminal sendfile descriptors before transpor
     ], 'no file, offset, or length keys reach the wire');
 };
 
-subtest 'fallback-rendered HEAD preserves calculated headers and suppresses payloads' => sub {
+subtest 'Router-generated HEAD outcomes preserve GET-equivalent metadata and suppress payloads' => sub {
     my $app = router(
-        middleware => [
-            middleware('ContentLength'),
-            middleware('Routing::NotFound', handler => sub {
-                return $_[0]->text('Not Found');
-            }),
-            middleware('Routing::MethodNotAllowed', handler => sub {
-                return $_[0]->text('Method Not Allowed');
-            }),
-        ],
+        middleware => [middleware('ContentLength')],
         routes => [
             route('/post' => sub { return $_[0]->text('post') }, methods => 'POST'),
         ],
     )->to_app;
 
+    my $not_found_get = run_app($app, method => 'GET', path => '/missing');
     my $not_found = run_app($app, method => 'HEAD', path => '/missing');
-    is(response_start($not_found)->{status}, 404, 'HEAD preserves fallback 404 status');
-    is(response_header($not_found, 'Content-Type'), 'text/plain; charset=utf-8',
-        'HEAD preserves fallback representation type');
-    is(response_header($not_found, 'Content-Length'), 9,
-        'ContentLength inside the Router sees the full fallback 404 body');
+    is(response_status($not_found), 404, 'HEAD preserves generated 404 status');
+    is(response_header($not_found, 'Content-Type'),
+        response_header($not_found_get, 'Content-Type'),
+        'HEAD preserves the GET 404 representation type');
+    is(response_header($not_found, 'Content-Length'),
+        response_header($not_found_get, 'Content-Length'),
+        'Router middleware calculates the same generated 404 length before suppression');
+    my $not_found_get_bodies = response_bodies($not_found_get);
+    ok(@$not_found_get_bodies
+            && length($not_found_get_bodies->[0]{body} // '') > 0,
+        'the GET 404 retains its negotiated representation');
     is(response_bodies($not_found), [{ type => 'http.response.body', body => '', more => 0 }],
-        'the one outer HEAD boundary suppresses the fallback 404 body');
+        'the one outer HEAD boundary suppresses the generated 404 body');
 
+    my $not_allowed_get = run_app($app, method => 'GET', path => '/post');
     my $not_allowed = run_app($app, method => 'HEAD', path => '/post');
-    is(response_start($not_allowed)->{status}, 405, 'HEAD preserves fallback 405 status');
+    is(response_status($not_allowed), 405, 'HEAD preserves generated 405 status');
     is(response_header($not_allowed, 'Allow'), 'POST',
-        'HEAD preserves fallback authoritative Allow');
-    is(response_header($not_allowed, 'Content-Type'), 'text/plain; charset=utf-8',
-        'HEAD preserves fallback 405 representation type');
-    is(response_header($not_allowed, 'Content-Length'), 18,
-        'ContentLength inside the Router sees the full fallback 405 body');
+        'HEAD preserves generated authoritative Allow');
+    is(response_header($not_allowed, 'Content-Type'),
+        response_header($not_allowed_get, 'Content-Type'),
+        'HEAD preserves the GET 405 representation type');
+    is(response_header($not_allowed, 'Content-Length'),
+        response_header($not_allowed_get, 'Content-Length'),
+        'Router middleware calculates the same generated 405 length before suppression');
     is(response_bodies($not_allowed), [{ type => 'http.response.body', body => '', more => 0 }],
-        'the one outer HEAD boundary suppresses the fallback 405 body');
+        'the one outer HEAD boundary suppresses the generated 405 body');
 
     my $file_app = router(
-        middleware => [middleware('Routing::NotFound', handler => sub {
-            return $_[0]->response->send_file(__FILE__);
-        })],
+        http_default => async sub {
+            my ($scope, $receive, $send) = @_;
+            await Future->wrap($send->({
+                type => 'http.response.start', status => 404,
+                headers => [['content-length' => -s __FILE__]],
+                trailers => 1,
+            }));
+            await Future->wrap($send->({
+                type => 'http.response.body', file => __FILE__,
+                offset => 0, length => -s __FILE__,
+            }));
+            await Future->wrap($send->({
+                type => 'http.response.trailers',
+                headers => [['x-fallback', 'complete']],
+            }));
+        },
         routes => [],
     )->to_app;
     my $file = run_app($file_app, method => 'HEAD', path => '/missing');
-    is(response_start($file)->{status}, 404,
-        'file fallback retains the seeded 404 status');
+    is(response_status($file), 404,
+        'sendfile HTTP default retains its 404 status');
     is(response_header($file, 'Content-Length'), -s __FILE__,
-        'file fallback retains the calculated file length');
+        'sendfile HTTP default retains its calculated file length');
     is(response_bodies($file), [
         { type => 'http.response.body', body => '', more => 0 },
-    ], 'fallback sendfile bytes and descriptor are suppressed at the outer edge');
+    ], 'default sendfile and trailers are suppressed at the outer edge');
 };
 
 subtest 'GET events remain byte-for-byte unchanged' => sub {
@@ -455,7 +480,7 @@ subtest 'HEAD forwards unrelated response events unchanged' => sub {
 
 subtest 'the outer HEAD boundary covers application and inline mounts' => sub {
     my $buffered = router(routes => [
-        mount('/buffered' => async sub {
+        mount('/buffered', app => async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({
                 type    => 'http.response.start',
@@ -510,7 +535,7 @@ subtest 'the outer HEAD boundary covers application and inline mounts' => sub {
     ], 'an inline mounted stream emits only start and one empty terminal body');
 
     my $sendfile = router(routes => [
-        mount('/files' => async sub {
+        mount('/files', app => async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({
                 type    => 'http.response.start',

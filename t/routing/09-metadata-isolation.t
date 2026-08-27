@@ -9,7 +9,6 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::Resolver;
-use PAGI::Routing::Trace;
 
 our $CONCURRENT_PROVIDER_CALLS = 0;
 sub ConcurrentId {
@@ -65,7 +64,9 @@ sub snapshot {
         label        => $label,
         container_id => refaddr($container),
         frames_id    => refaddr($container->{frames}),
+        frame_count  => scalar @{$container->{frames}},
         frame_id     => refaddr($frame),
+        resolver_id  => refaddr($frame->{resolver}),
         mounts_id    => refaddr($frame->{mounts}),
         captures_id  => refaddr($frame->{captures}),
         logical_namespace => $frame->{logical_namespace},
@@ -73,6 +74,16 @@ sub snapshot {
         mounts       => [map { +{%$_} } @{$frame->{mounts}}],
         match        => defined $frame->{match} ? {%{$frame->{match}}} : undef,
     };
+}
+
+sub allow_state {
+    my ($request_scope) = @_;
+    my @states = grep {
+        ref($_) eq 'HASH'
+            && exists $_->{router_generated}
+            && exists $_->{allowed_methods}
+    } values %$request_scope;
+    return $states[0];
 }
 
 sub observing_middleware {
@@ -149,6 +160,9 @@ subtest 'metadata is installed before middleware and records effective mounted l
         ],
         'metadata observers retain normal middleware ordering',
     );
+    is([map { $_->{frame_count} } @observations],
+        [1, 1, 2, 3, 3, 3, 3, 3, 3],
+        'inspectable Router entries append request-local boundary frames');
     is($observations[0]{mounts}, [], 'router middleware initially sees no mount selections');
     is($observations[0]{match}, undef, 'router middleware initially sees no leaf match');
     is([$observations[0]{logical_namespace}, $observations[0]{captures}],
@@ -199,11 +213,13 @@ subtest 'metadata is installed before middleware and records effective mounted l
 
     my %frame_ids = map { $_->{frame_id} => 1 } @observations;
     my %mount_ids = map { $_->{mounts_id} => 1 } @observations;
-    is(scalar keys %frame_ids, 1, 'all levels in one compiled router share one request-local frame');
-    is(scalar keys %mount_ids, 1, 'all levels in one compiled router share one request-local mounts array');
+    my %resolver_ids = map { $_->{resolver_id} => 1 } @observations;
+    is(scalar keys %frame_ids, 3, 'root and two child Routers use distinct boundary frames');
+    is(scalar keys %mount_ids, 3, 'each boundary frame owns its cumulative Mount snapshot');
+    is(scalar keys %resolver_ids, 1, 'every inspectable child frame retains the root Resolver');
 };
 
-subtest 'declines, short circuits, and application mounts publish only selected metadata' => sub {
+subtest 'Router outcomes, short circuits, and application mounts publish only selected metadata' => sub {
     my @declined;
     my $decline_app = router(
         middleware => [observing_middleware('declined router', \@declined)],
@@ -215,10 +231,10 @@ subtest 'declines, short circuits, and application mounts publish only selected 
     )->to_app;
 
     run_scope($decline_app, scope(path => '/missing', raw_path => '/missing'));
-    is($declined[-1]{mounts}, [], 'a root NONE decline has no mount chain');
-    is($declined[-1]{match}, undef, 'a root NONE decline has no match');
+    is($declined[-1]{mounts}, [], 'a root NONE outcome has no mount chain');
+    is($declined[-1]{match}, undef, 'a root NONE outcome has no match');
     is([$declined[-1]{logical_namespace}, $declined[-1]{captures}],
-        ['/', {}], 'a root NONE decline retains root metadata');
+        ['/', {}], 'a root NONE outcome retains root metadata');
 
     @declined = ();
     run_scope($decline_app, scope(
@@ -277,11 +293,8 @@ subtest 'declines, short circuits, and application mounts publish only selected 
     }, 'selection publishes a leaf before route middleware can short-circuit');
 
     my @application_mount;
-    my $application_mount_saw_trace;
     my $mounted_target = async sub {
         my ($request_scope, $receive, $send) = @_;
-        $application_mount_saw_trace
-            = exists $request_scope->{'pagi.routing.trace'};
         push @application_mount, snapshot('mounted target', $request_scope);
         await $send->({
             type => 'http.response.start', status => 200, headers => [],
@@ -292,7 +305,7 @@ subtest 'declines, short circuits, and application mounts publish only selected 
     };
     my $mounted_app = router(routes => [
         mount('/api', routes => [
-            mount('/assets' => $mounted_target,
+            mount('/assets', app => $mounted_target,
                 desc => 'Opaque assets',
                 middleware => [observing_middleware('application mount', \@application_mount)],
             ),
@@ -314,8 +327,6 @@ subtest 'declines, short circuits, and application mounts publish only selected 
     ], 'an opaque terminal mount retains inline ancestry without adding itself as a descriptor');
     is($application_mount[1]{match}, $application_mount[0]{match},
         'the mounted application receives the terminal parent match');
-    ok(!$application_mount_saw_trace,
-        'opaque mount shielding preserves metadata while removing parent Trace');
 };
 
 subtest 'separately compiled routers append frames without overwriting legacy metadata' => sub {
@@ -332,7 +343,7 @@ subtest 'separately compiled routers append frames without overwriting legacy me
     my $parent = router(
         middleware => [observing_middleware('parent', \@parent_observations)],
         routes => [
-            mount('/api' => $child, desc => 'Child application'),
+            mount('/api', app => $child, desc => 'Child application'),
         ],
     )->to_app;
     my $legacy = { route => { name => 'legacy', path => '/old' } };
@@ -676,7 +687,7 @@ subtest 'compiled middleware state follows documented ownership boundaries' => s
         'the two inline mount occurrences execute different wrapper instances');
 };
 
-subtest 'concurrent requests isolate frames, matches, parameters, traces, and snapshots' => sub {
+subtest 'opposite-order concurrent completion isolates selected metadata and Allow authority state' => sub {
     my (@contexts, @gates);
     $CONCURRENT_PROVIDER_CALLS = 0;
     my $app = router(routes => [
@@ -713,6 +724,8 @@ subtest 'concurrent requests isolate frames, matches, parameters, traces, and sn
     my $second_container = $second_scope->{'pagi.routing'};
     my $first_frame = current_frame($first_scope);
     my $second_frame = current_frame($second_scope);
+    my $first_allow_state = allow_state($first_scope);
+    my $second_allow_state = allow_state($second_scope);
     isnt(refaddr($first_scope->{path_params}), refaddr($second_scope->{path_params}),
         'concurrent requests have distinct path-parameter hashes');
     is([$first_scope->{path_params}{id}, $second_scope->{path_params}{id}], ['one', 'two'],
@@ -729,11 +742,10 @@ subtest 'concurrent requests isolate frames, matches, parameters, traces, and sn
         'concurrent requests have distinct match records');
     isnt(refaddr($first_frame->{captures}), refaddr($second_frame->{captures}),
         'concurrent requests have distinct capture snapshots');
-    isnt(
-        refaddr($contexts[0]->scope->{'pagi.routing.trace'}),
-        refaddr($contexts[1]->scope->{'pagi.routing.trace'}),
-        'concurrent requests have distinct routing Trace collectors',
-    );
+    ok(defined($first_allow_state) && defined($second_allow_state),
+        'both requests carry an authoritative-Allow state');
+    isnt(refaddr($first_allow_state), refaddr($second_allow_state),
+        'concurrent requests have distinct authoritative-Allow states');
     is([$first_frame->{logical_namespace}, $second_frame->{logical_namespace}],
         ['/', '/'], 'concurrent requests retain their own current namespaces');
     is([$first_frame->{captures}{id}, $second_frame->{captures}{id}],
@@ -749,83 +761,26 @@ subtest 'concurrent requests isolate frames, matches, parameters, traces, and sn
         'the first match uses the effective provider-backed mounted pattern');
     is($second_frame->{match}{route}, '/api/items/{id:&ConcurrentId}',
         'the second match uses the same immutable provider-backed pattern');
-    push @{$first_frame->{mounts}}, { path => '/consumer-only' };
-    $first_frame->{match}{consumer_marker} = 'first';
-    is(scalar @{$second_frame->{mounts}}, 1, 'a first-request mount update is absent from the second request');
-    is($second_frame->{match}{consumer_marker}, undef, 'a first-request match update is absent from the second request');
+    $gates[1]->done($contexts[1]->text('two'));
+    $second->get;
+    ok(!$first->is_ready, 'the first request remains pending after the second completes');
+    is(response_body(\@second_events), 'two',
+        'the second request completes first with its own response');
+    is(current_frame($first_scope)->{captures}, { id => 'one' },
+        'opposite-order completion does not disturb the pending request capture');
+    is(current_frame($first_scope)->{match}{route},
+        '/api/items/{id:&ConcurrentId}',
+        'the pending request retains its effective match');
 
     $gates[0]->done($contexts[0]->text('one'));
-    $gates[1]->done($contexts[1]->text('two'));
     $first->get;
-    $second->get;
-    is(response_body(\@first_events), 'one', 'the first pending request completes with its own response');
-    is(response_body(\@second_events), 'two', 'the second pending request completes with its own response');
-
-    my $partial_app = router(routes => [
-        route('/method' => sub { return $_[0]->text('get') }, methods => 'GET'),
-    ])->to_app;
-    my ($partial_one_scope, $partial_one_trace)
-        = PAGI::Routing::Trace->_ensure_http_scope(
-            scope(method => 'POST', path => '/method'),
-        );
-    my ($partial_two_scope, $partial_two_trace)
-        = PAGI::Routing::Trace->_ensure_http_scope(
-            scope(method => 'DELETE', path => '/method'),
-        );
-    my $partial_one_checkpoint = $partial_one_trace->checkpoint;
-    my $partial_two_checkpoint = $partial_two_trace->checkpoint;
-    my (@partial_one_events, @partial_two_events);
-    my $partial_one = $partial_app->(
-        $partial_one_scope,
-        \&receive,
-        sub { push @partial_one_events, $_[0]; return Future->done },
-    );
-    my $partial_two = $partial_app->(
-        $partial_two_scope,
-        \&receive,
-        sub { push @partial_two_events, $_[0]; return Future->done },
-    );
-    $partial_one->get;
-    $partial_two->get;
-    is([\@partial_one_events, \@partial_two_events], [[], []],
-        'both PARTIAL requests complete unanswered');
-    isnt(refaddr($partial_one_trace), refaddr($partial_two_trace),
-        'concurrent PARTIAL requests use distinct Trace collectors');
-    my $partial_one_snapshot = $partial_one_trace->snapshot(
-        $partial_one_checkpoint,
-    );
-    my $partial_two_snapshot = $partial_two_trace->snapshot(
-        $partial_two_checkpoint,
-    );
-    isnt(refaddr($partial_one_snapshot), refaddr($partial_two_snapshot),
-        'concurrent PARTIAL requests use distinct Snapshot objects');
-    my $partial_one_methods = $partial_one_snapshot->allowed_methods;
-    my $partial_two_methods = $partial_two_snapshot->allowed_methods;
-    isnt(refaddr($partial_one_methods), refaddr($partial_two_methods),
-        'concurrent snapshots return distinct method arrays');
-    is([$partial_one_methods, $partial_two_methods], [
-        [qw(GET HEAD)], [qw(GET HEAD)],
-    ], 'each concurrent snapshot retains the same immutable compiled union');
-    push @$partial_one_methods, 'MUTATED';
-    is($partial_two_methods, [qw(GET HEAD)],
-        'mutating one returned array cannot affect the other request');
-    is($partial_one_snapshot->allowed_methods, [qw(GET HEAD)],
-        'mutating one returned array cannot affect its source Snapshot');
-
-    my ($later_scope, $later_trace) = PAGI::Routing::Trace->_ensure_http_scope(
-        scope(method => 'PATCH', path => '/method'),
-    );
-    my $later_checkpoint = $later_trace->checkpoint;
-    my @later_events;
-    Future->wrap($partial_app->(
-        $later_scope,
-        \&receive,
-        sub { push @later_events, $_[0]; return Future->done },
-    ))->get;
-    is(\@later_events, [], 'a later PARTIAL request also completes unanswered');
-    is($later_trace->snapshot($later_checkpoint)->allowed_methods,
-        [qw(GET HEAD)],
-        'a later request receives a clean method union after consumer mutation');
+    is(response_body(\@first_events), 'one',
+        'the first request completes later with its own response');
+    is([map { current_frame($_->scope)->{captures}{id} } @contexts],
+        ['one', 'two'], 'both final frames retain request-local captures');
+    is([map { $_->path_for('show') } @contexts],
+        ['/api/items/one', '/api/items/two'],
+        'both final frames retain correct request-local reverse metadata');
 };
 
 subtest 'reentrant dispatch appends a frame without changing the outer invocation' => sub {
@@ -869,11 +824,8 @@ subtest 'reentrant dispatch appends a frame without changing the outer invocatio
     is($inner_frames->[1]{match}{route}, '/inner', 'the inner invocation records its own match');
     is(refaddr($inner_frames->[0]{resolver}), refaddr($inner_frames->[1]{resolver}),
         'reentrant calls through one compiled app share its immutable resolver');
-    is(
-        refaddr($inner_scope->{'pagi.routing.trace'}),
-        refaddr($outer_scope_after->{'pagi.routing.trace'}),
-        'reentrant dispatch reuses the compatible request Trace collector',
-    );
+    isnt(refaddr(allow_state($inner_scope)), refaddr(allow_state($outer_scope_after)),
+        'reentrant public entries allocate distinct authoritative-Allow states');
 };
 
 subtest 'WebSocket and SSE leaves publish protocol-specific effective metadata' => sub {
