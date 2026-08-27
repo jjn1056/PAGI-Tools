@@ -9,6 +9,7 @@ use FindBin qw($Bin);
 use lib "$Bin/lib";
 use ComposeTest qw(scope run_scope capture_send);
 use PAGI::Compose qw(compose);
+use PAGI::Response ();
 use PAGI::Routing qw(route middleware router);
 
 sub response_header {
@@ -134,7 +135,7 @@ subtest 'Router outcomes and root errors retain derived headers under HEAD' => s
         [
             'Router 404',
             compose(routes => [
-                route('/known' => sub { return $_[0]->text('known') }),
+                route('/known' => sub { return PAGI::Response->text('known') }),
             ])->to_app,
             scope(method => 'GET', path => '/missing'),
             scope(method => 'HEAD', path => '/missing'),
@@ -142,7 +143,7 @@ subtest 'Router outcomes and root errors retain derived headers under HEAD' => s
         [
             'Router 405',
             compose(routes => [
-                route('/known' => sub { return $_[0]->text('known') }, methods => 'POST'),
+                route('/known' => sub { return PAGI::Response->text('known') }, methods => 'POST'),
             ])->to_app,
             scope(method => 'GET', path => '/known'),
             scope(method => 'HEAD', path => '/known'),
@@ -210,12 +211,13 @@ subtest 'an explicit HEAD route can avoid its expensive GET sibling' => sub {
     my @called;
     my $app = compose(routes => [
         route('/resource' => sub {
-            push @called, ['head', $_[0]->request->method];
-            return $_[0]->response->header('x-source' => 'head')->text('');
+            push @called, ['head', $_[0]->method];
+            return PAGI::Response->new($_[0]->scope)
+                ->header('x-source' => 'head')->text('');
         }, methods => 'HEAD'),
         route('/resource' => sub {
-            push @called, ['get', $_[0]->request->method];
-            return $_[0]->text('expensive representation');
+            push @called, ['get', $_[0]->method];
+            return PAGI::Response->text('expensive representation');
         }, methods => 'GET'),
     ])->to_app;
     my $events = run_scope($app, scope(method => 'HEAD', path => '/resource'));

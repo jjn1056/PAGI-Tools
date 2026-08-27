@@ -4,6 +4,7 @@ use Test2::V0;
 use FindBin qw($Bin);
 use Future;
 use Future::AsyncAwait;
+use PAGI::Response ();
 use PAGI::Routing qw(router route mount middleware);
 
 sub run_http {
@@ -121,7 +122,7 @@ subtest 'a mounted object is one compiled application boundary' => sub {
         mount('/service', app => $component,
             middleware => [$mount_middleware]),
         route('/service/item' => sub {
-            return $_[0]->text('parent resumed');
+            return PAGI::Response->text('parent resumed');
         }),
     ])->to_app;
 

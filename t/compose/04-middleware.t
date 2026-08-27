@@ -9,6 +9,7 @@ use lib "$Bin/lib";
 use ComposeTest qw(scope run_scope);
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
+use PAGI::Response ();
 use PAGI::Routing qw(route middleware router);
 
 {
@@ -213,7 +214,7 @@ subtest 'application middleware sees delegated protocols and Router outcomes' =>
         };
     };
     my $routing_app = compose(
-        routes => [route('/present' => sub { return $_[0]->text('present') })],
+        routes => [route('/present' => sub { return PAGI::Response->text('present') })],
         middleware => [$outcome_observer],
     )->to_app;
     my $events = run_scope($routing_app, scope(type => 'http', path => '/missing'));
@@ -226,7 +227,7 @@ subtest 'Router-owned 404 and 405 cross the complete author stack' => sub {
     my @trace;
     my $app = compose(
         routes => [
-            route('/items' => sub { return $_[0]->text('item') }, methods => 'GET'),
+            route('/items' => sub { return PAGI::Response->text('item') }, methods => 'GET'),
         ],
         middleware => [
             tracing_factory('author outer', \@trace),

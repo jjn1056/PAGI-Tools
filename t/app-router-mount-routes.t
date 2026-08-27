@@ -8,6 +8,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
+use PAGI::Response ();
 use PAGI::Routing qw(route router);
 use PAGI::Test::Client;
 
@@ -24,7 +25,7 @@ use PAGI::Test::Client;
 
 sub handler {
     my ($body) = @_;
-    return sub { return $_[0]->text($body) };
+    return sub { return PAGI::Response->text($body) };
 }
 
 sub native_app {
@@ -146,7 +147,7 @@ subtest 'Mount middleware is named and first-listed outermost' => sub {
         routes => sub {
             $_[0]->get('/item' => sub {
                 push @runtime, 'handler';
-                return $_[0]->text('item');
+                return PAGI::Response->text('item');
             });
         },
         middleware => [$factory->('outer'), $factory->('inner')],
