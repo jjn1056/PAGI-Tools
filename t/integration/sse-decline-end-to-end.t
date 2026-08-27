@@ -73,8 +73,8 @@ subtest 'unmatched SSE route returns a real HTTP 404 over the real server' => su
     my $router = PAGI::App::Router->new;
     # An SSE route exists, but the request targets a different path.
     $router->sse('/events' => sub {
-        my ($c) = @_;
-        return $c->start(status => 200);
+        my ($sse) = @_;
+        return $sse->start(status => 200);
     });
 
     my $server = create_server($router->to_app);

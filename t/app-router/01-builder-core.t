@@ -153,7 +153,7 @@ subtest 'all leaf declarations retain one exact ordered record sequence' => sub 
         'record middleware lists are defensive');
 };
 
-subtest 'leaf grammar distinguishes Context targets from explicit raw targets' => sub {
+subtest 'leaf grammar distinguishes normal targets from explicit raw targets' => sub {
     my $builder = PAGI::App::Router::Builder->new;
     my $handler = sub { };
     my $raw = sub { };
@@ -187,7 +187,7 @@ subtest 'leaf grammar distinguishes Context targets from explicit raw targets' =
     like dies { $builder->get('/raw', raw => undef) }, qr/raw target must be defined/,
         'raw tags require their target';
     like dies { $builder->get('/normal' => 'native') }, qr/handler must be a coderef/,
-        'ordinary targets must be Context handler coderefs';
+        'ordinary targets must be handler coderefs';
     like(dies { $builder->get('/normal-object' => $raw_object) },
         qr/handler must be a coderef/,
         'application objects do not widen ordinary handler arity');

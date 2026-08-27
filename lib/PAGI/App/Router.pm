@@ -83,9 +83,9 @@ application or protocol channel.
     $r->route('/rpc' => \&rpc, methods => ['RPC']);
 
 An ordinary HTTP target must be a coderef. It receives exactly one
-L<PAGI::Context::HTTP> and returns an immediate or Future-backed
-L<PAGI::Response>. GET includes automatic HEAD qualification. An explicit
-HEAD is an ordinary declaration; place it before GET when it should win.
+L<PAGI::Request> and returns an immediate or Future-backed L<PAGI::Response>.
+GET includes automatic HEAD qualification. An explicit HEAD is an ordinary
+declaration; place it before GET when it should win.
 
 =head2 WebSocket and SSE routes
 
@@ -93,8 +93,8 @@ HEAD is an ordinary declaration; place it before GET when it should win.
     $r->sse('/events/{stream}' => \&events);
 
 Ordinary protocol handlers likewise receive exactly one
-L<PAGI::Context::WebSocket> or L<PAGI::Context::SSE>. Their completion value is
-awaited but is not interpreted as a wire event.
+L<PAGI::WebSocket> or L<PAGI::SSE>. Their completion value is awaited but is
+not interpreted as a wire event.
 
 =head2 Raw routes
 
@@ -236,8 +236,9 @@ snapshot identity matters.
 Names use canonical slash addresses. Nested names are discovered only through
 mounted immutable Router applications. C<path_for> validates the complete
 effective path and constraints, encodes parameter/query/fragment values, and
-performs no protocol I/O. Inside a selected handler, Context C<path_for> can
-resolve relative to the active placement and inherit captures.
+performs no protocol I/O. Inside a selected handler,
+L<PAGI::Routing::URL/path_for> accepts the Request or protocol object and can
+resolve relative to the active placement while inheriting captures.
 
 =head1 SEE ALSO
 

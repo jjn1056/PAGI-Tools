@@ -8,6 +8,7 @@ use Scalar::Util ();
 
 use lib 'lib';
 use PAGI::Endpoint::Router ();
+use PAGI::Response ();
 use PAGI::Routing qw(middleware);
 use PAGI::Test::Client ();
 
@@ -153,25 +154,25 @@ sub run_scope {
     }
 
     sub admin {
-        my ($self, $c) = @_;
+        my ($self, $request) = @_;
         push @order, 'handler';
-        push @handler_scopes, $c->scope;
-        return $c->text('admin');
+        push @handler_scopes, $request->scope;
+        return PAGI::Response->text('admin');
     }
 
     sub socket {
-        my ($self, $c) = @_;
+        my ($self, $websocket) = @_;
         push @order, 'handler';
-        push @handler_scopes, $c->scope;
-        return $c->close(1000, 'middleware');
+        push @handler_scopes, $websocket->scope;
+        return $websocket->close(1000, 'middleware');
     }
 
     sub events {
-        my ($self, $c) = @_;
+        my ($self, $sse) = @_;
         push @order, 'handler';
-        push @handler_scopes, $c->scope;
-        $c->start->get;
-        return $c->close;
+        push @handler_scopes, $sse->scope;
+        $sse->start->get;
+        return $sse->close;
     }
 }
 
@@ -181,7 +182,7 @@ sub run_scope {
     sub routes {
         my ($self, $r) = @_;
         $r->get('/bad' => [$self->middleware_as('missing')] => sub {
-            return $_[0]->text('bad');
+            return PAGI::Response->text('bad');
         });
     }
 }
@@ -192,7 +193,7 @@ sub run_scope {
     sub routes {
         my ($self, $r) = @_;
         $r->get('/bad' => [$self->middleware_as('async_factory')] => sub {
-            return $_[0]->text('bad');
+            return PAGI::Response->text('bad');
         });
     }
     sub async_factory {
@@ -229,10 +230,10 @@ sub run_scope {
     }
 
     sub leaf {
-        my ($self, $c) = @_;
+        my ($self, $request) = @_;
         $self->{handler_receiver} = Scalar::Util::refaddr($self);
         push @order, 'leaf';
-        return $c->text('nested');
+        return PAGI::Response->text('nested');
     }
 }
 

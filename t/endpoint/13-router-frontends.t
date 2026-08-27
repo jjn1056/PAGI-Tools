@@ -7,6 +7,8 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::Endpoint::Router ();
+use PAGI::Response ();
+use PAGI::Routing::URL ();
 use PAGI::Test::Client ();
 
 sub scope {
@@ -41,8 +43,8 @@ sub run_scope {
             sse => sub { return $self->_raw('sse', @_) },
         };
         $self->{closure} = sub {
-            my ($context) = @_;
-            return $context->text('closure');
+            my ($request) = @_;
+            return PAGI::Response->text('closure');
         };
         return $self;
     }
@@ -90,8 +92,8 @@ sub run_scope {
     }
 
     sub method_handler {
-        my ($self, $context) = @_;
-        return $context->text('method');
+        my ($self, $request) = @_;
+        return PAGI::Response->text('method');
     }
 }
 
@@ -146,7 +148,7 @@ subtest 'Endpoint raw leaves preserve targets and middleware for every protocol'
     is($client->get('/method')->text, 'method',
         'an ordinary method name keeps Endpoint binding semantics');
     is($client->get('/closure')->text, 'closure',
-        'an ordinary handler coderef keeps Context binding semantics');
+        'an ordinary handler coderef keeps Request binding semantics');
 };
 
 subtest 'Endpoint rejects malformed raw leaf declarations through the App builder' => sub {
@@ -173,21 +175,25 @@ subtest 'Endpoint rejects malformed raw leaf declarations through the App builde
     }
 
     sub show {
-        my ($self, $c) = @_;
-        my $params = { %{$c->scope->{path_params}} };
+        my ($self, $request) = @_;
+        my $params = { %{$request->scope->{path_params}} };
         if (!exists $params->{tenant}) {
             ++$self->{opaque_calls};
-            return $c->text('opaque child');
+            return PAGI::Response->text('opaque child');
         }
         my $record = {
             receiver => Scalar::Util::refaddr($self),
             params => $params,
-            relative => $c->path_for('show'),
-            left => $c->path_for('/left/show', $params),
-            right => $c->path_for('/right/show', $params),
+            relative => PAGI::Routing::URL::path_for($request, 'show'),
+            left => PAGI::Routing::URL::path_for(
+                $request, '/left/show', $params,
+            ),
+            right => PAGI::Routing::URL::path_for(
+                $request, '/right/show', $params,
+            ),
         };
         push @{$self->{seen}}, $record;
-        return $c->text($record->{relative});
+        return PAGI::Response->text($record->{relative});
     }
 }
 
@@ -222,15 +228,15 @@ subtest 'explicit child snapshots expose each named Endpoint placement' => sub {
 
     my $client = PAGI::Test::Client->new(app => $routing->to_app);
     is($client->get('/left/acme/item/1')->text, '/left/acme/item/1',
-        'relative Context lookup selects the active left placement');
+        'relative Request lookup selects the active left placement');
     is($client->get('/right/beta/item/2')->text, '/right/beta/item/2',
-        'relative Context lookup selects the active right placement');
+        'relative Request lookup selects the active right placement');
     is([map { $_->{receiver} } @{$child->{seen}}], [$identity, $identity],
         'both explicit child snapshots retain the Endpoint object identity');
     is([map { [$_->{left}, $_->{right}] } @{$child->{seen}}], [
         ['/left/acme/item/1', '/right/acme/item/1'],
         ['/left/beta/item/2', '/right/beta/item/2'],
-    ], 'absolute Context lookup can select either sibling placement');
+    ], 'absolute Request lookup can select either sibling placement');
 
     is($client->get('/opaque/item/3')->text, 'opaque child',
         'a direct Endpoint application remains dispatchable as opaque');
@@ -257,7 +263,7 @@ subtest 'explicit child snapshots expose each named Endpoint placement' => sub {
         $r->get('/throws' => 'throws');
     }
 
-    sub known { return $_[1]->text('known') }
+    sub known { return PAGI::Response->text('known') }
 
     sub throws { die "selected endpoint explosion\n" }
 
@@ -346,8 +352,8 @@ subtest 'Endpoint http_default owns HTTP NONE and no other outcome' => sub {
     use parent 'PAGI::Endpoint::Router';
     sub routes { $_[1]->get('/leaf' => 'leaf')->name('leaf') }
     sub leaf {
-        my ($self, $c) = @_;
-        return $c->text('mount ' . $c->path_param('mount'));
+        my ($self, $request) = @_;
+        return PAGI::Response->text('mount ' . $request->path_param('mount'));
     }
 }
 
@@ -377,12 +383,12 @@ subtest 'Endpoint http_default owns HTTP NONE and no other outcome' => sub {
         }
     }
     sub callback_leaf {
-        my ($self, $c) = @_;
-        return $c->text('callback ' . $c->path_param('group'));
+        my ($self, $request) = @_;
+        return PAGI::Response->text('callback ' . $request->path_param('group'));
     }
     sub provider_leaf {
-        my ($self, $c) = @_;
-        return $c->text('leaf ' . $c->path_param('leaf'));
+        my ($self, $request) = @_;
+        return PAGI::Response->text('leaf ' . $request->path_param('leaf'));
     }
 }
 

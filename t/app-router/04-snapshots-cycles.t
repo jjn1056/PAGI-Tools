@@ -8,12 +8,14 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router::Builder ();
 use PAGI::Compose qw(compose);
+use PAGI::Response ();
+use PAGI::Routing::URL qw(path_for);
 use PAGI::Routing::Router ();
 use PAGI::Test::Client ();
 
 sub handler {
     my ($body) = @_;
-    return sub { return $_[0]->text($body) };
+    return sub { return PAGI::Response->text($body) };
 }
 
 sub receive {
@@ -302,8 +304,8 @@ subtest 'one compiled app isolates two in-flight reused-child requests' => sub {
     my $child = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($child);
     $child->get('/item/{id}' => sub {
-        my ($context) = @_;
-        push @contexts, $context;
+        my ($request) = @_;
+        push @contexts, $request;
         my $gate = Future->new;
         push @gates, $gate;
         return $gate;
@@ -347,7 +349,7 @@ subtest 'one compiled app isolates two in-flight reused-child requests' => sub {
         'the first request retains only its left placement metadata');
     is([map { $_->{name} } @{$right_frame->{mounts}}], ['right'],
         'the second request retains only its right placement metadata');
-    is([$contexts[0]->path_for('show'), $contexts[1]->path_for('show')],
+    is([path_for($contexts[0], 'show'), path_for($contexts[1], 'show')],
         ['/left/item/one', '/right/item/two'],
         'concurrent reverse generation uses each active placement and capture');
     is(refaddr($left_frame->{resolver}), refaddr($right_frame->{resolver}),
@@ -360,8 +362,8 @@ subtest 'one compiled app isolates two in-flight reused-child requests' => sub {
     is($right_frame->{match}{consumer_only}, undef,
         'consumer mutation of one match record is absent from the other');
 
-    $gates[0]->done($contexts[0]->text('left one'));
-    $gates[1]->done($contexts[1]->text('right two'));
+    $gates[0]->done(PAGI::Response->text('left one'));
+    $gates[1]->done(PAGI::Response->text('right two'));
     $left->get;
     $right->get;
     is(response_body(\@left_events), 'left one',

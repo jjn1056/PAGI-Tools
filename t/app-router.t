@@ -7,6 +7,7 @@ use Future;
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
+use PAGI::Response ();
 
 sub channels {
     my @events;
@@ -52,17 +53,17 @@ sub response_header {
 sub handler {
     my ($label, $calls) = @_;
     return sub {
-        my ($c) = @_;
+        my ($request) = @_;
         push @$calls, {
             label => $label,
-            scope => $c->scope,
-            params => $c->path_params,
+            scope => $request->scope,
+            params => $request->path_params,
         } if $calls;
-        return $c->text($label);
+        return PAGI::Response->text($label);
     };
 }
 
-subtest 'ordinary HTTP routing uses Context handlers and shared path grammar' => sub {
+subtest 'ordinary HTTP routing uses Request handlers and shared path grammar' => sub {
     my @calls;
     my $router = PAGI::App::Router->new;
     $router->get('/users' => handler('list', \@calls));
@@ -76,7 +77,7 @@ subtest 'ordinary HTTP routing uses Context handlers and shared path grammar' =>
     @calls = ();
     is(response_body(run_scope($app, path => '/users/42')), 'show',
         'a brace parameter route dispatches');
-    is($calls[0]{params}, { id => 42 }, 'the Context exposes captured parameters');
+    is($calls[0]{params}, { id => 42 }, 'the Request exposes captured parameters');
     is(response_body(run_scope($app, method => 'POST', path => '/users')), 'create',
         'method siblings share a path');
     @calls = ();
@@ -224,17 +225,17 @@ subtest 'written mount order replaces longest-prefix sorting' => sub {
         'specific', 'putting the specific mount first changes ownership');
 };
 
-subtest 'normal WebSocket and SSE declarations receive protocol Contexts' => sub {
+subtest 'normal WebSocket and SSE declarations receive protocol objects' => sub {
     my @seen;
     my $router = PAGI::App::Router->new;
     $router->websocket('/ws/{room}' => sub {
-        my ($c) = @_;
-        push @seen, [ref($c), $c->path_param('room')];
+        my ($websocket) = @_;
+        push @seen, [ref($websocket), $websocket->path_param('room')];
         return Future->done;
     });
     $router->sse('/events/{channel}' => sub {
-        my ($c) = @_;
-        push @seen, [ref($c), $c->path_param('channel')];
+        my ($sse) = @_;
+        push @seen, [ref($sse), $sse->path_param('channel')];
         return Future->done;
     });
     my $app = $router->to_app;
@@ -242,9 +243,9 @@ subtest 'normal WebSocket and SSE declarations receive protocol Contexts' => sub
     run_scope($app, type => 'websocket', method => undef, path => '/ws/lobby');
     run_scope($app, type => 'sse', method => undef, path => '/events/news');
     is(\@seen, [
-        ['PAGI::Context::WebSocket', 'lobby'],
-        ['PAGI::Context::SSE', 'news'],
-    ], 'protocol-specific Contexts receive shared captures');
+        ['PAGI::WebSocket', 'lobby'],
+        ['PAGI::SSE', 'news'],
+    ], 'protocol-specific objects receive shared captures');
 
     my $miss = run_scope(
         $app,

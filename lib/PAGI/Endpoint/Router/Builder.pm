@@ -107,8 +107,8 @@ sub _add_route_from {
         );
         my $endpoint = $self->{endpoint};
         $target = sub {
-            my ($context) = @_;
-            return $method->($endpoint, $context);
+            my ($protocol) = @_;
+            return $method->($endpoint, $protocol);
         };
     }
     else {
@@ -180,7 +180,9 @@ PAGI::Endpoint::Router::Builder - Private method-binding App Router facade
 This private facade presents the App Router declaration methods to one
 constructed L<PAGI::Endpoint::Router>. Unqualified handler names are validated
 and captured as exact method CODE values during materialization. Handler
-coderefs pass through unchanged. All declarations, middleware normalization,
+coderefs pass through unchanged. Bound methods receive the Endpoint followed
+by the one direct Request, WebSocket, or SSE object supplied by the shared
+compiler. All declarations, middleware normalization,
 ordering, immutable snapshots, matching, and protocol adaptation remain owned
 by the shared App Router and routing compiler.
 

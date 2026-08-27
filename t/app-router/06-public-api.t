@@ -8,12 +8,13 @@ use overload ();
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::App::Router::Builder ();
+use PAGI::Response ();
 use PAGI::Routing::Router ();
 
-sub context_handler {
+sub request_handler {
     return sub {
-        my ($c) = @_;
-        return $c->text('ok');
+        my ($request) = @_;
+        return PAGI::Response->text('ok');
     };
 }
 
@@ -70,16 +71,16 @@ subtest 'raw package names are rejected before declaration or loading' => sub {
 
 subtest 'direct routes and both Mount forms materialize in written order' => sub {
     my $people = PAGI::App::Router->new;
-    $people->get('/{id}' => context_handler())->name('show');
+    $people->get('/{id}' => request_handler())->name('show');
 
     my $opaque = native_app();
     my $router = PAGI::App::Router->new(desc => 'public routes');
     my $routes_child;
-    $router->get('/direct' => context_handler())->name('direct');
+    $router->get('/direct' => request_handler())->name('direct');
     $router->mount('/api', routes => sub {
         my ($child) = @_;
         $routes_child = $child;
-        $child->post('/items' => context_handler())->name('items');
+        $child->post('/items' => request_handler())->name('items');
     })->name('api');
     $router->mount('/people', app => $people->to_router)->name('people');
     $router->mount('/assets', app => $opaque)->desc('opaque assets');
@@ -114,10 +115,10 @@ subtest 'direct routes and both Mount forms materialize in written order' => sub
 
 subtest 'snapshots are fresh and convenience inspection rematerializes' => sub {
     my $router = PAGI::App::Router->new;
-    $router->get('/first' => context_handler())->name('first');
+    $router->get('/first' => request_handler())->name('first');
 
     my $first = $router->to_router;
-    $router->get('/second' => context_handler())->name('second');
+    $router->get('/second' => request_handler())->name('second');
     my $second = $router->to_router;
 
     isnt(refaddr($first), refaddr($second), 'each to_router call returns a fresh Router');

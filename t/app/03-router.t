@@ -8,6 +8,7 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
+use PAGI::Response ();
 
 sub invoke {
     my ($app, %scope) = @_;
@@ -31,12 +32,12 @@ sub body {
 
 subtest 'basic App routing returns Responses through the shared compiler' => sub {
     my $router = PAGI::App::Router->new;
-    $router->get('/users' => sub { return $_[0]->text('Users list') });
+    $router->get('/users' => sub { return PAGI::Response->text('Users list') });
     my $app = compose(app => $router)->to_app;
 
     my $matched = invoke($app, path => '/users');
     is([$matched->[0]{status}, body($matched)], [200, 'Users list'],
-        'exact path returns its Context Response');
+        'exact path returns its Request handler Response');
     is(invoke($app, path => '/posts')->[0]{status}, 404,
         'unknown path returns 404');
     my $wrong = invoke($app, method => 'POST', path => '/users');
@@ -46,20 +47,20 @@ subtest 'basic App routing returns Responses through the shared compiler' => sub
     is($allow, 'GET, HEAD', 'shared automatic HEAD appears in Allow');
 };
 
-subtest 'brace parameters and terminal wildcards reach Context' => sub {
+subtest 'brace parameters and terminal wildcards reach Request' => sub {
     my @captured;
     my $router = PAGI::App::Router->new;
     $router->get('/users/{id}' => sub {
         push @captured, $_[0]->path_params;
-        return $_[0]->text('user');
+        return PAGI::Response->text('user');
     });
     $router->get('/users/{user_id}/posts/{post_id}' => sub {
         push @captured, $_[0]->path_params;
-        return $_[0]->text('post');
+        return PAGI::Response->text('post');
     });
     $router->get('/files/*filepath' => sub {
         push @captured, $_[0]->path_params;
-        return $_[0]->text('file');
+        return PAGI::Response->text('file');
     });
     my $app = $router->to_app;
 
@@ -70,19 +71,19 @@ subtest 'brace parameters and terminal wildcards reach Context' => sub {
         { id => 123 },
         { user_id => 42, post_id => 99 },
         { filepath => 'path/to/file.txt' },
-    ], 'all shared Pattern captures are exposed by Context');
+    ], 'all shared Pattern captures are exposed by Request');
 };
 
 subtest 'HTTP verb methods and automatic HEAD retain shared behavior' => sub {
     my $router = PAGI::App::Router->new;
     $router->post('/users' => sub {
-        return $_[0]->response->status(201)->text('Created');
+        return PAGI::Response->text('Created', status => 201);
     });
     $router->delete('/users/{id}' => sub {
-        return $_[0]->response->status(204)->text('');
+        return PAGI::Response->text('', status => 204);
     });
     $router->get('/report' => sub {
-        return $_[0]->response->status(203)->text('representation');
+        return PAGI::Response->text('representation', status => 203);
     });
     my $app = $router->to_app;
 
@@ -99,14 +100,14 @@ subtest 'route information lives in pagi.routing rather than pagi.router' => sub
     my $captured;
     my $router = PAGI::App::Router->new;
     $router->get('/users/{id}' => sub {
-        my ($c) = @_;
-        my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
+        my ($request) = @_;
+        my $frame = $request->scope->{'pagi.routing'}{frames}[-1];
         $captured = {
             match => { %{$frame->{match}} },
             captures => { %{$frame->{captures}} },
-            has_old => exists $c->scope->{'pagi.router'} ? 1 : 0,
+            has_old => exists $request->scope->{'pagi.router'} ? 1 : 0,
         };
-        return $c->text('OK');
+        return PAGI::Response->text('OK');
     })->name('show')->desc('Show user');
 
     invoke($router->to_app, path => '/users/123');
@@ -149,7 +150,7 @@ subtest 'App Router HTTP default is one-shot, retained, and HTTP NONE only' => s
     is($method->http_default($default), $method,
         'method configuration returns the mutable Router');
     my $method_snapshot = $method->to_router;
-    $method->get('/late' => sub { return $_[0]->text('late') });
+    $method->get('/late' => sub { return PAGI::Response->text('late') });
     is($method_snapshot->routes, [],
         'later parent mutation cannot alter an old snapshot');
     is(refaddr($method_snapshot->http_default), refaddr($default),

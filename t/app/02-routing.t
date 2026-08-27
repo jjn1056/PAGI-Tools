@@ -14,6 +14,7 @@ use lib "$FindBin::Bin/../lib";
 use PAGI::App::URLMap;
 use PAGI::App::Cascade;
 use PAGI::Pages;
+use PAGI::Response ();
 use PAGI::Routing qw(router route);
 
 my $loop = IO::Async::Loop->new;
@@ -213,7 +214,7 @@ subtest 'App::Cascade tries apps in sequence' => sub {
 
 subtest 'Cascade catches ordinary Router 404 and 405 responses' => sub {
     my $routing = router(routes => [
-        route('/only' => sub { return $_[0]->text('only') },
+        route('/only' => sub { return PAGI::Response->text('only') },
             methods => 'GET'),
     ])->to_app;
 

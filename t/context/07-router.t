@@ -6,6 +6,10 @@ use Future;
 
 use lib 'lib';
 use PAGI::App::Router;
+use PAGI::Context ();
+use PAGI::Response ();
+use PAGI::Routing::URL qw(path_for);
+use PAGI::Stash qw(stash);
 
 sub run_scope {
     my ($app, %scope) = @_;
@@ -29,45 +33,47 @@ sub body {
         grep { ($_->{type} // '') eq 'http.response.body' } @$events;
 }
 
-subtest 'App Router HTTP handlers receive one Context' => sub {
+subtest 'App Router HTTP handlers receive one Request while Context remains available' => sub {
+    ok(PAGI::Context->can('new'),
+        'the standalone Context family is not removed by the routing migration');
     my @seen;
     my $router = PAGI::App::Router->new;
     $router->get('/hello' => sub {
-        my ($c) = @_;
-        push @seen, [ref($c), scalar @_];
-        return $c->text('Hello!');
+        my ($request) = @_;
+        push @seen, [ref($request), scalar @_];
+        return PAGI::Response->text('Hello!');
     });
     $router->get('/users/{id}' => sub {
-        my ($c) = @_;
-        push @seen, [ref($c), scalar @_, $c->request->path_param('id')];
-        return $c->json({ id => $c->path_param('id') });
+        my ($request) = @_;
+        push @seen, [ref($request), scalar @_, $request->path_param('id')];
+        return PAGI::Response->json({ id => $request->path_param('id') });
     });
     my $app = $router->to_app;
 
     is(body(run_scope($app, path => '/hello')), 'Hello!',
-        'HTTP Context returns an immediate Response');
+        'HTTP Request handler returns an immediate Response');
     like(body(run_scope($app, path => '/users/42')), qr/"id"\s*:\s*"?42"?/,
-        'request and Context see the shared capture');
+        'Request sees the shared capture');
     is(\@seen, [
-        ['PAGI::Context::HTTP', 1],
-        ['PAGI::Context::HTTP', 1, 42],
+        ['PAGI::Request', 1],
+        ['PAGI::Request', 1, 42],
     ], 'ordinary HTTP handlers never receive native channels');
 };
 
-subtest 'App Router WebSocket and SSE handlers receive their Context subclasses' => sub {
+subtest 'App Router WebSocket and SSE handlers receive direct protocol objects' => sub {
     my @seen;
     my $router = PAGI::App::Router->new;
     $router->websocket('/ws/echo/{room}' => sub {
-        my ($c) = @_;
-        push @seen, [ref($c), scalar @_, $c->websocket->path_param('room')];
-        $c->accept->get;
-        return $c->close(1000, 'done');
+        my ($websocket) = @_;
+        push @seen, [ref($websocket), scalar @_, $websocket->path_param('room')];
+        $websocket->accept->get;
+        return $websocket->close(1000, 'done');
     });
     $router->sse('/events/{channel}' => sub {
-        my ($c) = @_;
-        push @seen, [ref($c), scalar @_, $c->sse->path_param('channel')];
-        return $c->send_event(
-            event => 'connected', data => { channel => $c->path_param('channel') },
+        my ($sse) = @_;
+        push @seen, [ref($sse), scalar @_, $sse->path_param('channel')];
+        return $sse->send_event(
+            event => 'connected', data => { channel => $sse->path_param('channel') },
         );
     });
     my $app = $router->to_app;
@@ -77,16 +83,16 @@ subtest 'App Router WebSocket and SSE handlers receive their Context subclasses'
     my $sse = run_scope($app,
         type => 'sse', method => undef, path => '/events/news');
     is([map { $_->{type} } @$ws], ['websocket.accept', 'websocket.close'],
-        'WebSocket Context owns protocol events');
+        'WebSocket object owns protocol events');
     ok((grep { ($_->{type} // '') eq 'sse.send' } @$sse),
-        'SSE Context owns protocol events');
+        'SSE object owns protocol events');
     is(\@seen, [
-        ['PAGI::Context::WebSocket', 1, 'test-room'],
-        ['PAGI::Context::SSE', 1, 'news'],
-    ], 'protocol handlers receive exactly one typed Context');
+        ['PAGI::WebSocket', 1, 'test-room'],
+        ['PAGI::SSE', 1, 'news'],
+    ], 'protocol handlers receive exactly one typed protocol object');
 };
 
-subtest 'native middleware can add Context-visible state' => sub {
+subtest 'native middleware can add Request-visible helper state' => sub {
     my @seen;
     my $middleware = sub {
         my ($inner) = @_;
@@ -99,13 +105,15 @@ subtest 'native middleware can add Context-visible state' => sub {
     };
     my $router = PAGI::App::Router->new;
     $router->get('/protected' => [$middleware] => sub {
-        my ($c) = @_;
+        my ($request) = @_;
         push @seen, [
-            $c->state->{db},
-            $c->stash->get('user')->{id},
-            $c->header('authorization'),
+            $request->state->get('db'),
+            stash($request)->get('user')->{id},
+            $request->header('authorization'),
         ];
-        return $c->json({ user_id => $c->stash->get('user')->{id} });
+        return PAGI::Response->json({
+            user_id => stash($request)->get('user')->{id},
+        });
     });
 
     my $events = run_scope(
@@ -115,26 +123,26 @@ subtest 'native middleware can add Context-visible state' => sub {
         headers => [['authorization', 'Bearer valid']],
     );
     like(body($events), qr/"user_id"\s*:\s*1/,
-        'Context handler returns state derived from middleware');
+        'Request handler returns state derived from middleware');
     is(\@seen, [['connected', 1, 'Bearer valid']],
-        'Context exposes state, stash, and headers from its routed scope');
+        'Request and explicit helper expose data from the routed scope');
 };
 
-subtest 'routing metadata enables relative Context reverse routing' => sub {
+subtest 'routing metadata enables relative Request reverse routing' => sub {
     my @seen;
     my $router = PAGI::App::Router->new;
     $router->mount('/people/{person_id}', routes => sub {
         my ($people) = @_;
         $people->get('/profile' => sub {
-            my ($c) = @_;
-            my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
+            my ($request) = @_;
+            my $frame = $request->scope->{'pagi.routing'}{frames}[-1];
             push @seen, {
-                path => $c->path_for('show'),
+                path => path_for($request, 'show'),
                 name => $frame->{match}{name},
                 namespace => $frame->{logical_namespace},
-                has_old => exists $c->scope->{'pagi.router'} ? 1 : 0,
+                has_old => exists $request->scope->{'pagi.router'} ? 1 : 0,
             };
-            return $c->text($seen[-1]{path});
+            return PAGI::Response->text($seen[-1]{path});
         })->name('show');
     })->name('people');
 
@@ -145,7 +153,7 @@ subtest 'routing metadata enables relative Context reverse routing' => sub {
         name => '/people/show',
         namespace => '/people',
         has_old => 0,
-    }], 'Context consumes shared pagi.routing metadata only');
+    }], 'Request URL helper consumes shared pagi.routing metadata only');
 };
 
 done_testing;

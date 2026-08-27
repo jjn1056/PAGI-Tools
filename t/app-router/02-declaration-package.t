@@ -5,13 +5,19 @@ use Test2::V0;
 
 use lib 'lib';
 use PAGI::App::Router::Builder ();
+use PAGI::Response ();
+use PAGI::Test::Client ();
 
 {
     package Local::BuilderAlpha;
+    our @handler_types;
     sub Int { return qr/alpha/ }
     sub declare {
         my ($builder) = @_;
-        $builder->get('/get/{id:&Int}' => sub { });
+        $builder->get('/get/{id:&Int}' => sub {
+            push @handler_types, ref($_[0]);
+            return PAGI::Response->text('alpha');
+        });
         $builder->post('/post/{id:&Int}' => sub { });
         $builder->put('/put/{id:&Int}' => sub { });
         $builder->patch('/patch/{id:&Int}' => sub { });
@@ -97,6 +103,17 @@ subtest 'each public-style builder declaration captures its direct package' => s
         'alpha declarations do not rebind to another caller package');
     is(paths_match_provider($beta_nodes, 'alpha'), [map { undef } @$beta_nodes],
         'beta declarations do not rebind to another caller package');
+};
+
+subtest 'the mutable frontend inherits direct Request dispatch' => sub {
+    @Local::BuilderAlpha::handler_types = ();
+    my $alpha = PAGI::App::Router::Builder->new;
+    Local::BuilderAlpha::declare($alpha);
+    my $response = PAGI::Test::Client->new(app => $alpha->to_app)
+        ->get('/get/alpha');
+    is([$response->text, \@Local::BuilderAlpha::handler_types],
+        ['alpha', ['PAGI::Request']],
+        'declaration-package capture does not add a frontend Context adapter');
 };
 
 subtest 'wrappers and role methods remain declaration-package boundaries' => sub {

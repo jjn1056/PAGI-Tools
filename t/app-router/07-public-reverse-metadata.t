@@ -7,6 +7,8 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
+use PAGI::Response ();
+use PAGI::Routing::URL qw(path_for);
 use PAGI::Test::Client;
 
 {
@@ -48,18 +50,20 @@ sub raw_http_app {
     };
 }
 
-subtest 'ordinary HTTP targets receive Context and emit immediate or Future Responses' => sub {
+subtest 'ordinary HTTP targets receive Request and emit immediate or Future Responses' => sub {
     my @normal_kinds;
     my $router = PAGI::App::Router->new;
     $router->get('/immediate/{id}' => sub {
-        my ($c) = @_;
-        push @normal_kinds, [ref($c), scalar @_];
-        return $c->response->status(201)->text('immediate ' . $c->path_param('id'));
+        my ($request) = @_;
+        push @normal_kinds, [ref($request), scalar @_];
+        return PAGI::Response->text(
+            'immediate ' . $request->path_param('id'), status => 201,
+        );
     });
     $router->get('/future' => sub {
-        my ($c) = @_;
-        push @normal_kinds, [ref($c), scalar @_];
-        return Future->done($c->response->status(202)->text('future'));
+        my ($request) = @_;
+        push @normal_kinds, [ref($request), scalar @_];
+        return Future->done(PAGI::Response->text('future', status => 202));
     });
 
     my $client = PAGI::Test::Client->new(app => $router->to_app);
@@ -71,9 +75,9 @@ subtest 'ordinary HTTP targets receive Context and emit immediate or Future Resp
     is([$future->status, $future->content], [202, 'future'],
         'a Future-backed Response is emitted through the same adapter');
     is(\@normal_kinds, [
-        ['PAGI::Context::HTTP', 1],
-        ['PAGI::Context::HTTP', 1],
-    ], 'ordinary HTTP handlers receive only an HTTP Context');
+        ['PAGI::Request', 1],
+        ['PAGI::Request', 1],
+    ], 'ordinary HTTP handlers receive only a Request');
 };
 
 subtest 'explicit raw HTTP targets retain all three native channels' => sub {
@@ -106,11 +110,11 @@ subtest 'ordinary and raw WebSocket targets receive their declared contracts' =>
     my (@normal, @raw);
     my $router = PAGI::App::Router->new;
     $router->websocket('/ws/{room}' => sub {
-        my ($c) = @_;
-        push @normal, [ref($c), scalar @_, $c->path_param('room')];
-        $c->accept->get;
-        $c->send_text('normal ' . $c->path_param('room'))->get;
-        return $c->close(1000, 'done');
+        my ($websocket) = @_;
+        push @normal, [ref($websocket), scalar @_, $websocket->path_param('room')];
+        $websocket->accept->get;
+        $websocket->send_text('normal ' . $websocket->path_param('room'))->get;
+        return $websocket->close(1000, 'done');
     });
     my $raw_object = Local::RawAppObject->new(sub {
         my ($scope, $receive, $send) = @_;
@@ -128,15 +132,15 @@ subtest 'ordinary and raw WebSocket targets receive their declared contracts' =>
     my $client = PAGI::Test::Client->new(app => $app);
     $client->websocket('/ws/lobby', sub {
         my ($ws) = @_;
-        is($ws->receive_text, 'normal lobby', 'normal WebSocket Context emitted text');
+        is($ws->receive_text, 'normal lobby', 'normal WebSocket object emitted text');
     });
     $client->websocket('/raw-ws/native', sub {
         my ($ws) = @_;
         is($ws->receive_text, 'raw native', 'raw WebSocket app emitted text');
     });
 
-    is(\@normal, [['PAGI::Context::WebSocket', 1, 'lobby']],
-        'ordinary WebSocket handler receives only its Context subclass');
+    is(\@normal, [['PAGI::WebSocket', 1, 'lobby']],
+        'ordinary WebSocket handler receives only its protocol object');
     is(\@raw, [[3, 'native']], 'raw WebSocket target receives the three channels');
 };
 
@@ -144,11 +148,11 @@ subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
     my (@normal, @raw);
     my $router = PAGI::App::Router->new;
     $router->sse('/events/{stream}' => sub {
-        my ($c) = @_;
-        push @normal, [ref($c), scalar @_, $c->path_param('stream')];
-        $c->start->get;
-        $c->send_event(event => 'normal', data => $c->path_param('stream'))->get;
-        return $c->close;
+        my ($sse) = @_;
+        push @normal, [ref($sse), scalar @_, $sse->path_param('stream')];
+        $sse->start->get;
+        $sse->send_event(event => 'normal', data => $sse->path_param('stream'))->get;
+        return $sse->close;
     });
     my $raw_object = Local::RawAppObject->new(sub {
         my ($scope, $receive, $send) = @_;
@@ -171,7 +175,7 @@ subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
         my ($sse) = @_;
         my $event = $sse->receive_event;
         is([$event->{event}, $event->{data}], ['normal', 'news'],
-            'normal SSE Context emitted an event');
+            'normal SSE object emitted an event');
     });
     $client->sse('/raw-events/native', sub {
         my ($sse) = @_;
@@ -180,12 +184,12 @@ subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
             'raw SSE app emitted an event');
     });
 
-    is(\@normal, [['PAGI::Context::SSE', 1, 'news']],
-        'ordinary SSE handler receives only its Context subclass');
+    is(\@normal, [['PAGI::SSE', 1, 'news']],
+        'ordinary SSE handler receives only its protocol object');
     is(\@raw, [[3, 'native']], 'raw SSE target receives the three channels');
 };
 
-subtest 'slash names, relative Context links, constraints, and metadata share one resolver' => sub {
+subtest 'slash names, relative Request links, constraints, and metadata share one resolver' => sub {
     my @seen;
     my $router = PAGI::App::Router->new;
     $router->mount('/orgs/{org}', routes => sub {
@@ -193,24 +197,24 @@ subtest 'slash names, relative Context links, constraints, and metadata share on
         $org->mount('/people', routes => sub {
             my ($people) = @_;
             $people->get('/{id}' => sub {
-                my ($c) = @_;
-                my $container = $c->scope->{'pagi.routing'};
+                my ($request) = @_;
+                my $container = $request->scope->{'pagi.routing'};
                 my $frame = $container->{frames}[-1];
                 push @seen, {
                     has_routing => ref($container) eq 'HASH',
                     version => $container->{version},
-                    has_old_router => exists $c->scope->{'pagi.router'} ? 1 : 0,
+                    has_old_router => exists $request->scope->{'pagi.router'} ? 1 : 0,
                     logical_namespace => $frame->{logical_namespace},
                     captures => { %{$frame->{captures}} },
                     match => { %{$frame->{match}} },
-                    link => $c->path_for(
+                    link => path_for($request,
                         'show', {}, { 'a key' => 'x y' }, 'part one',
                     ),
                 };
-                return $c->text($seen[-1]{link});
+                return PAGI::Response->text($seen[-1]{link});
             })->name('show')->desc('Show person')->constraints(id => qr/\A\d+\z/);
             $people->get('/{id}' => sub {
-                return $_[0]->text('constraint fallback');
+                return PAGI::Response->text('constraint fallback');
             });
         })->name('people');
     })->name('org');
@@ -244,7 +248,7 @@ subtest 'slash names, relative Context links, constraints, and metadata share on
 
     is($matched->content,
         '/orgs/acme/people/7?a%20key=x%20y#part%20one',
-        'Context relative reverse routing inherits the active captures');
+        'Request-relative reverse routing inherits the active captures');
     is($rejected->content, 'constraint fallback',
         'dispatch continues in declaration order after a failed constraint');
     is(\@seen, [{
@@ -279,12 +283,12 @@ subtest 'custom HTTP default and explicit HEAD use the shared compiler' => sub {
         return Future->done;
     });
     my $router = PAGI::App::Router->new(http_default => $default);
-    $router->get('/only' => sub { return $_[0]->text('only') });
+    $router->get('/only' => sub { return PAGI::Response->text('only') });
     $router->head('/report' => sub {
-        return $_[0]->response->status(203)->text('explicit');
+        return PAGI::Response->text('explicit', status => 203);
     });
     $router->get('/report' => sub {
-        return $_[0]->response->status(200)->text('automatic');
+        return PAGI::Response->text('automatic', status => 200);
     });
 
     my $app = $router->to_app;

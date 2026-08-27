@@ -10,6 +10,7 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use lib "$Bin/lib";
 use PAGI::Endpoint::Router ();
+use PAGI::Response ();
 use PAGI::Test::Client ();
 use PAGI::Compose qw(compose);
 use TestApps::AppPath::Endpoint ();
@@ -39,10 +40,10 @@ sub run_scope {
 {
     package Local::BindingRole;
     sub supplied {
-        my ($self, $c) = @_;
+        my ($self, $request) = @_;
         push @Local::BindingEndpoint::calls,
-            ['role', Scalar::Util::refaddr($self), scalar @_];
-        return $c->text('role');
+            ['role', Scalar::Util::refaddr($self), scalar @_, ref($request)];
+        return PAGI::Response->text('role');
     }
 }
 
@@ -50,10 +51,10 @@ sub run_scope {
     package Local::BindingBase;
     use parent 'PAGI::Endpoint::Router';
     sub inherited {
-        my ($self, $c) = @_;
+        my ($self, $request) = @_;
         push @Local::BindingEndpoint::calls,
-            ['inherited', Scalar::Util::refaddr($self), scalar @_];
-        return $c->text('inherited');
+            ['inherited', Scalar::Util::refaddr($self), scalar @_, ref($request)];
+        return PAGI::Response->text('inherited');
     }
 }
 
@@ -79,35 +80,37 @@ sub run_scope {
         $r->get('/closure' => sub {
             $coderef_arity = scalar @_;
             $coderef_context = $_[0];
-            return $_[0]->text('closure');
+            return PAGI::Response->text('closure');
         });
         $r->websocket('/socket' => 'socket_handler');
         $r->sse('/events' => 'event_handler');
     }
 
     sub sync_handler {
-        my ($self, $c) = @_;
-        push @calls, ['sync', Scalar::Util::refaddr($self), scalar @_];
-        return $c->text($self->{configured});
+        my ($self, $request) = @_;
+        push @calls, ['sync', Scalar::Util::refaddr($self), scalar @_, ref($request)];
+        return PAGI::Response->text($self->{configured});
     }
 
     sub future_handler {
-        my ($self, $c) = @_;
-        push @calls, ['future', Scalar::Util::refaddr($self), scalar @_];
-        return Future->done($c->text('future'));
+        my ($self, $request) = @_;
+        push @calls, ['future', Scalar::Util::refaddr($self), scalar @_, ref($request)];
+        return Future->done(PAGI::Response->text('future'));
     }
 
     sub socket_handler {
-        my ($self, $c) = @_;
-        push @calls, ['websocket', Scalar::Util::refaddr($self), scalar @_];
-        return $c->close(1000, 'method');
+        my ($self, $websocket) = @_;
+        push @calls, [
+            'websocket', Scalar::Util::refaddr($self), scalar @_, ref($websocket),
+        ];
+        return $websocket->close(1000, 'method');
     }
 
     sub event_handler {
-        my ($self, $c) = @_;
-        push @calls, ['sse', Scalar::Util::refaddr($self), scalar @_];
-        $c->start->get;
-        return $c->close;
+        my ($self, $sse) = @_;
+        push @calls, ['sse', Scalar::Util::refaddr($self), scalar @_, ref($sse)];
+        $sse->start->get;
+        return $sse->close;
     }
 }
 
@@ -121,9 +124,9 @@ sub run_scope {
     }
     sub routes { $_[1]->get('/configured' => 'show') }
     sub show {
-        my ($self, $c) = @_;
+        my ($self, $request) = @_;
         $self->{receiver} = Scalar::Util::refaddr($self);
-        return $c->text($self->{label});
+        return PAGI::Response->text($self->{label});
     }
 }
 
@@ -164,7 +167,7 @@ sub run_scope {
         $r->get('/closure' => sub {
             $self->{coderef_arity} = scalar @_;
             $self->{coderef_context} = $_[0];
-            return $_[0]->text('closure');
+            return PAGI::Response->text('closure');
         });
         $r->mount('/admin', routes => sub {
             my ($admin) = @_;
@@ -177,7 +180,7 @@ sub run_scope {
         my $array_routes = [
             route('/leaf' => sub {
                 $self->{array_coderef_arity} = scalar @_;
-                return $_[0]->text('array leaf');
+                return PAGI::Response->text('array leaf');
             }, name => 'leaf'),
         ];
         $self->{array_routes} = $array_routes;
@@ -185,15 +188,15 @@ sub run_scope {
     }
 
     sub index {
-        my ($self, $c) = @_;
+        my ($self, $request) = @_;
         push @{$self->{receivers}}, Scalar::Util::refaddr($self);
-        return $c->text('index');
+        return PAGI::Response->text('index');
     }
 
     sub users {
-        my ($self, $c) = @_;
+        my ($self, $request) = @_;
         push @{$self->{receivers}}, Scalar::Util::refaddr($self);
-        return $c->text('users');
+        return PAGI::Response->text('users');
     }
 
     sub _native_response {
@@ -286,7 +289,7 @@ sub run_scope {
         });
     }
 
-    sub leaf { return $_[1]->text('callback leaf') }
+    sub leaf { return PAGI::Response->text('callback leaf') }
 }
 
 {
@@ -301,7 +304,7 @@ sub run_scope {
 
 subtest 'the public surface is method-oriented and has no legacy machinery' => sub {
     for my $method (qw(
-        new routes to_router to_app middleware_as app_as new_context app_path
+        new routes to_router to_app middleware_as app_as new_request app_path
     )) {
         ok(PAGI::Endpoint::Router->can($method), "has $method");
     }
@@ -370,7 +373,7 @@ subtest 'the Endpoint facade follows the App Router composition grammar' => sub 
         'an ordinary handler coderef dispatches');
     is($endpoint->{coderef_arity}, 1,
         'an ordinary handler coderef is not rebound to the Endpoint');
-    isa_ok($endpoint->{coderef_context}, 'PAGI::Context::HTTP');
+    isa_ok($endpoint->{coderef_context}, 'PAGI::Request');
     is($client->get('/legacy/anything')->text, 'legacy app',
         'app_as supplies an opaque Mount application');
     is($client->get('/missing')->text, 'endpoint default',
@@ -378,7 +381,7 @@ subtest 'the Endpoint facade follows the App Router composition grammar' => sub 
     is($client->get('/array/leaf')->text, 'array leaf',
         'an arrayref routes value passes through to the App builder');
     is($endpoint->{array_coderef_arity}, 1,
-        'an arrayref route coderef remains an ordinary Context handler');
+        'an arrayref route coderef remains an ordinary Request handler');
     is([map { [$_->[0], $_->[1], $_->[2]] } @{$endpoint->{native_calls}}], [
         ['legacy app', $identity, 4],
         ['endpoint default', $identity, 4],
@@ -484,24 +487,29 @@ subtest 'class compilation constructs once and binds exact method CODE values' =
     my $receiver = $Local::BindingEndpoint::calls[0][1];
     is([map { [$_->[0], $_->[2]] } @Local::BindingEndpoint::calls[0 .. 3]],
         [['sync', 2], ['future', 2], ['inherited', 2], ['role', 2]],
-        'method handlers receive exactly self and Context');
+        'method handlers receive exactly self and the protocol object');
     is([map { $_->[1] } @Local::BindingEndpoint::calls[0 .. 3]],
         [($receiver) x 4], 'local, inherited, and aliased handlers share one receiver');
+    is([map { $_->[3] } @Local::BindingEndpoint::calls[0 .. 3]],
+        [('PAGI::Request') x 4], 'HTTP methods receive direct Request objects');
     is($Local::BindingEndpoint::coderef_arity, 1,
-        'handler coderef receives only the ordinary Context argument');
-    isa_ok($Local::BindingEndpoint::coderef_context, 'PAGI::Context::HTTP');
+        'handler coderef receives only the ordinary Request argument');
+    isa_ok($Local::BindingEndpoint::coderef_context, 'PAGI::Request');
 
     my $ws = run_scope($app, scope(type => 'websocket', path => '/socket',
         raw_path => '/socket'));
     my $sse = run_scope($app, scope(type => 'sse', path => '/events',
         raw_path => '/events'));
     is($ws, [{ type => 'websocket.close', code => 1000, reason => 'method' }],
-        'WebSocket method receives the shared compiler Context');
+        'WebSocket method receives the shared compiler object');
     is($sse, [{ type => 'sse.start', status => 200 },
               { type => 'sse.close' }],
-        'SSE method receives the shared compiler Context');
+        'SSE method receives the shared compiler object');
     is([map { $_->[1] } @Local::BindingEndpoint::calls[-2, -1]],
         [$receiver, $receiver], 'protocol methods retain the same Endpoint receiver');
+    is([map { $_->[3] } @Local::BindingEndpoint::calls[-2, -1]],
+        ['PAGI::WebSocket', 'PAGI::SSE'],
+        'protocol methods receive direct WebSocket and SSE objects');
 };
 
 subtest 'configured object calls retain object identity' => sub {
@@ -551,22 +559,22 @@ subtest 'handler validation is early and HTTP response validation stays shared' 
         $self->{native_arity} = scalar @_;
         return $send->({ type => 'native.event', marker => $scope->{marker} });
     }
-    sub new_context {
+    sub new_request {
         my $self = shift;
-        ++$self->{new_context_calls};
-        return $self->SUPER::new_context(@_);
+        ++$self->{new_request_calls};
+        return $self->SUPER::new_request(@_);
     }
     sub routes {
         my ($self, $r) = @_;
-        $r->get('/context' => sub {
-            $self->{compiled_context} = ref($_[0]);
-            return $_[0]->text('context');
+        $r->get('/request' => sub {
+            $self->{compiled_request} = ref($_[0]);
+            return PAGI::Response->text('request');
         });
         $r->get('/state' => sub {
-            my ($c) = @_;
-            $self->{scope_has_state} = exists $c->scope->{state} ? 1 : 0;
-            $self->{request_state} = $c->state;
-            return $c->text('state');
+            my ($request) = @_;
+            $self->{scope_has_state} = exists $request->scope->{state} ? 1 : 0;
+            $self->{request_state} = $request->state;
+            return PAGI::Response->text('state');
         });
     }
 }
@@ -603,24 +611,21 @@ subtest 'middleware_as and app_as are validated normal closure adapters' => sub 
     }
 };
 
-subtest 'new_context is explicit and is not the compiler Context factory' => sub {
+subtest 'new_request is explicit and is not the compiler Request factory' => sub {
     my $endpoint = bless {}, 'Local::HelperEndpoint';
-    my ($receive, $send) = channels();
-    for my $case (
-        [http => 'PAGI::Context::HTTP'],
-        [websocket => 'PAGI::Context::WebSocket'],
-        [sse => 'PAGI::Context::SSE'],
-    ) {
-        my ($type, $class) = @$case;
-        my $context = $endpoint->new_context(scope(type => $type), $receive, $send);
-        isa_ok($context, $class);
-    }
-    is($endpoint->{new_context_calls}, 3, 'override applies to explicit helper calls');
+    my ($receive) = channels();
+    ok(!$endpoint->can('new_context'), 'removed new_context has no compatibility alias');
+    my $request = $endpoint->new_request(scope(type => 'http'), $receive);
+    isa_ok($request, 'PAGI::Request');
+    like(dies {
+        $endpoint->new_request(scope(type => 'sse'), $receive);
+    }, qr/HTTP scope/i, 'new_request rejects non-HTTP scopes');
+    is($endpoint->{new_request_calls}, 2, 'override applies to explicit helper calls');
 
-    PAGI::Test::Client->new(app => $endpoint->to_app)->get('/context');
-    is($endpoint->{compiled_context}, 'PAGI::Context::HTTP',
-        'compiled handler still receives the shared compiler Context');
-    is($endpoint->{new_context_calls}, 3,
+    PAGI::Test::Client->new(app => $endpoint->to_app)->get('/request');
+    is($endpoint->{compiled_request}, 'PAGI::Request',
+        'compiled handler receives the shared compiler Request');
+    is($endpoint->{new_request_calls}, 2,
         'routing compilation and dispatch do not call the override');
 };
 
@@ -630,7 +635,7 @@ subtest 'Endpoint seeds no state and Compose exposes server-owned lifespan state
     run_scope($endpoint->to_app, $plain_scope);
     ok(!$endpoint->{scope_has_state}, 'Endpoint does not add state to a request scope');
     is($plain_scope->{state}, undef, 'the caller scope remains without state');
-    is($endpoint->{request_state}, {}, 'Context supplies only its empty fallback');
+    is($endpoint->{request_state}, undef, 'Request reports absent state as undef');
 
     my $state = {};
     my $composed = compose(
@@ -644,9 +649,9 @@ subtest 'Endpoint seeds no state and Compose exposes server-owned lifespan state
         sub { return Future->done },
     )->get;
     run_scope($composed, scope(path => '/state', raw_path => '/state', state => $state));
-    is($endpoint->{request_state}{server_value}, 'ready',
-        'Context sees the server state populated through Compose lifespan');
-    is(refaddr($endpoint->{request_state}), refaddr($state),
+    is($endpoint->{request_state}->get('server_value'), 'ready',
+        'Request sees the server state populated through Compose lifespan');
+    is(refaddr($endpoint->{request_state}->data), refaddr($state),
         'server-owned state identity is retained');
 };
 

@@ -9,6 +9,7 @@ use lib 'lib', 't/lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Endpoint::Router ();
+use PAGI::Response ();
 use PAGI::Routing qw(middleware mount route router sse websocket);
 
 sub scope {
@@ -73,8 +74,8 @@ sub response_header {
 }
 
 sub routing_match_projection {
-    my ($context) = @_;
-    my $frame = $context->scope->{'pagi.routing'}{frames}[-1];
+    my ($protocol) = @_;
+    my $frame = $protocol->scope->{'pagi.routing'}{frames}[-1];
     return {
         logical_namespace => $frame->{logical_namespace},
         captures => { %{$frame->{captures}} },
@@ -94,44 +95,45 @@ sub representative_handlers {
     my ($seen) = @_;
     return {
         post => sub {
-            my ($context) = @_;
-            return $context->text('post ' . $context->path_param('id'));
+            my ($request) = @_;
+            return PAGI::Response->text('post ' . $request->path_param('id'));
         },
         get => sub {
-            my ($context) = @_;
+            my ($request) = @_;
             push @$seen, {
                 label => 'get',
-                request_method => $context->request->method,
-                routing => routing_match_projection($context),
+                request_method => $request->method,
+                routing => routing_match_projection($request),
             };
-            return $context->response->status(207)
-                ->text('get ' . $context->path_param('id'));
+            return PAGI::Response->text(
+                'get ' . $request->path_param('id'), status => 207,
+            );
         },
         mounted => sub {
-            my ($context) = @_;
+            my ($request) = @_;
             push @$seen, {
                 label => 'mounted',
-                routing => routing_match_projection($context),
+                routing => routing_match_projection($request),
             };
-            return $context->text(join ':',
-                $context->path_param('tenant'),
-                $context->path_param('child_id'));
+            return PAGI::Response->text(join ':',
+                $request->path_param('tenant'),
+                $request->path_param('child_id'));
         },
         websocket => sub {
-            my ($context) = @_;
+            my ($websocket) = @_;
             push @$seen, {
                 label => 'websocket',
-                routing => routing_match_projection($context),
+                routing => routing_match_projection($websocket),
             };
-            return $context->close(1000, 'representative');
+            return $websocket->close(1000, 'representative');
         },
         sse => sub {
-            my ($context) = @_;
+            my ($sse) = @_;
             push @$seen, {
                 label => 'sse',
-                routing => routing_match_projection($context),
+                routing => routing_match_projection($sse),
             };
-            return $context->close;
+            return $sse->close;
         },
     };
 }
@@ -288,10 +290,10 @@ sub channel_probe {
 
     sub new { return bless { trace => [] }, $_[0] }
 
-    sub new_context {
+    sub new_request {
         my $self = shift;
-        ++$self->{manual_context_calls};
-        return $self->SUPER::new_context(@_);
+        ++$self->{manual_request_calls};
+        return $self->SUPER::new_request(@_);
     }
 
     sub routes {
@@ -312,19 +314,21 @@ sub channel_probe {
     }
 
     sub show_state {
-        my ($self, $c) = @_;
-        $self->{seen_state} = $c->state;
-        push @{$self->{compiled_contexts}}, ref($c);
-        return $c->text(defined $c->state->{phase} ? $c->state->{phase} : 'empty');
+        my ($self, $request) = @_;
+        $self->{seen_state} = $request->state;
+        push @{$self->{compiled_protocols}}, ref($request);
+        return PAGI::Response->text(
+            $request->has_state ? $request->state->get('phase') : 'empty',
+        );
     }
 
     sub socket {
-        push @{$_[0]{compiled_contexts}}, ref($_[1]);
+        push @{$_[0]{compiled_protocols}}, ref($_[1]);
         return Future->done;
     }
 
     sub events {
-        push @{$_[0]{compiled_contexts}}, ref($_[1]);
+        push @{$_[0]{compiled_protocols}}, ref($_[1]);
         return Future->done;
     }
 }
@@ -333,7 +337,9 @@ sub channel_probe {
     package Local::UpgradeChildEndpoint;
     use parent 'PAGI::Endpoint::Router';
     sub routes { $_[1]->get('/item/{id}' => 'show')->name('show') }
-    sub show { return $_[1]->text('nested:' . $_[1]->path_param('id')) }
+    sub show {
+        return PAGI::Response->text('nested:' . $_[1]->path_param('id'));
+    }
 }
 
 {
@@ -477,19 +483,19 @@ my @migration_cases = (
         },
     },
     {
-        name => 'App HTTP handlers receive a Context',
+        name => 'App HTTP handlers receive a Request',
         run  => sub {
             my $seen;
             my $router = PAGI::App::Router->new;
             $router->get('/context' => sub {
-                my ($c) = @_;
-                $seen = [ref($c), scalar @_];
-                return $c->text('context');
+                my ($request) = @_;
+                $seen = [ref($request), scalar @_];
+                return PAGI::Response->text('request');
             });
             my $events = run_scope($router->to_app, scope(path => '/context'));
-            is($seen, ['PAGI::Context::HTTP', 1],
-                'ordinary handler receives exactly one HTTP Context');
-            is(response_body($events), 'context', 'the compiler emits its Response');
+            is($seen, ['PAGI::Request', 1],
+                'ordinary handler receives exactly one HTTP Request');
+            is(response_body($events), 'request', 'the compiler emits its Response');
         },
     },
     {
@@ -508,7 +514,9 @@ my @migration_cases = (
         name => 'generic route is path-first with methods',
         run  => sub {
             my $router = PAGI::App::Router->new;
-            $router->route('/resource' => sub { return $_[0]->text('resource') },
+            $router->route('/resource' => sub {
+                return PAGI::Response->text('resource');
+            },
                 methods => ['GET', 'POST'])->name('resource');
             my $route = $router->to_router->route_named('/resource');
             is([$route->path, $route->methods],
@@ -521,7 +529,9 @@ my @migration_cases = (
         run  => sub {
             my $router = PAGI::App::Router->new;
             $router->mount('/api', routes => sub {
-                $_[0]->get('/people/{id}' => sub { return $_[0]->text('person') })
+                $_[0]->get('/people/{id}' => sub {
+                    return PAGI::Response->text('person');
+                })
                     ->name('show');
             })->name('api');
             is($router->path_for('/api/show', { id => 7 }), '/api/people/7',
@@ -532,7 +542,9 @@ my @migration_cases = (
         name => 'known mounts use name and expose child routes',
         run  => sub {
             my $child = PAGI::App::Router->new;
-            $child->get('/people/{id}' => sub { return $_[0]->text('person') })
+            $child->get('/people/{id}' => sub {
+                return PAGI::Response->text('person');
+            })
                 ->name('show');
             my $router = PAGI::App::Router->new;
             $router->mount('/api', app => $child->to_router)->name('api');
@@ -549,7 +561,9 @@ my @migration_cases = (
                 my ($child) = @_;
                 $child_identity = refaddr($child);
                 $child_class = ref($child);
-                $child->get('/inside' => sub { return $_[0]->text('inside') });
+                $child->get('/inside' => sub {
+                    return PAGI::Response->text('inside');
+                });
             });
             isnt($child_identity, refaddr($router), 'the callback does not reuse its parent');
             is($child_class, 'PAGI::App::Router', 'the child is another public builder');
@@ -580,13 +594,17 @@ my @migration_cases = (
 
             my $mount_first = PAGI::App::Router->new;
             $mount_first->mount('/owned', app => native_app('mount', []));
-            $mount_first->get('/owned' => sub { return $_[0]->text('route') });
+            $mount_first->get('/owned' => sub {
+                return PAGI::Response->text('route');
+            });
             is(response_body(run_scope($mount_first->to_app,
                 scope(path => '/owned'))), 'mount',
                 'an earlier mount owns before a later exact route');
 
             my $route_first = PAGI::App::Router->new;
-            $route_first->get('/owned' => sub { return $_[0]->text('route') });
+            $route_first->get('/owned' => sub {
+                return PAGI::Response->text('route');
+            });
             $route_first->mount('/owned', app => native_app('mount', []));
             is(response_body(run_scope($route_first->to_app,
                 scope(path => '/owned'))), 'route',
@@ -606,7 +624,10 @@ my @migration_cases = (
             my $router = PAGI::App::Router->new;
             $router->get('/middleware' => [
                 '^TestApps::FakeMiddleware', $factory, $object, $explicit,
-            ] => sub { push @trace, 'handler'; return $_[0]->text('ok') })
+            ] => sub {
+                push @trace, 'handler';
+                return PAGI::Response->text('ok');
+            })
                 ->name('middleware');
             my $descriptions = $router->to_router
                 ->route_named('/middleware')->middleware;
@@ -622,7 +643,9 @@ my @migration_cases = (
                 ['router', 'http', sub {
                     my ($entry) = @_;
                     my $r = PAGI::App::Router->new(middleware => [$entry]);
-                    $r->get('/boundary' => sub { return $_[0]->text('router') });
+                    $r->get('/boundary' => sub {
+                        return PAGI::Response->text('router');
+                    });
                     return $r;
                 }],
                 ['routes Mount', 'http', sub {
@@ -630,7 +653,7 @@ my @migration_cases = (
                     my $r = PAGI::App::Router->new;
                     $r->mount('/boundary', routes => sub {
                         $_[0]->get('/inside' => sub {
-                            return $_[0]->text('routes Mount');
+                            return PAGI::Response->text('routes Mount');
                         });
                     }, middleware => [$entry]);
                     return $r;
@@ -647,7 +670,7 @@ my @migration_cases = (
                     my ($entry) = @_;
                     my $r = PAGI::App::Router->new;
                     $r->get('/boundary' => [$entry] => sub {
-                        return $_[0]->text('http');
+                        return PAGI::Response->text('http');
                     });
                     return $r;
                 }],
@@ -702,18 +725,23 @@ my @migration_cases = (
         },
     },
     {
-        name => 'new_context is an explicit local helper only',
+        name => 'new_request is an explicit local helper only',
         run  => sub {
             my $endpoint = Local::UpgradeEndpoint->new;
             my $empty_app = sub { return Future->done };
             my ($events, $receive, $send) = run_scope_with_channels(
                 $empty_app, scope(path => '/manual'));
-            my $manual = $endpoint->new_context(
-                scope(path => '/manual'), $receive, $send,
+            ok(!$endpoint->can('new_context'),
+                'the removed Context helper has no compatibility alias');
+            my $manual = $endpoint->new_request(
+                scope(path => '/manual'), $receive,
             );
-            isa_ok($manual, ['PAGI::Context::HTTP'],
-                'an explicit helper call selects the shared HTTP Context');
-            is([$endpoint->{manual_context_calls}, $events], [1, []],
+            isa_ok($manual, ['PAGI::Request'],
+                'an explicit helper call constructs a strict HTTP Request');
+            like(dies {
+                $endpoint->new_request(scope(type => 'sse'), $receive);
+            }, qr/HTTP scope/i, 'the explicit helper rejects an SSE scope');
+            is([$endpoint->{manual_request_calls}, $events], [2, []],
                 'calling the overridden helper performs no protocol I/O');
 
             my $app = $endpoint->to_app;
@@ -722,17 +750,17 @@ my @migration_cases = (
                 path => '/socket'));
             run_scope($app, scope(type => 'sse', method => undef,
                 path => '/events'));
-            is($endpoint->{compiled_contexts}, [
-                'PAGI::Context::HTTP',
-                'PAGI::Context::WebSocket',
-                'PAGI::Context::SSE',
-            ], 'compiled handlers receive shared protocol Contexts');
-            is($endpoint->{manual_context_calls}, 1,
+            is($endpoint->{compiled_protocols}, [
+                'PAGI::Request',
+                'PAGI::WebSocket',
+                'PAGI::SSE',
+            ], 'compiled handlers receive shared direct protocol objects');
+            is($endpoint->{manual_request_calls}, 2,
                 'materialization and dispatch never call the local override');
         },
     },
     {
-        name => 'Endpoint reads server-owned lifespan state through Context',
+        name => 'Endpoint reads server-owned lifespan state through Request',
         run  => sub {
             my $endpoint = Local::UpgradeEndpoint->new;
             my $state = {};
@@ -751,9 +779,9 @@ my @migration_cases = (
             )->get;
             is(response_body(run_scope($app,
                 scope(path => '/state', state => $state))), 'ready',
-                'startup state is visible to the route Context');
-            is(refaddr($endpoint->{seen_state}), refaddr($state),
-                'the Context retains server state identity');
+                'startup state is visible to the route Request');
+            is(refaddr($endpoint->{seen_state}->data), refaddr($state),
+                'the Request State retains server state identity');
         },
     },
     {
@@ -787,12 +815,12 @@ my @migration_cases = (
             my $seen;
             my $child = PAGI::App::Router->new;
             $child->get('/items/{id}' => sub {
-                my ($c) = @_;
+                my ($request) = @_;
                 $seen = {
-                    routing => $c->scope->{'pagi.routing'},
-                    old     => $c->scope->{'pagi.router'},
+                    routing => $request->scope->{'pagi.routing'},
+                    old     => $request->scope->{'pagi.router'},
                 };
-                return $c->text('metadata');
+                return PAGI::Response->text('metadata');
             })->name('show');
             my $router = PAGI::App::Router->new;
             $router->mount('/api/{tenant}', app => $child->to_router)->name('api');
@@ -826,9 +854,13 @@ my @migration_cases = (
         name => 'path_for validates constraints and percent-encodes values',
         run  => sub {
             my $router = PAGI::App::Router->new;
-            $router->get('/people/{id}' => sub { return $_[0]->text('person') })
+            $router->get('/people/{id}' => sub {
+                return PAGI::Response->text('person');
+            })
                 ->name('show')->constraints(id => qr/\A\d+\z/);
-            $router->get('/tags/{name}' => sub { return $_[0]->text('tag') })
+            $router->get('/tags/{name}' => sub {
+                return PAGI::Response->text('tag');
+            })
                 ->name('tag')->constraints(name => qr/\A[[:print:]]+\z/);
             is($router->path_for('/show', { id => 42 }, { q => 'a b' }),
                 '/people/42?q=a%20b', 'valid parameters and query values render safely');
@@ -846,11 +878,15 @@ my @migration_cases = (
         name => 'to_router returns stable retained snapshots',
         run  => sub {
             my $router = PAGI::App::Router->new;
-            $router->get('/one' => sub { return $_[0]->text('one') })->name('one');
+            $router->get('/one' => sub {
+                return PAGI::Response->text('one');
+            })->name('one');
             my $first = $router->to_router;
             my $second = $router->to_router;
             isnt(refaddr($first), refaddr($second), 'each materialization is fresh');
-            $router->get('/two' => sub { return $_[0]->text('two') })->name('two');
+            $router->get('/two' => sub {
+                return PAGI::Response->text('two');
+            })->name('two');
             ok(!defined $first->route_named('/two'),
                 'a retained snapshot is isolated from later builder changes');
             is($first->path_for('/one'), '/one',
