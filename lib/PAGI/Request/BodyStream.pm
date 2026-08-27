@@ -238,7 +238,10 @@ consumers may have legitimate uses for whatever partial data they already
 collected -- so C<truncated> is how you tell "the client hung up early"
 apart from "the body really ended here". An immediate disconnect before any
 bytes ever arrive is treated as an empty stream, not a truncation. Check
-C<< $req->disconnect_reason >> for why the client disconnected.
+the optional connection directly for a disconnect reason:
+
+    my $connection = $req->connection;
+    my $reason = $connection ? $connection->disconnect_reason : undef;
 
 =cut
 
@@ -517,4 +520,3 @@ L<PAGI::Request>, L<Future::AsyncAwait>
 PAGI Contributors
 
 =cut
-

@@ -1126,9 +1126,11 @@ C<undef> if not provided by the server.
 Returns C<1> when the provided connection reports disconnected, C<0> when it
 reports connected, and C<undef> when no C<pagi.connection> is available.
 
-For advanced lifecycle, disconnect-reason, callback, Future, or outbound
-transport operations, obtain the server-provided object with L</connection>
-and use its explicit interface directly.
+For advanced lifecycle, disconnect-reason, callback, or Future operations,
+obtain the server-provided object with L</connection> and use its explicit
+interface directly. Outbound transport is separate from connection lifecycle:
+when the server provides it, access the raw transport handle through
+C<< $req->scope->{'pagi.transport'} >>.
 
 =head1 AUTH HELPERS
 
