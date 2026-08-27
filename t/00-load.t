@@ -18,14 +18,9 @@ my @load_modules = qw(
     PAGI::Routing::Resolver
     PAGI::Routing::Compiler
     PAGI::Routing::HeadBoundary
-    PAGI::Routing::Trace
-    PAGI::Routing::Trace::Recorder
-    PAGI::Routing::Trace::Snapshot
     PAGI::Middleware
     PAGI::Middleware::Helpers
     PAGI::Middleware::Builder
-    PAGI::Middleware::Routing::NotFound
-    PAGI::Middleware::Routing::MethodNotAllowed
     PAGI::App::Router
     PAGI::App::Router::Builder
     PAGI::App::Router::Materializer
@@ -60,6 +55,23 @@ for my $module (@load_modules) {
     $file .= '.pm';
     my $loaded = eval { require $file; 1 };
     ok($loaded, "$module loads") or diag($@);
+}
+
+my @removed_modules = (
+    join('::', qw(PAGI Routing Trace)),
+    join('::', qw(PAGI Routing Trace Recorder)),
+    join('::', qw(PAGI Routing Trace Snapshot)),
+    join('::', qw(PAGI Middleware Routing), '_' . 'Fallback'),
+    join('::', qw(PAGI Middleware Routing), 'Not' . 'Found'),
+    join('::', qw(PAGI Middleware Routing), 'Method' . 'NotAllowed'),
+);
+
+for my $module (@removed_modules) {
+    my $file = $module;
+    $file =~ s{::}{/}g;
+    $file .= '.pm';
+    my $loaded = eval { require $file; 1 };
+    ok(!$loaded, "$module is no longer loadable");
 }
 
 done_testing;

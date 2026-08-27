@@ -123,7 +123,7 @@ subtest 'native middleware can add Context-visible state' => sub {
 subtest 'routing metadata enables relative Context reverse routing' => sub {
     my @seen;
     my $router = PAGI::App::Router->new;
-    $router->group('/people/{person_id}' => sub {
+    $router->mount('/people/{person_id}', routes => sub {
         my ($people) = @_;
         $people->get('/profile' => sub {
             my ($c) = @_;

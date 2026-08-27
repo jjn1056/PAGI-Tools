@@ -164,12 +164,13 @@ are resolved during this call. It emits no events and starts no requests; the
 returned coderef performs request matching and protocol I/O only when invoked.
 Retain that coderef rather than compiling per request.
 
-This direct compilation is a low-level routing component. HTTP exhaustion
-records trusted routing evidence and completes normally without emitting a
-response. Use L<PAGI::Compose> for a complete deployed application, or install
-L<PAGI::Middleware::Routing::NotFound> and
-L<PAGI::Middleware::Routing::MethodNotAllowed> at the Router or enclosing
-boundary when custom policy belongs there. WebSocket and SSE miss behavior is
-unchanged.
+HTTP exhaustion is a complete Router outcome. NONE invokes C<http_default> when
+configured and otherwise emits a negotiated 404 through L<PAGI::Pages>.
+PARTIAL emits the Router's compliant 405 with an authoritative C<Allow> header.
+Selected child Router outcomes remain owned by that child. L<PAGI::Compose>
+remains useful at an application root for middleware, lifespan, error handling,
+and response lifecycle safety; it is not required to make Router 404 or 405
+responses complete. WebSocket and SSE retain their protocol-specific miss
+behavior.
 
 =cut

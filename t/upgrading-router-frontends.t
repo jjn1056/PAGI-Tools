@@ -3,14 +3,13 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
-use Scalar::Util qw(refaddr);
+use Scalar::Util qw(blessed refaddr);
 
 use lib 'lib', 't/lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Endpoint::Router ();
 use PAGI::Routing qw(middleware mount route router sse websocket);
-use PAGI::Routing::Trace ();
 
 sub scope {
     my (%change) = @_;
@@ -156,7 +155,7 @@ sub build_functional_representative {
             route('/resource/{id}' => $handler->{get},
                 methods => 'GET', name => 'get_resource',
                 desc => 'GET resource'),
-            mount('/api/{tenant}', router => $child,
+            mount('/api/{tenant}', app => $child,
                 name => 'api', desc => 'API boundary'),
             websocket('/socket/{room}' => $handler->{websocket},
                 name => 'socket', desc => 'Socket route'),
@@ -178,7 +177,7 @@ sub build_app_representative {
         ->name('post_resource')->desc('POST resource');
     $builder->get('/resource/{id}' => $handler->{get})
         ->name('get_resource')->desc('GET resource');
-    $builder->mount('/api/{tenant}', router => $child)
+    $builder->mount('/api/{tenant}', app => $child->to_router)
         ->name('api')->desc('API boundary');
     $builder->websocket('/socket/{room}' => $handler->{websocket})
         ->name('socket')->desc('Socket route');
@@ -197,9 +196,10 @@ sub immutable_node_projection {
         name => $node->name,
         desc => $node->desc,
         methods => $node->methods,
-        is_raw => $node->is_raw ? 1 : 0,
+        is_raw => $node->can('is_raw') && $node->is_raw ? 1 : 0,
     };
-    my $child = $node->can('router') ? $node->router : undef;
+    my $child = $node->can('app') && blessed($node->app)
+        && $node->app->isa('PAGI::Routing::Router') ? $node->app : undef;
     $projection->{router} = immutable_router_projection($child)
         if defined $child;
     return $projection;
@@ -342,7 +342,7 @@ sub channel_probe {
     sub new { return bless { child => $_[1] }, $_[0] }
     sub routes {
         my ($self, $r) = @_;
-        $r->mount('/child', router => $self->{child})->name('child');
+        $r->mount('/child', app => $self->{child}->to_router)->name('child');
     }
 }
 
@@ -517,15 +517,15 @@ my @migration_cases = (
         },
     },
     {
-        name => 'nested names use slash addresses',
+        name => 'routes Mount names use slash addresses',
         run  => sub {
             my $router = PAGI::App::Router->new;
-            $router->group('/api' => sub {
+            $router->mount('/api', routes => sub {
                 $_[0]->get('/people/{id}' => sub { return $_[0]->text('person') })
                     ->name('show');
             })->name('api');
             is($router->path_for('/api/show', { id => 7 }), '/api/people/7',
-                'group and leaf names form one slash address');
+                'Mount and leaf names form one slash address');
         },
     },
     {
@@ -535,17 +535,17 @@ my @migration_cases = (
             $child->get('/people/{id}' => sub { return $_[0]->text('person') })
                 ->name('show');
             my $router = PAGI::App::Router->new;
-            $router->mount('/api', router => $child)->name('api');
+            $router->mount('/api', app => $child->to_router)->name('api');
             is($router->path_for('/api/show', { id => 8 }), '/api/people/8',
                 'name assigns the logical mount segment');
         },
     },
     {
-        name => 'group callbacks receive a fresh child builder',
+        name => 'routes callbacks receive a fresh child builder',
         run  => sub {
             my ($child_identity, $child_class);
             my $router = PAGI::App::Router->new;
-            $router->group('/group' => sub {
+            $router->mount('/group', routes => sub {
                 my ($child) = @_;
                 $child_identity = refaddr($child);
                 $child_class = ref($child);
@@ -556,13 +556,13 @@ my @migration_cases = (
         },
     },
     {
-        name => 'mutable mount targets are constructed objects',
+        name => 'mutable mount targets use explicit immutable snapshots',
         run  => sub {
             my $child = Local::UpgradeChildEndpoint->new;
             my $router = PAGI::App::Router->new;
-            $router->mount('/endpoint', router => $child)->name('endpoint');
+            $router->mount('/endpoint', app => $child->to_router)->name('endpoint');
             is($router->path_for('/endpoint/show', { id => 9 }), '/endpoint/item/9',
-                'an explicitly constructed Endpoint object materializes as a known mount');
+                'an explicitly materialized Endpoint Router is a known mount');
         },
     },
     {
@@ -570,8 +570,8 @@ my @migration_cases = (
         run  => sub {
             my (@broad_seen, @specific_seen);
             my $router = PAGI::App::Router->new;
-            $router->mount('/api' => native_app('broad', \@broad_seen));
-            $router->mount('/api/v2' => native_app('specific', \@specific_seen));
+            $router->mount('/api', app => native_app('broad', \@broad_seen));
+            $router->mount('/api/v2', app => native_app('specific', \@specific_seen));
             is(response_body(run_scope($router->to_app,
                 scope(path => '/api/v2/items'))), 'broad',
                 'the earlier broad mount owns the request');
@@ -579,7 +579,7 @@ my @migration_cases = (
                 'the later longer prefix is not sorted ahead');
 
             my $mount_first = PAGI::App::Router->new;
-            $mount_first->mount('/owned' => native_app('mount', []));
+            $mount_first->mount('/owned', app => native_app('mount', []));
             $mount_first->get('/owned' => sub { return $_[0]->text('route') });
             is(response_body(run_scope($mount_first->to_app,
                 scope(path => '/owned'))), 'mount',
@@ -587,7 +587,7 @@ my @migration_cases = (
 
             my $route_first = PAGI::App::Router->new;
             $route_first->get('/owned' => sub { return $_[0]->text('route') });
-            $route_first->mount('/owned' => native_app('mount', []));
+            $route_first->mount('/owned', app => native_app('mount', []));
             is(response_body(run_scope($route_first->to_app,
                 scope(path => '/owned'))), 'route',
                 'an earlier exact route owns before a later mount');
@@ -625,18 +625,22 @@ my @migration_cases = (
                     $r->get('/boundary' => sub { return $_[0]->text('router') });
                     return $r;
                 }],
-                ['group', 'http', sub {
+                ['routes Mount', 'http', sub {
                     my ($entry) = @_;
                     my $r = PAGI::App::Router->new;
-                    $r->group('/boundary' => [$entry] => sub {
-                        $_[0]->get('/inside' => sub { return $_[0]->text('group') });
-                    });
+                    $r->mount('/boundary', routes => sub {
+                        $_[0]->get('/inside' => sub {
+                            return $_[0]->text('routes Mount');
+                        });
+                    }, middleware => [$entry]);
                     return $r;
                 }],
                 ['mount', 'http', sub {
                     my ($entry) = @_;
                     my $r = PAGI::App::Router->new;
-                    $r->mount('/boundary' => [$entry] => channel_probe('mount', []));
+                    $r->mount('/boundary',
+                        app => channel_probe('mount', []),
+                        middleware => [$entry]);
                     return $r;
                 }],
                 ['HTTP route', 'http', sub {
@@ -677,7 +681,8 @@ my @migration_cases = (
                     };
                 };
                 my $boundary_router = $build->($entry);
-                my $path = $label eq 'group' ? '/boundary/inside' : '/boundary';
+                my $path = $label eq 'routes Mount'
+                    ? '/boundary/inside' : '/boundary';
                 run_scope($boundary_router->to_app,
                     scope(type => $type, method => $type eq 'http' ? 'GET' : undef,
                         path => $path));
@@ -790,14 +795,14 @@ my @migration_cases = (
                 return $c->text('metadata');
             })->name('show');
             my $router = PAGI::App::Router->new;
-            $router->mount('/api/{tenant}', router => $child)->name('api');
+            $router->mount('/api/{tenant}', app => $child->to_router)->name('api');
             run_scope($router->to_app,
                 scope(path => '/api/acme/items/42'));
             is($seen->{routing}{version}, 1, 'the routing container is versioned');
             is(ref($seen->{routing}{frames}), 'ARRAY',
                 'the routing container exposes its frame stack');
-            is(scalar @{$seen->{routing}{frames}}, 1,
-                'a known mounted Router shares the current owner frame');
+            is(scalar @{$seen->{routing}{frames}}, 2,
+                'an explicit child Router adds its selected owner frame');
             my $frame = $seen->{routing}{frames}[-1];
             is($frame->{logical_namespace}, '/api',
                 'the frame records the effective logical namespace');
@@ -863,8 +868,8 @@ my @migration_cases = (
                 channel_probe('raw-ws', \@raw_seen))->name('raw_ws');
             $router->sse('/raw-sse/{channel}' => raw =>
                 channel_probe('raw-sse', \@raw_seen))->name('raw_sse');
-            $router->mount('/opaque/{tenant}' =>
-                channel_probe('mount', \@mount_seen));
+            $router->mount('/opaque/{tenant}',
+                app => channel_probe('mount', \@mount_seen));
 
             my $routing = $router->to_router;
             is([map { $routing->route_named($_)->kind }
@@ -893,15 +898,13 @@ my @migration_cases = (
                     ['raw-ws', 'websocket', 3],
                     ['raw-sse', 'sse', 3],
                 ], 'explicit raw HTTP, WebSocket, and SSE own native channels');
-            is([
-                refaddr($raw_seen[0]{receive}), refaddr($raw_seen[0]{send}),
-                refaddr($raw_seen[1]{receive}), refaddr($raw_seen[1]{send}),
-                refaddr($raw_seen[2]{receive}), refaddr($raw_seen[2]{send}),
-            ], [
-                refaddr($http_receive), refaddr($http_send),
-                refaddr($ws_receive), refaddr($ws_send),
-                refaddr($sse_receive), refaddr($sse_send),
-            ], 'raw leaves receive the exact supplied receive and send channels');
+            is([map { refaddr($_->{receive}) } @raw_seen], [
+                refaddr($http_receive),
+                refaddr($ws_receive),
+                refaddr($sse_receive),
+            ], 'raw leaves receive the exact supplied receive channels');
+            ok((grep { ref($_->{send}) eq 'CODE' } @raw_seen) == 3,
+                'raw leaves receive the Router-owned send boundary');
             is([map { [$_->{scope}{path}, $_->{scope}{root_path}] } @raw_seen], [
                 ['/raw-http/7', '/edge'],
                 ['/raw-ws/lobby', '/edge'],
@@ -919,16 +922,12 @@ my @migration_cases = (
                     ['sse', '/raw_sse'],
                 ], 'raw leaves publish selected leaf metadata');
 
-            my ($wrong_scope, $trace) =
-                PAGI::Routing::Trace->_ensure_http_scope(scope(
-                    method => 'POST', path => '/raw-http/7'));
-            my $checkpoint = $trace->checkpoint;
-            my $wrong = run_scope($app, $wrong_scope);
-            my $snapshot = $trace->snapshot($checkpoint);
-            is($wrong, [],
-                'low-level raw-route method exhaustion emits no events');
-            is($snapshot->allowed_methods, ['GET', 'HEAD'],
-                'raw HTTP remains method-aware in trusted routing evidence');
+            my $wrong = run_scope($app, scope(
+                method => 'POST', path => '/raw-http/7'));
+            is(response_status($wrong), 405,
+                'raw-route method exhaustion emits the built-in 405');
+            is(response_header($wrong, 'Allow'), 'GET, HEAD',
+                'raw HTTP contributes its methods to the public response');
             is(scalar @raw_seen, 3,
                 'the wrong-method request never invokes the raw HTTP target');
 
@@ -968,12 +967,15 @@ subtest 'removed compatibility surface stays absent' => sub {
     ok(!PAGI::App::Router->can('uri_for'), 'App Router has no uri_for alias');
     my $child = PAGI::App::Router->new;
     my $router = PAGI::App::Router->new;
-    my $declaration_result = $router->mount('/child', router => $child);
+    my $declaration_result = $router->mount(
+        '/child', app => $child->to_router,
+    );
     is(refaddr($declaration_result), refaddr($router),
         'a declaration returns its App Router builder');
     ok(!$declaration_result->can('as'),
         'the declaration result has no removed as modifier');
     $declaration_result->name('child');
+    ok(!$router->can('group'), 'App Router has no group method');
     ok(!PAGI::App::Router->can('namespace'), 'App Router has no public namespace');
     ok(!PAGI::Routing::Mount->can('namespace'), 'Mount has no public namespace accessor');
     ok(!PAGI::Endpoint::Router->can('state'), 'Endpoint has no state method');

@@ -846,14 +846,10 @@ middleware. A GET-only catch-all gives an unknown POST a method partial; a
 declines. Use it for application or subsystem error policy. It does not make a
 parent catch-all resume after a selected Mount already owns the path.
 
-The routing Trace passed to fallback handlers contains facts, never a chosen
-HTTP status: `routing_declined`, `path_matched`, `method_matched`,
-`allowed_methods`, and bounded development attempts. PAGI::Context
-intentionally has no `routing_trace`, `not_found`, or `method_not_allowed`
-convenience method because Context also serves native applications and
-third-party routers that do not implement this first-party evidence contract.
-Middleware authors can use the low-level scope key and the Trace checkpoint/
-snapshot API when they deliberately participate in it.
+Router exhaustion is now an ordinary application outcome: HTTP NONE uses the
+Router's `http_default` or stock 404, and HTTP PARTIAL uses the built-in 405.
+The `pagi.routing` scope value is reserved for selected reverse-routing
+metadata; it is not a status or decline channel.
 
 ## Choose a frontend: three descriptions, one engine
 

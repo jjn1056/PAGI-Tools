@@ -8,7 +8,6 @@ use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
 use PAGI::Routing qw(router route mount middleware);
-use PAGI::Routing::Trace;
 
 our $MOUNT_PROVIDER_CALLS = 0;
 sub MountProvider { ++$MOUNT_PROVIDER_CALLS; return qr/accepted/ }
@@ -125,13 +124,12 @@ subtest 'application mounts rewrite static and exact-prefix scopes' => sub {
         mount('/api', app => $mounted, middleware => [$scope_middleware]),
     ])->to_app;
 
-    my ($parent_scope, $parent_trace)
-        = PAGI::Routing::Trace->_ensure_http_scope(scope(
+    my $parent_scope = scope(
         path        => '/api/users',
         root_path   => '/outer',
         raw_path    => '/outer/api/users%20raw',
         path_params => { retained => 'yes' },
-    ));
+    );
     run_scope($app, $parent_scope);
     run_app(
         $app,
@@ -177,8 +175,6 @@ subtest 'application mounts rewrite static and exact-prefix scopes' => sub {
     );
     is($parent_scope->{path_params}, { retained => 'yes' },
         'path-parameter merging leaves the parent hash unchanged');
-    is($parent_scope->{'pagi.routing.trace'}, $parent_trace,
-        'the incoming compatible Trace remains installed on the parent scope');
     is(
         [@{$middleware_seen[0]}{qw(path root_path raw_path)}],
         ['/users', '/outer/api', '/outer/api/users%20raw'],
@@ -412,8 +408,8 @@ subtest 'provider constraints select every mounted application form once' => sub
     for my $prefix (qw(shorthand-provider router-provider coderef-provider)) {
         my $path = "/$prefix/rejected/leaf";
         my $events = run_app($app, path => $path, raw_path => $path);
-        is($events, [],
-            "$prefix provider rejection leaves the Router unanswered");
+        is(response_start($events)->{status}, 404,
+            "$prefix provider rejection reaches the Router 404");
     }
 
     is(\@shorthand_seen, ['accepted'], 'routes shorthand runs only for the accepted prefix');
@@ -494,7 +490,8 @@ subtest 'mount ownership follows declaration order without inspecting child outc
         route('/api/missing' => sub { return $_[0]->text('parent resumed') }),
     ])->to_app;
     my $missing = run_app($child_missing, path => '/api/missing', raw_path => '/api/missing');
-    is($missing, [], 'an unanswered routes-shorthand child remains terminal');
+    is(response_start($missing)->{status}, 404,
+        'a routes-shorthand child owns its complete 404');
 
     my $child_405 = router(routes => [
         route('/api/item' => sub { return $_[0]->text('parent GET') }, methods => 'GET'),
@@ -514,28 +511,12 @@ subtest 'mount ownership follows declaration order without inspecting child outc
     is(response_header($method, 'Allow'), 'PATCH', 'the parent partial GET is not merged into the child application Allow');
 };
 
-subtest 'routes-shorthand Mount fallback middleware owns local decline evidence' => sub {
-    my @fallback_calls;
+subtest 'routes-shorthand Mount owns local Router outcomes' => sub {
     my $app = router(routes => [
         route('/api/item' => sub { return $_[0]->text('parent POST') }, methods => 'POST'),
         mount('/api', routes => [
-                route('/item' => sub { return $_[0]->text('child GET') }, methods => 'GET'),
-        ], middleware => [
-            middleware('Routing::NotFound', handler => sub {
-                my ($context) = @_;
-                push @fallback_calls, ['not_found', $context->request->path];
-                return $context->response
-                    ->header('X-Fallback' => 'shorthand')
-                    ->text('child missing');
-            }),
-            middleware('Routing::MethodNotAllowed', handler => sub {
-                my ($context, $snapshot) = @_;
-                push @fallback_calls,
-                    ['method_not_allowed', join(', ', @{$snapshot->allowed_methods})];
-                return $context->response
-                    ->header('X-Fallback' => 'shorthand')
-                    ->text('child method');
-            }),
+            route('/item' => sub { return $_[0]->text('child GET') },
+                methods => 'GET'),
         ]),
     ])->to_app;
 
@@ -545,28 +526,21 @@ subtest 'routes-shorthand Mount fallback middleware owns local decline evidence'
         path => '/api/item',
         raw_path => '/api/item',
     );
-    is(response_start($method)->{status}, 405, 'the shorthand child fallback renders 405');
-    is(response_header($method, 'Allow'), 'GET, HEAD', 'the child uses a fresh local Allow set without parent POST');
-    is(response_header($method, 'X-Fallback'), 'shorthand', 'the Mount rendered its child outcome');
+    is(response_start($method)->{status}, 405,
+        'the shorthand child emits its built-in 405');
+    is(response_header($method, 'Allow'), 'GET, HEAD',
+        'the child uses a fresh local Allow set without parent POST');
 
     my $missing = run_app(
         $app,
         path => '/api/missing',
         raw_path => '/api/missing',
     );
-    is(response_start($missing)->{status}, 404, 'the shorthand child fallback renders 404');
-    is(response_body($missing), 'child missing', 'the Mount renders inside its child Router');
-    is(
-        \@fallback_calls,
-        [
-            ['method_not_allowed', 'GET, HEAD'],
-            ['not_found', '/missing'],
-        ],
-        'both child handlers observe rewritten scope and child-only evidence',
-    );
+    is(response_start($missing)->{status}, 404,
+        'the shorthand child emits its stock 404');
 };
 
-subtest 'Mount middleware surrounds fallback-rendered child declines while route middleware is full-only' => sub {
+subtest 'Mount middleware surrounds child outcomes while route middleware is full-only' => sub {
     my @trace;
     my $route_runs = 0;
     my $route_middleware = middleware(sub {
@@ -586,14 +560,6 @@ subtest 'Mount middleware surrounds fallback-rendered child declines while route
                 ],
                 middleware => [
                     tracing_middleware('mount', \@trace),
-                    middleware('Routing::NotFound', handler => sub {
-                        push @trace, 'not found';
-                        return $_[0]->text('missing');
-                    }),
-                    middleware('Routing::MethodNotAllowed', handler => sub {
-                        push @trace, 'method not allowed';
-                        return $_[0]->text('wrong method');
-                    }),
                 ],
             ),
         ],
@@ -602,8 +568,8 @@ subtest 'Mount middleware surrounds fallback-rendered child declines while route
     run_app($app, path => '/api/missing', raw_path => '/api/missing');
     is(
         \@trace,
-        ['mount before', 'not found', 'mount after'],
-        'Mount middleware surrounds its rendered child 404',
+        ['mount before', 'mount after'],
+        'Mount middleware surrounds its child 404',
     );
     is($route_runs, 0, 'route middleware does not run for child 404');
 
@@ -611,8 +577,8 @@ subtest 'Mount middleware surrounds fallback-rendered child declines while route
     run_app($app, method => 'POST', path => '/api/item', raw_path => '/api/item');
     is(
         \@trace,
-        ['mount before', 'method not allowed', 'mount after'],
-        'Mount middleware surrounds its rendered child 405',
+        ['mount before', 'mount after'],
+        'Mount middleware surrounds its child 405',
     );
     is($route_runs, 0, 'route middleware does not run for child 405');
 };

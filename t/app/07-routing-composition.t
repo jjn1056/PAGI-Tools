@@ -419,6 +419,10 @@ subtest 'URLMap keeps Router applications opaque but complete' => sub {
         'Compose does not replace the selected child outcome');
 
     my $unrelated = {};
+    my $selected_metadata = {
+        version => 1,
+        frames  => [{ logical_namespace => '/outer' }],
+    };
     my @opaque_seen;
     my $opaque = PAGI::App::URLMap->new(
         default => async sub {
@@ -433,10 +437,12 @@ subtest 'URLMap keeps Router applications opaque but complete' => sub {
     run_app($opaque->to_app, {
         type => 'http', method => 'GET', path => '/api/x',
         root_path => '/outer', unrelated => $unrelated,
+        'pagi.routing' => $selected_metadata,
     });
     run_app($opaque->to_app, {
         type => 'http', method => 'GET', path => '/elsewhere',
         root_path => '/outer', unrelated => $unrelated,
+        'pagi.routing' => $selected_metadata,
     });
     is([$opaque_seen[0]{path}, $opaque_seen[0]{root_path}],
         ['/x', '/outer/api'], 'opaque mount scope rewriting remains exact');
@@ -445,6 +451,9 @@ subtest 'URLMap keeps Router applications opaque but complete' => sub {
     is([map { refaddr($_->{unrelated}) } @opaque_seen],
         [refaddr($unrelated), refaddr($unrelated)],
         'shallow delegated scopes preserve unrelated values');
+    is([map { refaddr($_->{'pagi.routing'}) } @opaque_seen],
+        [refaddr($selected_metadata), refaddr($selected_metadata)],
+        'mount and default preserve selected routing metadata by identity');
 
     for my $type (qw(websocket sse)) {
         my ($events, $error) = run_app(

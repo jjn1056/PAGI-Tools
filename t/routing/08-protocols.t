@@ -181,7 +181,8 @@ subtest 'raw HTTP, WebSocket, and SSE leaves own their exact matched channels' =
         $app->($request_scope, $receive, $send)->get;
         push @event_sets, \@events;
         is($seen[-1]{receive_id}, refaddr($receive), "$label raw leaf receives the exact receive channel");
-        is($seen[-1]{send_id}, refaddr($send), "$label raw leaf receives the exact send channel");
+        isnt($seen[-1]{send_id}, refaddr($send),
+            "$label raw leaf receives the Router-owned send boundary");
     }
 
     is(
@@ -489,20 +490,28 @@ subtest 'HTTP selection ignores WebSocket and SSE leaves without warnings' => su
     }
 
     is(\@warnings, [], 'mixed-protocol route tables do not warn during HTTP selection');
-    is($ws_only, [], 'a WebSocket-only path leaves HTTP routing unanswered');
-    is($sse_only, [], 'an SSE-only path leaves HTTP routing unanswered');
+    is($ws_only->[0]{status}, 404,
+        'a WebSocket-only path reaches the HTTP Router 404');
+    is($sse_only->[0]{status}, 404,
+        'an SSE-only path reaches the HTTP Router 404');
     is($shared->[0]{status}, 200, 'HTTP scanning continues to a later same-path HTTP leaf');
     is($shared->[1]{body}, 'http leaf', 'the later HTTP leaf owns the response');
 };
 
 subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcomes' => sub {
-    my @http_fallback_calls;
+    my @http_default_calls;
     my $app = router(
-        middleware => [middleware('Routing::NotFound', handler => sub {
-            my ($c) = @_;
-            push @http_fallback_calls, $c->type // 'http';
-            return $c->text('custom HTTP missing');
-        })],
+        http_default => async sub {
+            my ($request_scope, $receive, $send) = @_;
+            push @http_default_calls, $request_scope->{type} // 'http';
+            await Future->wrap($send->({
+                type => 'http.response.start', status => 404, headers => [],
+            }));
+            await Future->wrap($send->({
+                type => 'http.response.body', body => 'custom HTTP missing',
+                more => 0,
+            }));
+        },
         routes => [],
     )->to_app;
 
@@ -544,8 +553,8 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
     ));
     is($ws_close, [{ type => 'websocket.close' }],
         'without the denial extension an unmatched WebSocket closes before acceptance');
-    is(\@http_fallback_calls, [],
-        'WebSocket and SSE misses never invoke the HTTP not-found handler');
+    is(\@http_default_calls, [],
+        'WebSocket and SSE misses never invoke the HTTP default');
 
     my ($lifespan_reads, $lifespan_sends) = (0, 0);
     my $lifespan_result = $app->(
@@ -568,8 +577,8 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
         qr/PAGI scope type is required/,
         'a missing scope type is rejected as a malformed PAGI scope',
     );
-    is(\@http_fallback_calls, [],
-        'a malformed scope never invokes the HTTP fallback');
+    is(\@http_default_calls, [],
+        'a malformed scope never invokes the HTTP default');
 
     my ($grpc_reads, $grpc_sends) = (0, 0);
     like(
@@ -716,114 +725,6 @@ subtest 'standalone protocol leaves and mounts compile as complete applications'
     is($mounted_miss->[0]{status}, 404, 'the child Router emits its complete 404 fallback');
     is(\@trace, ['mount before', 'mount after'],
         'mount middleware surrounds a child protocol miss');
-};
-
-subtest 'non-HTTP protocols never observe or replace routing Trace data' => sub {
-    my $sentinel = { owner => 'caller', nested => ['unchanged'] };
-    my @seen_values;
-    my $app = router(routes => [
-        websocket('/socket' => async sub {
-            push @seen_values, $_[0]->scope->{'pagi.routing.trace'};
-            await $_[0]->close(1000, 'matched');
-        }),
-        sse('/events' => async sub {
-            push @seen_values, $_[0]->scope->{'pagi.routing.trace'};
-            await $_[0]->close;
-        }),
-    ])->to_app;
-
-    my $ws_scope = scope(
-        type => 'websocket', path => '/socket', raw_path => '/socket',
-        'pagi.routing.trace' => $sentinel,
-    );
-    is(run_scope($app, $ws_scope), [
-        { type => 'websocket.close', code => 1000, reason => 'matched' },
-    ], 'matched WebSocket events remain byte-for-byte unchanged');
-    is($seen_values[-1], $sentinel,
-        'WebSocket routing preserves preexisting Trace-key identity');
-    is($ws_scope->{'pagi.routing.trace'}, {
-        owner => 'caller', nested => ['unchanged'],
-    }, 'WebSocket routing preserves preexisting Trace-key contents');
-
-    my $sse_scope = scope(
-        type => 'sse', path => '/events', raw_path => '/events',
-        'pagi.routing.trace' => $sentinel,
-    );
-    is(run_scope($app, $sse_scope), [
-        { type => 'sse.close' },
-    ], 'matched SSE events remain byte-for-byte unchanged');
-    is($seen_values[-1], $sentinel,
-        'SSE routing preserves preexisting Trace-key identity');
-
-    my $ws_close_scope = scope(
-        type => 'websocket', path => '/missing', raw_path => '/missing',
-        'pagi.routing.trace' => $sentinel,
-    );
-    is(run_scope($app, $ws_close_scope), [
-        { type => 'websocket.close' },
-    ], 'WebSocket close denial remains byte-for-byte unchanged');
-    is($ws_close_scope->{'pagi.routing.trace'}, $sentinel,
-        'a WebSocket miss preserves preexisting Trace-key identity');
-
-    my $ws_denial_scope = scope(
-        type => 'websocket', path => '/missing', raw_path => '/missing',
-        extensions => { 'websocket.http.response' => {} },
-        'pagi.routing.trace' => $sentinel,
-    );
-    is(run_scope($app, $ws_denial_scope), [
-        {
-            type => 'websocket.http.response.start',
-            status => 404,
-            headers => [['content-type', 'text/plain']],
-        },
-        {
-            type => 'websocket.http.response.body',
-            body => 'Not Found',
-            more => 0,
-        },
-    ], 'WebSocket HTTP denial remains byte-for-byte unchanged');
-
-    my $sse_miss_scope = scope(
-        type => 'sse', path => '/missing', raw_path => '/missing',
-    );
-    is(run_scope($app, $sse_miss_scope), [
-        {
-            type => 'sse.http.response.start',
-            status => 404,
-            headers => [['content-type', 'text/plain']],
-        },
-        {
-            type => 'sse.http.response.body',
-            body => 'Not Found',
-            more => 0,
-        },
-    ], 'SSE decline remains byte-for-byte unchanged with no Trace key');
-    ok(!exists $sse_miss_scope->{'pagi.routing.trace'},
-        'an absent SSE Trace key remains absent');
-
-    my $lifespan_scope = {
-        type => 'lifespan',
-        'pagi.routing.trace' => $sentinel,
-    };
-    is($app->(
-        $lifespan_scope,
-        sub { return Future->fail('must not receive') },
-        sub { return Future->fail('must not send') },
-    )->get, undef, 'lifespan completion remains inert');
-    is($lifespan_scope->{'pagi.routing.trace'}, $sentinel,
-        'lifespan preserves preexisting Trace-key identity and contents');
-
-    my $bare_lifespan_scope = { type => 'lifespan' };
-    my $bare_scope_id = refaddr($bare_lifespan_scope);
-    is($app->(
-        $bare_lifespan_scope,
-        sub { return Future->fail('must not receive') },
-        sub { return Future->fail('must not send') },
-    )->get, undef, 'lifespan without a Trace key remains inert');
-    is(refaddr($bare_lifespan_scope), $bare_scope_id,
-        'lifespan without a Trace key preserves scope identity');
-    ok(!exists $bare_lifespan_scope->{'pagi.routing.trace'},
-        'an absent lifespan Trace key remains absent');
 };
 
 done_testing;

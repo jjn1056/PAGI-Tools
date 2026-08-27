@@ -14,6 +14,7 @@ use lib "$FindBin::Bin/../lib";
 use PAGI::App::URLMap;
 use PAGI::App::Cascade;
 use PAGI::Pages;
+use PAGI::Routing qw(router route);
 
 my $loop = IO::Async::Loop->new;
 
@@ -208,6 +209,37 @@ subtest 'App::Cascade tries apps in sequence' => sub {
 
         is $sent[0]{status}, 200, 'catches 403 and tries next';
     };
+};
+
+subtest 'Cascade catches ordinary Router 404 and 405 responses' => sub {
+    my $routing = router(routes => [
+        route('/only' => sub { return $_[0]->text('only') },
+            methods => 'GET'),
+    ])->to_app;
+
+    for my $case (
+        ['404', { method => 'GET', path => '/missing' }],
+        ['405', { method => 'POST', path => '/only' }],
+    ) {
+        my ($label, $request) = @$case;
+        my $later_runs = 0;
+        my $app = PAGI::App::Cascade->new(apps => [
+            $routing,
+            make_response_app(418, "after $label"),
+            async sub { ++$later_runs; return },
+        ])->to_app;
+        my @sent;
+        run_async(async sub {
+            await $app->(
+                { type => 'http', headers => [], %$request },
+                async sub { { type => 'http.disconnect' } },
+                async sub { push @sent, $_[0] },
+            );
+        });
+        is([$sent[0]{status}, $sent[1]{body}], [418, "after $label"],
+            "Router $label is caught and the first non-caught response replays");
+        is($later_runs, 0, "Router $label does not advance past that response");
+    }
 };
 
 subtest 'URLMap sets spec root_path key (not script_name)' => sub {
