@@ -5,56 +5,60 @@ use Test2::V0;
 require PAGI::Request;
 use PAGI::Stash;
 
-subtest 'state accessor reads from scope' => sub {
+sub request_for {
+    my ($scope) = @_;
+    return PAGI::Request->new($scope, sub { die 'body unavailable' });
+}
+
+subtest 'absent state is optional' => sub {
+    my $request = request_for({ type => 'http' });
+
+    ok(!$request->has_state, 'has_state is false when state is absent');
+    is($request->state, undef, 'state is undef when absent');
+};
+
+subtest 'empty and populated state return a strict facade' => sub {
+    my $empty_request = request_for({ type => 'http', state => {} });
+    ok($empty_request->has_state, 'an empty state hash is present');
+    isa_ok($empty_request->state, ['PAGI::State'], 'empty state returns a facade');
+
     my $scope = {
-        type    => 'http',
-        method  => 'GET',
-        path    => '/',
-        headers => [],
+        type  => 'http',
         state => { db => 'test-connection', config => { env => 'test' } },
     };
+    my $request = request_for($scope);
+    my $state = $request->state;
 
-    my $req = PAGI::Request->new($scope, sub { die 'body unavailable' });
-
-    is(ref($req->state), 'HASH', 'state returns hashref');
-    is($req->state->{db}, 'test-connection', 'state contains db');
-    is($req->state->{config}{env}, 'test', 'state contains nested config');
+    ok($request->has_state, 'has_state is true for a state hash');
+    isa_ok($state, ['PAGI::State']);
+    is($state->get('db'), 'test-connection', 'state reads application data');
+    is($state->get('config')->{env}, 'test', 'state preserves nested values');
+    like(dies { $state->get('missing') }, qr/State key 'missing'.*config.*db|State key 'missing'.*db.*config/i,
+        'request state access is strict');
+    is($request->state->data, exact_ref($scope->{state}),
+        'repeated access uses the same backing data without promising facade identity');
 };
 
-subtest 'state returns empty hash if not set' => sub {
-    my $scope = {
-        type    => 'http',
-        method  => 'GET',
-        path    => '/',
-        headers => [],
-    };
-
-    my $req = PAGI::Request->new($scope, sub { die 'body unavailable' });
-
-    is(ref($req->state), 'HASH', 'state returns hashref');
-    is($req->state, {}, 'state is empty hash when not injected');
+subtest 'malformed present state is rejected' => sub {
+    for my $malformed ([], 'state', bless({}, 'Local::State::HashObject')) {
+        my $request = request_for({ type => 'http', state => $malformed });
+        like(dies { $request->has_state }, qr/Request state.*hashref/i,
+            'has_state validates the present state shape');
+        like(dies { $request->state }, qr/state.*hashref/i,
+            'state validates the present state shape');
+    }
 };
 
-subtest 'state is separate from stash' => sub {
-    my $scope = {
-        type    => 'http',
-        method  => 'GET',
-        path    => '/',
-        headers => [],
-        state => { db => 'connection' },
-    };
-
-    my $req = PAGI::Request->new($scope, sub { die 'body unavailable' });
-
-    # Set something in stash
-    my $stash = PAGI::Stash->new($req);
+subtest 'application state is separate from request stash' => sub {
+    my $scope = { type => 'http', state => { db => 'connection' } };
+    my $request = request_for($scope);
+    my $stash = PAGI::Stash->new($request);
     $stash->set(user => 'alice');
 
-    # Verify they are separate
-    is($req->state->{db}, 'connection', 'state has app data');
+    is($request->state->get('db'), 'connection', 'state has application data');
     is($stash->get('user'), 'alice', 'stash has request data');
-    ok(!exists $req->state->{user}, 'state does not have stash data');
-    ok(!$stash->exists('db'), 'stash does not have state data');
+    ok(!$request->state->exists('user'), 'state does not contain stash data');
+    ok(!$stash->exists('db'), 'stash does not contain state data');
 };
 
 done_testing;

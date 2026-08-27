@@ -306,9 +306,18 @@ sub response {
 
 
 # Application state (injected by PAGI::Lifespan, read-only)
+sub has_state {
+    my $self = shift;
+    return 0 unless exists $self->{scope}{state};
+    croak 'PAGI::Request state must be a hashref'
+        unless ref($self->{scope}{state}) eq 'HASH';
+    return 1;
+}
+
 sub state {
     my $self = shift;
-    return $self->{scope}{state} // {};
+    require PAGI::State;
+    return PAGI::State->new($self);
 }
 
 # Body streaming - mutually exclusive with buffered body methods
@@ -1179,12 +1188,21 @@ and handlers. Construct from a Request object or scope:
 
 =head2 state
 
-    my $db = $req->state->{db};
-    my $config = $req->state->{config};
+    my $state = $req->state;
+    my $db = $state->get('db');
+    my $config = $state->get('config');
 
-Returns the application state hashref injected by L<PAGI::Lifespan>.
-This contains worker-level shared state like database connections
-and configuration. Returns empty hashref if no state was injected.
+Returns a L<PAGI::State> facade over the application state injected by
+L<PAGI::Lifespan>. This contains worker-level shared state like database
+connections and configuration. Returns C<undef> if no state was injected and
+croaks if a present state value is not a hashref.
+
+Repeated calls are not guaranteed to return the same facade object.
+
+=head2 has_state
+
+Returns true when a state hashref is present and false when state is absent.
+Croaks when a present state value is malformed.
 
 B<Key differences from L<PAGI::Stash>:>
 
