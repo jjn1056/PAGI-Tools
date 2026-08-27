@@ -194,6 +194,191 @@ subtest 'mounted Router applications publish placement-specific reverse paths' =
     );
 };
 
+subtest 'Resolver metadata indexes every inspectable Router placement' => sub {
+    my $show = route('/show/{item}' => sub { },
+        name => 'show',
+        desc => 'show leaf',
+        constraints => { item => Local::ReverseType->new('leaf') },
+    );
+    my $grandchild = router(routes => [$show]);
+    my $team_mount = mount('/teams/{team}',
+        app => $grandchild,
+        name => 'team',
+        desc => 'team placement',
+        constraints => { team => qr/\A\d+\z/ },
+    );
+    my $child = router(routes => [$team_mount]);
+    my $health = route('/health' => sub { },
+        name => 'health', desc => 'root leaf');
+    my $left_mount = mount('/left/{account}',
+        app => $child,
+        name => 'left',
+        desc => 'left placement',
+        constraints => { account => qr/\A[a-z]+\z/ },
+    );
+    my $right_mount = mount('/right/{account}',
+        app => $child,
+        name => 'right',
+        desc => 'right placement',
+        constraints => { account => qr/\A[a-z]+\z/ },
+    );
+    my $opaque_mount = mount('/legacy/{legacy}',
+        app => Local::OpaqueRoutes->new,
+        name => 'legacy',
+        desc => 'legacy placement',
+        constraints => { legacy => qr/\A[a-z]+\z/ },
+    );
+    my $root = router(routes => [
+        $health, $left_mount, $right_mount, $opaque_mount,
+    ]);
+    my $resolver = $root->_resolver;
+
+    my @metadata_cases = (
+        ['root leaf', [0], {
+            match => {
+                kind => 'route', route => '/health', name => '/health',
+                logical_namespace => '/', desc => 'root leaf',
+            },
+            mount => undef,
+            logical_namespace => '/',
+        }],
+        ['left root placement', [1], {
+            match => {
+                kind => 'mount', route => '/left/{account}', name => undef,
+                logical_namespace => '/', desc => 'left placement',
+            },
+            mount => {
+                path => '/left/{account}', name => 'left',
+                desc => 'left placement',
+            },
+            logical_namespace => '/left',
+        }],
+        ['left nested placement', [1, 0], {
+            match => {
+                kind => 'mount', route => '/left/{account}/teams/{team}',
+                name => undef, logical_namespace => '/left',
+                desc => 'team placement',
+            },
+            mount => {
+                path => '/teams/{team}', name => 'team',
+                desc => 'team placement',
+            },
+            logical_namespace => '/left/team',
+        }],
+        ['left grandchild leaf', [1, 0, 0], {
+            match => {
+                kind => 'route',
+                route => '/left/{account}/teams/{team}/show/{item}',
+                name => '/left/team/show',
+                logical_namespace => '/left/team', desc => 'show leaf',
+            },
+            mount => undef,
+            logical_namespace => '/left/team',
+        }],
+        ['right root placement', [2], {
+            match => {
+                kind => 'mount', route => '/right/{account}', name => undef,
+                logical_namespace => '/', desc => 'right placement',
+            },
+            mount => {
+                path => '/right/{account}', name => 'right',
+                desc => 'right placement',
+            },
+            logical_namespace => '/right',
+        }],
+        ['right nested placement', [2, 0], {
+            match => {
+                kind => 'mount', route => '/right/{account}/teams/{team}',
+                name => undef, logical_namespace => '/right',
+                desc => 'team placement',
+            },
+            mount => {
+                path => '/teams/{team}', name => 'team',
+                desc => 'team placement',
+            },
+            logical_namespace => '/right/team',
+        }],
+        ['right grandchild leaf', [2, 0, 0], {
+            match => {
+                kind => 'route',
+                route => '/right/{account}/teams/{team}/show/{item}',
+                name => '/right/team/show',
+                logical_namespace => '/right/team', desc => 'show leaf',
+            },
+            mount => undef,
+            logical_namespace => '/right/team',
+        }],
+        ['opaque placement', [3], {
+            match => {
+                kind => 'mount', route => '/legacy/{legacy}', name => undef,
+                logical_namespace => '/', desc => 'legacy placement',
+            },
+            mount => {
+                path => '/legacy/{legacy}', name => 'legacy',
+                desc => 'legacy placement',
+            },
+            logical_namespace => '/legacy',
+        }],
+    );
+
+    for my $case (@metadata_cases) {
+        my ($label, $location, $expected) = @$case;
+        my $metadata = $resolver->_metadata_for_location($location);
+        is($metadata, $expected, "$label has exact effective metadata");
+        ok(!exists $metadata->{is_raw}, "$label publishes no retired is_raw flag");
+    }
+
+    my @record_cases = (
+        ['0', [0], [], $health],
+        ['1', [1], [qw(account)], $left_mount],
+        ['1.0', [1, 0], [qw(account team)], $team_mount],
+        ['1.0.0', [1, 0, 0], [qw(account item team)], $show],
+        ['2', [2], [qw(account)], $right_mount],
+        ['2.0', [2, 0], [qw(account team)], $team_mount],
+        ['2.0.0', [2, 0, 0], [qw(account item team)], $show],
+        ['3', [3], [qw(legacy)], $opaque_mount],
+    );
+    for my $case (@record_cases) {
+        my ($key, $location, $parameters, $source) = @$case;
+        my $record = $resolver->{metadata_by_location}{$key};
+        is($record->{location}, $location,
+            "$key retains its defensive location path");
+        is([sort keys %{$record->{predicate_records}}], $parameters,
+            "$key retains the exact effective predicate ancestry");
+        is(refaddr($record->{source}), refaddr($source),
+            "$key retains the original source node identity");
+        ok(!exists $record->{is_raw},
+            "$key stores no retired is_raw metadata");
+    }
+
+    my $source_predicates = $show->_pattern->_predicate_records;
+    is(
+        refaddr($resolver->{metadata_by_location}{'1.0.0'}
+            {predicate_records}{item}[0]{check}),
+        refaddr($source_predicates->{item}[0]{check}),
+        'effective metadata preserves the leaf predicate check identity',
+    );
+    is(
+        $root->path_for('/left/team/show', {
+            account => 'acme', team => 7, item => 'leaf',
+        }),
+        '/left/acme/teams/7/show/leaf',
+        'left metadata ancestry renders every placement capture',
+    );
+    is(
+        $root->path_for('/right/team/show', {
+            account => 'globex', team => 8, item => 'leaf',
+        }),
+        '/right/globex/teams/8/show/leaf',
+        'reused metadata ancestry renders every second-placement capture',
+    );
+    like(
+        dies { $resolver->_metadata_for_location([3, 0]) },
+        qr/metadata location is unknown/,
+        'an opaque Mount has placement metadata but no descendant locations',
+    );
+};
+
 subtest 'Router path_for accepts equivalent compact and named reverse arguments' => sub {
     my $routing = router(routes => [
         route('/items/{id}' => sub { }, name => 'show'),

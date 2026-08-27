@@ -104,7 +104,27 @@ subtest 'Context selects the last resolver from a valid routing frame stack' => 
     );
 };
 
-subtest 'Context references resolve from a mounted Router child boundary' => sub {
+# TASK 4 RUNTIME INTEGRATION OWNERSHIP
+#
+# The five Context subtests below deliberately supply selected routing frames.
+# They verify only Context/Resolver behavior and do not claim that Compiler
+# publishes these values. Task 4's mounted-application integration coverage
+# retains ownership of the removed runtime observations:
+#
+# - a selected blog leaf publishes namespace /person/blog and captures
+#   { person_id => 42, blog_id => 7 };
+# - its unnamed catchall publishes the same namespace with captures
+#   { person_id => 42, rest => 'missing/path' };
+# - HTTP/WebSocket/SSE child scopes use /proxy/tenants/acme while their root
+#   Resolver frame boundary remains /proxy;
+# - the provider-backed account request completes with HTTP 200, and dispatch
+#   plus reverse generation do not reinvoke the mount provider;
+# - a separately compiled service child publishes frame root paths /proxy and
+#   /proxy/service while its selected scope root is /proxy/service/spaces/blue;
+# - the dynamic tenant child receives the decoded scope/root boundary
+#   "/edge root/tenants/caf\x{e9} 50%" before reverse output encodes it once.
+
+subtest 'Context resolves from a supplied mounted Router child frame' => sub {
     my $blogs = router(routes => [
         route('/' => sub { }, name => 'index'),
         route('/{blog_id}' => sub { }, name => 'show',
@@ -122,6 +142,8 @@ subtest 'Context references resolve from a mounted Router child boundary' => sub
         mount('/legacy', app => $opaque, name => 'legacy'),
     ]);
     my $resolver = $routing->_resolver;
+    # Supplied frame: Task 4 owns runtime namespace/capture publication,
+    # including the selected leaf and unnamed catchall observations above.
     my $context = _context('http', $resolver,
         scheme => 'https',
         'pagi.routing' => {
@@ -543,7 +565,7 @@ subtest 'missing and malformed routing metadata fail at the Context boundary' =>
     }
 };
 
-subtest 'Context child-boundary reverse lookup works across protocols' => sub {
+subtest 'Context reverses supplied child-boundary frames across protocols' => sub {
     my $tenant = router(routes => [
         route('/show/{id}' => sub { }, name => 'show'),
         route('/sibling/{id}' => sub { }, name => 'sibling'),
@@ -569,6 +591,7 @@ subtest 'Context child-boundary reverse lookup works across protocols' => sub {
 
     for my $case (@cases) {
         my ($type, $scheme, $name, $params, $path, $url) = @$case;
+        # Supplied frame: Task 4 owns cross-protocol scope/root publication.
         my $context = _context($type, $resolver,
             root_path => '/proxy/tenants/acme',
             scheme => $scheme,
@@ -622,6 +645,7 @@ subtest 'Context reverse generation inherits captures and applies each composed 
         ),
     ]);
     my $resolver = $routing->_resolver;
+    # Supplied frame: Task 4 owns provider-backed dispatch and HTTP completion.
     my $context = _context('http', $resolver,
         root_path => '/edge/accounts/acme',
         scheme    => 'https',
@@ -665,7 +689,7 @@ subtest 'Context reverse generation inherits captures and applies each composed 
         'Context reverse generation does not reinvoke the mount provider');
 };
 
-subtest 'a mounted child uses the root resolver and its selected namespace' => sub {
+subtest 'Context uses a supplied root Resolver and selected namespace' => sub {
     my $space = router(routes => [
         route('/items/{id}' => sub { }, name => 'item'),
         route('/siblings/{id}' => sub { }, name => 'sibling'),
@@ -677,6 +701,7 @@ subtest 'a mounted child uses the root resolver and its selected namespace' => s
         mount('/service', app => $child, name => 'service'),
     ]);
     my $resolver = $parent->_resolver;
+    # Supplied frame: Task 4 owns the compiled parent/child frame stack.
     my $context = _context('http', $resolver,
         root_path => '/proxy/service/spaces/blue',
         scheme    => 'https',
@@ -792,7 +817,7 @@ subtest 'Context URI-encodes decoded root_path without re-encoding generated pat
     );
 };
 
-subtest 'a mounted Router boundary encodes decoded captures exactly once' => sub {
+subtest 'Context encodes supplied mounted captures exactly once' => sub {
     my $child = router(routes => [
         route('/items/{id}' => sub { }, name => 'item'),
     ]);
@@ -800,6 +825,7 @@ subtest 'a mounted Router boundary encodes decoded captures exactly once' => sub
         mount('/tenants/{tenant}', app => $child),
     ]);
     my $resolver = $parent->_resolver;
+    # Supplied frame: Task 4 owns decoded child-scope boundary publication.
     my $context = _context('http', $resolver,
         root_path => "/edge root/tenants/caf\x{e9} 50%",
         scheme    => 'https',
