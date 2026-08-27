@@ -17,6 +17,7 @@ PAGI::Middleware::CSRF - Cross-Site Request Forgery protection middleware
 =head1 SYNOPSIS
 
     use PAGI::Middleware::Builder;
+    use PAGI::CSRF qw(csrf);
 
     my $app = builder {
         enable 'CSRF',
@@ -28,7 +29,7 @@ PAGI::Middleware::CSRF - Cross-Site Request Forgery protection middleware
     };
 
     # Issue-only mode: the middleware never rejects; the app validates via
-    # $ctx->csrf_verify once it has parsed the submitted form/JSON params.
+    # csrf($request)->verify once it has parsed the submitted form/JSON params.
     my $app2 = builder {
         enable 'CSRF', secret => 'your-secret-key', enforce => 'app';
         $my_app;
@@ -85,10 +86,11 @@ would always 403 -- see L</USAGE> for why.
 token exactly as it does for safe methods, on I<every> method, and never
 auto-rejects. It stashes the cookie token (the existing one, or a freshly
 minted one if none existed yet) into scope as C<csrf_token> for the app to
-read via C<< $ctx->csrf_token >>. The app owns validation, by calling
-C<< $ctx->csrf_verify($submitted) >> once it has parsed the request's
-params, and decides the response for a failed check. This is what
-server-rendered form POSTs need.
+read with C<< csrf($request)->token >>. The app owns validation, by calling
+C<< csrf($request)->verify($submitted) >> once it has parsed the request's
+params, and decides the response for a failed check. Raw PAGI applications can
+pass the scope directly as C<csrf($scope)>. This is what server-rendered form
+POSTs need.
 
 =back
 
@@ -236,10 +238,13 @@ header. The middleware validates the header itself; the app is never called
 on a mismatch.
 
 Render the token into the page once (a C<< <meta> >> tag is the usual spot),
-reading it from the context helper -- B<not> from the cookie, which
+reading it from the CSRF facade -- B<not> from the cookie, which
 JavaScript cannot see:
 
-    <meta name="csrf-token" content="<%= $ctx->csrf_token %>">
+    my $guard = csrf($request);
+    my $token = $guard->token;
+
+    <meta name="csrf-token" content="<%= $token %>">
 
 Then have client-side script read the meta tag and send it back as the
 configured header:
@@ -260,22 +265,33 @@ auto-rejects; the app validates once it has parsed the submitted params.
 
 Embed the token as a hidden field:
 
-    <input type="hidden" name="_csrf_token" value="<%= $ctx->csrf_token %>">
+    my $guard = csrf($request);
+
+    <input type="hidden" name="_csrf_token" value="<%= $guard->token %>">
 
 Then, in the handler, verify the submitted value against the one the
 middleware stashed in scope:
 
-    return $ctx->text('CSRF token validation failed', status => 403)
-        unless $ctx->csrf_verify($params->{_csrf_token});
+    return $request->response
+        ->text('CSRF token validation failed', status => 403)
+        unless $guard->verify($params->{_csrf_token});
 
-See L<PAGI::Context/csrf_token> and L<PAGI::Context/csrf_verify> for the
-helper reference.
+The same helper works in a raw-scope application:
+
+    my $guard = csrf($scope);
+    my $token = $guard->token;
+    my $valid = $guard->verify($params->{_csrf_token});
+
+L<PAGI::Context/csrf_token> and L<PAGI::Context/csrf_verify> remain available
+as compatibility convenience for Context handlers.
 
 =head1 SEE ALSO
 
 L<PAGI::Middleware> - Base class for middleware
 
-L<PAGI::Context/csrf_token>, L<PAGI::Context/csrf_verify> - context helpers
-for reading and checking the token, used by the C<enforce =E<gt> 'app'> flow
+L<PAGI::CSRF> - request-first and raw-scope token access and verification
+
+L<PAGI::Context/csrf_token>, L<PAGI::Context/csrf_verify> - compatibility
+convenience for Context handlers
 
 =cut

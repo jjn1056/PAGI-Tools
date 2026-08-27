@@ -34,6 +34,8 @@ my @load_modules = qw(
     PAGI::Endpoint::WebSocket
     PAGI::Request
     PAGI::State
+    PAGI::CSRF
+    PAGI::Transport
     PAGI::Request::Upload
     PAGI::Request::Negotiate
     PAGI::Response
