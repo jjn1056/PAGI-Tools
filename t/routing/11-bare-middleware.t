@@ -190,7 +190,8 @@ subtest 'bare router factory surrounds unanswered routing and mixed lists retain
     run_scope($app, scope(method => 'POST', path => '/present'));
     is(\@runs, [qw(bare explicit bare explicit)],
         'mixed bare and explicit list keeps first-listed-outermost order');
-    is(\@statuses, [], 'unanswered Router exhaustion emits no statuses');
+    is(\@statuses, [404, 405],
+        'Router middleware observes owned NONE and PARTIAL statuses in request order');
 };
 
 subtest 'bare factory timing and failures remain compile-time behavior' => sub {
