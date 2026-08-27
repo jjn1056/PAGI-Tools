@@ -2,7 +2,12 @@ package PAGI::Stash;
 
 use strict;
 use warnings;
-use Scalar::Util 'blessed';
+use Exporter 'import';
+use PAGI::Utils::Scope ();
+
+our @EXPORT = ();
+our @EXPORT_OK = qw(stash);
+our %EXPORT_TAGS = (ALL => [@EXPORT_OK]);
 
 =head1 NAME
 
@@ -10,12 +15,12 @@ PAGI::Stash - Standalone helper for per-request shared state
 
 =head1 SYNOPSIS
 
-    use PAGI::Stash;
+    use PAGI::Stash qw(stash);
 
     # Middleware sets shared state for downstream handlers
     my $auth_middleware = sub ($app) {
         async sub ($scope, $receive, $send) {
-            my $stash = PAGI::Stash->new($scope);
+            my $stash = stash($scope);
             $stash->set(user => authenticate($scope));
             await $app->($scope, $receive, $send);
         };
@@ -23,7 +28,7 @@ PAGI::Stash - Standalone helper for per-request shared state
 
     # Handler reads what middleware stored
     async sub ($scope, $receive, $send) {
-        my $stash = PAGI::Stash->new($scope);
+        my $stash = stash($scope);
         my $user  = $stash->get('user');           # dies if missing
         my $theme = $stash->get('theme', 'dark');  # default if missing
         ...
@@ -42,18 +47,32 @@ for keys that may or may not be present.
 The stash lives in the PAGI scope hashref and is shared across all
 middleware, handlers, and protocol objects processing the same request.
 
+=head1 FUNCTIONS
+
+=head2 stash
+
+    my $stash = stash($scope);
+    my $stash = stash($request);
+
+Constructs a stash facade from exactly one unblessed scope hashref or object
+with a C<scope> method. This function is an opt-in named export and is also
+available through the uppercase C<:ALL> tag. Nothing is exported by default.
+
+=cut
+
+sub stash { return __PACKAGE__->new(@_) }
+
 =head1 CONSTRUCTOR
 
 =head2 new
 
     my $stash = PAGI::Stash->new($scope);
     my $stash = PAGI::Stash->new($request);   # any object with ->scope
-    my $stash = PAGI::Stash->new(@_);          # extra args ignored
 
 Scope-based constructor. Resolves to the C<< $scope->{'pagi.stash'} >>
 hashref, creating it lazily if it does not exist. Accepts a scope hashref
-directly, or any blessed object with a C<scope()> method. Extra positional
-arguments are silently ignored.
+directly, or an object with a C<scope()> method. Exactly one source argument
+is required.
 
 =head2 from_data
 
@@ -66,25 +85,9 @@ backing data, bypassing scope resolution.
 
 sub new {
     my ($class, @args) = @_;
-
-    my $arg = $args[0];
-
-    # Object with ->scope method (e.g., PAGI::Request, PAGI::SSE)
-    if (blessed($arg) && $arg->can('scope')) {
-        my $scope = $arg->scope;
-        die "PAGI::Stash requires scope hashref from ->scope method\n"
-            unless ref $scope eq 'HASH';
-        $scope->{'pagi.stash'} //= {};
-        return bless { _data => $scope->{'pagi.stash'} }, $class;
-    }
-
-    # Unblessed hashref — treat as scope
-    if (ref $arg eq 'HASH') {
-        $arg->{'pagi.stash'} //= {};
-        return bless { _data => $arg->{'pagi.stash'} }, $class;
-    }
-
-    die "PAGI::Stash requires a scope hashref or object with ->scope method\n";
+    my $scope = PAGI::Utils::Scope::scope_from_source($class, @args);
+    $scope->{'pagi.stash'} //= {};
+    return bless { _data => $scope->{'pagi.stash'} }, $class;
 }
 
 sub from_data {

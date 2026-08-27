@@ -3,7 +3,41 @@ use strict;
 use warnings;
 use Test2::V0;
 
+use PAGI::Request;
 use PAGI::Session;
+
+my $no_default_imported = eval q{
+    package Local::Session::NoDefault;
+    PAGI::Session->import;
+    1;
+};
+
+my $named_imported = eval q{
+    package Local::Session::Named;
+    PAGI::Session->import('session');
+    1;
+};
+
+my $all_imported = eval q{
+    package Local::Session::All;
+    PAGI::Session->import(':ALL');
+    1;
+};
+
+ok($no_default_imported && !Local::Session::NoDefault->can('session'),
+    'session is not exported by default');
+ok($named_imported && Local::Session::Named->can('session'),
+    'session is available as a named export');
+ok($all_imported && Local::Session::All->can('session'),
+    'uppercase :ALL exports session');
+
+my $lowercase_tag_error;
+{
+    local $SIG{__WARN__} = sub { };
+    $lowercase_tag_error = dies { PAGI::Session->import(':all') };
+}
+like($lowercase_tag_error, qr/"?:all"? is not defined|Can't continue/i,
+    'lowercase :all is not an export tag');
 
 # ===================
 # set and get round-trip
@@ -278,6 +312,39 @@ subtest 'construct from scope hashref' => sub {
     is($scope->{'pagi.session'}{added}, 1, 'mutation visible in scope');
 };
 
+subtest 'class and factory construct separate facades over raw scope data' => sub {
+    my $scope = {
+        type => 'http',
+        'pagi.session' => { _id => 'facades', counter => 7 },
+    };
+    my $class_session = PAGI::Session->new($scope);
+    my $factory = Local::Session::Named->can('session');
+    ok($factory, 'named session export is callable') or return;
+    my $factory_session = $factory->($scope);
+
+    $class_session->set(counter => 8);
+    is($factory_session->get('counter'), 8, 'factory sees class mutation');
+    $factory_session->set(role => 'admin');
+    is($class_session->get('role'), 'admin', 'class sees factory mutation');
+};
+
+subtest 'class and factory accept PAGI::Request sources' => sub {
+    my $scope = {
+        type => 'http',
+        method => 'GET',
+        headers => [],
+        'pagi.session' => { _id => 'request-source', user_id => 42 },
+    };
+    my $request = PAGI::Request->new($scope, sub { die 'body unavailable' });
+    my $class_session = PAGI::Session->new($request);
+    my $factory = Local::Session::Named->can('session');
+    ok($factory, 'named session export is callable') or return;
+    my $factory_session = $factory->($request);
+
+    $class_session->set(user_id => 43);
+    is($factory_session->get('user_id'), 43, 'factory resolves request scope');
+};
+
 subtest 'construct from object with ->scope (duck typing)' => sub {
     # Simulate a PAGI::Request-like object
     my $fake_req = bless {
@@ -293,8 +360,8 @@ subtest 'construct from object with ->scope (duck typing)' => sub {
 };
 
 subtest 'dies on invalid argument' => sub {
-    like(dies { PAGI::Session->new("string") }, qr/pagi\.session/, 'dies on string');
-    like(dies { PAGI::Session->new(undef) }, qr/pagi\.session/, 'dies on undef');
+    like(dies { PAGI::Session->new("string") }, qr/unblessed scope hashref/, 'dies on string');
+    like(dies { PAGI::Session->new(undef) }, qr/unblessed scope hashref/, 'dies on undef');
     like(dies { PAGI::Session->new({}) }, qr/pagi\.session/, 'dies on plain hashref without pagi.session');
     like(dies { PAGI::Session->new("bad") }, qr/requires/, 'error message');
 };
@@ -343,16 +410,17 @@ subtest 'new resolves object with ->scope method' => sub {
     is($session->get('name'), 'alice', 'data from object scope');
 };
 
-subtest 'new ignores extra positional args' => sub {
+subtest 'class and factory require exactly one source' => sub {
     my $scope = {
         type => 'http',
         'pagi.session' => { _id => 'extra', count => 5 },
     };
-    my $receive = sub {};
-    my $send = sub {};
-    my $session = PAGI::Session->new($scope, $receive, $send);
-    is($session->id, 'extra', 'extra args ignored');
-    is($session->get('count'), 5, 'data accessible');
+    like(dies { PAGI::Session->new($scope, sub { }) },
+        qr/PAGI::Session.*exactly one.*scope/i, 'class rejects extra arguments');
+    my $factory = Local::Session::Named->can('session');
+    ok($factory, 'named session export is callable') or return;
+    like(dies { $factory->($scope, sub { }) },
+        qr/PAGI::Session.*exactly one.*scope/i, 'factory rejects extra arguments');
 };
 
 subtest 'new dies on plain hashref without pagi.session' => sub {
@@ -364,10 +432,21 @@ subtest 'new dies on plain hashref without pagi.session' => sub {
     );
 };
 
-subtest 'new dies on invalid argument' => sub {
-    like(dies { PAGI::Session->new("string") }, qr/requires/, 'dies on string');
-    like(dies { PAGI::Session->new(undef) }, qr/requires/, 'dies on undef');
-    like(dies { PAGI::Session->new() }, qr/requires/, 'dies on no args');
+subtest 'class and factory report malformed and missing session sources' => sub {
+    like(dies { PAGI::Session->new([]) },
+        qr/PAGI::Session.*unblessed scope hashref.*scope\(\)/i,
+        'class rejects a non-scope reference');
+    like(dies { PAGI::Session->new({ type => 'http' }) },
+        qr/PAGI::Session requires Session middleware \(missing pagi\.session\)/,
+        'class names missing Session middleware');
+    my $factory = Local::Session::Named->can('session');
+    ok($factory, 'named session export is callable') or return;
+    like(dies { $factory->([]) },
+        qr/PAGI::Session.*unblessed scope hashref.*scope\(\)/i,
+        'factory rejects a non-scope reference');
+    like(dies { $factory->({ type => 'http' }) },
+        qr/PAGI::Session requires Session middleware \(missing pagi\.session\)/,
+        'factory names missing Session middleware');
 };
 
 # ===================

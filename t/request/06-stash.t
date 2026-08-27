@@ -8,6 +8,7 @@ use PAGI::Request;
 use PAGI::Stash;
 
 my $no_body = sub { die 'body unavailable' };
+my $stash_factory = PAGI::Stash->can('stash') ? \&PAGI::Stash::stash : undef;
 
 subtest 'scope accessor returns scope hashref' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
@@ -18,7 +19,8 @@ subtest 'scope accessor returns scope hashref' => sub {
 subtest 'stash basic usage' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
     my $req = PAGI::Request->new($scope, $no_body);
-    my $stash = PAGI::Stash->new($scope);
+    ok($stash_factory, 'stash factory is available') or return;
+    my $stash = $stash_factory->($req);
 
     # Starts empty
     is($stash->data, {}, 'stash starts empty');
@@ -34,7 +36,8 @@ subtest 'stash basic usage' => sub {
 subtest 'stash persists on same request' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
     my $req = PAGI::Request->new($scope, $no_body);
-    my $stash = PAGI::Stash->new($scope);
+    ok($stash_factory, 'stash factory is available') or return;
+    my $stash = $stash_factory->($req);
 
     $stash->set(counter => 1);
     $stash->data->{counter}++;
@@ -46,7 +49,8 @@ subtest 'stash persists on same request' => sub {
 subtest 'stash lives in scope' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
     my $req = PAGI::Request->new($scope, $no_body);
-    my $stash = PAGI::Stash->new($scope);
+    ok($stash_factory, 'stash factory is available') or return;
+    my $stash = $stash_factory->($req);
 
     $stash->set(user => 'alice');
 
@@ -57,8 +61,9 @@ subtest 'stash lives in scope' => sub {
 subtest 'stash shared via scope' => sub {
     # Same scope = same stash (important for middleware flow)
     my $scope = { type => 'http', method => 'GET', headers => [] };
-    my $stash1 = PAGI::Stash->new($scope);
-    my $stash2 = PAGI::Stash->new($scope);
+    ok($stash_factory, 'stash factory is available') or return;
+    my $stash1 = $stash_factory->($scope);
+    my $stash2 = $stash_factory->($scope);
 
     $stash1->set(foo => 'bar');
 
@@ -69,8 +74,9 @@ subtest 'stash isolated with different scopes' => sub {
     # Different scopes = different stashes
     my $scope1 = { type => 'http', method => 'GET', headers => [] };
     my $scope2 = { type => 'http', method => 'GET', headers => [] };
-    my $stash1 = PAGI::Stash->new($scope1);
-    my $stash2 = PAGI::Stash->new($scope2);
+    ok($stash_factory, 'stash factory is available') or return;
+    my $stash1 = $stash_factory->($scope1);
+    my $stash2 = $stash_factory->($scope2);
 
     $stash1->set(value => 'first');
     $stash2->set(value => 'second');
