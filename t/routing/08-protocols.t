@@ -52,12 +52,17 @@ sub run_scope {
 subtest 'normal WebSocket and SSE handlers use direct cached protocol objects' => sub {
     my @seen;
     my @selected_channels;
+    my @middleware_cached_ids;
     my @middleware_argument_counts;
     my $capture_channels = middleware(sub {
         my ($inner) = @_;
         return sub {
             push @middleware_argument_counts, scalar @_;
             push @selected_channels, [@_];
+            my $cached = $_[0]{type} eq 'websocket'
+                ? PAGI::WebSocket->new(@_)
+                : PAGI::SSE->new(@_);
+            push @middleware_cached_ids, refaddr($cached);
             return $inner->(@_);
         };
     });
@@ -171,6 +176,8 @@ subtest 'normal WebSocket and SSE handlers use direct cached protocol objects' =
         'protocol objects retain the exact selected scopes seen by middleware');
     is([map { $_->{cached_id} } @seen], [map { $_->{object_id} } @seen],
         'constructing each protocol helper again returns the exact cached object');
+    is(\@middleware_cached_ids, [map { $_->{object_id} } @seen],
+        'compiler reuses an object cached by route middleware on the exact selected scope');
     is(\@middleware_argument_counts, [3, 3],
         'protocol route middleware remains an exact three-argument native app');
     is(\@ws_events, [
@@ -183,6 +190,175 @@ subtest 'normal WebSocket and SSE handlers use direct cached protocol objects' =
         { type => 'sse.send', data => 'ready' },
         { type => 'sse.close' },
     ], 'plain SSE completion adds no wire interpretation');
+};
+
+subtest 'normal protocol leaves discard live caches inherited from outer scopes' => sub {
+    my @cases = (
+        {
+            label    => 'incoming WebSocket cache',
+            kind     => 'websocket',
+            class    => 'PAGI::WebSocket',
+            cache_at => 'incoming',
+            id       => 'incoming-ws',
+            event    => {
+                type => 'websocket.close', code => 1000,
+                reason => 'selected',
+            },
+        },
+        {
+            label    => 'incoming SSE cache',
+            kind     => 'sse',
+            class    => 'PAGI::SSE',
+            cache_at => 'incoming',
+            id       => 'incoming-sse',
+            event    => { type => 'sse.close', reason => 'selected' },
+        },
+        {
+            label    => 'Router-middleware WebSocket cache',
+            kind     => 'websocket',
+            class    => 'PAGI::WebSocket',
+            cache_at => 'router',
+            id       => 'router-ws',
+            event    => {
+                type => 'websocket.close', code => 1000,
+                reason => 'selected',
+            },
+        },
+        {
+            label    => 'Mount-middleware SSE cache',
+            kind     => 'sse',
+            class    => 'PAGI::SSE',
+            cache_at => 'mount',
+            id       => 'mount-sse',
+            event    => { type => 'sse.close', reason => 'selected' },
+        },
+    );
+
+    for my $case (@cases) {
+        subtest $case->{label} => sub {
+            my (@old_events, @selected_events, @wire_events);
+            my ($stale, $handled, $selected_scope, $handled_params,
+                $handled_frame);
+
+            my $capture_selected = middleware(sub {
+                my ($inner) = @_;
+                return sub {
+                    $selected_scope = $_[0];
+                    return $inner->(@_);
+                };
+            });
+            my $handler = async sub {
+                my ($protocol) = @_;
+                $handled = $protocol;
+                $handled_params = { %{$protocol->path_params} };
+                my $container = $protocol->scope->{'pagi.routing'};
+                my $frames = ref($container) eq 'HASH'
+                    ? $container->{frames}
+                    : undef;
+                $handled_frame = ref($frames) eq 'ARRAY' && @$frames
+                    ? $frames->[-1]
+                    : undef;
+
+                if ($case->{kind} eq 'websocket') {
+                    await $protocol->close(1000, 'selected');
+                }
+                else {
+                    await $protocol->close(reason => 'selected');
+                }
+                return;
+            };
+            my $leaf = $case->{kind} eq 'websocket'
+                ? websocket('/stream/{id}' => $handler,
+                    middleware => [$capture_selected])
+                : sse('/stream/{id}' => $handler,
+                    middleware => [$capture_selected]);
+
+            my $outer_cache = middleware(sub {
+                my ($inner) = @_;
+                return sub {
+                    my ($outer_scope, $receive, $send) = @_;
+                    my $old_send = sub {
+                        push @old_events, $_[0];
+                        return $send->($_[0]);
+                    };
+                    $stale = $case->{class}->new(
+                        $outer_scope, $receive, $old_send,
+                    );
+                    my $selected_send = sub {
+                        push @selected_events, $_[0];
+                        return $send->($_[0]);
+                    };
+                    return $inner->(
+                        $outer_scope, $receive, $selected_send,
+                    );
+                };
+            });
+
+            my $routing = $case->{cache_at} eq 'mount'
+                ? router(routes => [
+                    mount('/api', routes => [$leaf],
+                        middleware => [$outer_cache]),
+                ])
+                : router(
+                    routes => [$leaf],
+                    ($case->{cache_at} eq 'router'
+                        ? (middleware => [$outer_cache])
+                        : ()),
+                );
+            my $app = $routing->to_app;
+            my $path = $case->{cache_at} eq 'mount'
+                ? '/api/stream/' . $case->{id}
+                : '/stream/' . $case->{id};
+            my $incoming = scope(
+                type => $case->{kind}, path => $path, raw_path => $path,
+            );
+            my $receive = sub {
+                return Future->done({ type => "$case->{kind}.receive" });
+            };
+            my $wire_send = sub {
+                push @wire_events, $_[0];
+                return Future->done;
+            };
+
+            if ($case->{cache_at} eq 'incoming') {
+                my $old_receive = sub {
+                    return Future->done({ type => "$case->{kind}.old" });
+                };
+                $stale = $case->{class}->new(
+                    $incoming,
+                    $old_receive,
+                    sub {
+                        push @old_events, $_[0];
+                        return Future->done;
+                    },
+                );
+                my $selected_send = sub {
+                    push @selected_events, $_[0];
+                    return $wire_send->($_[0]);
+                };
+                $app->($incoming, $receive, $selected_send)->get;
+            }
+            else {
+                $app->($incoming, $receive, $wire_send)->get;
+            }
+
+            isnt(refaddr($handled), refaddr($stale),
+                'handler does not reuse the live outer-scope object');
+            is(refaddr($handled->scope), refaddr($selected_scope),
+                'handler object retains the exact selected route scope');
+            is($handled_params, { id => $case->{id} },
+                'handler object sees selected path parameters');
+            is($handled_frame && $handled_frame->{captures},
+                { id => $case->{id} },
+                'handler object sees the selected routing frame');
+            is(\@old_events, [],
+                'handler emits nothing through the inherited callback');
+            is(\@selected_events, [$case->{event}],
+                'handler emits through the selected callback');
+            is(\@wire_events, [$case->{event}],
+                'selected callback forwards the event to the wire');
+        };
+    }
 };
 
 subtest 'raw HTTP, WebSocket, and SSE leaves own their exact matched channels' => sub {

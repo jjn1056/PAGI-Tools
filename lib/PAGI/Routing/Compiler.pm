@@ -315,6 +315,16 @@ sub _compile_protocol_leaf {
         my $kind = $route->kind;
         $app = async sub {
             my ($scope, $receive, $send) = @_;
+            my $cache_key = $kind eq 'websocket'
+                ? 'pagi.websocket'
+                : 'pagi.sse';
+            my $cached = $scope->{$cache_key};
+            if (blessed($cached) && $cached->can('scope')) {
+                my $cached_scope = $cached->scope;
+                delete $scope->{$cache_key}
+                    unless ref($cached_scope)
+                        && refaddr($cached_scope) == refaddr($scope);
+            }
             my $protocol = $kind eq 'websocket'
                 ? PAGI::WebSocket->new($scope, $receive, $send)
                 : PAGI::SSE->new($scope, $receive, $send);
