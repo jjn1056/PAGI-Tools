@@ -141,6 +141,10 @@ sub quick_sync_task {
 
 #---------------------------------------------------------
 # HTTP Endpoints
+#
+# These are intentionally native raw PAGI applications because they send the
+# response before starting follow-up work. Ordinary App Router handlers receive
+# one PAGI::Request and return an unsent PAGI::Response instead.
 #---------------------------------------------------------
 
 my $router = PAGI::App::Router->new;

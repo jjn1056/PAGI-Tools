@@ -6,6 +6,9 @@ use Future::AsyncAwait;
 
 use MyApp::API;
 use PAGI::App::File;
+use PAGI::Response;
+use PAGI::Routing::URL qw(path_for);
+use PAGI::State qw(app_state);
 
 sub new {
     my ($class, %args) = @_;
@@ -24,11 +27,13 @@ sub routes {
 }
 
 async sub home {
-    my ($self, $c) = @_;
-    $c->state->{metrics}{requests}++;
+    my ($self, $request) = @_;
+    my $state = app_state($request)
+        or die 'endpoint-router-demo requires Compose lifespan state';
+    $state->get('metrics')->{requests}++;
 
-    my $api_index = $c->path_for('/api/index');
-    return $c->html(<<"HTML");
+    my $api_index = path_for($request, '/api/index');
+    return PAGI::Response->html(<<"HTML");
 <!doctype html>
 <title>Endpoint Router Demo</title>
 <h1>Endpoint Router Demo</h1>
@@ -38,19 +43,20 @@ HTML
 }
 
 async sub status_socket {
-    my ($self, $c) = @_;
-    await $c->accept;
+    my ($self, $websocket) = @_;
+    await $websocket->accept;
 
-    my $state = $c->state;
-    await $c->send_json({
+    my $state = app_state($websocket)
+        or die 'endpoint-router-demo requires Compose lifespan state';
+    await $websocket->send_json({
         type     => 'ready',
-        resource => $state->{resource}{name},
+        resource => $state->get('resource')->{name},
     });
 
-    await $c->each_json(async sub {
+    await $websocket->each_json(async sub {
         my ($message) = @_;
-        $state->{metrics}{websocket_messages}++;
-        await $c->send_json({ type => 'echo', data => $message });
+        $state->get('metrics')->{websocket_messages}++;
+        await $websocket->send_json({ type => 'echo', data => $message });
     });
 }
 

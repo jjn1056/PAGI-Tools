@@ -42,6 +42,29 @@ subtest 'the example exposes explicit Endpoint objects without Endpoint state' =
     }
 };
 
+subtest 'Endpoint methods receive direct protocol objects' => sub {
+    my $main = source_text(
+        "$Bin/../examples/endpoint-router-demo/lib/MyApp/Main.pm",
+    );
+    my $api = source_text(
+        "$Bin/../examples/endpoint-router-demo/lib/MyApp/API.pm",
+    );
+    my $events = source_text(
+        "$Bin/../examples/endpoint-router-demo/lib/MyApp/API/Events.pm",
+    );
+
+    like($main, qr/sub home\s*\{.*?my \(\$self, \$request\) = \@_/s,
+        'HTTP Endpoint method receives Request');
+    like($main, qr/sub status_socket\s*\{.*?my \(\$self, \$websocket\) = \@_/s,
+        'WebSocket Endpoint method receives WebSocket');
+    like($events, qr/sub stream\s*\{.*?my \(\$self, \$sse\) = \@_/s,
+        'SSE Endpoint method receives SSE');
+    like($api, qr/\$self->new_request\(\$scope, \$receive\)/,
+        'native middleware explicitly constructs Request');
+    unlike($api . $main . $events, qr/new_context|\$c\b/,
+        'demo no longer relies on Context');
+};
+
 subtest 'the nested demo exercises the complete Endpoint design' => sub {
     local $ENV{PAGI_HOME};
     delete $ENV{PAGI_HOME};

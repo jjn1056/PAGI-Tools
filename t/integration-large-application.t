@@ -91,8 +91,10 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
 
     like($data, qr/sub new\(\$class\)/, 'Data constructor uses a signature');
     like($root_app, qr/sub routing\(\$class\)/, 'Root routing uses a signature');
-    like($person, qr/sub show_person\(\$c\)/, 'Person handler uses a signature');
-    like($blogs, qr/sub show_blog\(\$c\)/, 'Blogs handler uses a signature');
+    like($person, qr/sub show_person\(\$request\)/,
+        'Person handler uses a Request signature');
+    like($blogs, qr/sub show_blog\(\$request\)/,
+        'Blogs handler uses a Request signature');
     like($view, qr/sub document\(\$class, \$title, \$body\)/,
         'View document helper uses a signature');
 
@@ -257,7 +259,7 @@ subtest 'legacy URL helper is absent' => sub {
     ok(!-e $url_module, 'the legacy URL helper file is no longer present');
 };
 
-subtest 'component handlers keep application hrefs behind Context reverse calls' => sub {
+subtest 'component handlers keep application hrefs behind URL helper calls' => sub {
     my $component_root = "$Bin/../examples/15-large-application/lib/MyApp";
     my @components = (
         ['Root', "$component_root/Root.pm", 0],
@@ -275,14 +277,16 @@ subtest 'component handlers keep application hrefs behind Context reverse calls'
         );
         like(
             $source,
-            qr{\$c->path_for\s*\(},
-            "$label handlers generate paths through Context",
+            qr{\bpath_for\s*\(\$request\s*,},
+            "$label handlers generate paths through PAGI::Routing::URL",
         );
         like(
             $source,
-            qr{\$c->url_for\s*\(},
-            "$label handlers generate absolute URLs through Context",
+            qr{\burl_for\s*\(\$request\s*,},
+            "$label handlers generate absolute URLs through PAGI::Routing::URL",
         ) if $uses_url_for;
+        unlike($source, qr{\$c\b},
+            "$label normal handlers no longer receive Context");
     }
 };
 
@@ -344,7 +348,7 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
             'Root-to-Pages generated link is followed');
         like($pagi_link->{response}->text,
             qr/<title>200 Welcome to PAGI<\/title>/,
-            'Pages route returns the stock Welcome response from Context');
+            'Pages route returns the stock Welcome response from Request');
 
         my $people_link = _follow_link($client, $home, 'Browse people');
         is($people_link->{href}, $people_path,

@@ -59,14 +59,14 @@ lib/MyApp/
   platform-aware static component, and can be mounted directly. `PAGI_HOME`
   remains the override for nonstandard deployments.
 - `MyApp::Data` is created during startup and shared through
-  `$c->state->{data}`. `MyApp::View` renders the shared HTML document shell
-  without introducing a template engine.
+  `$request->state->get('data')`. `MyApp::View` renders the shared HTML
+  document shell without introducing a template engine.
 - Root and Blogs configure `PAGI::Pages->not_found(...)` endpoints as their
   Router `http_default` values. The details identify which selected Router
   owns an unmatched path without turning a wildcard into a normal route.
-- Root's named `/pagi` route returns `PAGI::Pages->welcome($c)`. The home page
-  reaches it through a generated `path_for('/pagi')` link, demonstrating an
-  ordinary Pages Response returned from a selected Context handler without
+- Root's named `/pagi` route returns `PAGI::Pages->welcome($request)`. The home
+  page reaches it through a generated `path_for('/pagi')` link, demonstrating an
+  ordinary Pages Response returned from a selected Request handler without
   replacing the application's branded or domain-specific missing pages.
 
 ## Named address map
@@ -83,11 +83,11 @@ paths. The mount names contribute `person` and `blog`:
 | `/person/blog/index` | `/person/{person_id}/blog/` | `MyApp::Person::Blogs` |
 | `/person/blog/show` | `/person/{person_id}/blog/{blog_id}` | `MyApp::Person::Blogs` |
 
-Handlers generate every application link through Context `path_for` or
-`url_for`. Calls inside a component use relative addresses and inherit the
-matched `person_id` or `blog_id`; graph-wide links such as Home use absolute
-addresses such as `/home`. The two distinct parameter names avoid collisions
-in the composed path.
+Handlers import `path_for` and `url_for` from `PAGI::Routing::URL` and pass the
+current Request explicitly. Calls inside a component use relative addresses
+and inherit the matched `person_id` or `blog_id`; graph-wide links such as
+Home use absolute addresses such as `/home`. The two distinct parameter names
+avoid collisions in the composed path.
 
 Person and Blog identifiers demonstrate inline constraint providers:
 
@@ -538,9 +538,9 @@ The comparison highlights a few deliberate differences:
 - Starlette's named mounts compose colon-qualified names such as
   `person:blog:show`; PAGI composes slash addresses such as
   `/person/blog/show` and additionally supports relative lookup.
-- Starlette URL generation requires every path parameter explicitly. PAGI
-  Context lookup may inherit matched parameters, which enables calls such as
-  `path_for('show')` and `path_for('../show')`.
+- Starlette URL generation requires every path parameter explicitly. PAGI's
+  Request-bound URL helper may inherit matched parameters, which enables calls
+  such as `path_for('show')` and `path_for('../show')`.
 - Starlette's `int` converter both validates and converts the value to a
   Python integer. PAGI's `&Int` provider obtains a Type::Tiny constraint once
   during route construction; it validates without coercing the decoded scalar

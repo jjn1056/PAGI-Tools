@@ -15,6 +15,19 @@ my $package_loaded = eval {
 ok($package_loaded, 'the example handler package loads normally')
     or diag($@);
 
+my $handler_source = do {
+    my $path = "$Bin/../examples/declarative-routing/lib/MyApp/Routes/Home.pm";
+    open my $fh, '<', $path or die "cannot open $path: $!\n";
+    local $/;
+    <$fh>;
+};
+like($handler_source, qr/my \(\$request\) = \@_;/,
+    'normal declarative HTTP handlers receive Request');
+like($handler_source, qr/use PAGI::Routing::URL qw\(path_for url_for\)/,
+    'reverse routing comes from its owning helper');
+unlike($handler_source, qr/\$c\b/,
+    'normal declarative handlers no longer receive Context');
+
 my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'the example app file loads cleanly')

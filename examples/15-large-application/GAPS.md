@@ -5,6 +5,11 @@ Router reverse discovery, Router-owned 404/405 outcomes, custom
 `http_default` presentation, and selected-Mount ownership are shipped and are
 therefore no longer listed as gaps.
 
+Normal HTTP route handlers now receive `PAGI::Request`, while reverse routing
+is an explicit `PAGI::Routing::URL` capability and lifespan data uses strict
+`PAGI::State`. The example no longer needs a broad Context merely to combine
+those independent owners, so that migration is also no longer a gap.
+
 ## Optional route-component base class
 
 Person and Blogs still repeat a small package shell around `routing()`, while

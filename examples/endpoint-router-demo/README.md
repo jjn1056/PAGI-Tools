@@ -31,9 +31,9 @@ response-completion and application-error safeguards.
 
 Each package owns only its immutable configuration: `Main` keeps its `api`
 child and `API` keeps its `events` child. The server creates the resource and
-metrics hash in `Compose` startup; handlers read it through `$c->state`.
-Shutdown marks the mock resource closed. No Endpoint object receives or mirrors
-that state.
+metrics hash in `Compose` startup; handlers read it through
+`app_state($request)` or `app_state($protocol)`. Shutdown marks the mock
+resource closed. No Endpoint object receives or mirrors that state.
 
 ## Route declarations and addresses
 
@@ -49,8 +49,9 @@ nested router produces these logical addresses:
 | `API` callback child | `status` | `/api/tools/status` |
 | `Events` | `stream` | `/api/events/stream` |
 
-`Main` generates the API link with `$c->path_for('/api/index')`. `API` uses
-its local name, `$c->path_for('show', { user_id => 1 })`, for `/api/show/1`.
+`Main` generates the API link with `path_for($request, '/api/index')`. `API`
+uses its local name, `path_for($request, 'show', { user_id => 1 })`, for
+`/api/show/1`.
 
 `Main` owns the home page, static-file mount, and root `/status` WebSocket.
 It places the configured API object explicitly with
@@ -90,19 +91,22 @@ $r->get('/index' => [$self->middleware_as('require_demo_token')] => 'index');
 ```
 
 The factory is native PAGI middleware: it receives `($scope, $receive, $send)`
-and returns an application. It uses `$self->new_context(...)` only there to
-inspect the request header. Its denial response is constructed through
-`PAGI::Pages->unauthorized($scope, ...)` and explicitly sent through `$send`,
-including the required `WWW-Authenticate` challenge.
+and returns an application. It uses `$self->new_request($scope, $receive)`
+only there to inspect the request header. Its denial response is constructed
+through `PAGI::Pages->unauthorized($scope, ...)` and explicitly sent through
+`$send`, including the required `WWW-Authenticate` challenge.
 
-Compiled Endpoint handlers receive the shared `$c` Context directly; they do
-not select a `context_class`. The missing-user branch demonstrates the other
-Pages form: `PAGI::Pages->not_found($c, ...)` returns an unsent Response value,
-which the Endpoint adapter sends after the handler returns it.
+Compiled Endpoint HTTP methods receive `PAGI::Request` directly. The
+missing-user branch demonstrates the other Pages form:
+`PAGI::Pages->not_found($request, ...)` returns an unsent Response value,
+which the Endpoint adapter sends after the handler returns it. Reverse routes,
+state, and responses come from their owning `PAGI::Routing::URL`,
+`PAGI::State`, and `PAGI::Response` imports.
 
-The WebSocket and SSE methods also receive their protocol-aware shared Context,
-so they can call `$c->accept`, `$c->send_json`, and `$c->send_event` while
-reading the same lifespan-owned `$c->state`.
+WebSocket and SSE methods receive `PAGI::WebSocket` and `PAGI::SSE` directly,
+so they call `$websocket->accept`, `$websocket->send_json`, and
+`$sse->send_event`. `app_state($protocol)` reads the same lifespan-owned state
+without hiding that capability on a shared Context.
 
 The API boundary configures its native default explicitly:
 

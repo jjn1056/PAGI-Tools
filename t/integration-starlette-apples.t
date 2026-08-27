@@ -3,6 +3,7 @@ use warnings;
 
 use Test2::V0;
 use FindBin qw($Bin);
+use Digest::SHA qw(sha256_hex);
 use JSON::PP ();
 use lib "$Bin/../lib";
 use PAGI::Test::Client;
@@ -13,6 +14,31 @@ if ($] < 5.040) {
 }
 
 my $app_file = "$Bin/../examples/starlette-apples/app.pl";
+my $readme_file = "$Bin/../examples/starlette-apples/README.md";
+
+sub _slurp {
+    my ($path) = @_;
+    open my $fh, '<', $path or die "cannot open $path: $!\n";
+    local $/;
+    my $text = <$fh>;
+    close $fh or die "cannot close $path: $!\n";
+    return $text;
+}
+
+subtest 'README preserves the comparison and current executable source' => sub {
+    my $readme = _slurp($readme_file);
+    my ($python) = $readme =~ /```python\n(.*?)```/s;
+    my ($perl) = $readme =~ /```perl\n(.*?)```/s;
+
+    is(
+        sha256_hex($python // ''),
+        '5841982d7452eaaba77a23fc9063fbe6fef53b8ea291371e7ed179789adb1835',
+        'the supplied Python Starlette application remains byte-for-byte intact',
+    );
+    is($perl, _slurp($app_file),
+        'the copied Perl application stays identical to the executable example');
+};
+
 my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'Starlette comparison example loads cleanly')
@@ -23,7 +49,10 @@ subtest 'welcome, routing outcomes, and apples CRUD' => sub {
     plan skip_all => 'example did not load'
         unless ref($app) eq 'PAGI::Compose';
 
-    my $client = PAGI::Test::Client->new(app => $app);
+    PAGI::Test::Client->run($app, sub {
+        my ($client) = @_;
+        ok(ref($client->state->{apples_db}) eq 'HASH',
+            'Compose lifespan startup installs the apple fixture');
 
     my $welcome = $client->get('/', headers => { Accept => 'text/html' });
     is($welcome->status, 200, 'welcome route responds');
@@ -33,8 +62,14 @@ subtest 'welcome, routing outcomes, and apples CRUD' => sub {
     my $list = $client->get('/apples');
     is($list->status, 200, 'apple collection responds');
     is($list->json, [
-        { id => 1, name => 'Gala', color => 'Red/Yellow' },
-        { id => 2, name => 'Honeycrisp', color => 'Rosy Red' },
+        {
+            id => 1, name => 'Gala', color => 'Red/Yellow',
+            url => 'http://testserver/apples/1',
+        },
+        {
+            id => 2, name => 'Honeycrisp', color => 'Rosy Red',
+            url => 'http://testserver/apples/2',
+        },
     ], 'collection preserves numeric ID order');
 
     my $slash_list = $client->get('/apples/');
@@ -91,6 +126,8 @@ subtest 'welcome, routing outcomes, and apples CRUD' => sub {
     is($created->json,
         { id => 3, name => 'Fuji', color => 'Red' },
         'create assigns the next numeric ID');
+    is($created->header('Location'), '/apples/3',
+        'create publishes the generated item path');
 
     my $updated = $client->put('/apples/3', json => {
         color => 'Crimson',
@@ -123,6 +160,7 @@ subtest 'welcome, routing outcomes, and apples CRUD' => sub {
         'root routing miss negotiates problem JSON');
     is($unknown->json->{title}, 'Not Found',
         'root routing miss uses the stock Pages response');
+    });
 };
 
 done_testing;

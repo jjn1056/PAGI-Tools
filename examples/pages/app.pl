@@ -13,10 +13,10 @@ my $routing = router(routes => [
     route('/old' => PAGI::Pages->permanent_redirect('/new')),
     route('/missing' => PAGI::Pages->not_found),
     mount('/terminal', app => PAGI::Pages->gone),
-    route('/context' => sub {
-        my ($c) = @_;
-        my $response = PAGI::Pages->not_found($c, as => 'text');
-        $response->header('X-Demo' => 'Context response value');
+    route('/request' => sub {
+        my ($request) = @_;
+        my $response = PAGI::Pages->not_found($request, as => 'text');
+        $response->header('X-Demo' => 'Request response value');
         return $response;
     }),
     route('/raw', raw => async sub {

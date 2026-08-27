@@ -117,8 +117,9 @@ compose(
 ```
 
 These handlers intentionally demonstrate the protocol channels directly, so
-each route says `raw`. An ordinary App Router handler would receive `$c` and
-return a Response. The declarations run in exactly the order shown. Compose
+each route says `raw`. An ordinary App Router handler would receive
+`PAGI::Request` and return a Response. The declarations run in exactly the
+order shown. Compose
 keeps the same callbacks and state identity while providing lifecycle,
 application-error, and response-completion safety around the Router. The
 Router itself emits complete stock or configured 404 and 405 responses;

@@ -4,7 +4,9 @@ use v5.40;
 use PAGI::App::File;
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
+use PAGI::Response;
 use PAGI::Routing qw(router route mount);
+use PAGI::Routing::URL qw(path_for);
 use MyApp::Data;
 use MyApp::Person ();
 use MyApp::View ();
@@ -19,12 +21,14 @@ sub shutdown($state, $scope) {
     return;
 }
 
-sub home($c) {
-    my $people_path = $c->path_for('/person/index');
-    my $pagi_path = $c->path_for('/pagi');
-    my $count = scalar @{$c->state->{data}->people};
+sub home($request) {
+    my $state = $request->state
+        or die 'MyApp::Root requires Compose lifespan state';
+    my $people_path = path_for($request, '/person/index');
+    my $pagi_path = path_for($request, '/pagi');
+    my $count = scalar @{$state->get('data')->people};
 
-    return $c->html(MyApp::View->document(
+    return PAGI::Response->html(MyApp::View->document(
         'My PAGI People',
         qq{    <h1>My PAGI People</h1>\n}
             . qq{    <p>This application contains $count people.</p>\n}
@@ -33,8 +37,8 @@ sub home($c) {
     ));
 }
 
-sub pagi($c) {
-    return PAGI::Pages->welcome($c);
+sub pagi($request) {
+    return PAGI::Pages->welcome($request);
 }
 
 sub routing($class) {
@@ -46,7 +50,7 @@ sub routing($class) {
             ),
             route('/pagi' => \&pagi,
                 name => 'pagi',
-                desc => 'Pages Welcome response from Context',
+                desc => 'Pages Welcome response from Request',
             ),
             mount('/static',
                 app => PAGI::App::File->app_path('static')),

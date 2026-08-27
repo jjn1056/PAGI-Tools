@@ -4,6 +4,9 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use PAGI::Pages;
+use PAGI::Response;
+use PAGI::Routing::URL qw(path_for);
+use PAGI::State qw(app_state);
 
 use MyApp::API::Events;
 
@@ -46,10 +49,10 @@ sub require_demo_token {
     my ($self, $inner) = @_;
     return async sub {
         my ($scope, $receive, $send) = @_;
-        my $c = $self->new_context($scope, $receive, $send);
+        my $request = $self->new_request($scope, $receive);
 
         return await $inner->($scope, $receive, $send)
-            if ($c->request->header('x-demo-token') // '') eq 'demo-token';
+            if ($request->header('x-demo-token') // '') eq 'demo-token';
 
         my $response = PAGI::Pages->unauthorized($scope,
             challenge => 'DemoToken realm="endpoint-router-demo"',
@@ -59,35 +62,42 @@ sub require_demo_token {
 }
 
 async sub index {
-    my ($self, $c) = @_;
-    $c->state->{metrics}{requests}++;
+    my ($self, $request) = @_;
+    my $state = app_state($request)
+        or die 'endpoint-router-demo requires Compose lifespan state';
+    $state->get('metrics')->{requests}++;
 
-    my $alice = $c->path_for('show', { user_id => 1 });
-    return $c->html(<<"HTML");
+    my $alice = path_for($request, 'show', { user_id => 1 });
+    my $resource = $state->get('resource')->{name};
+    return PAGI::Response->html(<<"HTML");
 <!doctype html>
 <title>Demo API</title>
 <h1>Demo API</h1>
-<p>Resource: $c->state->{resource}{name}</p>
+<p>Resource: $resource</p>
 <p><a href="$alice">Alice</a></p>
 HTML
 }
 
 async sub show {
-    my ($self, $c) = @_;
-    $c->state->{metrics}{requests}++;
+    my ($self, $request) = @_;
+    my $state = app_state($request)
+        or die 'endpoint-router-demo requires Compose lifespan state';
+    $state->get('metrics')->{requests}++;
 
-    my $user_id = $c->path_param('user_id');
+    my $user_id = $request->path_param('user_id');
     my ($user) = grep { $_->{id} == $user_id } @USERS;
-    return $c->html("<h1>$user->{name}</h1>") if $user;
-    return PAGI::Pages->not_found($c,
+    return PAGI::Response->html("<h1>$user->{name}</h1>") if $user;
+    return PAGI::Pages->not_found($request,
         detail => 'User not found');
 }
 
 async sub status {
-    my ($self, $c) = @_;
-    return $c->json({
+    my ($self, $request) = @_;
+    my $state = app_state($request)
+        or die 'endpoint-router-demo requires Compose lifespan state';
+    return PAGI::Response->json({
         status   => 'ready',
-        resource => $c->state->{resource}{name},
+        resource => $state->get('resource')->{name},
     });
 }
 

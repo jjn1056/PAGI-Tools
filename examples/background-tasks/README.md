@@ -4,8 +4,8 @@ Patterns for running work after sending a response.
 
 This example deliberately sends responses before starting follow-up work, so
 its App Router declarations use explicit `raw` handlers. Ordinary App handlers
-instead receive `$c`, return a Response, and leave emission to the shared
-routing compiler.
+instead receive `PAGI::Request`, return a Response, and leave emission to the
+shared routing compiler.
 
 The final Router is deployed through `compose(app => $router)`. Direct
 `$router->to_app` remains useful as a low-level routing component, and the

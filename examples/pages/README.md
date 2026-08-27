@@ -26,15 +26,16 @@ subtree to an opaque terminal application, so both `/terminal` and every
 descendant such as `/terminal/anything` return the configured Gone page for
 every HTTP method.
 
-The `/context` handler receives `$c`. `PAGI::Pages->not_found($c)` returns an
+The `/request` handler receives `PAGI::Request`.
+`PAGI::Pages->not_found($request)` returns an
 ordinary unsent `PAGI::Response`; the handler adds `X-Demo` and returns it so
 Router can own the send step:
 
 ```perl
-route('/context' => sub {
-    my ($c) = @_;
-    my $response = PAGI::Pages->not_found($c, as => 'text');
-    $response->header('X-Demo' => 'Context response value');
+route('/request' => sub {
+    my ($request) = @_;
+    my $response = PAGI::Pages->not_found($request, as => 'text');
+    $response->header('X-Demo' => 'Request response value');
     return $response;
 });
 ```

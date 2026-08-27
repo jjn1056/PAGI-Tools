@@ -4,15 +4,16 @@ This is a small executable `PAGI::Routing` application. It demonstrates the
 ordinary shape without turning the example into a framework:
 
 - handlers loaded normally from `MyApp::Routes::Home` and passed as fully
-  qualified coderefs;
+  qualified coderefs, receiving `PAGI::Request` directly;
 - a separately configured `/api` Router mounted with `app =>`, whose local
   `api` name segment composes the absolute logical address `/api/item`;
 - a numeric path constraint;
 - one bare pure route middleware factory, normalized to an inspectable description;
 - distinct root and API Router `http_default` endpoints rendered through
   `PAGI::Pages`, plus the child Router's authoritative stock 405 and `Allow`;
-- absolute slash-addressed `path_for` and request-aware `url_for` generation
-  (both return strings and perform no protocol I/O); and
+- absolute slash-addressed `path_for($request, ...)` and request-aware
+  `url_for($request, ...)` from `PAGI::Routing::URL` (both return strings and
+  perform no protocol I/O); and
 - a final `compose(app => $routing)` expression, so `app.pl` evaluates to an
   inspectable `PAGI::Compose` object that a conforming server compiles once
   through its `to_app` method.

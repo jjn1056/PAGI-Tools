@@ -11,7 +11,7 @@ my $load_error = $@ || $!;
 ok(!$load_error, 'Pages example loads cleanly') or diag($load_error);
 isa_ok($app, 'PAGI::Compose');
 
-subtest 'Pages example exercises route, mount, Context, raw, and lifespan forms' => sub {
+subtest 'Pages example exercises route, mount, Request, raw, and lifespan forms' => sub {
     plan skip_all => 'Pages example did not load'
         unless ref($app) eq 'PAGI::Compose';
 
@@ -60,13 +60,13 @@ subtest 'Pages example exercises route, mount, Context, raw, and lifespan forms'
         like($mounted->text, qr/^410 Gone/m,
             'mounted descendant renders the Gone page');
 
-        my $context = $client->get('/context');
-        is($context->status, 404,
-            'Context handler returns its unsent Response value');
-        is($context->header('X-Demo'), 'Context response value',
-            'Context handler modifies the Response before Router sends it');
-        is($context->content_type, 'text/plain; charset=utf-8',
-            'Context handler fixes the text representation');
+        my $request = $client->get('/request');
+        is($request->status, 404,
+            'Request handler returns its unsent Response value');
+        is($request->header('X-Demo'), 'Request response value',
+            'Request handler modifies the Response before Router sends it');
+        is($request->content_type, 'text/plain; charset=utf-8',
+            'Request handler fixes the text representation');
 
         my $raw = $client->get('/raw');
         is($raw->status, 404, 'raw closure sends its Response explicitly');
