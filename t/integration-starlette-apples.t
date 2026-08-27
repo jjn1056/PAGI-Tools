@@ -45,7 +45,7 @@ ok(!$load_error, 'Starlette comparison example loads cleanly')
     or diag($load_error);
 isa_ok($app, 'PAGI::Compose');
 
-subtest 'welcome, routing outcomes, and apples CRUD' => sub {
+subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
     plan skip_all => 'example did not load'
         unless ref($app) eq 'PAGI::Compose';
 
@@ -54,10 +54,24 @@ subtest 'welcome, routing outcomes, and apples CRUD' => sub {
         ok(ref($client->state->{apples_db}) eq 'HASH',
             'Compose lifespan startup installs the apple fixture');
 
-    my $welcome = $client->get('/', headers => { Accept => 'text/html' });
+    my $manager = $client->get('/', headers => { Accept => 'text/html' });
+    is($manager->status, 200, 'apple manager route responds');
+    is($manager->content_type, 'text/html',
+        'apple manager is an HTML application');
+    like($manager->text, qr/<title>Apple Manager<\/title>/,
+        'root identifies the apple manager');
+    like($manager->text, qr/<form\b[^>]*id="apple-form"/,
+        'manager provides the create and edit form');
+    like($manager->text, qr/<section\b[^>]*id="apple-list"/,
+        'manager provides a live apple list');
+    like($manager->text, qr/href="\/welcome"/,
+        'manager links to the PAGI welcome page');
+
+    my $welcome = $client->get('/welcome',
+        headers => { Accept => 'text/html' });
     is($welcome->status, 200, 'welcome route responds');
     like($welcome->text, qr/<title>200 Welcome to PAGI<\/title>/,
-        'root uses the shared Pages welcome endpoint');
+        '/welcome uses the shared Pages welcome endpoint');
 
     my $list = $client->get('/apples');
     is($list->status, 200, 'apple collection responds');

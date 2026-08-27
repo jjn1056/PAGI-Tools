@@ -10,6 +10,9 @@ use PAGI::Pages;
 use PAGI::Response;
 use PAGI::Routing qw(route mount);
 use PAGI::Routing::URL qw(url url_for path_for);
+use PAGI::Utils qw(app_path);
+
+my $manager_file = app_path('public', 'index.html');
 
 sub startup($state, $scope) {
     $state->{apples_db} = {
@@ -23,6 +26,10 @@ sub apples_db($request) {
     my $state = $request->state
         or die 'starlette-apples requires Compose lifespan state';
     return $state->get('apples_db');
+}
+
+sub apple_manager($request) {
+    return PAGI::Response->send_file($manager_file, inline => 1);
 }
 
 async sub list_apples($request) {
@@ -91,8 +98,10 @@ async sub delete_apple($request) {
 
 compose(
     routes => [
-        route('/' => PAGI::Pages->welcome,
-            name => 'home', desc => 'PAGI welcome page'),
+        route('/' => \&apple_manager,
+            name => 'home', desc => 'Apple manager SPA'),
+        route('/welcome' => PAGI::Pages->welcome,
+            name => 'welcome', desc => 'PAGI welcome page'),
         mount('/apples',
             routes => [
                 route('/' => \&list_apples,
