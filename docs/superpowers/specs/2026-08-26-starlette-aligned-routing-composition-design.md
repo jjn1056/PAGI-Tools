@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-26
 
-**Status:** Draft design; awaiting written-spec review
+**Status:** Implemented on `main` through `1d780068088ea0c9080e1e9ad72ab3321f9644bc`
 
 **Scope:** Simplify `PAGI::Routing`, `PAGI::Compose`,
 `PAGI::App::Router`, and `PAGI::Endpoint::Router` around one clear separation

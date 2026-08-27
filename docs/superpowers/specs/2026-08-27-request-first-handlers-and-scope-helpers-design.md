@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-27
 
-**Status:** Draft design; awaiting written-spec review
+**Status:** Approved design; implementation planning follows
 
 **Scope:** Replace `PAGI::Context` as the normal routing handler argument with
 the existing protocol objects, move router- and middleware-specific
@@ -63,12 +63,19 @@ dual handler conventions.
 
 | Repository | Ticket | Branch | Base | Owned changes | Deployment boundary | Push target |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | Request-first handlers and scope helpers | `main` | `main@1d780068088ea0c9080e1e9ad72ab3321f9644bc` | This design specification only | Documentation/design; no runtime change | None unless separately authorized |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | Request-first handlers and scope helpers | `main` | `main@1d780068088ea0c9080e1e9ad72ab3321f9644bc` | This design plus predecessor-status reconciliation | Documentation/design; no runtime change | None unless separately authorized |
 
 The eventual implementation is confined to PAGI-Tools. It does not change the
 PAGI protocol or PAGI::Server. Before implementation begins, its execution
 plan must record a fresh work map because the branch and base will differ from
 this design-only commit.
+
+The 2026-08-26 Starlette-aligned routing-composition campaign is already
+implemented on this design's base in the 23-commit range ending at
+`1d780068088ea0c9080e1e9ad72ab3321f9644bc`. This is the deliberately ordered
+second migration: routing topology first, handler arguments and helper
+ownership second. It is not a pair of unimplemented campaigns awaiting a
+combined execution.
 
 ## 3. Governing and superseded designs
 
@@ -163,6 +170,21 @@ This follows the compositional style already used by `PAGI::Compose`: a small
 core object plus explicitly imported tools, rather than one object accumulating
 every feature in the distribution.
 
+### 4.4 Starlette alignment governs topology, not every method
+
+The 2026-08-26 design aligns Route, Mount, Router, middleware, and application
+composition with Starlette because those responsibilities transfer cleanly.
+Starlette also exposes router-, application-, and middleware-owned facilities
+through its Request, including URL generation, session, and mutable state.
+PAGI-Tools deliberately does not copy that part of the surface.
+
+In a Perl toolkit, an import makes optional capability ownership visible at the
+top of the file. Keeping Request neutral also lets a higher-level framework add
+its own controller conveniences or use a different Router without first
+undoing PAGI::Routing coupling. Alignment therefore means familiar routing
+concepts retain familiar responsibilities; it does not mean API-by-API parity
+with Starlette's Request object.
+
 ## 5. Goals
 
 This design must:
@@ -173,8 +195,8 @@ This design must:
 4. remove declarative-Router URL generation from the neutral Request surface;
 5. give Router users a concise object and functional URL API;
 6. make Stash, Session, CSRF, State, and Transport follow one source contract;
-7. reuse one helper object for one exact request scope without leaking across
-   shallow-cloned mount scopes or keeping scopes alive;
+7. make scope-bound helpers cheap, identity-free facades whose backing data is
+   selected solely by the supplied scope;
 8. replace typo-prone Request state hash access with a strict wrapper while
    providing a temporary, warned hash-dereference bridge;
 9. preserve current body-consumption behavior and Response return behavior;
@@ -262,6 +284,11 @@ The required Pages change is narrow: any blessed request source with a
 `scope()` method returning an unblessed HTTP scope is accepted anywhere Pages
 currently accepts `PAGI::Context::HTTP`. No renderer, catalog, negotiation,
 favicon, or endpoint-shape redesign belongs to this phase.
+
+This one-versus-three-argument endpoint is an explicitly retained Pages
+interoperability exception. It bridges the normal-handler and native-app
+positions already supported by Pages; it is not precedent for arity-dependent
+return types in new helper APIs and remains reviewable under `LATER-PAGES`.
 
 ## 8. `PAGI::Request` public surface
 
@@ -400,20 +427,25 @@ phase can reconsider that surface independently.
 ### 9.1 Presence and construction
 
 ```perl
-use PAGI::State qw(state);
+use PAGI::State qw(app_state);
 
 my $state_a = PAGI::State->new($request);
-my $state_b = state($request);
-my $state_c = state($scope);
+my $state_b = app_state($request);
+my $state_c = app_state($scope);
 ```
 
-All three expressions return the same cached State object for the exact scope.
-If the scope has no `state` key, they return `undef`. An existing empty hashref
-is present state and returns a valid wrapper. A present non-hashref state is a
-contract error and croaks.
+Perl 5.10 and later reserve `state` as a declarator. Under `use v5.40`, a call
+spelled `state($request)` silently parses as a state-variable declaration
+rather than invoking an imported function. The export is therefore named
+`app_state`; no `state` function is exported.
+
+All three expressions return equivalent State facades over the exact scope's
+backing hash. Object identity is unspecified. If the scope has no `state` key,
+they return `undef`. An existing empty hashref is present state and returns a
+valid facade. A present non-hashref state is a contract error and croaks.
 
 `$request->has_state` tests valid presence. `$request->state` delegates to the
-same factory and therefore returns the same object or `undef`.
+same construction rules and therefore returns an equivalent object or `undef`.
 
 ### 9.2 Read-oriented interface
 
@@ -453,6 +485,13 @@ use at each package/file/line callsite in a process emits a deprecation warning.
 Set `PAGI_SILENCE_STATE_HASHREF_WARNING=1` to suppress that warning only; the
 overload behavior is unchanged. The environment value must be exactly `1`.
 
+The overload preserves hash-dereference syntax, not hashref identity. The
+facade remains blessed, so `ref($request->state) eq 'HASH'` is false, HashRef
+type constraints reject it, and serializers or cloning tools may treat it as
+an object. Code that requires an actual hashref uses the explicit, unprotected
+`$request->state->data` escape hatch during migration. The upgrading guide must
+call out this limitation rather than describing the bridge as transparent.
+
 The bridge does not change `$scope->{state}`, which remains an ordinary
 hashref, and does not alter `PAGI::Context->state` while Context remains in the
 distribution. Its eventual removal is documented but not assigned an invented
@@ -460,8 +499,8 @@ version in this design.
 
 Existing `PAGI::WebSocket->state` and `PAGI::SSE->state` hashref access also
 remains unchanged in this Request-focused phase. New protocol-neutral examples
-that want strict access use `state($websocket)` or `state($sse)`. Harmonizing
-the direct WebSocket/SSE convenience methods can be considered with
+that want strict access use `app_state($websocket)` or
+`app_state($sse)`. Harmonizing the direct WebSocket/SSE convenience methods can be considered with
 `LATER-CONTEXT`; it is not allowed to delay direct protocol handler arguments.
 
 ## 10. Shared scope-source contract
@@ -492,6 +531,13 @@ compatible routing frame. State and Transport return `undef` when their
 optional scope capability is absent. Stash creates its request-local backing
 hash lazily.
 
+The governing rule is capability ownership: absence returns `undef` when the
+underlying PAGI or application capability is optional; construction croaks
+when the caller explicitly requests a helper whose meaningful operation
+requires a provider contract. State and Transport are optional, Stash is
+self-provisioning, and URL, Session, and CSRF require their Router or middleware
+provider.
+
 Existing Stash and Session `from_data` test constructors remain direct-data
 constructors. They do not use scope caching, do not require a scope lifetime,
 and are not generalized to the other helpers by this design.
@@ -505,7 +551,7 @@ use PAGI::Routing::URL qw(url url_for path_for);
 use PAGI::Stash       qw(stash);
 use PAGI::Session     qw(session);
 use PAGI::CSRF        qw(csrf);
-use PAGI::State       qw(state);
+use PAGI::State       qw(app_state);
 use PAGI::Transport   qw(transport);
 ```
 
@@ -524,43 +570,33 @@ url($request, 'show', @args);     # string -- rejected design
 `url($source)` always returns a `PAGI::Routing::URL`. String-producing calls
 are spelled `url_for($source, ...)` and `path_for($source, ...)`.
 
-### 10.3 Exact-scope caching
+### 10.3 Cheap facades without identity semantics
 
-For each helper class and exact scope reference:
-
-- object construction and the exported factory return one canonical helper;
-- repeated calls do not rebuild the helper or reverse-routing resolver;
-- the scope owns the cached helper;
-- the helper keeps only a weak reference back to the scope; and
-- any inherited cache whose recorded scope reference is not `refaddr`-equal to
-  the current scope is replaced in the child scope.
-
-Mount and middleware frequently create shallow scope clones. A nested shared
-cache hash would itself be copied by reference and leak helpers between parent
-and child. Implementations therefore use independent top-level, class-specific
-cache entries or another mechanism with the same exact-reference guarantee.
-They must not use one shared nested helper-cache hash.
-
-The following must hold:
+Scope-bound helpers are cheap facades constructed per call. The public
+contract guarantees equivalent behavior over the same backing capability, not
+object identity:
 
 ```perl
-my $a = url($parent_scope);
-my $b = url($parent_scope);
-refaddr($a) == refaddr($b);       # true
+my $a = url($scope);
+my $b = url($scope);
 
-my $child_scope = { %$parent_scope };
-my $c = url($child_scope);
-refaddr($a) == refaddr($c);       # false
+$a->path_for('show', { id => 1 })
+    eq $b->path_for('show', { id => 1 });  # guaranteed
+
+refaddr($a) == refaddr($b);                # unspecified
 ```
 
-The helper reads mutable request-selection metadata at operation time. Creating
-a URL helper before the selected leaf metadata is finalized must not freeze an
-ancestor frame and later generate from stale placement.
+Stash, Session, State, CSRF, and Transport already obtain their meaningful
+data or handle from the supplied scope. URL obtains the existing Resolver from
+the routing frame; constructing a URL facade does not compile or rebuild the
+Resolver. No helper object or helper-cache record is stored in the scope.
 
-A helper retained after its scope has been destroyed is outside its lifetime.
-Any operation needing that scope croaks with a concise expired-scope error; it
-must not operate on a stale ancestor record or silently create a replacement
-scope.
+This keeps shallow-cloned mount scopes naturally separate: each facade reads
+the exact scope supplied to its constructor. Implementations may introduce an
+invisible optimization later if measurement justifies it, but must not expose
+referential identity or require cache lifecycle semantics. A URL facade reads
+request-selection metadata when an operation runs so constructing it before
+final leaf metadata is installed cannot freeze a stale ancestor frame.
 
 ## 11. `PAGI::Routing::URL`
 
@@ -640,8 +676,8 @@ my $trace_id = stash($request)->get('trace_id'); # normal handler
 ```
 
 Stash retains its mutable `get`, `set`, `exists`, `delete`, `keys`, and `data`
-API and lazily creates `scope->{'pagi.stash'}`. Its constructor/factory now
-uses exact-scope caching and strict source arity.
+API and lazily creates `scope->{'pagi.stash'}`. Its constructor/factory uses
+strict source arity and returns a cheap facade over that backing hash.
 
 ### 12.2 Session
 
@@ -655,7 +691,7 @@ session($request)->set(cart => [@$cart, $apple_id]);
 Session retains its current data and lifecycle API. Construction requires
 Session middleware to have installed `pagi.session`; absence croaks with a
 diagnostic naming the required middleware capability. Its constructor/factory
-uses exact-scope caching and strict source arity.
+uses strict source arity and returns a cheap facade over that backing hash.
 
 ### 12.3 CSRF
 
@@ -714,9 +750,9 @@ if ($flow && !$flow->is_writable) {
 }
 ```
 
-`PAGI::Transport->new($source)` and `transport($source)` return the cached
-facade over `scope->{'pagi.transport'}`, or `undef` when the optional transport
-handle is absent. The facade provides:
+`PAGI::Transport->new($source)` and `transport($source)` return a cheap facade
+over `scope->{'pagi.transport'}`, or `undef` when the optional transport handle
+is absent. The facade provides:
 
 ```text
 buffered_amount
@@ -757,9 +793,9 @@ The compiler:
 5. validates and sends HTTP Responses; and
 6. leaves raw targets and middleware on the native PAGI signature.
 
-Request-scoped helper caches must observe the same selected scope and metadata.
-They must not be constructed against an ancestor and then blindly reused after
-a Mount creates a child scope.
+Every helper consumes the exact selected scope passed to it. Mount-created
+child scopes therefore use their own path, root path, routing frame, and
+capabilities without cache inheritance or replacement logic.
 
 ### 14.2 Endpoint Router
 
@@ -823,7 +859,9 @@ sub startup($state, $scope) {
 }
 
 sub apples_db($request) {
-    return $request->state->get('apples_db');
+    my $state = $request->state
+        or die 'starlette-apples requires Compose lifespan state';
+    return $state->get('apples_db');
 }
 
 async sub list_apples($request) {
@@ -925,8 +963,9 @@ my $self = $urls->url_for('read', { apple_id => $apple_id });
 my $edit = $urls->url_for('update', { apple_id => $apple_id });
 ```
 
-Repeated `url($request)` calls return the same helper, so concise repeated
-factory use does not impose repeated resolver construction.
+Repeated `url($request)` calls may return different facade objects, but each
+uses the same Resolver already installed in the request's routing frame. No
+Resolver compilation occurs per helper call.
 
 ## 16. Error behavior and diagnostics
 
@@ -944,7 +983,6 @@ Construction-time and request-time failures must identify the owning API:
 | Session or CSRF middleware capability is absent | Helper construction croaks and names the missing capability |
 | URL routing frame is absent, malformed, or unsupported version | URL operation croaks and names PAGI::Routing requirement |
 | URL authority is invalid or duplicated | `PAGI::Authority` error propagates |
-| Cached helper belongs to a shallow-cloned ancestor scope | Factory replaces it with a child-bound helper |
 
 No helper sends a response merely because a capability is absent. ErrorHandler
 and Pages remain responsible for translating application failures where the
@@ -954,12 +992,11 @@ application has installed those boundaries.
 
 1. Protocol objects and helpers are request scoped. No package-global mutable
    object may hold the active scope, routing frame, state, session, or stash.
-2. Helper cache entries must not make a scope/helper reference cycle. The
-   helper's scope reference is weak.
+2. No helper objects or helper-cache records are written into the scope.
 3. Concurrent requests through one compiled application must receive distinct
    Request, State, URL, Stash, Session, CSRF, and Transport objects.
-4. A shallow-cloned child scope must not mutate a parent's top-level cache
-   entry when replacing an inherited helper.
+4. A helper reads only the exact scope or backing capability supplied at
+   construction; shallow-cloned child scopes do not inherit facade state.
 5. State's raw `data` and `%{}` compatibility bridge are deliberate
    jailbreaks. Documentation must say that typo protection no longer applies
    after using them.
@@ -970,9 +1007,6 @@ application has installed those boundaries.
    include expected/submitted values in diagnostics.
 8. Request body methods continue to prevent two consumers from independently
    reading the same receive stream.
-9. Helper cache keys are private implementation details and must not collide
-   with public PAGI scope keys or trust user-provided lookalike records without
-   an identity token.
 
 ## 18. Upgrading
 
@@ -1033,6 +1067,18 @@ Canonical code:
 ```perl
 my $db = $request->state->get('db');
 ```
+
+The compatibility overload preserves only dereference syntax. It does not
+preserve hashref identity:
+
+```perl
+ref($request->state) eq 'HASH';          # false
+$request->state->data;                   # actual hashref escape hatch
+```
+
+HashRef type constraints, serializers, cloning libraries, and APIs that test
+`ref($value) eq 'HASH'` must receive `->data` during migration or be updated to
+consume the State interface.
 
 ### 18.4 Stash, Session, and CSRF
 
@@ -1171,9 +1217,11 @@ Tests must cover:
 - exact-value environment suppression;
 - no warning suppression when the variable is missing, empty, or not `1`;
 - raw `$scope->{state}` and surviving Context behavior remain hashref-based;
-- cached identity for exact scope and separation across concurrent scopes.
+- `ref($state) eq 'HASH'` remains false while `->data` returns the backing
+  hashref; and
+- equivalent data with unspecified facade identity across repeated calls.
 
-### 20.4 Helpers and caching
+### 20.4 Helper facades
 
 Each helper must be tested with a scope and each applicable protocol object.
 Tests must cover:
@@ -1181,12 +1229,11 @@ Tests must cover:
 - accepted source shapes and strict rejection of every malformed shape;
 - rejection of extra constructor/factory arguments;
 - no default exports, named exports, and uppercase `:ALL`;
-- constructor/factory referential identity for one exact scope;
-- distinct objects for distinct scopes;
-- shallow-clone inherited-cache replacement;
-- no mutation of the parent's top-level cache during replacement;
-- weak-reference collection after scope release;
-- no nested shared cache record;
+- `app_state` invokes the function under `use v5.40` and no `state` function is
+  exported;
+- equivalent behavior with no referential-identity guarantee;
+- no helper object or helper-cache record added to the scope;
+- exact backing data selection for parent and shallow-cloned child scopes;
 - missing optional versus required capability behavior; and
 - concurrency through one compiled application without cross-request leakage.
 
@@ -1211,7 +1258,7 @@ Reuse and extend the existing reverse-routing matrix for:
 ### 20.6 Stash, Session, CSRF, and Transport
 
 Tests must preserve existing Stash/Session behavior while adding factory and
-cache coverage. CSRF tests must include middleware-present, middleware-absent,
+scope-source coverage. CSRF tests must include middleware-present, middleware-absent,
 matching, mismatching, missing, empty, and timing-safe comparison paths without
 exposing token values. Transport tests must cover optional absence, every
 delegated method, callback chaining, writable threshold boundaries, malformed
@@ -1240,7 +1287,7 @@ receiving Context. Historical design records are not rewritten.
 
 The later implementation plan must preserve a buildable sequence:
 
-1. introduce and test the shared scope-source/cache machinery;
+1. introduce and test the shared scope-source normalization machinery;
 2. add State, Transport, CSRF, and functional factories while normalizing
    Stash and Session;
 3. add `PAGI::Routing::URL` by moving, not reimplementing, current
@@ -1269,13 +1316,19 @@ Routers and middleware to mimic PAGI-Tools internals.
 
 Rejected. An imported Perl function does not automatically become a method,
 and an actual method would couple Request to PAGI::Routing. `url($request)` is
-concise, cacheable, and honest about ownership.
+concise, explicit, and honest about ownership.
 
 ### 22.3 Overload `url` by arity
 
 Rejected. Returning an object with one argument and a string with more
 arguments makes refactoring change the return type invisibly. Separate
 `url_for` and `path_for` exports are only a few characters longer.
+
+Pages' existing one-argument normal-handler and three-argument native-app
+endpoint is a deliberately retained interoperability exception. It bridges two
+framework invocation positions rather than offering two ordinary caller-facing
+return types. `LATER-PAGES` will reconsider that dual contract; this design
+does not generalize it to new helper APIs.
 
 ### 22.4 Rename Request to `PAGI::HTTP`
 
@@ -1295,11 +1348,13 @@ Rejected. Raw PAGI applications and middleware would lose the same helpers,
 and constructing through `$scope` would produce a second object. The exact
 scope is the common lifetime boundary.
 
-### 22.7 Store one nested helper cache in scope
+### 22.7 Require helper identity or cache facades in scope
 
-Rejected. Shallow-cloned mount scopes would share and mutate that nested hash.
-Independent cache entries plus exact-scope verification prevent cross-boundary
-reuse.
+Rejected. No helper's semantics require referential identity, and the Router
+Resolver already lives in its routing frame. Public identity would require
+weak references, clone replacement, cache-key protection, and lifetime rules
+without measured benefit. Cheap per-call facades leave future invisible
+performance optimization possible without expanding the contract.
 
 ### 22.8 Let State mutate top-level values
 
@@ -1338,12 +1393,13 @@ following:
    the recommended surface;
 5. State catches missing-key typos and provides the documented temporary
    warned hash bridge;
-6. all scope-bound helpers share one strict source contract and exact-scope
-   caching rule;
+6. all scope-bound helpers share one strict source contract without public
+   identity or scope-cache semantics;
 7. URL behavior matches the existing reverse-routing contract without a second
    resolver implementation;
 8. Stash, Session, CSRF, State, and Transport work from Request and raw scope;
-9. shallow scope cloning and concurrent requests cannot share helper identity;
+9. shallow scope cloning and concurrent requests select only their own backing
+   capabilities without helper records in scope;
 10. Pages requires only the narrow Request-source compatibility change;
 11. the apples and large-application examples are fully migrated and tested;
 12. the upgrading guide contains the Thunderhorse/framework-author handoff;
