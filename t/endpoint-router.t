@@ -258,7 +258,7 @@ sub run_scope {
         my ($self, $r) = @_;
         if ($self->{mode} eq 'normal') {
             push @{$self->{trace}}, 'before';
-            my $future = Future->done('ignored callback return');
+            my $future = Future->fail("callback return must stay ignored\n");
             $self->{callback_future} = $future;
             $r->mount('/callback', routes => sub {
                 my ($child) = @_;
@@ -272,14 +272,18 @@ sub run_scope {
         return $r->mount('/bad', routes => sub {
             die "callback explosion\n";
         }) if $self->{mode} eq 'throws';
-        return $r->mount('/bad', routes => sub { }, 'dangling')
+        return $r->mount('/bad', routes => sub {
+            ++$self->{malformed_callback_calls};
+        }, 'dangling')
             if $self->{mode} eq 'odd';
         return $r->mount('/bad',
-            routes => sub { ++$self->{duplicate_calls} },
-            routes => sub { ++$self->{duplicate_calls} },
+            routes => sub { ++$self->{malformed_callback_calls} },
+            routes => sub { ++$self->{malformed_callback_calls} },
         ) if $self->{mode} eq 'duplicate';
         my $non_string = [];
-        return $r->mount('/bad', $non_string => sub { });
+        return $r->mount('/bad', $non_string => sub {
+            ++$self->{malformed_callback_calls};
+        });
     }
 
     sub leaf { return $_[1]->text('callback leaf') }
@@ -403,8 +407,9 @@ subtest 'Endpoint callback wrapping preserves synchronous App builder semantics'
     is($endpoint->{trace}, ['before', 'callback', 'after'],
         'the routes callback executes synchronously during declaration');
     isa_ok($endpoint->{callback_future}, 'Future');
-    is($endpoint->{callback_future}->get, 'ignored callback return',
-        'a Future callback return remains caller-owned and ignored');
+    is($endpoint->{callback_future}->failure,
+        "callback return must stay ignored\n",
+        'a failed Future return remains unconsumed and is explicitly reported');
     is($routing->path_for('/callback/leaf'), '/callback/leaf',
         'the callback child declaration is retained instead of its return value');
     is(PAGI::Test::Client->new(app => $routing->to_app)
@@ -426,7 +431,7 @@ subtest 'Endpoint callback wrapping preserves synchronous App builder semantics'
         my $bad = Local::CallbackContractEndpoint->new($mode);
         like(dies { $bad->to_router }, $pattern,
             "$mode options retain the App builder diagnostic");
-        is(0 + ($bad->{duplicate_calls} || 0), 0,
+        is(0 + ($bad->{malformed_callback_calls} || 0), 0,
             "$mode options fail before a callback executes");
     }
 };
