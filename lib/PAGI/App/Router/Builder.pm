@@ -399,9 +399,13 @@ sub _copy_record {
 sub _option_hash {
     my ($name, @args) = @_;
     croak "$name option list must be key/value pairs" if @args % 2;
+    my %seen;
     for (my $index = 0; $index < @args; $index += 2) {
         croak "$name option names must be strings"
             unless defined $args[$index] && !ref($args[$index]);
+        my $key = $args[$index];
+        croak "duplicate $name option '$key'" if exists $seen{$key};
+        $seen{$key} = 1;
     }
     return { @args };
 }

@@ -276,6 +276,47 @@ subtest 'HTTP Cascade streams accepted apps and suppresses caught apps' => sub {
         'body before start is a typed failure');
     is($body_error->stage, 'body_before_start',
         'body before start reports its exact lifecycle stage');
+
+    my $incomplete_next_runs = 0;
+    my ($incomplete_events, $incomplete_error) = run_app(
+        PAGI::App::Cascade->new(apps => [
+            async sub {
+                my ($request_scope, $request_receive, $send) = @_;
+                await Future->wrap($send->({
+                    type => 'http.response.start', status => 404, headers => [],
+                }));
+                return;
+            },
+            async sub { ++$incomplete_next_runs; return },
+        ])->to_app,
+        scope(path => '/caught-incomplete'),
+    );
+    isa_ok($incomplete_error, ['PAGI::Exception::IncompleteResponse'],
+        'a caught response without a terminal body is a typed failure');
+    is($incomplete_error->stage, 'after_start',
+        'caught incompletion reports the post-start stage');
+    is($incomplete_events, [],
+        'the incomplete caught start remains suppressed');
+    is($incomplete_next_runs, 0,
+        'caught incompletion never advances to the next application');
+
+    my ($post_start_events, $post_start_error) = run_app(
+        PAGI::App::Cascade->new(apps => [
+            async sub {
+                my ($request_scope, $request_receive, $send) = @_;
+                await Future->wrap($send->({
+                    type => 'http.response.start', status => 200, headers => [],
+                }));
+                die "stream failed after start\n";
+            },
+            response_app(200, 'unused'),
+        ])->to_app,
+        scope(path => '/post-start'),
+    );
+    like($post_start_error, qr/stream failed after start/,
+        'an exception after a forwarded response start propagates');
+    is([map { $_->{type} } @$post_start_events], ['http.response.start'],
+        'the already-forwarded start is preserved');
 };
 
 subtest 'non-HTTP Cascade buffers only its first application' => sub {
@@ -323,6 +364,13 @@ subtest 'non-HTTP Cascade buffers only its first application' => sub {
         Future->wrap($running)->get;
         is(\@events, [$event], "$type replays buffered events after completion");
         is($later_runs, 0, "$type returns without running later apps");
+
+        my ($empty_events, $empty_error) = run_app(
+            PAGI::App::Cascade->new(apps => [])->to_app,
+            $request_scope,
+        );
+        is($empty_error, undef, "$type empty Cascade completes normally");
+        is($empty_events, [], "$type empty Cascade remains silent");
     }
 };
 

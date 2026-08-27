@@ -76,6 +76,13 @@ subtest 'constructor copies and normalizes router configuration' => sub {
     like dies { PAGI::App::Router::Builder->new(unknown => 1) },
         qr/unknown router option 'unknown'/,
         'unknown router options are rejected';
+    like dies {
+        PAGI::App::Router::Builder->new(
+            http_default => $default,
+            http_default => $method_default,
+        );
+    }, qr/duplicate router option 'http_default'/,
+        'duplicate constructor options are rejected before hash construction';
     like dies { PAGI::App::Router::Builder->new(desc => []) },
         qr/desc must be a string/,
         'invalid descriptions are rejected';
@@ -197,6 +204,11 @@ subtest 'leaf grammar distinguishes Context targets from explicit raw targets' =
             bless({}, 'Local::StringifiedOption') => ['GET']);
     }, qr/route option names must be strings/,
         'stringified reference option keys are rejected before hash construction';
+    like dies {
+        $builder->route('/duplicate-methods' => $handler,
+            methods => ['GET'], methods => ['POST']);
+    }, qr/duplicate route option 'methods'/,
+        'duplicate route options are rejected before hash construction';
 };
 
 subtest 'last declaration modifiers update only the latest compatible route' => sub {
@@ -238,6 +250,10 @@ subtest 'last declaration modifiers update only the latest compatible route' => 
         'description uses shared text validation';
     like dies { $builder->constraints('id') }, qr/constraints option list must be key\/value pairs/,
         'constraints require key/value pairs';
+    like dies {
+        $builder->constraints(id => qr/\d+/, id => qr/[a-z]+/);
+    }, qr/duplicate constraints option 'id'/,
+        'duplicate constraint options are rejected before hash construction';
 };
 
 subtest 'materialization defers immutable HTTP normalization to Route' => sub {

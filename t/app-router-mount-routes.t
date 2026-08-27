@@ -181,6 +181,10 @@ subtest 'only app or routes named grammar is accepted' => sub {
         PAGI::App::Router->new->mount('/x', app => $app, routes => []);
     }, qr/mount requires exactly one of app or routes/,
         'a Mount cannot have both app and routes');
+    like(dies {
+        PAGI::App::Router->new->mount('/x', app => $app, app => $immutable);
+    }, qr/duplicate mount option 'app'/,
+        'duplicate Mount options are rejected before hash construction');
     like(dies { PAGI::App::Router->new->mount('/x', routes => 'No::Routes') },
         qr/mount routes must be an arrayref or callback/,
         'routes rejects strings');
