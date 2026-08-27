@@ -368,7 +368,7 @@ HEAD to the Router-generated 405 union.
 
 Compose installs the same root safety graph for every HTTP target:
 
-  HEAD wire boundary
+  outer idempotent application-root HEAD boundary
     automatic ErrorHandler
       response-completion guard
         author middleware, in listed order
@@ -381,9 +381,11 @@ official error policy inside request IDs, access logging, and security
 middleware so those layers observe it:
 
 A bare Router has no root ErrorHandler, response-completion guard, or lifespan
-owner. If a selected application sends nothing, a direct Router call completes
-without synthesizing a response. Compose wraps that same Router in the safety
-graph above and converts pre-start silence into its production-safe 500.
+owner, but its compiled app already installs a Router HeadBoundary. If a
+selected application sends nothing, a direct Router call completes without
+synthesizing a response. Compose wraps that same Router in the safety graph
+above; the outer idempotent HEAD boundary becomes the wire owner, and the guard
+converts pre-start silence into its production-safe 500.
 
   my $app = compose(
       app => $routing,
@@ -693,8 +695,8 @@ router middleware:
       }],
   };
 
-A known inline or Router mount appends this exact record before its middleware
-runs:
+A matched structural or inspectable Router Mount appends this exact Mount
+record to the current frame before its Mount middleware runs:
 
   {
       path      => '/tenants/{tenant_id}', # declared mount path
@@ -725,15 +727,21 @@ Router-owned NONE/PARTIAL outcome leaves C<match> undefined. See
 L<PAGI::Routing/MATCHED-ROUTE SCOPE CONVENTION> for the complete
 public schema.
 
-An explicit Router mount shares the containing frame. A separately compiled
-compatible Router reached through an opaque mount appends a frame, so child
-middleware can inspect ancestry while the parent keeps its terminal mount
-record.
+Each matched Mount first appends its Mount record to the current frame. Entering
+an inspectable Router Mount then appends a distinct child boundary frame. That
+frame retains the root Resolver and root entry C<root_path> while copying the
+selected placement's namespace, captures, and cumulative Mount chain.
 
-The frame is shared through request-local shallow scopes: router/mount
-middleware can inspect the final match after awaiting downstream. Middleware
-outside the compiled app keeps its original top-level scope and does not see
-downstream top-level additions.
+An opaque Mount instead leaves its terminal Mount match in the parent frame. If
+its native target happens to be another separately compiled Router, that Router
+appends its own child frame to a compatible container, using its own Resolver
+and its own entry C<root_path>. Child middleware can inspect the new innermost
+frame while parent middleware retains the terminal Mount frame.
+
+Each active frame is shared only through request-local shallow scopes within
+its boundary: router/mount middleware can inspect the final match after awaiting
+downstream. Middleware outside the compiled app keeps its original top-level
+scope and does not see downstream top-level additions.
 
 Opaque, malformed, or newer C<pagi.routing> data forms an incompatible
 boundary. The child installs a fresh v1 container, ignores foreign ancestry,
@@ -921,6 +929,10 @@ parent should retain their names, metadata, and structure:
           return $c->json({ report => 'current' });
       })->name('index');
   })->name('reports');
+
+The C<routes =E<gt> sub> callback is a mutable App/Endpoint builder shorthand.
+The functional L<PAGI::Routing/mount> constructor instead takes
+C<routes =E<gt> [ ... ]>; it does not execute a builder callback.
 
   my $snapshot = $main_router->to_router;
   $snapshot->path_for('/api/users');

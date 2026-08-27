@@ -587,14 +587,15 @@ without sending any response.
 my $app = $routing->to_app;
 ```
 
-**After (shipped):** direct compilation sends the Router's own 404 and 405.
-Compose supplies the separate root safety and lifecycle boundary.
+**After (shipped):** direct compilation sends the Router's own 404 and 405 and
+installs its own HeadBoundary. Compose supplies a separate outer, idempotent
+application-root HEAD boundary plus root safety and lifecycle.
 
 ```perl
 # Router-complete outcomes: HTTP NONE/405 are sent here.
 my $routing_app = $routing->to_app;
 
-# Deployed application: adds ErrorHandler, response guard, HEAD, and lifespan.
+# Deployed application: adds an outer HEAD owner, ErrorHandler, guard, lifespan.
 my $app = compose(app => $routing)->to_app;
 ```
 
@@ -606,7 +607,7 @@ and renders 500 before response start.
 For every HTTP target, Compose installs this exact outer-to-inner graph:
 
 ```text
-HEAD wire boundary
+outer idempotent application-root HEAD boundary
   Compose ErrorHandler failsafe
     response-completion guard
       author Compose middleware, in listed order
@@ -1304,6 +1305,12 @@ Why: the frame stack and its mount ancestry can describe nested immutable
 routers, captures, logical placement, and the selected leaf without mutating
 shared descriptions.
 
+An inspectable Router Mount appends a distinct child boundary frame that keeps
+the root Resolver and root entry `root_path`. An opaque Mount keeps its terminal
+Mount match in the parent frame; if its native target is a separately compiled
+Router, that Router appends its own frame/container boundary with its own
+Resolver and entry `root_path` when the incoming metadata is compatible.
+
 ## Retain a `to_router` snapshot for stable inspection
 
 **Before (removed):** named-route inspection and generation read the mutable
@@ -1425,8 +1432,30 @@ middleware('RequestId', header => 'X-Request-ID');
 ```
 
 This distinction applies to Mount `app`, `raw`, Router `http_default`, and
-Compose `app`. A package-name application is rejected synchronously rather
-than guessed.
+Compose `app`; `PAGI::Test::Client`'s `app`; `PAGI::Lifespan`'s `app`/`wrap`
+target; `PAGI::Middleware::Builder`'s final fallback and Mount targets; and
+URLMap/Cascade application entries. A package-name application is rejected
+synchronously rather than guessed.
+
+Construct once and pass the same explicit object at these boundaries:
+
+```perl
+use MyApp::Legacy;
+use PAGI::Lifespan;
+use PAGI::Middleware::Builder;
+use PAGI::Test::Client;
+
+my $legacy = MyApp::Legacy->new;
+
+my $client = PAGI::Test::Client->new(app => $legacy);
+my $with_lifespan = PAGI::Lifespan->wrap($legacy,
+    startup => sub { my ($state) = @_; $state->{ready} = 1 },
+);
+my $built = builder {
+    mount '/legacy' => $legacy;
+    $legacy;
+};
+```
 
 ## Removed routing fallback machinery
 
@@ -1444,16 +1473,24 @@ These accepted forms are deliberately explicit:
 
 ```perl
 mount('/x', app => $app);
-mount('/x', routes => sub {
+
+# Immutable functional constructor: structural nodes in an arrayref.
+mount('/x', routes => [
+    route('/' => sub { return $_[0]->text('child') }),
+]);
+
+# Mutable App/Endpoint builder: one declaration-time callback.
+$r->mount('/x', routes => sub {
     my ($child) = @_;
     $child->get('/' => sub { return $_[0]->text('child') });
 });
 ```
 
-The callback form is available in the mutable App and Endpoint frontends. It
-runs once during declaration, receives a fresh child builder bound to the same
-Endpoint object when applicable, and ignores its return value. Both `/x` and
-`/x/` reach the child `/` leaf without redirecting.
+The functional form accepts an arrayref, never a callback. The callback form is
+available only in the mutable App and Endpoint frontends. It runs once during
+declaration, receives a fresh child builder bound to the same Endpoint object
+when applicable, and ignores its return value. Both `/x` and `/x/` reach the
+child `/` leaf without redirecting.
 
 ## Deliberate Starlette differences and deferred schema work
 

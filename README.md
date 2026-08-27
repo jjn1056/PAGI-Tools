@@ -107,9 +107,10 @@ route metadata, constraints, GET/HEAD behavior, Router-owned 404/405 outcomes,
 first-seen method unions, written declaration order, and reverse
 routing. Ordinary HTTP handlers receive `$c` and return a Response. Native
 channel ownership is always explicit with `raw`. A bare Router sends its own
-negotiated 404 and compliant 405, but it deliberately has no root ErrorHandler,
-response-completion guard, or lifespan driver. Compose supplies those deployed
-application boundaries.
+negotiated 404 and compliant 405 and installs its own HeadBoundary, but it
+deliberately has no root ErrorHandler, response-completion guard, or lifespan
+driver. Compose adds an outer idempotent application-root HEAD boundary and
+supplies those deployed application policies.
 See the
 [router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md)
 for the intentionally breaking migration from the previous App and Endpoint

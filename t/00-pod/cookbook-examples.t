@@ -167,8 +167,11 @@ subtest 'Cookbook publishes the representative final forms' => sub {
         qr/outer Router middleware.*Router-mount middleware.*child Router middleware.*inline-mount middleware.*route middleware/s,
         'middleware placement order is published');
     like($cookbook,
-        qr/A bare Router has no root ErrorHandler, response-completion guard, or lifespan\s+owner\./,
-        'direct Router versus Compose safety is explicit');
+        qr/A bare Router has no root ErrorHandler, response-completion guard, or lifespan\s+owner, but its compiled app already installs a Router HeadBoundary\./,
+        'direct Router retains its own HEAD owner while lacking root safety');
+    like($cookbook,
+        qr/outer idempotent application-root HEAD boundary/,
+        'Compose publishes its distinct outer HEAD owner');
 };
 
 subtest 'representative Cookbook forms construct and dispatch' => sub {

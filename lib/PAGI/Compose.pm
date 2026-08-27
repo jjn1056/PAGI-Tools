@@ -272,7 +272,7 @@ state.
 
 For HTTP, the exact outer-to-inner order is:
 
-  final HEAD wire boundary
+  outer idempotent application-root HEAD wire boundary
     ErrorHandler
       response-completion guard
         first application middleware
@@ -280,11 +280,13 @@ For HTTP, the exact outer-to-inner order is:
             Compose dispatcher
               request target
 
-The final HEAD boundary is outermost. Compose does not clone an ordinary HTTP
-scope or inspect routing metadata. All response lifecycle observation is
-lexical to that request. The completion guard observes events without copying
-or rewriting them and accepts a terminal C<http.response.body> with absent or
-false C<more>, including sendfile bodies.
+The application-root HEAD boundary is outermost and idempotent with a directly
+compiled Router's own HeadBoundary; the outermost participating boundary owns
+wire suppression. Compose does not clone an ordinary HTTP scope or inspect
+routing metadata. All response lifecycle observation is lexical to that
+request. The completion guard observes events without copying or rewriting
+them and accepts a terminal C<http.response.body> with absent or false C<more>,
+including sendfile bodies.
 
 WebSocket, SSE, lifespan, and application-defined extension scopes retain the
 author stack and dispatcher path; they do not enter the HTTP ErrorHandler or
@@ -342,12 +344,14 @@ graph is not entered for lifespan.
 
 =head1 HEAD REQUESTS
 
-For HTTP HEAD, the final Compose wire boundary sits outside the HTTP safety
-graph and all application middleware. Middleware, Router outcome renderers,
-and error renderers therefore complete the full representation before wire
-suppression. Body-derived C<Content-Length>, compression metadata, ETags, and
-similar headers survive for target, Router outcome, error, and sendfile
-responses.
+For HTTP HEAD, Compose's outer idempotent application-root boundary sits
+outside the HTTP safety graph and all application middleware. A directly
+compiled Router already installs its own HeadBoundary; the shared marker makes
+the outermost participating boundary the wire owner. Middleware, Router outcome
+renderers, and error renderers therefore complete the full representation
+before wire suppression. Body-derived C<Content-Length>, compression metadata,
+ETags, and similar headers survive for target, Router outcome, error, and
+sendfile responses.
 
 The boundary never rewrites HEAD to GET. Custom HEAD routes still receive
 method C<HEAD>, so they can avoid an expensive GET handler. At the wire it
@@ -440,9 +444,10 @@ recover if an inner renderer fails.
 C<< compose(routes => [...]) >> is a compact deployed root: a functional
 Router plus application middleware, lifecycle, and HTTP safety. It does not
 replace any Router frontend. A directly compiled Router already owns HTTP 404
-and 405 outcomes and its final HEAD boundary, but it does not install Compose's
+and 405 outcomes and its own HeadBoundary, but it does not install Compose's
 ErrorHandler, response guard, or lifespan driver. Wrapping it with
-C<< compose(app => $routing) >> adds that application-root boundary. For
+C<< compose(app => $routing) >> adds the outer idempotent application-root HEAD
+boundary and those root policies. For
 router middleware, C<http_default>, reverse routing, or inspection, retain that
 Router and pass it to Compose. Compose deliberately does not delegate
 C<path_for>, C<route_named>, or other target-specific methods.

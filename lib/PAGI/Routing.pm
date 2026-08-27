@@ -774,10 +774,15 @@ leave C<match> undefined while retaining the namespace and consumed-prefix
 capture snapshot of their owning placement. The Router renders the resulting
 404 or 405 without inventing a selected leaf.
 
-Router base applications share their containing resolver frame. A separately
-compiled Router reached through an application mount appends a compatible child
-frame, and Context selects the innermost compatible frame. Malformed or newer
-C<pagi.routing> data is an incompatible boundary:
+Entering an inspectable Router Mount appends a distinct child boundary frame.
+It shares the root Resolver and root entry C<root_path> while copying the
+selected placement's logical namespace, captures, and cumulative Mount chain.
+
+An opaque application Mount retains its terminal Mount match in the parent
+frame. If that native target is another separately compiled Router, the child
+Router appends a frame to a compatible container with its own Resolver and its
+own entry C<root_path>; Context selects that innermost compatible frame.
+Malformed or newer C<pagi.routing> data is an incompatible boundary:
 the child router creates a fresh v1 container, ignores foreign ancestry, and
 does not croak. The incoming scope and foreign value are not mutated. Additive
 compatible fields, such as frame C<root_path>, retain version 1.

@@ -1097,9 +1097,9 @@ C<denial_complete> states), so it is genuinely advertised.
 
 =item app (required)
 
-The PAGI application to test. Accepts anything L<PAGI::Utils/to_app> accepts:
-a coderef, a component object (anything with a C<to_app> method), or a class
-name string:
+The PAGI application to test. This native application position accepts the two
+forms supported by L<PAGI::Utils/to_app>: a coderef or an instantiated
+component object with a C<to_app> method:
 
     # Coderef (existing style)
     my $client = PAGI::Test::Client->new(app => $coderef);
@@ -1107,8 +1107,13 @@ name string:
     # Component object
     my $client = PAGI::Test::Client->new(app => MyApp::Main->new(%opts));
 
-    # Class name - auto-required, then compiled via to_app
-    my $client = PAGI::Test::Client->new(app => 'MyApp::Main');
+Package-name strings are rejected synchronously. Load and construct the
+component explicitly so configuration and object identity stay visible:
+
+    use MyApp::Main;
+    my $client = PAGI::Test::Client->new(
+        app => MyApp::Main->new(%opts),
+    );
 
 =item headers
 

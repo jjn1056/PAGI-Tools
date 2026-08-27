@@ -154,6 +154,16 @@ for either form. After a prefix matches, the child owns its full match, 404,
 and 405. Those responses flow through child, Mount-occurrence, and parent
 middleware, but the parent never resumes scanning.
 
+The immutable functional form takes an arrayref of nodes. The callback
+shorthand belongs only to the mutable App/Endpoint builder:
+
+  mount('/reports', routes => [route('/' => \&report)])
+
+  $r->mount('/reports', routes => sub {
+      my ($child) = @_;
+      $child->get('/' => \&report);
+  });
+
 Route and structural-mount names are local segments; slash constructs absolute
 logical addresses such as C</api/user>. Context reverse calls may resolve from
 the active namespace and inherit only target-required captures:
@@ -235,12 +245,14 @@ WebSocket, SSE, and extension scopes. The first listed middleware is outermost.
 Only the deployed root runs lifecycle callbacks; mounting or nesting a Compose
 description retains request dispatch but does not run that inner lifecycle.
 
-For HTTP, Compose installs final HEAD wire suppression, ErrorHandler, and a
-response-completion guard outside author middleware and the target. The Router
-already owns 404 and 405. Configure its C<http_default> when the application
-needs custom missing-route presentation; method mismatches retain the
-Router-generated 405 and authoritative C<Allow>. A selected native app that
-sends nothing is incomplete output and becomes 500, never an implicit miss.
+For HTTP, a directly compiled Router already installs its own HeadBoundary.
+Compose adds an outer, idempotent application-root HEAD boundary plus
+ErrorHandler and a response-completion guard outside author middleware and the
+target. The Router already owns 404 and 405. Configure its C<http_default> when
+the application needs custom missing-route presentation; method mismatches
+retain the Router-generated 405 and authoritative C<Allow>. A selected native
+app that sends nothing is incomplete output and becomes 500, never an implicit
+miss.
 
 C<compose(...)> returns an immutable description. The final C<to_app> compiles
 the native three-channel PAGI coderef once. Compose is not a base class and it
@@ -626,7 +638,7 @@ The route forms are exact and method-aware. The mount owns C</gone> and its
 entire subtree for every HTTP method; a terminal Pages app ignores the
 remaining child path. A direct deferred-endpoint triplet is HTTP-only. Deploy
 it through C<< compose(app => $endpoint)->to_app >> when the root must also own
-lifespan and final HEAD body suppression.
+lifespan and an application-root HEAD body boundary.
 
 Automatic representation selection negotiates HTML, RFC 9457 problem JSON for
 errors (ordinary JSON for welcome and redirects), and text. Use C<< as =>
@@ -1387,7 +1399,8 @@ L<PAGI::App::Router> and
 L<PAGI::Routing>, C<mount> and the final block value in
 L<PAGI::Middleware::Builder>'s C<builder {}>, L<PAGI::App::URLMap>
 mounts and its C<default>, L<PAGI::App::Cascade> entries, and the
-C<app> argument to L<PAGI::Test::Client>. Put together:
+C<app> argument to L<PAGI::Test::Client>, L<PAGI::Lifespan/new>, and
+L<PAGI::Lifespan/wrap>. Put together:
 
   my $app = builder {
       enable 'AccessLog';
@@ -1402,7 +1415,7 @@ deliberately stricter: load their packages normally, construct configured
 objects explicitly, and pass immutable snapshots to
 C<< mount('/prefix', app => $child->to_router) >> when reverse discovery is
 required. Ordinary route targets receive
-C<$c>; native coderefs and class/component apps belong only behind explicit
+C<$c>; native coderefs and instantiated component apps belong only behind explicit
 C<raw> or opaque mount boundaries.
 
 Middleware position is the same idea with a different duck type:

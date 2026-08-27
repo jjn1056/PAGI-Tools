@@ -254,17 +254,18 @@ error(s) in C<message> -- instead of C<lifespan.shutdown.complete>.
 Both C<startup> and C<shutdown> callbacks receive the shared state
 hashref as their first argument.
 
-The C<app> argument accepts anything L<PAGI::Utils/to_app> accepts: a
-coderef, a component object with a C<to_app> method, or a class name
-string.  The coercion happens once at construction time.
+The C<app> argument accepts the two native application forms supported by
+L<PAGI::Utils/to_app>: a coderef or an instantiated component object with a
+C<to_app> method. Package-name strings are rejected; load and construct the
+component explicitly. The coercion happens once at construction time.
 
 =head2 wrap
 
     my $app = PAGI::Lifespan->wrap($inner_app, startup => ..., shutdown => ...);
 
-Class method shortcut that creates a wrapper and returns the app coderef.  The
-first argument accepts anything L<PAGI::Utils/to_app> accepts (coderef,
-component object, or class name).
+Class method shortcut that creates a wrapper and returns the app coderef. The
+first argument accepts a coderef or instantiated C<to_app> object and rejects
+package-name strings, just like C<new(app =E<gt> ...)>.
 
 =head2 to_app
 

@@ -140,8 +140,20 @@ subtest 'executable routing-composition migration matrix' => sub {
 
     ok(lives { mount('/current', app => $native) },
         'functional Mount accepts a named application');
-    ok(lives { mount('/current', routes => []) },
-        'functional Mount accepts a structural route list');
+    my $functional_mount;
+    ok(lives {
+        $functional_mount = mount('/functional', routes => [
+            route('/' => sub { return $_[0]->text('functional child') }),
+        ]);
+    }, 'functional Mount accepts a structural route list');
+    my ($functional_events, $functional_error) = run_http(
+        router(routes => [$functional_mount])->to_app,
+        path => '/functional', raw_path => '/functional',
+    );
+    is($functional_error, undef,
+        'functional routes array constructs and dispatches');
+    is(response_body($functional_events), 'functional child',
+        'functional Mount routes array reaches its child root');
     ok(lives { middleware('RequestId', header => 'X-Request-ID') },
         'middleware package strings retain their explicit loading contract');
 
@@ -294,7 +306,8 @@ subtest 'public documentation publishes one final routing model' => sub {
         'upgrade guide has one complete routing-composition section');
     for my $replacement (
         'mount(\'/x\', app => $app)',
-        'mount(\'/x\', routes => sub',
+        'mount(\'/x\', routes => [',
+        '$r->mount(\'/x\', routes => sub',
         'Router `http_default`',
         'Compose',
         'package-name application',
@@ -302,6 +315,15 @@ subtest 'public documentation publishes one final routing model' => sub {
     ) {
         like($upgrading, qr/\Q$replacement\E/,
             "upgrade guide covers $replacement");
+    }
+
+    for my $file (
+        'lib/PAGI/Tools/Tutorial.pod',
+        'lib/PAGI/Tools/Cookbook.pod',
+    ) {
+        unlike(slurp_file($file),
+            qr/(?<!->)mount\('\/[^']*', routes => sub/,
+            "$file does not present a mutable callback as functional Mount syntax");
     }
 
     my $changes = slurp_file('Changes');

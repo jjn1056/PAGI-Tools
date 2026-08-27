@@ -169,10 +169,12 @@
     App, and Endpoint frontends reject removed `not_found` and
     `method_not_allowed` callbacks.
   - PAGI::Compose no longer creates routing Trace/fallback layers. It owns the
-    root lifespan and installs final HEAD suppression, ErrorHandler, and a
-    response-completion guard outside author middleware and the target. Router
-    404/405 responses pass through unchanged. A selected native application
-    that sends nothing is guarded as 500, not reinterpreted as a routing miss.
+    root lifespan and installs an outer idempotent application-root HEAD
+    boundary, ErrorHandler, and a response-completion guard outside author
+    middleware and the target. A directly compiled Router already installs its
+    own HeadBoundary. Router 404/405 responses pass through unchanged. A
+    selected native application that sends nothing is guarded as 500, not
+    reinterpreted as a routing miss.
   - ErrorHandler adds an optional Response renderer, awaits immediate or
     Future-backed `on_error` reporting, and rethrows the original exception
     after response start without attempting a second response. Its built-in
@@ -218,8 +220,9 @@
     migrations to Context handlers, explicit raw routes, local names and slash
     addresses, explicit constructed child objects, retained snapshots, and
     universal native middleware. `group`, positional Mount targets, and
-    `router =>` are removed; mutable `mount(..., routes => sub { ... })` builds
-    a real child Router, and Endpoint `app_as` exposes local native methods.
+    `router =>` are removed. Functional `mount(..., routes => [...])` takes a
+    structural node array; mutable `mount(..., routes => sub { ... })` builds a
+    real child Router, and Endpoint `app_as` exposes local native methods.
   - PAGI::Routing inline paths now accept zero-argument constraint providers
     such as `{id:&Int}`. Providers use exact declaration-package or qualified
     CODE-slot lookup, run once per source occurrence during construction, and
@@ -247,8 +250,10 @@
     application-wide pure event middleware and explicit startup/shutdown
     callbacks. It owns lifespan without delegating it, requires server-provided
     state when callbacks are configured, normalizes immediate/Future callback
-    completion, and shares routing's outermost HEAD wire boundary so all
-    middleware sees the complete representation before suppression.
+    completion, and adds an outer idempotent application-root HEAD boundary.
+    A directly compiled Router keeps its own HEAD boundary; the shared marker
+    leaves the outermost participant as wire owner so all middleware sees the
+    complete representation before suppression.
   - New PAGI::Routing provides the immutable, declaration-ordered route tree
     shared by all three public frontends. Normal HTTP handlers receive one
     PAGI::Context and return a PAGI::Response; explicit raw routes retain native
@@ -258,10 +263,12 @@
     first-seen method evidence, synchronous constraints, reverse URLs,
     request-local matched-route frames, inspection, and an executable example.
     PAGI::App::Router and PAGI::Endpoint::Router materialize the same model.
-  - Application positions (`app`, `raw`, and `http_default`) accept coderefs or
-    instantiated `to_app` objects and reject package strings. Middleware class
-    strings remain accepted because middleware descriptors define their
-    loading/construction/wrap contract. PAGI deliberately differs from
+  - Application positions accept coderefs or instantiated `to_app` objects and
+    reject package strings. This includes `app`, `raw`, `http_default`, Test
+    Client `app`, Lifespan `app`/`wrap`, Middleware Builder mount/fallback,
+    URLMap, and Cascade targets. Middleware class strings remain accepted
+    because middleware descriptors define their loading/construction/wrap
+    contract. PAGI deliberately differs from
     Starlette through Context versus native positions, validation without
     coercion, slash logical names and relative lookup, first-class SSE,
     HTTP-only `http_default`, pure PAGI middleware, and Compose-owned root
