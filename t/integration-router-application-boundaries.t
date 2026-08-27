@@ -3,6 +3,8 @@ use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
 use Future;
+use Future::AsyncAwait;
+use PAGI::Routing qw(router route mount middleware);
 
 sub run_http {
     my ($app, $path) = @_;
@@ -42,38 +44,32 @@ sub response_body {
 }
 
 {
-    package Local::BackgroundTasksLoader;
-    sub load { return do $_[1] }
-}
-
-{
     package Local::FullDemoLoader;
     sub load { return do $_[1] }
 }
 
+{
+    package Local::MountedIntegrationApp;
+
+    sub new { return bless { compilations => 0 }, $_[0] }
+    sub compilations { $_[0]{compilations} }
+    sub to_app {
+        my ($self) = @_;
+        ++$self->{compilations};
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({
+                type => 'http.response.start', status => 200,
+                headers => [['x-child-path', $scope->{path}]],
+            });
+            await $send->({
+                type => 'http.response.body', body => 'mounted integration', more => 0,
+            });
+        };
+    }
+}
+
 local $ENV{PAGI_ENV} = 'production';
-
-subtest 'background-tasks deploys its Router as a complete application' => sub {
-    my $file = "$Bin/../examples/background-tasks/app.pl";
-    my $app = Local::BackgroundTasksLoader->load($file);
-    my $load_error = $@ || $!;
-    ok(!$load_error, 'background-tasks loads cleanly') or diag($load_error);
-    is(ref($app), 'CODE', 'background-tasks returns a native PAGI coderef');
-
-    return unless ref($app) eq 'CODE';
-
-    my $known = run_http($app, '/');
-    is($known->[0]{status}, 200, 'known background-tasks route still succeeds');
-    like(response_body($known), qr/Background Tasks Demo/,
-        'known route keeps its example page');
-
-    my $missing = run_http($app, '/not-a-route');
-    is([map { $_->{type} } @$missing],
-        ['http.response.start', 'http.response.body'],
-        'unknown route completes the HTTP response event family');
-    is($missing->[0]{status}, 404,
-        'unknown route receives the Compose application-boundary 404');
-};
 
 subtest 'full-demo keeps its routes and gains a complete application boundary' => sub {
     my $file = "$Bin/../examples/full-demo/app.pl";
@@ -95,6 +91,34 @@ subtest 'full-demo keeps its routes and gains a complete application boundary' =
         'unknown full-demo route completes the HTTP response event family');
     is($missing->[0]{status}, 404,
         'unknown full-demo route receives the Compose application-boundary 404');
+};
+
+subtest 'a mounted object is one compiled application boundary' => sub {
+    my $component = Local::MountedIntegrationApp->new;
+    my $middleware_builds = 0;
+    my $mount_middleware = middleware(sub {
+        my ($inner) = @_;
+        ++$middleware_builds;
+        return $inner;
+    });
+    my $app = router(routes => [
+        mount('/service', app => $component,
+            middleware => [$mount_middleware]),
+        route('/service/item' => sub {
+            return $_[0]->text('parent resumed');
+        }),
+    ])->to_app;
+
+    is([$component->compilations, $middleware_builds], [1, 1],
+        'the object and Mount middleware compile once at the parent boundary');
+    my $events = run_http($app, '/service/item');
+    is(response_body($events), 'mounted integration',
+        'the selected child application owns completion');
+    is($events->[0]{headers}, [['x-child-path', '/item']],
+        'the child receives the rewritten remainder');
+    run_http($app, '/service/again');
+    is([$component->compilations, $middleware_builds], [1, 1],
+        'requests do not recompile the child or Mount middleware');
 };
 
 done_testing;

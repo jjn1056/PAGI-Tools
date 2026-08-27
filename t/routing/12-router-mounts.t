@@ -162,7 +162,7 @@ subtest 'a Router Mount transfers unanswered child ownership outward' => sub {
                 push @parent_calls, 'earlier partial';
                 return $_[0]->text('parent PATCH');
             }, methods => 'PATCH'),
-            mount('/api', router => $child, name => 'child'),
+            mount('/api', app => $child, name => 'child'),
             route('/api/item' => sub {
                 push @parent_calls, 'later full item';
                 return $_[0]->text('parent PUT');
@@ -202,12 +202,12 @@ subtest 'a Router Mount transfers unanswered child ownership outward' => sub {
         'the handler-returned 404 keeps application headers');
     is(response_body($application), 'handler missing',
         'the handler-returned 404 keeps its body');
-    is(\@parent_calls, [], 'no parent handler runs after Router-mount ownership transfers');
+    is(\@parent_calls, [], 'no parent handler runs after mounted Router ownership transfers');
     is(\@fallback_calls, ['outer method', 'outer not found'],
         'outer fallback runs only for unanswered child PARTIAL and NONE');
 };
 
-subtest 'Router-mount middleware order, metadata, compilation freshness, and immutability' => sub {
+subtest 'mounted Router middleware order, metadata, compilation freshness, and immutability' => sub {
     my @trace;
     my @metadata;
     my @after_metadata;
@@ -243,7 +243,7 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
                     push @metadata, snapshot_frame($c->scope);
                     return $c->text($c->scope->{'router-mount.build'});
                 }, name => 'item', middleware => [tracing_middleware('route', \@trace)]),
-            ], name      => 'inline', middleware => [tracing_middleware('inline mount', \@trace)]),
+            ], name      => 'inline', middleware => [tracing_middleware('shorthand mount', \@trace)]),
         ],
     );
 
@@ -267,9 +267,9 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
             }),
         ],
         routes => [
-            mount('/left', router => $child, name      => 'left',
+            mount('/left', app => $child, name      => 'left',
                 desc => 'Left child', middleware => [
-                    tracing_middleware('Router mount', \@trace),
+                    tracing_middleware('Mount', \@trace),
                     middleware('Routing::NotFound', handler => sub {
                         ++$mount_default_calls;
                         return $_[0]->text('mount missing');
@@ -279,7 +279,7 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
                         return $_[0]->text('mount method');
                     }),
                 ]),
-            mount('/right', router => $child, name      => 'right'),
+            mount('/right', app => $child, name      => 'right'),
         ],
     );
     is($outer->routes->[0]->name, 'left',
@@ -293,11 +293,11 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
     );
     is(response_body($left), '1', 'the first placement uses its own middleware build identity');
     is(\@trace, [
-        'outer Router before', 'Router mount before', 'child Router before',
-        'inline mount before', 'route before', 'handler', 'route after',
-        'inline mount after', 'child Router after', 'Router mount after',
+        'outer Router before', 'Mount before', 'child Router before',
+        'shorthand mount before', 'route before', 'handler', 'route after',
+        'shorthand mount after', 'child Router after', 'Mount after',
         'outer Router after',
-    ], 'middleware order is outer Router, Router mount, child Router, inline mount, route, handler');
+    ], 'middleware order is outer Router, Mount, child Router, routes-shorthand Mount, route, handler');
     is($metadata[-1], {
         frame_count => 1,
         mounts => [
@@ -324,8 +324,8 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
     @trace = ();
     run_app($first_app, path => '/left/missing', raw_path => '/left/missing');
     is(\@trace, [
-        'outer Router before', 'Router mount before', 'child Router before',
-        'child 404', 'child Router after', 'Router mount after', 'outer Router after',
+        'outer Router before', 'Mount before', 'child Router before',
+        'child 404', 'child Router after', 'Mount after', 'outer Router after',
     ], 'child fallback 404 remains inside child, mount, and outer Router middleware');
     is($after_metadata[-1], {
         frame_count => 1,
@@ -340,10 +340,10 @@ subtest 'Router-mount middleware order, metadata, compilation freshness, and imm
         path => '/left/inline/item', raw_path => '/left/inline/item',
     );
     is(\@trace, [
-        'outer Router before', 'Router mount before', 'child Router before',
-        'inline mount before', 'inline mount after', 'child 405',
-        'child Router after', 'Router mount after', 'outer Router after',
-    ], 'child Router fallback renders after the unanswered inline boundary unwinds');
+        'outer Router before', 'Mount before', 'child Router before',
+        'shorthand mount before', 'shorthand mount after', 'child 405',
+        'child Router after', 'Mount after', 'outer Router after',
+    ], 'child Router fallback renders after the unanswered shorthand boundary unwinds');
     is($after_metadata[-1], {
         frame_count => 1,
         mounts => [
@@ -401,9 +401,9 @@ subtest 'reused child Router has exact occurrence-local fallback ownership' => s
         routes => [
             route('/left/item' => sub { return $_[0]->text('parent PATCH') },
                 methods => 'PATCH'),
-            mount('/left', router => $child, name => 'left',
+            mount('/left', app => $child, name => 'left',
                 middleware => $occurrence_middleware->('left')),
-            mount('/right', router => $child, name => 'right',
+            mount('/right', app => $child, name => 'right',
                 middleware => $occurrence_middleware->('right')),
         ],
     )->to_app;
@@ -445,8 +445,8 @@ subtest 'relative child links follow the active Router placement without mutatin
         }, name => 'show'),
     ]);
     my $outer = router(routes => [
-        mount('/authors', router => $child, name      => 'authors'),
-        mount('/editors', router => $child, name      => 'editors'),
+        mount('/authors', app => $child, name      => 'authors'),
+        mount('/editors', app => $child, name      => 'editors'),
     ]);
     my $app = $outer->to_app;
 
@@ -469,7 +469,71 @@ subtest 'relative child links follow the active Router placement without mutatin
         'the reused child Router remains local and contains neither parent prefix');
 };
 
-subtest 'Router mounts share the one outer HEAD edge and root mounts consume nothing' => sub {
+subtest 'mounted application runtime boundaries retain root frames and decoded prefixes' => sub {
+    my @service_seen;
+    my $space = router(routes => [
+        route('/items/{id}' => sub {
+            my ($c) = @_;
+            push @service_seen, {
+                frame_roots => [map { $_->{root_path} }
+                    @{$c->scope->{'pagi.routing'}{frames}}],
+                scope_root => $c->scope->{root_path},
+            };
+            return $c->text('service');
+        }, name => 'item'),
+    ]);
+    my $service = router(routes => [
+        mount('/spaces/{space}', app => $space, name => 'space'),
+    ]);
+    my $component = Local::CompiledRouterComponent->new($service);
+    my $parent = router(routes => [
+        mount('/service', app => $component, name => 'service'),
+    ])->to_app;
+
+    is(response_body(run_app($parent,
+        path => '/service/spaces/blue/items/9',
+        raw_path => '/service/spaces/blue/items/9',
+        root_path => '/proxy')), 'service',
+        'a separately compiled child Router completes through its Mount');
+    is($component->compilations, 1,
+        'the separately compiled application object is coerced once');
+    is(\@service_seen, [{
+        frame_roots => ['/proxy', '/proxy/service'],
+        scope_root => '/proxy/service/spaces/blue',
+    }], 'separate Router applications publish both root boundaries and the selected scope root');
+
+    my @tenant_seen;
+    my $tenant = router(routes => [
+        route('/items/{id}' => sub {
+            my ($c) = @_;
+            push @tenant_seen, {
+                scope_root => $c->scope->{root_path},
+                frame_root => $c->scope->{'pagi.routing'}{frames}[-1]{root_path},
+                captures => { %{$c->scope->{'pagi.routing'}{frames}[-1]{captures}} },
+                reverse => $c->path_for('item', { id => 'a b%' },
+                    { q => "caf\x{e9} %" }),
+            };
+            return $c->text('tenant');
+        }, name => 'item'),
+    ]);
+    my $tenant_app = router(routes => [
+        mount('/tenants/{tenant}', app => $tenant),
+    ])->to_app;
+    my $tenant_value = "caf\x{e9} 50%";
+    is(response_body(run_app($tenant_app,
+        path => "/tenants/$tenant_value/items/one",
+        raw_path => '/tenants/caf%C3%A9%2050%25/items/one',
+        root_path => '/edge root')), 'tenant',
+        'a decoded dynamic Mount prefix reaches its child');
+    is(\@tenant_seen, [{
+        scope_root => "/edge root/tenants/$tenant_value",
+        frame_root => '/edge root',
+        captures => { tenant => $tenant_value, id => 'one' },
+        reverse => '/edge%20root/tenants/caf%C3%A9%2050%25/items/a%20b%25?q=caf%C3%A9%20%25',
+    }], 'the child receives decoded placement data before reverse output encodes it once');
+};
+
+subtest 'mounted Routers share the one outer HEAD edge and root Mounts consume nothing' => sub {
     my @seen_scopes;
     my $child = router(
         middleware => [
@@ -496,7 +560,7 @@ subtest 'Router mounts share the one outer HEAD edge and root mounts consume not
         ],
     );
     my $app = router(routes => [
-        mount('/api', router => $child, name      => 'api',
+        mount('/api', app => $child, name      => 'api',
             middleware => [body_header_middleware('X-Mount-Bytes')]),
     ])->to_app;
 
@@ -533,7 +597,7 @@ subtest 'Router mounts share the one outer HEAD edge and root mounts consume not
 
     my @root_scope;
     my $root = router(routes => [
-        mount('/', router => router(routes => [
+        mount('/', app => router(routes => [
             route('/item' => sub {
                 my ($c) = @_;
                 push @root_scope, [@{$c->scope}{qw(path root_path)}];
@@ -543,12 +607,12 @@ subtest 'Router mounts share the one outer HEAD edge and root mounts consume not
     ])->to_app;
     is(response_body(run_app(
         $root, path => '/item', root_path => '/edge', raw_path => '/edge/item',
-    )), 'root child', 'a root Router mount dispatches without adding a slash');
+    )), 'root child', 'a root mounted Router dispatches without adding a slash');
     is(\@root_scope, [['/item', '/edge']],
-        'a root Router mount consumes no path and leaves root_path unchanged');
+        'a root Mount consumes no path and leaves root_path unchanged');
 };
 
-subtest 'Router mounts own WebSocket and SSE success and miss outcomes' => sub {
+subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub {
     my @http_fallback_calls;
     my $child = router(
         middleware => [middleware('Routing::NotFound', handler => sub {
@@ -570,7 +634,7 @@ subtest 'Router mounts own WebSocket and SSE success and miss outcomes' => sub {
     );
     my @parent_protocol_calls;
     my $app = router(routes => [
-        mount('/api', router => $child, name      => 'api'),
+        mount('/api', app => $child, name      => 'api'),
         websocket('/api/missing' => sub {
             push @parent_protocol_calls, 'parent websocket';
             return Future->done;
@@ -628,3 +692,20 @@ subtest 'Router mounts own WebSocket and SSE success and miss outcomes' => sub {
 };
 
 done_testing;
+
+{
+    package Local::CompiledRouterComponent;
+
+    sub new {
+        my ($class, $router) = @_;
+        return bless { router => $router, compilations => 0 }, $class;
+    }
+
+    sub to_app {
+        my ($self) = @_;
+        ++$self->{compilations};
+        return $self->{router}->to_app;
+    }
+
+    sub compilations { $_[0]{compilations} }
+}

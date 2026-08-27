@@ -77,9 +77,9 @@ subtest 'all four middleware entry forms normalize without protocol work' => sub
         ['HTTP route', sub { return route('/http' => sub { return $_[0]->text('ok') }, middleware => $_[0]) }],
         ['WebSocket route', sub { return websocket('/socket' => async sub { await $_[0]->close }, middleware => $_[0]) }],
         ['SSE route', sub { return sse('/events' => async sub { await $_[0]->close }, middleware => $_[0]) }],
-        ['inline mount', sub { return mount('/inline', routes => [], middleware => $_[0]) }],
-        ['Router mount', sub { return mount('/router', app => $child, name => 'child', middleware => $_[0]) }],
-        ['opaque mount', sub { return mount('/opaque', app => sub { return }, middleware => $_[0]) }],
+        ['routes-shorthand Mount', sub { return mount('/shorthand', routes => [], middleware => $_[0]) }],
+        ['Router application Mount', sub { return mount('/router', app => $child, name => 'child', middleware => $_[0]) }],
+        ['coderef application Mount', sub { return mount('/coderef', app => sub { return }, middleware => $_[0]) }],
     );
 
     for my $form (@forms) {
@@ -106,8 +106,7 @@ subtest 'all four middleware entry forms normalize without protocol work' => sub
     is($object->wraps, 0, 'normalization does not wrap direct objects');
 };
 
-subtest 'router, inline mount, and HTTP route factories keep nested order' => sub {
-    plan skip_all => 'Mount compilation moves to the staged Compiler migration';
+subtest 'router, routes-shorthand Mount, and HTTP route factories keep nested order' => sub {
     my (@builds, @runs);
     my $router_factory = tracing_factory('router', \@builds, \@runs);
     my $mount_factory  = tracing_factory('mount',  \@builds, \@runs);
@@ -131,18 +130,17 @@ subtest 'router, inline mount, and HTTP route factories keep nested order' => su
         'first visible execution proceeds outermost to handler');
 };
 
-subtest 'opaque mount, WebSocket, and SSE accept bare factories' => sub {
-    plan skip_all => 'Mount compilation moves to the staged Compiler migration';
+subtest 'coderef Mount, WebSocket, and SSE accept bare factories' => sub {
     my (@builds, @runs);
-    my $opaque = tracing_factory('opaque', \@builds, \@runs);
+    my $mounted = tracing_factory('mounted', \@builds, \@runs);
     my $ws = tracing_factory('ws', \@builds, \@runs);
     my $events = tracing_factory('sse', \@builds, \@runs);
     my $app = router(routes => [
-        mount('/opaque', app => async sub {
+        mount('/mounted', app => async sub {
             my ($request_scope, $receive, $send) = @_;
             await $send->({ type => 'http.response.start', status => 204, headers => [] });
             await $send->({ type => 'http.response.body', body => '', more => 0 });
-        }, middleware => [$opaque]),
+        }, middleware => [$mounted]),
         websocket('/socket' => async sub {
             push @runs, 'handler:websocket';
             await $_[0]->close(1000, 'done');
@@ -153,14 +151,14 @@ subtest 'opaque mount, WebSocket, and SSE accept bare factories' => sub {
         }, middleware => [$events]),
     ])->to_app;
 
-    run_scope($app, scope(path => '/opaque', raw_path => '/opaque'));
+    run_scope($app, scope(path => '/mounted', raw_path => '/mounted'));
     run_scope($app, scope(type => 'websocket', path => '/socket', raw_path => '/socket'));
     run_scope($app, scope(type => 'sse', path => '/events', raw_path => '/events'));
     is(\@runs, [
-        'opaque:http',
+        'mounted:http',
         'ws:websocket', 'handler:websocket',
         'sse:sse', 'handler:sse',
-    ], 'each protocol and opaque boundary executes its bare factory wrapper');
+    ], 'each protocol and mounted application executes its bare factory wrapper');
 };
 
 subtest 'bare router factory surrounds unanswered routing and mixed lists retain order' => sub {

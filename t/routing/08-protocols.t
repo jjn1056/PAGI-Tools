@@ -57,6 +57,9 @@ subtest 'normal WebSocket and SSE handlers use protocol Contexts and ignore comp
                     root_path   => $c->scope->{root_path},
                     raw_path    => $c->raw_path,
                     path_params => $c->path_params,
+                    frame_root  => $c->scope->{'pagi.routing'}{frames}[-1]{root_path},
+                    namespace   => $c->scope->{'pagi.routing'}{frames}[-1]{logical_namespace},
+                    captures    => { %{$c->scope->{'pagi.routing'}{frames}[-1]{captures}} },
                 };
                 await $c->accept(subprotocol => 'chat');
                 await $c->send_text('welcome');
@@ -71,13 +74,16 @@ subtest 'normal WebSocket and SSE handlers use protocol Contexts and ignore comp
                     root_path   => $c->scope->{root_path},
                     raw_path    => $c->raw_path,
                     path_params => $c->path_params,
+                    frame_root  => $c->scope->{'pagi.routing'}{frames}[-1]{root_path},
+                    namespace   => $c->scope->{'pagi.routing'}{frames}[-1]{logical_namespace},
+                    captures    => { %{$c->scope->{'pagi.routing'}{frames}[-1]{captures}} },
                 };
                 $c->start(status => 201)->get;
                 $c->send('ready')->get;
                 $c->close->get;
                 return 'plain synchronous completion';
             }),
-        ]),
+        ], name => 'tenant'),
     ])->to_app;
 
     my $ws_events = run_scope($app, scope(
@@ -102,6 +108,9 @@ subtest 'normal WebSocket and SSE handlers use protocol Contexts and ignore comp
             root_path   => '/edge/api/acme',
             raw_path    => '/edge/api/acme/socket/lobby',
             path_params => { retained => 'yes', tenant => 'acme', room => 'lobby' },
+            frame_root  => '/edge',
+            namespace   => '/tenant',
+            captures    => { tenant => 'acme', room => 'lobby' },
         },
         {
             kind        => 'PAGI::Context::SSE',
@@ -109,6 +118,9 @@ subtest 'normal WebSocket and SSE handlers use protocol Contexts and ignore comp
             root_path   => '/edge/api/acme',
             raw_path    => '/edge/api/acme/events/news',
             path_params => { retained => 'yes', tenant => 'acme', channel => 'news' },
+            frame_root  => '/edge',
+            namespace   => '/tenant',
+            captures    => { tenant => 'acme', channel => 'news' },
         },
     ], 'mounted protocol handlers receive the right Context subclass and rewritten scope');
     is($ws_events, [
@@ -367,14 +379,14 @@ subtest 'protocol selection is declaration ordered, protocol local, and mount aw
 
     my @mounted;
     my $component = router(routes => [
-        mount('/component' => sub {
+        mount('/component', app => sub {
             my ($request_scope) = @_;
             push @mounted, [
                 $request_scope->{type} // 'http',
                 $request_scope->{method},
                 $request_scope->{path},
             ];
-            return 'opaque completion';
+            return 'application completion';
         }),
     ])->to_app;
     run_scope($component, scope(type => 'http', method => 'DELETE', path => '/component/x'));
@@ -385,6 +397,77 @@ subtest 'protocol selection is declaration ordered, protocol local, and mount aw
         ['websocket', undef, '/x'],
         ['sse', undef, '/x'],
     ], 'an application mount owns every supported scope type without an HTTP method filter');
+};
+
+subtest 'the first prefix Mount owns every protocol and middleware boundary' => sub {
+    my (@middleware_types, @later_calls);
+    my $mount_middleware = middleware(sub {
+        my ($inner) = @_;
+        return async sub {
+            push @middleware_types, $_[0]{type};
+            await Future->wrap($inner->(@_));
+        };
+    });
+    my $first = router(routes => [
+        route('/http' => sub { return $_[0]->text('first http') }),
+        websocket('/socket' => async sub {
+            await $_[0]->close(1000, 'first websocket');
+        }),
+        sse('/events' => async sub {
+            await $_[0]->close;
+        }),
+    ]);
+    my $later = async sub {
+        push @later_calls, $_[0]{type};
+        die 'a later same-prefix Mount must not run';
+    };
+    my $app = router(routes => [
+        mount('/api', app => $first, middleware => [$mount_middleware]),
+        mount('/api', app => $later),
+        websocket('/api/missing' => async sub {
+            push @later_calls, 'parent websocket';
+            await $_[0]->close;
+        }),
+        sse('/api/missing' => async sub {
+            push @later_calls, 'parent sse';
+            await $_[0]->close;
+        }),
+    ])->to_app;
+
+    my $http = run_scope($app, scope(
+        path => '/api/http', raw_path => '/api/http'));
+    my $websocket = run_scope($app, scope(
+        type => 'websocket', path => '/api/socket', raw_path => '/api/socket'));
+    my $sse = run_scope($app, scope(
+        type => 'sse', path => '/api/events', raw_path => '/api/events'));
+    is($http->[-1]{body}, 'first http',
+        'the first same-prefix Mount owns HTTP');
+    is($websocket, [
+        { type => 'websocket.close', code => 1000, reason => 'first websocket' },
+    ], 'the first same-prefix Mount owns WebSocket');
+    is($sse, [{ type => 'sse.close' }],
+        'the first same-prefix Mount owns SSE');
+
+    is(run_scope($app, scope(
+        type => 'websocket', path => '/api/missing', raw_path => '/api/missing')),
+        [{ type => 'websocket.close' }],
+        'a child WebSocket miss closes without parent resumption');
+    my $denial = run_scope($app, scope(
+        type => 'websocket', path => '/api/missing', raw_path => '/api/missing',
+        extensions => { 'websocket.http.response' => {} }));
+    is([$denial->[0]{type}, $denial->[0]{status}],
+        ['websocket.http.response.start', 404],
+        'a child WebSocket miss owns its HTTP denial');
+    my $sse_miss = run_scope($app, scope(
+        type => 'sse', path => '/api/missing', raw_path => '/api/missing'));
+    is([$sse_miss->[0]{type}, $sse_miss->[0]{status}],
+        ['sse.http.response.start', 404],
+        'a child SSE miss owns its protocol-specific 404');
+    is(\@middleware_types,
+        [qw(http websocket sse websocket websocket sse)],
+        'Mount middleware sees successes and misses for all delegated protocols');
+    is(\@later_calls, [],
+        'neither a later Mount nor later parent protocol sibling resumes');
 };
 
 subtest 'HTTP selection ignores WebSocket and SSE leaves without warnings' => sub {
@@ -629,8 +712,8 @@ subtest 'standalone protocol leaves and mounts compile as complete applications'
         extensions => { 'websocket.http.response' => {} },
     ));
     is($mounted_miss->[0]{type}, 'websocket.http.response.start',
-        'the inline child owns its protocol-specific miss');
-    is($mounted_miss->[0]{status}, 404, 'the inline child emits its complete 404 fallback');
+        'the routes-shorthand child owns its protocol-specific miss');
+    is($mounted_miss->[0]{status}, 404, 'the child Router emits its complete 404 fallback');
     is(\@trace, ['mount before', 'mount after'],
         'mount middleware surrounds a child protocol miss');
 };
