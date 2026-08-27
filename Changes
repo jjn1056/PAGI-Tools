@@ -217,7 +217,7 @@
     ordering, dotted names, package-string loading, Endpoint private state and
     context override, and response-valued middleware chain are removed without
     a compatibility mode. See UPGRADING.md for exercised before-and-after
-    migrations to Context handlers, explicit raw routes, local names and slash
+    migrations to direct protocol handlers, explicit raw routes, local names and slash
     addresses, explicit constructed child objects, retained snapshots, and
     universal native middleware. `group`, positional Mount targets, and
     `router =>` are removed. Functional `mount(..., routes => [...])` takes a
@@ -256,9 +256,9 @@
     complete representation before suppression.
   - New PAGI::Routing provides the immutable, declaration-ordered route tree
     shared by all three public frontends. Normal HTTP handlers receive one
-    PAGI::Context and return a PAGI::Response; explicit raw routes retain native
+    PAGI::Request and return a PAGI::Response; explicit raw routes retain native
     channel ownership. The release includes inline and application mounts,
-    route/mount/router pure event middleware, WebSocket and SSE Context
+    route/mount/router pure event middleware, direct PAGI::WebSocket and PAGI::SSE
     handlers, automatic HEAD wire suppression, Router-owned HTTP outcomes,
     first-seen method evidence, synchronous constraints, reverse URLs,
     request-local matched-route frames, inspection, and an executable example.
@@ -268,9 +268,11 @@
     Client `app`, Lifespan `app`/`wrap`, Middleware Builder mount/fallback,
     URLMap, and Cascade targets. Middleware class strings remain accepted
     because middleware descriptors define their loading/construction/wrap
-    contract. PAGI deliberately differs from
-    Starlette through Context versus native positions, validation without
-    coercion, slash logical names and relative lookup, first-class SSE,
+    contract. PAGI follows Starlette's Route/Mount/Router/application topology
+    rather than copying every Starlette Request method. It deliberately differs
+    through explicit imports for optional capabilities, direct protocol versus
+    native positions, validation without coercion, slash logical names and
+    relative lookup, first-class SSE,
     HTTP-only `http_default`, pure PAGI middleware, and Compose-owned root
     lifespan. Starlette's multiprotocol Router `default` was considered and not
     copied. OpenAPI/schema generation remains deferred; no `schema` or
@@ -278,8 +280,27 @@
   - Declarative mount prefixes accept both the exact prefix and its slash form
     without redirecting, deliberately differing from Starlette's default
     slash behavior. ReverseProxy and TrustedHosts remain HTTP-only; routing
-    does not ship the separately planned cross-protocol compatibility changes
-    or Context/Response vocabulary changes.
+    does not ship the separately planned cross-protocol compatibility changes.
+  - BREAKING: normal Router handlers now receive the selected protocol object
+    directly: PAGI::Request for HTTP, PAGI::WebSocket for WebSocket, and
+    PAGI::SSE for SSE. PAGI::Request construction is strict HTTP-only
+    `($scope, $receive)`. Raw applications and all middleware retain the native
+    `($scope, $receive, $send)` contract, and Response return behavior is
+    unchanged.
+  - New PAGI::Routing::URL, PAGI::State, PAGI::CSRF, and PAGI::Transport
+    facades make Router-, lifespan-, middleware-, and server-owned capabilities
+    explicit. PAGI::Stash and PAGI::Session now accept the same Request or raw
+    scope sources. Only `app_state` is exported for State because `state(...)`
+    conflicts with Perl's declarator; its temporary hash-dereference bridge
+    warns unless PAGI_SILENCE_STATE_HASHREF_WARNING is exactly 1.
+  - PAGI::Request retains intrinsic HTTP input, strict path parameters, State,
+    and minimal connection access. `is_disconnected` is now tri-state and
+    returns undef when no connection capability exists; advanced flow control
+    uses PAGI::Transport. Router URL, Stash, Session, CSRF, and response
+    shortcuts are no longer Request methods.
+  - PAGI::Endpoint::Router replaces `new_context` with the explicit HTTP-only
+    `new_request($scope, $receive)` helper; compiled dispatch constructs direct
+    protocol objects independently of that override seam.
   - New PAGI::Authority centralizes strict validation and scope-derived authority
     formatting. PAGI::Request->host and PAGI::Context->host now return only a
     single structurally valid Host field (including an explicit port), return
@@ -414,8 +435,9 @@
     a truncation. L<PAGI::Request::BodyStream> gets a new C<truncated>
     accessor for the streaming API (C<next_chunk> still returns C<undef> on
     disconnect -- streaming consumers may have legitimate uses for partial
-    data -- so C<truncated> plus C<< $req->disconnect_reason >> is how you
-    tell that apart from a real end of body).
+    data -- so C<truncated> plus the optional
+    C<< $req->connection->disconnect_reason >> is how you tell that apart
+    from a real end of body).
   - PAGI::Response::Writer's C<close> no longer skips C<on_close>
     cleanup when the terminal send fails: callbacks now fire (and the
     callback array is cleared) whether the send succeeds or fails, and the

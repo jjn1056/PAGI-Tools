@@ -158,7 +158,7 @@ Bare coderefs have deliberately different meanings according to position:
 
   Position                         Called with                       Meaning
   ------------------------------   -------------------------------   --------------------------
-  route('/x' => $code)             ($context)                        Context handler
+  route('/x' => $code)             ($request)                        Request handler
   compose(app => $code)            ($scope, $receive, $send)         native PAGI app
   middleware => [$entry]           ($inner_app), at compile time     normalized middleware description
   middleware($target, %config)     ($inner_app), at compile time     middleware description

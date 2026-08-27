@@ -41,18 +41,19 @@ middleware suite — so the same application reads like this:
 
     use PAGI::App::Router;
     use PAGI::Compose qw(compose);
+    use PAGI::Response;
     use Future::AsyncAwait;
 
     my $router = PAGI::App::Router->new;
 
     $router->get('/' => async sub {
-        my ($c) = @_;
-        return $c->json({ hello => 'world' });
+        my ($request) = @_;
+        return PAGI::Response->json({ hello => 'world' });
     })->name('home');
 
     $router->get('/users/{id}' => async sub {
-        my ($c) = @_;
-        return $c->json({ id => $c->path_param('id') });
+        my ($request) = @_;
+        return PAGI::Response->json({ id => $request->path_param('id') });
     })->name('user');
 
     my $routing = $router->to_router; # retain one immutable snapshot
@@ -63,7 +64,7 @@ ordinary negotiated Response or a terminal endpoint:
 
     use PAGI::Pages;
 
-    my $response = PAGI::Pages->not_found($context);
+    my $response = PAGI::Pages->not_found($request);
     my $endpoint = PAGI::Pages->welcome;
 
 For a conventional static tree, use the rooted file component rather than
@@ -86,18 +87,19 @@ for the intentionally changed statuses, hidden-file policy, and mapping rules.
 Routing has three public frontends over that same immutable snapshot and
 compiler:
 
-    PAGI::Routing          immutable functional declarations   $c handlers
-    PAGI::App::Router      mutable imperative builder          verb methods + $c
+    PAGI::Routing          immutable functional declarations   Request handlers
+    PAGI::App::Router      mutable imperative builder          verb methods + Request
     PAGI::Endpoint::Router class/role-oriented frontend        local method names
 
 Use the functional frontend when the declarations are already immutable:
 
     use PAGI::Routing qw(:routes);
     use PAGI::Compose qw(compose);
+    use PAGI::Response;
 
     async sub home {
-        my ($c) = @_;
-        return $c->json({ hello => 'world' });
+        my ($request) = @_;
+        return PAGI::Response->json({ hello => 'world' });
     }
 
     my $routing = router(routes => [
@@ -110,15 +112,16 @@ Every Mount names its target: C<< routes => [...] >> constructs a complete
 child Router, while C<< app => $child >> composes a native application or
 instantiated component. An immutable Router in C<app> remains inspectable;
 other applications are opaque. Named routes compose into slash addresses such as
-C</person/show>; request Contexts can generate relative links from the active
-placement, with compact or named path/query/fragment arguments. These helpers
+C</person/show>; L<PAGI::Routing::URL> can generate request-relative links from
+the active placement, with compact or named path/query/fragment arguments. Its helpers
 return strings or croak, perform no protocol I/O, and do not replace normal
 authorization checks.
 
 The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
 route metadata, constraints, GET/HEAD behavior, Router-owned 404/405 outcomes,
 first-seen method unions, written declaration order, and reverse
-routing. Ordinary HTTP handlers receive C<$c> and return a Response. Native
+routing. Ordinary HTTP handlers receive L<PAGI::Request> and return a Response;
+WebSocket and SSE handlers receive their direct protocol objects. Native
 channel ownership is always explicit with C<raw>. A bare Router sends its own
 negotiated 404 and compliant 405 and installs its own HeadBoundary, but it
 deliberately has no root ErrorHandler, response-completion guard, or lifespan
@@ -165,8 +168,14 @@ ReverseProxy and TrustedHosts middleware still process HTTP only, so
 WebSocket/SSE deployments must normalize and validate those scopes outside
 routing.
 
+PAGI follows Starlette's Route/Mount/Router/application topology, not every
+method on Starlette Request. L<PAGI::Request> owns HTTP input; imports identify
+the Router or middleware that supplies optional behavior. This keeps URL,
+Session, Stash, CSRF, State, and Transport ownership visible and lets another
+framework use its own Router without teaching Request that framework's API.
+
 The Starlette influence is conceptual, not API identity. PAGI distinguishes
-Context handlers from native three-channel application positions, validates
+direct protocol handlers from native three-channel application positions, validates
 constraints without coercion, uses slash logical names and relative lookup,
 treats SSE as a first-class scope, and exposes an HTTP-only C<http_default>.
 Starlette's single multiprotocol Router C<default> was considered and not
@@ -201,8 +210,12 @@ WebSocket chat/echo, PSGI bridging)
 L<PAGI::Endpoint::SSE>, L<PAGI::Endpoint::WebSocket> - high-level endpoint
 framework
 
-=item * L<PAGI::Request>, L<PAGI::Response>, L<PAGI::Context> - request
-processing and ergonomics
+=item * L<PAGI::Request> and L<PAGI::Response> - HTTP input and detached output
+values; L<PAGI::Context> remains a standalone compatibility/low-level surface
+
+=item * L<PAGI::State>, L<PAGI::Stash>, L<PAGI::Session>, L<PAGI::CSRF>,
+L<PAGI::Transport>, and L<PAGI::Routing::URL> - explicitly imported optional
+scope capabilities
 
 =item * L<PAGI::Pages> - negotiated conventional welcome, redirect, and HTTP
 error Responses and terminal endpoints

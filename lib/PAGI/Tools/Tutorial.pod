@@ -67,20 +67,22 @@ applications (PART 7).
 
 =head2 2.1 PAGI::Routing - Immutable Declarative Routing
 
-L<PAGI::Routing> is the compact route-tree API when handlers should receive one
-L<PAGI::Context> and HTTP handlers should return Response values:
+L<PAGI::Routing> is the compact route-tree API. HTTP handlers receive one
+L<PAGI::Request> and return L<PAGI::Response> values; WebSocket and SSE
+handlers receive their direct protocol objects:
 
   use Future::AsyncAwait;
   use PAGI::Routing qw(:routes);
+  use PAGI::Response;
 
   async sub home {
-      my ($c) = @_;
-      return $c->html('<h1>Home</h1>');
+      my ($request) = @_;
+      return PAGI::Response->html('<h1>Home</h1>');
   }
 
   async sub user {
-      my ($c) = @_;
-      return $c->json({ id => $c->path_param('id') });
+      my ($request) = @_;
+      return PAGI::Response->json({ id => $request->path_param('id') });
   }
 
   my $routing = router(
@@ -104,7 +106,7 @@ L<PAGI::Context> and HTTP handlers should return Response values:
 Constructors validate and build immutable descriptions. C<to_app> compiles a
 fresh native PAGI wrapper graph and starts no request; call it once for the app
 instance and retain the returned coderef. At request time routing matches in
-declaration order, constructs C<$c>, awaits the handler, and emits its returned
+declaration order, constructs the selected protocol object, awaits the handler, and emits its returned
 Response exactly once.
 
 The compiled coderef is a complete Router application for routing outcomes. If
@@ -167,17 +169,20 @@ shorthand belongs only to the mutable App/Endpoint builder:
   });
 
 Route and structural-mount names are local segments; slash constructs absolute
-logical addresses such as C</api/user>. Context reverse calls may resolve from
-the active namespace and inherit only target-required captures:
+logical addresses such as C</api/user>. Import URL helpers from their Router
+owner; request-bound calls may resolve from the active namespace and inherit
+only target-required captures:
 
-  $c->path_for('user');
-  $c->url_for('user', { id => 42 }, { tab => 'profile' }, 'details');
-  $c->url_for('user',
+  use PAGI::Routing::URL qw(path_for url_for);
+
+  path_for($request, 'user');
+  url_for($request, 'user', { id => 42 }, { tab => 'profile' }, 'details');
+  url_for($request, 'user',
       query    => { tab => 'profile' },
       fragment => 'details',
   );
 
-Absolute Context references and Router-object calls inherit nothing. URL
+Absolute request-bound references and Router-object calls inherit nothing. URL
 generation is not authorization. Reverse helpers return strings or croak; they
 send no protocol events or redirects.
 
@@ -264,22 +269,23 @@ does not duplicate Router callback APIs or reverse-routing methods.
 
 L<PAGI::App::Router> is the mutable frontend for the same immutable routing
 model. Its verb methods append declarations in written order; ordinary
-handlers use the same Context contract as C<PAGI::Routing>:
+handlers use the same direct protocol contract as C<PAGI::Routing>:
 
   use PAGI::App::Router;
   use PAGI::Compose qw(compose);
   use PAGI::Routing qw(middleware);
+  use PAGI::Response;
 
   my $router = PAGI::App::Router->new;
 
   $router->get('/' => sub {
-      my ($c) = @_;
-      return $c->text('Home');
+      my ($request) = @_;
+      return PAGI::Response->text('Home');
   })->name('home');
 
   $router->post('/users' => sub {
-      my ($c) = @_;
-      return $c->json({ created => 1 }, status => 201);
+      my ($request) = @_;
+      return PAGI::Response->json({ created => 1 }, status => 201);
   })->name('create_user');
 
   $router->get('/users/{id}' => [
@@ -288,8 +294,8 @@ handlers use the same Context contract as C<PAGI::Routing>:
       $configured_auth,
       middleware('Session', cookie_name => 'sid'),
   ] => sub {
-      my ($c) = @_;
-      return $c->json({ id => $c->path_param('id') });
+      my ($request) = @_;
+      return PAGI::Response->json({ id => $request->path_param('id') });
   })->name('show_user');
 
   # Native three-channel applications must say raw.
@@ -318,8 +324,8 @@ application composition. Package strings do not load routing behavior.
 
 The three APIs are declaration frontends at different abstraction boundaries:
 
-  PAGI::Routing          immutable functional declarations   $c handlers
-  PAGI::App::Router      mutable imperative builder          verb methods + $c
+  PAGI::Routing          immutable functional declarations   Request handlers
+  PAGI::App::Router      mutable imperative builder          verb methods + Request
   PAGI::Endpoint::Router class/role-oriented frontend        local method names
 
 All three materialize L<PAGI::Routing::Router> and share Pattern parsing,
@@ -356,9 +362,10 @@ L<PAGI::Request> parses HTTP requests and provides convenient accessors for head
 =head3 Creating a Request
 
   my $req = PAGI::Request->new($scope, $receive);
-  my $res = $req->response;
 
-  await $res->text("You requested: " . $req->path)->respond($send);
+Normal Router handlers receive this object directly. Raw PAGI applications
+construct it only when they choose the Request API; construction requires an
+HTTP scope and a receive coderef.
 
 =head3 Basic Properties
 
@@ -427,14 +434,15 @@ L<PAGI::Request::BodyStream> you consume incrementally:
   if ($stream->truncated) {
       # Client disconnected before the body finished -- whatever chunks
       # you already saw were only part of the intended upload.
-      warn "upload cut short: " . ($req->disconnect_reason // 'unknown');
+      warn "upload cut short";
   }
 
 C<next_chunk> returns C<undef> both at a legitimate end of body and after a
 client disconnect -- C<undef> alone doesn't tell you which happened. Check
 C<< $stream->truncated >> after the loop to distinguish "the body really
-ended here" from "the client hung up early", and C<< $req->disconnect_reason
->> for why. The buffered methods (C<body>/C<text>/C<json>/C<form_params>)
+ended here" from "the client hung up early". When the server supplies
+C<pagi.connection>, inspect C<< $req->connection->disconnect_reason >> for
+why. The buffered methods (C<body>/C<text>/C<json>/C<form_params>)
 take the opposite stance: they croak on a mid-body disconnect rather than
 handing back a partial body as if it were complete, since nothing downstream
 of those methods ever sees raw chunks to make that judgment call itself.
@@ -479,6 +487,50 @@ can be fully asynchronous -- the read pauses until your sink's Future resolves.
 Slow-client and idle-read timeouts, and the aggregate C<max_body_size> cap, are
 enforced by the PAGI server, not by this layer (the stream cannot impose a
 wall-clock timeout itself).
+
+=head2 3.2 Optional Scope Capabilities
+
+Request owns HTTP input. Router- and middleware-owned capabilities are
+separate facades whose imports make the dependency visible:
+
+  use PAGI::CSRF qw(csrf);
+  use PAGI::Routing::URL qw(path_for url_for);
+  use PAGI::Session qw(session);
+  use PAGI::Stash qw(stash);
+  use PAGI::State qw(app_state);
+  use PAGI::Transport qw(transport);
+
+  my $db      = app_state($request)->get('db');
+  my $user    = session($request)->get('user');
+  my $result  = stash($request)->get('result');
+  my $token   = csrf($request)->token;
+  my $home    = path_for($request, '/home');
+  my $flow    = transport($request);             # optional; may be undef
+
+Each factory also accepts a raw scope, so native middleware and applications
+can use the same capability without constructing Request. Session and CSRF
+croak when their required middleware data is absent; State and Transport
+return C<undef> when their optional capability is absent. Stash is created
+lazily in the request scope.
+
+C<app_state> is deliberately not named C<state>: under C<use v5.40>, a call
+spelled C<state (...)> parses as Perl's C<state> declarator instead of calling an
+imported function. C<< $request->state >> is the method form. It returns a
+strict L<PAGI::State> facade when state exists; C<get> catches missing-key
+typos and C<data> is the explicit escape hatch for code that requires a real
+HashRef.
+
+The temporary C<< $state->{key} >> bridge warns once per callsite. Set
+C<PAGI_SILENCE_STATE_HASHREF_WARNING> to exactly C<1> only while migrating.
+The object overload preserves dereference syntax, not
+C<< ref($state) eq 'HASH' >>, HashRef type constraints, serializers, or clone
+libraries; pass C<< $state->data >> to those consumers.
+
+C<< $request->is_disconnected >> is tri-state: true after disconnect, false
+when a supplied connection remains open, and C<undef> when the server supplied
+no C<pagi.connection> capability. Test C<defined> when the unsupported case
+matters. Advanced disconnect callbacks live on C<< $request->connection >>;
+outbound watermark and drain operations live on C<transport($request)>.
 
 =head1 PART 4: BUILDING RESPONSES
 
@@ -531,10 +583,10 @@ Factory class methods build a detached response value you can use directly:
   # Build and send inline
   await PAGI::Response->json({ ok => \1 })->respond($send);
 
-  # Ordinary App routes receive Context and return the value.
+  # Ordinary App routes receive Request and return the value.
   $router->get('/health' => sub {
-      my ($c) = @_;
-      return $c->json({ ok => \1 });
+      my ($request) = @_;
+      return PAGI::Response->json({ ok => \1 });
   });
 
 Key points:
@@ -610,16 +662,16 @@ the await if you have more code below.
 =head2 4.2 PAGI::Pages - Conventional Negotiated Responses
 
 Use L<PAGI::Pages> when the response is a conventional welcome, HTTP error, or
-redirect rather than an application-owned literal document. A Context call
+redirect rather than an application-owned literal document. A Request call
 returns an ordinary Response for Router to send:
 
   use PAGI::Pages;
 
   route('/items/{id}' => async sub {
-      my ($c) = @_;
-      my $item = await find_item($c->path_param('id'));
-      return PAGI::Pages->not_found($c) unless $item;
-      return $c->json($item);
+      my ($request) = @_;
+      my $item = await find_item($request->path_param('id'));
+      return PAGI::Pages->not_found($request) unless $item;
+      return PAGI::Response->json($item);
   });
 
 A raw app constructs the same unsent value, may modify it, and explicitly owns
@@ -629,7 +681,7 @@ the send:
   $response->header('X-Request-ID' => $request_id);
   await $response->respond($send);
 
-Without a Context or scope, the call returns a plain coderef that works as a
+Without a Request or scope, the call returns a plain coderef that works as a
 normal route target or native HTTP app:
 
   route('/' => PAGI::Pages->welcome);
@@ -647,14 +699,14 @@ errors (ordinary JSON for welcome and redirects), and text. Use C<< as =>
 'html' >>, C<'json'>, or C<'text'> for a fixed representation. Error responses
 default to C<Cache-Control: no-store>. Pages also validates mandatory fields:
 
-  PAGI::Pages->unauthorized($c,
+  PAGI::Pages->unauthorized($request,
       challenge => 'Bearer realm="api"');
-  PAGI::Pages->method_not_allowed($c,
+  PAGI::Pages->method_not_allowed($request,
       allow => [qw(GET HEAD)]);
 
 Redirect query preservation is explicit and defaults off:
 
-  PAGI::Pages->redirect($c, '/search#results',
+  PAGI::Pages->redirect($request, '/search#results',
       status => 308, preserve_query => 1);
 
 Pages has no Context shortcut and Compose has no Pages configuration option.
@@ -1148,8 +1200,8 @@ Or per-route:
 
   my $auth = MyApp::Middleware::Auth->new(secret => 'secret-key');
   $router->get('/admin' => [$auth] => sub {
-      my ($c) = @_;
-      return $c->text('admin');
+      my ($request) = @_;
+      return PAGI::Response->text('admin');
   });
 
 =head3 Middleware Patterns
@@ -1416,8 +1468,8 @@ the component — never per request. Routing-aware App/Endpoint children are
 deliberately stricter: load their packages normally, construct configured
 objects explicitly, and pass immutable snapshots to
 C<< mount('/prefix', app => $child->to_router) >> when reverse discovery is
-required. Ordinary route targets receive
-C<$c>; native coderefs and instantiated component apps belong only behind explicit
+required. Ordinary route targets receive the direct protocol object; native
+coderefs and instantiated component apps belong only behind explicit
 C<raw> or opaque mount boundaries.
 
 Middleware position is the same idea with a different duck type:
@@ -1443,11 +1495,16 @@ depends on the applications it composes.
 
 =head2 7.8 Starlette Vocabulary, PAGI Boundaries
 
-PAGI borrows the Route/Mount/Router distinction without copying Starlette's
-API. Ordinary handlers receive an explicit Context, while C<raw>, Mount
+PAGI follows Starlette's Route/Mount/Router/application topology, not every
+method on Starlette Request. L<PAGI::Request> owns HTTP input; imports identify
+the Router or middleware that supplies optional behavior. This keeps optional
+capability ownership visible and lets a higher-level framework use its own
+Router API.
+
+Ordinary handlers receive the direct Request, WebSocket, or SSE object, while C<raw>, Mount
 C<app>, Router C<http_default>, and Compose C<app> receive the native three
 channels. Constraints validate without coercion. Names use slash logical
-addresses and relative Context lookup. SSE is a first-class scope, and all
+addresses and relative L<PAGI::Routing::URL> lookup. SSE is a first-class scope, and all
 middleware is pure PAGI app-to-app wrapping.
 
 Starlette's single multiprotocol Router C<default> was considered and
