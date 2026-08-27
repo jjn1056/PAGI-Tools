@@ -14,6 +14,7 @@ use PAGI::Pages::_Catalog;
 use PAGI::Request;
 use PAGI::Request::Negotiate;
 use PAGI::Response;
+use PAGI::Utils::Scope ();
 
 my %REPRESENTATION = map { $_ => 1 } qw(auto html json text);
 my %DEFAULT_REPRESENTATION = map { $_ => 1 } qw(html json text);
@@ -172,28 +173,15 @@ sub _policy_for {
 sub _take_request_source {
     my ($args) = @_;
     return unless @$args;
-    return unless _is_scope_candidate($args->[0])
-        || _is_context_candidate($args->[0]);
+    return unless PAGI::Utils::Scope::is_scope_source($args->[0]);
     my $source = shift @$args;
     _scope_from_source($source);
     return $source;
 }
 
-sub _is_scope_candidate {
-    my ($value) = @_;
-    return ref($value) eq 'HASH' && !blessed($value);
-}
-
-sub _is_context_candidate {
-    my ($value) = @_;
-    return blessed($value) && $value->isa('PAGI::Context');
-}
-
 sub _scope_from_source {
     my ($source) = @_;
-    my $scope = _is_context_candidate($source) ? $source->scope : $source;
-    croak 'PAGI::Pages scope must be an unblessed hashref'
-        unless ref($scope) eq 'HASH' && !blessed($scope);
+    my $scope = PAGI::Utils::Scope::scope_from_source('PAGI::Pages', $source);
 
     my $type = $scope->{type};
     croak 'PAGI::Pages scope type is required'
@@ -208,12 +196,7 @@ sub _endpoint {
     return sub {
         my @call = @_;
 
-        if (@call && _is_context_candidate($call[0])) {
-            my $scope = _scope_from_source($call[0]);
-            return $self->_response_for($scope, $descriptor_factory->($scope));
-        }
-
-        if (@call && _is_scope_candidate($call[0])) {
+        if (@call && PAGI::Utils::Scope::is_scope_source($call[0])) {
             my $scope = _scope_from_source($call[0]);
             if (@call == 1) {
                 return $self->_response_for($scope, $descriptor_factory->($scope));
@@ -1109,7 +1092,8 @@ PAGI::Pages - Negotiated conventional HTTP response factory
 
     use PAGI::Pages;
 
-    # A Context or HTTP scope constructs an ordinary, unsent Response.
+    # A Request, Context, or HTTP scope constructs an ordinary, unsent Response.
+    my $response = PAGI::Pages->not_found($request);
     my $response = PAGI::Pages->not_found($context);
     my $response = PAGI::Pages->not_found($scope);
 
@@ -1160,9 +1144,12 @@ state.
 
 =head1 RESPONSE AND ENDPOINT OWNERSHIP
 
-A C<PAGI::Context::HTTP> or an unblessed scope whose explicit C<type> is
-C<http> is a request source. It constructs but does not send a response:
+A L<PAGI::Request> is the normal handler request source. Any object with a
+C<scope> method, including C<PAGI::Context::HTTP>, and an unblessed scope are
+also accepted after their resolved scope is explicitly validated as HTTP. A
+request source constructs but does not send a response:
 
+    my $response = PAGI::Pages->not_found($request);
     my $response = PAGI::Pages->not_found($scope);
     $response->headers->set('X-Request-ID' => $request_id);
     await $response->respond($send);
@@ -1180,9 +1167,12 @@ Do not call C<respond> inside a normal Context route. Use an explicit C<raw>
 route when the handler must own C<$receive>, C<$send>, and protocol events.
 
 Without a request source, a page call returns a plain unblessed coderef. It
-accepts C<($context, @ignored_callback_metadata)>, C<($scope)>, or the native
-HTTP triplet C<($scope, $receive, $send)>. Only the triplet sends. Other
-invocation shapes and non-HTTP scopes croak before response construction.
+accepts exactly one request source and returns a response, or the native HTTP
+triplet C<($scope, $receive, $send)>, which sends and returns a Future. The
+native triplet is a retained arity-interoperability exception for raw PAGI
+applications; ordinary handlers should use the one-argument Request form.
+Other invocation shapes, callback metadata, and non-HTTP scopes croak before
+response construction.
 
 =head1 COMPLETE COMPOSITION FORMS
 

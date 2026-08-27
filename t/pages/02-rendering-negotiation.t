@@ -7,6 +7,7 @@ use Future;
 use JSON::MaybeXS qw(decode_json);
 
 use PAGI::Pages;
+use PAGI::Request;
 
 my $WELCOME_TITLE = 'Welcome to PAGI';
 my $WELCOME_DETAIL = 'PAGI is a spiritual successor to PSGI for asynchronous Perl applications. '
@@ -110,6 +111,14 @@ sub html_favicon_href {
     my ($html) = @_;
     my ($href) = $html =~ m{<link\s+rel="icon"\s+type="image/svg\+xml"\s+href="([^"]+)"}i;
     return $href;
+}
+
+sub http_request {
+    my (%args) = @_;
+    return PAGI::Request->new(
+        http_scope(%args),
+        sub { return Future->done },
+    );
 }
 
 {
@@ -301,6 +310,18 @@ subtest 'auto Vary merge is case-insensitive and duplicate-free' => sub {
     } split /,/, $vary_fields[0];
     is([sort @tokens], [sort qw(origin accept user-agent)],
         'existing Vary tokens are retained without duplicate Accept tokens');
+};
+
+subtest 'Request source preserves configured negotiated rendering' => sub {
+    my $pages = PAGI::Pages->new(as => 'auto', default => 'text');
+    my $response = $pages->welcome(http_request(accept => 'application/json'));
+    isa_ok($response, ['PAGI::Response']);
+
+    my $events = send_response($response);
+    is(header($events, 'Content-Type'), 'application/json',
+        'configured Pages instance negotiates JSON from a Request source');
+    is(decode_json(body($events))->{title}, $WELCOME_TITLE,
+        'negotiated Request response retains the welcome document');
 };
 
 subtest 'welcome is not a problem document and preserves exact stock copy' => sub {

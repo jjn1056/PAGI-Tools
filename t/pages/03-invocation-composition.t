@@ -9,6 +9,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Context;
 use PAGI::Pages;
 use PAGI::Pages::_Catalog;
+use PAGI::Request;
 use PAGI::Routing qw(route mount);
 
 sub http_scope {
@@ -42,6 +43,26 @@ sub response_header {
         return $pair->[1] if lc($pair->[0]) eq $wanted;
     }
     return;
+}
+
+sub http_request {
+    my (%args) = @_;
+    return PAGI::Request->new(
+        http_scope(%args),
+        sub { return Future->done },
+    );
+}
+
+{
+    package Local::ScopeBearer;
+    sub new { bless { scope => $_[1] }, $_[0] }
+    sub scope { shift->{scope} }
+}
+
+{
+    package Local::MalformedScopeBearer;
+    sub new { bless {}, shift }
+    sub scope { return [] }
 }
 
 {
@@ -123,15 +144,77 @@ subtest 'immediate and deferred invocation preserve response ownership' => sub {
     is(ref($endpoint), 'CODE', 'deferred endpoint is a plain coderef');
     ok(!ref($endpoint) || !eval { $endpoint->can('to_app') },
         'deferred endpoint is not a Pages endpoint object');
-    isa_ok($endpoint->($ctx, bless({}, 'Local::Snapshot')), ['PAGI::Response']);
+    like(dies { $endpoint->($ctx, bless({}, 'Local::Snapshot')) },
+        qr/invalid PAGI::Pages endpoint invocation/,
+        'deferred Context form rejects ignored callback metadata');
     isa_ok($endpoint->($scope), ['PAGI::Response']);
     is(\@events, [], 'deferred Context and scope-only forms remain unsent');
 
-    Future->wrap($endpoint->($scope, sub { Future->done }, $send))->get;
+    my $native = $endpoint->($scope, sub { Future->done }, $send);
+    isa_ok($native, ['Future'], 'native triplet returns a Future');
+    Future->wrap($native)->get;
     is($events[0]{status}, 404, 'native triplet sends the page');
     is([map { $_->{type} } @events],
         [qw(http.response.start http.response.body)],
         'native triplet sends one complete buffered response');
+};
+
+subtest 'Request and scope-bearing sources return unsent responses' => sub {
+    my $request = http_request(headers => [['Accept' => 'text/plain']]);
+    my $class_welcome = PAGI::Pages->welcome($request);
+    isa_ok($class_welcome, ['PAGI::Response']);
+    is($class_welcome->status, 200, 'class welcome accepts a strict Request');
+
+    my $pages = PAGI::Pages->new(as => 'text');
+    my $instance_welcome = $pages->welcome($request);
+    isa_ok($instance_welcome, ['PAGI::Response']);
+    is($instance_welcome->status, 200, 'configured instance welcome accepts a Request');
+
+    my $named = PAGI::Pages->not_found($request);
+    isa_ok($named, ['PAGI::Response']);
+    is($named->status, 404, 'named error accepts a Request');
+
+    my $custom = $pages->status(
+        $request, 599,
+        type => 'https://example.test/problems/upstream-timeout',
+        title => 'Upstream Timeout',
+        detail => 'The upstream did not answer.',
+    );
+    isa_ok($custom, ['PAGI::Response']);
+    is($custom->status, 599, 'status accepts a Request');
+
+    my $redirect = PAGI::Pages->permanent_redirect($request, '/new');
+    isa_ok($redirect, ['PAGI::Response']);
+    is($redirect->status, 308, 'named redirect accepts a Request');
+
+    my $endpoint = PAGI::Pages->not_found;
+    my $response = $endpoint->($request);
+    isa_ok($response, ['PAGI::Response']);
+    my @events;
+    Future->wrap($response->respond(sub {
+        push @events, $_[0];
+        return Future->done;
+    }))->get;
+    is(response_header(\@events, 'Content-Type'),
+        'text/plain; charset=utf-8',
+        'one-Request endpoint invocation negotiates a text response');
+
+    my $bearer = Local::ScopeBearer->new(http_scope());
+    isa_ok($endpoint->($bearer), ['PAGI::Response'],
+        'endpoint accepts another Task 1 scope-bearing source');
+    like(dies { $endpoint->(Local::MalformedScopeBearer->new) },
+        qr/requires an unblessed scope hashref or object with scope\(\)/,
+        'malformed scope-bearing object has the Task 1 diagnostic');
+    like(dies { $endpoint->(Local::ScopeBearer->new({ type => 'websocket' })) },
+        qr/requires HTTP scope.*websocket/,
+        'non-HTTP scope-bearing object is rejected explicitly');
+
+    like(dies { $endpoint->($request, sub { Future->done }) },
+        qr/invalid PAGI::Pages endpoint invocation/,
+        'two-argument Request endpoint invocation is rejected');
+    like(dies { $endpoint->($request, bless({}, 'Local::Snapshot')) },
+        qr/invalid PAGI::Pages endpoint invocation/,
+        'Request endpoint rejects arbitrary callback metadata');
 };
 
 subtest 'class calls are fresh and retain subclass class dispatch' => sub {
