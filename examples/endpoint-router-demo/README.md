@@ -24,9 +24,9 @@ my $main   = MyApp::Main->new(api => $api);
 my $app = compose(app => $main->to_router, lifespan => { ... })->to_app;
 ```
 
-That Compose is also the complete HTTP boundary: the Endpoint Router itself is
-a nonterminal routing component, while Compose supplies mandatory inert 404,
-405, response-completion, and application-error safeguards.
+That Compose is also the complete deployed HTTP boundary: the selected
+Endpoint Router owns its negotiated 404 and 405, while Compose supplies
+response-completion and application-error safeguards.
 
 Each package owns only its immutable configuration: `Main` keeps its `api`
 child and `API` keeps its `events` child. The server creates the resource and
@@ -45,18 +45,36 @@ nested router produces these logical addresses:
 | `Main` | `status_socket` | `/status_socket` |
 | `API` | `index` | `/api/index` |
 | `API` | `show` | `/api/show` |
+| `API` callback child | `status` | `/api/tools/status` |
 | `Events` | `stream` | `/api/events/stream` |
 
 `Main` generates the API link with `$c->path_for('/api/index')`. `API` uses
 its local name, `$c->path_for('show', { user_id => 1 })`, for `/api/show/1`.
 
 `Main` owns the home page, static-file mount, and root `/status` WebSocket.
-`API` owns the protected HTTP pages. `Events` owns `/api/events/stream`.
+It places the configured API object explicitly with
+`app => $self->{api}->to_router`, so its descendant names remain discoverable.
+`API` does the same for its configured Events object. Direct Endpoint objects
+are valid opaque applications, but the parent deliberately does not guess
+their route names.
+
+`API` also demonstrates the callback form of a structural child:
+
+```perl
+$r->mount('/tools', routes => sub {
+    my ($tools) = @_;
+    $tools->get('/status' => 'status')->name('status');
+})->name('tools');
+```
+
+The callback receives an Endpoint-aware facade bound to the same API object,
+so the method string calls `API::status`. No separate Router configuration is
+needed for this child.
 
 `Main` mounts its static files with:
 
 ```perl
-$r->mount('/', PAGI::App::File->app_path('public'));
+$r->mount('/', app => PAGI::App::File->app_path('public'));
 ```
 
 Because `MyApp::Main` lives under `lib/MyApp/Main.pm`, the constructor resolves
@@ -84,6 +102,16 @@ which the Endpoint adapter sends after the handler returns it.
 The WebSocket and SSE methods also receive their protocol-aware shared Context,
 so they can call `$c->accept`, `$c->send_json`, and `$c->send_event` while
 reading the same lifespan-owned `$c->state`.
+
+The API boundary configures its native default explicitly:
+
+```perl
+$r->http_default($self->app_as('api_not_found'));
+```
+
+`app_as` binds the API object to the native three-channel method. It renders
+`No API Endpoint route matched` for HTTP NONE only; Router-generated 405,
+selected handlers, WebSocket, and SSE retain their own outcomes.
 
 ## Running
 

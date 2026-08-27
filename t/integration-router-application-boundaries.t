@@ -71,6 +71,22 @@ sub response_body {
 
 local $ENV{PAGI_ENV} = 'production';
 
+subtest 'background-task example returns a composable routing object' => sub {
+    my $file = "$Bin/../examples/background-tasks/app.pl";
+    my $app = do $file;
+    my $load_error = $@ || $!;
+    ok(!$load_error, 'background-task example loads cleanly')
+        or diag($load_error);
+    isa_ok($app, 'PAGI::Compose');
+
+    return unless ref($app) eq 'PAGI::Compose';
+    my $events = run_http($app->to_app, '/');
+    is($events->[0]{status}, 200,
+        'background-task root route responds after explicit compilation');
+    like(response_body($events), qr/Background Tasks Demo/,
+        'focused load check reaches the example root content');
+};
+
 subtest 'full-demo keeps its routes and gains a complete application boundary' => sub {
     my $file = "$Bin/../examples/full-demo/app.pl";
     my $app = Local::FullDemoLoader->load($file);
@@ -90,7 +106,7 @@ subtest 'full-demo keeps its routes and gains a complete application boundary' =
         ['http.response.start', 'http.response.body'],
         'unknown full-demo route completes the HTTP response event family');
     is($missing->[0]{status}, 404,
-        'unknown full-demo route receives the Compose application-boundary 404');
+        'unknown full-demo route receives the enclosed Router 404');
 };
 
 subtest 'a mounted object is one compiled application boundary' => sub {

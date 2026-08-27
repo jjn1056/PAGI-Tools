@@ -25,7 +25,7 @@ subtest 'Main mounts its application-relative public component' => sub {
     my $path = "$Bin/../examples/endpoint-router-demo/lib/MyApp/Main.pm";
     my $source = source_text($path);
     like($source,
-        qr{mount\('/'\s*,\s*PAGI::App::File->app_path\('public'\)\)},
+        qr{mount\('/'\s*,\s*app\s*=>\s*PAGI::App::File->app_path\('public'\)\)},
         'module-layout Router mounts the returned component');
     unlike($source, qr/PAGI::App::File->app_path\('public'\)->to_app/,
         'module passes the component to the Router without compiling it');
@@ -53,7 +53,8 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
 
     isa_ok($router, 'PAGI::Routing::Router');
     is([sort keys %{$router->named_routes}], [qw(
-        /api/events/stream /api/index /api/show /home /status_socket
+        /api/events/stream /api/index /api/show /api/tools/status
+        /home /status_socket
     )], 'nested local names form canonical absolute addresses');
 
     my $resource;
@@ -71,7 +72,8 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
                 $state->{resource}{closed} = 1;
             },
         },
-    )->to_app;
+    );
+    isa_ok($app, 'PAGI::Compose');
 
     PAGI::Test::Client->run($app, sub {
         my ($client) = @_;
@@ -107,6 +109,15 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
         is($show->status, 200, 'generated API item link resolves');
         like($show->text, qr/Alice/, 'item handler sees its typed path capture');
 
+        my $tools_path = $router->path_for('/api/tools/status');
+        is($tools_path, '/api/tools/status',
+            'callback child publishes its composed reverse address');
+        my $tools = $client->get($tools_path);
+        is($tools->status, 200,
+            'Endpoint routes callback binds methods to the API object');
+        is($tools->json, { status => 'ready', resource => 'demo-resource' },
+            'callback-bound handler reads shared lifespan state');
+
         my $missing_user = $client->get('/api/show/999', headers => {
             'X-Demo-Token' => 'demo-token',
             Accept         => 'application/problem+json',
@@ -121,6 +132,18 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
             status => 404,
             detail => 'User not found',
         }, 'missing API user uses the shared Pages representation');
+
+        my $api_missing = $client->get('/api/not-a-route', headers => {
+            Accept => 'application/problem+json',
+        });
+        is($api_missing->status, 404,
+            'API Router owns its unmatched path');
+        is($api_missing->json, {
+            type   => 'about:blank',
+            title  => 'Not Found',
+            status => 404,
+            detail => 'No API Endpoint route matched',
+        }, 'app_as custom default renders the API boundary policy');
 
         $client->websocket('/status', sub {
             my ($ws) = @_;

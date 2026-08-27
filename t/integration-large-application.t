@@ -84,7 +84,7 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
     unlike($root_app, qr/use PAGI::Utils qw\(app_path\)/,
         'Root no longer needs the functional application path helper');
     like($root_app,
-        qr/mount\('\/static'\s*=>\s*PAGI::App::File->app_path\('static'\)\)/,
+        qr/mount\('\/static'\s*,\s*app\s*=>\s*PAGI::App::File->app_path\('static'\)\)/,
         'static mount uses the concise App File component constructor');
     unlike($root_app, qr/PAGI::App::File->new\s*\(|File::Basename|File::Spec|__FILE__|\$STATIC_ROOT/,
         'Root contains no manual or expanded static-root construction');
@@ -221,11 +221,11 @@ subtest 'component routing publishes the canonical composed address map' => sub 
     my ($person_mount) = grep {
         defined $_->name && $_->name eq 'person'
     } @{$root->routes};
-    my $mounted_person = $person_mount->router;
+    my $mounted_person = $person_mount->app;
     my ($blog_mount) = grep {
         defined $_->name && $_->name eq 'blog'
     } @{$mounted_person->routes};
-    my $mounted_blogs = $blog_mount->router;
+    my $mounted_blogs = $blog_mount->app;
 
     is(refaddr($root->route_named('/home')), refaddr($home_source),
         'home address preserves its Root source leaf');
@@ -297,13 +297,13 @@ subtest 'application View owns the shared HTML document shell' => sub {
 subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
     my $routing = MyApp::Root->routing;
     my $direct_app = MyApp::Root->to_app;
-    is(ref($direct_app), 'CODE', 'Root class compiles to a PAGI app');
+    isa_ok($direct_app, 'PAGI::Compose');
 
     my $app_file = "$Bin/../examples/15-large-application/app.pl";
     my $app = do $app_file;
     my $load_error = $@ || $!;
     ok(!$load_error, 'minimal app.pl loads cleanly') or diag($load_error);
-    is(ref($app), 'CODE', 'app.pl returns Root compiled as a PAGI app');
+    isa_ok($app, 'PAGI::Compose');
 
     my $state;
     PAGI::Test::Client->run($app, sub {
@@ -449,7 +449,7 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         is($noninteger_person->status, 404,
             'a noninteger person identifier does not reach the typed leaf');
         like($noninteger_person->text, qr{<h1>Not Found</h1>},
-            'a noninteger person identifier reaches the Pages-backed Compose 404');
+            'a noninteger person identifier reaches the Person Router 404');
         unlike($noninteger_person->text, qr{<h1>Person not found</h1>},
             'the automatic noninteger response is not the branded handler 404');
 
@@ -461,24 +461,29 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
 
         my $blogs_catchall = $client->get('/person/1/blog/not/a/route');
         is($blogs_catchall->status, 404,
-            'Blogs explicit catchall owns deeper paths');
-        like($blogs_catchall->text, qr{<h1>Blogs section not found</h1>},
-            'Blogs catchall body remains local');
+            'Blogs Router default owns deeper paths');
+        like($blogs_catchall->text,
+            qr{No Blogs route matched this path[.]},
+            'Blogs default publishes its boundary-specific detail');
 
         my $root_missing = $client->get('/outside');
-        is($root_missing->status, 404, 'Root catchall handles root miss');
-        like($root_missing->text, qr{<h1>Root page not found</h1>},
-            'Root catchall is an ordinary branded route');
+        is($root_missing->status, 404, 'Root Router default handles root miss');
+        like($root_missing->text,
+            qr{No root route matched this path[.]},
+            'Root default publishes its boundary-specific detail');
 
         my $child_none = $client->get('/person/1/unmatched');
         is($child_none->status, 404,
-            'Person Router mount owns its routing decline');
+            'Person Router mount owns its routing miss');
         like($child_none->text, qr{<h1>Not Found</h1>},
-            'Compose completes the child decline instead of resuming Root catchall');
+            'Person uses its own stock Router default instead of Root policy');
+        like($child_none->text,
+            qr{The requested resource was not found[.]},
+            'Person stock detail distinguishes it from both custom defaults');
 
         my $wrong_method = $client->post('/person/1/blog/101');
         is($wrong_method->status, 405,
-            'child method exhaustion reaches the Compose automatic 405');
+            'child method exhaustion reaches the Blogs Router automatic 405');
         is($wrong_method->header('Allow'), 'GET, HEAD',
             'automatic 405 carries only the selected child method union');
 
@@ -492,8 +497,9 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
         my $static_missing = $client->get('/static/missing.css');
         is($static_missing->status, 404,
             'missing static asset remains owned by the opaque file app');
-        unlike($static_missing->text, qr{<h1>Root page not found</h1>},
-            'opaque application 404 is not reinterpreted as Root decline');
+        unlike($static_missing->text,
+            qr{No root route matched this path[.]},
+            'opaque application 404 is not reinterpreted as Root policy');
 
         my $head = $client->head($person_link->{target});
         is($head->status, 200, 'automatic HEAD reaches Person GET');

@@ -7,7 +7,7 @@ use Types::Standard qw(Int);
 
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
-use PAGI::Routing qw(router route mount);
+use PAGI::Routing qw(route mount);
 
 my %apples_db = (
     1 => { id => 1, name => 'Gala',       color => 'Red/Yellow' },
@@ -59,29 +59,29 @@ async sub delete_apple($c) {
     });
 }
 
-my $apples = router(
-    routes => [
-        route('/' => \&list_apples,
-            methods => ['GET'], name => 'list', desc => 'List apples'),
-        route('/' => \&create_apple,
-            methods => ['POST'], name => 'create', desc => 'Create an apple'),
-        route('/{apple_id:&Int}' => \&read_apple,
-            methods => ['GET'], name => 'read', desc => 'Read an apple'),
-        route('/{apple_id:&Int}' => \&update_apple,
-            methods => ['PUT'], name => 'update', desc => 'Update an apple'),
-        route('/{apple_id:&Int}' => \&delete_apple,
-            methods => ['DELETE'], name => 'delete', desc => 'Delete an apple'),
-    ],
-    desc => 'Apples API',
-);
-
 compose(
     routes => [
         route('/' => PAGI::Pages->welcome,
             name => 'home', desc => 'PAGI welcome page'),
         mount('/apples',
-            router => $apples,
-            name   => 'apples',
-            desc   => 'Apples API namespace'),
+            routes => [
+                route('/' => \&list_apples,
+                    methods => ['GET'], name => 'list',
+                    desc => 'List apples'),
+                route('/' => \&create_apple,
+                    methods => ['POST'], name => 'create',
+                    desc => 'Create an apple'),
+                route('/{apple_id:&Int}' => \&read_apple,
+                    methods => ['GET'], name => 'read',
+                    desc => 'Read an apple'),
+                route('/{apple_id:&Int}' => \&update_apple,
+                    methods => ['PUT'], name => 'update',
+                    desc => 'Update an apple'),
+                route('/{apple_id:&Int}' => \&delete_apple,
+                    methods => ['DELETE'], name => 'delete',
+                    desc => 'Delete an apple'),
+            ],
+            name => 'apples',
+            desc => 'Apples API namespace'),
     ],
-)->to_app;
+);

@@ -37,17 +37,6 @@ sub pagi($c) {
     return PAGI::Pages->welcome($c);
 }
 
-sub not_found($c) {
-    return $c->html(
-        MyApp::View->document(
-            'Root page not found',
-            "    <h1>Root page not found</h1>\n"
-                . '    <p>No root route matched this path.</p>',
-        ),
-        status => 404,
-    );
-}
-
 sub routing($class) {
     return router(
         routes => [
@@ -59,17 +48,17 @@ sub routing($class) {
                 name => 'pagi',
                 desc => 'Pages Welcome response from Context',
             ),
-            mount('/static' => PAGI::App::File->app_path('static')),
+            mount('/static',
+                app => PAGI::App::File->app_path('static')),
             mount('/person',
-                router    => MyApp::Person->routing,
-                name      => 'person',
-                desc      => 'People section',
-            ),
-            route('/*path' => \&not_found,
-                desc => 'Final root catchall',
+                app  => MyApp::Person->routing,
+                name => 'person',
+                desc => 'People section',
             ),
         ],
         desc => 'MyApp root routes',
+        http_default => PAGI::Pages->not_found(
+            detail => 'No root route matched this path.'),
     );
 }
 
@@ -80,7 +69,7 @@ sub to_app($class) {
             startup  => \&startup,
             shutdown => \&shutdown,
         },
-    )->to_app;
+    );
 }
 
 1;

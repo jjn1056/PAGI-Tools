@@ -12,7 +12,7 @@ my $routing = router(routes => [
     route('/' => PAGI::Pages->welcome, name => 'welcome'),
     route('/old' => PAGI::Pages->permanent_redirect('/new')),
     route('/missing' => PAGI::Pages->not_found),
-    mount('/terminal' => PAGI::Pages->gone),
+    mount('/terminal', app => PAGI::Pages->gone),
     route('/context' => sub {
         my ($c) = @_;
         my $response = PAGI::Pages->not_found($c, as => 'text');
@@ -41,4 +41,4 @@ compose(
             return;
         },
     },
-)->to_app;
+);

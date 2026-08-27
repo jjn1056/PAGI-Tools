@@ -71,21 +71,110 @@ The corresponding PAGI application is in [`app.pl`](app.pl). It adds a `/`
 route using the shared `PAGI::Pages` Welcome page, then mounts an apples Router
 under `/apples`.
 
-The final wildcard considered during design is intentionally absent. Compose
-already turns routing evidence into negotiated Not Found and Method Not
-Allowed responses. A wildcard route would be a real match, so it could hide a
-method mismatch such as `PATCH /apples` and incorrectly turn the 405 into a
-404.
+```perl
+#!/usr/bin/env perl
+use v5.40;
+
+use Future::AsyncAwait;
+use List::Util qw(max);
+use Types::Standard qw(Int);
+
+use PAGI::Compose qw(compose);
+use PAGI::Pages;
+use PAGI::Routing qw(route mount);
+
+my %apples_db = (
+    1 => { id => 1, name => 'Gala',       color => 'Red/Yellow' },
+    2 => { id => 2, name => 'Honeycrisp', color => 'Rosy Red' },
+);
+
+async sub list_apples($c) {
+    my @ids = sort { $a <=> $b } keys %apples_db;
+    return $c->json([map { $apples_db{$_} } @ids]);
+}
+
+async sub read_apple($c) {
+    my $apple_id = $c->path_param('apple_id');
+    my $apple = $apples_db{$apple_id};
+    return $c->json($apple) if $apple;
+    return $c->json({ error => 'Apple not found' }, status => 404);
+}
+
+async sub create_apple($c) {
+    my $data = await $c->request->json;
+    my $new_id = max(0, keys %apples_db) + 1;
+    my $new_apple = { id => $new_id, %$data };
+    $apples_db{$new_id} = $new_apple;
+    return $c->json($new_apple, status => 201);
+}
+
+async sub update_apple($c) {
+    my $apple_id = $c->path_param('apple_id');
+    return $c->json({ error => 'Apple not found' }, status => 404)
+        unless exists $apples_db{$apple_id};
+
+    my $data = await $c->request->json;
+    $apples_db{$apple_id} = {
+        %{$apples_db{$apple_id}},
+        %$data,
+    };
+    return $c->json($apples_db{$apple_id});
+}
+
+async sub delete_apple($c) {
+    my $apple_id = $c->path_param('apple_id');
+    return $c->json({ error => 'Apple not found' }, status => 404)
+        unless exists $apples_db{$apple_id};
+
+    my $deleted_apple = delete $apples_db{$apple_id};
+    return $c->json({
+        success => \1,
+        deleted => $deleted_apple,
+    });
+}
+
+compose(
+    routes => [
+        route('/' => PAGI::Pages->welcome,
+            name => 'home', desc => 'PAGI welcome page'),
+        mount('/apples',
+            routes => [
+                route('/' => \&list_apples,
+                    methods => ['GET'], name => 'list',
+                    desc => 'List apples'),
+                route('/' => \&create_apple,
+                    methods => ['POST'], name => 'create',
+                    desc => 'Create an apple'),
+                route('/{apple_id:&Int}' => \&read_apple,
+                    methods => ['GET'], name => 'read',
+                    desc => 'Read an apple'),
+                route('/{apple_id:&Int}' => \&update_apple,
+                    methods => ['PUT'], name => 'update',
+                    desc => 'Update an apple'),
+                route('/{apple_id:&Int}' => \&delete_apple,
+                    methods => ['DELETE'], name => 'delete',
+                    desc => 'Delete an apple'),
+            ],
+            name => 'apples',
+            desc => 'Apples API namespace'),
+    ],
+);
+```
+
+The final wildcard considered during design is intentionally absent. Each
+Router already renders negotiated Not Found and Method Not Allowed outcomes. A
+wildcard route would be a real match, so it could hide a method mismatch such
+as `PATCH /apples` and incorrectly turn the 405 into a 404.
 
 | Starlette | PAGI::Tools |
 | --- | --- |
-| `Starlette(routes=[...])` | `compose(routes => [...])->to_app` |
-| `Route(...)` | `route(...)` and an explicit `/apples` `mount(...)` boundary |
+| `Starlette(routes=[...])` | `compose(routes => [...])`, retained as a component object |
+| `Route(...)` | `route(...)` leaves inside one `mount('/apples', routes => [...])` child Router |
 | `Request` | HTTP `$c` Context and `$c->request` |
 | `JSONResponse(...)` | `$c->json(...)` |
 | `{apple_id:int}` | `{apple_id:&Int}` from `Types::Standard` |
 | converter validates and converts | constraint validates without coercion |
-| application default 404/405 | Compose default NotFound/MethodNotAllowed |
+| root application default 404/405 | selected root or child Router renders Not Found/Method Not Allowed |
 
 These APIs are related, but they are not identical. The PAGI mount creates an
 explicit namespace boundary that the flat Python route list does not have.
@@ -96,9 +185,11 @@ scalar for the handler.
 That distinction is visible at the boundary. `/apples/999` matches a resource
 route and returns the handler's JSON `{ "error": "Apple not found" }`.
 `/apples/not-an-int` fails the route constraint, while `/elsewhere` matches no
-route at all; Compose renders both routing misses. `Types::Standard::Int`
-accepts `-1`, so `/apples/-1` reaches the handler and returns the application
-JSON rather than a routing response.
+route at all; the apples child and root Router render those misses at their
+respective boundaries. The child also owns `PATCH /apples` and its
+`Allow: GET, HEAD, POST`. Both `/apples` and `/apples/` reach the child `/`
+index. `Types::Standard::Int` accepts `-1`, so `/apples/-1` reaches the handler
+and returns the application JSON rather than a routing response.
 
 ## Run
 
@@ -140,7 +231,7 @@ curl -i -X PUT \
 curl -i -X DELETE http://127.0.0.1:5000/apples/3
 ```
 
-Compare an application-owned missing record with Compose-owned routing
+Compare an application-owned missing record with Router-owned routing
 outcomes:
 
 ```bash

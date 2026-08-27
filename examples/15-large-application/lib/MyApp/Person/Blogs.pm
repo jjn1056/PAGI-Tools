@@ -2,6 +2,7 @@ package MyApp::Person::Blogs;
 
 use v5.40;
 use Types::Standard qw(Int);
+use PAGI::Pages;
 use PAGI::Routing qw(router route);
 use MyApp::View ();
 
@@ -78,19 +79,6 @@ sub show_blog($c) {
     ));
 }
 
-sub blogs_not_found($c) {
-    # The unnamed catchall still has /person/blog as its containing namespace.
-    my $blogs_path = $c->path_for('index');
-    return $c->html(
-        MyApp::View->document(
-            'Blogs section not found',
-            qq{    <a href="$blogs_path">Blogs</a>\n}
-                . '    <h1>Blogs section not found</h1>',
-        ),
-        status => 404,
-    );
-}
-
 sub routing($class) {
     return router(
         routes => [
@@ -102,11 +90,10 @@ sub routing($class) {
                 name => 'show',
                 desc => 'Show one blog',
             ),
-            route('/*path' => \&blogs_not_found,
-                desc => 'Blogs-local catchall',
-            ),
         ],
         desc => 'Blog routes',
+        http_default => PAGI::Pages->not_found(
+            detail => 'No Blogs route matched this path.'),
     );
 }
 

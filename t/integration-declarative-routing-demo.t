@@ -19,10 +19,11 @@ my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'the example app file loads cleanly')
     or diag($load_error);
-is(ref($app), 'CODE', 'the app file returns a compiled PAGI application');
+isa_ok($app, 'PAGI::Compose');
 
 SKIP: {
-    skip 'the example app did not load', 24 unless ref($app) eq 'CODE';
+    skip 'the example app did not load', 24
+        unless ref($app) eq 'PAGI::Compose';
 
     my $client = PAGI::Test::Client->new(app => $app);
 
@@ -45,43 +46,45 @@ SKIP: {
 
     my $constraint_miss = $client->get('/api/items/not-a-number',
         headers => { Accept => 'application/problem+json' });
-    is($constraint_miss->status, 404, 'failed route constraint reaches custom not-found');
+    is($constraint_miss->status, 404,
+        'failed route constraint reaches the API Router default');
     is($constraint_miss->content_type, 'application/problem+json',
         'constraint miss negotiates a problem document');
     is($constraint_miss->json, {
         type   => 'about:blank',
         title  => 'Not Found',
         status => 404,
-        detail => 'No route matched',
-    }, 'custom not-found body uses the shared Pages representation');
+        detail => 'No API route matched',
+    }, 'child Router default uses the shared Pages representation');
 
     my $missing = $client->get('/missing',
         headers => { Accept => 'application/problem+json' });
-    is($missing->status, 404, 'unknown path uses custom not-found');
+    is($missing->status, 404, 'unknown path uses the root Router default');
     is($missing->content_type, 'application/problem+json',
         'unknown path negotiates a problem document');
     is($missing->json, {
         type   => 'about:blank',
         title  => 'Not Found',
         status => 404,
-        detail => 'No route matched',
-    }, 'custom not-found policy remains application-owned');
+        detail => 'No root route matched',
+    }, 'root Router default remains distinct from child policy');
 
     my $wrong_method = $client->post('/api/items/42',
         headers => { Accept => 'application/problem+json' });
-    is($wrong_method->status, 405, 'wrong method uses custom method-not-allowed');
+    is($wrong_method->status, 405,
+        'wrong method uses the child Router method-not-allowed');
     is($wrong_method->header('Allow'), 'GET, HEAD', '405 publishes first-seen Allow');
     is($wrong_method->content_type, 'application/problem+json',
-        'custom 405 negotiates a problem document');
+        'stock 405 negotiates a problem document');
     is(
         $wrong_method->json,
         {
             type   => 'about:blank',
             title  => 'Method Not Allowed',
             status => 405,
-            detail => 'Method not allowed',
+            detail => 'The request method is not allowed for this resource.',
         },
-        'custom 405 handler renders Pages from routing evidence',
+        'child Router renders its stock 405 from owned method evidence',
     );
 
     my $head = $client->head('/');

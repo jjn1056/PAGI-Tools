@@ -61,12 +61,14 @@ return await $response->respond($send);
 Successful endpoint payloads remain application-owned JSON. `PAGI::Pages`
 handles only the generic HTTP failure.
 
-The three Endpoint applications are already compiled native PAGI components,
-so the App Router attaches them as explicit opaque mounts. The `/` static-file
-mount is last because the shared routing engine preserves written order and a
-matched mount prefix owns dispatch immediately.
+The three Endpoint applications are compiled native PAGI components at their
+explicit `app =>` positions, with Mount middleware declared by name. The `/`
+static-file mount is last because the shared routing engine preserves written
+order and a matched mount prefix owns dispatch immediately.
 
-Only the root Router is wrapped in `compose(app => $router)`. The HTTP,
+Only the root Router is wrapped in `compose(app => $router)`. The returned
+Compose description is accepted directly by conforming servers and test
+clients; it is not compiled merely to make `app.pl` load. The HTTP,
 WebSocket, and SSE Endpoint applications remain opaque at their existing mount
 boundaries; the root Compose supplies the deployed application's outer safety
 boundary without changing their protocol ownership. If one selected opaque
@@ -74,7 +76,7 @@ HTTP child were to complete silently, the outer response guard would treat it
 as incomplete output (500), not as a trusted routing 404.
 
 ```perl
-$router->mount('/' => PAGI::App::File->app_path('public'));
+$router->mount('/', app => PAGI::App::File->app_path('public'));
 ```
 
 ## Routes

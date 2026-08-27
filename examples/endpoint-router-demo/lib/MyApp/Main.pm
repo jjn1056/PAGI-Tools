@@ -17,10 +17,10 @@ sub routes {
     my ($self, $r) = @_;
 
     $r->get('/' => 'home')->name('home');
-    $r->mount('/api', router => $self->{api})->name('api');
+    $r->mount('/api', app => $self->{api}->to_router)->name('api');
     $r->websocket('/status' => 'status_socket')->name('status_socket');
 
-    $r->mount('/', PAGI::App::File->app_path('public'));
+    $r->mount('/', app => PAGI::App::File->app_path('public'));
 }
 
 async sub home {

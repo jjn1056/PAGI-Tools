@@ -9,10 +9,11 @@ my $app_file = "$Bin/../examples/pages/app.pl";
 my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'Pages example loads cleanly') or diag($load_error);
-is(ref($app), 'CODE', 'example returns one Compose-rooted PAGI app');
+isa_ok($app, 'PAGI::Compose');
 
 subtest 'Pages example exercises route, mount, Context, raw, and lifespan forms' => sub {
-    plan skip_all => 'Pages example did not load' unless ref($app) eq 'CODE';
+    plan skip_all => 'Pages example did not load'
+        unless ref($app) eq 'PAGI::Compose';
 
     my $state;
     PAGI::Test::Client->run($app, sub {

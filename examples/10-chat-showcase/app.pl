@@ -76,7 +76,7 @@ sub with_logging {
 my $router = PAGI::App::Router->new;
 $router->websocket('/ws/chat', raw => $ws_handler);
 $router->sse('/events', raw => $sse_handler);
-$router->mount('/'            => $http_handler);
+$router->mount('/', app => $http_handler);
 
 compose(
     app => $router,
@@ -96,7 +96,7 @@ compose(
             say STDERR "[lifespan] Final stats: $stats->{users_online} users, $stats->{messages_total} messages";
         },
     },
-)->to_app;
+);
 
 __END__
 

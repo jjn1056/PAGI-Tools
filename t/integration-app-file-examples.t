@@ -18,7 +18,8 @@ my @cases = (
         name  => 'endpoint demo',
         file  => "$Bin/../examples/endpoint-demo/app.pl",
         title => qr/PAGI Endpoint Demo/,
-        shape => qr{mount\('/'\s*=>\s*PAGI::App::File->app_path\('public'\)\s*\)},
+        shape => qr{mount\('/'\s*,\s*app\s*=>\s*PAGI::App::File->app_path\('public'\)\s*\)},
+        class => 'PAGI::Compose',
     },
     {
         name  => 'SSE dashboard',
@@ -47,11 +48,17 @@ for my $case (@cases) {
         my $app = do $case->{file};
         my $load_error = $@ || $!;
         ok(!$load_error, 'loads cleanly') or diag($load_error);
-        is(ref($app), 'CODE', 'returns a native PAGI application');
+        if ($case->{class}) {
+            isa_ok($app, $case->{class});
+        }
+        else {
+            is(ref($app), 'CODE', 'returns a native PAGI application');
+        }
 
         SKIP: {
             skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 8 : 2)
-                unless ref($app) eq 'CODE';
+                unless ref($app) eq 'CODE'
+                    || ($case->{class} && ref($app) eq $case->{class});
             my $client = PAGI::Test::Client->new(app => $app);
             my $response = $client->get('/');
             is($response->status, 200, 'static index responds');

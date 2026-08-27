@@ -250,7 +250,7 @@ $router->post('/signup', raw => async sub {
 });
 
 # WebSocket with background processing
-$router->mount('/ws' => async sub {
+$router->mount('/ws', app => async sub {
     my ($scope, $receive, $send) = @_;
     return unless $scope->{type} eq 'websocket';
 
@@ -281,4 +281,4 @@ $router->mount('/ws' => async sub {
     });
 });
 
-compose(app => $router)->to_app;
+compose(app => $router);

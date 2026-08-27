@@ -23,11 +23,23 @@ sub Int { return qr/\A\d+\z/ }
 sub routes {
     my ($self, $r) = @_;
 
+    $r->http_default($self->app_as('api_not_found'));
     $r->get('/index' => [$self->middleware_as('require_demo_token')] => 'index')
         ->name('index');
     $r->get('/show/{user_id:&Int}' => [$self->middleware_as('require_demo_token')] => 'show')
         ->name('show');
-    $r->mount('/events', router => $self->{events})->name('events');
+    $r->mount('/tools', routes => sub {
+        my ($tools) = @_;
+        $tools->get('/status' => 'status')->name('status');
+    })->name('tools');
+    $r->mount('/events', app => $self->{events}->to_router)->name('events');
+}
+
+async sub api_not_found {
+    my ($self, $scope, $receive, $send) = @_;
+    my $response = PAGI::Pages->not_found($scope,
+        detail => 'No API Endpoint route matched');
+    await $response->respond($send);
 }
 
 sub require_demo_token {
@@ -69,6 +81,14 @@ async sub show {
     return $c->html("<h1>$user->{name}</h1>") if $user;
     return PAGI::Pages->not_found($c,
         detail => 'User not found');
+}
+
+async sub status {
+    my ($self, $c) = @_;
+    return $c->json({
+        status   => 'ready',
+        resource => $c->state->{resource}{name},
+    });
 }
 
 1;

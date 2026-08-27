@@ -17,10 +17,11 @@ my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'Starlette comparison example loads cleanly')
     or diag($load_error);
-is(ref($app), 'CODE', 'example returns one Compose-rooted PAGI app');
+isa_ok($app, 'PAGI::Compose');
 
 subtest 'welcome, routing outcomes, and apples CRUD' => sub {
-    plan skip_all => 'example did not load' unless ref($app) eq 'CODE';
+    plan skip_all => 'example did not load'
+        unless ref($app) eq 'PAGI::Compose';
 
     my $client = PAGI::Test::Client->new(app => $app);
 
@@ -35,6 +36,12 @@ subtest 'welcome, routing outcomes, and apples CRUD' => sub {
         { id => 1, name => 'Gala', color => 'Red/Yellow' },
         { id => 2, name => 'Honeycrisp', color => 'Rosy Red' },
     ], 'collection preserves numeric ID order');
+
+    my $slash_list = $client->get('/apples/');
+    is($slash_list->status, 200,
+        'mounted collection index also responds with a trailing slash');
+    is($slash_list->json, $list->json,
+        '/apples and /apples/ reach the same child index');
 
     my $gala = $client->get('/apples/1');
     is($gala->status, 200, 'apple detail responds');
@@ -72,9 +79,9 @@ subtest 'welcome, routing outcomes, and apples CRUD' => sub {
     is($wrong_method->status, 405,
         'known collection with unsupported method is 405');
     is($wrong_method->header('Allow'), 'GET, HEAD, POST',
-        'Compose preserves the child Router method union');
+        'selected child Router owns its method union');
     is($wrong_method->json->{title}, 'Method Not Allowed',
-        'Compose renders the stock method response');
+        'selected child Router renders the stock method response');
 
     my $created = $client->post('/apples', json => {
         name  => 'Fuji',
@@ -111,7 +118,7 @@ subtest 'welcome, routing outcomes, and apples CRUD' => sub {
 
     my $unknown = $client->get('/elsewhere',
         headers => { Accept => 'application/problem+json' });
-    is($unknown->status, 404, 'unknown root path uses Compose NotFound');
+    is($unknown->status, 404, 'unknown root path uses root Router NotFound');
     is($unknown->content_type, 'application/problem+json',
         'root routing miss negotiates problem JSON');
     is($unknown->json->{title}, 'Not Found',

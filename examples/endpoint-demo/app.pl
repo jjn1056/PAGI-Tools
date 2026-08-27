@@ -192,15 +192,24 @@ my $router = PAGI::App::Router->new;
 # Mount API endpoint with middleware:
 # - $access_log: logs each request (PAGI::Middleware instance)
 # - $require_json: validates Content-Type for POST (coderef middleware)
-$router->mount('/api/messages' => [$access_log, $require_json] => MessageAPI->to_app);
+$router->mount('/api/messages',
+    app        => MessageAPI->to_app,
+    middleware => [$access_log, $require_json],
+);
 
 # WebSocket with timing middleware
-$router->mount('/ws/echo' => [$access_log, $timing] => EchoWS->to_app);
+$router->mount('/ws/echo',
+    app        => EchoWS->to_app,
+    middleware => [$access_log, $timing],
+);
 
 # SSE with timing middleware
-$router->mount('/events' => [$timing] => MessageEvents->to_app);
+$router->mount('/events',
+    app        => MessageEvents->to_app,
+    middleware => [$timing],
+);
 
 # Static files as fallback for everything else (no middleware)
-$router->mount('/' => PAGI::App::File->app_path('public'));
+$router->mount('/', app => PAGI::App::File->app_path('public'));
 
-compose(app => $router)->to_app;
+compose(app => $router);

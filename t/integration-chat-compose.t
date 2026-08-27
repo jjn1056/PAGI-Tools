@@ -30,11 +30,13 @@ unlike($http_source,
 my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'chat app loads cleanly') or diag($load_error);
-is(ref($app), 'CODE', 'chat app returns one compiled PAGI coderef');
+isa_ok($app, 'PAGI::Compose');
 
 SKIP: {
-    skip 'chat app did not load', 17 unless ref($app) eq 'CODE';
+    skip 'chat app did not load', 17
+        unless ref($app) eq 'PAGI::Compose';
 
+    my $native_app = $app->to_app;
     my $stderr = '';
     my $stats;
     my $missing;
@@ -51,7 +53,7 @@ SKIP: {
                 if ($event->{type} // '') eq 'http.response.start';
             return $send->($event);
         };
-        return $app->($scope, $receive, $observed_send);
+        return $native_app->($scope, $receive, $observed_send);
     };
     {
         local *STDERR;
@@ -80,7 +82,7 @@ SKIP: {
     is($missing->status, 404,
         'an unknown API path is completed by the inner HTTP child');
     like($missing->text, qr/<h1>Not Found<\/h1>/,
-        'the child uses its negotiated Compose routing fallback');
+        'the child Router uses its negotiated routing default');
     is($starts_by_path{'/api/not-a-route'}, 1,
         'the opaque outer mount and root Compose emit no second response');
     is($index->status, 200, 'chat frontend remains reachable');

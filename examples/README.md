@@ -8,10 +8,15 @@ Routing examples use three frontends over one immutable engine:
 `PAGI::Routing` for functional declarations, `PAGI::App::Router` for a mutable
 verb-method builder, and `PAGI::Endpoint::Router` for local methods on a
 configured object. They share path Patterns, written declaration order,
-metadata, nonterminal HTTP decline evidence, and reverse routing. Native
+metadata, Router-owned HTTP outcomes, and reverse routing. Native
 three-channel route handlers are always marked `raw`. Deployed Router examples
-use Compose for complete 404, 405, and application-error safeguards; direct
-`to_app` remains the lower-level routing-component spelling.
+let the selected Router own complete negotiated 404/405 outcomes and use
+Compose for lifespan, application-error, and response-completion safeguards;
+direct `to_app` remains the lower-level routing-component spelling. Runnable
+examples normally return their Compose or Router object directly because
+conforming servers accept components with `to_app`; examples compile
+explicitly only when they need the resulting native coderef at another
+application boundary.
 
 ## Requirements
 
@@ -42,13 +47,13 @@ raw PAGI protocol details that belong alongside the server implementation.
 2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging and a mutable HTTP/WebSocket/SSE target router
 3. `13-contact-form` - form parsing and file uploads
 4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
-5. `15-large-application` - Perl 5.40+ Compose-rooted modular HTML application with known Person/Blogs Router mounts, named cross-component links, an opaque static-file mount, lifespan data, and an evidence-backed gaps ledger
+5. `15-large-application` - Perl 5.40+ Compose-rooted modular HTML application with named Person/Blogs Router application mounts, cross-component links, boundary-specific Router defaults, an opaque static-file mount, lifespan data, and a deferred-work ledger
 6. `app-01-file` - static file serving with `PAGI::App::File`
 7. `background-tasks` - running background work from within a PAGI app
 8. `compose` - optional application root combining declarative routes, request-ID middleware, server-owned lifecycle state, automatic HEAD, and verified shutdown
-9. `declarative-routing` - immutable `PAGI::Routing` tree with package handlers, an inline mount, route middleware, custom fallbacks, and reverse URLs
+9. `declarative-routing` - immutable `PAGI::Routing` tree with package handlers, a configured child Router mount, route middleware, boundary-specific HTTP defaults, and reverse URLs
 10. `endpoint-demo` - high-level HTTP endpoint with `PAGI::Endpoint::HTTP`
-11. `endpoint-router-demo` - composing routes with `PAGI::Endpoint::Router`
+11. `endpoint-router-demo` - composing Endpoint routes with callback children, explicit discoverable child Routers, `app_as`, and `http_default`
 12. `full-demo` - kitchen-sink demo combining multiple toolkit features
 13. `pages` - Compose-rooted `PAGI::Pages` demo covering Welcome, redirects, negotiated HTML/problem JSON/text errors, Route versus Mount, Context-managed Responses, raw `respond($send)`, and lifespan
 14. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
@@ -56,7 +61,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 16. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
 17. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
 18. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::Context`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
-19. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Compose-owned routing outcomes
+19. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Router-owned routing outcomes
 
 **Note on `websocket-chat-v2/public`:** this directory is a symlink to
 `10-chat-showcase/public`. It works in git checkouts but is omitted from the

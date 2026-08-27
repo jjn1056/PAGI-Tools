@@ -21,9 +21,10 @@ curl -i http://localhost:5000/old
 ```
 
 `route('/old' => ...)` is an exact route, so `/old/child` does not reach its
-redirect endpoint. `mount('/terminal' => ...)` transfers the entire subtree to
-an opaque terminal application, so both `/terminal` and every descendant such
-as `/terminal/anything` return the configured Gone page for every HTTP method.
+redirect endpoint. `mount('/terminal', app => ...)` transfers the entire
+subtree to an opaque terminal application, so both `/terminal` and every
+descendant such as `/terminal/anything` return the configured Gone page for
+every HTTP method.
 
 The `/context` handler receives `$c`. `PAGI::Pages->not_found($c)` returns an
 ordinary unsent `PAGI::Response`; the handler adds `X-Demo` and returns it so
@@ -52,5 +53,7 @@ route('/raw', raw => async sub {
 ```
 
 Compose owns the deployed protocol boundary around those routes, including
-lifespan startup/shutdown, the final automatic 404/405 policy, and HEAD body
-suppression.
+lifespan startup/shutdown and response/error safety. The enclosed Router owns
+automatic negotiated 404/405 and HEAD body suppression. The final
+`compose(...)` expression is returned as an inspectable object; a conforming
+server compiles it once through `to_app`.

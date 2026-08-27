@@ -2,7 +2,9 @@
 
 This example structures a larger PAGI::Tools application as an inspectable
 Router graph. All application behavior lives under `lib/`; `app.pl` only loads
-`MyApp::Root` and returns `MyApp::Root->to_app`.
+`MyApp::Root` and returns `MyApp::Root->to_app`. That method retains the
+inspectable `PAGI::Compose` description; a conforming server compiles its
+`to_app` boundary once while loading the application.
 
 This example requires Perl 5.40+ and Type::Tiny. Those are example/test
 requirements: the PAGI::Tools distribution itself still supports Perl 5.18
@@ -44,12 +46,12 @@ lib/MyApp/
 - `MyApp::Root`, `MyApp::Person`, and `MyApp::Person::Blogs` each expose a
   `routing()` method that returns an immutable `PAGI::Routing::Router`
   description.
-- `MyApp::Root` is the one Compose boundary. Its `to_app()` composes
-  `MyApp::Root->routing` with startup and shutdown callbacks.
-- Root mounts Person with `router =>` and name `person`; Person mounts
-  Blogs with `router =>` and name `blog`. These known Router mounts form
-  one inspectable reverse-routing graph.
-- Root mounts `PAGI::App::File` positionally at `/static`. That mount stays an
+- `MyApp::Root` is the one Compose boundary. Its `to_app()` returns the
+  composition of `MyApp::Root->routing` with startup and shutdown callbacks.
+- Root mounts Person with `app =>` and name `person`; Person mounts Blogs with
+  `app =>` and name `blog`. The application values are immutable Router
+  objects, so these mounts form one inspectable reverse-routing graph.
+- Root mounts `PAGI::App::File` with `app =>` at `/static`. That mount stays an
   opaque application boundary: the resolver knows its prefix but does not
   inspect named routes below it.
 - Root uses `PAGI::App::File->app_path('static')`, a component constructor that
@@ -59,6 +61,9 @@ lib/MyApp/
 - `MyApp::Data` is created during startup and shared through
   `$c->state->{data}`. `MyApp::View` renders the shared HTML document shell
   without introducing a template engine.
+- Root and Blogs configure `PAGI::Pages->not_found(...)` endpoints as their
+  Router `http_default` values. The details identify which selected Router
+  owns an unmatched path without turning a wildcard into a normal route.
 - Root's named `/pagi` route returns `PAGI::Pages->welcome($c)`. The home page
   reaches it through a generated `path_for('/pagi')` link, demonstrating an
   ordinary Pages Response returned from a selected Context handler without
@@ -108,16 +113,14 @@ would normally expose a narrower local provider such as `&PersonId`.
   link.
 - `/person/999` is a Person handler-owned 404.
 - `/person/-1` matches `&Int` and is also a Person handler-owned 404.
-- `/person/not-an-integer` fails `&Int`; the selected Person Router publishes
-  a trusted decline and the root Compose renders its negotiated Pages-backed
-  automatic 404.
+- `/person/not-an-integer` fails `&Int`; the selected Person Router renders its
+  stock negotiated Pages-backed 404.
 - `/person/1/blog/999` is a Blogs handler-owned 404.
-- `/person/1/blog/not/a/route` is handled by Blogs' explicit catchall.
-- `/outside` is handled by Root's ordinary explicit catchall.
-- `/person/1/unmatched` is owned by the selected Person Router. The parent does
-  not resume its root catchall; trusted decline evidence reaches the root
-  Compose fallback instead.
-- A method mismatch under a selected child reaches Compose's automatic 405
+- `/person/1/blog/not/a/route` is handled by Blogs' custom Router default.
+- `/outside` is handled by Root's custom Router default.
+- `/person/1/unmatched` is owned and completed by the selected Person Router.
+  The parent does not resume and Root's custom policy does not replace it.
+- A method mismatch under a selected child reaches that Router's automatic 405
   with only that child's first-seen `Allow` union; discarded parent partials
   do not leak into it.
 - `/static/missing.css` remains owned by the opaque file application rather
@@ -544,3 +547,7 @@ The comparison highlights a few deliberate differences:
   and accepts signed integers such as `-1`.
 - Starlette adds query parameters and a fragment by transforming the returned
   URL object. PAGI accepts query and fragment values directly in `url_for`.
+- The illustrative Starlette modules retain explicit root and Blogs catchall
+  routes. The executable PAGI version instead configures Router
+  `http_default` endpoints, so missing-path policy remains an outcome rather
+  than masquerading as a successful wildcard match.
