@@ -10,6 +10,7 @@ use MIME::Base64 qw(decode_base64);
 use Future::AsyncAwait;
 use JSON::MaybeXS qw(decode_json);
 use Carp qw(croak carp);
+use Scalar::Util qw(blessed);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::Request::Negotiate;
@@ -17,10 +18,16 @@ use PAGI::Request::BodyStream;
 
 sub new {
     my ($class, $scope, $receive) = @_;
-    return bless {
-        scope   => $scope,
-        receive => $receive,
-    }, $class;
+    croak 'PAGI::Request requires an unblessed scope hashref'
+        unless ref($scope) eq 'HASH' && !blessed($scope);
+    my $type = $scope->{type};
+    croak 'PAGI::Request scope type is required'
+        unless defined($type) && !ref($type) && length($type);
+    croak "PAGI::Request requires HTTP scope; received '$type'"
+        unless $type eq 'http';
+    croak 'PAGI::Request requires a receive coderef'
+        unless ref($receive) eq 'CODE';
+    return bless { scope => $scope, receive => $receive }, $class;
 }
 
 # Basic properties from scope
@@ -31,6 +38,7 @@ sub query_string { shift->{scope}{query_string} // '' }
 sub scheme       { shift->{scope}{scheme} // 'http' }
 sub http_version { shift->{scope}{http_version} // '1.1' }
 sub client       { shift->{scope}{client} }
+sub server       { shift->{scope}{server} }
 sub raw          { shift->{scope} }
 
 # Internal: URL decode a string (handles + as space)
@@ -180,111 +188,16 @@ sub is_delete  { uc(shift->method // '') eq 'DELETE' }
 sub is_head    { uc(shift->method // '') eq 'HEAD' }
 sub is_options { uc(shift->method // '') eq 'OPTIONS' }
 
-# =============================================================================
-# Connection State Methods (PAGI spec 0.3)
-#
-# These methods provide non-destructive disconnect detection via the
-# pagi.connection scope key, which is a PAGI::Server::ConnectionState object.
-# =============================================================================
-
-# Get the connection state object
 sub connection {
     my $self = shift;
     return $self->{scope}{'pagi.connection'};
 }
 
-# Check if client is still connected (synchronous, non-destructive)
-sub is_connected {
-    my $self = shift;
-    my $conn = $self->connection;
-    return 0 unless $conn;
-    return $conn->is_connected;
-}
-
-# Check if client has disconnected (synchronous, non-destructive)
-# This is the inverse of is_connected - preferred for new code
 sub is_disconnected {
     my $self = shift;
-    return !$self->is_connected;
-}
-
-# Get the disconnect reason string, or undef if still connected
-sub disconnect_reason {
-    my $self = shift;
-    my $conn = $self->connection;
-    return undef unless $conn;
-    return $conn->disconnect_reason;
-}
-
-# Register a callback to be invoked on an abnormal disconnect (not on a clean
-# finish). The counterpart to on_complete; exactly one of the two fires.
-sub on_disconnect {
-    my ($self, $cb) = @_;
-    my $conn = $self->connection;
-    $conn->on_disconnect($cb) if $conn;
-    return $self;
-}
-
-# Register a callback to be invoked only when the request completes successfully.
-# The counterpart to on_disconnect; exactly one of the two fires.
-sub on_complete {
-    my ($self, $cb) = @_;
-    my $conn = $self->connection;
-    $conn->on_complete($cb) if $conn;
-    return $self;
-}
-
-# Get a Future that resolves when the client disconnects
-sub disconnect_future {
-    my $self = shift;
-    my $conn = $self->connection;
-    return undef unless $conn;
-    return $conn->disconnect_future;
-}
-
-# Outbound flow-control introspection (delegates to the pagi.transport handle)
-sub buffered_amount {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return 0 unless $t;
-    return $t->buffered_amount;
-}
-
-sub high_water_mark {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return undef unless $t;
-    return $t->high_water_mark;
-}
-
-sub low_water_mark {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return undef unless $t;
-    return $t->low_water_mark;
-}
-
-sub on_high_water {
-    my ($self, $cb) = @_;
-    my $t = $self->{scope}{'pagi.transport'};
-    $t->on_high_water($cb) if $t && $t->can('on_high_water');
-    return $self;
-}
-
-sub on_drain {
-    my ($self, $cb) = @_;
-    my $t = $self->{scope}{'pagi.transport'};
-    $t->on_drain($cb) if $t && $t->can('on_drain');
-    return $self;
-}
-
-sub is_writable {
-    my $self = shift;
-    my $t = $self->{scope}{'pagi.transport'};
-    return 1 unless $t;
-    my $high = $t->high_water_mark;
-    return 1 unless defined $high;
-    return $t->buffered_amount < $high ? 1 : 0;
+    my $connection = $self->connection;
+    return undef unless $connection;
+    return $connection->is_connected ? 0 : 1;
 }
 
 # Content-type predicates
@@ -463,7 +376,9 @@ async sub body {
     # A prior call already hit a mid-body disconnect: fail identically instead
     # of re-awaiting a receive that will never resolve normally again.
     if ($self->{scope}{'pagi.request.body.truncated'}) {
-        my $reason = $self->disconnect_reason // 'disconnect';
+        my $connection = $self->connection;
+        my $reason = $connection ? $connection->disconnect_reason : undef;
+        $reason //= 'disconnect';
         croak "Request body incomplete: client disconnected mid-body ($reason)";
     }
 
@@ -477,7 +392,9 @@ async sub body {
         if ($message->{type} eq 'http.disconnect') {
             last unless length $body;  # no bytes ever arrived -- an empty body, not a truncation
             $self->{scope}{'pagi.request.body.truncated'} = 1;
-            my $reason = $self->disconnect_reason // 'disconnect';
+            my $connection = $self->connection;
+            my $reason = $connection ? $connection->disconnect_reason : undef;
+            $reason //= 'disconnect';
             croak "Request body incomplete: client disconnected mid-body ($reason)";
         }
 
@@ -735,8 +652,10 @@ work with C<$scope> and C<$receive> directly.
 
     my $req = PAGI::Request->new($scope, $receive);
 
-Creates a new request object. C<$scope> is required. C<$receive> is optional
-but required for body/upload methods.
+Creates an HTTP request object. C<$scope> must be an unblessed hashref with
+C<< $scope->{type} eq 'http' >>, and C<$receive> must be a coderef. The
+receive callback is retained for deferred body consumption; construction never
+reads from it.
 
 =head1 PROPERTIES
 
@@ -775,6 +694,12 @@ HTTP version (1.0 or 1.1).
 
 Arrayref of C<[host, port]> or undef.
 
+=head2 server
+
+Arrayref of C<[host, port]> for the local server endpoint, or undef when the
+server did not provide it. This is informational only; use L</host> for the
+validated inbound Host authority.
+
 =head2 content_type
 
 Content-Type header value (without parameters).
@@ -785,7 +710,8 @@ Content-Length header value.
 
 =head2 raw
 
-Returns the raw scope hashref.
+Deferred alias for L</scope>; returns the raw scope hashref without interpreting
+it.
 
 =head1 HEADER METHODS
 
@@ -1181,10 +1107,8 @@ Supports shortcuts (json, html, xml, etc).
 
 =head1 CONNECTION STATE METHODS
 
-These methods provide non-destructive disconnect detection. Unlike reading
-from the receive queue, these methods do not consume any messages.
-
-See L<PAGI::Server::ConnectionState> for the underlying implementation.
+These methods provide non-destructive connection lookup without reading from
+the receive queue.
 
 =head2 connection
 
@@ -1193,112 +1117,18 @@ See L<PAGI::Server::ConnectionState> for the underlying implementation.
 Returns the L<PAGI::Server::ConnectionState> object for this request, or
 C<undef> if not provided by the server.
 
-=head2 is_connected
-
-    if ($req->is_connected) {
-        # Client still connected
-    }
-
-Returns true if the client connection is still alive. This is a synchronous,
-non-destructive check that does not consume messages from the receive queue.
-
 =head2 is_disconnected
 
     if ($req->is_disconnected) {
         # Client has disconnected
     }
 
-Returns true if the client has disconnected. Equivalent to
-C<< !$req->is_connected >>.
+Returns C<1> when the provided connection reports disconnected, C<0> when it
+reports connected, and C<undef> when no C<pagi.connection> is available.
 
-This is a synchronous, non-destructive check.
-
-=head2 disconnect_reason
-
-    my $reason = $req->disconnect_reason;
-
-Returns the disconnect reason string, or C<undef> if still connected.
-
-Standard reasons include: C<client_closed>, C<client_timeout>, C<idle_timeout>,
-C<keepalive_timeout>, C<write_error>, C<read_error>, C<protocol_error>,
-C<server_shutdown>, C<server_error>, C<body_too_large>.
-
-See L<PAGI::Server::ConnectionState/disconnect_reason> for the full list.
-
-=head2 on_disconnect
-
-    $req->on_disconnect(sub {
-        my ($reason) = @_;
-        rollback();
-        log_info("Client disconnected: $reason");
-    });
-
-Registers a callback invoked B<only on an abnormal disconnect> (the client
-goes away, a timeout fires, an error occurs) -- not on a clean finish. The
-callback receives the disconnect reason. Multiple callbacks may be registered;
-if the client has already disconnected, the callback is invoked immediately.
-Returns the request for chaining. The counterpart to L</on_complete>: exactly
-one of the two fires per request.
-
-=head2 on_complete
-
-    $req->on_complete(sub {
-        commit();
-    });
-
-Registers a callback invoked B<only when the request completes successfully>
-(the response was fully delivered without the client disconnecting). Multiple
-callbacks may be registered; if the request has already completed, the callback
-is invoked immediately. Returns the request for chaining. The counterpart to
-L</on_disconnect>.
-
-=head2 disconnect_future
-
-    my $future = $req->disconnect_future;
-    if ($future) {
-        # Race against other operations
-        await Future->wait_any($disconnect_future, $event_future);
-    }
-
-Returns a Future that resolves B<only> on an abnormal disconnect, with the
-disconnect reason string, or C<undef> if not supported. It does B<not>
-resolve when the request completes cleanly -- if first requested B<after>
-a clean completion, it stays pending forever, since there is no longer any
-disconnect left to wait for. Use L</on_complete> to detect that case; the
-two events remain mutually exclusive, exactly as with L</on_disconnect> and
-L</on_complete>.
-
-This is useful for racing against other async operations, for example
-C<< Future->wait_any($req->disconnect_future, $event_future) >> to abandon
-work early when the client goes away. Don't race it unconditionally against
-work that legitimately outlives the response -- once the response completes,
-this Future will never fire, so nothing left waiting on it alone will
-resolve.
-
-=head2 buffered_amount, high_water_mark, low_water_mark
-
-    my $pending = $req->buffered_amount;   # bytes queued, not yet on the wire
-    my $ceiling = $req->high_water_mark;    # backpressure ceiling (or undef)
-    my $floor   = $req->low_water_mark;     # backpressure floor (or undef)
-
-Outbound flow-control introspection, delegated to the server-provided
-C<pagi.transport> handle (see L<PAGI::Spec::Www/"Transport Flow Control">). For a
-streaming response, use C<buffered_amount> to conflate or shed load instead of
-only blocking on drain; when the server does not provide the handle,
-C<buffered_amount> returns C<0> and the watermarks return C<undef>.
-
-=head2 on_high_water, on_drain, is_writable
-
-    $req->on_high_water(sub { $source->pause });   # backpressure engaged
-    $req->on_drain(sub      { $source->resume });   # backpressure cleared
-    last unless $req->is_writable;                   # below the high mark?
-
-Backpressure controls delegated to the C<pagi.transport> handle. C<on_high_water>
-and C<on_drain> register edge-triggered callbacks (the Node/Mojo C<drain> model)
-for producers that cannot self-pace with a blocking send; each returns the
-object for chaining. C<is_writable> is true when the outbound buffer is below the
-high mark. When the server provides no transport handle (or only the read
-methods), the callbacks are quiet no-ops and C<is_writable> is true.
+For advanced lifecycle, disconnect-reason, callback, Future, or outbound
+transport operations, obtain the server-provided object with L</connection>
+and use its explicit interface directly.
 
 =head1 AUTH HELPERS
 
@@ -1329,7 +1159,8 @@ objects like L<PAGI::Stash> and L<PAGI::Session>:
 
 Vends a detached L<PAGI::Response> bound to this request's scope: the
 raw-application analog of C<< $ctx->response >>. The response is a value, not a
-connection; build it up and send it with C<< $res->respond($send) >>:
+connection; it is created only when requested. Build it up and send it with
+C<< $res->respond($send) >>:
 
     await $req->response->status(201)->json($data)->respond($send);
 

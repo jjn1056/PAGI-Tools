@@ -14,7 +14,7 @@ subtest 'state accessor reads from scope' => sub {
         state => { db => 'test-connection', config => { env => 'test' } },
     };
 
-    my $req = PAGI::Request->new($scope, sub { });
+    my $req = PAGI::Request->new($scope, sub { die 'body unavailable' });
 
     is(ref($req->state), 'HASH', 'state returns hashref');
     is($req->state->{db}, 'test-connection', 'state contains db');
@@ -29,7 +29,7 @@ subtest 'state returns empty hash if not set' => sub {
         headers => [],
     };
 
-    my $req = PAGI::Request->new($scope, sub { });
+    my $req = PAGI::Request->new($scope, sub { die 'body unavailable' });
 
     is(ref($req->state), 'HASH', 'state returns hashref');
     is($req->state, {}, 'state is empty hash when not injected');
@@ -44,7 +44,7 @@ subtest 'state is separate from stash' => sub {
         state => { db => 'connection' },
     };
 
-    my $req = PAGI::Request->new($scope, sub { });
+    my $req = PAGI::Request->new($scope, sub { die 'body unavailable' });
 
     # Set something in stash
     my $stash = PAGI::Stash->new($req);

@@ -2,9 +2,12 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 
 use lib 'lib';
 use PAGI::Request;
+
+my $receive = sub { Future->fail('body unavailable') };
 
 subtest 'constructor and basic properties' => sub {
     my $scope = {
@@ -24,7 +27,7 @@ subtest 'constructor and basic properties' => sub {
         client => ['127.0.0.1', 54321],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $receive);
 
     is($req->method, 'GET', 'method');
     is($req->path, '/users/42', 'path');
@@ -41,13 +44,13 @@ subtest 'host validates the raw Host field instead of using a last-value lookup'
         PAGI::Request->new({
             type    => 'http',
             headers => [['Host', 'example.com:8443']],
-        })->host,
+        }, $receive)->host,
         'example.com:8443',
         'preserves an explicit Host port',
     );
 
     is(
-        PAGI::Request->new({ type => 'http', headers => [] })->host,
+        PAGI::Request->new({ type => 'http', headers => [] }, $receive)->host,
         undef,
         'returns undef when Host is absent',
     );
@@ -57,7 +60,7 @@ subtest 'host validates the raw Host field instead of using a last-value lookup'
             PAGI::Request->new({
                 type    => 'http',
                 headers => [['Host', 'bad.example:65536']],
-            })->host;
+            }, $receive)->host;
         },
         qr/invalid authority/,
         'rejects a malformed Host field',
@@ -72,7 +75,7 @@ subtest 'host validates the raw Host field instead of using a last-value lookup'
         my $request = PAGI::Request->new({
             type    => 'http',
             headers => [$first, $second],
-        });
+        }, $receive);
 
         is(
             $request->header('host'),
@@ -91,8 +94,8 @@ subtest 'predicate methods' => sub {
     my $get_scope = { type => 'http', method => 'GET', headers => [] };
     my $post_scope = { type => 'http', method => 'POST', headers => [] };
 
-    my $get_req = PAGI::Request->new($get_scope);
-    my $post_req = PAGI::Request->new($post_scope);
+    my $get_req = PAGI::Request->new($get_scope, $receive);
+    my $post_req = PAGI::Request->new($post_scope, $receive);
 
     ok($get_req->is_get, 'is_get true for GET');
     ok(!$get_req->is_post, 'is_post false for GET');
@@ -107,7 +110,7 @@ subtest 'all method predicates' => sub {
     for my $i (0 .. $#methods) {
         my $method = $methods[$i];
         my $scope = { type => 'http', method => $method, headers => [] };
-        my $req = PAGI::Request->new($scope);
+        my $req = PAGI::Request->new($scope, $receive);
 
         for my $j (0 .. $#predicates) {
             my $predicate = $predicates[$j];
@@ -130,7 +133,7 @@ subtest 'content_length method' => sub {
         ],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $receive);
     is($req->content_length, '1234', 'content_length returns correct value');
 
     # Test without content-length header
@@ -139,7 +142,7 @@ subtest 'content_length method' => sub {
         method => 'GET',
         headers => [],
     };
-    my $req_no_cl = PAGI::Request->new($scope_no_cl);
+    my $req_no_cl = PAGI::Request->new($scope_no_cl, $receive);
     is($req_no_cl->content_length, undef, 'content_length returns undef when missing');
 };
 
@@ -150,7 +153,7 @@ subtest 'http_version property' => sub {
         http_version => '1.1',
         headers => [],
     };
-    my $req_11 = PAGI::Request->new($scope_11);
+    my $req_11 = PAGI::Request->new($scope_11, $receive);
     is($req_11->http_version, '1.1', 'http_version returns 1.1');
 
     my $scope_10 = {
@@ -159,7 +162,7 @@ subtest 'http_version property' => sub {
         http_version => '1.0',
         headers => [],
     };
-    my $req_10 = PAGI::Request->new($scope_10);
+    my $req_10 = PAGI::Request->new($scope_10, $receive);
     is($req_10->http_version, '1.0', 'http_version returns 1.0');
 };
 
@@ -172,7 +175,7 @@ subtest 'raw property returns full scope' => sub {
         custom_field => 'custom_value',
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $receive);
     is($req->raw, $scope, 'raw returns the full scope hash');
     is($req->raw->{custom_field}, 'custom_value', 'raw includes custom fields');
 };
@@ -188,7 +191,7 @@ subtest 'case-insensitive header lookup' => sub {
         ],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $receive);
 
     # Test various case combinations
     is($req->header('host'), 'example.com', 'lowercase header name');
@@ -219,7 +222,7 @@ subtest 'multiple headers with same name returns last value' => sub {
         ],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $receive);
     is($req->header('accept'), 'text/plain', 'returns last accept header value');
     is($req->header('x-custom'), 'third', 'returns last x-custom header value');
 };
@@ -233,7 +236,7 @@ subtest 'content-type parameter stripping' => sub {
         ],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $receive);
     is($req->content_type, 'application/json', 'content_type strips charset parameter');
 
     # Test with multiple parameters
@@ -244,7 +247,7 @@ subtest 'content-type parameter stripping' => sub {
             ['content-type', 'text/html; charset=utf-8; boundary=something'],
         ],
     };
-    my $req_multi = PAGI::Request->new($scope_multi);
+    my $req_multi = PAGI::Request->new($scope_multi, $receive);
     is($req_multi->content_type, 'text/html', 'content_type strips all parameters');
 
     # Test without parameters
@@ -255,27 +258,32 @@ subtest 'content-type parameter stripping' => sub {
             ['content-type', 'application/xml'],
         ],
     };
-    my $req_plain = PAGI::Request->new($scope_plain);
+    my $req_plain = PAGI::Request->new($scope_plain, $receive);
     is($req_plain->content_type, 'application/xml', 'content_type without parameters');
 };
 
-subtest 'optional receive parameter in constructor' => sub {
+subtest 'constructor requires an HTTP scope and receive callback' => sub {
     my $scope = {
         type => 'http',
         method => 'GET',
         headers => [],
     };
 
-    # Without $receive
-    my $req_no_receive = PAGI::Request->new($scope);
-    ok($req_no_receive, 'constructor works without $receive parameter');
-    is($req_no_receive->{receive}, undef, 'receive is undef when not provided');
+    like(dies { PAGI::Request->new({ type => 'http' }) }, qr/receive coderef/i,
+        'receive callback is required');
+    like(dies { PAGI::Request->new({ headers => [] }, $receive) },
+        qr/scope type is required/i, 'scope type is required');
+    like(dies { PAGI::Request->new({ type => 'sse' }, $receive) },
+        qr/requires HTTP scope.*sse/i, 'only HTTP scopes are accepted');
+    like(dies { PAGI::Request->new(bless({}, 'Local::Scope'), $receive) },
+        qr/unblessed scope hashref/i, 'scope must be an unblessed hashref');
+    is(PAGI::Request->new({ type => 'http', server => ['127.0.0.1', 8080] }, $receive)->server,
+        ['127.0.0.1', 8080], 'server returns the local endpoint tuple');
+    is(PAGI::Request->new({ type => 'http' }, $receive)->server, undef,
+        'server is optional');
 
-    # With $receive
-    my $receive = sub { };
     my $req_with_receive = PAGI::Request->new($scope, $receive);
-    ok($req_with_receive, 'constructor works with $receive parameter');
-    is($req_with_receive->{receive}, $receive, 'receive is stored when provided');
+    is($req_with_receive->{receive}, $receive, 'receive is stored');
 };
 
 subtest 'defaults and fallbacks' => sub {
@@ -287,7 +295,7 @@ subtest 'defaults and fallbacks' => sub {
         raw_path => '/raw/path',
         headers => [],
     };
-    my $req_with_raw = PAGI::Request->new($scope_with_raw);
+    my $req_with_raw = PAGI::Request->new($scope_with_raw, $receive);
     is($req_with_raw->raw_path, '/raw/path', 'raw_path returns value when provided');
 
     # Test raw_path fallback to path
@@ -297,7 +305,7 @@ subtest 'defaults and fallbacks' => sub {
         path => '/fallback/path',
         headers => [],
     };
-    my $req_no_raw = PAGI::Request->new($scope_no_raw);
+    my $req_no_raw = PAGI::Request->new($scope_no_raw, $receive);
     is($req_no_raw->raw_path, '/fallback/path', 'raw_path falls back to path when missing');
 
     # Test query_string defaults to empty string
@@ -307,7 +315,7 @@ subtest 'defaults and fallbacks' => sub {
         raw_path => '/test',
         headers => [],
     };
-    my $req_no_qs = PAGI::Request->new($scope_no_qs);
+    my $req_no_qs = PAGI::Request->new($scope_no_qs, $receive);
     is($req_no_qs->query_string, '', 'query_string defaults to empty string');
 
     # Test scheme defaults to http
@@ -317,7 +325,7 @@ subtest 'defaults and fallbacks' => sub {
         raw_path => '/test',
         headers => [],
     };
-    my $req_no_scheme = PAGI::Request->new($scope_no_scheme);
+    my $req_no_scheme = PAGI::Request->new($scope_no_scheme, $receive);
     is($req_no_scheme->scheme, 'http', 'scheme defaults to http');
 
     # Test http_version defaults to 1.1
@@ -327,7 +335,7 @@ subtest 'defaults and fallbacks' => sub {
         raw_path => '/test',
         headers => [],
     };
-    my $req_no_version = PAGI::Request->new($scope_no_version);
+    my $req_no_version = PAGI::Request->new($scope_no_version, $receive);
     is($req_no_version->http_version, '1.1', 'http_version defaults to 1.1');
 
     # Test all defaults together
@@ -337,75 +345,31 @@ subtest 'defaults and fallbacks' => sub {
         raw_path => '/minimal',
         headers => [],
     };
-    my $minimal_req = PAGI::Request->new($minimal_scope);
+    my $minimal_req = PAGI::Request->new($minimal_scope, $receive);
     is($minimal_req->raw_path, '/minimal', 'minimal request: raw_path works');
     is($minimal_req->query_string, '', 'minimal request: query_string defaults');
     is($minimal_req->scheme, 'http', 'minimal request: scheme defaults');
     is($minimal_req->http_version, '1.1', 'minimal request: http_version defaults');
 };
 
-subtest 'on_disconnect returns $self for chaining' => sub {
-    my $scope = { type => 'http', method => 'GET', headers => [] };
-    my $req = PAGI::Request->new($scope);
-
-    # No connection — early-return path must still return $self
-    is $req->on_disconnect(sub {}), $req,
-        'on_disconnect returns $self when no connection';
-
-    # Chain on_disconnect with a sync accessor
-    my $scope2 = { type => 'http', method => 'GET', headers => [], query_string => 'x=1' };
-    my $req2 = PAGI::Request->new($scope2);
-    is $req2->on_disconnect(sub {})->query_param('x'), '1',
-        'on_disconnect chains with query_param';
-};
-
-subtest 'on_disconnect with connection returns $self' => sub {
+subtest 'connection state is tri-state and advanced delegates are absent' => sub {
     {
         package t::MockConn;
-        sub new { bless { cbs => [] }, shift }
-        sub on_disconnect {
-            my ($self, $cb) = @_;
-            push @{$self->{cbs}}, $cb;
-        }
+        sub new { bless { connected => $_[1] }, $_[0] }
+        sub is_connected { shift->{connected} }
     }
 
-    my $conn = t::MockConn->new;
-    my $scope = { type => 'http', method => 'GET', headers => [],
-                  'pagi.connection' => $conn };
-    my $req = PAGI::Request->new($scope);
-
-    is $req->on_disconnect(sub {}), $req,
-        'on_disconnect returns $self when connection is present';
-    is scalar @{$conn->{cbs}}, 1, 'callback was delegated to connection';
-};
-
-subtest 'on_complete returns $self for chaining' => sub {
-    my $scope = { type => 'http', method => 'GET', headers => [] };
-    my $req = PAGI::Request->new($scope);
-
-    # No connection — early-return path must still return $self
-    is $req->on_complete(sub {}), $req,
-        'on_complete returns $self when no connection';
-};
-
-subtest 'on_complete with connection delegates and returns $self' => sub {
-    {
-        package t::MockConnComplete;
-        sub new { bless { cbs => [] }, shift }
-        sub on_complete {
-            my ($self, $cb) = @_;
-            push @{$self->{cbs}}, $cb;
-        }
-    }
-
-    my $conn = t::MockConnComplete->new;
-    my $scope = { type => 'http', method => 'GET', headers => [],
-                  'pagi.connection' => $conn };
-    my $req = PAGI::Request->new($scope);
-
-    is $req->on_complete(sub {}), $req,
-        'on_complete returns $self when connection is present';
-    is scalar @{$conn->{cbs}}, 1, 'callback was delegated to connection';
+    is(PAGI::Request->new({ type => 'http' }, $receive)->is_disconnected,
+        undef, 'missing connection has unknown disconnected state');
+    is(PAGI::Request->new({ type => 'http', 'pagi.connection' => t::MockConn->new(1) }, $receive)->is_disconnected,
+        0, 'connected connection is not disconnected');
+    is(PAGI::Request->new({ type => 'http', 'pagi.connection' => t::MockConn->new(0) }, $receive)->is_disconnected,
+        1, 'disconnected connection is disconnected');
+    ok(PAGI::Request->can('connection'), 'connection remains available');
+    ok(!PAGI::Request->can($_), "$_ is not a Request delegate")
+        for qw(is_connected disconnect_reason on_disconnect on_complete
+               disconnect_future buffered_amount high_water_mark low_water_mark
+               on_high_water on_drain is_writable);
 };
 
 subtest 'headers is a PAGI::Headers' => sub {
@@ -420,7 +384,7 @@ subtest 'headers is a PAGI::Headers' => sub {
         ],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $receive);
 
     # headers returns PAGI::Headers
     my $headers = $req->headers;
@@ -444,14 +408,14 @@ subtest 'request headers are a PAGI::Headers' => sub {
         type => 'http', method => 'GET',
         headers => [['Host','example.com'],['Accept','text/html'],['X-Multi','a'],['X-Multi','b']],
     };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $receive);
     isa_ok $req->headers, ['PAGI::Headers'], 'headers() is a PAGI::Headers';
     is $req->header('host'), 'example.com', 'case-insensitive single lookup';
     is [$req->header_all('x-multi')], ['a','b'], 'multi-value via header_all';
 };
 
 subtest 'mutating the returned headers does not affect the request' => sub {
-    my $req = PAGI::Request->new({ type => 'http', method => 'GET', headers => [['Host','x.com']] });
+    my $req = PAGI::Request->new({ type => 'http', method => 'GET', headers => [['Host','x.com']] }, $receive);
     $req->headers->clear;                 # mutate the returned object (a clone)
     is $req->header('host'), 'x.com', 'request lookups unaffected -- headers() is a clone';
 };

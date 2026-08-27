@@ -7,15 +7,17 @@ use lib 'lib';
 use PAGI::Request;
 use PAGI::Stash;
 
+my $no_body = sub { die 'body unavailable' };
+
 subtest 'scope accessor returns scope hashref' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
     ok($req->scope == $scope, 'scope returns same hashref');
 };
 
 subtest 'stash basic usage' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
     my $stash = PAGI::Stash->new($scope);
 
     # Starts empty
@@ -31,7 +33,7 @@ subtest 'stash basic usage' => sub {
 
 subtest 'stash persists on same request' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
     my $stash = PAGI::Stash->new($scope);
 
     $stash->set(counter => 1);
@@ -43,7 +45,7 @@ subtest 'stash persists on same request' => sub {
 
 subtest 'stash lives in scope' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
     my $stash = PAGI::Stash->new($scope);
 
     $stash->set(user => 'alice');

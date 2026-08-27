@@ -7,7 +7,7 @@ use PAGI::Response;
 
 subtest 'request vends a response bound to its scope' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [], path => '/' };
-    my $req = PAGI::Request->new($scope, sub { });
+    my $req = PAGI::Request->new($scope, sub { die 'body unavailable' });
 
     my $res = $req->response;
     isa_ok($res, ['PAGI::Response'], 'response() returns a PAGI::Response');

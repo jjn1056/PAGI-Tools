@@ -820,7 +820,10 @@ sub _assembled_headers {
     my @headers = @{$page->{headers} || []};
 
     if ($page->{upgrade_connection}) {
-        my $version = PAGI::Request->new($scope)->http_version;
+        my $no_body = sub {
+            return Future->fail('metadata-only Request cannot consume a body');
+        };
+        my $version = PAGI::Request->new($scope, $no_body)->http_version;
         croak 'PAGI::Pages status 426 Upgrade requires HTTP/1.1'
             unless defined($version) && !ref($version) && $version eq '1.1';
         # No Connection header: connection-level headers belong to the
@@ -859,7 +862,10 @@ sub _select_representation {
     my @families = ($self->{default});
     push @families, grep { $_ ne $self->{default} } qw(html json text);
 
-    my $request = PAGI::Request->new($scope);
+    my $no_body = sub {
+        return Future->fail('metadata-only Request cannot consume a body');
+    };
+    my $request = PAGI::Request->new($scope, $no_body);
     my @accept_values = $request->header_all('accept');
     my $accept = @accept_values ? join(', ', @accept_values) : undef;
     my $problem_rejected = $page->{kind} eq 'error'

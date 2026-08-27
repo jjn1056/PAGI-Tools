@@ -7,6 +7,8 @@ use lib 'lib';
 use PAGI::Request;
 use MIME::Base64 qw(encode_base64);
 
+my $no_body = sub { die 'body unavailable' };
+
 subtest 'bearer_token' => sub {
     my $scope = {
         type    => 'http',
@@ -14,7 +16,7 @@ subtest 'bearer_token' => sub {
         headers => [['authorization', 'Bearer abc123xyz']],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
     is($req->bearer_token, 'abc123xyz', 'extracts bearer token');
 };
 
@@ -26,8 +28,8 @@ subtest 'bearer_token missing' => sub {
         headers => [['authorization', 'Basic dXNlcjpwYXNz']],
     };
 
-    is(PAGI::Request->new($scope1)->bearer_token, undef, 'no auth header');
-    is(PAGI::Request->new($scope2)->bearer_token, undef, 'basic auth not bearer');
+    is(PAGI::Request->new($scope1, $no_body)->bearer_token, undef, 'no auth header');
+    is(PAGI::Request->new($scope2, $no_body)->bearer_token, undef, 'basic auth not bearer');
 };
 
 subtest 'basic_auth' => sub {
@@ -38,7 +40,7 @@ subtest 'basic_auth' => sub {
         headers => [['authorization', "Basic $encoded"]],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
     my ($user, $pass) = $req->basic_auth;
 
     is($user, 'john', 'username extracted');
@@ -53,7 +55,7 @@ subtest 'basic_auth with colon in password' => sub {
         headers => [['authorization', "Basic $encoded"]],
     };
 
-    my ($user, $pass) = PAGI::Request->new($scope)->basic_auth;
+    my ($user, $pass) = PAGI::Request->new($scope, $no_body)->basic_auth;
 
     is($user, 'user', 'username correct');
     is($pass, 'pass:with:colons', 'password with colons preserved');
@@ -61,7 +63,7 @@ subtest 'basic_auth with colon in password' => sub {
 
 subtest 'basic_auth missing' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
-    my ($user, $pass) = PAGI::Request->new($scope)->basic_auth;
+    my ($user, $pass) = PAGI::Request->new($scope, $no_body)->basic_auth;
 
     is($user, undef, 'no user');
     is($pass, undef, 'no pass');

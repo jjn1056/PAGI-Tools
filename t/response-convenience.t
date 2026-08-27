@@ -42,7 +42,7 @@ subtest 'stash shared with Request' => sub {
 
     # Simulate middleware setting stash via Request
     require PAGI::Request;
-    my $req = PAGI::Request->new($shared_scope);
+    my $req = PAGI::Request->new($shared_scope, sub { die 'body unavailable' });
     PAGI::Stash->new($req)->set(user => { id => 42, role => 'admin' });
 
     # Response should see the same stash (via shared scope)

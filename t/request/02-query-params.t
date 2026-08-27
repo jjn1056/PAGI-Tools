@@ -6,6 +6,8 @@ use Test2::V0;
 use lib 'lib';
 use PAGI::Request;
 
+my $no_body = sub { die 'body unavailable' };
+
 subtest 'query_params returns Hash::MultiValue' => sub {
     my $scope = {
         type         => 'http',
@@ -14,7 +16,7 @@ subtest 'query_params returns Hash::MultiValue' => sub {
         headers      => [],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
     my $params = $req->query_params;
 
     isa_ok $params, 'Hash::MultiValue';
@@ -33,7 +35,7 @@ subtest 'query_param() shortcut method' => sub {
         headers      => [],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     is($req->query_param('page'), '5', 'query returns single value');
     is($req->query_param('tags'), 'async', 'query returns last for multi');
@@ -48,7 +50,7 @@ subtest 'percent-decoding' => sub {
         headers      => [],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     is($req->query_param('name'), 'John Doe', 'spaces decoded');
     is($req->query_param('emoji'), "\x{1F525}", 'UTF-8 emoji decoded');
@@ -58,8 +60,8 @@ subtest 'empty and missing query string' => sub {
     my $scope1 = { type => 'http', method => 'GET', query_string => '', headers => [] };
     my $scope2 = { type => 'http', method => 'GET', headers => [] };
 
-    my $req1 = PAGI::Request->new($scope1);
-    my $req2 = PAGI::Request->new($scope2);
+    my $req1 = PAGI::Request->new($scope1, $no_body);
+    my $req2 = PAGI::Request->new($scope2, $no_body);
 
     isa_ok $req1->query_params, 'Hash::MultiValue';
     isa_ok $req2->query_params, 'Hash::MultiValue';
