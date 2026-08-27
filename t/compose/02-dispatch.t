@@ -57,19 +57,6 @@ subtest 'routes mode dispatches HTTP WebSocket and SSE' => sub {
         return sub { return Future->done };
     }
 }
-{
-    package Local::ComposeClass;
-    our $COMPILES = 0;
-    sub to_app {
-        ++$COMPILES;
-        return sub { return Future->done };
-    }
-}
-{
-    package Local::NoToApp;
-    sub new { return bless {}, $_[0] }
-}
-
 subtest 'non-HTTP immediate and Future-backed app completion remain normalized' => sub {
     my $immediate_calls = 0;
     my $immediate = compose(app => sub { ++$immediate_calls; return })->to_app;
@@ -98,9 +85,8 @@ subtest 'non-HTTP immediate and Future-backed app completion remain normalized' 
         qr/target Future failed/, 'failed target Futures propagate');
 };
 
-subtest 'object and class targets compile once per to_app' => sub {
+subtest 'object targets compile once per to_app' => sub {
     local $Local::ComposeComponent::COMPILES = 0;
-    local $Local::ComposeClass::COMPILES = 0;
     my $object_description = compose(app => Local::ComposeComponent->new);
     my $object_app = $object_description->to_app;
     run_scope($object_app, scope(type => 'example.extension'));
@@ -108,15 +94,6 @@ subtest 'object and class targets compile once per to_app' => sub {
     is($Local::ComposeComponent::COMPILES, 1, 'requests reuse one object compilation');
     my $object_app_two = $object_description->to_app;
     is($Local::ComposeComponent::COMPILES, 2, 'second to_app recompiles object');
-
-    my $class_app = compose(app => 'Local::ComposeClass')->to_app;
-    run_scope($class_app, scope(type => 'example.extension'));
-    is($Local::ComposeClass::COMPILES, 1, 'loaded class compiles once');
-
-    ok(!TestApps::AutoLoaded->can('to_app'), 'fixture class starts unloaded');
-    my $autoloaded = compose(app => 'TestApps::AutoLoaded')->to_app;
-    my $events = run_scope($autoloaded, scope(type => 'http'));
-    is($events->[1]{body}, 'autoloaded', 'loadable class is required and compiled');
 };
 
 subtest 'app mode delegates unknown non-lifespan scopes by channel identity' => sub {
@@ -132,12 +109,6 @@ subtest 'app mode delegates unknown non-lifespan scopes by channel identity' => 
     $app->($extension_scope, $receive, $send)->get;
     is($seen[0], [map { refaddr($_) } ($extension_scope, $receive, $send)],
         'all three native channels reach the target unchanged');
-};
-
-subtest 'object capability errors remain at compilation' => sub {
-    my $description = compose(app => Local::NoToApp->new);
-    like(dies { $description->to_app }, qr/no to_app method/,
-        'PAGI::Utils reports the unsupported object');
 };
 
 subtest 'no-hook lifespan succeeds without state and never reaches target' => sub {

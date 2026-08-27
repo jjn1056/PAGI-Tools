@@ -63,6 +63,23 @@ sub deriving_body_length {
 }
 
 subtest 'application middleware derives HEAD headers from the full body' => sub {
+    my @observed_bodies;
+    my $observer = sub {
+        my ($inner) = @_;
+        return async sub {
+            my ($request_scope, $receive, $send) = @_;
+            my $observing_send = sub {
+                my ($event) = @_;
+                push @observed_bodies, $event->{body}
+                    if ($event->{type} // '') eq 'http.response.body';
+                return $send->($event);
+            };
+            await Future->wrap(
+                $inner->($request_scope, $receive, $observing_send),
+            );
+            return;
+        };
+    };
     my $raw = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
@@ -70,15 +87,18 @@ subtest 'application middleware derives HEAD headers from the full body' => sub 
     };
     my $app = compose(
         app => $raw,
-        middleware => [middleware('ContentLength')],
+        middleware => [$observer, middleware('ContentLength')],
     )->to_app;
     my $get = run_scope($app, scope(method => 'GET'));
+    @observed_bodies = ();
     my $head = run_scope($app, scope(method => 'HEAD'));
     is(response_header($get, 'Content-Length'), 14, 'GET length is calculated');
     is(response_header($head, 'Content-Length'), 14, 'HEAD retains GET-equivalent length');
     is(response_bodies($head), [
         { type => 'http.response.body', body => '', more => 0 },
     ], 'wire receives one empty terminal body');
+    is(\@observed_bodies, ['representation'],
+        'author middleware sees unsuppressed HEAD representation bytes');
 };
 
 subtest 'Router middleware derives identical GET and HEAD representation metadata' => sub {
@@ -108,11 +128,11 @@ subtest 'Router middleware derives identical GET and HEAD representation metadat
     ], 'HEAD emits one empty terminal wire body');
 };
 
-subtest 'built-in routing and error bodies retain derived headers under HEAD' => sub {
+subtest 'Router outcomes and root errors retain derived headers under HEAD' => sub {
     local $ENV{PAGI_ENV} = 'production';
     my @cases = (
         [
-            'NotFound',
+            'Router 404',
             compose(routes => [
                 route('/known' => sub { return $_[0]->text('known') }),
             ])->to_app,
@@ -120,7 +140,7 @@ subtest 'built-in routing and error bodies retain derived headers under HEAD' =>
             scope(method => 'HEAD', path => '/missing'),
         ],
         [
-            'MethodNotAllowed',
+            'Router 405',
             compose(routes => [
                 route('/known' => sub { return $_[0]->text('known') }, methods => 'POST'),
             ])->to_app,
@@ -128,7 +148,7 @@ subtest 'built-in routing and error bodies retain derived headers under HEAD' =>
             scope(method => 'HEAD', path => '/known'),
         ],
         [
-            'ErrorHandler',
+            'root ErrorHandler',
             compose(app => sub { die "HEAD error\n" })->to_app,
             scope(method => 'GET'),
             scope(method => 'HEAD'),
@@ -206,7 +226,7 @@ subtest 'an explicit HEAD route can avoid its expensive GET sibling' => sub {
     ], 'outer boundary remains terminal');
 };
 
-subtest 'one Compose owner covers a separately compiled router' => sub {
+subtest 'Compose HEAD boundary is idempotent with a Router direct boundary' => sub {
     my $child = router(
         routes => [
             route('/item', raw => async sub {
@@ -228,7 +248,7 @@ subtest 'one Compose owner covers a separately compiled router' => sub {
         'both middleware layers see the complete child representation');
     is(response_bodies($events), [
         { type => 'http.response.body', body => '', more => 0 },
-    ], 'nested router recognizes the existing owner');
+    ], 'nested Router boundary recognizes the existing Compose owner');
 };
 
 subtest 'byte stream file terminal trailers and late bodies are suppressed' => sub {

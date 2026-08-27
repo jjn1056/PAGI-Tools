@@ -7,6 +7,7 @@ use FindBin qw($Bin);
 use lib "$Bin/lib";
 use ComposeTest qw(scope run_scope capture_send channel);
 use PAGI::Compose qw(compose);
+use PAGI::Routing qw(mount middleware router);
 
 my $never_target = sub { die "request target received lifespan\n" };
 
@@ -179,6 +180,82 @@ subtest 'callback completion and lifecycle phase are awaited per scope' => sub {
     $_->{future}->get for @runs;
     is($_->{events}[-1], { type => 'lifespan.shutdown.complete' },
         "$_->{id} shuts down independently") for @runs;
+};
+
+subtest 'only the deployed root owns lifespan across Router and Mount boundaries' => sub {
+    my ($root_startup, $root_shutdown) = (0, 0);
+    my ($nested_startup, $nested_shutdown, $nested_requests) = (0, 0, 0);
+    my @router_scope_types;
+    my $nested = compose(
+        app => sub {
+            my ($request_scope, $receive, $send) = @_;
+            ++$nested_requests;
+            $send->({
+                type => 'http.response.start', status => 200, headers => [],
+            })->get;
+            return $send->({
+                type => 'http.response.body', body => 'nested', more => 0,
+            });
+        },
+        lifespan => {
+            startup  => sub { ++$nested_startup; return },
+            shutdown => sub { ++$nested_shutdown; return },
+        },
+    );
+    my $routing = router(
+        routes => [mount('/nested', app => $nested)],
+        middleware => [middleware(sub {
+            my ($inner) = @_;
+            return sub {
+                my ($request_scope) = @_;
+                push @router_scope_types, $request_scope->{type};
+                return $inner->(@_);
+            };
+        })],
+    );
+    my $state = {};
+    my $app = compose(
+        app => $routing,
+        lifespan => {
+            startup => sub {
+                my ($callback_state) = @_;
+                ++$root_startup;
+                $callback_state->{started} = 1;
+                return;
+            },
+            shutdown => sub {
+                my ($callback_state) = @_;
+                ++$root_shutdown;
+                $callback_state->{stopped} = 1;
+                return;
+            },
+        },
+    )->to_app;
+
+    my $events = run_scope($app, scope(type => 'lifespan', state => $state), [
+        { type => 'lifespan.startup' },
+        { type => 'lifespan.shutdown' },
+    ]);
+    is($events, [
+        { type => 'lifespan.startup.complete' },
+        { type => 'lifespan.shutdown.complete' },
+    ], 'root completes one startup and shutdown cycle');
+    is([$root_startup, $root_shutdown], [1, 1],
+        'root callbacks run exactly once');
+    is($state, { started => 1, stopped => 1 },
+        'root callbacks update the server-owned state');
+    is(\@router_scope_types, [], 'the Router target never receives lifespan');
+    is([$nested_startup, $nested_shutdown], [0, 0],
+        'mounted Compose callbacks do not run during root lifespan');
+
+    my $response = run_scope($app, scope(path => '/nested/child'));
+    is($response->[0]{status}, 200, 'mounted Compose remains a request app');
+    is($response->[1]{body}, 'nested', 'mounted request reaches its target');
+    is($nested_requests, 1, 'mounted target runs once for the request');
+    is(\@router_scope_types, ['http'],
+        'Router receives only the delegated request scope');
+    is([$nested_startup, $nested_shutdown], [0, 0],
+        'request dispatch does not synthesize nested lifespan');
 };
 
 done_testing;
