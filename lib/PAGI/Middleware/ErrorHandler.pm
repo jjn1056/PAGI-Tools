@@ -80,11 +80,13 @@ Use the handler seam to force a fixed Pages representation:
         );
     }
 
-The wrapper is required: ErrorHandler supplies C<($context, $error)>, while a
-Pages endpoint accepts one request source plus page options. Passing the Pages
-endpoint directly therefore rejects the two-argument callback invocation. The
-wrapper may inspect C<$error> when it deliberately chooses safe page fields,
-but Pages does not consume that callback metadata itself.
+The wrapper is required: ErrorHandler supplies C<($context, $error)>, while the
+deferred Pages endpoint accepts exactly one request source. The wrapper instead
+calls the Pages factory with C<$context> as its source and C<as> as a factory
+option. Passing the deferred endpoint directly therefore rejects the
+two-argument callback invocation. The wrapper may inspect C<$error> when it
+deliberately chooses safe page fields, but Pages does not consume that callback
+metadata itself.
 
 =back
 

@@ -6,6 +6,7 @@ use Future;
 use PAGI::Compose qw(compose);
 use PAGI::CSRF qw(csrf);
 use PAGI::Endpoint::Router;
+use PAGI::Middleware::ErrorHandler;
 use PAGI::Pages;
 use PAGI::Request;
 use PAGI::Response;
@@ -135,6 +136,28 @@ subtest 'optional capabilities come from their owning helpers' => sub {
         'CSRF verifies against middleware-owned scope data');
     is(transport($request), undef,
         'Transport is optional when the server supplies no handle');
+};
+
+subtest 'ErrorHandler adapts its callback before invoking Pages' => sub {
+    my $app = PAGI::Middleware::ErrorHandler->new(
+        handler => sub {
+            my ($context, $error) = @_;
+            return PAGI::Pages->internal_server_error(
+                $context,
+                as => 'json',
+            );
+        },
+    )->wrap(sub { die "database failed\n" });
+    my $client = PAGI::Test::Client->new(app => $app);
+    my $response = eval { $client->get('/') };
+
+    ok($response, 'the documented ErrorHandler and Pages integration completes')
+        or diag($@);
+    is($response && $response->status, 500,
+        'the adapted Pages response keeps the error status');
+    is($response && $response->header('content-type'),
+        'application/problem+json',
+        'the adapted Pages response uses the configured representation');
 };
 
 subtest 'Endpoint exposes explicit Request construction only' => sub {

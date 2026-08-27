@@ -384,7 +384,13 @@ middleware('ErrorHandler', content_type => 'text/html');
 
 ```perl
 middleware('ErrorHandler',
-    handler => PAGI::Pages->internal_server_error(as => 'html'),
+    handler => sub {
+        my ($context, $error) = @_;
+        return PAGI::Pages->internal_server_error(
+            $context,
+            as => 'html',
+        );
+    },
 );
 ```
 
@@ -398,7 +404,13 @@ middleware('ErrorHandler', content_type => 'application/json');
 
 ```perl
 middleware('ErrorHandler',
-    handler => PAGI::Pages->internal_server_error(as => 'json'),
+    handler => sub {
+        my ($context, $error) = @_;
+        return PAGI::Pages->internal_server_error(
+            $context,
+            as => 'json',
+        );
+    },
 );
 ```
 
@@ -412,9 +424,21 @@ middleware('ErrorHandler', content_type => 'text/plain');
 
 ```perl
 middleware('ErrorHandler',
-    handler => PAGI::Pages->internal_server_error(as => 'text'),
+    handler => sub {
+        my ($context, $error) = @_;
+        return PAGI::Pages->internal_server_error(
+            $context,
+            as => 'text',
+        );
+    },
 );
 ```
+
+The wrapper adapts ErrorHandler's `($context, $error)` callback. The deferred
+Pages endpoint accepts exactly one request source, so the wrapper instead calls
+the Pages factory with `$context` as its source and `as` as a factory option.
+It may inspect `$error` when deliberately choosing safe page fields; Pages
+does not consume that exception implicitly.
 
 To use request negotiation, remove `content_type` and do not install a
 representation-fixing handler. Existing custom handlers remain authoritative

@@ -412,7 +412,10 @@ policy:
         'AccessLog',
         'SecurityHeaders',
         middleware('ErrorHandler',
-            handler  => $pages->internal_server_error,
+            handler  => sub {
+                my ($context, $error) = @_;
+                return $pages->internal_server_error($context);
+            },
             on_error => \&report_error),
     ]
 
