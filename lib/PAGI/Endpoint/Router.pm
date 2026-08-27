@@ -115,6 +115,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 
     sub routes {
         my ($self, $r) = @_;
+        $r->http_default($self->app_as('not_found_app'));
         $r->get('/people/{id}' => [
             'RequestId',
             $self->middleware_as('authenticate'),
@@ -124,7 +125,11 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
         $r->get('/download', raw => $self->app_as('download'));
         $r->websocket('/chat/{room}' => 'chat')->name('chat');
         $r->sse('/events' => 'events')->name('events');
-        $r->mount('/admin' => $self->app_as('admin_app'));
+        $r->mount('/admin', routes => sub {
+            my ($admin) = @_;
+            $admin->get('/users' => 'users')->name('users');
+        })->name('admin');
+        $r->mount('/legacy', app => $self->app_as('legacy_app'));
     }
 
     sub show {
@@ -180,14 +185,16 @@ retains that exact object. Each call materializes a fresh immutable
 L<PAGI::Routing::Router> snapshot, so later changes to ordinary object fields
 do not alter an existing snapshot's declaration graph.
 
-Nested Endpoint objects are mounted with the routing-aware form:
+Convert a nested Endpoint explicitly when its names must be discoverable
+through the outer Router:
 
-    $r->mount('/people', router => $people_endpoint)->name('people');
+    $r->mount('/people', app => $people_endpoint->to_router)
+        ->name('people');
 
-All nested mutable frontends materialize in the same root operation. Reusing
-one object at sibling placements reuses one child Router identity within that
-snapshot while each Mount retains independent path, name, and metadata.
-Recursive Endpoint graphs fail with the shared placement-cycle diagnostic.
+Each C<to_router> call makes an immutable child snapshot. Mounting an Endpoint
+object directly with C<< app => $endpoint >> is also valid application
+composition, but that boundary is opaque: dispatch enters the Endpoint's
+C<to_app>, while the outer reverse resolver does not guess its route names.
 
 =head2 to_app
 
@@ -203,10 +210,11 @@ Mount boundary.
 
 C<routes($builder)> receives an Endpoint-aware facade over one public App
 Router. It provides C<get>, C<post>, C<put>, C<patch>, C<delete>, C<head>,
-C<options>, C<any>, C<route>, C<websocket>, C<sse>, C<group>, C<mount>, and the
-last-declaration modifiers C<name>, C<desc>, and C<constraints>. Declarations
-remain in exact first-seen order. Groups receive another Endpoint facade bound
-to the same object.
+C<options>, C<any>, C<route>, C<websocket>, C<sse>, C<mount>,
+C<http_default>, and the last-declaration modifiers C<name>, C<desc>, and
+C<constraints>. It intentionally has no C<group>. Declarations remain in exact
+first-seen order. A Mount C<routes> callback receives a fresh Endpoint facade
+bound to the same object and a fresh child App Router.
 
 The same snapshot and reverse-routing rules as L<PAGI::App::Router> apply.
 Names are local logical segments; nested names form canonical slash addresses.
@@ -256,7 +264,7 @@ one Context. Neither form becomes raw without the explicit marker.
 
 =head1 MIDDLEWARE
 
-Every router, group, mount, and route middleware array uses the universal four
+Every router, mount, and route middleware array uses the universal four
 forms:
 
 =over 4
@@ -292,14 +300,15 @@ immediately. Constructing the helper performs no protocol I/O.
 
     my $app = $endpoint->app_as('native_app');
     $r->get('/download', raw => $endpoint->app_as('native_app'));
-    $r->mount('/legacy' => $endpoint->app_as('native_app'));
+    $r->mount('/legacy', app => $endpoint->app_as('native_app'));
+    $r->http_default($endpoint->app_as('not_found_app'));
 
 Validates the method and returns a native application closure. When invoked,
 the method receives C<($endpoint, $scope, $receive, $send)>. The helper is
 useful as the target of an exact raw leaf, an opaque mount, or another native
-composition boundary, and does no work merely by being constructed. A raw
-leaf remains method-aware and keeps its matched path; an opaque mount owns and
-rewrites a matched prefix.
+composition boundary, including C<http_default>, and does no work merely by
+being constructed. A raw leaf remains method-aware and keeps its matched path;
+an opaque mount owns and rewrites a matched prefix.
 
 =head1 CONTEXT AND STATE
 
@@ -340,6 +349,7 @@ compiles one retained snapshot. Matching, middleware folds, nonterminal HTTP
 exhaustion, first-seen method evidence, route metadata, reverse resolution, and
 request-local scope cloning are exactly those documented by
 L<PAGI::App::Router>. Endpoint adds only method binding over that machinery and
-does not add Router fallback callback options or accessors.
+forwards the Router's one-shot native C<http_default> declaration without
+adding separate fallback callback accessors.
 
 =cut

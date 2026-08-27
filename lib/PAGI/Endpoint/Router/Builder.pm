@@ -121,28 +121,31 @@ sub _add_route_from {
     return $self;
 }
 
-sub group {
+sub mount {
     my ($self, $path, @args) = @_;
     my $caller = caller;
-    my $middleware = [];
-    $middleware = shift @args if @args && ref($args[0]) eq 'ARRAY';
-    croak 'group requires a callback'
-        unless @args == 1 && ref($args[0]) eq 'CODE';
-    my $callback = $args[0];
-    my $endpoint = $self->{endpoint};
-
-    $self->{builder}->_group_from($caller, $path, $middleware, sub {
-        my ($child) = @_;
-        my $facade = ref($self)->new($endpoint, $child);
-        $callback->($facade);
-    });
+    if (@args % 2 == 0) {
+        for (my $index = 0; $index < @args; $index += 2) {
+            next unless defined $args[$index] && !ref($args[$index])
+                && $args[$index] eq 'routes'
+                && ref($args[$index + 1]) eq 'CODE';
+            my $callback = $args[$index + 1];
+            my $endpoint = $self->{endpoint};
+            my $facade_class = ref($self);
+            $args[$index + 1] = sub {
+                my ($child) = @_;
+                my $facade = $facade_class->new($endpoint, $child);
+                return $callback->($facade);
+            };
+        }
+    }
+    $self->{builder}->_mount_from($caller, $path, @args);
     return $self;
 }
 
-sub mount {
+sub http_default {
     my ($self, @args) = @_;
-    my $caller = caller;
-    $self->{builder}->_mount_from($caller, @args);
+    $self->{builder}->http_default(@args);
     return $self;
 }
 

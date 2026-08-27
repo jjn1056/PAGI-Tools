@@ -147,6 +147,108 @@ sub run_scope {
 }
 
 {
+    package Local::CompositionEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+    use PAGI::Routing qw(route);
+
+    sub new {
+        my ($class) = @_;
+        return bless { receivers => [], native_calls => [] }, $class;
+    }
+
+    sub routes {
+        my ($self, $r) = @_;
+        $self->{root_facade} = $r;
+        $r->http_default($self->app_as('not_found_app'));
+        $r->get('/' => 'index')->name('index');
+        $r->get('/closure' => sub {
+            $self->{coderef_arity} = scalar @_;
+            $self->{coderef_context} = $_[0];
+            return $_[0]->text('closure');
+        });
+        $r->mount('/admin', routes => sub {
+            my ($admin) = @_;
+            $self->{admin_facade} = $admin;
+            $admin->get('/users' => 'users')->name('users');
+        })->name('admin');
+        my $legacy = $self->app_as('legacy_app');
+        $self->{legacy_app} = $legacy;
+        $r->mount('/legacy', app => $legacy);
+        my $array_routes = [
+            route('/leaf' => sub {
+                $self->{array_coderef_arity} = scalar @_;
+                return $_[0]->text('array leaf');
+            }, name => 'leaf'),
+        ];
+        $self->{array_routes} = $array_routes;
+        $r->mount('/array', routes => $array_routes)->name('array');
+    }
+
+    sub index {
+        my ($self, $c) = @_;
+        push @{$self->{receivers}}, Scalar::Util::refaddr($self);
+        return $c->text('index');
+    }
+
+    sub users {
+        my ($self, $c) = @_;
+        push @{$self->{receivers}}, Scalar::Util::refaddr($self);
+        return $c->text('users');
+    }
+
+    sub _native_response {
+        my ($self, $label, $arity, $scope, $receive, $send) = @_;
+        push @{$self->{native_calls}}, [
+            $label, Scalar::Util::refaddr($self), $arity,
+            Scalar::Util::refaddr($scope), Scalar::Util::refaddr($receive),
+            Scalar::Util::refaddr($send),
+        ];
+        return $send->({
+            type => 'http.response.start', status => 200, headers => [],
+        })->then(sub {
+            return $send->({
+                type => 'http.response.body', body => $label, more => 0,
+            });
+        });
+    }
+
+    sub not_found_app {
+        my ($self, $scope, $receive, $send) = @_;
+        return $self->_native_response(
+            'endpoint default', scalar @_, $scope, $receive, $send,
+        );
+    }
+
+    sub legacy_app {
+        my ($self, $scope, $receive, $send) = @_;
+        return $self->_native_response(
+            'legacy app', scalar @_, $scope, $receive, $send,
+        );
+    }
+}
+
+{
+    package Local::BadCompositionEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+    sub new { return bless { mode => $_[1] }, $_[0] }
+    sub native { return Future->done }
+    sub routes {
+        my ($self, $r) = @_;
+        return $r->group('/bad', sub { }) if $self->{mode} eq 'group';
+        return $r->mount('/bad', $self->app_as('native'))
+            if $self->{mode} eq 'positional';
+        return $r->mount('/bad', router => $self->app_as('native'))
+            if $self->{mode} eq 'router';
+        return $r->mount('/bad', app => 'native')
+            if $self->{mode} eq 'mount-string';
+        return $r->http_default('native')
+            if $self->{mode} eq 'default-string';
+        return $r->get('/bad', raw => 'native')
+            if $self->{mode} eq 'raw-string';
+    }
+}
+
+{
     package Local::InlinePathEndpoint;
     use parent 'PAGI::Endpoint::Router';
 
@@ -174,6 +276,78 @@ subtest 'the public surface is method-oriented and has no legacy machinery' => s
         'base new rejects silently discarded configuration');
     isa_ok($base->to_router, 'PAGI::Routing::Router');
     is(ref($base->to_app), 'CODE', 'an empty Endpoint compiles to an app');
+};
+
+subtest 'the Endpoint facade follows the App Router composition grammar' => sub {
+    my $endpoint = Local::CompositionEndpoint->new;
+    my $identity = refaddr($endpoint);
+    my $routing = $endpoint->to_router;
+
+    isa_ok($endpoint->{root_facade}, 'PAGI::Endpoint::Router::Builder');
+    isa_ok($endpoint->{admin_facade}, 'PAGI::Endpoint::Router::Builder');
+    isnt(refaddr($endpoint->{root_facade}), refaddr($endpoint->{admin_facade}),
+        'a routes callback receives a fresh Endpoint facade');
+    isnt(refaddr($endpoint->{root_facade}{builder}),
+        refaddr($endpoint->{admin_facade}{builder}),
+        'the callback facade wraps a fresh child App Router');
+    is(refaddr($endpoint->{root_facade}{endpoint}), $identity,
+        'the root facade retains the Endpoint receiver');
+    is(refaddr($endpoint->{admin_facade}{endpoint}), $identity,
+        'the child facade retains the same Endpoint receiver');
+
+    for my $method (qw(
+        get post put patch delete head options any route websocket sse
+        mount http_default name desc constraints
+    )) {
+        ok($endpoint->{root_facade}->can($method), "facade provides $method");
+    }
+    ok(!$endpoint->{root_facade}->can('group'), 'facade exposes no group');
+    is([sort keys %{$routing->named_routes}],
+        ['/admin/users', '/array/leaf', '/index'],
+        'callback and arrayref routes remain discoverable through Mount names');
+    my ($legacy_mount) = grep { $_->path eq '/legacy' } @{$routing->routes};
+    is(refaddr($legacy_mount->app), refaddr($endpoint->{legacy_app}),
+        'an app Mount value passes through unchanged');
+
+    my $client = PAGI::Test::Client->new(app => $routing->to_app);
+    is($client->get('/')->text, 'index', 'root method handler dispatches');
+    is($client->get('/admin/users')->text, 'users',
+        'callback method handler dispatches');
+    is($endpoint->{receivers}, [$identity, $identity],
+        'root and callback handler strings bind the same Endpoint instance');
+    is($client->get('/closure')->text, 'closure',
+        'an ordinary handler coderef dispatches');
+    is($endpoint->{coderef_arity}, 1,
+        'an ordinary handler coderef is not rebound to the Endpoint');
+    isa_ok($endpoint->{coderef_context}, 'PAGI::Context::HTTP');
+    is($client->get('/legacy/anything')->text, 'legacy app',
+        'app_as supplies an opaque Mount application');
+    is($client->get('/missing')->text, 'endpoint default',
+        'app_as supplies the Router HTTP default application');
+    is($client->get('/array/leaf')->text, 'array leaf',
+        'an arrayref routes value passes through to the App builder');
+    is($endpoint->{array_coderef_arity}, 1,
+        'an arrayref route coderef remains an ordinary Context handler');
+    is([map { [$_->[0], $_->[1], $_->[2]] } @{$endpoint->{native_calls}}], [
+        ['legacy app', $identity, 4],
+        ['endpoint default', $identity, 4],
+    ], 'native methods receive the same self plus exactly three PAGI channels');
+};
+
+subtest 'Endpoint native positions do not bind handler strings or old Mount forms' => sub {
+    my @cases = (
+        [group => qr/locate object method "group"/],
+        [positional => qr/mount option list must be key\/value pairs|unknown mount option/],
+        [router => qr/unknown mount option 'router'/],
+        ['mount-string' => qr/mount app must be a coderef or instantiated object with to_app/],
+        ['default-string' => qr/router http_default must be a coderef or instantiated object with to_app/],
+        ['raw-string' => qr/raw application must be a coderef or instantiated object with to_app/],
+    );
+    for my $case (@cases) {
+        my ($mode, $pattern) = @$case;
+        like(dies { Local::BadCompositionEndpoint->new($mode)->to_router },
+            $pattern, "$mode declaration is rejected without method magic");
+    }
 };
 
 subtest 'app_path delegates with the concrete Endpoint origin' => sub {
