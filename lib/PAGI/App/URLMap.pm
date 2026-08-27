@@ -132,8 +132,8 @@ URLMap has no Pages configuration surface.
 
 =over 4
 
-=item * C<default> - App (coderef, component object, or class name) to use
-when no prefix matches
+=item * C<default> - Coderef or instantiated component object with a C<to_app>
+method to use when no prefix matches. Package-name strings are rejected.
 
 =back
 
