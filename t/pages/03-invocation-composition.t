@@ -336,7 +336,7 @@ subtest 'one endpoint composes as Route, Mount, Compose, and a raw app' => sub {
 
     my $route_app = route('/terminal' => $endpoint)->to_app;
     is(run_app($route_app, http_scope(path => '/terminal'))->[0]{status}, 404,
-        'Route invokes the endpoint as a Context handler');
+        'Route invokes the endpoint as a Request handler');
     is(run_app($route_app, http_scope(path => '/terminal/child'))->[0]{status}, 404,
         q{standalone Route's wrapper Router owns the descendant miss as stock 404});
 

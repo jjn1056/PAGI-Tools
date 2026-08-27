@@ -155,6 +155,12 @@ subtest 'raw middleware keeps the native three-channel PAGI contract' => sub {
             type    => 'http.response.start',
             status  => 204,
             headers => [],
+        })->then(sub {
+            return $send->({
+                type => 'http.response.body',
+                body => '',
+                more => 0,
+            });
         });
     };
     my $middleware = sub {
@@ -177,6 +183,11 @@ subtest 'raw middleware keeps the native three-channel PAGI contract' => sub {
     is($seen[1], $receive, 'raw middleware preserves the receive channel');
     is($seen[2], $send, 'raw middleware preserves the send channel');
     is($events[0]{status}, 204, 'native send reaches the caller');
+    is($events[1], {
+        type => 'http.response.body',
+        body => '',
+        more => 0,
+    }, 'native example completes the response body');
 };
 
 done_testing;

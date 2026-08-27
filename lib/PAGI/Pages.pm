@@ -1093,18 +1093,21 @@ PAGI::Pages - Negotiated conventional HTTP response factory
 
     use PAGI::Pages;
 
-    # A Request, Context, or HTTP scope constructs an ordinary, unsent Response.
+    # A Request or HTTP scope constructs an ordinary, unsent Response.
     my $response = PAGI::Pages->not_found($request);
-    my $response = PAGI::Pages->not_found($context);
     my $response = PAGI::Pages->not_found($scope);
+
+    # A standalone Context remains a compatible scope source.
+    my $response = PAGI::Pages->not_found($context);
 
     # Without a request source, the same call compiles a plain coderef.
     my $endpoint = PAGI::Pages->not_found(
         detail => 'That page does not exist.',
     );
 
-    my $response = $endpoint->($context);       # Context handler
+    my $response = $endpoint->($request);       # normal Router handler
     my $response = $endpoint->($scope);         # still unsent
+    my $response = $endpoint->($context);       # standalone compatibility
     await $endpoint->($scope, $receive, $send); # native HTTP PAGI app
 
 =head1 DESCRIPTION
@@ -1156,15 +1159,15 @@ request source constructs but does not send a response:
     await $response->respond($send);
 
 The scope-only form is deliberately unsent so raw callers can inspect or
-modify the value before the one wire operation. A normal Router Context
+modify the value before the one wire operation. A normal Router Request
 handler instead returns the value; the Router adapter owns the send step:
 
     async sub missing {
-        my ($context) = @_;
-        return PAGI::Pages->not_found($context);
+        my ($request) = @_;
+        return PAGI::Pages->not_found($request);
     }
 
-Do not call C<respond> inside a normal Context route. Use an explicit C<raw>
+Do not call C<respond> inside a normal Request route. Use an explicit C<raw>
 route when the handler must own C<$receive>, C<$send>, and protocol events.
 
 Without a request source, a page call returns a plain unblessed coderef. It
@@ -1182,7 +1185,7 @@ The following forms are complete at the boundary they demonstrate. Examples
 that deploy a server root use L<PAGI::Compose> so lifespan and final HEAD wire
 handling have an owner.
 
-=head2 1. Class-style one-off Response from Context
+=head2 1. Class-style one-off Response from Request
 
     use PAGI::Compose qw(compose);
     use PAGI::Pages;
@@ -1190,8 +1193,8 @@ handling have an owner.
 
     my $app = compose(routes => [
         route('/missing' => sub {
-            my ($context) = @_;
-            return PAGI::Pages->not_found($context);
+            my ($request) = @_;
+            return PAGI::Pages->not_found($request);
         }),
     ])->to_app;
 
@@ -1226,21 +1229,22 @@ handling have an owner.
         route('/missing' => $pages->not_found),
     ])->to_app;
 
-=head2 4. Returning a Response from an async Context handler
+=head2 4. Returning a Response from an async Request handler
 
     use Future::AsyncAwait;
     use PAGI::Compose qw(compose);
     use PAGI::Pages;
+    use PAGI::Response;
     use PAGI::Routing qw(route);
 
     async sub lookup_item { return undef }
 
     my $app = compose(routes => [
         route('/items/{id}' => async sub {
-            my ($context) = @_;
-            my $item = await lookup_item($context->path_param('id'));
-            return PAGI::Pages->not_found($context) unless $item;
-            return $context->json($item);
+            my ($request) = @_;
+            my $item = await lookup_item($request->path_param('id'));
+            return PAGI::Pages->not_found($request) unless $item;
+            return PAGI::Response->json($item);
         }),
     ])->to_app;
 
@@ -1333,11 +1337,12 @@ Compose preserves its status and headers and suppresses the final wire body.
 
     use PAGI::Compose qw(compose);
     use PAGI::Pages;
+    use PAGI::Response;
     use PAGI::Routing qw(router route middleware);
 
     sub home {
-        my ($context) = @_;
-        return $context->text('Home');
+        my ($request) = @_;
+        return PAGI::Response->text('Home');
     }
 
     my $routing = router(
@@ -1352,19 +1357,21 @@ Compose preserves its status and headers and suppresses the final wire body.
         ],
     )->to_app;
 
-The HTTP default handles only Router NONE. The ErrorHandler endpoint handles a
-thrown application error. Pages ignores trailing callback metadata; use a
-wrapper when that metadata must choose copy or extensions.
+The HTTP default handles only Router NONE. ErrorHandler's separate handler API
+still supplies a standalone Context plus the thrown application error. A Pages
+endpoint accepts that Context source and ignores trailing callback metadata;
+use a wrapper when that metadata must choose copy or extensions.
 
 =head2 12. Router-owned MethodNotAllowed union
 
     use PAGI::Compose qw(compose);
     use PAGI::Pages;
+    use PAGI::Response;
     use PAGI::Routing qw(router route);
 
     sub items {
-        my ($context) = @_;
-        return $context->text('Items');
+        my ($request) = @_;
+        return PAGI::Response->text('Items');
     }
 
     my $routing = router(routes => [

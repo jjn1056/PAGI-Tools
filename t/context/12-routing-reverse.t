@@ -9,6 +9,7 @@ use lib 'lib';
 use PAGI::Context;
 use PAGI::Middleware::ReverseProxy;
 use PAGI::Middleware::TrustedHosts;
+use PAGI::Response;
 use PAGI::Routing qw(mount route router sse websocket);
 use PAGI::Routing::Resolver;
 
@@ -752,7 +753,7 @@ subtest 'Context uses a supplied root Resolver and selected namespace' => sub {
 };
 
 subtest 'compiled routers reject a non-scalar current root_path boundary' => sub {
-    my $app = route('/inside' => sub { return $_[0]->text('inside') },
+    my $app = route('/inside' => sub { return PAGI::Response->text('inside') },
         name => 'inside')->to_app;
 
     like(
@@ -930,10 +931,14 @@ subtest 'url_for uses validated Host and only absent Host permits server fallbac
 };
 
 subtest 'documented HTTP proxy and Host middleware order feeds routing URL generation' => sub {
+    require PAGI::Routing::URL;
+
     my $routing = router(routes => [
         route('/external' => sub {
-            my ($context) = @_;
-            return $context->text($context->url_for('/external'));
+            my ($request) = @_;
+            return PAGI::Response->text(
+                PAGI::Routing::URL::url_for($request, '/external'),
+            );
         }, name => 'external'),
     ]);
     my $trusted = PAGI::Middleware::TrustedHosts->new(
@@ -965,9 +970,11 @@ subtest 'documented HTTP proxy and Host middleware order feeds routing URL gener
     my $missing_calls = 0;
     my $missing_routing = router(routes => [
         route('/missing' => sub {
-            my ($context) = @_;
+            my ($request) = @_;
             ++$missing_calls;
-            return $context->text($context->url_for('/missing'));
+            return PAGI::Response->text(
+                PAGI::Routing::URL::url_for($request, '/missing'),
+            );
         }, name => 'missing'),
     ]);
     my $allow_empty = PAGI::Middleware::TrustedHosts->new(

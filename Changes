@@ -296,8 +296,10 @@
   - PAGI::Request retains intrinsic HTTP input, strict path parameters, State,
     and minimal connection access. `is_disconnected` is now tri-state and
     returns undef when no connection capability exists; advanced flow control
-    uses PAGI::Transport. Router URL, Stash, Session, CSRF, and response
-    shortcuts are no longer Request methods.
+    uses PAGI::Transport. Router URL, Stash, Session, CSRF, and Context's
+    outgoing response shortcuts do not transfer to Request. The existing
+    `PAGI::Request->response` factory remains installed; its redesign is
+    deferred with the wider Response review.
   - PAGI::Endpoint::Router replaces `new_context` with the explicit HTTP-only
     `new_request($scope, $receive)` helper; compiled dispatch constructs direct
     protocol objects independently of that override seam.

@@ -438,11 +438,12 @@ root-local Materializer; arrays are passed to declarative Mount C<routes> so
 that Mount constructs their real child Router.
 
 Middleware and native application shapes normalize when declarations are
-recorded. Normal targets remain Context-handler coderefs. Explicit C<raw>,
-Mount C<app>, and C<http_default> positions use the shared coderef-or-
-instantiated-C<to_app> contract. Mutable frontend objects are valid opaque
-application values; callers explicitly use C<to_router> when parent reverse
-inspection must discover their names.
+recorded. Normal targets are direct-protocol handler coderefs: HTTP receives
+L<PAGI::Request>, WebSocket receives L<PAGI::WebSocket>, and SSE receives
+L<PAGI::SSE>. Explicit C<raw>, Mount C<app>, and C<http_default> positions use
+the shared coderef-or-instantiated-C<to_app> contract. Mutable frontend objects
+are valid opaque application values; callers explicitly use C<to_router> when
+parent reverse inspection must discover their names.
 
 Each C<to_router> call creates an independent immutable root snapshot.
 C<to_app> compiles exactly one retained snapshot. The public

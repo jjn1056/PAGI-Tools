@@ -8,6 +8,7 @@ use Types::Standard qw(Int);
 
 use lib 'lib';
 use PAGI::Request;
+use PAGI::Response;
 use PAGI::WebSocket;
 use PAGI::SSE;
 use PAGI::Routing qw(mount route router sse websocket);
@@ -650,15 +651,15 @@ subtest 'real compiled frames follow the active Router placement' => sub {
     my @seen;
     my $child = router(routes => [
         route('/{person_id}' => sub {
-            my ($context) = @_;
-            my $urls = url($context);
-            my $frame = $context->scope->{'pagi.routing'}{frames}[-1];
+            my ($request) = @_;
+            my $urls = url($request);
+            my $frame = $request->scope->{'pagi.routing'}{frames}[-1];
             push @seen, {
                 path => $urls->path_for('show'),
                 logical_namespace => $frame->{logical_namespace},
                 captures => { %{$frame->{captures}} },
             };
-            return $context->text('person');
+            return PAGI::Response->text('person');
         }, name => 'show'),
     ]);
     my $app = router(routes => [

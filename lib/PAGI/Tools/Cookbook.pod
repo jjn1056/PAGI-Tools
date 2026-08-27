@@ -1645,15 +1645,13 @@ that hashref with a convenient (and typo-catching) API.
   use PAGI::App::Router;
   use PAGI::Middleware::Builder;
   use PAGI::Session;
-  use PAGI::Request;
   use PAGI::Response;
 
   my $router = PAGI::App::Router->new;
 
   $router->get('/login', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $req = PAGI::Request->new($scope, $receive);
-      my $res = $req->response;
+      my $res = PAGI::Response->new($scope);
 
       # Set session data
       my $session = PAGI::Session->new($scope);
@@ -1665,8 +1663,7 @@ that hashref with a convenient (and typo-catching) API.
 
   $router->get('/profile', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $req = PAGI::Request->new($scope, $receive);
-      my $res = $req->response;
+      my $res = PAGI::Response->new($scope);
 
       # Read session data (the second arg is a default for optional keys)
       my $session = PAGI::Session->new($scope);
@@ -1677,8 +1674,7 @@ that hashref with a convenient (and typo-catching) API.
 
   $router->get('/logout', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $req = PAGI::Request->new($scope, $receive);
-      my $res = $req->response;
+      my $res = PAGI::Response->new($scope);
 
       # Clear session data
       PAGI::Session->new($scope)->clear;
@@ -1730,15 +1726,13 @@ that hashref with a convenient (and typo-catching) API.
   use Future::AsyncAwait;
   use PAGI::App::Router;
   use PAGI::Middleware::Builder;
-  use PAGI::Request;
   use PAGI::Response;
 
   my $router = PAGI::App::Router->new;
 
   $router->get('/api/me', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $req = PAGI::Request->new($scope, $receive);
-      my $res = $req->response;
+      my $res = PAGI::Response->new($scope);
 
       # Claims from the validated token: the middleware stores
       # { type => 'bearer', token => ..., claims => ... } under 'pagi.auth'
@@ -2183,7 +2177,7 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = $req->response;
+      my $res = PAGI::Response->new($scope);
 
       if ($req->method eq 'POST') {
           my $form = await $req->form_params;
@@ -2218,7 +2212,7 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = $req->response;
+      my $res = PAGI::Response->new($scope);
 
       if ($req->method eq 'POST') {
           # uploads() returns a Hash::MultiValue keyed by form field name;

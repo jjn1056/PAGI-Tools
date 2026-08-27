@@ -40,8 +40,9 @@ PAGI::Middleware::CSRF - Cross-Site Request Forgery protection middleware
 PAGI::Middleware::CSRF provides protection against Cross-Site Request
 Forgery attacks by validating tokens on state-changing requests. Its built-in
 enforced 403 response negotiates through L<PAGI::Pages>. The C<enforce =E<gt>
-'app'> flow remains issue-only, so application-owned responses, including
-L<PAGI::Context> responses, remain literal and authoritative.
+'app'> flow remains issue-only, so application-owned Responses returned by
+Request handlers or sent by standalone L<PAGI::Context> applications remain
+literal and authoritative.
 
 =head1 CONFIGURATION
 
@@ -133,9 +134,9 @@ sub wrap {
 
         # Safe methods always just issue the token. Under enforce => 'app', unsafe
         # methods do too: the middleware never validates, it only issues; the app
-        # calls $ctx->csrf_verify once it has parsed the submitted params. Either
-        # way $token is the existing cookie token if there was one, never a
-        # regenerated one, so a submitted form token still has something to match.
+        # calls csrf($request)->verify once it has parsed the submitted params.
+        # Either way $token is the existing cookie token if there was one, never
+        # a regenerated one, so a submitted form token still has something to match.
         if ($self->{safe_methods}{$method} || $self->{enforce} eq 'app') {
             my $modified_scope = $self->modify_scope($scope, {
                 csrf_token => $token,
@@ -272,8 +273,12 @@ Embed the token as a hidden field:
 Then, in the handler, verify the submitted value against the one the
 middleware stashed in scope:
 
-    return $request->response
-        ->text('CSRF token validation failed', status => 403)
+    use PAGI::Pages;
+
+    return PAGI::Pages->forbidden(
+        $request,
+        detail => 'CSRF token validation failed',
+    )
         unless $guard->verify($params->{_csrf_token});
 
 The same helper works in a raw-scope application:
@@ -283,7 +288,7 @@ The same helper works in a raw-scope application:
     my $valid = $guard->verify($params->{_csrf_token});
 
 L<PAGI::Context/csrf_token> and L<PAGI::Context/csrf_verify> remain available
-as compatibility convenience for Context handlers.
+as compatibility conveniences for standalone Context applications.
 
 =head1 SEE ALSO
 
@@ -292,6 +297,6 @@ L<PAGI::Middleware> - Base class for middleware
 L<PAGI::CSRF> - request-first and raw-scope token access and verification
 
 L<PAGI::Context/csrf_token>, L<PAGI::Context/csrf_verify> - compatibility
-convenience for Context handlers
+conveniences for standalone Context applications
 
 =cut
