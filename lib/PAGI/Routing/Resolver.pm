@@ -254,11 +254,11 @@ sub path_for {
     return $rendered->{path};
 }
 
-sub reverse_for_context {
+sub reverse_for_scope {
     my ($self, $operation, $scope, $reference, $root_path,
         $logical_namespace, $captures, @reverse_args) = @_;
 
-    croak 'Context reverse operation must be path_for or url_for'
+    croak 'scope-bound reverse operation must be path_for or url_for'
         unless defined $operation && !ref($operation)
             && ($operation eq 'path_for' || $operation eq 'url_for');
     croak "$operation requires a canonical logical namespace"
@@ -269,7 +269,7 @@ sub reverse_for_context {
     my @base_segments = $logical_namespace eq '/'
         ? ()
         : split(m{/}, substr($logical_namespace, 1), -1);
-    my $rendered = $self->_render_reverse_from_context(
+    my $rendered = $self->_render_reverse_from_scope(
         $operation,
         $reference,
         \@base_segments,
@@ -335,7 +335,7 @@ sub _render_reverse {
     );
 }
 
-sub _render_reverse_from_context {
+sub _render_reverse_from_scope {
     my ($self, $operation, $reference, $base_segments, $captures,
         @reverse_args) = @_;
     my $arguments = _parse_reverse_arguments($operation, @reverse_args);
@@ -596,8 +596,9 @@ the active ancestry, rejecting cycles while allowing sibling placement reuse.
 
 Child Router descriptions remain placement-free: traversal calls their
 C<routes> method and never reuses their local resolver as an outer placement
-resolver. Reverse arguments use one parser for Router C<path_for>, Context
-C<path_for>, and Context C<url_for>. The compact and named forms are:
+resolver. Reverse arguments use one parser for Router C<path_for> and the
+scope-bound C<path_for> and C<url_for> operations. The compact and named forms
+are:
 
     path_for($reference, \%params, \%query, $fragment)
     path_for($reference,
@@ -641,16 +642,16 @@ returns a defensive hashref, while C<route_named>
 preserves the original leaf identity and C<route_kind> returns the immutable
 indexed kind.
 
-C<reverse_for_context> is the Context-only request-aware entry point. It
+C<reverse_for_scope> is the scope-bound request-aware entry point. It
 parses one reverse argument list, resolves one exact target from the frame's
 canonical C<logical_namespace>, and renders that resolved record once. Only
 relative spellings select target-required keys from the frame's capture
-snapshot before explicit params are overlaid. Absolute Context references and
-all public Router calls remain inheritance-free. Query and fragment values are
-never read from captures. The existing Pattern renderer remains responsible
-for missing, extra, scalar, and constraint validation. URL mode adds the
-request scheme and L<PAGI::Authority> only after target resolution; neither
-mode performs protocol I/O.
+snapshot before explicit params are overlaid. Absolute scope-bound references
+and all public Router calls remain inheritance-free. Query and fragment values
+are never read from captures. The existing Pattern renderer remains
+responsible for missing, extra, scalar, and constraint validation. URL mode
+adds the request scheme and L<PAGI::Authority> only after target resolution;
+neither mode performs protocol I/O.
 
 Relative capture inheritance is a URL-construction convenience. It does not
 authorize the generated target; handlers remain responsible for access checks.

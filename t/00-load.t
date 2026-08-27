@@ -16,6 +16,7 @@ my @load_modules = qw(
     PAGI::Routing::Middleware
     PAGI::Routing::Pattern
     PAGI::Routing::Resolver
+    PAGI::Routing::URL
     PAGI::Routing::Compiler
     PAGI::Routing::HeadBoundary
     PAGI::Middleware

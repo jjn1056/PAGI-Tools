@@ -7,6 +7,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::Routing qw(router route websocket sse mount);
+use PAGI::Routing::Resolver;
 
 {
     package Local::ReverseType;
@@ -111,6 +112,26 @@ use PAGI::Routing qw(router route websocket sse mount);
         )];
     }
 }
+
+subtest 'Resolver exposes only the neutral scope-bound reverse seam' => sub {
+    ok(PAGI::Routing::Resolver->can('reverse_for_scope'),
+        'Resolver exposes reverse_for_scope');
+    ok(!PAGI::Routing::Resolver->can('reverse_for_context'),
+        'the Context-named reverse seam is removed');
+
+    my $resolver = PAGI::Routing::Resolver->new(routes => [
+        route('/page' => sub { }, name => 'page'),
+    ]);
+    like(
+        dies {
+            $resolver->reverse_for_scope(
+                'redirect', {}, '/page', '', '/', {},
+            );
+        },
+        qr/\Ascope-bound reverse operation must be path_for or url_for/,
+        'operation diagnostics describe the neutral scope-bound seam',
+    );
+};
 
 subtest 'direct slash addresses render application paths and route kinds' => sub {
     my $routing = router(routes => [

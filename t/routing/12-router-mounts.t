@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
 use PAGI::Routing qw(router route websocket sse mount middleware);
+use PAGI::Routing::URL qw(path_for);
 
 sub scope {
     my (%changes) = @_;
@@ -428,7 +429,7 @@ subtest 'relative child links follow the active Router placement without mutatin
             my ($c) = @_;
             my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
             push @seen, {
-                path              => $c->path_for('show'),
+                path              => path_for($c, 'show'),
                 logical_namespace => $frame->{logical_namespace},
                 captures          => { %{$frame->{captures}} },
             };
@@ -491,7 +492,7 @@ subtest 'mounted application runtime boundaries retain root frames and decoded p
     is(\@service_seen, [{
         frame_roots => ['/proxy', '/proxy/service', '/proxy/service'],
         scope_root => '/proxy/service/spaces/blue',
-    }], 'separate Router applications publish both root boundaries and the selected scope root');
+    }], 'separate Router applications pass neutral URL-capable frame validation and publish both root boundaries');
 
     my @tenant_seen;
     my $tenant = router(routes => [
@@ -501,7 +502,7 @@ subtest 'mounted application runtime boundaries retain root frames and decoded p
                 scope_root => $c->scope->{root_path},
                 frame_root => $c->scope->{'pagi.routing'}{frames}[-1]{root_path},
                 captures => { %{$c->scope->{'pagi.routing'}{frames}[-1]{captures}} },
-                reverse => $c->path_for('item', { id => 'a b%' },
+                reverse => path_for($c, 'item', { id => 'a b%' },
                     { q => "caf\x{e9} %" }),
             };
             return $c->text('tenant');

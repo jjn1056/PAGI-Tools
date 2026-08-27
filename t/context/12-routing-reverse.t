@@ -77,6 +77,23 @@ sub _run_compiled {
     return \@events;
 }
 
+subtest 'Context reverse methods lazily delegate to the URL compatibility facade' => sub {
+    ok(!exists $INC{'PAGI/Routing/URL.pm'},
+        'loading Context does not eagerly load PAGI::Routing::URL');
+    my $resolver = _resolver(
+        route('/page/{id}' => sub { }, name => 'page'),
+    );
+    my $context = _context('http', $resolver);
+
+    is($context->path_for('/page', { id => 7 }), '/page/7',
+        'the compatibility path_for method preserves its result');
+    ok(exists $INC{'PAGI/Routing/URL.pm'},
+        'the first reverse operation loads the URL facade lazily');
+    is($context->url_for('/page', { id => 7 }),
+        'http://example.test/page/7',
+        'the compatibility url_for method preserves its result');
+};
+
 subtest 'Context selects the last resolver from a valid routing frame stack' => sub {
     my $parent = _resolver(
         route('/parent/{id}' => sub { }, name => 'selected'),

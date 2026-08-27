@@ -8,7 +8,6 @@ use Future::AsyncAwait;
 use Future;
 use PAGI::Utils::SecureCompare qw(secure_compare);
 use PAGI::Authority ();
-use PAGI::Routing::Resolver ();
 
 my %WARNED_UNMAPPED;
 
@@ -316,7 +315,7 @@ sub path_param {
     return $params->{$name};
 }
 
-=head2 Routing Reverse Methods
+=head2 Routing Reverse Compatibility Methods
 
     my $path = $ctx->path_for(
         '/account/user/show',
@@ -409,78 +408,22 @@ untouched. Those scopes therefore must already contain normalized and
 validated scheme and authority data. Cross-protocol middleware support is a
 separate planned compatibility change, not behavior supplied by routing.
 
+These methods remain as a compatibility API. They lazily delegate to
+L<PAGI::Routing::URL>; new handler code can use that scope-bound facade
+directly without depending on Context.
+
 =cut
 
 sub path_for {
-    my ($self, $reference, @reverse_args) = @_;
-    my $frame = $self->_routing_frame('path_for');
-    my $root_path = exists $frame->{root_path}
-        ? $frame->{root_path}
-        : $self->{scope}{root_path};
-    return $frame->{resolver}->reverse_for_context(
-        'path_for',
-        $self->{scope},
-        $reference,
-        $root_path,
-        $frame->{logical_namespace},
-        $frame->{captures},
-        @reverse_args,
-    );
+    my $self = shift;
+    require PAGI::Routing::URL;
+    return PAGI::Routing::URL->new($self)->path_for(@_);
 }
 
 sub url_for {
-    my ($self, $reference, @reverse_args) = @_;
-    my $frame = $self->_routing_frame('url_for');
-    my $root_path = exists $frame->{root_path}
-        ? $frame->{root_path}
-        : $self->{scope}{root_path};
-    return $frame->{resolver}->reverse_for_context(
-        'url_for',
-        $self->{scope},
-        $reference,
-        $root_path,
-        $frame->{logical_namespace},
-        $frame->{captures},
-        @reverse_args,
-    );
-}
-
-sub _routing_frame {
-    my ($self, $operation) = @_;
-    my $container = $self->{scope}{'pagi.routing'};
-    my $valid = ref($container) eq 'HASH'
-        && defined $container->{version}
-        && !ref($container->{version})
-        && $container->{version} eq '1'
-        && ref($container->{frames}) eq 'ARRAY'
-        && @{$container->{frames}};
-
-    if ($valid) {
-        for my $frame (@{$container->{frames}}) {
-            $valid = 0, last unless ref($frame) eq 'HASH'
-                && blessed($frame->{resolver})
-                && $frame->{resolver}->can('path_for')
-                && $frame->{resolver}->can('reverse_for_context')
-                && PAGI::Routing::Resolver::_is_canonical_namespace(
-                    $frame->{logical_namespace},
-                )
-                && ref($frame->{captures}) eq 'HASH'
-                && ref($frame->{mounts}) eq 'ARRAY'
-                && (!defined $frame->{match} || ref($frame->{match}) eq 'HASH')
-                && (!exists $frame->{root_path}
-                    || (defined $frame->{root_path} && !ref($frame->{root_path})));
-        }
-    }
-
-    my $frame = $valid ? $container->{frames}[-1] : undef;
-
-    croak "$operation requires a PAGI::Routing resolver in scope" unless $valid;
-    return $frame;
-}
-
-sub _join_root_path {
-    my ($root_path, $path) = @_;
-    return PAGI::Routing::Resolver::_join_root_path($root_path, $path);
+    my $self = shift;
+    require PAGI::Routing::URL;
+    return PAGI::Routing::URL->new($self)->url_for(@_);
 }
 
 =head2 Protocol Introspection
