@@ -78,8 +78,8 @@ subtest 'all four middleware entry forms normalize without protocol work' => sub
         ['WebSocket route', sub { return websocket('/socket' => async sub { await $_[0]->close }, middleware => $_[0]) }],
         ['SSE route', sub { return sse('/events' => async sub { await $_[0]->close }, middleware => $_[0]) }],
         ['inline mount', sub { return mount('/inline', routes => [], middleware => $_[0]) }],
-        ['Router mount', sub { return mount('/router', router => $child, name => 'child', middleware => $_[0]) }],
-        ['opaque mount', sub { return mount('/opaque' => sub { return }, middleware => $_[0]) }],
+        ['Router mount', sub { return mount('/router', app => $child, name => 'child', middleware => $_[0]) }],
+        ['opaque mount', sub { return mount('/opaque', app => sub { return }, middleware => $_[0]) }],
     );
 
     for my $form (@forms) {
@@ -136,7 +136,7 @@ subtest 'opaque mount, WebSocket, and SSE accept bare factories' => sub {
     my $ws = tracing_factory('ws', \@builds, \@runs);
     my $events = tracing_factory('sse', \@builds, \@runs);
     my $app = router(routes => [
-        mount('/opaque' => async sub {
+        mount('/opaque', app => async sub {
             my ($request_scope, $receive, $send) = @_;
             await $send->({ type => 'http.response.start', status => 204, headers => [] });
             await $send->({ type => 'http.response.body', body => '', more => 0 });

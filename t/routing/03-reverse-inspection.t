@@ -68,7 +68,7 @@ use PAGI::Routing qw(router route websocket sse mount);
     sub known {
         my ($prefix, $router, $namespace) = @_;
         return mount($prefix . '/{tenant:&Tenant}',
-            router => $router, name      => $namespace);
+            app => $router, name      => $namespace);
     }
 }
 
@@ -79,7 +79,7 @@ use PAGI::Routing qw(router route websocket sse mount);
     sub routes {
         my ($self) = @_;
         return [PAGI::Routing::Mount->new(
-            '/again', router => $self, name      => 'loop',
+            '/again', app => $self, name      => 'loop',
         )];
     }
 }
@@ -595,7 +595,7 @@ subtest 'reverse constraints cover protocol leaves, inline regexes, and signed v
         'protocol reverse rendering does not reinvoke its provider');
 };
 
-subtest 'composed Router graph exposes placements and respects opacity' => sub {
+subtest 'composed Router graph exposes every Router application placement' => sub {
     my $hidden = route('/secret' => sub { }, name => 'hidden');
     my $hidden_router = router(routes => [$hidden]);
 
@@ -605,7 +605,7 @@ subtest 'composed Router graph exposes placements and respects opacity' => sub {
     my $blogs = router(routes => [
         $blog_index,
         $blog_show,
-        mount('/legacy' => $hidden_router),
+        mount('/legacy', app => $hidden_router),
         $blog_archive,
     ]);
 
@@ -613,22 +613,24 @@ subtest 'composed Router graph exposes placements and respects opacity' => sub {
     my $notifications = route('/notifications' => sub { }, name => 'notifications');
     my $person = router(routes => [
         $person_show,
-        mount('/blogs', router => $blogs, name      => 'blog'),
+        mount('/blogs', app => $blogs, name      => 'blog'),
         mount('/settings', routes => [$notifications], name      => 'settings'),
     ]);
 
     my $health = route('/health' => sub { }, name => 'health');
     my $root = router(routes => [
         $health,
-        mount('/people/{person_id}', router => $person, name      => 'person'),
-        mount('/opaque' => $hidden_router),
+        mount('/people/{person_id}', app => $person, name      => 'person'),
+        mount('/opaque', app => $hidden_router),
     ]);
 
     is(
         [sort keys %{$root->named_routes}],
         [qw(
             /health
+            /hidden
             /person/blog/archive
+            /person/blog/hidden
             /person/blog/index
             /person/blog/show
             /person/settings/notifications
@@ -670,10 +672,10 @@ subtest 'composed Router graph exposes placements and respects opacity' => sub {
         refaddr($blog_show),
         'route_named preserves source leaf identity',
     );
-    is($root->route_named('/person/blog/hidden'), undef,
-        'an opaque Router application inside a known Router is terminal only at that mount');
-    is($root->route_named('/hidden'), undef,
-        'a positional Router application mount remains entirely undiscoverable');
+    is(refaddr($root->route_named('/person/blog/hidden')), refaddr($hidden),
+        'a Router base application is inspectable within a known Router');
+    is(refaddr($root->route_named('/hidden')), refaddr($hidden),
+        'an unnamed Router application mount contributes its child route');
     is(refaddr($root->route_named('/person/blog/archive')), refaddr($blog_archive),
         'discovery resumes with siblings after an opaque terminal');
 
@@ -697,7 +699,7 @@ subtest 'canonical collisions report both placement paths' => sub {
                 mount('/inline', routes => [
                     route('/one' => sub { }, name => 'show'),
                 ], name      => 'person'),
-                mount('/router', router => $child, name      => 'person'),
+                mount('/router', app => $child, name      => 'person'),
             ]);
         },
         qr/duplicate canonical route address '\/person\/show'.*'\/inline\/one'.*'\/router\/two'/,
@@ -713,7 +715,7 @@ subtest 'parameter validation follows one ancestry and precedes opacity' => sub 
         dies {
             router(routes => [
                 mount('/people/{id}',
-                    router => $repeated_child,
+                    app => $repeated_child,
                     name      => 'person',
                 ),
             ]);
@@ -726,7 +728,7 @@ subtest 'parameter validation follows one ancestry and precedes opacity' => sub 
         dies {
             router(routes => [
                 mount('/people/{id}', routes => [
-                    mount('/opaque/{id}' => sub { }),
+                    mount('/opaque/{id}', app => sub { }),
                 ]),
             ]);
         },
@@ -739,8 +741,8 @@ subtest 'parameter validation follows one ancestry and precedes opacity' => sub 
     ]);
     my $reused = lives {
         router(routes => [
-            mount('/authors', router => $shared, name      => 'authors'),
-            mount('/editors', router => $shared, name      => 'editors'),
+            mount('/authors', app => $shared, name      => 'authors'),
+            mount('/editors', app => $shared, name      => 'editors'),
             mount('/groups/{id}', routes => [
                 route('/first' => sub { }, name => 'first'),
             ], name      => 'groups'),

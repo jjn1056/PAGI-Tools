@@ -249,7 +249,7 @@ subtest 'one endpoint composes as Route, Mount, Compose, and a raw app' => sub {
     is(run_app($route_app, http_scope(path => '/terminal/child')), [],
         'Route does not own descendant paths');
 
-    my $mount_app = mount('/terminal' => $endpoint)->to_app;
+    my $mount_app = mount('/terminal', app => $endpoint)->to_app;
     is(run_app($mount_app, http_scope(path => '/terminal'))->[0]{status}, 404,
         'Mount invokes the endpoint as an opaque app');
     is(run_app($mount_app, http_scope(path => '/terminal/child'))->[0]{status}, 404,

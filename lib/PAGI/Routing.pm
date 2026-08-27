@@ -145,7 +145,7 @@ inspect signatures or evaluate package-method strings.
     websocket('/x' => $code)     ($c)                           inert; completion awaited
     sse('/x' => $code)           ($c)                           inert; completion awaited
     route('/x', raw => $code)    ($scope, $receive, $send)      inert
-    mount('/x' => $code)         ($scope, $receive, $send)      inert
+    mount('/x', app => $code)    ($scope, $receive, $send)      inert
     middleware => [$entry]       ($inner_app), at to_app         PAGI app coderef
     middleware($target, %config) ($inner_app), at compile time    PAGI app coderef
 
@@ -162,7 +162,7 @@ completion is awaited and their resolved values are inert.
 C<websocket> and C<sse> forms, are native PAGI applications. They receive
 C<($scope, $receive, $send)> and own protocol events.
 
-=item * C<< mount('/x' =E<gt> $code) >> is a native PAGI application or
+=item * C<< mount('/x', app =E<gt> $code) >> is a native PAGI application or
 component accepted by L<PAGI::Utils/to_app>. It receives a rewritten child
 scope after its prefix matches.
 
@@ -202,9 +202,13 @@ wrapper or method was defined.
         routes     => \@nodes,
         middleware => \@middleware_entries,
         desc       => $text,
+        http_default => $app,
     )
 
-Directly compiled Routers publish request-local trusted routing evidence for
+Routes describe endpoint leaves, Mount describes one prefixed application, and
+Router describes an ordered collection of Route and Mount descriptions. An
+optional C<http_default> declares an HTTP application; construction validates
+it but does not compile it. Directly compiled Routers publish request-local trusted routing evidence for
 HTTP selection. Unmatched and method-mismatched requests complete normally
 without sending a response. Install ordinary C<Routing::NotFound> and
 C<Routing::MethodNotAllowed> middleware at a Router, routing-aware Mount, or
@@ -237,31 +241,28 @@ inline and explicit path constraints as HTTP routes.
 
 =head2 mount
 
-    mount('/prefix' => $app, %options)
+    mount('/prefix', app => $app, %options)
     mount('/prefix', routes => \@nodes, %options)
-    mount('/prefix', router => $router, name => 'segment', %options)
 
-The three mutually exclusive forms are:
+The two mutually exclusive forms are:
 
-    Form                    Visibility                  Name
-    ----------------------  --------------------------  ------------------------
-    '/x' => $app            opaque application          forbidden
-    '/x', routes => [...]   inline structural subtree  optional local segment
-    '/x', router => $r      inspectable Router child    required local segment
+    Form                    Base application             Name
+    ----------------------  ---------------------------  ------------------------
+    '/x', app => $app       retained exactly             optional local segment
+    '/x', routes => [...]   new child Router application  optional local segment
 
-All accept C<desc>, C<constraints>, and C<middleware>. C<routes> and C<router>
-are named selectors and may appear anywhere in a well-formed option list.
-C<router> accepts only a blessed L<PAGI::Routing::Router> object. Names are
-nonempty scalar logical segments: they may not contain C</> or
+All accept C<desc>, C<constraints>, and C<middleware>. C<app> accepts a native
+application coderef or instantiated object with C<to_app>. C<routes> creates a
+real L<PAGI::Routing::Router> application and stores it as the Mount's C<app>.
+Names are nonempty scalar logical segments: they may not contain C</> or
 equal C<.> or C<..>. A dot in C<v1.1> is literal, not hierarchy.
 
-Passing a Router positionally selects the opaque application contract; the
-compiler never guesses intent from its class:
+Named and unnamed mounts use the same one-application representation:
 
-    mount('/opaque' => $child_router)
-    mount('/known', router => $child_router, name => 'known')
+    mount('/api', app => $child_router, name => 'api')
+    mount('/public', routes => [ route('/status' => $handler) ])
 
-The first hides all child names. It is not shorthand for the second.
+Positional targets and C<router> are not accepted.
 
 =head2 middleware
 
@@ -521,11 +522,9 @@ only after that route fully matches.
 
 Direct C<< $routing->to_app >> is therefore a lower-level component spelling.
 Use C<< compose(app => $routing)->to_app >> for a complete deployed HTTP
-application. An opaque Mount or raw route shields the parent routing-evidence
-channel; if its selected native target sends nothing, Compose treats that as
-incomplete output and renders 500 rather than inventing a 404. Preserve Router
-awareness with C<< router => $child >>, or keep opacity and wrap the child in
-its own Compose boundary.
+application. An application Mount or raw route shields the parent
+routing-evidence channel; if its selected native target sends nothing, Compose
+treats that as incomplete output and renders 500 rather than inventing a 404.
 
 L<PAGI::Pages> supplies terminal negotiated endpoints without a Router-specific
 adapter:
@@ -533,7 +532,7 @@ adapter:
     use PAGI::Pages;
 
     route('/old' => PAGI::Pages->permanent_redirect('/new'));
-    mount('/gone' => PAGI::Pages->gone);
+    mount('/gone', app => PAGI::Pages->gone);
 
 The first is still one exact, method-aware route. The second owns the complete
 C</gone> subtree for every HTTP method and ignores the remaining child path.
@@ -548,20 +547,17 @@ deliberately.
 
 =head1 MOUNTS
 
-An inline Mount is a selected dispatch boundary within its containing Router.
-A C<< router => $child >> Mount is visible to inspection and reverse routing,
-but remains a real dispatch boundary. Once its prefix matches, the child owns
-FULL, PARTIAL, and NONE: unanswered child completion bubbles outward through
-child, occurrence, and enclosing Router middleware, while the parent neither
-resumes sibling scanning nor unions method evidence. A child or occurrence
-fallback response makes later outer fallback middleware inert.
-
-A positional application mount is opaque and owns every selected HTTP,
-WebSocket, and SSE outcome. Discovery stops there even if the target object is
-a Router. A raw route is different again:
+Every Mount is a selected application boundary within its containing Router.
+C<routes> is shorthand for a child Router application; C<app> retains a
+declared base application. Once its prefix matches, the child owns FULL,
+PARTIAL, and NONE: unanswered child completion bubbles outward through child,
+occurrence, and enclosing Router middleware, while the parent neither resumes
+sibling scanning nor unions method evidence. A child or occurrence fallback
+response makes later outer fallback middleware inert. A raw route is different
+again:
 
     route('/files/*path', raw => $app)
-    mount('/files' => $app)
+    mount('/files', app => $app)
 
 The raw route is one HTTP leaf: it participates in methods, automatic HEAD,
 partial matching, and named reverse routing, and keeps the routed path. The
@@ -717,9 +713,9 @@ The immutable tree is the public inspection surface:
 
 C<routes> contains only direct children in declaration order. C<named_routes>
 maps canonical absolute addresses to original leaves, and C<route_named>
-resolves from the Router root. Explicit Router mounts are traversed; positional
-applications are opaque. Collection accessors return shallow copies. C<desc>
-is a human note with no matching or schema behavior.
+resolves from the Router root. Router base applications are traversed.
+Collection accessors return shallow copies. C<desc> is a human note with no
+matching or schema behavior.
 
 =head1 MATCHED-ROUTE SCOPE CONVENTION
 
@@ -771,7 +767,7 @@ object's C<< Route->name >> remains only its local final segment, such as
 C<show>; matched metadata C<name> is absolute. C<desc> is that leaf's declared
 description, or undef.
 
-A selected opaque application mount uses the same match shape:
+A selected application mount uses the same match shape:
 
     {
         kind              => 'mount',
@@ -781,16 +777,16 @@ A selected opaque application mount uses the same match shape:
         desc              => 'Tenant admin app',   # declared value or undef
     }
 
-The opaque mount does not append an entry for itself to C<mounts>; its terminal
-C<match> is the only record it adds. Unanswered NONE/PARTIAL declines leave
+C<match> is the selected mount's terminal record. Unanswered NONE/PARTIAL
+declines leave
 C<match> undefined while retaining the namespace and consumed-prefix capture
 snapshot of their owning placement. Routing fallback middleware may render
 that trusted decline without changing the match metadata.
 
-Explicit Router mounts share their containing resolver frame. A separately
-compiled Router reached through an opaque application mount appends a
-compatible child frame, and Context selects the innermost compatible frame.
-Opaque, malformed, or newer C<pagi.routing> data is an incompatible boundary:
+Router base applications share their containing resolver frame. A separately
+compiled Router reached through an application mount appends a compatible child
+frame, and Context selects the innermost compatible frame. Malformed or newer
+C<pagi.routing> data is an incompatible boundary:
 the child router creates a fresh v1 container, ignores foreign ancestry, and
 does not croak. The incoming scope and foreign value are not mutated. Additive
 compatible fields, such as frame C<root_path>, retain version 1.
