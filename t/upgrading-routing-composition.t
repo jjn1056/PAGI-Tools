@@ -326,6 +326,38 @@ subtest 'public documentation publishes one final routing model' => sub {
             "$file does not present a mutable callback as functional Mount syntax");
     }
 
+    my $tutorial = slurp_file('lib/PAGI/Tools/Tutorial.pod');
+    my @tutorial_paragraphs = map {
+        my $paragraph = $_;
+        $paragraph =~ s/\s+/ /g;
+        $paragraph;
+    } split /\n\s*\n/, $tutorial;
+    my ($router_outcome_paragraph) = grep {
+        /(?:unanswered Router|If no route answers)/i
+    } @tutorial_paragraphs;
+    $router_outcome_paragraph //= '';
+    unlike($router_outcome_paragraph, qr/sends nothing/i,
+        'Tutorial never says an unanswered Router sends nothing');
+    unlike($router_outcome_paragraph, qr/Compose.*?404.*?405/i,
+        'Tutorial never assigns Router 404 and 405 fallback to Compose');
+    like($router_outcome_paragraph,
+        qr/If no route answers.*?stock Pages 404.*?C<http_default>.*?PARTIAL.*?built-in Pages 405.*?Compose does not own routing fallback.*?root safety.*?lifespan/i,
+        'Tutorial assigns 404 and 405 to Router while Compose owns root safety and lifespan');
+
+    my ($app_pl_paragraph) = grep { /F<app\.pl>/i } @tutorial_paragraphs;
+    $app_pl_paragraph //= '';
+    unlike($app_pl_paragraph,
+        qr/must still be a native coderef/i,
+        'Tutorial never restricts app.pl to a native coderef');
+    like($app_pl_paragraph,
+        qr/F<app\.pl> may return either a native coderef or an instantiated component object with C<to_app>, including a Compose description/i,
+        'Tutorial permits either native coderef or instantiated to_app object from app.pl');
+    unlike($app_pl_paragraph, qr/routing-capable Cascade/i,
+        'Tutorial does not give Cascade special routing semantics');
+    like($app_pl_paragraph,
+        qr/Cascade is ordinary status-driven application coordination and carries no special Router semantics/i,
+        'Tutorial characterizes Cascade as ordinary status-driven coordination');
+
     my $changes = slurp_file('Changes');
     like($changes, qr/\A# Revision history for PAGI-Tools\s+0\.002003 - UNRELEASED\b/s,
         'release note stays inside unreleased 0.002003');

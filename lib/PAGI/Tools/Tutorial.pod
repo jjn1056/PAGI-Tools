@@ -107,10 +107,12 @@ instance and retain the returned coderef. At request time routing matches in
 declaration order, constructs C<$c>, awaits the handler, and emits its returned
 Response exactly once.
 
-The compiled coderef is deliberately a routing component rather than a
-complete public HTTP application. If no route answers, it records trusted
-request-local matching facts and sends nothing. Part 2.2 wraps that component
-in Compose for a deployed root with complete 404, 405, and 500 safeguards.
+The compiled coderef is a complete Router application for routing outcomes. If
+no route answers, NONE emits its stock Pages 404 or configured HTTP-only
+C<http_default>; PARTIAL emits its built-in Pages 405 with authoritative
+C<Allow>. Compose does not own routing fallback. It owns deployed root safety,
+including ErrorHandler, response-completion guarding, the outer HEAD boundary,
+and lifespan.
 
 Reusable semantic constraints can sit beside a parameter. An imported
 Type::Tiny type is an ordinary zero-argument provider function:
@@ -1429,14 +1431,15 @@ C<sub { my ($app) = @_; async sub { ... } }>.
 Passing middleware where an app belongs (or vice versa) croaks at
 composition time with a message pointing at the right position.
 
-The value F<app.pl> hands to the server must still be a native coderef. For a
-Router or a routing-capable Cascade, end the file with
-C<< compose(app => $routing)->to_app >> when the deployed application also
-needs root ErrorHandler, response-completion guarding, and lifespan. Direct
-C<< $routing->to_app >> already owns Router 404/405 but not those root
-boundaries. A C<builder {}>
-block already returns a native coderef; whether it is complete depends on the
-applications it composes.
+F<app.pl> may return either a native coderef or an instantiated component object
+with C<to_app>, including a Compose description. A Router is already complete
+for its own 404/405. Cascade is ordinary status-driven application coordination
+and carries no special Router semantics. Wrap either with
+C<< compose(app => $application) >> when the deployed application also needs
+root ErrorHandler, response-completion guarding, and lifespan. The server may
+compile that component object once, or the file may call C<to_app> explicitly.
+A C<builder {}> block already returns a native coderef; whether it is complete
+depends on the applications it composes.
 
 =head2 7.8 Starlette Vocabulary, PAGI Boundaries
 
