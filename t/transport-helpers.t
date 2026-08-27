@@ -112,6 +112,35 @@ subtest 'required and optional read capabilities' => sub {
     is($minimal->high_water_mark, undef, 'missing high watermark degrades to undef');
     is($minimal->low_water_mark, undef, 'missing low watermark degrades to undef');
     ok($minimal->is_writable, 'missing high watermark is assumed writable');
+
+    my $undefined_high = transport({
+        type             => 'http',
+        'pagi.transport' => MockTransport->new(0, undef, 0),
+    });
+    is($undefined_high->high_water_mark, undef,
+        'present high watermark returning undef stays undef');
+    ok($undefined_high->is_writable,
+        'present undefined high watermark is assumed writable');
+
+    my $zero_boundary = transport({
+        type             => 'http',
+        'pagi.transport' => MockTransport->new(0, 0, 0),
+    });
+    is($zero_boundary->buffered_amount, 0,
+        'zero buffered amount is returned exactly at a zero high watermark');
+    is($zero_boundary->high_water_mark, 0,
+        'zero high watermark is returned exactly');
+    ok(!$zero_boundary->is_writable,
+        'zero buffered amount is not below a zero high watermark');
+
+    my $zero_below_positive = transport({
+        type             => 'http',
+        'pagi.transport' => MockTransport->new(0, 1, 0),
+    });
+    is($zero_below_positive->buffered_amount, 0,
+        'zero buffered amount is returned exactly below a positive high watermark');
+    ok($zero_below_positive->is_writable,
+        'zero buffered amount is writable below a positive high watermark');
 };
 
 subtest 'callback registration delegates and chains' => sub {
