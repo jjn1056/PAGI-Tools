@@ -502,7 +502,7 @@ capture as a filesystem path.
 =head1 HTTP DECLINES, FALLBACK MIDDLEWARE, AND CATCH-ALLS
 
 A selected route's 404 or 405 is application output and passes through
-untouched. A selected raw route or opaque Mount that sends nothing is also a
+untouched. A selected raw route or Mount application that sends nothing is also a
 selected application completion, not a routing decline. A selected normal
 HTTP handler must still return a Response; an invalid return remains an
 application error.
@@ -513,9 +513,9 @@ union; GET contributes HEAD. The renderer reads C<allowed_methods> from the
 snapshot rather than mutable Context headers. An explicit handler/native 405
 remains application output and is never repaired by an outer fallback.
 
-Router middleware surrounds that Router's own decline. Middleware on an inline
-or Router Mount surrounds the already-selected child boundary, and the parent
-never resumes scanning. Put C<Routing::NotFound> or
+Router middleware surrounds that Router's own decline. Mount middleware
+surrounds the selected child application boundary, and the parent never
+resumes scanning. Put C<Routing::NotFound> or
 C<Routing::MethodNotAllowed> middleware at the boundary that owns response
 policy. Route placement is inert for exhaustion because route middleware runs
 only after that route fully matches.
