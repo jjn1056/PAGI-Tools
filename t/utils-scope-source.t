@@ -30,13 +30,11 @@ use PAGI::Utils::Scope ();
 {
     package Local::CachedObject;
     sub new { return bless { scope => $_[1] }, $_[0] }
-    sub scope { return $_[0]{scope} }
-}
-
-{
-    package Local::CachedObjectWithDyingScope;
-    sub new { return bless {}, $_[0] }
-    sub scope { die 'cached scope exploded' }
+    sub dying { return bless { dying => 1 }, $_[0] }
+    sub scope {
+        die 'cached scope exploded' if $_[0]{dying};
+        return $_[0]{scope};
+    }
 }
 
 my $scope = { type => 'http' };
@@ -63,7 +61,7 @@ subtest '_compatible_cached_scope_object reuses only an exact-class object bound
         [ absent => undef, undef ],
         [ valid => Local::CachedObject->new($scope), 'Local::CachedObject' ],
         [ 'wrong class' => Local::BadScope->new, 'Local::CachedObject' ],
-        [ 'throwing scope' => Local::CachedObjectWithDyingScope->new,
+        [ 'throwing scope' => Local::CachedObject->dying,
             'Local::CachedObject' ],
         [ 'other scope' => Local::CachedObject->new($other_scope),
             'Local::CachedObject' ],
