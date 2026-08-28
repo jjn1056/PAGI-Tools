@@ -240,9 +240,11 @@ Immediate and Future-backed returns are accepted uniformly:
 my $response = await Future->wrap($self->$method($request));
 ```
 
-The returned value must satisfy `PAGI::Utils::is_response`; otherwise dispatch
-croaks with the existing Endpoint-style diagnostic. Dispatch emits it exactly
-once through the current API:
+`dispatch($request)` returns the selected Response and performs no protocol
+send. The returned value must satisfy `PAGI::Utils::is_response`; otherwise
+dispatch croaks with the existing Endpoint-style diagnostic. `to_app` is the
+only Endpoint adapter that emits the returned value, exactly once through the
+current API:
 
 ```perl
 await Future->wrap($response->respond($send));
