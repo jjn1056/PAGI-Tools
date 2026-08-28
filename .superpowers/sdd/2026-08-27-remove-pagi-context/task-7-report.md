@@ -191,3 +191,28 @@ described above.
   rerun; new Context spellings occur only in the labeled Before block and
   inventory, while direct `PAGI::SSE->send` occurs only as shipped guidance.
 - `git diff --check` passes. No full suite was run.
+
+## DEV-004: correct Router history in the Context-removal guide
+
+The audit found that the primary Before block incorrectly grouped ordinary
+declarative/App Router callbacks with class Endpoint callbacks. The approved
+Context-removal design says the earlier Request-first campaign had already
+made Router callbacks direct-object handlers. Both the Task 7 base
+`0cbbf139b3a1126f3d52dba3b8a860662821deed` and the Task 8 audit base
+`9ab83b6ee512657086f42669b48e24b04e9e4864` independently confirm this in
+`PAGI::Routing::Compiler`: normal HTTP leaves construct `PAGI::Request`, while
+normal protocol leaves construct `PAGI::WebSocket` or `PAGI::SSE` before
+calling the handler.
+
+`UPGRADING.md` now limits the Before-to-After signature migration to the three
+class Endpoint frontends. It lists the Router Request/WebSocket/SSE signatures
+as an explicitly unchanged campaign baseline. The existing executable Router
+characterization was renamed to state that contract and its HTTP diagnostic
+now identifies the retained Request-first behavior; no runtime API changed.
+
+Focused verification under Perl 5.42.2 passes
+`t/upgrading-context-removal.t` (1 file, 5 top-level subtests) and all 18 Task 7
+POD checks. The live-doc search finds `received a Context wrapper` only for
+class Endpoint callbacks and no `$router` callback taking `$ctx`; the mandated
+legacy search remains limited to labeled Before/removal evidence and negative
+tests. `git diff --check` passes. No full suite or build was run.

@@ -39,7 +39,7 @@ subtest 'Context hooks and modules are removed' => sub {
     }
 };
 
-subtest 'direct routes receive their protocol objects' => sub {
+subtest 'declarative Router callbacks remain direct protocol objects' => sub {
     my ($request_seen, $websocket_seen, $sse_seen);
     my $router = PAGI::App::Router->new;
 
@@ -67,7 +67,8 @@ subtest 'direct routes receive their protocol objects' => sub {
 
     my $client = PAGI::Test::Client->new(app => $router);
     my $response = $client->get('/request/world');
-    is($response->text, 'hello world', 'HTTP callback returns a Response');
+    is($response->text, 'hello world',
+        'Router HTTP callback remains Request-first and returns a Response');
     isa_ok($request_seen, 'PAGI::Request');
 
     $client->websocket('/socket', sub {

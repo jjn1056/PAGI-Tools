@@ -16,14 +16,16 @@ may still return a `Future` when their protocol operation is asynchronous.
 
 The Context class family has been removed without a compatibility layer. There
 is no replacement Context base class, factory hook, type map, or generic event
-dispatcher. Normal callbacks now receive the object that owns their protocol;
-raw applications and every middleware wrapper keep the native
-`($scope, $receive, $send)` contract unchanged.
+dispatcher. Normal callbacks receive the object that owns their protocol;
+for this campaign, the callback-signature change applies to class Endpoint
+frontends. Ordinary declarative and App Router callbacks already received the
+direct protocol object and remain unchanged. Raw applications and every
+middleware wrapper keep the native `($scope, $receive, $send)` contract
+unchanged.
 
-### Change normal callback signatures
+### Change class Endpoint callback signatures
 
-**Before (removed):** class Endpoint callbacks and direct Router callbacks
-received a Context wrapper.
+**Before (removed):** class Endpoint callbacks received a Context wrapper.
 
 ```perl
 # PAGI::Endpoint::HTTP
@@ -36,11 +38,6 @@ sub on_disconnect    { my ($self, $ctx, $code, $reason) = @_; ... }
 # PAGI::Endpoint::SSE
 async sub on_connect { my ($self, $ctx) = @_; ... }
 sub on_disconnect    { my ($self, $ctx) = @_; ... }
-
-# Direct Router callbacks
-$router->get('/'       => sub { my ($ctx) = @_; ... });
-$router->websocket('/' => sub { my ($ctx) = @_; ... });
-$router->sse('/'       => sub { my ($ctx) = @_; ... });
 ```
 
 **After (shipped):** use `PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE`
@@ -63,7 +60,13 @@ async sub on_connect {
     await $sse->send_event(data => 'ready');
 }
 sub on_disconnect { my ($self, $sse) = @_; ... }
+```
 
+Ordinary declarative and App Router callbacks are not a Context-removal
+migration. At the campaign base they already used these signatures, which
+remain current:
+
+```perl
 $router->get('/'       => sub { my ($request)   = @_; ... });
 $router->websocket('/' => sub { my ($websocket) = @_; ... });
 $router->sse('/'       => sub { my ($sse)       = @_; ... });
