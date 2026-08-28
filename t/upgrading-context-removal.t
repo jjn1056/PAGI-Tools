@@ -92,6 +92,32 @@ subtest 'direct routes receive their protocol objects' => sub {
     isa_ok($sse_seen, 'PAGI::SSE');
 };
 
+subtest 'direct Response factories replace the four HTTP shortcuts' => sub {
+    my $text = PAGI::Test::Client->new(
+        app => PAGI::Response->text('Created', status => 201),
+    )->get('/');
+    is([$text->status, $text->text], [201, 'Created'],
+        'text constructs the complete response directly');
+
+    my $html = PAGI::Test::Client->new(
+        app => PAGI::Response->html('<h1>Created</h1>', status => 201),
+    )->get('/');
+    is([$html->status, $html->text], [201, '<h1>Created</h1>'],
+        'html constructs the complete response directly');
+
+    my $json = PAGI::Test::Client->new(
+        app => PAGI::Response->json({ created => 1 }, status => 201),
+    )->get('/');
+    is([$json->status, $json->json], [201, { created => 1 }],
+        'json constructs the complete response directly');
+
+    my $redirect = PAGI::Test::Client->new(
+        app => PAGI::Response->redirect('/items'),
+    )->get('/');
+    is([$redirect->status, $redirect->header('location')], [302, '/items'],
+        'redirect constructs the complete response directly');
+};
+
 subtest 'ErrorHandler receives Request and preserves explicit status' => sub {
     my ($request_seen, $error_seen);
     my $error = Local::UpgradeStatusError->new(503);

@@ -75,31 +75,48 @@ protocol loop ends.
 
 ### Build Responses directly
 
-**Before (removed):** response shortcuts and the hidden seeded response lived
-on Context. `status_try` could mutate that seeded value as a fallback.
+**Before (removed):** `PAGI::Context::HTTP` lazily cached one detached Response
+behind `response`/`resp`. Its complete response-construction shortcut set was
+`text`, `html`, `json`, and `redirect`; each mutated that cached value and
+returned it. The other HTTP-specific additions were `request`/`req`, guarded
+`respond`, and `method`; scope, helper, connection, dispatch, and raw-channel
+methods were inherited from the base class.
 
 ```perl
+return $ctx->text('Created', status => 201);
+return $ctx->html('<h1>Created</h1>', status => 201);
 return $ctx->json($data, status => 201);
-$ctx->status_try(500);
-await $ctx->respond($ctx->response);
+return $ctx->redirect('/items');
+
+my $response = $ctx->response;
+$response->status_try(500);
+await $ctx->respond($response);
 ```
 
-**After (shipped):** construct and return a detached Response. In an explicit
-raw application, call `respond($send)` once.
+`status_try` was a Response method, not a Context method. Likewise `empty`,
+`send`, `send_raw`, `stream`, `writer`, and `send_file` were Response methods
+reachable through `response`; they were never Context shortcuts.
+
+**After (shipped):** construct and return a detached Response directly. In an
+explicit raw application, call `respond($send)` once.
 
 ```perl
+return PAGI::Response->text('Created', status => 201);
+return PAGI::Response->html('<h1>Created</h1>', status => 201);
 return PAGI::Response->json($data, status => 201);
+return PAGI::Response->redirect('/items');
 
-my $response = PAGI::Response->json($data);
+my $response = PAGI::Response->new($scope);
 $response->status_try(500);
 await $response->respond($send);
 ```
 
-There is no automatically seeded response and no automatic Context fallback.
+There is no per-callback cached response accumulator or Context-owned send
+guard. `PAGI::Response->status_try` remains supported on explicitly constructed
+Response values, including the value ErrorHandler receives from a custom
+renderer. ErrorHandler's precedence behavior is described below.
 `PAGI::Request->response` remains a temporary compatibility factory for this
-release, but new code should construct `PAGI::Response` directly. The direct
-factories replace the former `text`, `html`, `json`, `redirect`, `empty`,
-`send`, `send_raw`, `stream`, `writer`, and `send_file` shortcuts.
+release, but new code should construct `PAGI::Response` directly.
 
 ### Import optional capabilities from their owners
 
@@ -197,10 +214,20 @@ one generic dispatcher.
 
 ```perl
 sub context_class { 'MyApp::Context' }
-PAGI::Context->register_type('myproto' => 'MyApp::Context');
+
+sub _type_map {
+    my ($class) = @_;
+    return {
+        %{$class->SUPER::_type_map},
+        myproto => 'MyApp::ProtocolContext',
+    };
+}
+
 $ctx->assert_websocket;
-await $ctx->raw_send->($event);
-my $event = await $ctx->raw_receive->();
+my $receive = $ctx->receive;
+my $send = $ctx->raw_send;
+my $event = await $receive->();
+await $send->($event);
 $ctx->on('app.notify' => \&notify);
 await $ctx->run;
 ```
@@ -218,10 +245,11 @@ my $app = async sub {
 ```
 
 The removed surface includes Context constructors and subclasses, Endpoint
-factory overrides, protocol assertions, the type registry/map, response
-seeding, generic `on`/`on_default`/`on_error` dispatch, `stop`, `raw_send`, and
-`raw_receive`. Do not introduce a replacement hook that recreates this
-all-purpose ownership boundary.
+factory overrides, protocol assertions, the overrideable type map, the cached
+HTTP Response accumulator and guarded `respond`, generic
+`on`/`on_default`/`on_error` dispatch, `stop`, and the inherited `receive` and
+`raw_send` channel accessors. Do not introduce a replacement hook that
+recreates this all-purpose ownership boundary.
 
 ## Running against PAGI-Server 0.002007
 
@@ -596,9 +624,9 @@ middleware('ErrorHandler', content_type => 'text/html');
 ```perl
 middleware('ErrorHandler',
     handler => sub {
-        my ($context, $error) = @_;
+        my ($request, $error) = @_;
         return PAGI::Pages->internal_server_error(
-            $context,
+            $request,
             as => 'html',
         );
     },
@@ -616,9 +644,9 @@ middleware('ErrorHandler', content_type => 'application/json');
 ```perl
 middleware('ErrorHandler',
     handler => sub {
-        my ($context, $error) = @_;
+        my ($request, $error) = @_;
         return PAGI::Pages->internal_server_error(
-            $context,
+            $request,
             as => 'json',
         );
     },
@@ -636,18 +664,18 @@ middleware('ErrorHandler', content_type => 'text/plain');
 ```perl
 middleware('ErrorHandler',
     handler => sub {
-        my ($context, $error) = @_;
+        my ($request, $error) = @_;
         return PAGI::Pages->internal_server_error(
-            $context,
+            $request,
             as => 'text',
         );
     },
 );
 ```
 
-The wrapper adapts ErrorHandler's `($context, $error)` callback. The deferred
+The wrapper adapts ErrorHandler's `($request, $error)` callback. The deferred
 Pages endpoint accepts exactly one request source, so the wrapper instead calls
-the Pages factory with `$context` as its source and `as` as a factory option.
+the Pages factory with `$request` as its source and `as` as a factory option.
 It may inspect `$error` when deliberately choosing safe page fields; Pages
 does not consume that exception implicitly.
 
@@ -672,7 +700,7 @@ Tests that asserted a built-in English body should assert status, required
 fields, and selected media type, or install an explicit handler at a supported
 policy seam.
 
-There is no `pages` option on Compose and no Pages shortcut on Context. Supply
+There is no `pages` option on Compose. Supply
 a Pages endpoint as Router `http_default` to customize HTTP NONE, and install
 ordinary ErrorHandler middleware for application exception policy. Router's
 built-in PARTIAL/405 outcome has no fallback-middleware override. Compose's
@@ -1258,8 +1286,9 @@ Framework adapters should account for these points:
 - State is a `PAGI::State` facade with the temporary warned hash-dereference
   bridge described above.
 - Response return and Future normalization are unchanged in this phase.
-- Context removal and the Response redesign remain separate later reviews;
-  do not anticipate them in this migration.
+- The former Context family is removed by this release without a deferred
+  compatibility review or replacement hook. Response factory names and the
+  explicit send boundary otherwise remain unchanged.
 
 A higher-level framework may deliberately attach its own conveniences to its
 own handler/controller object. The neutral PAGI Request does not require that

@@ -111,8 +111,10 @@
     renderer status wins over the derived exception/configured status. Removed
     along with the class family are Endpoint factory overrides, protocol
     assertions and type maps, raw channel accessors, the generic event
-    dispatcher, and the hidden seeded response/status fallback. Native raw
-    applications and all middleware retain `($scope, $receive, $send)`.
+    dispatcher, and the cached HTTP Response accumulator plus guarded send.
+    `status_try` remains a Response method and ErrorHandler's fallback-status
+    mechanism. Native raw applications and all middleware retain
+    `($scope, $receive, $send)`.
     Extension protocols provide their own object. Endpoint disconnect hooks are
     synchronous. `PAGI::Request->response` remains temporary compatibility for
     this release but is not recommended for new code.

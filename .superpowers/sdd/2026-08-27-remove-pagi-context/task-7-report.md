@@ -50,9 +50,11 @@ example. The Cookbook's complete apples block also differed from the runnable
 - `git diff --check` — pass.
 - No full suite was run, per the Task 7 boundary.
 
-## Retained mandated-search matches
+## Retained mandated-search matches at the original Task 7 commit
 
-Every final match is removal evidence, not live guidance:
+This was the search classification recorded at commit
+`f67b32244b4f71e7ed1170d40e4939c5c4649144`. Fix round 1 below supersedes its
+UPGRADING line numbers and corrects the former-surface classifications.
 
 - `UPGRADING.md:82` — removed response-shortcut Before example.
 - `UPGRADING.md:83` — removed seeded-status Before example.
@@ -96,3 +98,62 @@ Every final match is removal evidence, not live guidance:
 The controller owns the ledger and independent documentation/spec and technical
 review coordination. No ledger, runtime implementation, historical design
 document, push, merge, tag, or release was performed.
+
+## Fix round 1: exact former HTTP surface
+
+The primary migration was checked against the source immediately before
+removal (`git show cfcc50f^:lib/PAGI/Context/HTTP.pm` and
+`git show cfcc50f^:lib/PAGI/Context.pm`). `PAGI::Context::HTTP` added the
+cached `request`/`req` and `response`/`resp` accessors, guarded `respond`,
+`method`, and exactly four response-construction shortcuts: `text`, `html`,
+`json`, and `redirect`. `status_try`, `empty`, `send`, `send_raw`, `stream`,
+`writer`, and `send_file` belonged to `PAGI::Response`, not Context. The base
+Context exposed the raw channel as `receive` and `raw_send`; it had no
+`raw_receive` method. Extension types overrode `_type_map`; there was no
+`register_type` API.
+
+`UPGRADING.md` now presents only source-backed Before examples and direct
+Response/Request migrations for that surface. The three later ErrorHandler
+examples now use `($request, $error)` and pass Request to Pages. The stale
+statement deferring Context removal was replaced with the shipped no-backcompat
+contract. `Changes` now distinguishes the removed cached Response/guarded send
+from the retained Response-level `status_try`. The upgrade test executes all
+four direct Response factories.
+
+## Fix round 1: broadened live-doc classification
+
+The final public-doc search covered `README.md`, `UPGRADING.md`, `Changes`,
+`lib`, and `examples` for `$context`, `PAGI Context`, `Context removal`, the
+old `($context, $error)` callback, and broader `Context` references.
+
+- `UPGRADING.md:185-186` is the only retained `$context`/old-callback match;
+  it is inside the explicitly labeled **Before (removed)** ErrorHandler block.
+- Exact phrases `PAGI Context` and `Context removal` have no live matches.
+- `Changes:103` is the current breaking-removal entry. `Changes:510`, `:534`,
+  and `:625` are immutable release history describing the former facade.
+- `UPGRADING.md:15-247` is the authoritative removal contract; its executable
+  legacy spellings occur only in labeled Before blocks. `UPGRADING.md:1099`,
+  `:1163`, and `:1289` explain shipped removal in later migration sections.
+  `UPGRADING.md:1624-1628` is another explicitly labeled Before block.
+- `examples/endpoint-router-demo/README.md:109` and
+  `examples/15-large-application/GAPS.md:10` explain why current examples no
+  longer hide capabilities on Context; neither teaches a Context API.
+- The mandated narrow search's test matches remain executable negative
+  assertions listed above. Its UPGRADING line numbers moved in this fix:
+  direct-response Before lines 78 and 86-93, helper Before lines 127-133,
+  ErrorHandler Before line 186, extension Before lines 216 and 226-232, and
+  the older Endpoint-hook Before lines 1624 and 1628.
+
+The broader search found no stale `($context, $error)` callback in an After
+block or live module POD/example, and no prose that defers Context removal.
+
+## Fix round 1 verification
+
+- Required Perl 5.42.2 focused gate: `t/upgrading-context-removal.t`,
+  `t/upgrading-request-first-handlers.t`, `t/upgrading-router-frontends.t`, and
+  `t/00-pod/cookbook-examples.t` pass; 4 files, 34 tests.
+- All 18 Task 7 POD-bearing files pass `perl -Ilib -c` under Perl 5.42.2 and
+  pass `podchecker`.
+- The broadened live-doc searches and the original mandated narrow search were
+  rerun after the corrections; retained matches are classified above.
+- `git diff --check` passes. No full suite was run.
