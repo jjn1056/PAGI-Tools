@@ -56,7 +56,7 @@ for my $case (@cases) {
         }
 
         SKIP: {
-            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 8 : 2)
+            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 21 : 2)
                 unless ref($app) eq 'CODE'
                     || ($case->{class} && ref($app) eq $case->{class});
             my $client = PAGI::Test::Client->new(app => $app);
