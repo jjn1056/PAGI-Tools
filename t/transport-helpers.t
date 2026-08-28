@@ -6,7 +6,6 @@ use PAGI::Transport qw(transport);
 use PAGI::Request;
 use PAGI::WebSocket;
 use PAGI::SSE;
-use PAGI::Context;
 
 {
     package Local::Transport::NoDefault;
@@ -211,13 +210,13 @@ subtest 'strict source normalization supports protocol objects' => sub {
     }, $receive, $send);
     is(transport($sse)->buffered_amount, 103, 'SSE source resolves its scope');
 
-    my $context = PAGI::Context->new({
+    my $raw_scope = {
         type             => 'http',
         method           => 'GET',
         headers          => [],
         'pagi.transport' => MockTransport->new(104, 200, 50),
-    }, $receive, $send);
-    is(transport($context)->buffered_amount, 104, 'Context source resolves its scope');
+    };
+    is(transport($raw_scope)->buffered_amount, 104, 'raw scope source resolves directly');
 
     like(dies { PAGI::Transport->new() }, qr/exactly one.*scope/i,
         'constructor rejects a missing source');
@@ -225,16 +224,10 @@ subtest 'strict source normalization supports protocol objects' => sub {
         'factory rejects multiple sources');
 };
 
-subtest 'Context, WebSocket, and SSE compatibility convenience remains' => sub {
+subtest 'WebSocket and SSE retain transport convenience' => sub {
     my $receive = sub { };
     my $send = sub { };
     my @cases = (
-        ['PAGI::Context', sub {
-            my ($handle) = @_;
-            my $scope = { type => 'http', method => 'GET', headers => [] };
-            $scope->{'pagi.transport'} = $handle if defined $handle;
-            return PAGI::Context->new($scope, $receive, $send);
-        }],
         ['PAGI::WebSocket', sub {
             my ($handle) = @_;
             my $scope = { type => 'websocket', headers => [] };
@@ -253,16 +246,17 @@ subtest 'Context, WebSocket, and SSE compatibility convenience remains' => sub {
         my ($name, $build) = @{$case};
         my $handle = MockTransport->new(11, 22, 5);
         my $object = $build->($handle);
+        my $flow = ref($object) eq 'HASH' ? transport($object) : $object;
         my $high_callback = sub { };
         my $drain_callback = sub { };
 
-        is($object->buffered_amount, 11, "$name keeps buffered_amount");
-        is($object->high_water_mark, 22, "$name keeps high_water_mark");
-        is($object->low_water_mark, 5, "$name keeps low_water_mark");
-        ok($object->is_writable, "$name keeps is_writable");
-        is($object->on_high_water($high_callback), exact_ref($object),
+        is($flow->buffered_amount, 11, "$name keeps buffered_amount");
+        is($flow->high_water_mark, 22, "$name keeps high_water_mark");
+        is($flow->low_water_mark, 5, "$name keeps low_water_mark");
+        ok($flow->is_writable, "$name keeps is_writable");
+        is($flow->on_high_water($high_callback), exact_ref($flow),
             "$name high callback still chains");
-        is($object->on_drain($drain_callback), exact_ref($object),
+        is($flow->on_drain($drain_callback), exact_ref($flow),
             "$name drain callback still chains");
         is($handle->{hw}, [exact_ref($high_callback)],
             "$name high callback still delegates");
@@ -270,15 +264,17 @@ subtest 'Context, WebSocket, and SSE compatibility convenience remains' => sub {
             "$name drain callback still delegates");
 
         my $without = $build->(undef);
-        is($without->buffered_amount, 0, "$name keeps absent buffered default");
-        is($without->high_water_mark, undef, "$name keeps absent high default");
-        is($without->low_water_mark, undef, "$name keeps absent low default");
-        ok($without->is_writable, "$name keeps absent writable default");
+        my $without_flow = ref($without) eq 'HASH' ? transport($without) : $without;
+        is($without_flow->buffered_amount, 0, "$name keeps absent buffered default");
+        is($without_flow->high_water_mark, undef, "$name keeps absent high default");
+        is($without_flow->low_water_mark, undef, "$name keeps absent low default");
+        ok($without_flow->is_writable, "$name keeps absent writable default");
 
         my $reads_only = $build->(ReadsOnlyTransport->new(0, 22, 5));
-        is($reads_only->on_high_water(sub { }), exact_ref($reads_only),
+        my $reads_only_flow = ref($reads_only) eq 'HASH' ? transport($reads_only) : $reads_only;
+        is($reads_only_flow->on_high_water(sub { }), exact_ref($reads_only_flow),
             "$name missing high callback stays a chaining no-op");
-        is($reads_only->on_drain(sub { }), exact_ref($reads_only),
+        is($reads_only_flow->on_drain(sub { }), exact_ref($reads_only_flow),
             "$name missing drain callback stays a chaining no-op");
     }
 };

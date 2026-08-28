@@ -7,8 +7,8 @@ use Future;
 use JSON::MaybeXS qw(decode_json);
 use Scalar::Util qw(dualvar);
 
-use PAGI::Context;
 use PAGI::Pages;
+use PAGI::Request;
 
 {
     package Local::HostileRedirectJSONPages;
@@ -131,10 +131,10 @@ subtest 'redirect supports immediate and deferred Pages invocation forms' => sub
     my $scope = http_scope();
     my @events;
     my $send = sub { push @events, $_[0]; return Future->done };
-    my $context = PAGI::Context->new($scope, sub { Future->done }, $send);
+    my $request = PAGI::Request->new($scope, sub { Future->done });
 
-    my $class = PAGI::Pages->redirect($context, '/class', as => 'text');
-    is($class->header('Location'), '/class', 'class immediate Context call returns redirect');
+    my $class = PAGI::Pages->redirect($request, '/class', as => 'text');
+    is($class->header('Location'), '/class', 'class immediate Request call returns redirect');
 
     my $pages = PAGI::Pages->new(as => 'text');
     my $instance = $pages->found($scope, '/instance');
@@ -142,8 +142,8 @@ subtest 'redirect supports immediate and deferred Pages invocation forms' => sub
 
     my $endpoint = PAGI::Pages->see_other('/endpoint', as => 'text');
     is(ref($endpoint), 'CODE', 'deferred redirect is a plain coderef');
-    is($endpoint->($context)->header('Location'), '/endpoint',
-        'deferred Context call returns an unsent redirect');
+    is($endpoint->($request)->header('Location'), '/endpoint',
+        'deferred Request call returns an unsent redirect');
     is($endpoint->($scope)->header('Location'), '/endpoint',
         'deferred scope-only call returns an unsent redirect');
 

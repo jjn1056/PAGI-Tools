@@ -14,8 +14,8 @@ use PAGI::Middleware::CORS;
 use PAGI::Middleware::SecurityHeaders;
 use PAGI::Middleware::TrustedHosts;
 use PAGI::Middleware::CSRF;
-use PAGI::Context;
 use PAGI::Headers;
+use PAGI::Response;
 
 my $loop = IO::Async::Loop->new;
 
@@ -1064,7 +1064,7 @@ subtest "CSRF enforce => 'app' passes an unsafe request through with no token" =
     like $set_cookie->[1], qr/\Q$seen_token\E/, 'Set-Cookie carries the same token stashed in scope';
 };
 
-subtest "CSRF enforce => 'app' preserves an application-owned Context response" => sub {
+subtest "CSRF enforce => 'app' preserves an application-owned Response" => sub {
     my $mw = PAGI::Middleware::CSRF->new(
         secret => 'test-secret', enforce => 'app',
     );
@@ -1072,10 +1072,11 @@ subtest "CSRF enforce => 'app' preserves an application-owned Context response" 
     my $send = async sub { my ($event) = @_; push @sent, $event };
     my $wrapped = $mw->wrap(async sub {
         my ($scope, $receive, $downstream_send) = @_;
-        my $ctx = PAGI::Context->new($scope, $receive, $downstream_send);
-        await $ctx->respond(
-            $ctx->text('application-owned CSRF rejection', status => 403),
+        my $response = PAGI::Response->text(
+            'application-owned CSRF rejection',
+            status => 403,
         );
+        await $response->respond($downstream_send);
     });
 
     run_async(async sub {
@@ -1094,11 +1095,11 @@ subtest "CSRF enforce => 'app' preserves an application-owned Context response" 
     is $sent[0]{status}, 403, 'application retains its chosen status';
     is [response_header_values($sent[0], 'Content-Type')],
         ['text/plain; charset=utf-8'],
-        'application Context response remains literal text despite Accept';
+        'application Response remains literal text despite Accept';
     is [response_header_values($sent[0], 'Vary')], [],
-        'application Context response does not gain Pages negotiation metadata';
+        'application Response does not gain Pages negotiation metadata';
     is $sent[1]{body}, 'application-owned CSRF rejection',
-        'application Context response body remains byte-for-byte literal';
+        'application Response body remains byte-for-byte literal';
 };
 
 subtest "CSRF enforce => 'app' stashes the existing COOKIE token, not a new one" => sub {

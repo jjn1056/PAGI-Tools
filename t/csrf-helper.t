@@ -5,6 +5,8 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::CSRF qw(csrf);
 use PAGI::Request;
+use PAGI::WebSocket;
+use PAGI::SSE;
 
 {
     package Local::CSRF::NoDefault;
@@ -33,7 +35,7 @@ my $lowercase_tag_error;
 like($lowercase_tag_error, qr/"?:all"? is not defined|Can't continue/i,
     'lowercase :all is not an export tag');
 
-subtest 'scope and Request sources expose the exact token' => sub {
+subtest 'scope and direct protocol sources expose the exact token' => sub {
     my $scope = {
         type       => 'http',
         method     => 'GET',
@@ -46,6 +48,15 @@ subtest 'scope and Request sources expose the exact token' => sub {
     is(csrf($scope)->token, 'scope-token', 'raw scope returns its token exactly');
     is(PAGI::CSRF->new($request)->token, 'scope-token',
         'strict Request source returns its scope token');
+
+    for my $case (
+        ['WebSocket', 'websocket', sub { PAGI::WebSocket->new($_[0], sub {}, sub {}) }],
+        ['SSE', 'sse', sub { PAGI::SSE->new($_[0], sub {}, sub {}) }],
+    ) {
+        my ($name, $type, $build) = @{$case};
+        my $source = $build->({ type => $type, headers => [], csrf_token => 'scope-token' });
+        is(csrf($source)->token, 'scope-token', "$name source returns its scope token");
+    }
 };
 
 subtest 'provider validation rejects missing and malformed tokens' => sub {

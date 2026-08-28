@@ -173,65 +173,32 @@ sub _server_send {
 }
 
 subtest 'is_sent reads pagi.connection->response_started' => sub {
-    require PAGI::Context; require PAGI::Test::ConnectionState;
+    require PAGI::Test::ConnectionState;
     my $conn = PAGI::Test::ConnectionState->new; my @sent;
     my $scope = { type => 'http', method => 'GET', 'pagi.connection' => $conn };
-    my $ctx = PAGI::Context->new($scope, sub { Future->done }, _server_send($conn, \@sent));
-    my $res = $ctx->response;
+    my $res = PAGI::Response->new($scope);
     ok !$res->is_sent, 'false before respond';
-    $ctx->respond($res->send_raw("test"))->get;
+    $res->send_raw("test")->respond(_server_send($conn, \@sent))->get;
     ok $res->is_sent, 'true after the response started';
 };
 
 subtest 'two Response objects share sent state via the connection object' => sub {
-    require PAGI::Context; require PAGI::Test::ConnectionState;
+    require PAGI::Test::ConnectionState;
     my $conn = PAGI::Test::ConnectionState->new; my @sent;
     my $scope = { type => 'http', method => 'GET', 'pagi.connection' => $conn };
-    my $ctx = PAGI::Context->new($scope, sub { Future->done }, _server_send($conn, \@sent));
     my $res1 = PAGI::Response->new($scope); my $res2 = PAGI::Response->new($scope);
     ok !$res1->is_sent && !$res2->is_sent, 'neither sent initially';
-    $ctx->respond($res1->send_raw("test"))->get;
+    $res1->send_raw("test")->respond(_server_send($conn, \@sent))->get;
     ok $res1->is_sent && $res2->is_sent, 'both see it (shared object survives cloning)';
 };
 
-subtest 'double-send rejected synchronously (same context, no await between)' => sub {
-    require PAGI::Context; require PAGI::Test::ConnectionState;
-    my $conn = PAGI::Test::ConnectionState->new; my @sent;
-    my $ctx = PAGI::Context->new(
-        { type => 'http', method => 'GET', 'pagi.connection' => $conn },
-        sub { Future->done }, _server_send($conn, \@sent));
-    my $f1  = $ctx->respond(PAGI::Response->new($ctx->scope)->send_raw("a"));   # not awaited
-    my $err = eval { $ctx->respond(PAGI::Response->new($ctx->scope)->send_raw("b")); 1 } ? undef : $@;
-    like $err, qr/already sent/, 'second respond croaks in the same tick';
-    $f1->get;
-};
-
-subtest 'malformed pagi.connection dies loudly in BOTH is_sent and respond' => sub {
-    require PAGI::Context;
+subtest 'malformed pagi.connection dies loudly in is_sent' => sub {
     my $bad   = bless {}, 'Bare::Object';   # no response_started method
     my $scope = { type => 'http', method => 'GET', 'pagi.connection' => $bad };
 
     my $res = PAGI::Response->new($scope);
     my $e1  = eval { $res->is_sent; 1 } ? undef : $@;
     like $e1, qr/lacks response_started/, 'is_sent croaks on a malformed connection';
-
-    my $ctx = PAGI::Context->new($scope, sub { Future->done }, sub { Future->done });
-    my $e2  = eval { $ctx->respond($ctx->response->send_raw("x")); 1 } ? undef : $@;
-    like $e2, qr/lacks response_started/, 'respond croaks on a malformed connection too';
-};
-
-subtest 'cross-context double-send: a second context on the same request is rejected' => sub {
-    require PAGI::Context; require PAGI::Test::ConnectionState;
-    my $conn  = PAGI::Test::ConnectionState->new; my @sent;
-    my $scope = { type => 'http', method => 'GET', 'pagi.connection' => $conn };
-    my $send  = _server_send($conn, \@sent);
-
-    my $ctx1 = PAGI::Context->new($scope, sub { Future->done }, $send);
-    my $ctx2 = PAGI::Context->new($scope, sub { Future->done }, $send);   # different context, same request
-
-    $ctx1->respond($ctx1->response->send_raw("first"))->get;             # response_started now true on the shared conn
-    my $err = eval { $ctx2->respond($ctx2->response->send_raw("second")); 1 } ? undef : $@;
-    like $err, qr/already sent/, 'ctx2 rejects because the shared connection already started';
 };
 
 subtest 'text method' => sub {

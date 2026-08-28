@@ -33,6 +33,8 @@ subtest 'on_close callback runs on disconnect' => sub {
 
     is($called_code, 1000, 'on_close received code');
     is($called_reason, 'Bye', 'on_close received reason');
+    ok($ws->is_closed, 'direct disconnect synchronizes WebSocket state');
+    ok(!$ws->is_connected, 'direct disconnect clears WebSocket liveness');
 };
 
 subtest 'on_close runs after each_* loops' => sub {
