@@ -9,6 +9,7 @@ use Exporter qw(import);
 use Future::AsyncAwait;
 use PAGI::Headers ();
 use Scalar::Util qw(blessed);
+use Socket ();
 
 =encoding UTF-8
 
@@ -331,9 +332,104 @@ sub _allows_body_forbidden_status { 0 }
 sub _validate_uri_reference {
     my ($label, $value) = @_;
     croak "$label must be a URI-reference scalar"
-        unless defined($value) && !ref($value)
-            && $value =~ /\A(?:[A-Za-z0-9\-._~!\$&'\(\)\*\+,;=:@\/?#\[\]]|%[0-9A-Fa-f]{2})*\z/;
+        unless defined($value) && !ref($value) && _is_uri_reference($value);
     return $value;
+}
+
+sub _is_uri_reference {
+    my ($reference) = @_;
+    my $fragment_at = index($reference, '#');
+    my $before_fragment = $fragment_at >= 0
+        ? substr($reference, 0, $fragment_at) : $reference;
+    my $fragment = $fragment_at >= 0 ? substr($reference, $fragment_at + 1) : undef;
+    return 0 if defined($fragment) && index($fragment, '#') >= 0;
+    return 0 if defined($fragment) && !_valid_query_or_fragment($fragment);
+
+    my $query_at = index($before_fragment, '?');
+    my $hier_part = $query_at >= 0
+        ? substr($before_fragment, 0, $query_at) : $before_fragment;
+    my $query = $query_at >= 0 ? substr($before_fragment, $query_at + 1) : undef;
+    return 0 if defined($query) && !_valid_query_or_fragment($query);
+
+    if ($hier_part =~ /\A[A-Za-z][A-Za-z0-9+.-]*:(.*)\z/) {
+        return _valid_hier_part($1);
+    }
+    return _valid_relative_part($hier_part);
+}
+
+sub _valid_hier_part {
+    my ($part) = @_;
+    return _valid_authority_and_path(substr($part, 2)) if $part =~ /\A\/\//;
+    return _valid_path($part);
+}
+
+sub _valid_relative_part {
+    my ($part) = @_;
+    return _valid_authority_and_path(substr($part, 2)) if $part =~ /\A\/\//;
+    return 1 unless length $part;
+    return _valid_path($part) if $part =~ /\A\//;
+    my ($first_segment) = split /\//, $part, 2;
+    return 0 if index($first_segment, ':') >= 0;
+    return _valid_path($part);
+}
+
+sub _valid_authority_and_path {
+    my ($authority_and_path) = @_;
+    my $slash = index($authority_and_path, '/');
+    my ($authority, $path) = $slash >= 0
+        ? (substr($authority_and_path, 0, $slash), substr($authority_and_path, $slash))
+        : ($authority_and_path, '');
+    return _valid_authority($authority) && _valid_path($path);
+}
+
+sub _valid_authority {
+    my ($authority) = @_;
+    my ($userinfo, $host_port);
+    if ($authority =~ /\A(.*)@(.*)\z/) {
+        ($userinfo, $host_port) = ($1, $2);
+        return 0 unless _valid_pchar_component($userinfo);
+    } else {
+        $host_port = $authority;
+    }
+
+    if ($host_port =~ /\A\[([^\]]+)\](?::([0-9]*))?\z/) {
+        return _valid_ip_literal($1);
+    }
+    return 0 if $host_port =~ /[\[\]]/;
+
+    my ($host, $port) = ($host_port, undef);
+    if (index($host_port, ':') >= 0) {
+        return 0 unless $host_port =~ /\A([^:]*):([0-9]*)\z/;
+        ($host, $port) = ($1, $2);
+    }
+    return 0 unless length($host) || (!defined($userinfo) && !defined($port));
+    return _valid_reg_name($host);
+}
+
+sub _valid_ip_literal {
+    my ($literal) = @_;
+    return 1 if $literal =~ /\Av[0-9A-Fa-f]+\.(?:[A-Za-z0-9\-._~!\$&'\(\)\*\+,;=:])+\z/;
+    return defined Socket::inet_pton(Socket::AF_INET6(), $literal) ? 1 : 0;
+}
+
+sub _valid_path {
+    my ($value) = @_;
+    return $value =~ /\A(?:[A-Za-z0-9\-._~!\$&'\(\)\*\+,;=:@\/]|%[0-9A-Fa-f]{2})*\z/;
+}
+
+sub _valid_query_or_fragment {
+    my ($value) = @_;
+    return $value =~ /\A(?:[A-Za-z0-9\-._~!\$&'\(\)\*\+,;=:@\/?]|%[0-9A-Fa-f]{2})*\z/;
+}
+
+sub _valid_pchar_component {
+    my ($value) = @_;
+    return $value =~ /\A(?:[A-Za-z0-9\-._~!\$&'\(\)\*\+,;=:@]|%[0-9A-Fa-f]{2})*\z/;
+}
+
+sub _valid_reg_name {
+    my ($value) = @_;
+    return $value =~ /\A(?:[A-Za-z0-9\-._~!\$&'\(\)\*\+,;=]|%[0-9A-Fa-f]{2})*\z/;
 }
 
 sub _validate_http_triplet {

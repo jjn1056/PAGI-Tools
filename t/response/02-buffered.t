@@ -34,6 +34,36 @@ sub header_values {
     return [ map { $_->[1] } grep { lc($_->[0]) eq lc($name) } @$headers ];
 }
 
+my @VALID_URI_REFERENCES = (
+    '/relative/path',
+    '../parent',
+    './child',
+    'a/b',
+    'https://example.test/path?x=a%20b#part',
+    'https://[2001:db8::1]/path',
+    '//[::1]:8443/path',
+    '//example.test:8443/path',
+    'urn:example:animal:ferret:nose',
+    '?q=value',
+    '#fragment',
+);
+my @INVALID_URI_REFERENCES = (
+    '/bad|target',
+    '/bad%zz',
+    '/bad space',
+    "/bad\nuri",
+    '/bad<target>',
+    '/bad"target',
+    '/bad[segment]',
+    '?q=[x]',
+    '//[bad]',
+    '//[::1',
+    '//example.test:not-a-port',
+    '//example.test:80:90',
+    '/one#two#three',
+    '1relative:segment',
+);
+
 subtest 'text and HTML render Unicode as strict UTF-8 bytes' => sub {
     my $text = text_response("caf\x{e9}");
     isa_ok($text, ['PAGI::Response::Text']);
@@ -129,11 +159,11 @@ subtest 'Problem validates RFC 9457 members without materializing omissions' => 
     like(dies { problem_response([]) }, qr/hashref/i, 'Problem requires a hashref');
     like(dies { problem_response({ type => [] }) }, qr/type.*URI-reference/i,
         'Problem validates type URI references');
-    for my $uri ('/relative/path', '../parent', 'https://example.test/path?x=a%20b#part', '?q=value', '#fragment') {
+    for my $uri (@VALID_URI_REFERENCES) {
         is(decode_json(problem_response({ type => $uri })->body)->{type}, $uri,
             "Problem retains valid URI-reference $uri");
     }
-    for my $uri ('/bad|target', '/bad%zz', '/bad space', "/bad\nuri", '/bad<target>', '/bad"target') {
+    for my $uri (@INVALID_URI_REFERENCES) {
         like(dies { problem_response({ type => $uri }) }, qr/type.*URI-reference/i,
             "Problem rejects malformed URI-reference $uri");
     }
@@ -174,11 +204,11 @@ subtest 'Redirect validates status and URI references then builds safe finite HT
     }
     is(redirect_response('https://example.test/there')->header('Location'),
         'https://example.test/there', 'Redirect accepts absolute URI references');
-    for my $uri ('/relative/path', '../parent', 'https://example.test/path?x=a%20b#part', '?q=value', '#fragment') {
+    for my $uri (@VALID_URI_REFERENCES) {
         is(redirect_response($uri)->header('Location'), $uri,
             "Redirect accepts valid URI-reference $uri");
     }
-    for my $uri ('/bad|target', '/bad%zz', '/bad space', "/bad\nlocation", '/bad<target>', '/bad"target') {
+    for my $uri (@INVALID_URI_REFERENCES) {
         like(dies { redirect_response($uri) }, qr/URI-reference/i,
             "Redirect rejects malformed URI-reference $uri");
     }
@@ -239,6 +269,20 @@ subtest 'Empty owns zero bytes without a default content type' => sub {
         '205 Empty emits the required zero Content-Length');
     is(header_values($reset->[0]{headers}, 'transfer-encoding'), [],
         '205 Empty emits no Transfer-Encoding');
+
+    for my $method (qw(set add)) {
+        my $mutated = empty_response();
+        $mutated->headers->$method('Content-Type', 'text/plain');
+        my @events;
+        like(dies {
+            $mutated->respond(
+                { type => 'http' },
+                sub { Future->done },
+                sub { push @events, $_[0]; Future->done },
+            )->get;
+        }, qr/Content-Type/i, "Empty rejects headers->$method Content-Type at emission");
+        is(\@events, [], "headers->$method Content-Type emits zero events");
+    }
 };
 
 done_testing;
