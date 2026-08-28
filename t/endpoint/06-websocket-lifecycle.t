@@ -38,6 +38,29 @@ package EchoEndpoint {
     }
 }
 
+{
+    package TextAdapterEndpoint;
+    use parent 'PAGI::Endpoint::WebSocket';
+    our @received;
+    sub on_receive { push @received, $_[2] }
+}
+
+{
+    package BytesAdapterEndpoint;
+    use parent 'PAGI::Endpoint::WebSocket';
+    our @received;
+    sub encoding { 'bytes' }
+    sub on_receive { push @received, $_[2] }
+}
+
+{
+    package JSONAdapterEndpoint;
+    use parent 'PAGI::Endpoint::WebSocket';
+    our @received;
+    sub encoding { 'json' }
+    sub on_receive { push @received, $_[2] }
+}
+
 subtest 'lifecycle via to_app' => sub {
     @EchoEndpoint::log = ();
     ($EchoEndpoint::seen_connect, $EchoEndpoint::seen_receive,
@@ -118,6 +141,72 @@ subtest 'immediate on_connect and on_receive results are normalized' => sub {
         'PAGI::WebSocket',
         'hello:PAGI::WebSocket',
     ], 'direct callbacks accept immediate return values');
+};
+
+subtest 'on_receive dispatches each declared message encoding' => sub {
+    for my $case (
+        {
+            name     => 'text',
+            endpoint => 'TextAdapterEndpoint',
+            received => \@TextAdapterEndpoint::received,
+            events   => [
+                { type => 'websocket.receive', bytes => "\x00\xff" },
+                { type => 'websocket.receive', text => 'plain text' },
+                { type => 'websocket.disconnect', code => 1000 },
+            ],
+            want => ['plain text'],
+        },
+        {
+            name     => 'bytes',
+            endpoint => 'BytesAdapterEndpoint',
+            received => \@BytesAdapterEndpoint::received,
+            events   => [
+                { type => 'websocket.receive', text => 'ignored text' },
+                { type => 'websocket.receive', bytes => "\x00\xff" },
+                { type => 'websocket.disconnect', code => 1000 },
+            ],
+            want => ["\x00\xff"],
+        },
+        {
+            name     => 'json',
+            endpoint => 'JSONAdapterEndpoint',
+            received => \@JSONAdapterEndpoint::received,
+            events   => [
+                { type => 'websocket.receive', bytes => 'ignored bytes' },
+                { type => 'websocket.receive', text => '{"kind":"notice","count":2}' },
+                { type => 'websocket.disconnect', code => 1000 },
+            ],
+            want => [{ kind => 'notice', count => 2 }],
+        },
+    ) {
+        subtest "$case->{name} adapter" => sub {
+            @{$case->{received}} = ();
+            my @sent;
+            my @events = @{$case->{events}};
+            my $app = $case->{endpoint}->to_app;
+
+            $app->(
+                { type => 'websocket', path => '/ws', headers => [] },
+                sub { Future->done(shift @events) },
+                sub { push @sent, $_[0]; Future->done },
+            )->get;
+
+            is($case->{received}, $case->{want},
+                "on_receive receives decoded $case->{name} frames only");
+        };
+    }
+};
+
+subtest 'no on_connect override accepts the connection automatically' => sub {
+    my @sent;
+    PAGI::Endpoint::WebSocket->to_app->(
+        { type => 'websocket', path => '/ws', headers => [] },
+        sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+        sub { push @sent, $_[0]; Future->done },
+    )->get;
+
+    is([map { $_->{type} } @sent], ['websocket.accept'],
+        'the default on_connect implementation accepts once');
 };
 
 subtest 'failed callback Future propagates through the endpoint app' => sub {

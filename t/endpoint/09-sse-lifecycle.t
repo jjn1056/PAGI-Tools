@@ -91,6 +91,34 @@ subtest 'default lifecycle starts the stream without an on_connect hook' => sub 
         'the default lifecycle starts one stream');
 };
 
+subtest 'one compiled app constructs a fresh endpoint for each connection' => sub {
+    {
+        package FreshSSEEndpoint;
+        use parent 'PAGI::Endpoint::SSE';
+        our @instances;
+        sub on_connect {
+            push @instances, $_[0];
+            return $_[1]->start;
+        }
+    }
+
+    @FreshSSEEndpoint::instances = ();
+    my $app = FreshSSEEndpoint->to_app;
+    for my $connection (1, 2) {
+        $app->(
+            { type => 'sse', path => "/events/$connection", headers => [] },
+            sub { Future->done({ type => 'sse.disconnect' }) },
+            sub { Future->done },
+        )->get;
+    }
+
+    is(scalar @FreshSSEEndpoint::instances, 2,
+        'both connections reached their endpoint instance');
+    isnt(refaddr($FreshSSEEndpoint::instances[0]),
+        refaddr($FreshSSEEndpoint::instances[1]),
+        'the compiled app does not retain endpoint state between connections');
+};
+
 subtest 'immediate on_connect results are normalized' => sub {
     {
         package ImmediateSSEEndpoint;
