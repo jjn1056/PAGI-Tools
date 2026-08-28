@@ -95,7 +95,9 @@ await $ctx->respond($response);
 
 `status_try` was a Response method, not a Context method. Likewise `empty`,
 `send`, `send_raw`, `stream`, `writer`, and `send_file` were Response methods
-reachable through `response`; they were never Context shortcuts.
+reachable through `response`; they were never Context response-construction
+shortcuts. `PAGI::Response->send` is distinct from the same-named Context
+methods described next.
 
 **After (shipped):** construct and return a detached Response directly. In an
 explicit raw application, call `respond($send)` once.
@@ -117,6 +119,40 @@ Response values, including the value ErrorHandler receives from a custom
 renderer. ErrorHandler's precedence behavior is described below.
 `PAGI::Request->response` remains a temporary compatibility factory for this
 release, but new code should construct `PAGI::Response` directly.
+
+### Distinguish the two former Context `send` meanings
+
+**Before (removed):** the base Context `send` method returned the raw send
+coderef. HTTP and WebSocket inherited that accessor, so code called the
+returned coderef to emit a native event. `PAGI::Context::SSE` alone overrode
+the same method name: its `send($data)` emitted a data-only SSE event.
+`raw_send` was the unambiguous raw-coderef accessor on every Context type.
+
+```perl
+# Base, HTTP, and WebSocket Context: accessor, then coderef call.
+my $raw_send = $ctx->send;
+await $raw_send->($event);
+
+# SSE Context: protocol method, not the raw accessor.
+await $ctx->send('Hello world');
+my $sse_raw_send = $ctx->raw_send;
+await $sse_raw_send->($event);
+```
+
+**After (shipped):** native applications and middleware already receive the
+raw channel lexically and call it directly. Normal WebSocket and SSE handlers
+use their direct protocol object's typed methods; `PAGI::SSE->send($data)`
+retains the former SSE data-only behavior.
+
+```perl
+my $native_app = async sub {
+    my ($scope, $receive, $send) = @_;
+    await $send->($event);
+};
+
+await $websocket->send_text('Hello world');
+await $sse->send('Hello world');
+```
 
 ### Import optional capabilities from their owners
 
@@ -247,9 +283,11 @@ my $app = async sub {
 The removed surface includes Context constructors and subclasses, Endpoint
 factory overrides, protocol assertions, the overrideable type map, the cached
 HTTP Response accumulator and guarded `respond`, generic
-`on`/`on_default`/`on_error` dispatch, `stop`, and the inherited `receive` and
-`raw_send` channel accessors. Do not introduce a replacement hook that
-recreates this all-purpose ownership boundary.
+`on`/`on_default`/`on_error` dispatch, `stop`, the inherited `receive` and
+`raw_send` channel accessors, the base/HTTP/WebSocket `send` raw-coderef
+accessor, and SSE's overriding `send($data)` protocol method. Lexical raw
+channels and direct `PAGI::SSE->send($data)` remain available; do not introduce
+a replacement hook that recreates this all-purpose ownership boundary.
 
 ## Running against PAGI-Server 0.002007
 

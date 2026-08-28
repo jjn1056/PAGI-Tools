@@ -108,9 +108,10 @@ cached `request`/`req` and `response`/`resp` accessors, guarded `respond`,
 `method`, and exactly four response-construction shortcuts: `text`, `html`,
 `json`, and `redirect`. `status_try`, `empty`, `send`, `send_raw`, `stream`,
 `writer`, and `send_file` belonged to `PAGI::Response`, not Context. The base
-Context exposed the raw channel as `receive` and `raw_send`; it had no
-`raw_receive` method. Extension types overrode `_type_map`; there was no
-`register_type` API.
+Context exposed `receive` plus the synonymous raw-send accessors `send` and
+`raw_send`; it had no `raw_receive` method. The SSE subclass overrode `send`
+with protocol data-event semantics. Extension types overrode `_type_map`;
+there was no `register_type` API.
 
 `UPGRADING.md` now presents only source-backed Before examples and direct
 Response/Request migrations for that surface. The three later ErrorHandler
@@ -156,4 +157,37 @@ block or live module POD/example, and no prose that defers Context removal.
   pass `podchecker`.
 - The broadened live-doc searches and the original mandated narrow search were
   rerun after the corrections; retained matches are classified above.
+- `git diff --check` passes. No full suite was run.
+
+## Fix round 2: same-named Context `send` semantics
+
+The pre-removal sources establish two distinct Context contracts. Base Context
+implemented `send` as a raw send-coderef accessor, inherited unchanged by HTTP
+and WebSocket; callers then invoked the returned coderef. `raw_send` was the
+unambiguous accessor on every Context type. `PAGI::Context::SSE` alone
+overrode `send($data)` to delegate to `PAGI::SSE->send($data)` and emit a
+data-only event.
+
+`UPGRADING.md:123-153` now gives separate Before/After migrations: native
+applications and middleware call their lexical `$send`, WebSocket handlers use
+typed direct-object methods, and SSE handlers retain `$sse->send($data)`.
+The removed-surface inventory at `UPGRADING.md:283-290` names both meanings and
+explicitly distinguishes the surviving lexical/direct APIs. The Response
+section also distinguishes `PAGI::Response->send` from both former Context
+meanings.
+
+Executable characterization now emits an HTTP response through the lexical raw
+send coderef and changes the direct SSE route to emit through
+`PAGI::SSE->send`. The final mandated search retains the new `$ctx->send` and
+`PAGI::Context::SSE` spellings only in this labeled Before block; all other
+retained legacy spellings remain the classified Before/negative assertions
+described above.
+
+## Fix round 2 verification
+
+- Perl 5.42.2 focused upgrade/Cookbook gate passes: 4 files, 35 tests.
+- All 18 Task 7 POD-bearing files pass `podchecker`.
+- The same-named `send` search and the mandated legacy-surface search were
+  rerun; new Context spellings occur only in the labeled Before block and
+  inventory, while direct `PAGI::SSE->send` occurs only as shipped guidance.
 - `git diff --check` passes. No full suite was run.

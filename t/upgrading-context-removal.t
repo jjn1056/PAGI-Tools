@@ -61,10 +61,7 @@ subtest 'direct routes receive their protocol objects' => sub {
         my ($sse) = @_;
         $sse_seen = $sse;
         stash($sse)->set(upgrade_example => 'direct sse');
-        await $sse->send_event(
-            event => 'upgrade',
-            data  => stash($sse)->get('upgrade_example'),
-        );
+        await $sse->send(stash($sse)->get('upgrade_example'));
         await $sse->run;
     });
 
@@ -83,13 +80,35 @@ subtest 'direct routes receive their protocol objects' => sub {
     $client->sse('/events', sub {
         my ($events) = @_;
         is($events->receive_event, {
-            event => 'upgrade',
+            event => undef,
             data  => 'direct sse',
             id    => undef,
             retry => undef,
-        }, 'SSE callback and stash helper use the direct protocol object');
+        }, 'SSE send and stash helper use the direct protocol object');
     });
     isa_ok($sse_seen, 'PAGI::SSE');
+};
+
+subtest 'native applications call the lexical raw send channel' => sub {
+    my $send_seen;
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $send_seen = $send;
+        await $send->({
+            type    => 'http.response.start',
+            status  => 202,
+            headers => [['content-type' => 'text/plain; charset=utf-8']],
+        });
+        await $send->({
+            type => 'http.response.body',
+            body => 'lexical raw send',
+        });
+    };
+
+    my $response = PAGI::Test::Client->new(app => $app)->get('/');
+    is(ref($send_seen), 'CODE', 'native callback receives lexical send coderef');
+    is([$response->status, $response->text], [202, 'lexical raw send'],
+        'calling lexical send emits the native response');
 };
 
 subtest 'direct Response factories replace the four HTTP shortcuts' => sub {
