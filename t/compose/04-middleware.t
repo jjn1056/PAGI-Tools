@@ -272,9 +272,9 @@ subtest 'author ErrorHandler response crosses only earlier middleware' => sub {
                     return;
                 },
                 handler => sub {
-                    my ($context) = @_;
+                    my ($request) = @_;
                     push @trace, 'author ErrorHandler render';
-                    return $context->text('author 500');
+                    return PAGI::Response->text('author 500');
                 },
             ),
             middleware(tracing_factory('author inner', \@trace)),

@@ -6,7 +6,6 @@ use Future;
 use Scalar::Util qw(refaddr);
 
 use PAGI::Compose qw(compose);
-use PAGI::Context;
 use PAGI::Pages;
 use PAGI::Pages::_Catalog;
 use PAGI::Request;
@@ -128,12 +127,12 @@ subtest 'immediate and deferred invocation preserve response ownership' => sub {
     my $scope = http_scope();
     my @events;
     my $send = sub { push @events, $_[0]; return Future->done };
-    my $ctx = PAGI::Context->new($scope, sub { Future->done }, $send);
+    my $request = PAGI::Request->new($scope, sub { Future->done });
 
-    my $response = PAGI::Pages->not_found($ctx, as => 'text');
+    my $response = PAGI::Pages->not_found($request, as => 'text');
     isa_ok($response, ['PAGI::Response']);
-    is(\@events, [], 'immediate Context form is unsent');
-    is($response->status, 404, 'immediate Context response has the named status');
+    is(\@events, [], 'immediate Request form is unsent');
+    is($response->status, 404, 'immediate Request response has the named status');
 
     my $scope_response = PAGI::Pages->welcome($scope, as => 'text');
     isa_ok($scope_response, ['PAGI::Response']);
@@ -144,11 +143,11 @@ subtest 'immediate and deferred invocation preserve response ownership' => sub {
     is(ref($endpoint), 'CODE', 'deferred endpoint is a plain coderef');
     ok(!ref($endpoint) || !eval { $endpoint->can('to_app') },
         'deferred endpoint is not a Pages endpoint object');
-    like(dies { $endpoint->($ctx, bless({}, 'Local::Snapshot')) },
+    like(dies { $endpoint->($request, bless({}, 'Local::Snapshot')) },
         qr/invalid PAGI::Pages endpoint invocation/,
-        'deferred Context form rejects ignored callback metadata');
+        'deferred Request form rejects ignored callback metadata');
     isa_ok($endpoint->($scope), ['PAGI::Response']);
-    is(\@events, [], 'deferred Context and scope-only forms remain unsent');
+    is(\@events, [], 'deferred Request and scope-only forms remain unsent');
 
     my $native = $endpoint->($scope, sub { Future->done }, $send);
     isa_ok($native, ['Future'], 'native triplet returns a Future');
@@ -277,22 +276,6 @@ subtest 'scope and channel validation is explicit' => sub {
     like(dies { $endpoint->([]) }, qr/invalid PAGI::Pages endpoint invocation/,
         'non-scope reference is rejected');
 
-    my $warning = '';
-    my $custom;
-    {
-        local $SIG{__WARN__} = sub { $warning .= $_[0] };
-        $custom = PAGI::Context->new(
-            { type => 'example.custom', marker => 1 }, $receive, $send,
-        );
-    }
-    isa_ok($custom, ['PAGI::Context']);
-    ok(!$custom->can('response'), 'generic custom Context has no HTTP helpers');
-    like(dies { PAGI::Pages->not_found($custom) },
-        qr/requires HTTP scope.*example\.custom/,
-        'generic custom-protocol Context is rejected explicitly');
-    like(dies { $endpoint->($custom) },
-        qr/requires HTTP scope.*example\.custom/,
-        'deferred endpoint also rejects a generic custom Context explicitly');
 };
 
 subtest 'page calls validate options and status recipes before capture' => sub {

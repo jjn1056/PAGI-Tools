@@ -8,7 +8,7 @@ use Encode qw(encode);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util 'blessed';
-use PAGI::Context;
+use PAGI::Request;
 use PAGI::Pages ();
 use PAGI::Utils ();
 
@@ -64,25 +64,25 @@ facts. Statuses such as 401, 405, 407, and 426 therefore require a handler.
 
 =item * handler (default: undef)
 
-Optional renderer invoked as C<< $handler->($context, $original_error) >>.
+Optional renderer invoked as C<< $handler->($request, $original_error) >>.
 It must return an immediate or Future-backed PAGI response value. The cached
-Context response is seeded with the configured or exception-provided status;
-an explicit renderer status wins. A custom renderer owns its response content
-type and cache policy unchanged.
+response receives the configured or exception-provided status only after the
+handler returns; an explicit renderer status wins. A custom renderer owns its
+response content type and cache policy unchanged.
 
 Use the handler seam to force a fixed Pages representation:
 
     handler => sub {
-        my ($context, $error) = @_;
+        my ($request, $error) = @_;
         return PAGI::Pages->internal_server_error(
-            $context,
+            $request,
             as => 'json',
         );
     }
 
-The wrapper is required: ErrorHandler supplies C<($context, $error)>, while the
+The wrapper is required: ErrorHandler supplies C<($request, $error)>, while the
 deferred Pages endpoint accepts exactly one request source. The wrapper instead
-calls the Pages factory with C<$context> as its source and C<as> as a factory
+calls the Pages factory with C<$request> as its source and C<as> as a factory
 option. Passing the deferred endpoint directly therefore rejects the
 two-argument callback invocation. The wrapper may inspect C<$error> when it
 deliberately chooses safe page fields, but Pages does not consume that callback
@@ -159,18 +159,19 @@ sub wrap {
             }
 
             my $status = $self->_status_for_error($error);
-            my $context_scope = defined($scope->{type})
+            my $request_scope = defined($scope->{type})
                 ? $scope : { %$scope, type => 'http' };
-            my $context = PAGI::Context->new($context_scope, $receive, $send);
-            $context->response->status($status);
+            my $request = PAGI::Request->new($request_scope, $receive);
 
             my $response;
             if ($self->{handler}) {
                 $response = await Future->wrap(
-                    $self->{handler}->($context, $error),
+                    $self->{handler}->($request, $error),
                 );
-                croak 'handler did not return a response'
-                    unless PAGI::Utils::is_response($response);
+                croak 'handler did not return a status-aware response'
+                    unless PAGI::Utils::is_response($response)
+                        && $response->can('status_try');
+                $response->status_try($status);
             }
             else {
                 my $development = await $self->_development_for_request;
@@ -186,7 +187,7 @@ sub wrap {
 
                 my $rendered = eval {
                     $response = PAGI::Pages->status(
-                        $context, $status, @detail,
+                        $request, $status, @detail,
                     );
                     1;
                 };
@@ -196,7 +197,7 @@ sub wrap {
                 }
             }
 
-            await Future->wrap($context->respond($response));
+            await Future->wrap($response->respond($wrapped_send));
         }
     };
 }
