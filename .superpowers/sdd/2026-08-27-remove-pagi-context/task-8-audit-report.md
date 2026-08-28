@@ -1,13 +1,14 @@
-# Task 8 audit report — halted in Phase A
+# Task 8 audit report
 
-## Status
+## Current status
 
-**BLOCKED: ordinary release-blocking live-documentation defect found.**
+**BLOCKED IN PHASE B: the sole repository-suite invocation found an ordinary
+release-blocking test integration defect.**
 
-Per Task 8 Step 2 and the controller's Phase A gate, the audit stopped before
-the changed-test/syntax/POD gate, repository-wide suite, and distribution
-build. No production, test, example, or live-documentation fix was applied.
-The ledger was not modified.
+AUD-001 was corrected by approved and independently reviewed DEV-004 at
+`8703e77`. Fresh Phase A then passed. The one authorized repository suite
+failed in `t/upgrading-routing-composition.t`, so Task 8 stopped before the
+distribution build. No AUD-002 fix, second suite, or build was attempted.
 
 ## Audited campaign identity
 
@@ -71,7 +72,7 @@ a separately recorded `DEV-NNN` exact-path ruling for `UPGRADING.md`, focused
 verification, a separate fix commit, and independent review are required
 before Phase A can restart.
 
-## Gates deliberately not run
+## Initial AUD-001 stop at `c312941`: gates deliberately not run
 
 - Changed-test focused gate: **not run** (Phase A stopped on AUD-001).
 - Changed Perl syntax/POD gate: **not run**.
@@ -79,8 +80,9 @@ before Phase A can restart.
 - Repository suite `prove -lr t`: **not run; Files/Tests/time/exit unavailable**.
 - `dzil build`: **not run; build exit/artifact path/size/SHA-256/entry counts unavailable**.
 
-No suite attempt, host replacement suite, `dzil build`, or `dzil test` was
-invoked, preserving the exactly-once Phase B budget for a clean audited HEAD.
+At that initial stop, no suite attempt, host replacement suite, `dzil build`,
+or `dzil test` was invoked, preserving the Phase B budget for DEV-004's
+corrected HEAD.
 
 ## Remaining concerns
 
@@ -116,3 +118,128 @@ spellings remain labeled Before/removal evidence or negative assertions.
 This correction does not resume Task 8 Phase A or spend the exactly-once Phase
 B suite/build budget. The full audit, suite, and distribution build remain for
 the controller's fresh post-correction audit turn.
+
+## Fresh Phase A evidence at `8703e77`
+
+- Corrected HEAD: `8703e77c2c5b339f72777e787103467bcecf28ba`.
+- History: 19 commits and 92 changed paths from `9ab83b6`; 2,351 insertions
+  and 6,686 deletions.
+- Worktree was tracked-clean before Phase A and before the suite.
+- All four Context modules and all sixteen `t/context/*.t` files are absent
+  from HEAD and the filesystem. The empty untracked `lib/PAGI/Context/`
+  directory contains no file and has no Git or distribution entry.
+- Matrix audit: all 192 former top-level Context subtests occur in the
+  disposition matrix; all 88 `TRANSFER`/`ALREADY` owner-file/name references
+  resolve in the final tree.
+- Changed-test gate under Perl 5.42.2: `Files=37, Tests=397`, 6 wallclock
+  seconds, exit 0.
+- Changed syntax gate: 60 `.pm`/`.pl`/`.t` files, zero failures. The
+  bidirectional example retains its documented base warning for the final
+  native-coderef expression and reports `syntax OK`.
+- Changed POD gate: 22 POD-bearing `.pm`/`.pod` files, zero failures.
+- `git diff --check` passed.
+- No live source loads, requires, inherits from, or constructs Context. No
+  replacement `context_class`, `request_class`, `websocket_class`, or
+  `sse_class` production hook exists. No new production or example dependency
+  on `PAGI::Request->response` was introduced.
+- Retained Context-family/path/hook/`$ctx`/`$context` search matches are
+  confined to labeled **Before (removed)** migration blocks, current/historical
+  removal prose, or executable negative/absence assertions. The only retained
+  old ErrorHandler `($context, $error)` spelling is the labeled Before block at
+  `UPGRADING.md:224`; no live handler or example uses it.
+
+## Spec §§5–18 implementation map
+
+| Spec | Production / retained owner | Focused evidence | Live documentation | Commit(s) |
+|---|---|---|---|---|
+| §5 deleted surface | Four Context modules absent; no factory/type-map/assertion/dispatcher stub | `t/00-load.t`, `t/upgrading-context-removal.t`, exact tree search | `UPGRADING.md` removed-surface inventory; current `Changes` | `cfcc50f`, `f67b322`, `763fde5`, `c312941` |
+| §6 capability disposition | `PAGI::Request`, `PAGI::WebSocket`, `PAGI::SSE`; `PAGI::Routing::URL`, Stash, Session, State, CSRF, Transport | Matrix plus authority/stash/CSRF/transport/routing/WebSocket/SSE owner tests | `UPGRADING.md` direct-owner/helper tables and examples | `cfcc50f`, `1899d4d`, `9420f42`, `f67b322` |
+| §7 HTTP Endpoint | `lib/PAGI/Endpoint/HTTP.pm` constructs strict Request, returns/validates Response, emits only in `to_app` | HTTP Endpoint changed tests, including sync/Future, strict scope, HEAD/OPTIONS/405, singleton and invalid returns | HTTP Endpoint POD and upgrade guide | `b0644ec` |
+| §8 WebSocket Endpoint | `Endpoint/WebSocket.pm`, shared exact-scope helper in `Utils/Scope.pm`, Compiler consumer | WebSocket Endpoint lifecycle/cache/immediate/failure/disconnect tests and routing cache tests | WebSocket Endpoint POD and upgrade guide | `ed2412c`, `ecc862e` |
+| §9 SSE Endpoint | `Endpoint/SSE.pm` and shared exact-scope helper | SSE lifecycle/cache/keepalive/decline/immediate/failure/disconnect tests | SSE Endpoint POD and upgrade guide | `7fc987a` |
+| §10 ErrorHandler | `Middleware/ErrorHandler.pm` constructs Request, validates `respond` + `status_try`, applies fallback after return | `error-handler-contract.t`, Pages composition, Compose middleware | ErrorHandler/Pages/Compose POD and `UPGRADING.md` | `82f5bd6`, `40756f0`, `f67b322`, `763fde5` |
+| §11 Pages and scope-source consumers | Pages and helper modules retain structural scope-source ownership; `Request->response` remains temporary | Pages, helper, scope-source, request and transport changed tests | Module POD plus compatibility warning in Request/upgrade guide | `cfcc50f`, `1899d4d`, `f67b322` |
+| §12 before/after examples | Direct Request/WebSocket/SSE and Response APIs in executable examples | `t/upgrading-context-removal.t`, `t/integration-app-file-examples.t` | Primary mechanical blocks in `UPGRADING.md` | `1511d4d`, `f67b322`, `763fde5`, `c312941`, `8703e77` |
+| §13 test migration | Sixteen Context tests deleted only after owner matrix/coverage transfer | 192/192 former subtests classified; 88/88 retained-owner references resolved | Matrix and Task 5 report | `cfcc50f`, `1899d4d`, `9420f42` |
+| §14 docs and examples | Endpoint demo and bidirectional WebSocket use direct objects; public POD reconciled | Example integration, upgrade tests, Cookbook source sync in repository suite before AUD-002 | README, examples READMEs, Tutorial, Cookbook, current Changes, upgrade guide | `1511d4d`, `f67b322`, `763fde5`, `c312941`, `8703e77` |
+| §15 non-goals | Current Response `respond($send)` and `Request->response` retained; raw/middleware triplets and topology unchanged; no replacement hooks | Endpoint middleware/frontend tests, response tests, upgrade assertions | Design boundary repeated in Changes/upgrade/POD | Campaign aggregate; no Response-family implementation commit |
+| §16 constraints | Direct constructors remain strict; awaitable boundaries use `Future->wrap`; sync disconnect deviations are explicit | Changed gate plus DEV-001/002 regression tests and syntax/POD gates | Ledger and task reports | `b0644ec` through `8703e77` |
+| §17 adversarial resolutions | Coverage owners, fixed direct classes, post-return status, exact-scope caches, separate Response campaign | Matrix, ErrorHandler status tests, protocol cache tests, upgrade tests | Approved design and mechanical upgrade guide | Task-specific commits above |
+| §18 acceptance | Criteria 1–10 and exact-removal criterion 13 pass Phase A | Focused gate/searches above | Public migration contract corrected by DEV-004 | `8703e77`; criterion 11 failed in Phase B and criterion 12 was not attempted |
+
+## Sole repository-suite invocation
+
+Command under project Perl 5.42.2:
+
+```sh
+perlbrew exec --with perl-5.42.2@default prove -lr t
+```
+
+Exact result: **FAIL**, `Files=208, Tests=2220`, 38 wallclock seconds
+(`0.72 usr 0.36 sys + 29.27 cusr 4.28 csys = 34.63 CPU`), process exit 1.
+
+The documented `t/request/multipart-stream-e2e.t` `RELEASE_TESTING` skip was
+the only skip. One ordinary test failed:
+
+```text
+t/upgrading-routing-composition.t
+Failed test: Router Compose and Context have no retired evidence channel
+Cannot read lib/PAGI/Context.pm: No such file or directory
+at t/upgrading-routing-composition.t line 578
+```
+
+This is not a sandbox/socket failure, so no host-access replacement suite was
+authorized or run.
+
+## AUD-002 — unchanged integration test opens the intentionally deleted modules
+
+Classification: **ordinary defect; release blocker; cross-task test
+integration.**
+
+`t/upgrading-routing-composition.t:553-587` inventories Router, Compose, and
+the four former Context module paths, then unconditionally opens every path to
+search it for older retired routing evidence. Context removal at `cfcc50f`
+deleted those four files, so the first deleted path dies at line 578 before
+the source assertions can run.
+
+The test itself is byte-identical to base `9ab83b6`; its inventory was added by
+pre-campaign commit `f585511`. The defect is the unreviewed interaction between
+that existing source-inspection test and Task 5's intentional module deletion.
+The final live search exposed the path literals, but they were incorrectly
+classified as absence evidence; unlike `t/upgrading-context-removal.t`, this
+test does not use `-e` and instead requires the files to exist.
+
+No fix was applied. The controller must approve the exact test path under a
+new `DEV-NNN`, obtain focused RED/GREEN evidence and independent review, and
+rule explicitly on the already-consumed exactly-once full-suite budget before
+Task 8 can resume. The build remains gated.
+
+## Distribution build
+
+`dzil build` was **not run**. Build exit, artifact path, size, SHA-256, entry
+counts, metadata comparison, archive integrity, and exclusion checks are
+therefore unavailable. `dzil test` was not run.
+
+## DEV-005 disposition — AUD-002 corrected
+
+The controller approved DEV-005 with exact ownership of
+`t/upgrading-routing-composition.t` and the Task 7/8 evidence reports. The
+focused Perl 5.42.2 RED reproduced the sole-suite failure: 1 file, 10 top-level
+subtests, final subtest failed when its unconditional source scan opened the
+deleted `lib/PAGI/Context.pm`.
+
+The correction separates the test's two contracts. It continues opening and
+checking all seven live Router/Compose sources for the retired routing evidence
+channel, while the four former Context paths are now asserted absent with no
+compatibility source. No routing-composition assertion was removed. The
+focused GREEN passes 1 file and 10 top-level subtests; its final subtest has 60
+passing assertions (56 retained source checks plus 4 Context absence checks).
+
+Adjacent verification under Perl 5.42.2 passes
+`t/upgrading-routing-composition.t`, `t/upgrading-context-removal.t`, and
+`t/upgrading-router-frontends.t`: 3 files, 35 top-level tests. The changed test
+passes `perl -Ilib -c`, and `git diff --check` passes.
+
+Per the DEV-005 boundary, no second repository suite, distribution build,
+`dzil test`, host replacement, or push was run. Task 8 remains with the
+controller for post-correction review and its explicit Phase B budget ruling.

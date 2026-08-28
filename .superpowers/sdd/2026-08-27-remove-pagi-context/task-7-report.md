@@ -216,3 +216,21 @@ POD checks. The live-doc search finds `received a Context wrapper` only for
 class Endpoint callbacks and no `$router` callback taking `$ctx`; the mandated
 legacy search remains limited to labeled Before/removal evidence and negative
 tests. `git diff --check` passes. No full suite or build was run.
+
+## DEV-005: deleted Context paths in routing-composition upgrade coverage
+
+Task 8 exposed a cross-task integration defect in
+`t/upgrading-routing-composition.t`. Its final subtest mixed seven live
+Router/Compose sources with the four Context paths deleted by Task 5, then
+unconditionally opened every path. The focused Perl 5.42.2 RED failed 1 of 10
+top-level subtests at the first deleted path:
+`Cannot read lib/PAGI/Context.pm: No such file or directory`.
+
+The correction leaves the seven live-source retired-evidence scans unchanged
+and moves the four Context paths into explicit absence assertions. This tests
+the intended no-compatibility contract instead of requiring deleted source.
+The focused GREEN passes 1 file and 10 top-level subtests; the final subtest
+retains all 56 Router/Compose evidence assertions and adds 4 Context absence
+assertions. The adjacent upgrade gate passes 3 files and 35 top-level tests,
+and `perl -Ilib -c t/upgrading-routing-composition.t` plus
+`git diff --check` pass. No full suite or build was run.

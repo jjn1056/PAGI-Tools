@@ -550,7 +550,7 @@ subtest 'retired routing support modules are not loadable' => sub {
     }
 };
 
-subtest 'Router Compose and Context have no retired evidence channel' => sub {
+subtest 'Router and Compose have no retired evidence channel and Context stays absent' => sub {
     my @files = (
         'lib/PAGI/Routing/Router.pm',
         'lib/PAGI/App/Router.pm',
@@ -559,11 +559,16 @@ subtest 'Router Compose and Context have no retired evidence channel' => sub {
         'lib/PAGI/Compose.pm',
         'lib/PAGI/Compose/Compiler.pm',
         'lib/PAGI/Compose/ResponseGuard.pm',
+    );
+    my @removed_context_files = (
         'lib/PAGI/Context.pm',
         'lib/PAGI/Context/HTTP.pm',
         'lib/PAGI/Context/SSE.pm',
         'lib/PAGI/Context/WebSocket.pm',
     );
+    for my $file (@removed_context_files) {
+        ok(!-e $file, "$file remains absent with no compatibility source");
+    }
     my @retired = (
         join('::', qw(PAGI Routing Trace)),
         join('.', qw(pagi routing trace)),
