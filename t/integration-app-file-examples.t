@@ -65,6 +65,22 @@ for my $case (@cases) {
             like($response->text, $case->{title}, 'index comes from the public root');
 
             if ($case->{name} eq 'endpoint demo') {
+                unlike($source,
+                    qr/\$ctx\b|PAGI::Context|->request|->websocket|->sse/,
+                    'endpoint callbacks do not reach through a Context object');
+                like($source,
+                    qr/async sub get \{\n        my \(\$self, \$request\) = \@_;\n        return PAGI::Response->json\(\\\@messages\);/,
+                    'HTTP GET accepts its direct request object');
+                like($source,
+                    qr/async sub post \{\n        my \(\$self, \$request\) = \@_;\n        my \$data = await \$request->json;/,
+                    'HTTP POST names and uses its direct request object');
+                like($source,
+                    qr/package EchoWS \{.*?async sub on_connect \{\n        my \(\$self, \$websocket\) = \@_;.*?await \$websocket->accept;.*?async sub on_receive \{\n        my \(\$self, \$websocket, \$data\) = \@_;.*?await \$websocket->send_json/s,
+                    'WebSocket hooks name and use their direct WebSocket object');
+                like($source,
+                    qr/package MessageEvents \{.*?async sub on_connect \{\n        my \(\$self, \$sse\) = \@_;.*?stash\(\$sse\)->set\(sub_id => \$id\);.*?sub on_disconnect \{\n        my \(\$self, \$sse\) = \@_;.*?stash\(\$sse\)->get/s,
+                    'SSE hooks name and use their direct SSE object and stash');
+
                 my $missing = $client->get('/not-a-static-file');
                 is($missing->status, 404,
                     'unresolved endpoint-demo root request is complete');
@@ -84,6 +100,22 @@ for my $case (@cases) {
                     status => 415,
                     detail => 'Content-Type must be application/json',
                 }, 'content-type rejection uses the shared Pages representation');
+
+                my $messages = $client->get('/api/messages');
+                is($messages->status, 200, 'message API lists messages');
+                is($messages->json, [
+                    { id => 1, text => 'Hello, World!' },
+                    { id => 2, text => 'Welcome to PAGI Endpoints' },
+                ], 'message API lists its initial JSON messages');
+
+                my $created = $client->post('/api/messages', json => {
+                    text => 'Direct request object',
+                });
+                is($created->status, 201, 'message API creates a JSON message');
+                is($created->json, {
+                    id   => 3,
+                    text => 'Direct request object',
+                }, 'created message preserves the JSON request data');
             }
         }
     };
@@ -92,6 +124,19 @@ for my $case (@cases) {
 my $endpoint = source_text($cases[0]{file});
 unlike($endpoint, qr/File::Basename|File::Spec|dirname\s*\(/,
     'endpoint demo has no obsolete path arithmetic');
+
+my $bidirectional = source_text("$Bin/../examples/websocket-bidirectional/app.pl");
+unlike($bidirectional, qr/\$ctx\b|PAGI::Context/,
+    'bidirectional WebSocket example has no Context dependency');
+like($bidirectional,
+    qr/use PAGI::WebSocket;.*?my \$websocket = PAGI::WebSocket->new\(\$scope, \$receive, \$send\);.*?await \$websocket->accept;/s,
+    'bidirectional WebSocket example constructs and accepts one direct object');
+like($bidirectional,
+    qr/my \$incoming = \$websocket->each_text\(async sub \{/,
+    'bidirectional receive loop uses the direct WebSocket object');
+like($bidirectional,
+    qr/await \$websocket->send_text_if_connected.*?while \(\$websocket->is_connected\)/s,
+    'bidirectional send queue and loop use the direct WebSocket object');
 
 my $dashboard = source_text($cases[1]{file});
 unlike($dashboard, qr/File::Basename|File::Spec|dirname\s*\(/,

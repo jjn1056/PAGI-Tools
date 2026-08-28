@@ -1,4 +1,4 @@
-# websocket-bidirectional — full-duplex WebSocket with PAGI::Context
+# websocket-bidirectional — full-duplex WebSocket with PAGI::WebSocket
 
 Send **and** receive at the same time. After accepting, the handler runs two
 concurrent branches on one connection:
@@ -11,24 +11,26 @@ directions live at once.
 
 This is the same demo as the raw-protocol
 [`examples/18-bidirectional-websocket`](../../../PAGI/examples/18-bidirectional-websocket)
-in the `PAGI` distribution, rewritten with **`PAGI::Context`** to show how much it
-folds away.
+in the `PAGI` distribution, using one direct **`PAGI::WebSocket`** object to
+make the connection operations explicit without spelling out individual
+protocol events.
 
-## What PAGI::Context gives you here
+## The direct WebSocket object
 
-One object (`$ctx`) wraps `$scope`/`$receive`/`$send` and hands you exactly the
-pieces a bidirectional handler needs:
+Construct the connection once from the native PAGI triplet, then use that same
+object in both concurrent branches:
 
-| `PAGI::Context` | does |
+| `PAGI::WebSocket` | does |
 |---|---|
-| `$ctx->each_text(sub {...})` | the **receive-loop**, returned as a Future that completes when the client disconnects — no manual `websocket.connect`/`receive`/`disconnect` handling |
-| `$ctx->send_text_if_connected(...)` | a send that becomes a **no-op once the socket is closing**, so the concurrent send-loop never races the teardown (no `eval`, no guards) |
-| `$ctx->is_connected` | a clean loop guard |
-| `$ctx->accept` | the handshake |
+| `$websocket->each_text(sub {...})` | the **receive-loop**, returned as a Future that completes when the client disconnects |
+| `$websocket->send_text_if_connected(...)` | a send that becomes a **no-op once the socket is closing**, so the concurrent send-loop never races the teardown |
+| `$websocket->is_connected` | a clean loop guard |
+| `$websocket->accept` | the handshake |
 
-Compare with the raw version, which spells out the `websocket.connect` →
-`websocket.accept` handshake, the `websocket.receive`/`websocket.disconnect`
-dispatch, and its own helper to race without cancelling `$receive`.
+```perl
+my $websocket = PAGI::WebSocket->new($scope, $receive, $send);
+await $websocket->accept;
+```
 
 The two branches are joined with `Future->wait_any`: a client disconnect ends
 `incoming`, and `wait_any` then cancels the idle `outgoing` tick-loop. (That
@@ -42,7 +44,7 @@ be cancelled.)
 **same socket** at once. PAGI leaves overlapping in-flight sends
 unspecified — issuing a second send before the first has been awaited is
 exactly what the development `Lint` middleware's overlap check warns about —
-so this handler never calls `$ctx->send_text_if_connected` directly from more
+so this handler never calls `$websocket->send_text_if_connected` directly from more
 than one place. Instead, both branches route through one small serializing
 queue:
 
@@ -53,7 +55,7 @@ my $queue_send = sub {
     my $prev = $send_queue;
     $send_queue = (async sub {
         await $prev;
-        await $ctx->send_text_if_connected(@text);
+        await $websocket->send_text_if_connected(@text);
     })->();
     return $send_queue;
 };

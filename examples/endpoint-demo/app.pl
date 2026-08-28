@@ -24,6 +24,7 @@ use PAGI::Pages;
 package MessageAPI {
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
+    use PAGI::Response;
 
     my @messages = (
         { id => 1, text => 'Hello, World!' },
@@ -32,20 +33,20 @@ package MessageAPI {
     my $next_id = 3;
 
     async sub get {
-        my ($self, $ctx) = @_;
-        return $ctx->json(\@messages);
+        my ($self, $request) = @_;
+        return PAGI::Response->json(\@messages);
     }
 
     async sub post {
-        my ($self, $ctx) = @_;
-        my $data = await $ctx->request->json;
+        my ($self, $request) = @_;
+        my $data = await $request->json;
         my $message = { id => $next_id++, text => $data->{text} };
         push @messages, $message;
 
         # Notify SSE subscribers -- awaited, not fired and forgotten.
         await MessageEvents::broadcast($message);
 
-        return $ctx->json($message, status => 201);
+        return PAGI::Response->json($message, status => 201);
     }
 }
 
@@ -60,15 +61,14 @@ package EchoWS {
     sub ping_interval { 25 }  # Keep connection alive
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $ws = $ctx->websocket;
-        await $ws->accept;
-        await $ws->send_json({ type => 'connected', message => 'Welcome!' });
+        my ($self, $websocket) = @_;
+        await $websocket->accept;
+        await $websocket->send_json({ type => 'connected', message => 'Welcome!' });
     }
 
     async sub on_receive {
-        my ($self, $ctx, $data) = @_;
-        await $ctx->websocket->send_json({
+        my ($self, $websocket, $data) = @_;
+        await $websocket->send_json({
             type => 'echo',
             original => $data,
             timestamp => time(),
@@ -76,7 +76,7 @@ package EchoWS {
     }
 
     sub on_disconnect {
-        my ($self, $ctx, $code) = @_;
+        my ($self, $websocket, $code) = @_;
         print STDERR "WebSocket client disconnected: $code\n";
     }
 }
@@ -87,6 +87,7 @@ package EchoWS {
 package MessageEvents {
     use parent 'PAGI::Endpoint::SSE';
     use Future::AsyncAwait;
+    use PAGI::Stash qw(stash);
 
     sub keepalive_interval { 25 } # seconds
 
@@ -114,11 +115,10 @@ package MessageEvents {
     }
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $sse = $ctx->sse;
+        my ($self, $sse) = @_;
         my $id = ++$sub_id;
         $subscribers{$id} = $sse;
-        $ctx->stash->set(sub_id => $id);
+        stash($sse)->set(sub_id => $id);
 
         await $sse->send_event(
             event => 'connected',
@@ -127,8 +127,8 @@ package MessageEvents {
     }
 
     sub on_disconnect {
-        my ($self, $ctx) = @_;
-        my $id = $ctx->stash->get('sub_id', 'unknown');
+        my ($self, $sse) = @_;
+        my $id = stash($sse)->get('sub_id', 'unknown');
         delete $subscribers{$id};
     }
 }
