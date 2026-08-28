@@ -297,17 +297,6 @@ sub path_param {
 
 sub scope { shift->{scope} }
 
-# Temporary compatibility factory for a detached response bound to this
-# request's scope. It is a value, not a connection; call ->respond($send) to
-# send it from a raw application. New code should construct PAGI::Response
-# directly.
-sub response {
-    my $self = shift;
-    require PAGI::Response;
-    return PAGI::Response->new($self->{scope});
-}
-
-
 # Application state (injected by PAGI::Lifespan, read-only)
 sub has_state {
     my $self = shift;
