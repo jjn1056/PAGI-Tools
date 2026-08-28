@@ -55,3 +55,12 @@ owns the ledger and review coordination; no ledger entry was edited here.
   perlbrew use perl-5.42.2@default && prove -lv
   t/integration-app-file-examples.t` — pass (11 top-level subtests; endpoint
   demo skip plan reports `1..21`).
+
+## Review fix round 2
+
+- Corrected the endpoint-demo load-failure skip plan from 21 to 17: four
+  endpoint assertions run before `SKIP`, leaving 17 assertions inside it.
+- Count proof: a temporary `my $app = undef` mutation produced 17 endpoint
+  skips (`ok 5` through `ok 21`) and no TAP plan mismatch; the mutation was
+  restored immediately. The nominal Perl 5.42.2 focused gate then passed with
+  11 top-level subtests.
