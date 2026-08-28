@@ -39,15 +39,14 @@ package MyApp::ChatWS {
     sub encoding { 'json' }
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $ws = $ctx->websocket;
-        await $ws->accept;
-        await $ws->send_json({ type => 'welcome' });
+        my ($self, $websocket) = @_;
+        await $websocket->accept;
+        await $websocket->send_json({ type => 'welcome' });
     }
 
     async sub on_receive {
-        my ($self, $ctx, $data) = @_;
-        await $ctx->websocket->send_json({ type => 'echo', data => $data });
+        my ($self, $websocket, $data) = @_;
+        await $websocket->send_json({ type => 'echo', data => $data });
     }
 }
 

@@ -15,29 +15,23 @@ subtest 'can create websocket endpoint subclass' => sub {
         use Future::AsyncAwait;
 
         async sub on_connect {
-            my ($self, $ctx) = @_;
-            await $ctx->websocket->accept;
+            my ($self, $websocket) = @_;
+            await $websocket->accept;
         }
 
         async sub on_receive {
-            my ($self, $ctx, $data) = @_;
-            await $ctx->websocket->send_text("echo: $data");
+            my ($self, $websocket, $data) = @_;
+            await $websocket->send_text("echo: $data");
         }
 
         sub on_disconnect {
-            my ($self, $ctx, $code) = @_;
+            my ($self, $websocket, $code) = @_;
             # cleanup
         }
     }
 
     my $endpoint = ChatEndpoint->new;
     isa_ok($endpoint, 'PAGI::Endpoint::WebSocket');
-};
-
-subtest 'context_class has default' => sub {
-    require PAGI::Endpoint::WebSocket;
-
-    is(PAGI::Endpoint::WebSocket->context_class, 'PAGI::Context', 'default context_class');
 };
 
 subtest 'encoding attribute defaults to text' => sub {

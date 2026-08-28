@@ -13,6 +13,7 @@ use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
 use PAGI::SSE;
 use PAGI::Utils ();
+use PAGI::Utils::Scope ();
 use PAGI::WebSocket;
 
 my $ALLOW_STATE_KEY = "\0PAGI::Routing::Compiler::allow";
@@ -321,17 +322,9 @@ sub _compile_protocol_leaf {
             my $expected_class = $kind eq 'websocket'
                 ? 'PAGI::WebSocket'
                 : 'PAGI::SSE';
-            my $cached = $scope->{$cache_key};
-            my $reusable = (blessed($cached) // '') eq $expected_class
-                && $cached->can('scope');
-            if ($reusable) {
-                my $cached_scope = eval { $cached->scope };
-                $reusable = 0
-                    if $@
-                        || !ref($cached_scope)
-                        || refaddr($cached_scope) != refaddr($scope);
-            }
-            delete $scope->{$cache_key} unless $reusable;
+            PAGI::Utils::Scope::_compatible_cached_scope_object(
+                $scope, $cache_key, $expected_class,
+            );
             my $protocol = $kind eq 'websocket'
                 ? PAGI::WebSocket->new($scope, $receive, $send)
                 : PAGI::SSE->new($scope, $receive, $send);

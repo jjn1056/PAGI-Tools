@@ -28,6 +28,12 @@ sub ProtocolProvider { return qr/accepted/ }
     sub scope { return $_[0]{scope} }
 }
 
+{
+    package Local::DyingProtocolCache;
+    sub new { return bless {}, $_[0] }
+    sub scope { die 'cached protocol scope exploded' }
+}
+
 sub scope {
     my (%changes) = @_;
     return {
@@ -204,7 +210,7 @@ subtest 'normal protocol leaves reuse only an exact expected-class cache' => sub
         [sse       => 'PAGI::SSE',       'pagi.sse'],
     ) {
         my ($kind, $expected_class, $cache_key) = @$protocol;
-        for my $variant (qw(scalar hash wrong-class exact)) {
+        for my $variant (qw(scalar hash parent wrong-class throwing-scope exact)) {
             subtest "$kind $variant cache" => sub {
                 my ($seeded, $handled);
                 my $seed_cache = middleware(sub {
@@ -217,10 +223,21 @@ subtest 'normal protocol leaves reuse only an exact expected-class cache' => sub
                         elsif ($variant eq 'hash') {
                             $selected_scope->{$cache_key} = {};
                         }
+                        elsif ($variant eq 'parent') {
+                            my $parent_scope = { %$selected_scope };
+                            $seeded = $expected_class->new(
+                                $parent_scope, $receive, $send,
+                            );
+                            $selected_scope->{$cache_key} = $seeded;
+                        }
                         elsif ($variant eq 'wrong-class') {
                             $seeded = Local::WrongProtocolCache->new(
                                 $selected_scope,
                             );
+                            $selected_scope->{$cache_key} = $seeded;
+                        }
+                        elsif ($variant eq 'throwing-scope') {
+                            $seeded = Local::DyingProtocolCache->new;
                             $selected_scope->{$cache_key} = $seeded;
                         }
                         else {
@@ -254,7 +271,7 @@ subtest 'normal protocol leaves reuse only an exact expected-class cache' => sub
                 }
                 elsif (ref($seeded)) {
                     isnt(refaddr($handled), refaddr($seeded),
-                        'a wrong-class cache is discarded');
+                        'an incompatible cache is discarded');
                 }
             };
         }
