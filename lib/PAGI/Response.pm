@@ -5,6 +5,7 @@ use warnings;
 
 use Carp qw(croak);
 use Cookie::Baker ();
+use Exporter qw(import);
 use Future::AsyncAwait;
 use PAGI::Headers ();
 use Scalar::Util qw(blessed);
@@ -65,6 +66,56 @@ when C<to_app> is called.
 
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);
 
+our @EXPORT_OK = qw(
+    response text_response html_response json_response problem_response
+    redirect_response empty_response file_response stream_response
+);
+our %EXPORT_TAGS = (all => \@EXPORT_OK);
+
+sub response {
+    return PAGI::Response->new(@_);
+}
+
+sub text_response {
+    require PAGI::Response::Text;
+    return PAGI::Response::Text->new(@_);
+}
+
+sub html_response {
+    require PAGI::Response::HTML;
+    return PAGI::Response::HTML->new(@_);
+}
+
+sub json_response {
+    require PAGI::Response::JSON;
+    return PAGI::Response::JSON->new(@_);
+}
+
+sub problem_response {
+    require PAGI::Response::Problem;
+    return PAGI::Response::Problem->new(@_);
+}
+
+sub redirect_response {
+    require PAGI::Response::Redirect;
+    return PAGI::Response::Redirect->new(@_);
+}
+
+sub empty_response {
+    require PAGI::Response::Empty;
+    return PAGI::Response::Empty->new(@_);
+}
+
+sub file_response {
+    require PAGI::Response::File;
+    return PAGI::Response::File->new(@_);
+}
+
+sub stream_response {
+    require PAGI::Response::Stream;
+    return PAGI::Response::Stream->new(@_);
+}
+
 sub new {
     my ($class, $value, @pairs) = @_;
     croak 'PAGI::Response->new requires a body byte scalar'
@@ -104,7 +155,7 @@ sub status {
     return $self->{_status} // 200 if @_ == 1;
     _validate_status($code);
     croak "response body is forbidden for status $code"
-        if _status_forbids_body($code) && defined $self->{_body};
+        if _status_forbids_body($code) && length $self->{_body};
     $self->{_status} = $code;
     return $self;
 }

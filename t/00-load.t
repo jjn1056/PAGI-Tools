@@ -42,6 +42,12 @@ my @load_modules = qw(
     PAGI::Request::Upload
     PAGI::Request::Negotiate
     PAGI::Response
+    PAGI::Response::Text
+    PAGI::Response::HTML
+    PAGI::Response::JSON
+    PAGI::Response::Problem
+    PAGI::Response::Redirect
+    PAGI::Response::Empty
     PAGI::Pages
     PAGI::Session
     PAGI::Stash

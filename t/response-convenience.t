@@ -1,85 +1,51 @@
 use strict;
 use warnings;
 use Test2::V0;
-use Future::AsyncAwait;
-use Encode qw(encode);
+use PAGI::Response qw(
+    :all
+);
 
-use PAGI::Response;
-use PAGI::Stash;
+subtest 'facade exports are opt-in and map to fixed first-party classes' => sub {
+    my $default = eval q{
+        package T::NoDefaultResponseImports;
+        use PAGI::Response;
+        defined &response ? 1 : 0;
+    };
+    is($default, 0, 'PAGI::Response exports no default factory');
 
-subtest 'scope accessor returns scope hashref' => sub {
-    my $test_scope = { type => 'http' };
-    my $res = PAGI::Response->new($test_scope);
-    ok($res->scope == $test_scope, 'scope returns same hashref');
+    my $unknown = eval q{
+        package T::UnknownResponseImport;
+        use PAGI::Response qw(not_a_response_factory);
+        1;
+    };
+    ok(!$unknown, 'unknown facade import fails');
+    like($@, qr/not_a_response_factory/, 'unknown import names the rejected factory');
+
+    isa_ok(response('bytes'), ['PAGI::Response']);
+    isa_ok(text_response('hello'), ['PAGI::Response::Text']);
+    isa_ok(html_response('<b>x</b>'), ['PAGI::Response::HTML']);
+    isa_ok(json_response({ ok => \1 }), ['PAGI::Response::JSON']);
+    isa_ok(problem_response({ title => 'Nope' }), ['PAGI::Response::Problem']);
+    isa_ok(redirect_response('/next'), ['PAGI::Response::Redirect']);
+    isa_ok(empty_response(status => 204), ['PAGI::Response::Empty']);
+    ok(defined &file_response, 'facade has the deferred fixed File factory');
+    ok(defined &stream_response, 'facade has the deferred fixed Stream factory');
 };
 
-subtest 'stash accessor' => sub {
-    my $scope_with_stash = {
-        type => 'http',
+subtest 'each concrete class optionally exports only its matching factory' => sub {
+    my $text = eval q{
+        package T::TextFactory;
+        use PAGI::Response::Text qw(text_response);
+        text_response('hello');
     };
-    my $res = PAGI::Response->new($scope_with_stash);
-    my $stash = PAGI::Stash->new($res);
+    isa_ok($text, ['PAGI::Response::Text']);
 
-    # Default stash is empty hashref
-    is($stash->data, {}, 'stash returns empty hashref by default');
-
-    # Can set values
-    $stash->set(user => { id => 1, name => 'test' });
-    is($stash->get('user')->{id}, 1, 'stash values persist');
-
-    # Stash lives in scope
-    is($scope_with_stash->{'pagi.stash'}{user}{id}, 1, 'stash lives in scope');
-};
-
-subtest 'stash shared with Request' => sub {
-    # This tests the key design: Request and Response share the same stash
-    my $shared_scope = {
-        type => 'http',
-        method => 'GET',
-        path => '/test',
-        headers => [],
+    my $html = eval q{
+        package T::HTMLFactory;
+        use PAGI::Response::HTML qw(html_response);
+        html_response('<b>x</b>');
     };
-
-    # Simulate middleware setting stash via Request
-    require PAGI::Request;
-    my $req = PAGI::Request->new($shared_scope, sub { die 'body unavailable' });
-    PAGI::Stash->new($req)->set(user => { id => 42, role => 'admin' });
-
-    # Response should see the same stash (via shared scope)
-    my $res = PAGI::Response->new($shared_scope);
-    my $stash = PAGI::Stash->new($res);
-    is($stash->get('user')->{id}, 42, 'Response sees stash set by Request');
-    is($stash->get('user')->{role}, 'admin', 'full structure accessible');
-
-    # Modifications via Response stash are visible to Request stash
-    $stash->set(request_id => 'abc123');
-    is(PAGI::Stash->new($req)->get('request_id'), 'abc123', 'Request sees stash set by Response');
-};
-
-subtest 'stash survives scope shallow copy' => sub {
-    # This tests why the technical concern about Request being ephemeral is moot
-    my $original_scope = {
-        type => 'http',
-    };
-
-    # Set stash on original scope
-    my $res1 = PAGI::Response->new($original_scope);
-    PAGI::Stash->new($res1)->set(user => 'alice');
-
-    # Middleware creates shallow copy (what PAGI middleware does)
-    my $new_scope = {
-        %$original_scope,
-        path => '/modified',
-    };
-
-    # New Response on copied scope should see the same stash
-    my $res2 = PAGI::Response->new($new_scope);
-    my $stash2 = PAGI::Stash->new($res2);
-    is($stash2->get('user'), 'alice', 'stash survives shallow copy');
-
-    # They share the same stash reference
-    $stash2->set(role => 'admin');
-    is(PAGI::Stash->new($res1)->get('role'), 'admin', 'stash modifications visible across copies');
+    isa_ok($html, ['PAGI::Response::HTML']);
 };
 
 done_testing;
