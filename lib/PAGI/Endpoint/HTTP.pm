@@ -6,12 +6,10 @@ use warnings;
 use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
-use Scalar::Util qw(blessed);
 use PAGI::Pages;
+use PAGI::Request;
+use PAGI::Response;
 use PAGI::Utils qw(is_response);
-
-# Factory class method - override in subclass for customization
-sub context_class { 'PAGI::Context' }
 
 sub new {
     my ($class, %args) = @_;
@@ -35,52 +33,48 @@ sub allowed_methods {
 }
 
 async sub dispatch {
-    my ($self, $ctx) = @_;
-    my $http_method = lc($ctx->method // 'GET');
+    my ($self, $request) = @_;
+    my $http_method = lc($request->method // 'GET');
 
-    my $res;
+    my $response;
 
     # OPTIONS - return allowed methods (auto-respond unless overridden)
     if ($http_method eq 'options' && !$self->can('options')) {
         my $allow = join(', ', $self->allowed_methods);
-        $res = $ctx->response->header('Allow', $allow)->empty;
+        $response = PAGI::Response->new($request->scope)
+            ->header('Allow', $allow)
+            ->empty;
     }
     # HEAD falls back to GET if not explicitly defined
     elsif ($http_method eq 'head' && !$self->can('head') && $self->can('get')) {
-        $res = await $self->get($ctx);
+        $response = await Future->wrap($self->get($request));
     }
     # Dispatch to the appropriate method handler
     elsif ($self->can($http_method)) {
-        $res = await $self->$http_method($ctx);
+        $response = await Future->wrap($self->$http_method($request));
     }
     # 405 Method Not Allowed
     else {
-        $res = PAGI::Pages->method_not_allowed(
-            $ctx,
+        $response = PAGI::Pages->method_not_allowed(
+            $request,
             allow => [$self->allowed_methods],
         );
     }
 
     croak ref($self) . "->$http_method did not return a response"
-        unless is_response($res);
-    await Future->wrap($ctx->respond($res));
+        unless is_response($response);
+    return $response;
 }
 
 sub to_app {
     my ($class) = @_;
-    my $context_class = $class->context_class;
     my $endpoint = $class->new;    # ONE instance for the app lifetime (singleton)
 
     return async sub {
         my ($scope, $receive, $send) = @_;
-
-        my $type = $scope->{type} // 'http';
-        croak "Expected http scope, got '$type'" unless $type eq 'http';
-
-        require PAGI::Context;
-        my $ctx = $context_class->new($scope, $receive, $send);
-
-        await $endpoint->dispatch($ctx);
+        my $request = PAGI::Request->new($scope, $receive);
+        my $response = await $endpoint->dispatch($request);
+        await Future->wrap($response->respond($send));
     };
 }
 
@@ -97,25 +91,26 @@ PAGI::Endpoint::HTTP - Class-based HTTP endpoint handler
     package MyApp::UserAPI;
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
+    use PAGI::Response ();
 
     async sub get {
-        my ($self, $ctx) = @_;
+        my ($self, $request) = @_;
         my $users = get_all_users();
-        return $ctx->json($users);
+        return PAGI::Response->json($users);
     }
 
     async sub post {
-        my ($self, $ctx) = @_;
-        my $data = await $ctx->request->json;
+        my ($self, $request) = @_;
+        my $data = await $request->json;
         my $user = create_user($data);
-        return $ctx->json($user, status => 201);
+        return PAGI::Response->json($user, status => 201);
     }
 
     async sub delete {
-        my ($self, $ctx) = @_;
-        my $id = $ctx->request->path_param('id');
+        my ($self, $request) = @_;
+        my $id = $request->path_param('id');
         delete_user($id);
-        return $ctx->response->status(204)->empty;
+        return PAGI::Response->empty(status => 204);
     }
 
     # Use with PAGI server
@@ -148,21 +143,19 @@ surface.
 
 =item * HEAD falls back to GET if not defined
 
-=item * Customizable context class for framework integration
-
 =back
 
 =head1 HTTP METHODS
 
 Define any of these async methods to handle requests:
 
-    async sub get { my ($self, $ctx) = @_; ... }
-    async sub post { my ($self, $ctx) = @_; ... }
-    async sub put { my ($self, $ctx) = @_; ... }
-    async sub patch { my ($self, $ctx) = @_; ... }
-    async sub delete { my ($self, $ctx) = @_; ... }
-    async sub head { my ($self, $ctx) = @_; ... }
-    async sub options { my ($self, $ctx) = @_; ... }
+    async sub get { my ($self, $request) = @_; ... }
+    async sub post { my ($self, $request) = @_; ... }
+    async sub put { my ($self, $request) = @_; ... }
+    async sub patch { my ($self, $request) = @_; ... }
+    async sub delete { my ($self, $request) = @_; ... }
+    async sub head { my ($self, $request) = @_; ... }
+    async sub options { my ($self, $request) = @_; ... }
 
 Each receives:
 
@@ -170,17 +163,17 @@ Each receives:
 
 =item C<$self> - The endpoint instance
 
-=item C<$ctx> - A L<PAGI::Context::HTTP> instance
+=item C<$request> - A L<PAGI::Request> instance
 
 =back
 
-Use C<< $ctx->request >> for request data and C<< $ctx->response >> for
-building responses.
+Use C<$request> for request data and L<PAGI::Response> for building response
+values.
 
-B<Handler contract:> Every HTTP handler MUST return a respond-able value
-(e.g. C<< return $ctx->json(...) >>). Returning nothing (or an
-object without a C<respond> method) causes dispatch to croak. The return
-value is what dispatch sends to the client via C<< $ctx->respond($res) >>.
+B<Handler contract:> Every HTTP handler MUST return a L<PAGI::Response> value
+(immediately or through a Future). Returning nothing (or a non-response value)
+causes dispatch to croak. C<dispatch> returns the response without sending it;
+C<to_app> is responsible for emitting it with C<< $response->respond($send) >>.
 
 B<Singleton:> C<to_app> creates a single endpoint instance that serves the
 entire application lifetime. State stored in C<$self> persists across
@@ -189,7 +182,7 @@ requests (within the same worker process).
 B<Do not store per-request state on C<$self>> - one instance is shared by
 every request (and concurrent requests), so request-scoped data on C<$self>
 will leak between them. Keep configuration and long-lived services on
-C<$self>; put request-scoped data on C<$ctx> (e.g. C<< $ctx->stash >>).
+C<$self>; keep request-scoped data on C<$request> or scope-bound helpers.
 
 =head1 CLASS METHODS
 
@@ -202,20 +195,14 @@ with PAGI::Server or composed with middleware. Creates a single endpoint
 instance at construction time; that instance is reused for every request
 (singleton).
 
-=head2 context_class
-
-    sub context_class { 'PAGI::Context' }
-
-Override to use a custom context class.
-
 =head1 INSTANCE METHODS
 
 =head2 dispatch
 
-    await $endpoint->dispatch($ctx);
+    my $response = await $endpoint->dispatch($request);
 
-Dispatches the request to the appropriate HTTP method handler.
-Called automatically by C<to_app>.
+Dispatches the request to the appropriate HTTP method handler and returns the
+resulting response without emitting it. Called automatically by C<to_app>.
 
 =head2 allowed_methods
 
@@ -223,18 +210,9 @@ Called automatically by C<to_app>.
 
 Returns list of HTTP methods this endpoint handles.
 
-=head1 FRAMEWORK INTEGRATION
-
-Framework designers can subclass and customize via context:
-
-    package MyFramework::Endpoint;
-    use parent 'PAGI::Endpoint::HTTP';
-
-    sub context_class { 'MyFramework::Context' }
-
 =head1 SEE ALSO
 
-L<PAGI::Context>, L<PAGI::Endpoint::WebSocket>, L<PAGI::Endpoint::SSE>,
-L<PAGI::Request>, L<PAGI::Response>
+L<PAGI::Endpoint::WebSocket>, L<PAGI::Endpoint::SSE>, L<PAGI::Request>,
+L<PAGI::Response>
 
 =cut

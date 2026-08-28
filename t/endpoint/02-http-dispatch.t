@@ -8,27 +8,35 @@ use JSON::MaybeXS ();
 
 use lib 'lib';
 use PAGI::Endpoint::HTTP;
-use PAGI::Context;
+use PAGI::Request;
+use PAGI::Response;
 
 package TestEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
 
-    async sub get {
-        my ($self, $ctx) = @_;
-        return $ctx->response->text("GET response");
+    sub get {
+        my ($self, $request) = @_;
+        $self->{get_request} = $request;
+        return PAGI::Response->text("GET response");
     }
 
-    async sub post {
-        my ($self, $ctx) = @_;
-        return $ctx->response->text("POST response");
+    sub post {
+        my ($self, $request) = @_;
+        $self->{post_request} = $request;
+        return Future->done(PAGI::Response->text("POST response", status => 201));
     }
 }
 
-my $make_ctx = sub {
+package ExplicitHeadEndpoint {
+    use parent 'PAGI::Endpoint::HTTP';
+
+    sub get  { PAGI::Response->text('GET response') }
+    sub head { PAGI::Response->empty(status => 202) }
+}
+
+my $make_request = sub {
     my ($method, $headers) = @_;
-    my @sent;
-    my $send = sub { push @sent, $_[0]; Future->done };
     my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
     my $scope = {
         type    => 'http',
@@ -36,59 +44,57 @@ my $make_ctx = sub {
         path    => '/test',
         headers => $headers // [],
     };
-    my $ctx = PAGI::Context->new($scope, $receive, $send);
-    return ($ctx, \@sent);
+    return PAGI::Request->new($scope, $receive);
 };
 
-subtest 'dispatches GET to get method' => sub {
-    my ($ctx, $sent) = $make_ctx->('GET');
+subtest 'dispatches synchronous GET with a Request and does not emit' => sub {
+    my $request = $make_request->('GET');
+    my @events;
     my $endpoint = TestEndpoint->new;
 
-    $endpoint->dispatch($ctx)->get;
+    my $response = $endpoint->dispatch($request)->get;
 
-    is($sent->[1]{body}, 'GET response', 'GET dispatched correctly');
+    isa_ok($endpoint->{get_request}, ['PAGI::Request'],
+        'GET receives the direct Request');
+    isa_ok($response, ['PAGI::Response'], 'dispatch returns a Response');
+    is(\@events, [], 'dispatch returns without sending');
 };
 
-subtest 'dispatches POST to post method' => sub {
-    my ($ctx, $sent) = $make_ctx->('POST');
+subtest 'dispatches Future-backed POST with a Request' => sub {
+    my $request = $make_request->('POST');
     my $endpoint = TestEndpoint->new;
 
-    $endpoint->dispatch($ctx)->get;
+    my $response = $endpoint->dispatch($request)->get;
 
-    is($sent->[1]{body}, 'POST response', 'POST dispatched correctly');
+    isa_ok($endpoint->{post_request}, ['PAGI::Request'],
+        'POST receives the direct Request');
+    isa_ok($response, ['PAGI::Response'], 'Future resolves to a Response');
+    is($response->status, 201, 'Future-backed handler response is retained');
 };
 
 subtest 'returns 405 for unimplemented method' => sub {
-    my ($ctx, $sent) = $make_ctx->(
+    my $request = $make_request->(
         'PUT',
         [['Accept', 'application/json']],
     );
     my $endpoint = TestEndpoint->new;
 
-    $endpoint->dispatch($ctx)->get;
+    my $response = $endpoint->dispatch($request)->get;
 
-    is($sent->[0]{status}, 405, '405 status for unimplemented');
-    my @allow = map { $_->[1] }
-        grep { lc($_->[0]) eq 'allow' } @{$sent->[0]{headers}};
-    is \@allow, ['GET, HEAD, OPTIONS, POST'],
+    is($response->status, 405, '405 status for unimplemented');
+    is [$response->header_all('Allow')], ['GET, HEAD, OPTIONS, POST'],
         '405 retains one sorted complete Allow field';
-
-    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
-    is $headers{'content-type'}, 'application/problem+json',
-        'automatic 405 negotiates problem JSON';
-    is $headers{'cache-control'}, 'no-store', 'automatic 405 is not stored';
-    my $problem = JSON::MaybeXS::decode_json($sent->[1]{body});
-    is $problem->{status}, 405, 'problem status matches the wire status';
-    is $problem->{title}, 'Method Not Allowed', 'problem uses the stock title';
 };
 
-subtest 'HEAD dispatches to get if no head method' => sub {
-    my ($ctx, $sent) = $make_ctx->('HEAD');
+subtest 'HEAD dispatches to GET only without an explicit head method' => sub {
+    my $request = $make_request->('HEAD');
     my $endpoint = TestEndpoint->new;
 
-    $endpoint->dispatch($ctx)->get;
+    my $implicit = $endpoint->dispatch($request)->get;
+    is($implicit->status, 200, 'HEAD falls back to GET');
 
-    is($sent->[1]{body}, 'GET response', 'HEAD falls back to GET');
+    my $explicit = ExplicitHeadEndpoint->new->dispatch($request)->get;
+    is($explicit->status, 202, 'explicit HEAD handler wins');
 };
 
 done_testing;

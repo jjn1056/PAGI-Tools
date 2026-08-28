@@ -2,13 +2,18 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
+use Future;
+use PAGI::Request;
+use PAGI::Response;
 
 { package T::Ep; use parent 'PAGI::Endpoint::HTTP'; use Future::AsyncAwait;
-  async sub get { my ($self, $ctx) = @_; return $ctx->response->status(200)->json({ hi => 1 }) } }
+  async sub get { my ($self, $request) = @_; return PAGI::Response->json({ hi => 1 }) } }
 { package T::Void; use parent 'PAGI::Endpoint::HTTP'; use Future::AsyncAwait;
-  async sub get { my ($self, $ctx) = @_; return } }
+  async sub get { my ($self, $request) = @_; return } }
+{ package T::Invalid; use parent 'PAGI::Endpoint::HTTP';
+  sub get { return 'not a response' } }
 { package T::Count; use parent 'PAGI::Endpoint::HTTP'; use Future::AsyncAwait;
-  async sub get { my ($self, $ctx) = @_; $self->{n}++; return $ctx->response->text("n=$self->{n}") } }
+  async sub get { my ($self, $request) = @_; $self->{n}++; return PAGI::Response->text("n=$self->{n}") } }
 
 sub recorder { my @e; my $s = sub { push @e, $_[0]; Future->done }; return ($s, \@e) }
 
@@ -21,10 +26,18 @@ subtest 'HTTP endpoint sends the returned response value' => sub {
 };
 
 subtest 'handler returning nothing croaks' => sub {
-    my $app = T::Void->to_app;
-    my ($send, $events) = recorder();
-    like dies { $app->({ type => 'http', method => 'GET' }, sub { Future->done }, $send)->get },
+    like dies { T::Void->new->dispatch(PAGI::Request->new(
+        { type => 'http', method => 'GET' }, sub { Future->done },
+    ))->get },
         qr/did not return a response/, 'no-return is a loud error';
+};
+
+subtest 'handler returning a non-response croaks' => sub {
+    like(dies { T::Invalid->new->dispatch(PAGI::Request->new(
+        { type => 'http', method => 'GET' }, sub { Future->done },
+    ))->get },
+        qr/T::Invalid->get did not return a response/,
+        'invalid return retains the Endpoint diagnostic');
 };
 
 subtest '405 for unhandled method, with Allow' => sub {

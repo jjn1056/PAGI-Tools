@@ -9,6 +9,7 @@ use lib 'lib';
 use PAGI::Endpoint::HTTP;
 use PAGI::Endpoint::WebSocket;
 use PAGI::Endpoint::SSE;
+use PAGI::Response;
 
 # A realistic multi-protocol endpoint setup
 package MyApp::UserAPI {
@@ -16,18 +17,18 @@ package MyApp::UserAPI {
     use Future::AsyncAwait;
 
     async sub get {
-        my ($self, $ctx) = @_;
-        return $ctx->response->json({ users => ['alice', 'bob'] });
+        my ($self, $request) = @_;
+        return PAGI::Response->json({ users => ['alice', 'bob'] });
     }
 
     async sub post {
-        my ($self, $ctx) = @_;
-        return $ctx->response->status(201)->json({ created => 1 });
+        my ($self, $request) = @_;
+        return PAGI::Response->json({ created => 1 }, status => 201);
     }
 
     async sub delete {
-        my ($self, $ctx) = @_;
-        return $ctx->response->status(204)->empty;
+        my ($self, $request) = @_;
+        return PAGI::Response->empty(status => 204);
     }
 }
 
