@@ -4,6 +4,8 @@ use Test2::V0;
 use PAGI::CSRF;
 use PAGI::Request;
 use PAGI::Response;
+use PAGI::Routing qw(route);
+use PAGI::Routing::Resolver;
 use PAGI::Routing::URL;
 use PAGI::Session;
 use PAGI::Stash;
@@ -16,15 +18,31 @@ use PAGI::Transport;
     sub buffered_amount { 0 }
 }
 
+my $resolver = PAGI::Routing::Resolver->new(routes => [
+    route('/items/{id}' => sub { }, name => 'item'),
+]);
 my $scope = {
     type             => 'http',
     method           => 'GET',
     headers          => [],
     path             => '/',
+    raw_path         => '/',
+    scheme           => 'http',
+    root_path        => '',
     state            => { app_name => 'test' },
     'pagi.session'   => { _id => 'session-1', user_id => 42 },
     'pagi.transport' => T::TransportHandle->new,
     csrf_token       => 'csrf-token',
+    'pagi.routing'   => {
+        version => 1,
+        frames  => [{
+            resolver          => $resolver,
+            logical_namespace => '/',
+            captures          => {},
+            mounts            => [],
+            match             => undef,
+        }],
+    },
 };
 my $request = PAGI::Request->new($scope, sub { die 'body unavailable' });
 my $response = PAGI::Response->new('outgoing bytes');
@@ -35,8 +53,11 @@ is(PAGI::Stash->new($request)->set(request_id => 'r-1')->get('request_id'), 'r-1
     'Request remains a Stash source');
 is(PAGI::Session->new($request)->get('user_id'), 42, 'Request remains a Session source');
 is(PAGI::CSRF->new($request)->token, 'csrf-token', 'Request remains a CSRF source');
-isa_ok(PAGI::Routing::URL->new($request), ['PAGI::Routing::URL'],
+my $urls = PAGI::Routing::URL->new($request);
+isa_ok($urls, ['PAGI::Routing::URL'],
     'Request remains a Routing::URL source');
+is($urls->path_for('item', { id => 7 }), '/items/7',
+    'Request-backed Routing::URL renders a real reverse lookup');
 is(PAGI::Transport->new($request)->buffered_amount, 0, 'Request remains a Transport source');
 
 for my $helper (
