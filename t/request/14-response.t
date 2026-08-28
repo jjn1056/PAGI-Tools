@@ -1,11 +1,54 @@
 use strict;
 use warnings;
 use Test2::V0;
+use PAGI::CSRF;
 use PAGI::Request;
+use PAGI::Response;
+use PAGI::Routing::URL;
+use PAGI::Session;
+use PAGI::Stash;
+use PAGI::State;
+use PAGI::Transport;
 
-my $request = PAGI::Request->new(
-    { type => 'http', method => 'GET', headers => [], path => '/' },
-    sub { die 'body unavailable' },
-);
+{
+    package T::TransportHandle;
+    sub new { bless {}, shift }
+    sub buffered_amount { 0 }
+}
+
+my $scope = {
+    type             => 'http',
+    method           => 'GET',
+    headers          => [],
+    path             => '/',
+    state            => { app_name => 'test' },
+    'pagi.session'   => { _id => 'session-1', user_id => 42 },
+    'pagi.transport' => T::TransportHandle->new,
+    csrf_token       => 'csrf-token',
+};
+my $request = PAGI::Request->new($scope, sub { die 'body unavailable' });
+my $response = PAGI::Response->new('outgoing bytes');
+
 ok !$request->can('response'), 'Request no longer vends an outgoing Response';
+is(PAGI::State->new($request)->get('app_name'), 'test', 'Request remains a State source');
+is(PAGI::Stash->new($request)->set(request_id => 'r-1')->get('request_id'), 'r-1',
+    'Request remains a Stash source');
+is(PAGI::Session->new($request)->get('user_id'), 42, 'Request remains a Session source');
+is(PAGI::CSRF->new($request)->token, 'csrf-token', 'Request remains a CSRF source');
+isa_ok(PAGI::Routing::URL->new($request), ['PAGI::Routing::URL'],
+    'Request remains a Routing::URL source');
+is(PAGI::Transport->new($request)->buffered_amount, 0, 'Request remains a Transport source');
+
+for my $helper (
+    [ 'PAGI::State',        sub { PAGI::State->new($response) } ],
+    [ 'PAGI::Stash',        sub { PAGI::Stash->new($response) } ],
+    [ 'PAGI::Session',      sub { PAGI::Session->new($response) } ],
+    [ 'PAGI::CSRF',         sub { PAGI::CSRF->new($response) } ],
+    [ 'PAGI::Routing::URL', sub { PAGI::Routing::URL->new($response) } ],
+    [ 'PAGI::Transport',    sub { PAGI::Transport->new($response) } ],
+) {
+    like dies { $helper->[1]->() }, qr/scope method|scope hashref/i,
+        "$helper->[0] rejects Response as a scope source";
+}
+
 done_testing;

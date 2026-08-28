@@ -8,6 +8,16 @@ use PAGI::Response;
 sub http_scope { { type => 'http', method => 'GET', headers => [] } }
 sub receive { sub { Future->done({ type => 'http.request', body => '', more => 0 }) } }
 
+{
+    package T::InvalidSend;
+    use overload '&{}' => sub {
+        my ($self) = @_;
+        return sub { $self->{calls}++; Future->done };
+    }, fallback => 1;
+    sub new { bless { calls => 0 }, shift }
+    sub calls { $_[0]{calls} }
+}
+
 subtest 'base bytes retain metadata and byte invariants' => sub {
     my $bytes = "abc\x00";
     my $res = PAGI::Response->new(
@@ -22,8 +32,15 @@ subtest 'base bytes retain metadata and byte invariants' => sub {
     ok($res->is_buffered, 'base bytes are buffered');
     ok(!$res->can('scope'), 'Response is not a scope source');
     ok(!$res->can('cors'), 'CORS policy is not a Response method');
+    like(dies { PAGI::Response->new(undef) }, qr/defined.*encoded bytes/i,
+        'undefined body is rejected');
+    like(dies { PAGI::Response->new([]) }, qr/unblessed scalar.*encoded bytes/i,
+        'reference body is rejected');
     like(dies { PAGI::Response->new("wide \x{263a}") }, qr/encoded bytes/i);
-    like(dies { PAGI::Response->new('x', status => 204) }, qr/body.*204/i);
+    for my $forbidden (100, 204, 205, 304) {
+        like dies { PAGI::Response->new('x', status => $forbidden) },
+            qr/body.*\Q$forbidden\E/i, "body is rejected for status $forbidden";
+    }
     my $utf8_ascii = 'ascii';
     utf8::upgrade($utf8_ascii);
     like(dies { PAGI::Response->new($utf8_ascii) }, qr/encoded bytes/i,
@@ -67,6 +84,13 @@ subtest 'constructor and metadata setters validate and preserve ordered semantic
         'unknown constructor option is rejected';
     like dies { PAGI::Response->new('x', status => 201, status => 202) }, qr/duplicate response option/i,
         'duplicate constructor option is rejected';
+    like dies { PAGI::Response->new('x', 'status') }, qr/name.value pairs/i,
+        'odd constructor option list is rejected';
+    my $undefined_option_name;
+    like dies { PAGI::Response->new('x', $undefined_option_name => 201) }, qr/option names.*scalar strings/i,
+        'undefined constructor option name is rejected';
+    like dies { PAGI::Response->new('x', [] => 201) }, qr/option names.*scalar strings/i,
+        'reference constructor option name is rejected';
     like dies { PAGI::Response->new('x', headers => ['X-One']) }, qr/even-length/i,
         'flat headers require pairs';
     like dies { PAGI::Response->new('x', headers => [['X-One', 'one']]) }, qr/nested/i,
@@ -105,6 +129,7 @@ subtest 'respond validates the full triplet, awaits each send, and protects fram
         undef,
         {},
         { type => 'websocket' },
+        { type => 'unknown' },
         bless({}, 'T::BlessedScope'),
     ) {
         my @bad_events;
@@ -112,10 +137,16 @@ subtest 'respond validates the full triplet, awaits each send, and protects fram
             qr/(?:scope|HTTP)/i, 'invalid scope is rejected';
         is \@bad_events, [], 'invalid scope sends no events';
     }
-    like dies { $res->respond(http_scope(), 'receive', sub { Future->done })->get }, qr/receive.*coderef/i,
+    my @bad_receive_events;
+    like dies { $res->respond(http_scope(), 'receive', sub { push @bad_receive_events, $_[0]; Future->done })->get }, qr/receive.*coderef/i,
         'receive must be a coderef';
-    like dies { $res->respond(http_scope(), receive(), 'send')->get }, qr/send.*coderef/i,
+    is \@bad_receive_events, [], 'invalid receive sends no events';
+    my $invalid_send = T::InvalidSend->new;
+    like dies { $res->respond(http_scope(), receive(), $invalid_send)->get }, qr/send.*coderef/i,
         'send must be a coderef';
+    is $invalid_send->calls, 0, 'invalid send records no events';
+    like dies { $res->respond(sub { Future->done })->get }, qr/HTTP scope|scope hashref/i,
+        'legacy one-argument respond is rejected as an invalid scope';
 };
 
 subtest 'response invocation and to_app use stable snapshots' => sub {
