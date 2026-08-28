@@ -117,6 +117,7 @@ sub write {
     unless ($called) {
         $delivery->fail($@)
             unless $delivery->is_ready || $delivery->is_cancelled;
+        $self->_discard_deferred_disconnect_signal($active);
         return $delivery;
     }
 
@@ -219,6 +220,7 @@ sub close {
     unless ($called) {
         $delivery->fail($@)
             unless $delivery->is_ready || $delivery->is_cancelled;
+        $self->_discard_deferred_disconnect_signal($active);
         return $finished;
     }
 
@@ -406,11 +408,15 @@ sub _record_disconnect {
     $self->{_disconnect_reason} = $reason
         if defined($reason) && length($reason);
     my $error = $self->_disconnect_error;
+    my $defer_signal = 0;
 
     for my $slot (qw(_active_write _active_close)) {
         my $active = $self->{$slot} or next;
         if ($active->{in_send_call}) {
+            # State is visible immediately, but publishing the signal here
+            # would let Stream abort before the send return is classified.
             $active->{deferred_disconnect} = 1;
+            $defer_signal = 1;
             next;
         }
         my $delivery = $active->{delivery};
@@ -420,9 +426,7 @@ sub _record_disconnect {
         $send->cancel if $send && !$send->is_ready && !$send->is_cancelled;
     }
 
-    my $signal = $self->{_disconnect_signal};
-    $signal->done($self->{_disconnect_reason})
-        unless $signal->is_ready || $signal->is_cancelled;
+    $self->_publish_disconnect unless $defer_signal;
     return;
 }
 
@@ -430,13 +434,34 @@ sub _settle_deferred_disconnect {
     my ($self, $active) = @_;
     return unless $active->{deferred_disconnect};
 
+    my $send = $active->{send};
+    if ($send && $send->is_failed) {
+        $self->_discard_deferred_disconnect_signal($active);
+        return;
+    }
+
     my $delivery = $active->{delivery};
     $delivery->fail($self->_disconnect_error)
         unless $delivery->is_ready || $delivery->is_cancelled;
 
-    my $send = $active->{send};
     $send->cancel
         if $send && !$send->is_ready && !$send->is_cancelled;
+    $active->{deferred_disconnect} = 0;
+    $self->_publish_disconnect;
+    return;
+}
+
+sub _discard_deferred_disconnect_signal {
+    my ($self, $active) = @_;
+    $active->{deferred_disconnect} = 0;
+    return;
+}
+
+sub _publish_disconnect {
+    my ($self) = @_;
+    my $signal = $self->{_disconnect_signal};
+    $signal->done($self->{_disconnect_reason})
+        unless $signal->is_ready || $signal->is_cancelled;
     return;
 }
 

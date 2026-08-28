@@ -589,6 +589,110 @@ subtest 're-entrant terminal-send disconnect preserves primary outcome' => sub {
     }
 };
 
+subtest 'async producer classifies re-entrant send before publishing disconnect' => sub {
+    for my $operation (qw(body terminal)) {
+        subtest $operation => sub {
+            for my $mode (qw(pending failed throwing)) {
+                subtest $mode => sub {
+                    my $connection = PAGI::Test::ConnectionState->new;
+                    my $producer_gate = Future->new;
+                    my $pending_send = Future->new;
+                    my $send_cancelled = 0;
+                    my $cleanup_calls = 0;
+                    my ($writer, $operation_future, $producer_future);
+                    my @successful_events;
+                    my $delivery_calls = 0;
+                    $pending_send->on_cancel(sub { ++$send_cancelled });
+
+                    my $producer = async sub {
+                        ($writer) = @_;
+                        $writer->on_close(sub { ++$cleanup_calls });
+                        await $producer_gate;
+                        $operation_future = $operation eq 'body'
+                            ? $writer->write('gated body')
+                            : $writer->close;
+                        await $operation_future;
+                        return;
+                    };
+                    my $running = PAGI::Response::Stream->new(sub {
+                        $producer_future = $producer->(@_);
+                        return $producer_future;
+                    })->respond(
+                        http_scope('pagi.connection' => $connection), quiet_receive(),
+                        sub {
+                            my ($event) = @_;
+                            if ($event->{type} eq 'http.response.start') {
+                                push @successful_events, $event;
+                                return Future->done;
+                            }
+
+                            ++$delivery_calls;
+                            $connection->_mark_disconnected(
+                                "gated_${operation}_$mode",
+                            );
+                            return $pending_send if $mode eq 'pending';
+                            return Future->fail("gated $operation failed Future\n")
+                                if $mode eq 'failed';
+                            die "gated $operation synchronous throw\n";
+                        },
+                    );
+
+                    ok(!$producer_future->is_ready,
+                        'producer is pending on the controlled gate');
+                    ok(!$running->is_ready,
+                        'Stream wait_any is installed around the pending producer');
+                    is($delivery_calls, 0,
+                        'no body or terminal send starts before the gate opens');
+
+                    $producer_gate->done;
+                    is($delivery_calls, 1,
+                        'the gated producer starts exactly one delivery');
+
+                    my $operation_error = $operation_future
+                        && $operation_future->is_failed
+                        ? '' . [$operation_future->failure]->[0]
+                        : '<operation did not fail>';
+                    my $producer_error = $producer_future->is_failed
+                        ? '' . [$producer_future->failure]->[0]
+                        : '<producer did not fail>';
+
+                    if ($mode eq 'pending') {
+                        like($operation_error, qr/disconnect.*gated_${operation}_pending/i,
+                            'pending operation fails with the internal disconnect reason');
+                        ok($producer_future->is_cancelled,
+                            'published true disconnect cancels the pending producer');
+                        ok(lives { $running->get },
+                            'the runner keeps a true disconnect quiet');
+                        is($send_cancelled, 1,
+                            'the pending send is cancelled after send returns');
+                    } else {
+                        my $genuine = $mode eq 'failed'
+                            ? "gated $operation failed Future"
+                            : "gated $operation synchronous throw";
+                        like($operation_error, qr/\Q$genuine\E/,
+                            'operation preserves the genuine same-turn send error');
+                        like($producer_error, qr/\Q$genuine\E/,
+                            'producer preserves the genuine same-turn send error');
+                        like(dies { $running->get }, qr/\Q$genuine\E/,
+                            'runner rethrows the genuine same-turn send error');
+                    }
+
+                    $pending_send->cancel
+                        if !$pending_send->is_ready && !$pending_send->is_cancelled;
+                    is($cleanup_calls, 1, 'cleanup runs exactly once');
+                    is($writer->bytes_written, 0, 'no failed delivery counts bytes');
+                    is(terminal_events(\@successful_events), [],
+                        'no failed delivery is recorded as terminal success');
+                    my $active_slot = $operation eq 'body'
+                        ? $writer->{_active_write}
+                        : $writer->{_active_close};
+                    ok(!$active_slot, 'the settled operation clears its active state');
+                };
+            }
+        };
+    }
+};
+
 subtest 'disconnect immediately after send settlement still fails that write' => sub {
     my $connection = PAGI::Test::ConnectionState->new;
     my $body_send = Future->new;
