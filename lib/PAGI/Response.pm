@@ -155,7 +155,7 @@ sub status {
     return $self->{_status} // 200 if @_ == 1;
     _validate_status($code);
     croak "response body is forbidden for status $code"
-        if _status_forbids_body($code) && length $self->{_body};
+        if _status_forbids_body($code) && !$self->_allows_body_forbidden_status;
     $self->{_status} = $code;
     return $self;
 }
@@ -324,6 +324,16 @@ sub _validate_status {
 sub _status_forbids_body {
     my ($status) = @_;
     return $status >= 100 && $status < 200 || $status == 204 || $status == 205 || $status == 304;
+}
+
+sub _allows_body_forbidden_status { 0 }
+
+sub _validate_uri_reference {
+    my ($label, $value) = @_;
+    croak "$label must be a URI-reference scalar"
+        unless defined($value) && !ref($value)
+            && $value =~ /\A(?:[A-Za-z0-9\-._~!\$&'\(\)\*\+,;=:@\/?#\[\]]|%[0-9A-Fa-f]{2})*\z/;
+    return $value;
 }
 
 sub _validate_http_triplet {

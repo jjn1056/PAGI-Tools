@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
+use Encode qw(encode FB_CROAK);
 use Exporter qw(import);
 use parent 'PAGI::Response';
 
@@ -41,7 +42,8 @@ sub redirect_response {
 
 sub new {
     my ($class, $location, @pairs) = @_;
-    _validate_uri_reference($location);
+    $location = PAGI::Response::_validate_uri_reference('Redirect location', $location);
+    $location = encode('UTF-8', $location, FB_CROAK);
     my $options = PAGI::Response::_parse_options(@pairs);
     my $status = exists($options->{status}) ? $options->{status} : 302;
     _validate_redirect_status($status);
@@ -81,13 +83,6 @@ sub _validate_redirect_status {
         unless defined($status) && !ref($status) && $status =~ /\A\d+\z/
             && $REDIRECT_STATUS{0 + $status};
     return 0 + $status;
-}
-
-sub _validate_uri_reference {
-    my ($location) = @_;
-    croak 'Redirect location must be a URI-reference scalar'
-        unless defined($location) && !ref($location) && $location =~ /\A[\x21-\x7E]*\z/;
-    return $location;
 }
 
 sub _reject_location_header {

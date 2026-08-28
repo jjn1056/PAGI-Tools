@@ -6,6 +6,12 @@ use PAGI::Response qw(
 );
 
 subtest 'facade exports are opt-in and map to fixed first-party classes' => sub {
+    is([sort @PAGI::Response::EXPORT_OK], [sort qw(
+        response text_response html_response json_response problem_response
+        redirect_response empty_response file_response stream_response
+    )], ':all contains exactly the nine fixed facade names');
+    is([sort @{$PAGI::Response::EXPORT_TAGS{all}}], [sort @PAGI::Response::EXPORT_OK],
+        ':all tag maps to every and only facade factory');
     my $default = eval q{
         package T::NoDefaultResponseImports;
         use PAGI::Response;
@@ -21,13 +27,13 @@ subtest 'facade exports are opt-in and map to fixed first-party classes' => sub 
     ok(!$unknown, 'unknown facade import fails');
     like($@, qr/not_a_response_factory/, 'unknown import names the rejected factory');
 
-    isa_ok(response('bytes'), ['PAGI::Response']);
-    isa_ok(text_response('hello'), ['PAGI::Response::Text']);
-    isa_ok(html_response('<b>x</b>'), ['PAGI::Response::HTML']);
-    isa_ok(json_response({ ok => \1 }), ['PAGI::Response::JSON']);
-    isa_ok(problem_response({ title => 'Nope' }), ['PAGI::Response::Problem']);
-    isa_ok(redirect_response('/next'), ['PAGI::Response::Redirect']);
-    isa_ok(empty_response(status => 204), ['PAGI::Response::Empty']);
+    is(ref(response('bytes')), 'PAGI::Response', 'response has exact base class identity');
+    is(ref(text_response('hello')), 'PAGI::Response::Text', 'text_response has exact class identity');
+    is(ref(html_response('<b>x</b>')), 'PAGI::Response::HTML', 'html_response has exact class identity');
+    is(ref(json_response({ ok => \1 })), 'PAGI::Response::JSON', 'json_response has exact class identity');
+    is(ref(problem_response({ title => 'Nope' })), 'PAGI::Response::Problem', 'problem_response has exact class identity');
+    is(ref(redirect_response('/next')), 'PAGI::Response::Redirect', 'redirect_response has exact class identity');
+    is(ref(empty_response(status => 204)), 'PAGI::Response::Empty', 'empty_response has exact class identity');
     ok(defined &file_response, 'facade has the deferred fixed File factory');
     ok(defined &stream_response, 'facade has the deferred fixed Stream factory');
 };
@@ -46,6 +52,18 @@ subtest 'each concrete class optionally exports only its matching factory' => su
         html_response('<b>x</b>');
     };
     isa_ok($html, ['PAGI::Response::HTML']);
+
+    my @subclass_factories = (
+        ['PAGI::Response::JSON', 'json_response', '{ ok => \1 }'],
+        ['PAGI::Response::Problem', 'problem_response', q{{ title => 'Nope' }}],
+        ['PAGI::Response::Redirect', 'redirect_response', q{'/next'}],
+        ['PAGI::Response::Empty', 'empty_response', q{}],
+    );
+    for my $factory (@subclass_factories) {
+        my ($class, $name, $arguments) = @$factory;
+        my $value = eval "package T::${name}Factory; use $class qw($name); $name($arguments);";
+        is(ref($value), $class, "$class optionally exports $name with exact identity");
+    }
 };
 
 done_testing;

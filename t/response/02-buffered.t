@@ -3,6 +3,7 @@ use warnings;
 use utf8;
 
 use Encode qw(encode decode FB_CROAK);
+use Future;
 use JSON::MaybeXS qw(decode_json);
 use Test2::V0;
 
@@ -16,6 +17,22 @@ use PAGI::Response::JSON;
 use PAGI::Response::Problem;
 use PAGI::Response::Redirect;
 use PAGI::Response::Empty;
+
+sub emitted_events {
+    my ($response) = @_;
+    my @events;
+    $response->respond(
+        { type => 'http' },
+        sub { Future->done },
+        sub { push @events, $_[0]; Future->done },
+    )->get;
+    return \@events;
+}
+
+sub header_values {
+    my ($headers, $name) = @_;
+    return [ map { $_->[1] } grep { lc($_->[0]) eq lc($name) } @$headers ];
+}
 
 subtest 'text and HTML render Unicode as strict UTF-8 bytes' => sub {
     my $text = text_response("caf\x{e9}");
@@ -39,6 +56,15 @@ subtest 'text and HTML render Unicode as strict UTF-8 bytes' => sub {
         'Text rejects an undefined character value');
     like(dies { html_response([]) }, qr/Unicode scalar/i,
         'HTML rejects a reference character value');
+    my $surrogate = chr(0xD800);
+    like(dies { text_response($surrogate) }, qr/(?:UTF-8|surrogate|wide)/i,
+        'Text rejects a lone UTF-8 surrogate');
+    like(dies { html_response($surrogate) }, qr/(?:UTF-8|surrogate|wide)/i,
+        'HTML rejects a lone UTF-8 surrogate');
+    like(dies { text_response('x', status => 200, status => 201) }, qr/duplicate/i,
+        'Text rejects duplicate option names');
+    like(dies { html_response('x', 'status') }, qr/name.value pairs/i,
+        'HTML rejects malformed option lists');
 };
 
 subtest 'base Response remains the explicit non-UTF-8 byte escape hatch' => sub {
@@ -48,6 +74,12 @@ subtest 'base Response remains the explicit non-UTF-8 byte escape hatch' => sub 
     is($base->body, "caf\xE9", 'base Response preserves caller-encoded bytes');
     is($base->content_type, 'text/plain; charset=iso-8859-1',
         'base Response preserves caller-selected charset');
+    for my $status (100, 204, 205, 304) {
+        like(dies { response('', status => $status) }, qr/body.*\Q$status\E/i,
+            "base Response rejects an empty body for status $status");
+        like(dies { text_response('', status => $status) }, qr/body.*\Q$status\E/i,
+            "Text rejects an empty body for status $status");
+    }
 };
 
 subtest 'JSON produces UTF-8 bytes with semantic round trips' => sub {
@@ -97,8 +129,14 @@ subtest 'Problem validates RFC 9457 members without materializing omissions' => 
     like(dies { problem_response([]) }, qr/hashref/i, 'Problem requires a hashref');
     like(dies { problem_response({ type => [] }) }, qr/type.*URI-reference/i,
         'Problem validates type URI references');
-    like(dies { problem_response({ type => "bad\nuri" }) }, qr/type.*URI-reference/i,
-        'Problem rejects unsafe type URI references');
+    for my $uri ('/relative/path', '../parent', 'https://example.test/path?x=a%20b#part', '?q=value', '#fragment') {
+        is(decode_json(problem_response({ type => $uri })->body)->{type}, $uri,
+            "Problem retains valid URI-reference $uri");
+    }
+    for my $uri ('/bad|target', '/bad%zz', '/bad space', "/bad\nuri", '/bad<target>', '/bad"target') {
+        like(dies { problem_response({ type => $uri }) }, qr/type.*URI-reference/i,
+            "Problem rejects malformed URI-reference $uri");
+    }
     like(dies { problem_response({ instance => [] }) }, qr/instance.*URI-reference/i,
         'Problem validates instance URI references');
     like(dies { problem_response({ title => [] }) }, qr/title.*string/i,
@@ -113,17 +151,20 @@ subtest 'Problem validates RFC 9457 members without materializing omissions' => 
         'Problem requires document and HTTP statuses to agree');
     like(dies { problem_response({ extra => bless({}, 'T::Unencodable') }) }, qr/(?:encod|JSON)/i,
         'Problem validates extension JSON encodability');
+    like(dies { problem_response({}, status => 400, status => 401) }, qr/duplicate/i,
+        'Problem rejects duplicate constructor option names');
 };
 
 subtest 'Redirect validates status and URI references then builds safe finite HTML' => sub {
-    my $redirect = redirect_response('/next?x=<script>&q="quoted"');
+    my $target = '/next?x=%3Cscript%3E&q=%22quoted%22';
+    my $redirect = redirect_response($target);
     isa_ok($redirect, ['PAGI::Response::Redirect']);
     is($redirect->status, 302, 'Redirect defaults to 302');
-    is($redirect->header('Location'), '/next?x=<script>&q="quoted"',
+    is($redirect->header('Location'), $target,
         'Redirect installs the exact validated Location');
     is($redirect->content_type, 'text/html; charset=utf-8', 'Redirect has HTML content');
     my $body = decode('UTF-8', $redirect->body, FB_CROAK);
-    like($body, qr{href="/next\?x=&lt;script&gt;&amp;q=&quot;quoted&quot;"},
+    like($body, qr{href="/next\?x=%3Cscript%3E&amp;q=%22quoted%22"},
         'Redirect escapes the Location in HTML attributes');
     unlike($body, qr{<script>}, 'Redirect body never embeds target markup');
 
@@ -133,12 +174,28 @@ subtest 'Redirect validates status and URI references then builds safe finite HT
     }
     is(redirect_response('https://example.test/there')->header('Location'),
         'https://example.test/there', 'Redirect accepts absolute URI references');
-    like(dies { redirect_response("/bad\nlocation") }, qr/URI-reference/i,
-        'Redirect rejects unsafe URI references');
+    for my $uri ('/relative/path', '../parent', 'https://example.test/path?x=a%20b#part', '?q=value', '#fragment') {
+        is(redirect_response($uri)->header('Location'), $uri,
+            "Redirect accepts valid URI-reference $uri");
+    }
+    for my $uri ('/bad|target', '/bad%zz', '/bad space', "/bad\nlocation", '/bad<target>', '/bad"target') {
+        like(dies { redirect_response($uri) }, qr/URI-reference/i,
+            "Redirect rejects malformed URI-reference $uri");
+    }
     like(dies { redirect_response('/next', status => 200) }, qr/301.*302.*303.*307.*308/i,
         'Redirect rejects non-redirect statuses');
     like(dies { redirect_response('/next', headers => [Location => '/other']) }, qr/Location.*owned/i,
         'Redirect rejects a caller Location conflict');
+    like(dies { redirect_response('/next', status => 301, status => 302) }, qr/duplicate/i,
+        'Redirect rejects duplicate constructor option names');
+
+    my $flagged = '/ascii-only';
+    utf8::upgrade($flagged);
+    my $normalized = redirect_response($flagged);
+    is($normalized->header('Location'), '/ascii-only',
+        'Redirect normalizes an ASCII-valid flagged Location');
+    ok(!utf8::is_utf8($normalized->body),
+        'Redirect renders an ASCII-valid flagged Location to byte body');
 };
 
 subtest 'Empty owns zero bytes without a default content type' => sub {
@@ -147,9 +204,41 @@ subtest 'Empty owns zero bytes without a default content type' => sub {
     is($empty->status, 204, 'Empty defaults to 204');
     is($empty->body, '', 'Empty owns zero body bytes');
     ok(!$empty->has_content_type, 'Empty has no default Content-Type');
-    is(empty_response(status => 205)->body, '', 'Empty supports a body-forbidden status with zero bytes');
+    for my $status (100, 204, 205, 304) {
+        is(empty_response(status => $status)->body, '',
+            "Empty supports status $status with zero bytes");
+    }
     like(dies { empty_response(body => 'not empty') }, qr/unknown response option 'body'/i,
         'Empty rejects supplied body content');
+    like(dies { empty_response(content_type => 'text/plain') }, qr/Content-Type/i,
+        'Empty rejects content_type constructor option');
+    like(dies { empty_response(headers => ['Content-Type' => 'text/plain']) }, qr/Content-Type/i,
+        'Empty rejects Content-Type supplied through headers');
+    like(dies { empty_response(status => 204, status => 205) }, qr/duplicate/i,
+        'Empty rejects duplicate constructor option names');
+
+    my $framed = emitted_events(empty_response(
+        status => 204,
+        headers => ['X-Empty' => 'yes', 'Transfer-Encoding' => 'chunked'],
+    ));
+    is(header_values($framed->[0]{headers}, 'content-length'), [],
+        '204 Empty emits no Content-Length');
+    is(header_values($framed->[0]{headers}, 'transfer-encoding'), [],
+        '204 Empty emits no Transfer-Encoding');
+    is(header_values($framed->[0]{headers}, 'x-empty'), ['yes'],
+        'Empty preserves ordinary headers on emission');
+    for my $status (100, 304) {
+        my $events = emitted_events(empty_response(status => $status));
+        is(header_values($events->[0]{headers}, 'content-length'), [],
+            "$status Empty emits no Content-Length");
+        is(header_values($events->[0]{headers}, 'transfer-encoding'), [],
+            "$status Empty emits no Transfer-Encoding");
+    }
+    my $reset = emitted_events(empty_response(status => 205));
+    is(header_values($reset->[0]{headers}, 'content-length'), [0],
+        '205 Empty emits the required zero Content-Length');
+    is(header_values($reset->[0]{headers}, 'transfer-encoding'), [],
+        '205 Empty emits no Transfer-Encoding');
 };
 
 done_testing;

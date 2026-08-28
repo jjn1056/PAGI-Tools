@@ -64,7 +64,7 @@ sub _validate_problem {
 
     for my $member (qw(type instance)) {
         next unless exists $problem->{$member};
-        _validate_uri_reference($member, $problem->{$member});
+        PAGI::Response::_validate_uri_reference("Problem $member", $problem->{$member});
     }
     for my $member (qw(title detail)) {
         next unless exists $problem->{$member};
@@ -78,13 +78,6 @@ sub _validate_problem {
     croak 'Problem status must be an integer HTTP status from 100 through 599'
         unless $status >= 100 && $status <= 599;
     return;
-}
-
-sub _validate_uri_reference {
-    my ($member, $value) = @_;
-    croak "Problem $member must be a URI-reference scalar"
-        unless defined($value) && !ref($value) && $value =~ /\A[\x21-\x7E]*\z/;
-    return $value;
 }
 
 1;
