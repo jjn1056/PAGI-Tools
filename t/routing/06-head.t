@@ -204,6 +204,36 @@ subtest 'Stream HEAD runs the GET producer while an earlier explicit HEAD avoids
     ], 'explicit HEAD remains suppressed at the outer boundary');
 };
 
+subtest 'automatic HEAD stays pending for a controlled Stream producer' => sub {
+    my $producer_wait = Future->new;
+    my $producer_calls = 0;
+    my $app = router(routes => [
+        route('/slow-stream' => PAGI::Response::Stream->new(sub {
+            ++$producer_calls;
+            return $producer_wait;
+        }), methods => 'GET'),
+    ])->to_app;
+    my @events;
+
+    my $running = $app->(
+        scope(method => 'HEAD', path => '/slow-stream'),
+        \&receive,
+        sub { push @events, $_[0]; Future->done },
+    );
+
+    is($producer_calls, 1, 'automatic HEAD invokes the selected Stream producer');
+    ok(!$running->is_ready,
+        'automatic HEAD remains pending while the Stream producer is pending');
+    is(response_bodies(\@events), [],
+        'HEAD emits no terminal event before producer completion');
+
+    $producer_wait->done('producer complete');
+    $running->get;
+    is(response_bodies(\@events), [
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'HEAD emits one suppressed terminal body after producer completion');
+};
+
 subtest 'the outer HEAD boundary lets router middleware observe the full representation' => sub {
     my $raw = async sub {
         my ($scope, $receive, $send) = @_;

@@ -111,6 +111,17 @@ async sub respond {
         $producer_outcome,
     );
 
+    # wait_any resolves by readiness, not by error priority. A producer/send
+    # failure that is already observable in the disconnect turn remains the
+    # application outcome even when the disconnect signal won the race.
+    if ($outcome->{kind} eq 'disconnect' && $producer->is_failed) {
+        my @failure = $producer->failure;
+        $outcome = {
+            kind    => 'producer_failed',
+            failure => \@failure,
+        };
+    }
+
     if ($outcome->{kind} eq 'disconnect') {
         await $writer->_abort;
         return;

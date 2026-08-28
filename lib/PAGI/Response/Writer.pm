@@ -61,6 +61,7 @@ sub _new {
         _bytes_written     => 0,
         _active_write      => undef,
         _active_close      => undef,
+        _close_future      => undef,
         _on_close          => [],
         _cleanup_future    => undef,
     }, $class;
@@ -91,8 +92,10 @@ sub write {
 
     my $delivery = Future->new;
     my $active = {
-        delivery => $delivery,
-        send      => undef,
+        delivery            => $delivery,
+        send                => undef,
+        in_send_call        => 1,
+        deferred_disconnect => 0,
     };
     $self->{_active_write} = $active;
     $delivery->on_ready(sub {
@@ -110,8 +113,10 @@ sub write {
         }));
         1;
     };
+    $active->{in_send_call} = 0;
     unless ($called) {
-        $delivery->fail($@);
+        $delivery->fail($@)
+            unless $delivery->is_ready || $delivery->is_cancelled;
         return $delivery;
     }
 
@@ -141,6 +146,7 @@ sub write {
         $send_future->cancel
             if !$send_future->is_ready && !$send_future->is_cancelled;
     });
+    $self->_settle_deferred_disconnect($active);
 
     return $delivery;
 }
@@ -174,6 +180,8 @@ async sub _pipe_from {
 
 sub close {
     my ($self) = @_;
+    return $self->{_close_future}->without_cancel
+        if $self->{_close_future};
     return Future->done if $self->{_closed};
     croak 'Cannot close while a write is outstanding; await write first'
         if $self->{_active_write};
@@ -184,8 +192,10 @@ sub close {
     $self->{_closed} = 1;
     my $delivery = Future->new;
     my $active = {
-        delivery => $delivery,
-        send      => undef,
+        delivery            => $delivery,
+        send                => undef,
+        in_send_call        => 1,
+        deferred_disconnect => 0,
     };
     $self->{_active_close} = $active;
     $delivery->on_ready(sub {
@@ -195,6 +205,7 @@ sub close {
     });
 
     my $finished = $self->_finish_close($delivery);
+    $self->{_close_future} = $finished;
     my $send_future;
     my $called = eval {
         $send_future = Future->wrap($self->{_send}->({
@@ -204,8 +215,10 @@ sub close {
         }));
         1;
     };
+    $active->{in_send_call} = 0;
     unless ($called) {
-        $delivery->fail($@);
+        $delivery->fail($@)
+            unless $delivery->is_ready || $delivery->is_cancelled;
         return $finished;
     }
 
@@ -233,6 +246,7 @@ sub close {
         $send_future->cancel
             if !$send_future->is_ready && !$send_future->is_cancelled;
     });
+    $self->_settle_deferred_disconnect($active);
 
     return $finished;
 }
@@ -395,6 +409,10 @@ sub _record_disconnect {
 
     for my $slot (qw(_active_write _active_close)) {
         my $active = $self->{$slot} or next;
+        if ($active->{in_send_call}) {
+            $active->{deferred_disconnect} = 1;
+            next;
+        }
         my $delivery = $active->{delivery};
         $delivery->fail($error)
             unless $delivery->is_ready || $delivery->is_cancelled;
@@ -405,6 +423,20 @@ sub _record_disconnect {
     my $signal = $self->{_disconnect_signal};
     $signal->done($self->{_disconnect_reason})
         unless $signal->is_ready || $signal->is_cancelled;
+    return;
+}
+
+sub _settle_deferred_disconnect {
+    my ($self, $active) = @_;
+    return unless $active->{deferred_disconnect};
+
+    my $delivery = $active->{delivery};
+    $delivery->fail($self->_disconnect_error)
+        unless $delivery->is_ready || $delivery->is_cancelled;
+
+    my $send = $active->{send};
+    $send->cancel
+        if $send && !$send->is_ready && !$send->is_cancelled;
     return;
 }
 
@@ -443,7 +475,8 @@ settles.
 =head2 close, is_closed
 
 C<close> sends one terminal empty body event and runs cleanup. It is
-idempotent. Writes after close fail.
+idempotent; repeated calls while terminal delivery or cleanup is pending join
+that same close completion. Writes after close fail.
 
 =head2 is_disconnected, disconnect_reason, bytes_written
 

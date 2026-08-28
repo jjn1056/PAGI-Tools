@@ -33,6 +33,13 @@ use PAGI::Transport qw(transport);
 }
 
 {
+    package T::MinimalTransport;
+
+    sub new { return bless { buffered => $_[1] }, $_[0] }
+    sub buffered_amount { return $_[0]{buffered} }
+}
+
+{
     package T::Source;
 
     sub new {
@@ -215,6 +222,36 @@ subtest 'Writer delegates transport flow control and has deliberate quiet defaul
     $quiet_running->get;
 };
 
+subtest 'a transport with only buffered_amount gets every optional fallback' => sub {
+    my $transport_handle = T::MinimalTransport->new(7);
+    my $hold = Future->new;
+    my $writer;
+    my $running = PAGI::Response::Stream->new(sub {
+        ($writer) = @_;
+        return $hold;
+    })->respond(
+        http_scope('pagi.transport' => $transport_handle),
+        quiet_receive(),
+        sub { Future->done },
+    );
+
+    is($writer->buffered_amount, 7,
+        'the one required transport method still delegates');
+    is($writer->high_water_mark, undef,
+        'missing optional high watermark falls back to undef');
+    is($writer->low_water_mark, undef,
+        'missing optional low watermark falls back to undef');
+    ok($writer->is_writable,
+        'missing optional high watermark leaves the Writer writable');
+    is($writer->on_high_water(sub { die 'must not run' }), $writer,
+        'missing optional high-water callback is a chainable no-op');
+    is($writer->on_drain(sub { die 'must not run' }), $writer,
+        'missing optional drain callback is a chainable no-op');
+
+    $hold->done;
+    $running->get;
+};
+
 subtest 'pipe_from pulls only after the prior source and send settle' => sub {
     my $next = Future->new;
     my $source = T::Source->new('one', '', $next, undef);
@@ -312,6 +349,29 @@ subtest 'pipe_from propagates source/send failures and keeps truncation observab
     is(terminal_events(\@relay_events), [], 'reported truncation aborts without terminal success');
 };
 
+subtest 'pipe_from propagates a Future-backed next_chunk failure after waiting' => sub {
+    my $next = Future->new;
+    my $cleanup_calls = 0;
+    my @events;
+    my $running = PAGI::Response::Stream->new(sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { ++$cleanup_calls });
+        return $writer->pipe_from(T::Source->new($next));
+    })->respond(
+        http_scope(), quiet_receive(),
+        sub { push @events, $_[0]; Future->done },
+    );
+
+    ok(!$running->is_ready,
+        'the Stream waits for a pending Future-backed source result');
+    $next->fail("deferred source exploded\n");
+    like(dies { $running->get }, qr/deferred source exploded/,
+        'a later source Future failure remains the producer failure');
+    is($cleanup_calls, 1, 'deferred source failure runs cleanup exactly once');
+    is(terminal_events(\@events), [],
+        'deferred source failure emits no terminal success');
+};
+
 subtest 'disconnect before producer start completes quietly without consuming receive' => sub {
     my $connection = PAGI::Test::ConnectionState->new;
     my $start = Future->new;
@@ -400,6 +460,135 @@ subtest 'disconnect fails a pending write Future and cancels its send' => sub {
     is(terminal_events(\@events), [], 'pending-write disconnect emits no terminal success');
 };
 
+subtest 're-entrant body-send disconnect settles only after send returns' => sub {
+    for my $mode (qw(pending failed throwing)) {
+        subtest $mode => sub {
+            my $connection = PAGI::Test::ConnectionState->new;
+            my $pending_send = Future->new;
+            my $send_cancelled = 0;
+            my $cleanup_calls = 0;
+            my ($writer, $write);
+            my @events;
+            $pending_send->on_cancel(sub { ++$send_cancelled });
+
+            my $running = PAGI::Response::Stream->new(sub {
+                ($writer) = @_;
+                $writer->on_close(sub { ++$cleanup_calls });
+                $write = $writer->write('reentrant body');
+                return $write;
+            })->respond(
+                http_scope('pagi.connection' => $connection), quiet_receive(),
+                sub {
+                    my ($event) = @_;
+                    push @events, $event;
+                    return Future->done if $event->{type} eq 'http.response.start';
+
+                    $connection->_mark_disconnected("reentrant_body_$mode");
+                    return $pending_send if $mode eq 'pending';
+                    return Future->fail("reentrant body failed Future\n")
+                        if $mode eq 'failed';
+                    die "reentrant body synchronous throw\n";
+                },
+            );
+
+            if ($mode eq 'pending') {
+                ok($write->is_failed,
+                    're-entrant disconnect fails the public pending write');
+                like([$write->failure]->[0], qr/disconnect.*reentrant_body_pending/i,
+                    'pending write keeps the disconnect reason');
+                is($send_cancelled, 1,
+                    'the send Future returned after disconnect is immediately cancelled');
+                ok(lives { $running->get },
+                    'disconnect remains a quiet connection outcome');
+            } elsif ($mode eq 'failed') {
+                like(dies { $running->get }, qr/reentrant body failed Future/,
+                    'an already-failed returned send Future beats disconnect');
+            } else {
+                like(dies { $running->get }, qr/reentrant body synchronous throw/,
+                    'a synchronous send throw beats re-entrant disconnect');
+            }
+
+            $pending_send->cancel
+                if !$pending_send->is_ready && !$pending_send->is_cancelled;
+            is($cleanup_calls, 1, 'cleanup runs once for the selected primary outcome');
+            is(terminal_events(\@events), [], 'no re-entrant body case emits terminal success');
+        };
+    }
+};
+
+subtest 'an already-ready producer failure beats simultaneous disconnect' => sub {
+    my $connection = PAGI::Test::ConnectionState->new;
+    my $cleanup_calls = 0;
+    my @events;
+    my $running = PAGI::Response::Stream->new(sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { ++$cleanup_calls });
+        $connection->_mark_disconnected('producer_failure_turn');
+        return Future->fail("producer failure already observable\n");
+    })->respond(
+        http_scope('pagi.connection' => $connection), quiet_receive(),
+        sub { push @events, $_[0]; Future->done },
+    );
+
+    like(dies { $running->get }, qr/producer failure already observable/,
+        'observable producer failure is primary over the same-turn disconnect');
+    is($cleanup_calls, 1, 'simultaneous producer failure cleans up once');
+    is(terminal_events(\@events), [],
+        'simultaneous producer failure emits no terminal success');
+};
+
+subtest 're-entrant terminal-send disconnect preserves primary outcome' => sub {
+    for my $mode (qw(pending failed throwing)) {
+        subtest $mode => sub {
+            my $connection = PAGI::Test::ConnectionState->new;
+            my $pending_send = Future->new;
+            my $send_cancelled = 0;
+            my $cleanup_calls = 0;
+            my @events;
+            $pending_send->on_cancel(sub { ++$send_cancelled });
+
+            my $running = PAGI::Response::Stream->new(sub {
+                $_[0]->on_close(sub { ++$cleanup_calls });
+                return 'producer done';
+            })->respond(
+                http_scope('pagi.connection' => $connection), quiet_receive(),
+                sub {
+                    my ($event) = @_;
+                    if ($event->{type} eq 'http.response.start') {
+                        push @events, $event;
+                        return Future->done;
+                    }
+
+                    $connection->_mark_disconnected("reentrant_terminal_$mode");
+                    return $pending_send if $mode eq 'pending';
+                    return Future->fail("reentrant terminal failed Future\n")
+                        if $mode eq 'failed';
+                    die "reentrant terminal synchronous throw\n";
+                },
+            );
+
+            if ($mode eq 'pending') {
+                is($send_cancelled, 1,
+                    'terminal send returned after disconnect is immediately cancelled');
+                ok(lives { $running->get },
+                    'terminal disconnect remains a quiet outcome');
+            } elsif ($mode eq 'failed') {
+                like(dies { $running->get }, qr/reentrant terminal failed Future/,
+                    'an already-failed terminal Future beats disconnect');
+            } else {
+                like(dies { $running->get }, qr/reentrant terminal synchronous throw/,
+                    'a synchronous terminal throw beats re-entrant disconnect');
+            }
+
+            $pending_send->cancel
+                if !$pending_send->is_ready && !$pending_send->is_cancelled;
+            is($cleanup_calls, 1, 'terminal outcome runs cleanup exactly once');
+            is(terminal_events(\@events), [],
+                'a re-entrant terminal case is never recorded as terminal success');
+        };
+    }
+};
+
 subtest 'disconnect immediately after send settlement still fails that write' => sub {
     my $connection = PAGI::Test::ConnectionState->new;
     my $body_send = Future->new;
@@ -465,6 +654,122 @@ subtest 'pre-send disconnect fails write, while disconnect after completion is n
     is(scalar @{terminal_events(\@after_events)}, 1,
         'later disconnect cannot retract or duplicate completed output');
     is($cleanup_calls, 1, 'later disconnect does not repeat cleanup');
+};
+
+subtest 'repeated close joins pending terminal delivery and Stream awaits it' => sub {
+    my $terminal_send = Future->new;
+    my ($first_close, $second_close);
+    my $terminal_calls = 0;
+    my $running = PAGI::Response::Stream->new(sub {
+        my ($writer) = @_;
+        $first_close = $writer->close;
+        $second_close = $writer->close;
+        return $second_close;
+    })->respond(
+        http_scope(), quiet_receive(),
+        sub {
+            my ($event) = @_;
+            return Future->done if $event->{type} eq 'http.response.start';
+            ++$terminal_calls;
+            return $terminal_send;
+        },
+    );
+
+    ok(!$first_close->is_ready, 'first close waits for terminal send settlement');
+    ok(!$second_close->is_ready,
+        'second close joins rather than bypassing the pending terminal send');
+    ok(!$running->is_ready,
+        'Stream automatic close joins the producer-initiated terminal send');
+    is($terminal_calls, 1, 'joined close calls enqueue one terminal event');
+
+    $terminal_send->done;
+    $first_close->get;
+    $second_close->get;
+    $running->get;
+    is($terminal_calls, 1, 'settling joined close does not duplicate terminal output');
+};
+
+subtest 'repeated close joins pending cleanup and Stream awaits it' => sub {
+    my $cleanup_wait = Future->new;
+    my ($first_close, $second_close);
+    my @cleanup;
+    my $running = PAGI::Response::Stream->new(sub {
+        my ($writer) = @_;
+        $writer->on_close(sub {
+            push @cleanup, 'pending';
+            return $cleanup_wait;
+        });
+        $writer->on_close(sub { push @cleanup, 'later' });
+        $first_close = $writer->close;
+        $second_close = $writer->close;
+        return $second_close;
+    })->respond(
+        http_scope(), quiet_receive(), sub { Future->done },
+    );
+
+    ok(!$first_close->is_ready, 'first close waits for Future-backed cleanup');
+    ok(!$second_close->is_ready,
+        'second close joins rather than bypassing pending cleanup');
+    ok(!$running->is_ready,
+        'Stream automatic close joins producer-initiated cleanup');
+    is(\@cleanup, ['pending'], 'cleanup remains sequential while the first callback waits');
+
+    $cleanup_wait->done;
+    $first_close->get;
+    $second_close->get;
+    $running->get;
+    is(\@cleanup, ['pending', 'later'], 'joined close finishes after all cleanup callbacks');
+};
+
+subtest 'a pending terminal send that later fails remains primary after cleanup' => sub {
+    my $terminal_send = Future->new;
+    my $cleanup_calls = 0;
+    my $running = PAGI::Response::Stream->new(sub {
+        $_[0]->on_close(sub { ++$cleanup_calls });
+        return 'producer done';
+    })->respond(
+        http_scope(), quiet_receive(),
+        sub {
+            my ($event) = @_;
+            return Future->done if $event->{type} eq 'http.response.start';
+            return $terminal_send;
+        },
+    );
+
+    ok(!$running->is_ready, 'Stream waits for a pending terminal send');
+    $terminal_send->fail("deferred terminal send exploded\n");
+    like(dies { $running->get }, qr/deferred terminal send exploded/,
+        'a later terminal send failure remains the primary error');
+    is($cleanup_calls, 1, 'later terminal send failure runs cleanup exactly once');
+};
+
+subtest 'Future-backed failing cleanup warns and continues later callbacks' => sub {
+    my $cleanup_wait = Future->new;
+    my @cleanup;
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+
+    my $running = PAGI::Response::Stream->new(sub {
+        my ($writer) = @_;
+        $writer->on_close(sub {
+            push @cleanup, 'pending';
+            return $cleanup_wait;
+        });
+        $writer->on_close(sub { push @cleanup, 'later'; return 'immediate' });
+        return 'producer done';
+    })->respond(
+        http_scope(), quiet_receive(), sub { Future->done },
+    );
+
+    ok(!$running->is_ready, 'normal close waits for Future-backed cleanup');
+    is(\@cleanup, ['pending'], 'later cleanup does not prefetch');
+    $cleanup_wait->fail("deferred cleanup exploded\n");
+    $running->get;
+    is(\@cleanup, ['pending', 'later'],
+        'a Future-backed callback failure does not prevent the next callback');
+    is(scalar @warnings, 1, 'Future-backed callback failure is reported once');
+    like($warnings[0], qr/deferred cleanup exploded/,
+        'cleanup warning preserves the Future failure');
 };
 
 subtest 'genuine producer and terminal-send errors rethrow after cleanup' => sub {
