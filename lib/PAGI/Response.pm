@@ -63,6 +63,20 @@ Future, then sends and waits for one terminal C<http.response.body> event.
 Returns an async HTTP application coderef with a response snapshot captured
 when C<to_app> is called.
 
+=head2 stream_response
+
+    my $response = stream_response(
+        sub {
+            my ($writer) = @_;
+            return $writer->write('encoded bytes');
+        },
+        content_type => 'application/octet-stream',
+    );
+
+Constructs a reusable L<PAGI::Response::Stream>. The callback receives a fresh
+per-invocation L<PAGI::Response::Writer>; await every write Future to preserve
+backpressure.
+
 =cut
 
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);

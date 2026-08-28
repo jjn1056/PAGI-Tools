@@ -2,11 +2,19 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 
 use lib 'lib';
 use PAGI::Request;
 use PAGI::Test::ConnectionState;
+
+{
+    package T::GetOnlySinkResult;
+    sub new { return bless { get_calls => 0 }, shift }
+    sub get { ++$_[0]{get_calls}; die "undocumented get protocol was used\n" }
+    sub get_calls { return $_[0]{get_calls} }
+}
 
 # Helper to create a mock receive that returns body in chunks
 sub mock_receive {
@@ -168,6 +176,70 @@ subtest 'empty body' => sub {
     my $body = (async sub { await $req->body })->()->get;
 
     is($body, '', 'empty body returns empty string');
+};
+
+subtest 'buffered and streaming request-body consumption remain mutually exclusive' => sub {
+    my $stream_scope = { type => 'http', method => 'POST', headers => [] };
+    my $stream_request = PAGI::Request->new($stream_scope, mock_receive('streamed'));
+    $stream_request->body_stream;
+    like dies { $stream_request->body->get }, qr/streaming already started/i,
+        'buffered body is unavailable after body_stream creation';
+
+    my $buffer_scope = { type => 'http', method => 'POST', headers => [] };
+    my $buffer_request = PAGI::Request->new($buffer_scope, mock_receive('buffered'));
+    is $buffer_request->body->get, 'buffered', 'buffered body is consumed first';
+    like dies { $buffer_request->body_stream }, qr/already consumed|streaming not available/i,
+        'body_stream is unavailable after buffered consumption';
+};
+
+subtest 'BodyStream stream_to wraps immediate and Future-backed sink results only' => sub {
+    my @messages = (
+        { type => 'http.request', body => 'one', more => 1 },
+        { type => 'http.request', body => 'two', more => 1 },
+        { type => 'http.request', body => 'three', more => 0 },
+    );
+    my $sink_wait = Future->new;
+    my $get_only = T::GetOnlySinkResult->new;
+    my @seen;
+    my $stream = PAGI::Request::BodyStream->new(
+        receive => sub { Future->done(shift @messages) },
+    );
+    my $running = $stream->stream_to(sub {
+        my ($chunk) = @_;
+        push @seen, $chunk;
+        return 'immediate' if $chunk eq 'one';
+        return $sink_wait if $chunk eq 'two';
+        return $get_only;
+    });
+
+    is \@seen, ['one', 'two'], 'Future-backed sink applies pull backpressure';
+    ok !$running->is_ready, 'stream_to remains pending on the sink Future';
+    $sink_wait->done;
+    is $running->get, 11, 'stream_to counts every processed byte after sink settlement';
+    is \@seen, ['one', 'two', 'three'], 'source resumes only after sink settlement';
+    is $get_only->get_calls, 0,
+        'an unrelated get method does not create an undocumented awaitable protocol';
+
+    my $failed = PAGI::Request::BodyStream->new(
+        receive => sub { Future->done({
+            type => 'http.request', body => 'bad', more => 0,
+        }) },
+    )->stream_to(sub { Future->fail("sink exploded\n") });
+    like dies { $failed->get }, qr/sink exploded/,
+        'Future-backed sink failure propagates';
+};
+
+subtest 'BodyStream stream_to retains mid-body truncation reporting' => sub {
+    my @messages = (
+        { type => 'http.request', body => 'partial', more => 1 },
+        { type => 'http.disconnect' },
+    );
+    my $stream = PAGI::Request::BodyStream->new(
+        receive => sub { Future->done(shift @messages) },
+    );
+    is $stream->stream_to(sub { return Future->done })->get, 7,
+        'partial bytes are delivered to the sink';
+    ok $stream->truncated, 'mid-body disconnect remains explicitly observable';
 };
 
 done_testing;

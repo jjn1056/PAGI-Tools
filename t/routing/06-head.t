@@ -9,6 +9,7 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::Response;
 use PAGI::Response::Text ();
+use PAGI::Response::Stream ();
 use PAGI::Routing qw(router route mount middleware);
 
 sub scope {
@@ -159,6 +160,48 @@ subtest 'HEAD selection retains declaration order and constraint fallthrough' =>
     }
     is($expensive_get_calls, 0,
         'an explicit HEAD route before GET avoids the expensive GET handler');
+};
+
+subtest 'Stream HEAD runs the GET producer while an earlier explicit HEAD avoids it' => sub {
+    my $producer_calls = 0;
+    my $stream = PAGI::Response::Stream->new(async sub {
+        my ($writer) = @_;
+        ++$producer_calls;
+        await $writer->write('one');
+        await $writer->write('two');
+    }, headers => ['X-Stream' => 'yes']);
+    my $automatic = router(routes => [
+        route('/stream' => $stream, methods => 'GET'),
+    ])->to_app;
+
+    my $get = run_app($automatic, method => 'GET', path => '/stream');
+    my $head = run_app($automatic, method => 'HEAD', path => '/stream');
+    is($producer_calls, 2,
+        'ordinary GET and automatic HEAD each invoke and await the Stream producer');
+    is(response_bodies($get), [
+        { type => 'http.response.body', body => 'one', more => 1 },
+        { type => 'http.response.body', body => 'two', more => 1 },
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'GET receives the complete streamed representation');
+    is(response_bodies($head), [
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'HeadBoundary suppresses every Stream byte but retains terminal completion');
+    is(response_header($head, 'X-Stream'), response_header($get, 'X-Stream'),
+        'Stream HEAD retains GET-equivalent response metadata');
+
+    my $explicit = router(routes => [
+        route('/stream' => PAGI::Response::Text->new('lightweight'), methods => 'HEAD'),
+        route('/stream' => $stream, methods => 'GET'),
+    ])->to_app;
+    my $before = $producer_calls;
+    my $explicit_head = run_app($explicit, method => 'HEAD', path => '/stream');
+    is($producer_calls, $before,
+        'an earlier explicit HEAD route avoids the expensive GET Stream producer');
+    is(response_header($explicit_head, 'Content-Length'), 11,
+        'explicit HEAD uses its lightweight representation metadata');
+    is(response_bodies($explicit_head), [
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'explicit HEAD remains suppressed at the outer boundary');
 };
 
 subtest 'the outer HEAD boundary lets router middleware observe the full representation' => sub {

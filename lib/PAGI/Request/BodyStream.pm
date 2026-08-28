@@ -3,6 +3,7 @@ package PAGI::Request::BodyStream;
 use strict;
 use warnings;
 
+use Future;
 use Future::AsyncAwait;
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Carp qw(croak);
@@ -339,11 +340,10 @@ async sub stream_to {
         last unless defined $chunk;
         next unless length $chunk;
 
-        # Call callback - it may be async
+        # Future->wrap is the complete sink contract: immediate values settle
+        # now and real Future values retain their backpressure.
         my $result = $callback->($chunk);
-        if (ref($result) && $result->can('get')) {
-            await $result;
-        }
+        await Future->wrap($result);
 
         $bytes_processed += length($chunk);
     }

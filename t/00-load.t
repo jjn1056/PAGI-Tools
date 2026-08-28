@@ -48,6 +48,8 @@ my @load_modules = qw(
     PAGI::Response::Problem
     PAGI::Response::Redirect
     PAGI::Response::Empty
+    PAGI::Response::Stream
+    PAGI::Response::Writer
     PAGI::Pages
     PAGI::Session
     PAGI::Stash

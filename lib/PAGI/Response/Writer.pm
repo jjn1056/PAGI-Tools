@@ -1,0 +1,493 @@
+package PAGI::Response::Writer;
+
+use strict;
+use warnings;
+
+use Carp qw(croak);
+use Encode qw(encode FB_CROAK LEAVE_SRC);
+use Future;
+use Future::AsyncAwait;
+use Scalar::Util qw(blessed weaken);
+
+use PAGI::Response ();
+
+=encoding UTF-8
+
+=head1 NAME
+
+PAGI::Response::Writer - per-invocation backpressured Stream writer
+
+=head1 DESCRIPTION
+
+A Writer is created internally for one L<PAGI::Response::Stream> invocation.
+It is not a Response, application value, or publicly constructible object.
+
+Every C<write> returns a Future chained to the invocation's PAGI send Future.
+Applications must await that Future before producing the next chunk.  Only one
+write may be outstanding; Writer never hides a queue or buffers multiple
+chunks.
+
+=cut
+
+sub _new {
+    my ($class, %args) = @_;
+    my $send = $args{send};
+    croak 'Writer send must be a coderef' unless ref($send) eq 'CODE';
+
+    my $connection = $args{connection};
+    if (defined $connection) {
+        croak 'pagi.connection must provide is_connected, disconnect_reason, and on_disconnect'
+            unless blessed($connection)
+                && $connection->can('is_connected')
+                && $connection->can('disconnect_reason')
+                && $connection->can('on_disconnect');
+    }
+
+    my $transport = $args{transport};
+    if (defined $transport) {
+        croak 'pagi.transport must provide buffered_amount'
+            unless blessed($transport) && $transport->can('buffered_amount');
+    }
+
+    my $self = bless {
+        _send              => $send,
+        _connection        => $connection,
+        _transport         => $transport,
+        _closed            => 0,
+        _aborted           => 0,
+        _disconnected      => 0,
+        _disconnect_reason => undef,
+        _disconnect_signal => Future->new,
+        _bytes_written     => 0,
+        _active_write      => undef,
+        _active_close      => undef,
+        _on_close          => [],
+        _cleanup_future    => undef,
+    }, $class;
+
+    if ($connection) {
+        my $weak_self = $self;
+        weaken($weak_self);
+        $connection->on_disconnect(sub {
+            my ($reason) = @_;
+            return unless $weak_self;
+            $weak_self->_record_disconnect($reason);
+        });
+        $self->_refresh_disconnect;
+    }
+
+    return $self;
+}
+
+sub write {
+    my ($self, $bytes) = @_;
+    PAGI::Response::_require_bytes('stream chunk', $bytes);
+    croak 'A write is already outstanding; await write before writing again'
+        if $self->{_active_write};
+    return Future->fail("Writer already closed\n") if $self->{_closed};
+
+    $self->_refresh_disconnect;
+    return Future->fail($self->_disconnect_error) if $self->{_disconnected};
+
+    my $delivery = Future->new;
+    my $active = {
+        delivery => $delivery,
+        send      => undef,
+    };
+    $self->{_active_write} = $active;
+    $delivery->on_ready(sub {
+        $self->{_active_write} = undef
+            if $self->{_active_write}
+                && $self->{_active_write}{delivery} == $delivery;
+    });
+
+    my $send_future;
+    my $called = eval {
+        $send_future = Future->wrap($self->{_send}->({
+            type => 'http.response.body',
+            body => $bytes,
+            more => 1,
+        }));
+        1;
+    };
+    unless ($called) {
+        $delivery->fail($@);
+        return $delivery;
+    }
+
+    $active->{send} = $send_future;
+    $send_future->on_ready(sub {
+        return if $delivery->is_ready || $delivery->is_cancelled;
+        if ($send_future->is_failed) {
+            $delivery->fail($send_future->failure);
+            return;
+        }
+        if ($send_future->is_cancelled) {
+            $delivery->fail("Stream send Future was cancelled\n");
+            return;
+        }
+
+        $self->_refresh_disconnect;
+        return if $delivery->is_ready || $delivery->is_cancelled;
+        if ($self->{_disconnected}) {
+            $delivery->fail($self->_disconnect_error);
+            return;
+        }
+
+        $self->{_bytes_written} += length $bytes;
+        $delivery->done;
+    });
+    $delivery->on_cancel(sub {
+        $send_future->cancel
+            if !$send_future->is_ready && !$send_future->is_cancelled;
+    });
+
+    return $delivery;
+}
+
+sub write_text {
+    my ($self, $characters) = @_;
+    croak 'stream text must be a defined unblessed character scalar'
+        unless defined($characters) && !ref($characters);
+    my $bytes = encode('UTF-8', $characters, FB_CROAK | LEAVE_SRC);
+    return $self->write($bytes);
+}
+
+sub pipe_from {
+    my ($self, $source) = @_;
+    croak 'pipe_from source must be an object with next_chunk'
+        unless blessed($source) && $source->can('next_chunk');
+    return $self->_pipe_from($source);
+}
+
+async sub _pipe_from {
+    my ($self, $source) = @_;
+    while (1) {
+        my $returned = $source->next_chunk;
+        my $chunk = await Future->wrap($returned);
+        last unless defined $chunk;
+        next unless length $chunk;
+        await $self->write($chunk);
+    }
+    return;
+}
+
+sub close {
+    my ($self) = @_;
+    return Future->done if $self->{_closed};
+    croak 'Cannot close while a write is outstanding; await write first'
+        if $self->{_active_write};
+
+    $self->_refresh_disconnect;
+    return Future->fail($self->_disconnect_error) if $self->{_disconnected};
+
+    $self->{_closed} = 1;
+    my $delivery = Future->new;
+    my $active = {
+        delivery => $delivery,
+        send      => undef,
+    };
+    $self->{_active_close} = $active;
+    $delivery->on_ready(sub {
+        $self->{_active_close} = undef
+            if $self->{_active_close}
+                && $self->{_active_close}{delivery} == $delivery;
+    });
+
+    my $finished = $self->_finish_close($delivery);
+    my $send_future;
+    my $called = eval {
+        $send_future = Future->wrap($self->{_send}->({
+            type => 'http.response.body',
+            body => '',
+            more => 0,
+        }));
+        1;
+    };
+    unless ($called) {
+        $delivery->fail($@);
+        return $finished;
+    }
+
+    $active->{send} = $send_future;
+    $send_future->on_ready(sub {
+        return if $delivery->is_ready || $delivery->is_cancelled;
+        if ($send_future->is_failed) {
+            $delivery->fail($send_future->failure);
+            return;
+        }
+        if ($send_future->is_cancelled) {
+            $delivery->fail("Stream terminal send Future was cancelled\n");
+            return;
+        }
+
+        $self->_refresh_disconnect;
+        return if $delivery->is_ready || $delivery->is_cancelled;
+        if ($self->{_disconnected}) {
+            $delivery->fail($self->_disconnect_error);
+            return;
+        }
+        $delivery->done;
+    });
+    $delivery->on_cancel(sub {
+        $send_future->cancel
+            if !$send_future->is_ready && !$send_future->is_cancelled;
+    });
+
+    return $finished;
+}
+
+async sub _finish_close {
+    my ($self, $delivery) = @_;
+    my ($delivery_ok, $delivery_error);
+    $delivery_ok = eval { await $delivery; 1 };
+    $delivery_error = $@ unless $delivery_ok;
+
+    await $self->_cleanup;
+    die $delivery_error unless $delivery_ok;
+    return;
+}
+
+sub _abort {
+    my ($self) = @_;
+    $self->{_closed} = 1;
+    $self->{_aborted} = 1;
+
+    for my $slot (qw(_active_write _active_close)) {
+        my $active = $self->{$slot} or next;
+        my $delivery = $active->{delivery};
+        $delivery->fail("Stream aborted\n")
+            unless $delivery->is_ready || $delivery->is_cancelled;
+        my $send = $active->{send};
+        $send->cancel if $send && !$send->is_ready && !$send->is_cancelled;
+    }
+
+    return $self->_cleanup;
+}
+
+sub _cleanup {
+    my ($self) = @_;
+    return $self->{_cleanup_future}->without_cancel
+        if $self->{_cleanup_future};
+
+    my $completion = Future->new;
+    $self->{_cleanup_future} = $completion;
+    my @callbacks = splice @{$self->{_on_close}};
+
+    my $worker = async sub {
+        for my $callback (@callbacks) {
+            my $ok = eval {
+                my $returned = $callback->();
+                await Future->wrap($returned);
+                1;
+            };
+            warn "PAGI::Response::Writer on_close callback error: $@" unless $ok;
+        }
+        return;
+    }->();
+    $worker->on_ready(sub {
+        return if $completion->is_ready || $completion->is_cancelled;
+        if ($worker->is_failed) {
+            $completion->fail($worker->failure);
+        } elsif ($worker->is_cancelled) {
+            $completion->fail("Writer cleanup was cancelled\n");
+        } else {
+            $completion->done;
+        }
+    });
+
+    return $completion->without_cancel;
+}
+
+sub on_close {
+    my ($self, $callback) = @_;
+    croak 'on_close callback must be a coderef' unless ref($callback) eq 'CODE';
+    croak 'Cannot register on_close after Writer is closed' if $self->{_closed};
+    push @{$self->{_on_close}}, $callback;
+    return $self;
+}
+
+sub is_closed { return $_[0]{_closed} ? 1 : 0 }
+
+sub is_disconnected {
+    my ($self) = @_;
+    return undef unless $self->{_connection};
+    $self->_refresh_disconnect;
+    return $self->{_disconnected} ? 1 : 0;
+}
+
+sub disconnect_reason {
+    my ($self) = @_;
+    $self->_refresh_disconnect if $self->{_connection};
+    return $self->{_disconnect_reason};
+}
+
+sub bytes_written { return $_[0]{_bytes_written} }
+
+sub buffered_amount {
+    my ($self) = @_;
+    return 0 unless $self->{_transport};
+    return $self->{_transport}->buffered_amount;
+}
+
+sub high_water_mark {
+    my ($self) = @_;
+    my $transport = $self->{_transport};
+    return undef unless $transport && $transport->can('high_water_mark');
+    return $transport->high_water_mark;
+}
+
+sub low_water_mark {
+    my ($self) = @_;
+    my $transport = $self->{_transport};
+    return undef unless $transport && $transport->can('low_water_mark');
+    return $transport->low_water_mark;
+}
+
+sub is_writable {
+    my ($self) = @_;
+    my $high = $self->high_water_mark;
+    return 1 unless defined $high;
+    return $self->buffered_amount < $high ? 1 : 0;
+}
+
+sub on_high_water {
+    my ($self, $callback) = @_;
+    my $transport = $self->{_transport};
+    $transport->on_high_water($callback)
+        if $transport && $transport->can('on_high_water');
+    return $self;
+}
+
+sub on_drain {
+    my ($self, $callback) = @_;
+    my $transport = $self->{_transport};
+    $transport->on_drain($callback)
+        if $transport && $transport->can('on_drain');
+    return $self;
+}
+
+sub _disconnect_signal { return $_[0]{_disconnect_signal} }
+
+sub _refresh_disconnect {
+    my ($self) = @_;
+    my $connection = $self->{_connection};
+    return unless $connection || $self->{_disconnected};
+    return 1 if $self->{_disconnected};
+    return 0 if $connection->is_connected;
+
+    if ($connection->can('response_complete')) {
+        my $complete = $connection->response_complete;
+        return 0 if defined($complete) && $complete;
+    }
+
+    $self->_record_disconnect($connection->disconnect_reason);
+    return 1;
+}
+
+sub _record_disconnect {
+    my ($self, $reason) = @_;
+    return if $self->{_disconnected};
+    $self->{_disconnected} = 1;
+    $self->{_disconnect_reason} = $reason
+        if defined($reason) && length($reason);
+    my $error = $self->_disconnect_error;
+
+    for my $slot (qw(_active_write _active_close)) {
+        my $active = $self->{$slot} or next;
+        my $delivery = $active->{delivery};
+        $delivery->fail($error)
+            unless $delivery->is_ready || $delivery->is_cancelled;
+        my $send = $active->{send};
+        $send->cancel if $send && !$send->is_ready && !$send->is_cancelled;
+    }
+
+    my $signal = $self->{_disconnect_signal};
+    $signal->done($self->{_disconnect_reason})
+        unless $signal->is_ready || $signal->is_cancelled;
+    return;
+}
+
+sub _disconnect_error {
+    my ($self) = @_;
+    return PAGI::Response::Writer::_Disconnect->new(
+        $self->{_disconnect_reason},
+    );
+}
+
+sub _is_disconnect_error {
+    my ($class, $error) = @_;
+    return blessed($error)
+        && $error->isa('PAGI::Response::Writer::_Disconnect');
+}
+
+=head1 METHODS
+
+=head2 write, write_text
+
+    await $writer->write($encoded_bytes);
+    await $writer->write_text($characters);
+
+C<write> sends one nonterminal body event and settles only when the send Future
+settles while the connection remains connected. C<write_text> performs strict
+UTF-8 encoding first. Await each write before starting another.
+
+=head2 pipe_from
+
+    await $writer->pipe_from($source);
+
+Pulls immediate or Future-backed C<next_chunk> results sequentially. Empty
+chunks are skipped, and the next pull never starts before the previous write
+settles.
+
+=head2 close, is_closed
+
+C<close> sends one terminal empty body event and runs cleanup. It is
+idempotent. Writes after close fail.
+
+=head2 is_disconnected, disconnect_reason, bytes_written
+
+Connection capability is tri-state: C<is_disconnected> is C<undef> without
+C<pagi.connection>. C<bytes_written> counts only nonterminal bytes whose send
+settled before a detected disconnect.
+
+=head2 on_close
+
+Registers immediate or Future-backed local cleanup in registration order.
+Cleanup runs exactly once. Individual failures are warned and do not prevent
+later callbacks.
+
+=head2 buffered_amount, high_water_mark, low_water_mark, is_writable
+
+These methods report the invocation transport's current outbound buffer and
+watermark state.
+
+=head2 on_high_water, on_drain
+
+These methods expose the invocation's optional C<pagi.transport> flow-control
+capability. Without it, buffered amount is zero, watermarks are undefined,
+the writer is writable, and registrations are chainable no-ops.
+
+=cut
+
+package PAGI::Response::Writer::_Disconnect;
+
+use strict;
+use warnings;
+use overload '""' => '_as_string', fallback => 1;
+
+sub new {
+    my ($class, $reason) = @_;
+    return bless { reason => $reason }, $class;
+}
+
+sub reason { return $_[0]{reason} }
+
+sub _as_string {
+    my ($self) = @_;
+    return defined($self->{reason}) && length($self->{reason})
+        ? "Stream disconnected ($self->{reason})\n"
+        : "Stream disconnected\n";
+}
+
+1;
