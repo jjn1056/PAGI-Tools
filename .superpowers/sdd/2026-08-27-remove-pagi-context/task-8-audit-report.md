@@ -2,13 +2,15 @@
 
 ## Current status
 
-**BLOCKED IN PHASE B: the sole repository-suite invocation found an ordinary
-release-blocking test integration defect.**
+**DEV-005 CORRECTED: independent review of the test semantics and the
+authorized replacement repository suite are pending.**
 
 AUD-001 was corrected by approved and independently reviewed DEV-004 at
 `8703e77`. Fresh Phase A then passed. The one authorized repository suite
 failed in `t/upgrading-routing-composition.t`, so Task 8 stopped before the
-distribution build. No AUD-002 fix, second suite, or build was attempted.
+distribution build. AUD-002 was corrected by DEV-005 at `1693a8c`; independent
+review follows. The controller has authorized a replacement-suite budget, but
+it has not been used. No distribution build was attempted.
 
 ## Audited campaign identity
 
@@ -209,10 +211,11 @@ The final live search exposed the path literals, but they were incorrectly
 classified as absence evidence; unlike `t/upgrading-context-removal.t`, this
 test does not use `-e` and instead requires the files to exist.
 
-No fix was applied. The controller must approve the exact test path under a
-new `DEV-NNN`, obtain focused RED/GREEN evidence and independent review, and
-rule explicitly on the already-consumed exactly-once full-suite budget before
-Task 8 can resume. The build remains gated.
+At this failed-attempt stop, no fix had been applied. The controller still
+needed to approve an exact test path, focused RED/GREEN evidence, independent
+review, and a ruling on the consumed suite budget. DEV-005 below records the
+subsequent correction; this paragraph remains the chronology of the original
+AUD-002 stop.
 
 ## Distribution build
 
@@ -241,5 +244,7 @@ Adjacent verification under Perl 5.42.2 passes
 passes `perl -Ilib -c`, and `git diff --check` passes.
 
 Per the DEV-005 boundary, no second repository suite, distribution build,
-`dzil test`, host replacement, or push was run. Task 8 remains with the
-controller for post-correction review and its explicit Phase B budget ruling.
+`dzil test`, host replacement, or push was run. Independent review of the
+corrected test semantics is pending/following. The controller has authorized
+one replacement repository-suite budget, but it remains unused; Task 8 stays
+gated before the build until that review and replacement-suite result.
