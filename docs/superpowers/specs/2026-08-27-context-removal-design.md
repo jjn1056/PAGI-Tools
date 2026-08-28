@@ -371,8 +371,9 @@ my $response = await Future->wrap(
     $handler->($request, $original_error),
 );
 
-croak 'handler did not return a response'
-    unless PAGI::Utils::is_response($response);
+croak 'handler did not return a status-aware response'
+    unless PAGI::Utils::is_response($response)
+        && $response->can('status_try');
 
 $response->status_try($inferred_status);
 await Future->wrap($response->respond($send));
@@ -382,6 +383,9 @@ Consequences:
 
 - a custom callback's explicit status wins;
 - an unset status receives the configured or validated exception status;
+- ErrorHandler custom responses must implement both `respond` and
+  `status_try`; this is narrower than Router's general respondable-value
+  contract because ErrorHandler must apply its resolved status safely;
 - the callback no longer reads a hidden preseed from
   `$context->response->status`; and
 - a callback that needs to branch on the exception can inspect its explicit
@@ -406,7 +410,8 @@ Preserve all current ErrorHandler boundaries:
 - validated exception `status_code` claims retain their current rules;
 - built-in Pages rendering failure emits the fixed safe 500;
 - failures while sending that last-resort response propagate without retry;
-- an invalid custom-handler return uses the standard diagnostic; and
+- an invalid or non-status-aware custom-handler return uses the documented
+  ErrorHandler diagnostic; and
 - a custom handler exception or failed Future propagates unchanged rather than
   being hidden by the built-in fallback.
 
@@ -584,6 +589,7 @@ Tests must pin:
 - explicit response status winning over the inferred status;
 - invalid and throwing `status_code` accessors retaining safe behavior;
 - invalid custom return diagnostics;
+- rejection of a respondable value that lacks `status_try`;
 - custom handler exception and failed-Future identity propagation;
 - built-in renderer failure using the fixed last-resort 500;
 - send failures propagating without retry; and
@@ -724,7 +730,7 @@ The campaign is complete only when:
    lifecycle can await it;
 6. ErrorHandler custom callbacks receive `($request, $original_error)`;
 7. ErrorHandler applies inferred status with `status_try` after a valid custom
-   response is returned, preserving explicit status;
+   status-aware response is returned, preserving explicit status;
 8. current HTTP, WebSocket, SSE, Pages, helper, Endpoint, and ErrorHandler
    behavior has focused ownership tests;
 9. executable examples and upgrade guidance use the new signatures;
