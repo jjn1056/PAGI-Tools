@@ -45,3 +45,13 @@ outside Task 6.
 
 Only the six Task 6 files plus this required report are changed. The controller
 owns the ledger and review coordination; no ledger entry was edited here.
+
+## Review fix round 1
+
+- Corrected the endpoint-demo load-failure skip plan from 8 to 21, matching the
+  21 assertions in its integration-test block so a failed example load produces
+  valid TAP rather than a mismatched subtest plan.
+- Verification: `source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc &&
+  perlbrew use perl-5.42.2@default && prove -lv
+  t/integration-app-file-examples.t` — pass (11 top-level subtests; endpoint
+  demo skip plan reports `1..21`).
