@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-27
 
-**Status:** Proposed design; user review required before implementation planning
+**Status:** Approved design; implementation planning authorized
 
 **Scope:** Replace the all-purpose `PAGI::Response` body modes with a small,
 extensible HTTP response family; make every response a complete terminal PAGI
@@ -782,6 +782,13 @@ No `app =>` marker is added to Route. Perl value shape already distinguishes an
 instantiated component from a coderef, while it cannot distinguish two coderef
 contracts. Package-name strings remain invalid application values.
 
+Target shape does not change Route semantics. A Response or other `to_app`
+component receives the same `methods`, `constraints`, `middleware`, `name`,
+and `desc` behavior as a Request-handler target. Omitted `methods` means GET
+with automatic HEAD. A component-valued Route participates in FULL/PARTIAL
+scanning, method-union construction, generated 405 responses, and `Allow`
+exactly like any other Route.
+
 Mount retains exactly one of `app` or `routes`. It always owns the complete
 matched prefix subtree. A terminal mounted response ignores the rewritten
 remaining child path, which is occasionally useful but must be stated plainly.
@@ -932,8 +939,13 @@ WebSocket and SSE. They let push-style sources pause at the high watermark and
 resume on drain rather than producing another chunk. When no transport handle
 is available, `buffered_amount` returns zero, the watermarks return `undef`,
 `is_writable` returns true, and the callback registrations are quiet chainable
-no-ops. This does not weaken the primary rule: ordinary producers self-pace by
-awaiting each write.
+no-ops. This deliberately differs from the optional top-level
+`transport($request)` helper, which returns `undef` when the capability is
+absent. A caller asking for the optional Transport capability must handle its
+absence; a producer that already owns a Writer receives operationally neutral
+values so it need not branch around every write loop. These fallbacks do not
+claim that transport introspection exists and do not weaken the primary rule:
+ordinary producers self-pace by awaiting each write.
 
 `pipe_from` accepts an object with `next_chunk` returning an immediate value or
 a Future. It repeatedly:
@@ -996,7 +1008,13 @@ consuming `$receive`:
   disconnect outcome;
 - `write` checks connection state before and after awaiting `$send`, because
   PAGI defines a post-disconnect send as a successful no-op rather than a
-  disconnect error;
+  disconnect error. If either check observes a disconnect, the `write` Future
+  fails with a disconnect-specific error containing the available reason.
+  This makes an awaiting producer stop through its normal failure path. The
+  Stream runner recognizes that error as the already-recorded connection
+  disconnect outcome: it cancels remaining work, runs cleanup once, emits no
+  terminal event, and does not report or rethrow it as an application
+  failure;
 - a genuine failed send Future still fails the current write and producer;
 - normal close sends the terminal event once;
 - an exception after response start marks the writer aborted, runs local
@@ -1055,12 +1073,21 @@ without moving request-path security into Response.
 
 ### 14.2 File lifecycle
 
-File construction validates option shapes but does not read the complete file
-or open a long-lived handle. Request-time preparation validates the selected
-path sufficiently to choose status and headers before response start. Actual
+File construction validates option shapes only. It performs no filesystem
+existence, readability, metadata, or content checks and does not open a
+long-lived handle. Request-time preparation validates the selected path
+sufficiently to choose status and headers before response start. Actual
 delivery uses PAGI's `file` body event so the server can stream or use
 zero-copy mechanisms and the send Future remains pending until server file use
 is complete.
+
+This deliberately changes when path mistakes surface. The current
+`PAGI::Response->send_file($path)` performs `-f` and `-r` checks when called; a
+preconstructed `file_response($path)` instead reports a missing or unreadable
+file on its first applicable request. Deferral lets one reusable component
+follow ordinary deployment, replacement, and rotation of the selected path.
+An application that requires startup-time configuration validation must
+perform that validation explicitly during startup or lifespan handling.
 
 The established trusted-tree pathname race remains the PAGI file-event model:
 the server opens the path after application inspection. This design does not
@@ -1856,6 +1883,21 @@ They do not suppress their own body when nested. Router/Compose's outermost
 HeadBoundary remains authoritative so response and router middleware observe
 the full representation and can calculate identical GET/HEAD headers.
 
+For Stream, constructing the complete GET-equivalent representation means
+invoking and awaiting the entire producer while HeadBoundary suppresses its
+body events. This preserves one consistent HEAD model and allows enclosing
+middleware to observe the same event stream, but it can be expensive. An
+expensive streaming GET should declare an explicit lightweight HEAD route
+before the GET route:
+
+```perl
+route('/export' => \&head_export, methods => ['HEAD']),
+route('/export' => stream_response(\&produce_export), methods => ['GET']),
+```
+
+Declaration order is significant because GET supplies automatic HEAD. The
+explicit HEAD route must appear first to avoid invoking the GET producer.
+
 This order is required:
 
 ```text
@@ -2033,6 +2075,9 @@ This ordering is advisory until the implementation plan verifies dependencies.
 ### 24.2 Routing and composition
 
 - Response objects accepted as exact Route targets;
+- component-valued Routes default to GET plus automatic HEAD and preserve
+  explicit methods, PARTIAL matching, first-seen method unions, generated 405,
+  and `Allow`;
 - coderefs remain handlers unless marked raw;
 - arbitrary `to_app` handler return values remain invalid;
 - package strings remain invalid;
@@ -2075,10 +2120,13 @@ This ordering is advisory until the implementation plan verifies dependencies.
 - producer cancellation and exactly-once asynchronous cleanup on disconnect;
 - `pipe_from` with immediate/Future chunks, empty chunks, EOF, failure, and
   truncated BodyStream;
-- request buffered/streaming mutual exclusion; and
+- request buffered/streaming mutual exclusion;
 - no competing response-side receive consumption;
-- every invocation receives a fresh Writer and producer; and
-- ordinary Stream performs no SSE or WebSocket reconnection behavior.
+- every invocation receives a fresh Writer and producer;
+- ordinary Stream performs no SSE or WebSocket reconnection behavior;
+- HEAD invokes and awaits the ordinary producer while suppressing all body
+  events; and
+- an earlier explicit HEAD route avoids invoking that producer.
 
 ### 24.4 Files
 
@@ -2086,6 +2134,8 @@ This ordering is advisory until the implementation plan verifies dependencies.
   `PAGI::App::File->from_app_path` returns a rooted application, and the old
   class-method spelling is absent;
 - no body buffering;
+- construction performs no filesystem checks, while request-time preflight
+  handles missing and unreadable files before response start;
 - MIME, disposition, ETag, conditional, and strict range behavior;
 - full-file and configured-window delivery, including 200 without
   Content-Range and correct physical offsets;
@@ -2202,7 +2252,7 @@ UPGRADING must include at least:
 | `PAGI::Response->send_raw($b)` | `response($b)` |
 | `PAGI::Response->redirect($uri)` | `redirect_response($uri)` |
 | `PAGI::Response->empty(...)` | `empty_response(...)` |
-| `PAGI::Response->send_file($p)` | `file_response($p)` |
+| `PAGI::Response->send_file($p)` with immediate `-f`/`-r` checks | `file_response($p)`; filesystem validation is deferred to request-time preflight, so applications requiring startup validation must perform it explicitly |
 | `PAGI::Response->stream($cb)` | `stream_response($cb)` |
 | `$response->writer($send)` | `stream_response(async sub ($writer) { ... })` |
 | `$response->respond($send)` | `$response->respond($scope, $receive, $send)` |
