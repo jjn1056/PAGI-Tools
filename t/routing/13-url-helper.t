@@ -11,6 +11,8 @@ use PAGI::Request;
 use PAGI::Response;
 use PAGI::WebSocket;
 use PAGI::SSE;
+use PAGI::Middleware::ReverseProxy;
+use PAGI::Middleware::TrustedHosts;
 use PAGI::Routing qw(mount route router sse websocket);
 use PAGI::Routing::Resolver;
 use PAGI::Routing::URL qw(url path_for url_for);
@@ -200,6 +202,67 @@ subtest 'raw and protocol-object sources resolve their exact scopes' => sub {
         'SSE source supplies its exact scope');
     is([sort keys %$sse_scope], \@sse_keys,
         'URL use adds no key beside the SSE object cache');
+};
+
+subtest 'direct protocol sources preserve a mounted child boundary' => sub {
+    my $tenant = router(routes => [
+        route('/show/{id}' => sub { }, name => 'show'),
+        route('/sibling/{id}' => sub { }, name => 'sibling'),
+        websocket('/socket/{room}' => sub { }, name => 'socket'),
+        sse('/events/{channel}' => sub { }, name => 'events'),
+    ]);
+    my $routing = router(routes => [
+        mount('/tenants/{tenant}', app => $tenant, name => 'tenant'),
+    ]);
+    my $resolver = $routing->_resolver;
+    my $receive = sub { };
+    my $send = sub { };
+    my @cases = (
+        ['http', 'https', 'show', { id => 7 },
+            '/proxy/tenants/acme/show/7?via=http',
+            'https://public.example:8443/proxy/tenants/acme/show/7?via=http'],
+        ['websocket', 'wss', 'socket', { room => 'lobby' },
+            '/proxy/tenants/acme/socket/lobby?via=websocket',
+            'wss://public.example:8443/proxy/tenants/acme/socket/lobby?via=websocket'],
+        ['sse', 'https', 'events', { channel => 'news' },
+            '/proxy/tenants/acme/events/news?via=sse',
+            'https://public.example:8443/proxy/tenants/acme/events/news?via=sse'],
+    );
+
+    for my $case (@cases) {
+        my ($type, $scheme, $name, $params, $path, $absolute) = @{$case};
+        my $scope = _scope($type, $resolver,
+            root_path => '/proxy/tenants/acme',
+            scheme => $scheme,
+            headers => [['host', 'public.example:8443']],
+            'pagi.routing' => {
+                version => 1,
+                frames => [_frame(
+                    $resolver,
+                    root_path => '/proxy',
+                    logical_namespace => '/tenant',
+                    captures => { tenant => 'acme' },
+                    mounts => [{
+                        path => '/tenants/{tenant}', name => 'tenant', desc => undef,
+                    }],
+                )],
+            },
+        );
+        my $source = $type eq 'http'
+            ? PAGI::Request->new($scope, $receive)
+            : $type eq 'websocket'
+                ? PAGI::WebSocket->new($scope, $receive, $send)
+                : PAGI::SSE->new($scope, $receive, $send);
+
+        is(path_for($source, $name, $params, { via => $type }), $path,
+            "$type path_for retains the mounted child boundary");
+        is(url_for($source, $name, $params, { via => $type }), $absolute,
+            "$type url_for keeps the target protocol mapping");
+        is(path_for($source, '/tenant/sibling',
+            { tenant => 'acme', id => 8 }, { via => $type }),
+            "/proxy/tenants/acme/sibling/8?via=$type",
+            "$type absolute route reaches the mounted sibling");
+    }
 };
 
 subtest 'operations read the selected frame at operation time' => sub {
@@ -584,6 +647,37 @@ subtest 'authority validation and target kinds preserve HTTP HTTPS WS WSS mappin
         'missing authority remains an error');
     like(dies { url_for(_scope('http', $resolver, scheme => 'ftp'), '/page') },
         qr/\Aunsupported URL scheme/, 'unsupported scheme remains an error');
+};
+
+subtest 'ReverseProxy normalizes authority before TrustedHosts and url_for' => sub {
+    my $routing = router(routes => [
+        route('/external' => sub {
+            my ($request) = @_;
+            return PAGI::Response->text(url_for($request, '/external'));
+        }, name => 'external'),
+    ]);
+    my $proxy = PAGI::Middleware::ReverseProxy->new(
+        trusted_proxies => ['127.0.0.1'],
+    );
+    my $trusted = PAGI::Middleware::TrustedHosts->new(
+        hosts => ['public.example:8443'],
+    );
+    my $app = $proxy->wrap($trusted->wrap($routing->to_app));
+    my $events = _run_http($app,
+        path => '/external', raw_path => '/external',
+        client => ['127.0.0.1', 12345],
+        server => ['internal.example', 5000],
+        headers => [
+            ['host', 'internal.example'],
+            ['x-forwarded-proto', 'https'],
+            ['x-forwarded-host', 'public.example:8443'],
+        ],
+    );
+
+    is($events->[0]{status}, 200,
+        'TrustedHosts accepts the authority normalized by ReverseProxy');
+    is(_response_body($events), 'https://public.example:8443/external',
+        'url_for uses normalized scheme and validated external authority');
 };
 
 subtest 'missing malformed and versioned routing frames fail at operation time' => sub {

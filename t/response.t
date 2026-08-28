@@ -149,7 +149,7 @@ subtest 'send method encodes UTF-8' => sub {
 subtest 'respond is re-entrant by design' => sub {
     # respond() on a detached Response does NOT guard double-send.
     # The same response value can be served to multiple connections.
-    # Double-send protection is the responsibility of the caller (e.g. $ctx->respond).
+    # Cross-emission protection is owned by the server/Compose boundary.
     my $send1_count = 0;
     my $send2_count = 0;
     my $send1 = sub { $send1_count++; Future->done };

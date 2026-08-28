@@ -354,7 +354,7 @@ C<$request-E<gt>state> returns the strict L<PAGI::State> facade for a C<state>
 hash supplied in the server-owned request scope, including state prepared
 through L<PAGI::Compose> lifespan callbacks. It returns C<undef> when the key
 is absent. Endpoint neither creates nor injects that key and has no C<state>
-or legacy frontend-class hook.
+or C<context_class> method.
 
 =head1 SNAPSHOTS AND ORDER
 
