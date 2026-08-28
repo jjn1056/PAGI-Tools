@@ -57,8 +57,7 @@ package MyApp::EventsSSE {
     sub keepalive_interval { 30 }
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $sse = $ctx->sse;
+        my ($self, $sse) = @_;
         await $sse->send_event(
             event => 'connected',
             data  => { server_time => time() },

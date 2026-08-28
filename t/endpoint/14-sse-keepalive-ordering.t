@@ -30,8 +30,8 @@ package KeepaliveEndpoint {
     sub keepalive_interval { 5 }
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        await $ctx->sse->send_event(event => 'connected', data => { ok => 1 });
+        my ($self, $sse) = @_;
+        await $sse->send_event(event => 'connected', data => { ok => 1 });
     }
 }
 
@@ -86,8 +86,8 @@ package DeclineWithKeepalive {
     sub keepalive_interval { 5 }
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        await $ctx->sse->decline(status => 401, body => 'Unauthorized');
+        my ($self, $sse) = @_;
+        await $sse->decline(status => 401, body => 'Unauthorized');
     }
 }
 

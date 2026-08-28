@@ -23,8 +23,8 @@ package DeclineOnConnect {
     use Future::AsyncAwait;
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        await $ctx->decline(
+        my ($self, $sse) = @_;
+        await $sse->decline(
             status  => 401,
             headers => [['content-type', 'text/plain'], ['www-authenticate', 'Bearer']],
             body    => 'Unauthorized',
@@ -53,8 +53,8 @@ package DeclineThenTryToStream {
     our $post_decline_exception;
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        await $ctx->sse->decline(status => 403, body => 'Forbidden');
+        my ($self, $sse) = @_;
+        await $sse->decline(status => 403, body => 'Forbidden');
     }
 }
 

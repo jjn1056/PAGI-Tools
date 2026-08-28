@@ -3,11 +3,11 @@ package PAGI::Endpoint::SSE;
 use strict;
 use warnings;
 
+use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
-
-# Factory class method - override in subclass for customization
-sub context_class { 'PAGI::Context' }
+use PAGI::SSE;
+use PAGI::Utils::Scope ();
 
 # Keepalive interval in seconds (0 = disabled)
 sub keepalive_interval { 0 }
@@ -18,8 +18,7 @@ sub new {
 }
 
 async sub handle {
-    my ($self, $ctx) = @_;
-    my $sse = $ctx->sse;
+    my ($self, $sse) = @_;
 
     # Configure keepalive if specified. This runs before the stream has
     # started, so keepalive() defers rather than sending immediately --
@@ -37,13 +36,14 @@ async sub handle {
     # Register disconnect callback
     if ($self->can('on_disconnect')) {
         $sse->on_close(sub {
-            $self->on_disconnect($ctx);
+            $self->on_disconnect($sse);
+            return;
         });
     }
 
     # Call on_connect if defined
     if ($self->can('on_connect')) {
-        await $self->on_connect($ctx);
+        await Future->wrap($self->on_connect($sse));
     } else {
         # Default: just start the stream
         await $sse->start;
@@ -61,7 +61,6 @@ async sub handle {
 
 sub to_app {
     my ($class) = @_;
-    my $context_class = $class->context_class;
 
     return async sub {
         my ($scope, $receive, $send) = @_;
@@ -69,11 +68,14 @@ sub to_app {
         my $type = $scope->{type} // '';
         croak "Expected sse scope, got '$type'" unless $type eq 'sse';
 
-        require PAGI::Context;
+        PAGI::Utils::Scope::_compatible_cached_scope_object(
+            $scope, 'pagi.sse', 'PAGI::SSE',
+        );
         my $endpoint = $class->new;
-        my $ctx = $context_class->new($scope, $receive, $send);
+        my $sse = PAGI::SSE->new($scope, $receive, $send);
 
-        await $endpoint->handle($ctx);
+        await $endpoint->handle($sse);
+        return;
     };
 }
 
@@ -94,17 +96,17 @@ PAGI::Endpoint::SSE - Class-based Server-Sent Events endpoint handler
     sub keepalive_interval { 30 }
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $user_id = $ctx->stash->get('user_id');
+        my ($self, $sse) = @_;
+        my $user_id = $sse->scope->{user_id};
 
-        await $ctx->sse->send_event(
+        await $sse->send_event(
             event => 'connected',
             data  => { user_id => $user_id },
         );
     }
 
     sub on_disconnect {
-        my ($self, $ctx) = @_;
+        my ($self, $sse) = @_;
         # Cleanup subscriptions
     }
 
@@ -121,15 +123,15 @@ Server-Sent Events connections with lifecycle hooks.
 =head2 on_connect
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        await $ctx->sse->send_event(data => 'Hello!');
+        my ($self, $sse) = @_;
+        await $sse->send_event(data => 'Hello!');
     }
 
 Called before the SSE stream starts -- I<not> after. C<handle()> calls
 C<on_connect> in place of its own default (which just calls C<< $sse->start
 >>), so the stream is B<not> already running when C<on_connect> runs; it
 starts lazily the first time you call C<start>, C<send>, C<send_json>, or
-C<send_event> inside it (or explicitly via C<< await $ctx->sse->start >>).
+C<send_event> inside it (or explicitly via C<< await $sse->start >>).
 Use this to send initial events and set up subscriptions.
 
 Because the stream has not started yet, C<on_connect> is also the supported
@@ -137,10 +139,9 @@ place to reject the request outright with a real HTTP response instead of
 streaming -- an auth gate, for example:
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $sse = $ctx->sse;
+        my ($self, $sse) = @_;
 
-        unless (authorized($ctx)) {
+        unless (authorized($sse)) {
             await $sse->decline(status => 401, body => 'Unauthorized');
             return;
         }
@@ -156,7 +157,7 @@ sent.
 =head2 on_disconnect
 
     sub on_disconnect {
-        my ($self, $ctx) = @_;
+        my ($self, $sse) = @_;
         # Cleanup subscriptions
     }
 
@@ -175,12 +176,6 @@ C<on_connect> runs), which is otherwise illegal on the wire -- see
 L<PAGI::SSE/keepalive>'s deferred-arm behavior, which is what makes this
 safe. If C<on_connect> declines instead of starting the stream, the request
 is silently dropped rather than sent (see L<PAGI::SSE/decline>).
-
-=head2 context_class
-
-    sub context_class { 'PAGI::Context' }
-
-Override to use a custom context class.
 
 =head2 to_app
 
@@ -240,11 +235,9 @@ between workers.
     my $sub_id = 0;
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $sse = $ctx->sse;
+        my ($self, $sse) = @_;
         my $id = ++$sub_id;
         $subscribers{$id} = $sse;
-        $ctx->stash->set(sub_id => $id);
 
         await $sse->send_event(
             event => 'connected',
@@ -253,8 +246,8 @@ between workers.
     }
 
     sub on_disconnect {
-        my ($self, $ctx) = @_;
-        delete $subscribers{$ctx->stash->get('sub_id')};
+        my ($self, $sse) = @_;
+        delete $subscribers{$_} for grep { $subscribers{$_} == $sse } keys %subscribers;
     }
 
 Now when any worker calls C<broadcast()>, the message goes to Redis, and
@@ -281,7 +274,7 @@ Setup Redis in your lifespan handler:
 
 =head1 SEE ALSO
 
-L<PAGI::Context>, L<PAGI::SSE>, L<PAGI::Endpoint::HTTP>,
+L<PAGI::SSE>, L<PAGI::Endpoint::HTTP>,
 L<PAGI::Endpoint::WebSocket>
 
 =cut
