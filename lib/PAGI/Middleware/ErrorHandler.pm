@@ -65,10 +65,10 @@ facts. Statuses such as 401, 405, 407, and 426 therefore require a handler.
 =item * handler (default: undef)
 
 Optional renderer invoked as C<< $handler->($request, $original_error) >>.
-It must return an immediate or Future-backed PAGI response value. The cached
-response receives the configured or exception-provided status only after the
-handler returns; an explicit renderer status wins. A custom renderer owns its
-response content type and cache policy unchanged.
+It must return an immediate or Future-backed PAGI response value. ErrorHandler
+applies the configured or exception-provided status to that returned response
+only after the handler returns; an explicit renderer status wins. A custom
+renderer owns its response content type and cache policy unchanged.
 
 Use the handler seam to force a fixed Pages representation:
 
