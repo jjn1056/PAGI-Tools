@@ -2,15 +2,18 @@
 
 ## Current status
 
-**DEV-005 CORRECTED: independent review of the test semantics and the
-authorized replacement repository suite are pending.**
+**PASS — Task 8 release-evidence audit is complete at reviewed HEAD
+`97af8b6`; no release action was performed.**
 
 AUD-001 was corrected by approved and independently reviewed DEV-004 at
-`8703e77`. Fresh Phase A then passed. The one authorized repository suite
-failed in `t/upgrading-routing-composition.t`, so Task 8 stopped before the
-distribution build. AUD-002 was corrected by DEV-005 at `1693a8c`; independent
-review follows. The controller has authorized a replacement-suite budget, but
-it has not been used. No distribution build was attempted.
+`8703e77`. Fresh Phase A then passed. The original repository suite exposed
+AUD-002 in `t/upgrading-routing-composition.t` and stopped before the build.
+AUD-002 was corrected by DEV-005 at `1693a8c`, independently approved, and its
+chronology finalized at `97af8b6`. The controller authorized exactly one
+replacement repository suite on that corrected candidate. It passed, after
+which exactly one `dzil build` passed and the resulting archive passed the
+content, metadata, integrity, and exclusion audit. The build-generated root
+README change was restored exactly.
 
 ## Audited campaign identity
 
@@ -18,17 +21,17 @@ it has not been used. No distribution build was attempted.
 - Ticket: Remove `PAGI::Context`, Task 8 final audit
 - Branch: `feat/remove-pagi-context`
 - Base: `9ab83b6ee512657086f42669b48e24b04e9e4864`
-- Audited HEAD: `c312941211698419fa4e9e0c80aa129df63de902`
+- Audited HEAD: `97af8b6de19ffb97dee72960835b1525ab5975f1`
 - Deployment boundary: local implementation branch only
 - Push target: none
 - Initial tracked status: clean
-- History inspected: all 18 commits in `9ab83b6..c312941`; aggregate change is
-  91 paths, 2,204 insertions, and 6,686 deletions.
+- History inspected: all 21 commits in `9ab83b6..97af8b6`; aggregate change is
+  93 paths, 2,507 insertions, and 6,687 deletions.
 
 The Task 8 brief, approved design, implementation plan, ledger, complete
 Context-test matrix, all seven task reports, commit metadata/path history, and
-the implementation diffs through the point of the finding were read before
-classification.
+the complete base-to-HEAD implementation history were read before
+classification and rechecked after both approved corrections.
 
 ## AUD-001 — live upgrade guide falsely attributes Context to direct Router callbacks
 
@@ -88,10 +91,10 @@ corrected HEAD.
 
 ## Remaining concerns
 
-Phase A is incomplete after the stop point. The remaining requirement mapping,
-matrix-row reconciliation, changed-test gate, changed syntax/POD checks, exact
-removal/live-surface searches, full suite, and archive inspection must all be
-performed fresh after an approved and reviewed correction is present.
+No known release blocker remains within this campaign's audited scope. The
+usual operational actions remain intentionally outside Task 8: no push, merge,
+tag, publication, release, or worktree/artifact deletion was performed. The
+ignored build directory and archive remain available for controller inspection.
 
 ## DEV-004 disposition — AUD-001 corrected
 
@@ -167,9 +170,9 @@ the controller's fresh post-correction audit turn.
 | §15 non-goals | Current Response `respond($send)` and `Request->response` retained; raw/middleware triplets and topology unchanged; no replacement hooks | Endpoint middleware/frontend tests, response tests, upgrade assertions | Design boundary repeated in Changes/upgrade/POD | Campaign aggregate; no Response-family implementation commit |
 | §16 constraints | Direct constructors remain strict; awaitable boundaries use `Future->wrap`; sync disconnect deviations are explicit | Changed gate plus DEV-001/002 regression tests and syntax/POD gates | Ledger and task reports | `b0644ec` through `8703e77` |
 | §17 adversarial resolutions | Coverage owners, fixed direct classes, post-return status, exact-scope caches, separate Response campaign | Matrix, ErrorHandler status tests, protocol cache tests, upgrade tests | Approved design and mechanical upgrade guide | Task-specific commits above |
-| §18 acceptance | Criteria 1–10 and exact-removal criterion 13 pass Phase A | Focused gate/searches above | Public migration contract corrected by DEV-004 | `8703e77`; criterion 11 failed in Phase B and criterion 12 was not attempted |
+| §18 acceptance | Criteria 1–10 and exact-removal criterion 13 pass Phase A; criterion 11 passes the authorized corrected-candidate suite and criterion 12 passes the single build/archive audit | Focused gate/searches, both preserved suite attempts, and build evidence below | Public migration contract corrected by DEV-004 | `97af8b6`; all acceptance evidence complete |
 
-## Sole repository-suite invocation
+## Original failed repository-suite invocation
 
 Command under project Perl 5.42.2:
 
@@ -217,11 +220,11 @@ review, and a ruling on the consumed suite budget. DEV-005 below records the
 subsequent correction; this paragraph remains the chronology of the original
 AUD-002 stop.
 
-## Distribution build
+## Distribution build at the AUD-002 stop
 
-`dzil build` was **not run**. Build exit, artifact path, size, SHA-256, entry
-counts, metadata comparison, archive integrity, and exclusion checks are
-therefore unavailable. `dzil test` was not run.
+`dzil build` was **not run at this stop**. The single build budget remained
+unused until the approved DEV-005 corrected candidate passed its replacement
+suite. `dzil test` was not run.
 
 ## DEV-005 disposition — AUD-002 corrected
 
@@ -243,8 +246,82 @@ Adjacent verification under Perl 5.42.2 passes
 `t/upgrading-router-frontends.t`: 3 files, 35 top-level tests. The changed test
 passes `perl -Ilib -c`, and `git diff --check` passes.
 
-Per the DEV-005 boundary, no second repository suite, distribution build,
-`dzil test`, host replacement, or push was run. Independent review of the
-corrected test semantics is pending/following. The controller has authorized
-one replacement repository-suite budget, but it remains unused; Task 8 stays
-gated before the build until that review and replacement-suite result.
+Per the initial DEV-005 boundary, no second repository suite, distribution
+build, `dzil test`, host replacement, or push was run during the correction.
+Independent review subsequently approved the corrected test semantics. At
+reviewed HEAD `97af8b6`, narrow preflight confirmed that only the approved
+DEV-005 test/evidence commits followed `8703e77`, the range diff check passed,
+and the tracked worktree was clean. The controller then
+explicitly authorized the one replacement repository suite recorded below.
+
+## Authorized replacement repository suite
+
+Command under project Perl 5.42.2:
+
+```sh
+perlbrew exec --with perl-5.42.2@default prove -lr t
+```
+
+Exact result: **PASS**, `Files=208, Tests=2220`, 35 wallclock seconds
+(`0.68 usr 0.31 sys + 28.36 cusr 4.07 csys = 33.42 CPU`), process exit 0.
+
+The documented `t/request/multipart-stream-e2e.t` `RELEASE_TESTING` skip was
+the only skip. This was the one controller-authorized replacement for the
+preserved failed 208/2220 attempt above. It ran in the normal sandbox because
+there was no socket-only restriction, so no host-access replacement was used.
+No further repository suite was run.
+
+## Single distribution build and archive audit
+
+After the replacement suite passed and a clean-status preflight confirmed
+HEAD `97af8b6`, exactly this command ran once under project Perl 5.42.2:
+
+```sh
+perlbrew exec --with perl-5.42.2@default dzil build
+```
+
+Exact result: **PASS**, process exit 0, 8.008 seconds observed wall time. It
+built `PAGI-Tools-0.002002/` and `PAGI-Tools-0.002002.tar.gz`. `dzil test` was
+not run.
+
+Archive evidence:
+
+- Size: 884,013 bytes.
+- SHA-256:
+  `ec5e12d5a3fb6957ee5b55da913af940509e5fdaacc281eb1553ee739cd07866`.
+- `gzip -t` passed. The archive has 517 entries: 424 regular files and 93
+  directories, totaling 3,714,141 uncompressed file bytes; it has zero
+  symlinks, hardlinks, other entry types, or duplicate full paths.
+- The archive MANIFEST has 424 file entries and exactly matches the 424
+  archived files: zero missing and zero unmanifested files.
+- All 69 surviving release paths changed by this campaign are present. The
+  four changed `.superpowers` evidence paths are intentionally pruned. All 20
+  deleted campaign paths (four Context modules and sixteen Context tests) are
+  absent. No `.git`, `.superpowers`, `docs`, `CLAUDE.md`, task/review/ledger
+  evidence, `lib/PAGI/Context.pm`, `lib/PAGI/Context/*`, or `t/context/*`
+  entry is present.
+- `META.json` and `META.yml` agree on name `PAGI-Tools` and version
+  `0.002002`; release status is `stable`, and metadata records Perl v5.42.2 as
+  the generator runtime. `dist.ini` and `cpanfile` are unchanged from base.
+- Generated prerequisites match those unchanged inputs: 1 configure require,
+  7 develop requires, 3 runtime recommends, 9 runtime requires, and 5 test
+  requires. Runtime requires are `Cookie::Baker` 0.11, `Future` 0.50,
+  `Future::AsyncAwait` 0.66, `HTTP::Date` 6.06,
+  `HTTP::MultiPartParser` 0.02, `Hash::MultiValue` 0.16,
+  `IO::Compress::Gzip` 0, `JSON::MaybeXS` 1.004003, and Perl 5.018.
+
+`ReadmeAnyFromPod` rewrote root `README.md` during the build, as configured.
+The audit restored it with `apply_patch`; its post-restore Git blob
+`cb5513e6fc8852b783b1f7f287df0d7fee72924c` exactly matches the pre-build and
+HEAD blob. The tracked worktree was clean again before this report and ignored
+ledger were updated. The build directory and archive remain ignored and were
+not deleted.
+
+## Final disposition
+
+Task 8 is **PASS / complete for release evidence** at
+`97af8b6de19ffb97dee72960835b1525ab5975f1`. Phase A, the corrected-candidate
+repository suite, and the single distribution build/archive audit all pass.
+The original failed suite remains separately preserved as AUD-002 chronology.
+No push, merge, tag, release, publication, host replacement, deletion, or
+additional suite/build invocation occurred.
