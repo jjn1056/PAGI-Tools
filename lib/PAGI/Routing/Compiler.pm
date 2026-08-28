@@ -379,7 +379,7 @@ sub _compile_http_handler {
         my $result = await Future->wrap($returned);
 
         croak 'handler did not return a response'
-            unless PAGI::Utils::is_response($result);
+            unless blessed($result) && $result->isa('PAGI::Response');
 
         await Future->wrap($result->respond($scope, $receive, $send));
         return;

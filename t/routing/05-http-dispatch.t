@@ -185,6 +185,109 @@ subtest 'instantiated Response route targets compile once and retain normal rout
         'concurrent component requests receive independent emissions');
 };
 
+subtest 'component routes retain ordinary Route matching, methods, and compilation ownership' => sub {
+    my $component = Local::CountingComponent->new('component');
+    my $fallback = route('/component/{id}' => sub {
+        return PAGI::Response::Text->new('fallback ' . $_[0]->path_param('id'));
+    });
+    my $node = route('/component/{id}' => $component,
+        name => 'component', desc => 'component target',
+        constraints => { id => qr/\Aok\z/ });
+    is([$node->name, $node->desc], ['component', 'component target'],
+        'component Route retains name and description metadata');
+    my $router = router(routes => [$node, $fallback]);
+    my $app = $router->to_app;
+    is($component->compilations, 1, 'component to_app runs once for the first compilation');
+
+    my ($receive, $send, $events) = channels();
+    $app->(scope(path => '/component/ok', method => 'GET'), $receive, $send)->get;
+    is(response_body($events), 'component', 'a passing component constraint selects the component');
+    ($receive, $send, $events) = channels();
+    $app->(scope(path => '/component/no', method => 'GET'), $receive, $send)->get;
+    is(response_body($events), 'fallback no', 'a failing component constraint falls through');
+
+    ($receive, $send, $events) = channels();
+    $app->(scope(path => '/component/ok', method => 'HEAD'), $receive, $send)->get;
+    is($events->[-1], { type => 'http.response.body', body => '', more => 0 },
+        'omitted component methods include automatic HEAD');
+    ($receive, $send, $events) = channels();
+    $app->(scope(path => '/component/ok', method => 'POST'), $receive, $send)->get;
+    is(allow_header($events), 'GET, HEAD', 'omitted component methods produce GET and HEAD Allow');
+
+    my $post_component = Local::CountingComponent->new('post');
+    my $post_app = router(routes => [
+        route('/explicit' => $post_component, methods => 'POST'),
+    ])->to_app;
+    ($receive, $send, $events) = channels();
+    $post_app->(scope(path => '/explicit', method => 'POST'), $receive, $send)->get;
+    is(response_body($events), 'post', 'explicit component methods are honored');
+    ($receive, $send, $events) = channels();
+    $post_app->(scope(path => '/explicit', method => 'GET'), $receive, $send)->get;
+    is(allow_header($events), 'POST', 'explicit component methods control Allow');
+
+    my $root = Local::CountingComponent->new('root');
+    my $wildcard = Local::CountingComponent->new('wildcard');
+    my $paths = router(routes => [
+        route('/' => $root), route('/*path' => $wildcard),
+    ])->to_app;
+    ($receive, $send, $events) = channels();
+    $paths->(scope(path => '/'), $receive, $send)->get;
+    is(response_body($events), 'root', 'an exact root component matches root');
+    ($receive, $send, $events) = channels();
+    $paths->(scope(path => '/child'), $receive, $send)->get;
+    is(response_body($events), 'wildcard', 'an explicit catch-all component matches a child path');
+
+    my @components = map { Local::CountingComponent->new($_) } qw(get post put);
+    my $union = router(routes => [
+        route('/union' => $components[0], methods => 'GET'),
+        route('/union' => $components[1], methods => 'POST'),
+        route('/union' => $components[2], methods => 'PUT'),
+    ])->to_app;
+    ($receive, $send, $events) = channels();
+    $union->(scope(path => '/union', method => 'TRACE'), $receive, $send)->get;
+    is($events->[0]{status}, 405, 'component routes produce the generated 405');
+    is(allow_header($events), 'GET, HEAD, POST, PUT',
+        'component routes retain first-seen multi-route Allow union');
+
+    my $second = $router->to_app;
+    is($component->compilations, 2, 'a fresh Router compilation calls component to_app once');
+    for my $compiled ($app, $second) {
+        ($receive, $send, $events) = channels();
+        $compiled->(scope(path => '/component/ok'), $receive, $send)->get;
+    }
+    is($component->compilations, 2, 'component to_app is never called per request');
+};
+
+subtest 'one unchanged component isolates overlapping native invocations' => sub {
+    my $component = Local::BarrierComponent->new;
+    my $app = router(routes => [route('/overlap' => $component)])->to_app;
+    my ($left_gate, $right_gate) = (Future->new, Future->new);
+    my (@left, @right);
+    my ($left_sends, $right_sends) = (0, 0);
+    my $left_send = sub {
+        push @left, $_[0];
+        return ++$left_sends == 1 ? $left_gate : Future->done;
+    };
+    my $right_send = sub {
+        push @right, $_[0];
+        return ++$right_sends == 1 ? $right_gate : Future->done;
+    };
+    my ($left_receive) = channels();
+    my ($right_receive) = channels();
+    my $left_running = $app->(scope(path => '/overlap'), $left_receive, $left_send);
+    my $right_running = $app->(scope(path => '/overlap'), $right_receive, $right_send);
+    is($component->invocations, 2, 'both component invocations reached their send barriers');
+    ok(!$left_running->is_ready && !$right_running->is_ready,
+        'both requests remain pending while their own sends are blocked');
+    isnt($left[0]{headers}[0][1], $right[0]{headers}[0][1],
+        'overlapping requests receive distinct invocation-local metadata');
+    $right_gate->done;
+    $left_gate->done;
+    Future->needs_all($left_running, $right_running)->get;
+    is([response_body(\@left), response_body(\@right)], ['overlap 1', 'overlap 2'],
+        'each overlapped invocation completes with its own response state');
+};
+
 subtest 'request_app explicitly adapts Request handlers without arity inference' => sub {
     my @seen;
     my $sync = PAGI::Routing::request_app(sub {
@@ -209,6 +312,22 @@ subtest 'request_app explicitly adapts Request handlers without arity inference'
     ($receive, $send, $events) = channels();
     like dies { $bad->(scope(path => '/adapter'), $receive, $send)->get },
         qr/handler did not return a response/, 'adapter diagnoses invalid returns';
+    my $duck = PAGI::Routing::request_app(sub {
+        return Local::DuckResponse->new;
+    });
+    ($receive, $send, $events) = channels();
+    like dies { $duck->(scope(path => '/adapter'), $receive, $send)->get },
+        qr/handler did not return a response/,
+        'an object that merely implements respond is not a response value';
+    is($events, [], 'a duck response emits no events');
+    my $component_return = PAGI::Routing::request_app(sub {
+        return Local::ToAppOnly->new;
+    });
+    ($receive, $send, $events) = channels();
+    like dies { $component_return->(scope(path => '/adapter'), $receive, $send)->get },
+        qr/handler did not return a response/,
+        'an arbitrary to_app object is not a response value';
+    is($events, [], 'a returned component emits no events');
     like dies { $sync->({ type => 'websocket' }, $receive, $send)->get },
         qr/PAGI::Request requires HTTP scope/, 'adapter rejects non-HTTP scope';
 
@@ -716,6 +835,8 @@ subtest 'route middleware is compiled once and executes only after full selectio
 {
     package Local::CountedResponse;
 
+    use parent 'PAGI::Response';
+
     sub new {
         my ($class, $count, $sends, $completion) = @_;
         return bless {
@@ -730,6 +851,64 @@ subtest 'route middleware is compiled once and executes only after full selectio
         ++${$self->{count}};
         push @{$self->{sends}}, [$scope, $receive, $send];
         return $self->{completion};
+    }
+}
+
+{
+    package Local::DuckResponse;
+
+    sub new { return bless {}, $_[0] }
+    sub respond { return Future->done }
+}
+
+{
+    package Local::ToAppOnly;
+
+    sub new { return bless {}, $_[0] }
+    sub to_app { return async sub { return } }
+}
+
+{
+    package Local::CountingComponent;
+
+    sub new { return bless { body => $_[1], compilations => 0 }, $_[0] }
+    sub compilations { return $_[0]{compilations} }
+    sub to_app {
+        my ($self) = @_;
+        ++$self->{compilations};
+        my $body = $self->{body};
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({
+                type => 'http.response.start', status => 200, headers => [],
+            });
+            await $send->({
+                type => 'http.response.body', body => $body, more => 0,
+            });
+            return;
+        };
+    }
+}
+
+{
+    package Local::BarrierComponent;
+
+    sub new { return bless { invocations => 0 }, $_[0] }
+    sub invocations { return $_[0]{invocations} }
+    sub to_app {
+        my ($self) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            my $id = ++$self->{invocations};
+            await $send->({
+                type    => 'http.response.start', status => 200,
+                headers => [['x-invocation', $id]],
+            });
+            await $send->({
+                type => 'http.response.body', body => "overlap $id", more => 0,
+            });
+            return;
+        };
     }
 }
 
