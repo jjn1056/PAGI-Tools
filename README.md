@@ -192,8 +192,8 @@ WebSocket chat/echo, PSGI bridging)
 - [PAGI::Endpoint::HTTP](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AHTTP), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter),
 [PAGI::Endpoint::SSE](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ASSE), [PAGI::Endpoint::WebSocket](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AWebSocket) - high-level endpoint
 framework
-- [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) and [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse) - HTTP input and detached output values;
-[PAGI::Context](https://metacpan.org/pod/PAGI%3A%3AContext) remains a standalone compatibility/low-level surface
+- [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) and [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse) - HTTP input and detached output values; WebSocket and SSE
+handlers receive their direct protocol objects
 - `PAGI::State`, `PAGI::Stash`, `PAGI::Session`, `PAGI::CSRF`,
 `PAGI::Transport`, and `PAGI::Routing::URL` - explicitly imported optional
 scope capabilities

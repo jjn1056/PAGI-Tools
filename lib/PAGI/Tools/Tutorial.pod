@@ -709,9 +709,9 @@ Redirect query preservation is explicit and defaults off:
   PAGI::Pages->redirect($request, '/search#results',
       status => 308, preserve_query => 1);
 
-Pages has no Context shortcut and Compose has no Pages configuration option.
 Use a Pages instance or subclass explicitly when application presentation
-needs custom synchronous render hooks.
+needs custom synchronous render hooks. Compose has no Pages configuration
+option.
 
 =head1 PART 5: REAL-TIME & STREAMING
 
@@ -760,30 +760,6 @@ L<PAGI::SSE> simplifies Server-Sent Events:
 
   # Wait for disconnect
   await $sse->run;
-
-=head2 5.3 The Event Dispatcher
-
-When the receive stream mixes protocol events with application events -- for
-example, middleware that injects pub/sub messages -- L<PAGI::Context> offers a
-small dispatch loop: register a handler per event type and C<run> once, instead
-of a hand-rolled C<while (defined(my $e = await $ctx-E<gt>receive-E<gt>()))> loop.
-
-  my $ctx = PAGI::Context->new($scope, $receive, $send);
-  await $ctx->accept;
-
-  $ctx->on('websocket.receive', async sub {
-      my ($ctx, $event) = @_;
-      await $ctx->send_text("echo: $event->{text}");
-  });
-  $ctx->on('app.notify', async sub {        # an event injected by middleware
-      my ($ctx, $event) = @_;
-      await $ctx->send_json({ notice => $event->{message} });
-  });
-  $ctx->on_error(sub { my ($ctx, $err, $src) = @_; warn "[$src] $err" });
-
-  my $reason = await $ctx->run;   # 'disconnect', 'stop', or 'error'
-
-See L<PAGI::Tools::Cookbook/"Handling a Mixed Event Stream"> for a fuller example.
 
 =head1 PART 6: MIDDLEWARE
 
@@ -1117,9 +1093,9 @@ a Pages endpoint through the existing handler seam to fix its representation:
 
   enable 'ErrorHandler',
       handler => sub {
-          my ($context, $error) = @_;
+          my ($request, $error) = @_;
           return PAGI::Pages->internal_server_error(
-              $context,
+              $request,
               as => 'json',
           );
       };
@@ -1127,7 +1103,7 @@ a Pages endpoint through the existing handler seam to fix its representation:
 Use C<< as => 'html' >> or C<'text'> for the other fixed forms. Ordinary
 construction has static C<development =E<gt> 0> behavior and
 does not consult C<PAGI_ENV>. Its optional C<handler> receives
-C<($context, $error)> and returns an immediate or Future-backed Response.
+C<($request, $error)> and returns an immediate or Future-backed Response.
 The wrapper is required because a Pages endpoint accepts one request source,
 not ErrorHandler's two-argument callback. It may inspect C<$error> to choose
 safe page fields, but Pages does not consume the exception as trailing

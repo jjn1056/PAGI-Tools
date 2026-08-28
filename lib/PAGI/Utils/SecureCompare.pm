@@ -50,8 +50,7 @@ does not leak the secret's content.
 
 =head1 SEE ALSO
 
-L<PAGI::Middleware::CSRF> and L<PAGI::Context> both use this function so
-there is exactly one constant-time comparison implementation in the
-distribution.
+L<PAGI::Middleware::CSRF> and L<PAGI::CSRF> use this function so there is
+exactly one constant-time comparison implementation in the distribution.
 
 =cut

@@ -162,7 +162,7 @@ sub is_closed {
 # True while the stream is live (started and not yet closed/disconnected).
 # Mirrors PAGI::WebSocket->is_connected (state eq 'connected'): an SSE scope
 # carries no pagi.connection (spec: N/A for sse), so connection liveness is
-# derived from this object's own state machine, not the base Context method.
+# derived from this object's own state machine.
 sub is_connected {
     my $self = shift;
     return $self->{_state} eq 'started';
@@ -647,14 +647,12 @@ async sub _run_close_callbacks {
 }
 
 # Internal: mark closed and fire on_close callbacks for a disconnect that
-# arrived directly off the wire (not via close()). Shared by run()'s own
-# disconnect handling and PAGI::Context::SSE's _sync_terminal_disconnect hook
-# (fired when the disconnect is instead consumed via $ctx->run()). Does NOT
-# send an sse.close wire event -- the peer is already gone.
+# arrived directly off the wire (not via close()). Used when run() consumes the
+# terminal event. Does NOT send an sse.close wire event -- the peer is already
+# gone.
 async sub _note_disconnected {
     my ($self, $code, $reason) = @_;
-    # $code is accepted for signature parity with PAGI::WebSocket's version
-    # (Context::WebSocket and Context::SSE both call this positionally) but
+    # $code is accepted for signature parity with PAGI::WebSocket's version but
     # unused -- SSE has no RFC6455-style close code, only a reason.
 
     $self->{_disconnect_reason} = $reason // 'client_closed';
@@ -1144,10 +1142,9 @@ B<The supported auth-gate pattern> is to call C<decline> from inside
 C<on_connect> (see L<PAGI::Endpoint::SSE/on_connect>):
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $sse = $ctx->sse;
+        my ($self, $sse) = @_;
 
-        unless (authorized($ctx)) {
+        unless (authorized($sse)) {
             await $sse->decline(status => 401, body => 'Unauthorized');
             return;
         }

@@ -10,8 +10,9 @@ PAGI::Test::ConnectionState - the pagi.connection object provided by PAGI::Test
 =head1 DESCRIPTION
 
 PAGI::Test is a test server, so it provides the per-request C<pagi.connection>
-object. It implements the full surface L<PAGI::Request>/L<PAGI::Context>
-delegate to (C<is_connected>, C<disconnect_reason>, C<disconnect_future>,
+object. It implements the full connection surface to which L<PAGI::Request>
+delegates
+(C<is_connected>, C<disconnect_reason>, C<disconnect_future>,
 C<on_disconnect>, C<on_complete>) plus C<response_started> and
 C<response_complete>, mirroring production C<PAGI::Server::ConnectionState>:
 a clean completion ends the request and fires C<on_complete> but is not a

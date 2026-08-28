@@ -116,6 +116,6 @@ sub verify {
 
 =head1 SEE ALSO
 
-L<PAGI::Middleware::CSRF>, L<PAGI::Context>
+L<PAGI::Middleware::CSRF>, L<PAGI::Request>
 
 =cut

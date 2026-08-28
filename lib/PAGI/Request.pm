@@ -297,9 +297,10 @@ sub path_param {
 
 sub scope { shift->{scope} }
 
-# Vend a detached response bound to this request's scope (the raw-app analog
-# of $ctx->response). It is a value, not a connection; call ->respond($send)
-# to send it.
+# Temporary compatibility factory for a detached response bound to this
+# request's scope. It is a value, not a connection; call ->respond($send) to
+# send it from a raw application. New code should construct PAGI::Response
+# directly.
 sub response {
     my $self = shift;
     require PAGI::Response;
@@ -1177,12 +1178,15 @@ objects like L<PAGI::Stash> and L<PAGI::Session>:
 
     my $res = $req->response;
 
-Vends a detached L<PAGI::Response> bound to this request's scope: the
-raw-application analog of C<< $ctx->response >>. The response is a value, not a
-connection; it is created only when requested. Build it up and send it with
-C<< $res->respond($send) >>:
+Temporary compatibility factory for a detached L<PAGI::Response> bound to this
+request's scope. The response is a value, not a connection; it is created only
+when requested. Build it up and send it with C<< $res->respond($send) >> from a
+raw application:
 
     await $req->response->status(201)->json($data)->respond($send);
+
+New code should construct C<PAGI::Response> directly. Normal Request handlers
+return the value and let their Router or Endpoint own response emission.
 
 =head2 Per-Request Shared State
 

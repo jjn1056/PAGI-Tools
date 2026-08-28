@@ -188,6 +188,9 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   use PAGI::Response;
   use PAGI::Routing qw(route mount);
   use PAGI::Routing::URL qw(url url_for path_for);
+  use PAGI::Utils qw(app_path);
+
+  my $manager_file = app_path('public', 'index.html');
 
   sub startup($state, $scope) {
       $state->{apples_db} = {
@@ -201,6 +204,10 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
       my $state = $request->state
           or die 'starlette-apples requires Compose lifespan state';
       return $state->get('apples_db');
+  }
+
+  sub apple_manager($request) {
+      return PAGI::Response->send_file($manager_file, inline => 1);
   }
 
   async sub list_apples($request) {
@@ -269,8 +276,10 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
 
   compose(
       routes => [
-          route('/' => PAGI::Pages->welcome,
-              name => 'home', desc => 'PAGI welcome page'),
+          route('/' => \&apple_manager,
+              name => 'home', desc => 'Apple manager SPA'),
+          route('/welcome' => PAGI::Pages->welcome,
+              name => 'welcome', desc => 'PAGI welcome page'),
           mount('/apples',
               routes => [
                   route('/' => \&list_apples,
@@ -388,7 +397,7 @@ negotiated 405 with authoritative C<Allow>:
 Pages selects HTML, RFC 9457 problem JSON, or text from C<Accept>, adds
 C<Vary: Accept>, and defaults errors to C<Cache-Control: no-store>. Use a
 configured Pages instance or subclass here for application presentation; no
-Pages object is discovered through Context, Compose, or global state.
+Pages object is discovered through Compose or global state.
 
 A selected application's own 404 or 405 is left untouched. C<http_default>
 runs only for HTTP NONE: it never receives a method mismatch, WebSocket or SSE
@@ -445,14 +454,14 @@ the existing handler seam:
 
   middleware('ErrorHandler',
       handler => sub {
-          my ($context, $error) = @_;
+          my ($request, $error) = @_;
           return PAGI::Pages->internal_server_error(
-              $context,
+              $request,
               as => 'json',
           );
       })
 
-The wrapper adapts ErrorHandler's C<($context, $error)> callback to the single
+The wrapper adapts ErrorHandler's C<($request, $error)> callback to the single
 request source accepted by a Pages endpoint. A direct Pages endpoint is not a
 two-argument ErrorHandler callback; the wrapper may use C<$error> to choose
 safe page fields when needed.
@@ -1890,53 +1899,6 @@ JavaScript client:
 
 See C<examples/sse-dashboard/> for a complete dashboard example.
 
-=head2 Handling a Mixed Event Stream
-
-When the receive stream carries more than one kind of event -- the protocol's
-own events plus application events injected by middleware -- the
-L<PAGI::Context> event dispatcher lets you register one handler per event type
-and run a single loop, instead of hand-rolling a C<while> over C<receive>.
-
-  use PAGI::Context;
-
-  $router->websocket('/notify', raw => async sub {
-      my ($scope, $receive, $send) = @_;
-      my $ctx = PAGI::Context->new($scope, $receive, $send);
-      await $ctx->accept;
-
-      # A protocol event from the client
-      $ctx->on('websocket.receive', async sub {
-          my ($ctx, $event) = @_;
-          await $ctx->send_text("echo: " . ($event->{text} // ''));
-      });
-
-      # An application event injected into the receive stream by middleware
-      # (for example a pub/sub bridge such as the PAGI-Channels companion dist)
-      $ctx->on('app.notify', async sub {
-          my ($ctx, $event) = @_;
-          await $ctx->send_json({ notice => $event->{message} });
-      });
-
-      # A fallback for anything you did not register a handler for
-      $ctx->on_default(sub {
-          my ($ctx, $event) = @_;
-          warn "unexpected event: $event->{type}";
-      });
-
-      $ctx->on_error(sub {
-          my ($ctx, $err, $source) = @_;
-          warn "[$source] $err";
-      });
-
-      my $reason = await $ctx->run;   # 'disconnect', 'stop', or 'error'
-  });
-
-Handlers receive the protocol-typed C<$ctx> (so C<send_text>/C<send_json> work),
-run in registration order, and may be C<async sub>s. The loop runs until the
-client disconnects, a handler calls C<< $ctx->stop >>, or C<receive> fails;
-C<run()> resolves with the reason and clears the handlers afterward so closures
-over C<$ctx> do not leak.
-
 =head2 Closing an SSE stream, and recording why
 
 Returning from an SSE handler ends the stream when your code does. Call
@@ -2547,9 +2509,9 @@ A response moves through three phases. Each has its own signal:
 on the value. No connection, no I/O. The signal here is L<PAGI::Response/has_body_source>:
 "has a body source been registered?"
 
-=item 2. B<Send committed> — C<< $ctx->respond($res) >> (or a raw
-C<< $res->respond($send) >> behind the context's guard) has begun emitting the
-response and has taken the connection. The signal is L<PAGI::Response/is_sent>:
+=item 2. B<Send committed> — a raw C<< $res->respond($send) >> has begun
+emitting the response and has taken the connection. The signal is
+L<PAGI::Response/is_sent>:
 "has this response gone out?" It is set at the moment the send is committed, so
 a second send is rejected.
 
@@ -2601,42 +2563,39 @@ Intentional empty bodies count as a registered source: C<empty>, C<redirect>,
 and C<send_raw('')> all set an (empty) body, so C<has_body_source> is true for
 them. Only a response that never had a body method called reports false.
 
-=head2 Deciding "did the handler produce a response?"
+=head2 Handler and raw-application ownership
 
-A framework that lets handlers populate C<< $ctx->res >> and then auto-sends it
-needs to know, after the handler returns, whether to send, skip, or fall through
-to the next route. That is a three-way decision, and it is a precedence ladder —
-not a single predicate:
+A normal HTTP handler returns one detached L<PAGI::Response> value. The Router
+or Endpoint compiler validates and emits it; there is no hidden response for a
+handler to populate and no automatic status fallback. Construct the value
+directly:
 
-    # After running the handler, which mutated $ctx->res:
-    if ($ctx->res->is_sent) {
-        # The handler already took the connection itself — e.g. it called
-        # ->writer($send) for live streaming, or used SSE/WebSocket. Do nothing;
-        # sending again would be a double-send.
-    }
-    elsif ($ctx->res->has_body_source || $ctx->res->has_status) {
-        # The handler registered a body, or set a status (a bare 204 / redirect
-        # has no body but IS a response). Send it once, through the guard.
-        await $ctx->respond($ctx->res);
-    }
-    else {
-        # The handler touched nothing send-able — fall through to the next match
-        # (or a 404).
+    async sub create_item {
+        my ($request) = @_;
+        my $item = await create_from($request);
+        return PAGI::Response->json($item, status => 201);
     }
 
-Three things make this ladder correct:
+A raw application owns all three native channels and therefore owns the one
+send step too:
+
+    my $res = PAGI::Response->json($data, status => 200);
+    await $res->respond($send);
+
+Do not call C<respond> inside a normal Request handler, and do not return an
+already-sent value to a compiler that owns response emission.
 
 =over 4
 
-=item * B<Check C<is_sent> first.> A handler that called C<< ->writer($send) >>
-has already emitted headers (C<writer> marks the response sent), but
-C<has_body_source> stays false because the live-writer path bypasses the body
-slots. Without the C<is_sent> guard you would mistake an actively-streaming
-response for "nothing produced".
+=item * B<Check C<is_sent> before a raw second send.> A caller that used
+C<< ->writer($send) >> has already emitted headers (C<writer> marks the response
+sent), but C<has_body_source> stays false because the live-writer path bypasses
+the body slots. C<is_sent> is the relevant double-send guard.
 
-=item * B<C<|| has_status> is required.> A C<302> redirect or a C<204> can have
-no body source, yet it is a real response. C<has_status> catches the
-status-only case so you do not 404 a legitimate empty-body response.
+=item * B<C<has_status> and C<has_body_source> describe build intent.> A C<302>
+redirect or a C<204> can have no body source yet still be a real response. Use
+these predicates when inspecting a detached value, not to infer Router
+fallthrough.
 
 =item * B<Never inspect the private slots.> Use C<has_body_source>, not
 C<< exists $res->{_stream} >> and friends — those are private and may change
@@ -2645,10 +2604,8 @@ the supported way to ask.
 
 =back
 
-If instead your framework has handlers B<return> the response (PAGI's own
-endpoint contract), you do not need this ladder at all: the returned value is
-the answer, and "fall through" is an explicit sentinel you define, not an
-inference from an empty response.
+For a framework built above PAGI, make fallthrough an explicit sentinel rather
+than inferring it from an empty Response.
 
 =head1 TESTING
 

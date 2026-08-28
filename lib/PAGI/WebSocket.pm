@@ -293,10 +293,9 @@ async sub _run_close_callbacks {
 }
 
 # Internal: mark closed and fire on_close callbacks for a disconnect that
-# arrived directly off the wire (not via close()). Shared by receive()'s own
-# disconnect handling and PAGI::Context::WebSocket's _sync_terminal_disconnect
-# hook (fired when the disconnect is instead consumed via $ctx->run()). Does
-# NOT send a websocket.close wire event -- the peer is already gone.
+# arrived directly off the wire (not via close()). Used by receive() and run()
+# when either consumes the terminal event. Does NOT send a websocket.close wire
+# event -- the peer is already gone.
 async sub _note_disconnected {
     my ($self, $code, $reason) = @_;
 

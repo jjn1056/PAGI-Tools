@@ -41,8 +41,7 @@ PAGI::Middleware::CSRF provides protection against Cross-Site Request
 Forgery attacks by validating tokens on state-changing requests. Its built-in
 enforced 403 response negotiates through L<PAGI::Pages>. The C<enforce =E<gt>
 'app'> flow remains issue-only, so application-owned Responses returned by
-Request handlers or sent by standalone L<PAGI::Context> applications remain
-literal and authoritative.
+Request handlers or sent by raw applications remain literal and authoritative.
 
 =head1 CONFIGURATION
 
@@ -287,16 +286,10 @@ The same helper works in a raw-scope application:
     my $token = $guard->token;
     my $valid = $guard->verify($params->{_csrf_token});
 
-L<PAGI::Context/csrf_token> and L<PAGI::Context/csrf_verify> remain available
-as compatibility conveniences for standalone Context applications.
-
 =head1 SEE ALSO
 
 L<PAGI::Middleware> - Base class for middleware
 
 L<PAGI::CSRF> - request-first and raw-scope token access and verification
-
-L<PAGI::Context/csrf_token>, L<PAGI::Context/csrf_verify> - compatibility
-conveniences for standalone Context applications
 
 =cut

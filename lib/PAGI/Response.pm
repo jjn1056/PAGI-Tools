@@ -33,8 +33,8 @@ PAGI::Response - Fluent response builder for PAGI applications
     }
 
     # In an endpoint you just RETURN it; dispatch sends it for you:
-    async sub get ($self, $ctx) {
-        return $ctx->json({ message => 'Hello' }, status => 200);
+    async sub get ($self, $request) {
+        return PAGI::Response->json({ message => 'Hello' }, status => 200);
     }
 
     # Class-method factories build a detached response in one call;
@@ -438,9 +438,11 @@ L</respond> / L</to_app> or the endpoint return contract.
 
 Each method works as both a B<class-method factory> and an B<instance method>:
 
-    # Class-method factory — creates a new detached response and returns it
-    return $ctx->json($data);                     # instance method on existing $res
-    return PAGI::Response->json($data);          # factory shorthand
+    # Instance method — sets the body on an existing detached response
+    return $res->json($data);
+
+    # Class-method factory — creates a new detached response
+    return PAGI::Response->json($data);
 
     # Chain body with other setters before sending
     PAGI::Response->json($data)->status(201)->respond($send)->get;
@@ -587,16 +589,19 @@ This is useful when the writer needs to be passed to event handlers,
 pub/sub callbacks, timers, or other contexts outside a single function:
 
     async sub live_feed {
-        my ($self, $ctx) = @_;
-        my $writer = await $ctx->response
+        my ($scope, $receive, $send) = @_;
+        my $id;
+        my $writer = await PAGI::Response->new($scope)
             ->content_type('text/plain')
-            ->writer($ctx->send, on_close => sub { $bus->unsubscribe($id) });
+            ->writer($send, on_close => sub {
+                $bus->unsubscribe($id) if defined $id;
+            });
 
-        my $id = $bus->subscribe(async sub ($line) {
+        $id = $bus->subscribe(async sub ($line) {
             await $writer->write("$line\n");
         });
 
-        await $ctx->receive;    # wait for disconnect
+        await $receive->();      # wait for disconnect
         await $writer->close;
     }
 
@@ -996,18 +1001,18 @@ but calling C<close()> explicitly is recommended for clarity.
 A response is a value, so "produce a 404 instead" is just returning a different
 value -- no exceptions needed:
 
-    async sub show ($self, $ctx) {
-        my $user = await find_user($ctx->req->path_param('id'));
+    async sub show ($self, $request) {
+        my $user = await find_user($request->path_param('id'));
         return PAGI::Response->json({ error => 'not found' }, status => 404)
             unless $user;
-        return $ctx->json($user);
+        return PAGI::Response->json($user);
     }
 
 For cases that recur across handlers, prefer modeling the absence as a value
 (a "null object") whose own method returns the right response, instead of
 throwing from deep in the stack:
 
-    my $user = await find_user($ctx) // UnauthenticatedUser->new($ctx);
+    my $user = await find_user($request) // UnauthenticatedUser->new($request);
     return $user->dashboard;   # a real user renders; an UnauthenticatedUser
                                # returns a 401 / login response
 

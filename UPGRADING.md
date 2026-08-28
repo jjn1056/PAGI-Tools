@@ -12,6 +12,217 @@ Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Breaking: replace the `PAGI` Context family with the protocol owner
+
+The Context class family has been removed without a compatibility layer. There
+is no replacement Context base class, factory hook, type map, or generic event
+dispatcher. Normal callbacks now receive the object that owns their protocol;
+raw applications and every middleware wrapper keep the native
+`($scope, $receive, $send)` contract unchanged.
+
+### Change normal callback signatures
+
+**Before (removed):** class Endpoint callbacks and direct Router callbacks
+received a Context wrapper.
+
+```perl
+# PAGI::Endpoint::HTTP
+async sub get { my ($self, $ctx) = @_; ... }
+
+# PAGI::Endpoint::WebSocket
+async sub on_receive { my ($self, $ctx, $data) = @_; ... }
+sub on_disconnect    { my ($self, $ctx, $code, $reason) = @_; ... }
+
+# PAGI::Endpoint::SSE
+async sub on_connect { my ($self, $ctx) = @_; ... }
+sub on_disconnect    { my ($self, $ctx) = @_; ... }
+
+# Direct Router callbacks
+$router->get('/'       => sub { my ($ctx) = @_; ... });
+$router->websocket('/' => sub { my ($ctx) = @_; ... });
+$router->sse('/'       => sub { my ($ctx) = @_; ... });
+```
+
+**After (shipped):** use `PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE`
+directly.
+
+```perl
+async sub get {
+    my ($self, $request) = @_;
+    return PAGI::Response->json({ path => $request->path });
+}
+
+async sub on_receive {
+    my ($self, $websocket, $data) = @_;
+    await $websocket->send_json($data);
+}
+sub on_disconnect { my ($self, $websocket, $code, $reason) = @_; ... }
+
+async sub on_connect {
+    my ($self, $sse) = @_;
+    await $sse->send_event(data => 'ready');
+}
+sub on_disconnect { my ($self, $sse) = @_; ... }
+
+$router->get('/'       => sub { my ($request)   = @_; ... });
+$router->websocket('/' => sub { my ($websocket) = @_; ... });
+$router->sse('/'       => sub { my ($sse)       = @_; ... });
+```
+
+Endpoint `on_disconnect` hooks remain deliberately synchronous. Do not return a
+Future from them; finish asynchronous cleanup in an owned task or before the
+protocol loop ends.
+
+### Build Responses directly
+
+**Before (removed):** response shortcuts and the hidden seeded response lived
+on Context. `status_try` could mutate that seeded value as a fallback.
+
+```perl
+return $ctx->json($data, status => 201);
+$ctx->status_try(500);
+await $ctx->respond($ctx->response);
+```
+
+**After (shipped):** construct and return a detached Response. In an explicit
+raw application, call `respond($send)` once.
+
+```perl
+return PAGI::Response->json($data, status => 201);
+
+my $response = PAGI::Response->json($data);
+$response->status_try(500);
+await $response->respond($send);
+```
+
+There is no automatically seeded response and no automatic Context fallback.
+`PAGI::Request->response` remains a temporary compatibility factory for this
+release, but new code should construct `PAGI::Response` directly. The direct
+factories replace the former `text`, `html`, `json`, `redirect`, `empty`,
+`send`, `send_raw`, `stream`, `writer`, and `send_file` shortcuts.
+
+### Import optional capabilities from their owners
+
+**Before (removed):** one object presented URL generation, stash, session,
+state, CSRF, connection flow control, and transport as intrinsic methods.
+
+```perl
+my $path  = $ctx->path_for('show', { id => 42 });
+my $stash = $ctx->stash;
+my $user  = $ctx->session->get('user');
+my $db    = $ctx->state->{db};
+return $ctx->text('Forbidden', status => 403)
+    unless $ctx->csrf_verify($submitted);
+$ctx->on_drain(\&resume);
+```
+
+**After (shipped):** pass the direct protocol object to the owning helper.
+
+```perl
+use PAGI::CSRF qw(csrf);
+use PAGI::Routing::URL qw(path_for url_for);
+use PAGI::Session qw(session);
+use PAGI::Stash qw(stash);
+use PAGI::State qw(app_state);
+use PAGI::Transport qw(transport);
+
+my $path  = path_for($request, 'show', { id => 42 });
+my $url   = url_for($request, 'show', { id => 42 });
+my $user  = session($request)->get('user');
+my $db    = app_state($request)->get('db');
+my $guard = csrf($request);
+stash($request)->set(result => $result);
+stash($websocket)->set(subscription => $subscription);
+stash($sse)->set(subscription => $subscription);
+
+return PAGI::Response->text('Forbidden', status => 403)
+    unless $guard->verify($submitted);
+
+my $flow = transport($request);
+$flow->on_drain(\&resume) if $flow;
+```
+
+`scope`, protocol input methods, connection state, and path/query/header
+accessors stay on their direct Request, WebSocket, or SSE owner. `session`,
+`csrf`, and routing URLs require their supplying middleware or Router metadata;
+`stash` is scope-backed; `app_state` and `transport` return `undef` when their
+optional capability is absent.
+
+A blessed `PAGI::State` is not a hashref even while the temporary compatibility
+overload permits hash dereference:
+
+```perl
+ref(app_state($request)) eq 'HASH';  # false
+my $hashref = app_state($request)->data;
+```
+
+Use `->data` for HashRef type constraints, serializers, and exact `ref` checks.
+
+### Update ErrorHandler callbacks
+
+**Before (removed):** a custom renderer received Context and commonly returned
+one of its response shortcuts.
+
+```perl
+handler => sub {
+    my ($context, $error) = @_;
+    return $context->json({ error => 'request failed' });
+}
+```
+
+**After (shipped):** it receives `($request, $error)`. Return a status-aware
+response value implementing `status_try` and `respond`; `PAGI::Response` is the
+normal implementation.
+
+```perl
+handler => sub {
+    my ($request, $error) = @_;
+    return PAGI::Response->json(
+        { error => 'request failed' },
+        status => 503,
+    );
+}
+```
+
+ErrorHandler derives a fallback status from a valid exception `status_code` or
+its configured status, then calls `status_try` after the callback returns. An
+explicit response status therefore wins. ErrorHandler emits the result through
+`respond`; callbacks must return the value rather than sending it themselves.
+
+### Remove Context extension and dispatch machinery
+
+**Before (removed):** applications could override the Endpoint factory, assert
+a protocol dynamically, reach through to raw channels, or register handlers on
+one generic dispatcher.
+
+```perl
+sub context_class { 'MyApp::Context' }
+PAGI::Context->register_type('myproto' => 'MyApp::Context');
+$ctx->assert_websocket;
+await $ctx->raw_send->($event);
+my $event = await $ctx->raw_receive->();
+$ctx->on('app.notify' => \&notify);
+await $ctx->run;
+```
+
+**After (shipped):** Endpoint construction is fixed to the direct Request,
+WebSocket, and SSE objects. Use their typed send/receive methods. A custom
+protocol supplies and documents its own object, while a native application or
+middleware continues to own the raw channels explicitly:
+
+```perl
+my $app = async sub {
+    my ($scope, $receive, $send) = @_;
+    return await MyApp::Protocol->new($scope, $receive, $send)->run;
+};
+```
+
+The removed surface includes Context constructors and subclasses, Endpoint
+factory overrides, protocol assertions, the type registry/map, response
+seeding, generic `on`/`on_default`/`on_error` dispatch, `stop`, `raw_send`, and
+`raw_receive`. Do not introduce a replacement hook that recreates this
+all-purpose ownership boundary.
+
 ## Running against PAGI-Server 0.002007
 
 `PAGI::Test::Client` and its `PAGI::Test::WebSocket`/`PAGI::Test::SSE`/
@@ -543,12 +754,10 @@ positive wildcard no longer revives an exact `q=0` exclusion. Wildcard queries
 still succeed when at least one covered concrete type has positive effective
 quality, including a positive concrete exception inside an excluded family.
 
-`PAGI::Context` no longer treats an unknown explicit scope type as HTTP. A
-mapped type selects its registered Context subclass; an unmapped scalar type
-uses the generic base Context and warns once per factory/type pair. Missing,
-empty, or reference-valued scope types now croak as malformed. Applications
-supporting an extension protocol should map it explicitly or deliberately
-handle the generic Context; generic Contexts have no HTTP response API.
+Defined unknown scope types are never treated as HTTP. Missing, empty, or
+reference-valued scope types croak as malformed. Applications supporting an
+extension protocol should validate it explicitly and construct the custom
+protocol object they own.
 
 ## Routing composition redesign
 
@@ -794,8 +1003,8 @@ is($response_starts, 1);
 my $errors = middleware(
     'ErrorHandler',
     handler => sub {
-        my ($context, $error) = @_;
-        return $context->json({ error => 'request failed' });
+        my ($request, $error) = @_;
+        return PAGI::Response->json({ error => 'request failed' });
     },
     on_error => sub {
         my ($error) = @_;
@@ -1023,12 +1232,12 @@ Response. Its exact native `($scope, $receive, $send)` endpoint position is
 also retained. That arity-dependent bridge predates this ownership rule and is
 not precedent for overloading new helper functions by arity.
 
-### Context and Response follow-up remains deferred
+### Direct protocol ownership is now complete
 
-Routing no longer constructs Context, but the standalone Context class family
-is not removed by this release. Likewise, this release does not redesign
-Response factory names or its send boundary. Audit those surfaces separately
-when their deferred reviews land.
+The former wrapper class family is removed by this release. Response factory
+names and its explicit send boundary remain unchanged; normal HTTP handlers
+return a detached Response, while a raw application calls `respond` with its
+owned send channel.
 
 ### Framework-author and Thunderhorse handoff
 
@@ -1041,8 +1250,8 @@ Framework adapters should account for these points:
 - HTTP Route callbacks now receive `PAGI::Request`; WebSocket and SSE callbacks
   receive their direct protocol objects.
 - Request construction is HTTP-only and takes exactly `($scope, $receive)`.
-- Context subclasses, type maps, and `new_context` overrides no longer affect
-  shared Router dispatch.
+- Removed wrapper subclasses, type maps, and construction overrides have no
+  replacement in shared Router dispatch.
 - Router URL generation belongs to `PAGI::Routing::URL`. Thunderhorse may keep
   its own Controller/Router URL builder and need not manufacture
   `pagi.routing` frames for it.
@@ -1381,7 +1590,7 @@ sub list_people {
 Why: server-owned lifespan state has an explicit startup and shutdown lifetime
 and retains one identity across the requests that receive it.
 
-## `context_class` and `new_context` are gone
+## Removed Endpoint construction hooks
 
 **Before (removed):** overriding `context_class` changed the class Endpoint
 used to build Context objects for compiled handlers.

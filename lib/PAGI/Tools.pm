@@ -211,7 +211,7 @@ L<PAGI::Endpoint::SSE>, L<PAGI::Endpoint::WebSocket> - high-level endpoint
 framework
 
 =item * L<PAGI::Request> and L<PAGI::Response> - HTTP input and detached output
-values; L<PAGI::Context> remains a standalone compatibility/low-level surface
+values; WebSocket and SSE handlers receive their direct protocol objects
 
 =item * L<PAGI::State>, L<PAGI::Stash>, L<PAGI::Session>, L<PAGI::CSRF>,
 L<PAGI::Transport>, and L<PAGI::Routing::URL> - explicitly imported optional

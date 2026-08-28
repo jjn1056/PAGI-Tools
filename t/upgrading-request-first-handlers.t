@@ -141,9 +141,9 @@ subtest 'optional capabilities come from their owning helpers' => sub {
 subtest 'ErrorHandler adapts its callback before invoking Pages' => sub {
     my $app = PAGI::Middleware::ErrorHandler->new(
         handler => sub {
-            my ($context, $error) = @_;
+            my ($request, $error) = @_;
             return PAGI::Pages->internal_server_error(
-                $context,
+                $request,
                 as => 'json',
             );
         },

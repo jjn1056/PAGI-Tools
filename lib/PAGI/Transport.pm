@@ -153,6 +153,6 @@ sub is_writable {
 
 =head1 SEE ALSO
 
-L<PAGI::Context>, L<PAGI::WebSocket>, L<PAGI::SSE>
+L<PAGI::Request>, L<PAGI::WebSocket>, L<PAGI::SSE>
 
 =cut

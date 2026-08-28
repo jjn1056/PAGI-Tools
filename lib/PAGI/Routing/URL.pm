@@ -191,11 +191,10 @@ sub _routing_frame {
 
 1;
 
-=head1 COMPATIBILITY
+=head1 OWNERSHIP
 
-L<PAGI::Context/path_for> and L<PAGI::Context/url_for> remain compatibility
-methods and lazily delegate here. New handler code can use this facade directly
-without depending on Context.
+Route URL generation belongs to this facade. Normal handlers pass their direct
+Request, WebSocket, or SSE object; raw applications may pass the scope itself.
 
 =head1 SEE ALSO
 

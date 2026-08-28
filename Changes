@@ -100,11 +100,22 @@
   - PAGI::Middleware::Head is now a thin delegate to the shared HEAD wire
     boundary implementation (one implementation, two entry points); using
     it under Compose remains harmless but redundant.
-  - PAGI::Context::SSE gained the decline() delegation it was missing: the
-    documented on_connect auth-gate pattern failed with a method-not-found
-    error for endpoints running under a Context (the normal to_app path),
-    forcing a reach-through to $ctx->sse->decline. Found by a live probe
-    against PAGI::Server 0.002008.
+  - BREAKING: Removed the entire `PAGI` Context class family, without a
+    compatibility alias or replacement hook. Normal HTTP, WebSocket, and SSE
+    callbacks receive `PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE`
+    directly; HTTP callbacks return detached `PAGI::Response` values. Response
+    shortcuts now use direct Response factories. URL generation, stash,
+    session, state, CSRF, and transport access use their explicitly imported
+    owning helpers. ErrorHandler custom renderers receive `($request, $error)`
+    and must return a value implementing `status_try` and `respond`; an explicit
+    renderer status wins over the derived exception/configured status. Removed
+    along with the class family are Endpoint factory overrides, protocol
+    assertions and type maps, raw channel accessors, the generic event
+    dispatcher, and the hidden seeded response/status fallback. Native raw
+    applications and all middleware retain `($scope, $receive, $send)`.
+    Extension protocols provide their own object. Endpoint disconnect hooks are
+    synchronous. `PAGI::Request->response` remains temporary compatibility for
+    this release but is not recommended for new code.
   - PAGI::Endpoint::SSE no longer sends `sse.start` after
     `on_connect` has already declined the request -- previously `handle()`
     unconditionally awaited `run()` regardless of what `on_connect` did, so
@@ -153,9 +164,9 @@
     Throttle now reject their incompatible non-HTTP fallback cases clearly.
   - Shared Accept matching now honors the most-specific effective quality, so
     exact q=0 exclusions are not revived by positive wildcards and equal
-    qualities retain server order. Unknown explicit Context scope types now
-    produce a generic Context with a once-per-factory/type warning; malformed
-    or missing types croak instead of being treated as HTTP.
+    qualities retain server order. Malformed or missing scope types croak
+    instead of being treated as HTTP; extension protocols own their validation
+    and protocol object.
   - BREAKING: Route matches a complete URL leaf. Mount composes an application
     under a prefix. Router selects and owns routing outcomes. Middleware wraps
     behavior. Compose owns the application root and lifespan. This redesign is
@@ -296,7 +307,7 @@
   - PAGI::Request retains intrinsic HTTP input, strict path parameters, State,
     and minimal connection access. `is_disconnected` is now tri-state and
     returns undef when no connection capability exists; advanced flow control
-    uses PAGI::Transport. Router URL, Stash, Session, CSRF, and Context's
+    uses PAGI::Transport. Router URL, Stash, Session, CSRF, and the removed
     outgoing response shortcuts do not transfer to Request. The existing
     `PAGI::Request->response` factory remains installed; its redesign is
     deferred with the wider Response review.
@@ -304,8 +315,8 @@
     `new_request($scope, $receive)` helper; compiled dispatch constructs direct
     protocol objects independently of that override seam.
   - New PAGI::Authority centralizes strict validation and scope-derived authority
-    formatting. PAGI::Request->host and PAGI::Context->host now return only a
-    single structurally valid Host field (including an explicit port), return
+    formatting. The HTTP Request authority accessor now returns only a
+    single structurally valid Host field (including an explicit port), returns
     undef when it is absent, and reject malformed or duplicate fields. This is
     intentional security hardening; raw, last-value header('host')
     remains the compatibility escape hatch.
@@ -494,13 +505,13 @@
     (issue-only: mint/stash the token for every method, never auto-reject, and
     let the app validate). 'app' exists because the middleware cannot read
     form params without buffering the body stream.
-  - PAGI::Context: add csrf_token and csrf_verify (timing-safe token check).
-    Both inherit into PAGI::Nano contexts.
+  - The former Context facade gained csrf_token and csrf_verify (timing-safe
+    token checks). Both inherited into PAGI::Nano contexts.
   - REMOVED PAGI::Middleware::CSRF's 'token_param' config: it was dead (the
-    form-field lookup was never implemented). Use enforce => 'app' with
-    $ctx->csrf_verify for form tokens.
+    form-field lookup was never implemented). Use enforce => 'app' with the
+    facade's csrf_verify method for form tokens.
   - PAGI::Utils::SecureCompare: new module for the constant-time string compare
-    shared by PAGI::Middleware::CSRF and PAGI::Context.
+    shared by PAGI::Middleware::CSRF and the former facade.
   - Docs: PAGI::Middleware::CSRF's USAGE section no longer contradicts itself
     (a JS getCookie() against an HttpOnly cookie); it now documents the header
     and form flows separately.
@@ -518,10 +529,10 @@
     and every()) now runs on_close cleanup before re-raising, instead of
     bypassing it. WebSocket::run() is unchanged -- it isolates errors and keeps
     serving.
-  - PAGI::Context::WebSocket / PAGI::Context::SSE: a terminal disconnect driven
-    through $c->run now fires the underlying object's on_close (previously it
-    only recorded the reason, so on_close never fired and is_closed/is_connected
-    lied). Both also gain on_close() stubs pointing at
+  - The former protocol-specific Context wrappers now fire the underlying
+    object's on_close when a terminal disconnect is driven through their run
+    method (previously it only recorded the reason, so on_close never fired and
+    is_closed/is_connected lied). Both also gained on_close() stubs pointing at
     $c->websocket->on_close / $c->sse->on_close.
   - PAGI::Test::Client: start() now drives the event loop during lifespan
     startup and dies on failure, instead of busy-waiting a 5s deadline without
@@ -544,9 +555,9 @@
   - PAGI::Utils::is_response: one predicate for "did the handler return a
     response?", shared by the endpoint and router dispatch paths so the
     diagnostics stay consistent.
-  - PAGI::SSE / PAGI::Context::SSE: add is_connected, derived from the SSE
+  - PAGI::SSE and its former facade gained is_connected, derived from the SSE
     wrapper's own state machine (true while started and not closed), mirroring
-    PAGI::WebSocket. Context::SSE::is_connected overrides the base method, which
+    PAGI::WebSocket. The facade overrode the base method, which
     reads pagi.connection (not applicable to sse) and therefore wrongly reported
     a live stream as disconnected. Like the WebSocket counterpart it is "not
     falsely stale" rather than a live network probe.
@@ -609,7 +620,7 @@
   - PAGI::App::Router: coderef route middleware can transform the channel.
   - PAGI::Endpoint::Router route middleware are value-flow (await $next->() returns
     the handler's response); App::Router dispatch returns the matched route's value.
-  - PAGI::Context: $ctx->text/html/json/redirect shorthands,
+  - The former Context facade gained text/html/json/redirect shorthands,
     assert_http/websocket/sse guards, on_default catch-all, raw_send accessor.
   - Backpressure/lifecycle helpers: on_complete, buffered_amount/high_water_mark/
     low_water_mark, on_high_water/on_drain/is_writable, WebSocket->deny().

@@ -1097,9 +1097,6 @@ PAGI::Pages - Negotiated conventional HTTP response factory
     my $response = PAGI::Pages->not_found($request);
     my $response = PAGI::Pages->not_found($scope);
 
-    # A standalone Context remains a compatible scope source.
-    my $response = PAGI::Pages->not_found($context);
-
     # Without a request source, the same call compiles a plain coderef.
     my $endpoint = PAGI::Pages->not_found(
         detail => 'That page does not exist.',
@@ -1107,7 +1104,6 @@ PAGI::Pages - Negotiated conventional HTTP response factory
 
     my $response = $endpoint->($request);       # normal Router handler
     my $response = $endpoint->($scope);         # still unsent
-    my $response = $endpoint->($context);       # standalone compatibility
     await $endpoint->($scope, $receive, $send); # native HTTP PAGI app
 
 =head1 DESCRIPTION
@@ -1148,10 +1144,10 @@ state.
 
 =head1 RESPONSE AND ENDPOINT OWNERSHIP
 
-A L<PAGI::Request> is the normal handler request source. Any object with a
-C<scope> method, including C<PAGI::Context::HTTP>, and an unblessed scope are
-also accepted after their resolved scope is explicitly validated as HTTP. A
-request source constructs but does not send a response:
+A L<PAGI::Request> is the normal handler request source. A custom object with a
+C<scope> method and an unblessed scope are also accepted after their resolved
+scope is explicitly validated as HTTP. A request source constructs but does
+not send a response:
 
     my $response = PAGI::Pages->not_found($request);
     my $response = PAGI::Pages->not_found($scope);
@@ -1354,18 +1350,18 @@ Compose preserves its status and headers and suppresses the final wire body.
         middleware => [
             middleware('ErrorHandler',
                 handler => sub {
-                    my ($context, $error) = @_;
-                    return PAGI::Pages->internal_server_error($context);
+                    my ($request, $error) = @_;
+                    return PAGI::Pages->internal_server_error($request);
                 }),
         ],
     )->to_app;
 
 The HTTP default handles only Router NONE. ErrorHandler's separate handler API
-still supplies a standalone Context plus the thrown application error. A Pages
-endpoint accepts one request source and does not accept arbitrary trailing
-callback metadata, so the wrapper passes only that Context. It may inspect the
-error when it deliberately chooses safe copy or extensions. Passing a Pages
-endpoint directly rejects ErrorHandler's two-argument callback invocation.
+supplies a Request plus the thrown application error. A Pages endpoint accepts
+one request source and does not accept arbitrary trailing callback metadata, so
+the wrapper passes only that Request. It may inspect the error when it
+deliberately chooses safe copy or extensions. Passing a Pages endpoint directly
+rejects ErrorHandler's two-argument callback invocation.
 
 =head2 12. Router-owned MethodNotAllowed union
 

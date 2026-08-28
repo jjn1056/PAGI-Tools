@@ -413,8 +413,8 @@ policy:
         'SecurityHeaders',
         middleware('ErrorHandler',
             handler  => sub {
-                my ($context, $error) = @_;
-                return $pages->internal_server_error($context);
+                my ($request, $error) = @_;
+                return $pages->internal_server_error($request);
             },
             on_error => \&report_error),
     ]
@@ -459,6 +459,9 @@ L<PAGI::Routing>, L<PAGI::App::Router>, and L<PAGI::Endpoint::Router> are
 functional, mutable, and method-oriented frontends over one immutable routing
 engine. Any compiled frontend, native app, or instantiated component object can
 be the single Compose target; a package name is never loaded in that position.
+Normal compiled handlers receive their direct Request, WebSocket, or SSE
+object. Native applications and every middleware wrapper retain the exact
+C<($scope, $receive, $send)> triplet; Compose does not adapt that boundary.
 Compose remains the optional deployed root that can own application middleware
 and server-provided lifespan state; it is not a fourth router. L<PAGI::Lifespan> and
 L<PAGI::Utils/handle_lifespan> remain the low-level choices for hand-built
