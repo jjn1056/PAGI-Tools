@@ -37,8 +37,9 @@ Base: `9420f42f14e9eb857c815aaf1acc9fad6373d1a8`
 
 `t/00-pod/cookbook-examples.t` still reports that the Cookbook apples block is
 not identical to `examples/starlette-apples/app.pl`. The Cookbook, apples
-source, and this test have no diff from the supplied base, so this is outside
-Task 6 and was left unchanged.
+source, and this test have no diff from the supplied base. Per DEV-003, Task 7
+owns the public Cookbook reconciliation, so this unchanged mismatch was left
+outside Task 6.
 
 ## Scope and handoff
 
