@@ -109,7 +109,8 @@ this task. `DELETE` is intentionally rejected wrapper-only behavior.
 - is_started delegates; is_closed delegates — ALREADY -> t/sse/02-state.t: initial state is pending; state transitions.
 - last_event_id delegates — ALREADY -> t/sse/07-last-event-id.t: last_event_id returns header value.
 - keepalive delegates — ALREADY -> t/sse/08-keepalive.t: keepalive sends sse.keepalive event; t/sse/14-keepalive-deferred-arm.t: start() arms a pending keepalive immediately after sse.start.
-- query_param delegates; query_params delegates; raw_query_param delegates; raw_query_params delegates; header_all delegates; http_version delegates — DELETE -> Context forwarding surface, spec §6; direct protocol metadata remains owned by PAGI::SSE.
+- query_param delegates; query_params delegates; raw_query_param delegates; raw_query_params delegates; http_version delegates — TRANSFER -> t/sse/07-last-event-id.t: query helpers preserve decoded raw values and HTTP metadata.
+- header_all delegates — ALREADY -> t/sse/01-constructor.t: header accessors.
 - each delegates — ALREADY -> t/sse/09-iteration.t: each iterates over arrayref.
 - on() is Context dispatcher, not SSE on(); on_error() is Context dispatcher, not SSE on_error(); run() is Context dispatcher, not SSE run(); _sync_terminal_disconnect is a no-op when ->sse was never touched; on_close() croaks with a pointer to the underlying object; sse() still returns underlying object — DELETE -> Context dispatcher/delegation, spec §6.
 - sse on_close fires and state syncs on $ctx->run terminal disconnect — TRANSFER -> t/sse/06-lifecycle.t: run waits for disconnect and calls on_close.
