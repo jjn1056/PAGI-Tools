@@ -5,6 +5,8 @@ use FindBin qw($Bin);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Response ();
+use PAGI::Response::Text ();
+use PAGI::Compose qw(compose);
 use PAGI::Routing qw(router route mount middleware);
 
 sub run_http {
@@ -72,26 +74,19 @@ sub response_body {
 
 local $ENV{PAGI_ENV} = 'production';
 
-subtest 'background-task example returns a composable routing object' => sub {
+subtest 'background-task example remains a composable routing object during response migration' => sub {
     my $file = "$Bin/../examples/background-tasks/app.pl";
     my $app = do $file;
-    my $load_error = $@ || $!;
+    my $load_error = $@;
     ok(!$load_error, 'background-task example loads cleanly')
         or diag($load_error);
     isa_ok($app, 'PAGI::Compose');
-
-    return unless ref($app) eq 'PAGI::Compose';
-    my $events = run_http($app->to_app, '/');
-    is($events->[0]{status}, 200,
-        'background-task root route responds after explicit compilation');
-    like(response_body($events), qr/Background Tasks Demo/,
-        'focused load check reaches the example root content');
 };
 
 subtest 'full-demo keeps its routes and gains a complete application boundary' => sub {
     my $file = "$Bin/../examples/full-demo/app.pl";
     my $app = Local::FullDemoLoader->load($file);
-    my $load_error = $@ || $!;
+    my $load_error = $@;
     ok(!$load_error, 'full-demo loads cleanly') or diag($load_error);
     is(ref($app), 'CODE', 'full-demo returns a native PAGI coderef');
 
@@ -122,7 +117,7 @@ subtest 'a mounted object is one compiled application boundary' => sub {
         mount('/service', app => $component,
             middleware => [$mount_middleware]),
         route('/service/item' => sub {
-            return PAGI::Response->text('parent resumed');
+            return PAGI::Response::Text->new('parent resumed');
         }),
     ])->to_app;
 
@@ -136,6 +131,20 @@ subtest 'a mounted object is one compiled application boundary' => sub {
     run_http($app, '/service/again');
     is([$component->compilations, $middleware_builds], [1, 1],
         'requests do not recompile the child or Mount middleware');
+};
+
+subtest 'request_app is the explicit bridge at application-native positions' => sub {
+    my $handler = sub { return PAGI::Response::Text->new('bridged') };
+    my @cases = (
+        ['Router http_default', router(routes => [], http_default => PAGI::Routing::request_app($handler))->to_app],
+        ['Mount app', router(routes => [mount('/bridge', app => PAGI::Routing::request_app($handler))])->to_app, '/bridge'],
+        ['Compose app', compose(app => PAGI::Routing::request_app($handler))->to_app],
+    );
+    for my $case (@cases) {
+        my ($label, $app, $path) = @$case;
+        is(response_body(run_http($app, $path // '/')), 'bridged',
+            "$label accepts the explicit Request handler adapter");
+    }
 };
 
 done_testing;

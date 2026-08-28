@@ -2,9 +2,10 @@ package PAGI::Routing;
 
 use strict;
 use warnings;
+use Carp qw(croak);
 use Exporter 'import';
 
-our @EXPORT_OK = qw(router route websocket sse mount middleware);
+our @EXPORT_OK = qw(router route websocket sse mount middleware request_app);
 our %EXPORT_TAGS = (
     routes     => [qw(router route websocket sse mount)],
     middleware => [qw(middleware)],
@@ -43,6 +44,14 @@ sub mount {
 sub middleware {
     require PAGI::Routing::Middleware;
     return PAGI::Routing::Middleware->new(@_);
+}
+
+sub request_app {
+    my ($handler) = @_;
+    croak 'request_app handler must be a coderef'
+        unless ref($handler) eq 'CODE';
+    require PAGI::Routing::Compiler;
+    return PAGI::Routing::Compiler->_compile_http_handler($handler);
 }
 
 1;
@@ -106,8 +115,10 @@ Compose owns the application root and lifespan.
 
 This module is the immutable functional frontend for PAGI's shared routing
 engine. Constructor functions build an immutable, inspectable route tree.
-Normal HTTP handlers receive one L<PAGI::Request> and return one
-L<PAGI::Response>. Normal WebSocket and SSE handlers receive one
+Normal HTTP handler coderefs receive one L<PAGI::Request> and return one
+L<PAGI::Response>; instantiated objects with C<to_app> are native component
+targets. C<request_app> explicitly adapts a Request handler for a native
+application position. Normal WebSocket and SSE handlers receive one
 L<PAGI::WebSocket> or L<PAGI::SSE> and use that object's protocol methods.
 Explicit C<raw> forms keep all three PAGI channels available when an endpoint
 needs to own native events.
@@ -127,7 +138,7 @@ Nothing is exported by default.
 
 =item * C<:middleware> exports only C<middleware>.
 
-=item * Uppercase C<:ALL> exports all six constructors. Lowercase C<:all> is invalid.
+=item * Uppercase C<:ALL> exports all constructors and C<request_app>. Lowercase C<:all> is invalid.
 
 =back
 
@@ -150,6 +161,8 @@ inspect signatures or evaluate package-method strings.
     Form                         Called with                    Required result
     ---------------------------  -----------------------------  -------------------------
     route('/x' => $code)         ($request)                     PAGI::Response
+    route('/x' => $component)    ($scope, $receive, $send)      native component app
+    request_app($code)           ($scope, $receive, $send)      Request handler bridge
     websocket('/x' => $code)     ($websocket)                   inert; completion awaited
     sse('/x' => $code)           ($sse)                         inert; completion awaited
     route('/x', raw => $code)    ($scope, $receive, $send)      inert
@@ -161,6 +174,15 @@ inspect signatures or evaluate package-method strings.
 
 =item * C<< route('/x' =E<gt> $code) >> is a normal HTTP handler. It receives
 C<($request)> and must return a Response, immediately or through a Future.
+
+=item * C<< route('/x' =E<gt> $component) >> accepts an instantiated object
+with C<to_app>. It is compiled once per Router compilation and remains inside
+the normal route middleware, matching, method, and HEAD boundaries. Package
+names and unblessed references are invalid.
+
+=item * C<request_app($handler)> is the explicit adapter for placing a
+one-Request handler in a native application position such as C<http_default>,
+Mount C<app>, or Compose C<app>. It never infers coderef arity.
 
 =item * C<< websocket('/x' =E<gt> $code) >> and
 C<< sse('/x' =E<gt> $code) >> receive one direct L<PAGI::WebSocket> or
@@ -218,8 +240,8 @@ Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions. An
 optional C<http_default> declares an HTTP application; construction validates
 it but does not compile it. A directly compiled Router owns normal routing
-outcomes. HTTP NONE invokes C<http_default>, or the stock negotiated Pages 404
-when it is absent. HTTP PARTIAL emits the built-in negotiated 405 with one
+outcomes. HTTP NONE invokes C<http_default>, or the stock concrete Problem 404
+when it is absent. HTTP PARTIAL emits the built-in concrete Problem 405 with one
 authoritative C<Allow> union. The HTTP default never handles PARTIAL,
 WebSocket, or SSE misses. Router ignores lifespan; L<PAGI::Compose> owns that
 scope at a deployed root.
@@ -313,7 +335,8 @@ scope or lexicals during concurrent requests.
 
 At request time a normal HTTP handler builds and returns a Response. Routing
 awaits an immediate or Future-backed result, validates it, calls
-C<< $response->respond($send) >> exactly once, and awaits that operation. The
+C<< $response->respond($scope, $receive, $send) >> exactly once, and awaits
+that operation. The
 handler receives neither C<$receive> nor C<$send>; return the Response instead
 of sending it. Do not smuggle native channels into a normal handler through a
 closure or middleware side channel. Use C<raw> when an HTTP endpoint must call

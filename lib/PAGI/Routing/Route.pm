@@ -41,8 +41,9 @@ sub _new_from {
 
     croak 'route requires exactly one of handler or raw'
         unless $is_raw || defined $target;
-    croak 'handler must be a coderef' unless $is_raw || ref($target) eq 'CODE';
-    PAGI::Utils::_validate_app_value($target, 'raw application') if $is_raw;
+    PAGI::Utils::_validate_app_value(
+        $target, $is_raw ? 'raw application' : 'route target',
+    );
 
     _validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     _validate_logical_segment('name', $opts{name}) if exists $opts{name};
@@ -173,10 +174,10 @@ A route represents an HTTP, WebSocket, or SSE leaf. Its C<name>, when supplied,
 is one local logical address segment: it is nonempty, contains no slash, and
 is not C<.> or C<..>; dots are literal characters. The ordinary target is a
 coderef handler: HTTP receives one L<PAGI::Request>, WebSocket receives one
-L<PAGI::WebSocket>, and SSE receives one L<PAGI::SSE>. C<raw> targets remain
-explicit native apps or instantiated objects with C<to_app> for the compiler
-to coerce through L<PAGI::Utils/to_app>. Raw application positions never load
-package names; middleware positions retain their separate explicit
+L<PAGI::WebSocket>, and SSE receives one L<PAGI::SSE>. An instantiated object
+with C<to_app> is a component target, compiled once through
+L<PAGI::Utils/to_app>. C<raw> remains the explicit marker for a native coderef
+app. Route targets never load package names; middleware positions retain their separate explicit
 class-loading contract. Its path pattern is compiled during construction, and
 constructor validation performs no request I/O. The description never stores
 a request match, protocol object, or handler result. Collection and hash
@@ -207,9 +208,10 @@ pass before the normal or raw target is selected.
 =head2 to_app
 
 Synchronously compiles this route through a fresh complete one-node router on
-every call. Compilation resolves middleware and raw components but emits no
+every call. Compilation resolves middleware and component targets but emits no
 events. The returned app performs matching and invokes the handler later;
-normal HTTP dispatch awaits and emits the returned Response exactly once,
+normal HTTP dispatch awaits and emits the returned Response exactly once through
+C<< respond($scope, $receive, $send) >>,
 normal WebSocket/SSE dispatch awaits the direct protocol handler's completion,
 and raw dispatch leaves event ownership with the target. Every middleware
 wrapper remains a native C<($scope, $receive, $send)> application.

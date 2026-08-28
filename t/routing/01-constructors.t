@@ -7,6 +7,7 @@ use overload ();
 
 use lib 'lib';
 use PAGI::Routing qw(:ALL);
+use PAGI::Response::Text ();
 
 {
     package NoImports;
@@ -137,7 +138,7 @@ use PAGI::Routing qw(:ALL);
 }
 
 subtest 'exports are opt-in and tag-specific' => sub {
-    for my $name (qw(router route websocket sse mount middleware)) {
+    for my $name (qw(router route websocket sse mount middleware request_app)) {
         ok(!NoImports->can($name), "no default $name export");
         ok(AllImports->can($name), "ALL exports $name");
     }
@@ -147,6 +148,8 @@ subtest 'exports are opt-in and tag-specific' => sub {
     ok(!RouteImports->can('middleware'), 'routes tag excludes middleware');
     ok(MiddlewareImports->can('middleware'), 'middleware tag exports middleware');
     ok(!MiddlewareImports->can('route'), 'middleware tag excludes route');
+    ok(!RouteImports->can('request_app'), 'routes tag excludes the explicit adapter');
+    ok(AllImports->can('request_app'), 'ALL exports the explicit adapter');
     my ($error, $stderr);
     {
         local *STDERR;
@@ -537,8 +540,18 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/separator' => $handler, methods => 'GET POST' }, qr/methods must be a method string, arrayref, or '\*'/, 'methods reject separators';
     like dies { websocket '/socket' => $handler, methods => 'GET' }, qr/WebSocket routes do not accept methods/, 'WebSocket rejects methods';
     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
-    like dies { route '/not-code' => 'not a handler' }, qr/handler must be a coderef/, 'normal route handler must be a coderef';
-    like dies { route '/not-component' => TestRoutingApp->new($handler) }, qr/handler must be a coderef/, 'normal route does not coerce component targets';
+    like dies { route '/not-code' => 'not a handler' }, qr/route target must be a coderef or instantiated object with to_app/, 'normal route rejects package strings';
+    like dies { route '/not-component' => [] }, qr/route target must be a coderef or instantiated object with to_app/, 'normal route rejects unblessed component lookalikes';
+    ok(lives { route '/component' => PAGI::Response::Text->new('component') },
+        'normal route accepts an instantiated to_app component');
+    my $broken_component = bless {}, 'BrokenRouteComponent';
+    like dies { route '/broken-component' => $broken_component },
+        qr/route target must be a coderef or instantiated object with to_app/,
+        'normal route rejects an instantiated object without to_app';
+    my $bad_result = bless {}, 'BadRouteToAppResult';
+    like dies { route('/bad-result' => $bad_result)->to_app },
+        qr/BadRouteToAppResult->to_app must return a coderef/,
+        'component to_app result is validated at compilation';
     for my $invalid (
         [undef, qr/raw application must be a coderef or instantiated object with to_app/],
         ['Local::App', qr/raw application must be a coderef or instantiated object with to_app/],
@@ -610,6 +623,13 @@ subtest 'constructors reject invalid declarations' => sub {
     }
     is(route('/desc-slash' => $handler, desc => '/')->desc, '/', 'route descriptions retain ordinary text validation');
     is(mount('/desc-dot', routes => [], desc => 'person/show')->desc, 'person/show', 'mount descriptions retain ordinary text validation');
+    like dies { request_app('not a handler') }, qr/request_app handler must be a coderef/,
+        'request_app validates its handler at construction';
 };
+
+{
+    package BadRouteToAppResult;
+    sub to_app { return 'not a coderef' }
+}
 
 done_testing;

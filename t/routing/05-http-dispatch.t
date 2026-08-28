@@ -9,6 +9,7 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::App::Router;
 use PAGI::Response;
+use PAGI::Response::Text ();
 use PAGI::Routing qw(router route middleware);
 use PAGI::Routing::Compiler;
 
@@ -77,7 +78,7 @@ subtest 'normal HTTP leaves receive one exact Request and await one response emi
         push @call_contexts, defined wantarray ? (wantarray ? 'list' : 'scalar') : 'void';
         my ($request) = @_;
         push @requests, $request;
-        return PAGI::Response->text('item ' . $request->path_param('id'));
+        return PAGI::Response::Text->new('item ' . $request->path_param('id'));
     };
     my $sync_app = PAGI::Routing::Compiler->_compile_http_leaf($sync);
     my ($receive, $send, $events) = channels();
@@ -106,7 +107,7 @@ subtest 'normal HTTP leaves receive one exact Request and await one response emi
     my $future = route '/future' => async sub {
         my ($request) = @_;
         my $body = await $request->body;
-        return PAGI::Response->text("future $body");
+        return PAGI::Response::Text->new("future $body");
     };
     my $future_app = PAGI::Routing::Compiler->_compile_http_leaf($future);
     $receive = sub {
@@ -134,12 +135,111 @@ subtest 'normal HTTP leaves receive one exact Request and await one response emi
         route('/counted' => sub { return $counted }),
     );
     ($receive, $send, $events) = channels();
-    my $running = $counted_app->(scope(path => '/counted'), $receive, $send);
+    my $counted_scope = scope(path => '/counted');
+    my $running = $counted_app->($counted_scope, $receive, $send);
     ok(!$running->is_ready, 'adapter awaits the response emission Future');
     is($count, 1, 'adapter asks the response value to emit exactly once');
-    is(\@respond_sends, [$send], 'adapter passes the exact send channel to respond');
+    is(\@respond_sends, [[$counted_scope, $receive, $send]],
+        'adapter passes the exact native triplet to respond');
     $respond_completion->done;
     is($running->get, undef, 'adapter completes only after response emission');
+};
+
+subtest 'instantiated Response route targets compile once and retain normal routing boundaries' => sub {
+    my $response = PAGI::Response::Text->new('root');
+    my @middleware;
+    my $app = router(routes => [
+        route('/' => $response,
+            name => 'root', desc => 'component root', methods => 'GET',
+            constraints => {}, middleware => [middleware(sub {
+                my ($inner) = @_;
+                return async sub {
+                    push @middleware, $_[0]{method};
+                    await Future->wrap($inner->(@_));
+                };
+            })]),
+    ])->to_app;
+
+    my ($get_receive, $get_send, $get_events) = channels();
+    $app->(scope(path => '/', method => 'GET'), $get_receive, $get_send)->get;
+    is(response_body($get_events), 'root', 'component route emits its response');
+    is(\@middleware, ['GET'], 'route middleware remains outside the component');
+
+    my ($head_receive, $head_send, $head_events) = channels();
+    $app->(scope(path => '/', method => 'HEAD'), $head_receive, $head_send)->get;
+    is($head_events->[-1], { type => 'http.response.body', body => '', more => 0 },
+        'component route remains inside the HEAD boundary');
+
+    my ($post_receive, $post_send, $post_events) = channels();
+    $app->(scope(path => '/', method => 'POST'), $post_receive, $post_send)->get;
+    is($post_events->[0]{status}, 405, 'component route contributes a normal partial outcome');
+    is(allow_header($post_events), 'GET, HEAD', 'component route contributes normalized Allow methods');
+
+    my ($left_receive, $left_send, $left_events) = channels();
+    my ($right_receive, $right_send, $right_events) = channels();
+    Future->needs_all(
+        $app->(scope(path => '/', method => 'GET'), $left_receive, $left_send),
+        $app->(scope(path => '/', method => 'GET'), $right_receive, $right_send),
+    )->get;
+    is([response_body($left_events), response_body($right_events)], ['root', 'root'],
+        'concurrent component requests receive independent emissions');
+};
+
+subtest 'request_app explicitly adapts Request handlers without arity inference' => sub {
+    my @seen;
+    my $sync = PAGI::Routing::request_app(sub {
+        my ($request) = @_;
+        push @seen, ref($request);
+        return PAGI::Response::Text->new('sync');
+    });
+    my ($receive, $send, $events) = channels();
+    $sync->(scope(path => '/adapter'), $receive, $send)->get;
+    is(\@seen, ['PAGI::Request'], 'adapter supplies exactly a Request');
+    is(response_body($events), 'sync', 'adapter emits immediate Response returns');
+
+    my $future = PAGI::Routing::request_app(async sub {
+        my ($request) = @_;
+        return PAGI::Response::Text->new('future');
+    });
+    ($receive, $send, $events) = channels();
+    $future->(scope(path => '/adapter'), $receive, $send)->get;
+    is(response_body($events), 'future', 'adapter emits Future-backed Response returns');
+
+    my $bad = PAGI::Routing::request_app(sub { return undef });
+    ($receive, $send, $events) = channels();
+    like dies { $bad->(scope(path => '/adapter'), $receive, $send)->get },
+        qr/handler did not return a response/, 'adapter diagnoses invalid returns';
+    like dies { $sync->({ type => 'websocket' }, $receive, $send)->get },
+        qr/PAGI::Request requires HTTP scope/, 'adapter rejects non-HTTP scope';
+
+    my $ordinary = route('/ordinary' => sub {
+        return PAGI::Response::Text->new(ref($_[0]));
+    })->to_app;
+    is(response_body(do { ($receive, $send, $events) = channels(); $ordinary->(scope(path => '/ordinary'), $receive, $send)->get; $events }),
+        'PAGI::Request', 'ordinary Route coderefs remain Request handlers');
+
+    my $native = async sub {
+        my ($scope, $native_receive, $native_send) = @_;
+        die 'native app requires HTTP scope'
+            unless ref($scope) eq 'HASH' && ($scope->{type} // '') eq 'http';
+        await $native_send->({
+            type => 'http.response.start', status => 204, headers => [],
+        });
+        await $native_send->({
+            type => 'http.response.body', body => '', more => 0,
+        });
+    };
+    my $unmarked = route('/native' => $native)->to_app;
+    ($receive, $send, $events) = channels();
+    like dies { $unmarked->(scope(path => '/native'), $receive, $send)->get },
+        qr/native app requires HTTP scope/,
+        'an ordinary Route coderef is never inferred to be native';
+    is($events, [], 'the unmarked native coderef emits nothing');
+
+    my $raw = route('/native', raw => $native)->to_app;
+    ($receive, $send, $events) = channels();
+    $raw->(scope(path => '/native'), $receive, $send)->get;
+    is($events->[0]{status}, 204, 'raw remains the explicit native-coderef marker');
 };
 
 subtest 'raw HTTP leaves are coerced once and retain ownership of all channels' => sub {
@@ -191,12 +291,12 @@ subtest 'provider constraints select normal and raw HTTP leaves before invocatio
         route('/normal/{id:&HttpProvider}' => sub {
             my ($request) = @_;
             push @normal, $request->path_param('id');
-            return PAGI::Response->text(
+            return PAGI::Response::Text->new(
                 'provider ' . $request->path_param('id'),
             );
         }),
         route('/normal/rejected' => sub {
-            return PAGI::Response->text('continued');
+            return PAGI::Response::Text->new('continued');
         }),
         route('/raw/{id:&HttpProvider}', raw => sub {
             my ($request_scope, $receive, $send) = @_;
@@ -280,7 +380,7 @@ subtest 'handler exceptions and failed Futures propagate unchanged' => sub {
 
 subtest 'selection returns exact request-local full, partial, and none records' => sub {
     my $default = route '/items/{id}' => sub {
-        return PAGI::Response->text('default');
+        return PAGI::Response::Text->new('default');
     };
     my $entries = compiled_entries($default);
     my $incoming_params = { tenant => 'acme' };
@@ -331,27 +431,27 @@ subtest 'method matching consumes normalized scalar, array, wildcard, and HEAD d
     my @cases = (
         [
             'default GET',
-            route('/method' => sub { return PAGI::Response->text('GET') }),
+            route('/method' => sub { return PAGI::Response::Text->new('GET') }),
             'GET',
         ],
         [
             'automatic HEAD',
-            route('/method' => sub { return PAGI::Response->text('HEAD') }),
+            route('/method' => sub { return PAGI::Response::Text->new('HEAD') }),
             'HEAD',
         ],
         [
             'scalar method',
-            route('/method' => sub { return PAGI::Response->text('POST') }, methods => 'post'),
+            route('/method' => sub { return PAGI::Response::Text->new('POST') }, methods => 'post'),
             'POST',
         ],
         [
             'array method',
-            route('/method' => sub { return PAGI::Response->text('PATCH') }, methods => [qw(PUT PATCH)]),
+            route('/method' => sub { return PAGI::Response::Text->new('PATCH') }, methods => [qw(PUT PATCH)]),
             'PATCH',
         ],
         [
             'wildcard method',
-            route('/method' => sub { return PAGI::Response->text('wildcard') }, methods => '*'),
+            route('/method' => sub { return PAGI::Response::Text->new('wildcard') }, methods => '*'),
             'BREW',
         ],
     );
@@ -368,7 +468,7 @@ subtest 'method matching consumes normalized scalar, array, wildcard, and HEAD d
     }
 
     my $default_entries = compiled_entries(
-        route('/method' => sub { return PAGI::Response->text('GET') }),
+        route('/method' => sub { return PAGI::Response::Text->new('GET') }),
     );
     is(
         PAGI::Routing::Compiler->_select_http(
@@ -381,8 +481,8 @@ subtest 'method matching consumes normalized scalar, array, wildcard, and HEAD d
 };
 
 subtest 'declaration-order scanning continues past partials and stops on the first full match' => sub {
-    my $first_full = route '/same' => sub { return PAGI::Response->text('first') }, methods => 'POST';
-    my $second_full = route '/same' => sub { return PAGI::Response->text('second') }, methods => 'POST';
+    my $first_full = route '/same' => sub { return PAGI::Response::Text->new('first') }, methods => 'POST';
+    my $second_full = route '/same' => sub { return PAGI::Response::Text->new('second') }, methods => 'POST';
     my $entries = compiled_entries($first_full, $second_full);
     my $decision = PAGI::Routing::Compiler->_select_http(
         $entries,
@@ -390,8 +490,8 @@ subtest 'declaration-order scanning continues past partials and stops on the fir
     );
     is(refaddr($decision->{app}), refaddr($entries->[0]{app}), 'first full match wins without specificity sorting');
 
-    my $get = route '/same' => sub { return PAGI::Response->text('get') }, methods => 'GET';
-    my $post = route '/same' => sub { return PAGI::Response->text('post') }, methods => 'POST';
+    my $get = route '/same' => sub { return PAGI::Response::Text->new('get') }, methods => 'GET';
+    my $post = route '/same' => sub { return PAGI::Response::Text->new('post') }, methods => 'POST';
     $entries = compiled_entries($get, $post);
     $decision = PAGI::Routing::Compiler->_select_http(
         $entries,
@@ -400,7 +500,7 @@ subtest 'declaration-order scanning continues past partials and stops on the fir
     is($decision->{kind}, 'full', 'later full match beats an earlier partial');
     is(refaddr($decision->{app}), refaddr($entries->[1]{app}), 'later matching declaration is selected');
 
-    my $constrained = route '/items/{id}' => sub { return PAGI::Response->text('item') },
+    my $constrained = route '/items/{id}' => sub { return PAGI::Response::Text->new('item') },
         methods => 'GET', constraints => { id => sub { return 0 } };
     is(
         PAGI::Routing::Compiler->_select_http(
@@ -411,8 +511,8 @@ subtest 'declaration-order scanning continues past partials and stops on the fir
         'constraint failure is no match rather than a partial match',
     );
 
-    my $specific = route '/known' => sub { return PAGI::Response->text('specific') }, methods => 'GET';
-    my $catch_all = route '/*path' => sub { return PAGI::Response->text('catch all') }, methods => '*';
+    my $specific = route '/known' => sub { return PAGI::Response::Text->new('specific') }, methods => 'GET';
+    my $catch_all = route '/*path' => sub { return PAGI::Response::Text->new('catch all') }, methods => '*';
     $entries = compiled_entries($specific, $catch_all);
     $decision = PAGI::Routing::Compiler->_select_http(
         $entries,
@@ -575,7 +675,7 @@ subtest 'route middleware is compiled once and executes only after full selectio
         };
     });
     my $declared = route '/wrapped' => sub {
-        return PAGI::Response->text('wrapped');
+        return PAGI::Response::Text->new('wrapped');
     }, methods => 'GET', middleware => [$descriptor];
     my $entries = compiled_entries($declared);
 
@@ -626,9 +726,9 @@ subtest 'route middleware is compiled once and executes only after full selectio
     }
 
     sub respond {
-        my ($self, $send) = @_;
+        my ($self, $scope, $receive, $send) = @_;
         ++${$self->{count}};
-        push @{$self->{sends}}, $send;
+        push @{$self->{sends}}, [$scope, $receive, $send];
         return $self->{completion};
     }
 }

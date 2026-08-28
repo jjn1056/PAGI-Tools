@@ -6,8 +6,8 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
-use PAGI::Pages ();
 use PAGI::Request;
+use PAGI::Response::Problem ();
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
@@ -123,7 +123,12 @@ sub _compile_router_body {
 
     my $http_default = defined $router->http_default
         ? PAGI::Utils::to_app($router->http_default)
-        : PAGI::Utils::to_app(PAGI::Pages->not_found);
+        : $class->_compile_http_handler(sub {
+            return PAGI::Response::Problem->new({
+                title  => 'Not Found',
+                status => 404,
+            });
+        });
 
     my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
@@ -236,10 +241,11 @@ sub _compile_dispatcher {
             $state->{router_generated} = 1;
             $state->{allowed_methods} = [@{$decision->{allowed_methods}}];
 
-            my $response = PAGI::Pages->method_not_allowed(
-                $scope, allow => $decision->{allowed_methods},
+            my $response = PAGI::Response::Problem->new(
+                { title => 'Method Not Allowed', status => 405 },
+                headers => ['Allow' => join(', ', @{$decision->{allowed_methods}})],
             );
-            await Future->wrap($response->respond($send));
+            await Future->wrap($response->respond($scope, $receive, $send));
             return;
         }
 
@@ -302,7 +308,7 @@ sub _compile_protocol_leaf {
     my ($class, $route) = @_;
 
     my $app;
-    if ($route->is_raw) {
+    if ($route->is_raw || ref($route->target) ne 'CODE') {
         my $raw_app = PAGI::Utils::to_app($route->target);
         $app = async sub {
             my ($scope, $receive, $send) = @_;
@@ -344,7 +350,7 @@ sub _compile_http_leaf {
     my ($class, $route) = @_;
 
     my $app;
-    if ($route->is_raw) {
+    if ($route->is_raw || ref($route->target) ne 'CODE') {
         my $raw_app = PAGI::Utils::to_app($route->target);
         $app = async sub {
             my ($scope, $receive, $send) = @_;
@@ -375,7 +381,7 @@ sub _compile_http_handler {
         croak 'handler did not return a response'
             unless PAGI::Utils::is_response($result);
 
-        await Future->wrap($result->respond($send));
+        await Future->wrap($result->respond($scope, $receive, $send));
         return;
     };
 }
@@ -712,9 +718,10 @@ PAGI::Routing::Compiler - Internal declarative routing compiler
 
 Compiles declarative routing descriptions into fresh application graphs. A
 Router scans its declarations in order. A full Route or Mount invokes its
-compiled application and owns the request. HTTP PARTIAL produces a negotiated
-L<PAGI::Pages> 405 with the first-seen method union, while HTTP NONE invokes
-the Router's compiled C<http_default> or the stock negotiated Pages 404.
+compiled application and owns the request. HTTP PARTIAL produces a concrete
+L<PAGI::Response::Problem> 405 with the first-seen method union, while HTTP
+NONE invokes the Router's compiled C<http_default> or the stock concrete
+Problem 404.
 WebSocket and SSE misses retain their protocol-specific denial and close
 outcomes and never invoke C<http_default>.
 

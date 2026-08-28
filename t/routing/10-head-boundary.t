@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 use PAGI::Routing::HeadBoundary;
 use PAGI::Test::Client;
+use PAGI::Response::Text ();
 
 sub capture_send {
     my @events;
@@ -92,6 +93,17 @@ subtest 'middleware inside the final HEAD edge may finish response metadata firs
         },
         { type => 'http.response.body', body => '', more => 0 },
     ], 'the final edge preserves middleware-derived headers and suppresses only wire payload');
+};
+
+subtest 'a component response emits through the full triplet inside HEAD suppression' => sub {
+    my ($transport, $events) = capture_send();
+    my ($scope, $send) = PAGI::Routing::HeadBoundary->prepare(
+        { type => 'http', method => 'HEAD' }, $transport,
+    );
+    my $receive = sub { return Future->done({ type => 'http.request', body => '', more => 0 }) };
+    PAGI::Response::Text->new('component')->to_app->($scope, $receive, $send)->get;
+    is($events->[-1], { type => 'http.response.body', body => '', more => 0 },
+        'component output reaches the same final HEAD suppression edge');
 };
 
 like(
