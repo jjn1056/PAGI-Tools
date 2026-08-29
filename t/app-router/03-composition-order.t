@@ -9,7 +9,7 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router::Builder ();
 use PAGI::Compose qw(compose);
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing::Router ();
 use PAGI::Test::Client ();
 
@@ -18,7 +18,7 @@ sub handler {
     return sub {
         my ($request) = @_;
         ++$$counter if $counter;
-        return PAGI::Response->text($body);
+        return PAGI::Response::Text->new($body);
     };
 }
 

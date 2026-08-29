@@ -6,9 +6,9 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
-use PAGI::Response ();
+use PAGI::Response::Text ();
 
-sub handler { return sub { return PAGI::Response->text('ok') } }
+sub handler { return sub { return PAGI::Response::Text->new('ok') } }
 
 subtest 'public names are local segments and inspection uses slash addresses' => sub {
     my $router = PAGI::App::Router->new;

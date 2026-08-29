@@ -7,7 +7,7 @@ use Future::AsyncAwait;
 
 use lib 'lib';
 use PAGI::App::Router;
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(middleware);
 
 async sub request {
@@ -78,7 +78,7 @@ subtest 'public route middleware uses native app-to-app onion order' => sub {
     ] => sub {
         my ($request) = @_;
         push @trace, 'handler ' . ref($request);
-        return PAGI::Response->text('home');
+        return PAGI::Response::Text->new('home');
     });
 
     is($builds, 0, 'declaration normalizes without wrapping');
@@ -107,7 +107,7 @@ subtest 'object and explicit description forms compose on the public route' => s
     my $router = PAGI::App::Router->new;
     $router->get('/' => [$object, $description] => sub {
         push @trace, 'handler';
-        return PAGI::Response->text('mixed');
+        return PAGI::Response::Text->new('mixed');
     });
 
     my $snapshot = $router->to_router;
@@ -128,7 +128,7 @@ subtest 'class-name middleware is accepted and resolved at compilation' => sub {
     my $router = PAGI::App::Router->new;
     $router->get('/' => ['RequestId'] => sub {
         my ($request) = @_;
-        return PAGI::Response->text(
+        return PAGI::Response::Text->new(
             defined $request->scope->{request_id} ? 'has id' : 'missing id',
         );
     });
@@ -155,7 +155,7 @@ subtest 'middleware can short circuit or wrap native channels' => sub {
     my $router = PAGI::App::Router->new;
     $router->get('/denied' => [$auth] => sub {
         ++$handler_calls;
-        return PAGI::Response->text('must not run');
+        return PAGI::Response::Text->new('must not run');
     });
 
     my $denied = request($router->to_app, path => '/denied')->get;
@@ -188,7 +188,7 @@ subtest 'middleware can short circuit or wrap native channels' => sub {
     $channels->get('/channels' => [$inject] => async sub {
         my ($request) = @_;
         my $body = await $request->body;
-        return PAGI::Response->text($body);
+        return PAGI::Response::Text->new($body);
     });
     my $events = request($channels->to_app, path => '/channels')->get;
     is(event_body($events), 'synthetic', 'wrapped receive reaches the Request body');
@@ -204,7 +204,7 @@ subtest 'callback Mount, Router app, and route middleware stack once' => sub {
     );
     $child->get('/data' => [factory('route', \@trace, \$builds)] => sub {
         push @trace, 'handler';
-        return PAGI::Response->text('data');
+        return PAGI::Response::Text->new('data');
     });
 
     my $root = PAGI::App::Router->new(

@@ -7,7 +7,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing::URL qw(path_for);
 use PAGI::Test::Client;
 
@@ -56,14 +56,14 @@ subtest 'ordinary HTTP targets receive Request and emit immediate or Future Resp
     $router->get('/immediate/{id}' => sub {
         my ($request) = @_;
         push @normal_kinds, [ref($request), scalar @_];
-        return PAGI::Response->text(
+        return PAGI::Response::Text->new(
             'immediate ' . $request->path_param('id'), status => 201,
         );
     });
     $router->get('/future' => sub {
         my ($request) = @_;
         push @normal_kinds, [ref($request), scalar @_];
-        return Future->done(PAGI::Response->text('future', status => 202));
+        return Future->done(PAGI::Response::Text->new('future', status => 202));
     });
 
     my $client = PAGI::Test::Client->new(app => $router->to_app);
@@ -211,10 +211,10 @@ subtest 'slash names, relative Request links, constraints, and metadata share on
                         'show', {}, { 'a key' => 'x y' }, 'part one',
                     ),
                 };
-                return PAGI::Response->text($seen[-1]{link});
+                return PAGI::Response::Text->new($seen[-1]{link});
             })->name('show')->desc('Show person')->constraints(id => qr/\A\d+\z/);
             $people->get('/{id}' => sub {
-                return PAGI::Response->text('constraint fallback');
+                return PAGI::Response::Text->new('constraint fallback');
             });
         })->name('people');
     })->name('org');
@@ -283,19 +283,20 @@ subtest 'custom HTTP default and explicit HEAD use the shared compiler' => sub {
         return Future->done;
     });
     my $router = PAGI::App::Router->new(http_default => $default);
-    $router->get('/only' => sub { return PAGI::Response->text('only') });
+    $router->get('/only' => sub { return PAGI::Response::Text->new('only') });
     $router->head('/report' => sub {
-        return PAGI::Response->text('explicit', status => 203);
+        return PAGI::Response::Text->new('explicit', status => 203);
     });
     $router->get('/report' => sub {
-        return PAGI::Response->text('automatic', status => 200);
+        return PAGI::Response::Text->new('automatic', status => 200);
     });
 
     my $app = $router->to_app;
     is($default->{builds}, 1, 'HTTP default object compiles once');
     my $client = PAGI::Test::Client->new(app => $app);
     my $missing = $client->get('/missing');
-    my $wrong_method = $client->post('/only');
+    my $wrong_method = $client->post('/only',
+        headers => { Accept => 'text/html' });
     my $head = $client->head('/report');
     my $get = $client->get('/report');
 

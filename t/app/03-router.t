@@ -8,7 +8,8 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
-use PAGI::Response ();
+use PAGI::Response::Empty ();
+use PAGI::Response::Text ();
 
 sub invoke {
     my ($app, %scope) = @_;
@@ -32,7 +33,7 @@ sub body {
 
 subtest 'basic App routing returns Responses through the shared compiler' => sub {
     my $router = PAGI::App::Router->new;
-    $router->get('/users' => sub { return PAGI::Response->text('Users list') });
+    $router->get('/users' => sub { return PAGI::Response::Text->new('Users list') });
     my $app = compose(app => $router)->to_app;
 
     my $matched = invoke($app, path => '/users');
@@ -52,15 +53,15 @@ subtest 'brace parameters and terminal wildcards reach Request' => sub {
     my $router = PAGI::App::Router->new;
     $router->get('/users/{id}' => sub {
         push @captured, $_[0]->path_params;
-        return PAGI::Response->text('user');
+        return PAGI::Response::Text->new('user');
     });
     $router->get('/users/{user_id}/posts/{post_id}' => sub {
         push @captured, $_[0]->path_params;
-        return PAGI::Response->text('post');
+        return PAGI::Response::Text->new('post');
     });
     $router->get('/files/*filepath' => sub {
         push @captured, $_[0]->path_params;
-        return PAGI::Response->text('file');
+        return PAGI::Response::Text->new('file');
     });
     my $app = $router->to_app;
 
@@ -77,13 +78,13 @@ subtest 'brace parameters and terminal wildcards reach Request' => sub {
 subtest 'HTTP verb methods and automatic HEAD retain shared behavior' => sub {
     my $router = PAGI::App::Router->new;
     $router->post('/users' => sub {
-        return PAGI::Response->text('Created', status => 201);
+        return PAGI::Response::Text->new('Created', status => 201);
     });
     $router->delete('/users/{id}' => sub {
-        return PAGI::Response->text('', status => 204);
+        return PAGI::Response::Empty->new(status => 204);
     });
     $router->get('/report' => sub {
-        return PAGI::Response->text('representation', status => 203);
+        return PAGI::Response::Text->new('representation', status => 203);
     });
     my $app = $router->to_app;
 
@@ -107,7 +108,7 @@ subtest 'route information lives in pagi.routing rather than pagi.router' => sub
             captures => { %{$frame->{captures}} },
             has_old => exists $request->scope->{'pagi.router'} ? 1 : 0,
         };
-        return PAGI::Response->text('OK');
+        return PAGI::Response::Text->new('OK');
     })->name('show')->desc('Show user');
 
     invoke($router->to_app, path => '/users/123');
@@ -150,7 +151,7 @@ subtest 'App Router HTTP default is one-shot, retained, and HTTP NONE only' => s
     is($method->http_default($default), $method,
         'method configuration returns the mutable Router');
     my $method_snapshot = $method->to_router;
-    $method->get('/late' => sub { return PAGI::Response->text('late') });
+    $method->get('/late' => sub { return PAGI::Response::Text->new('late') });
     is($method_snapshot->routes, [],
         'later parent mutation cannot alter an old snapshot');
     is(refaddr($method_snapshot->http_default), refaddr($default),

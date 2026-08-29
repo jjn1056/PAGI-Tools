@@ -13,7 +13,7 @@ use PAGI::App::Cascade;
 use PAGI::App::URLMap;
 use PAGI::Compose qw(compose);
 use PAGI::Exception::IncompleteResponse;
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(router route);
 
 sub scope {
@@ -105,11 +105,11 @@ sub response_header {
 
 subtest 'Cascade catches Router-owned HTTP outcomes and propagates failures' => sub {
     my $get_router = router(routes => [
-        route('/only' => sub { return PAGI::Response->text('only') },
+        route('/only' => sub { return PAGI::Response::Text->new('only') },
             methods => 'GET'),
     ])->to_app;
     my $post_router = router(routes => [
-        route('/only' => sub { return PAGI::Response->text('post') },
+        route('/only' => sub { return PAGI::Response::Text->new('post') },
             methods => 'POST'),
     ])->to_app;
 
@@ -380,7 +380,7 @@ subtest 'URLMap keeps Router applications opaque but complete' => sub {
     my $child = router(routes => [
         route('/exists' => sub {
             push @selected_scopes, $_[0]->scope;
-            return PAGI::Response->text('exists');
+            return PAGI::Response::Text->new('exists');
         }),
     ]);
     my $map = PAGI::App::URLMap->new(default => $child);

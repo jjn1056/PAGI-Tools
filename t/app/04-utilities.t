@@ -42,7 +42,7 @@ subtest 'App::Healthcheck' => sub {
         });
 
         is $sent[0]{status}, 200, 'returns 200';
-        ok((grep { $_->[0] eq 'content-type' && $_->[1] =~ /application\/json/ } @{$sent[0]{headers}}),
+        ok((grep { lc($_->[0]) eq 'content-type' && $_->[1] =~ /application\/json/ } @{$sent[0]{headers}}),
             'returns JSON');
 
         my $body = JSON::MaybeXS::decode_json($sent[1]{body});

@@ -5,7 +5,7 @@ use Test2::V0;
 
 use lib 'lib';
 use PAGI::App::Router::Builder ();
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Test::Client ();
 
 {
@@ -16,7 +16,7 @@ use PAGI::Test::Client ();
         my ($builder) = @_;
         $builder->get('/get/{id:&Int}' => sub {
             push @handler_types, ref($_[0]);
-            return PAGI::Response->text('alpha');
+            return PAGI::Response::Text->new('alpha');
         });
         $builder->post('/post/{id:&Int}' => sub { });
         $builder->put('/put/{id:&Int}' => sub { });

@@ -33,17 +33,25 @@ PAGI::App::Router - Mutable declarations for the immutable PAGI router
 
     use PAGI::App::Router;
     use PAGI::Compose qw(compose);
+    use Future::AsyncAwait;
     use PAGI::Pages ();
 
     my $people = PAGI::App::Router->new;
     $people->get('/{id}' => \&show)->name('show');
 
+    my $not_found = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->not_found(
+            $scope,
+            detail => 'No public route matched.',
+        );
+        await $response->respond($scope, $receive, $send);
+    };
+
     my $r = PAGI::App::Router->new(
         desc         => 'Public routes',
         middleware   => [\&request_log],
-        http_default => PAGI::Pages->not_found(
-            detail => 'No public route matched.',
-        ),
+        http_default => $not_found,
     );
 
     $r->get('/health' => \&health);
@@ -83,7 +91,9 @@ application or protocol channel.
     $r->route('/rpc' => \&rpc, methods => ['RPC']);
 
 An ordinary HTTP target must be a coderef. It receives exactly one
-L<PAGI::Request> and returns an immediate or Future-backed L<PAGI::Response>.
+L<PAGI::Request> and returns an immediate or Future-backed concrete
+L<PAGI::Response> value such as L<PAGI::Response::Text> or
+L<PAGI::Response::JSON>.
 GET includes automatic HEAD qualification. An explicit HEAD is an ordinary
 declaration; place it before GET when it should win.
 

@@ -90,7 +90,7 @@ sub to_app {
             croak "URLMap has no default for scope type '$type'"
                 unless $type eq 'http';
             my $response = PAGI::Pages->not_found($scope);
-            await Future->wrap($response->respond($send));
+            await Future->wrap($response->respond($scope, $receive, $send));
         }
     };
 }

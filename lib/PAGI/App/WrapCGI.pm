@@ -81,7 +81,7 @@ sub to_app {
         my ($pid, $fh) = $self->_open_cgi();
 
         unless (defined $pid) {
-            await $self->_send_process_failure($scope, $send);
+            await $self->_send_process_failure($scope, $receive, $send);
             return;
         }
 
@@ -131,10 +131,10 @@ sub _open_cgi {
 }
 
 async sub _send_process_failure {
-    my ($self, $scope, $send) = @_;
+    my ($self, $scope, $receive, $send) = @_;
 
     my $response = PAGI::Pages->internal_server_error($scope);
-    await Future->wrap($response->respond($send));
+    await Future->wrap($response->respond($scope, $receive, $send));
 }
 
 1;

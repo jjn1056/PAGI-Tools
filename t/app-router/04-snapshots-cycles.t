@@ -8,14 +8,14 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router::Builder ();
 use PAGI::Compose qw(compose);
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing::URL qw(path_for);
 use PAGI::Routing::Router ();
 use PAGI::Test::Client ();
 
 sub handler {
     my ($body) = @_;
-    return sub { return PAGI::Response->text($body) };
+    return sub { return PAGI::Response::Text->new($body) };
 }
 
 sub receive {
@@ -362,8 +362,8 @@ subtest 'one compiled app isolates two in-flight reused-child requests' => sub {
     is($right_frame->{match}{consumer_only}, undef,
         'consumer mutation of one match record is absent from the other');
 
-    $gates[0]->done(PAGI::Response->text('left one'));
-    $gates[1]->done(PAGI::Response->text('right two'));
+    $gates[0]->done(PAGI::Response::Text->new('left one'));
+    $gates[1]->done(PAGI::Response::Text->new('right two'));
     $left->get;
     $right->get;
     is(response_body(\@left_events), 'left one',

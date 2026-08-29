@@ -14,7 +14,7 @@ use lib "$FindBin::Bin/../lib";
 use PAGI::App::URLMap;
 use PAGI::App::Cascade;
 use PAGI::Pages;
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(router route);
 
 my $loop = IO::Async::Loop->new;
@@ -214,7 +214,7 @@ subtest 'App::Cascade tries apps in sequence' => sub {
 
 subtest 'Cascade catches ordinary Router 404 and 405 responses' => sub {
     my $routing = router(routes => [
-        route('/only' => sub { return PAGI::Response->text('only') },
+        route('/only' => sub { return PAGI::Response::Text->new('only') },
             methods => 'GET'),
     ])->to_app;
 
@@ -318,8 +318,13 @@ subtest 'URLMap accepts instantiated components and rejects package apps' => sub
 subtest 'Cascade preserves app coercion and catch options' => sub {
     require TestApps::Component;
 
+    my $not_found = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->not_found($scope, as => 'text');
+        await Future->wrap($response->respond($scope, $receive, $send));
+    };
     my $cascade = PAGI::App::Cascade->new(
-        apps => [PAGI::Pages->not_found(as => 'text')],
+        apps => [$not_found],
     );
     $cascade->add(make_response_app(404, 'coderef'));
     $cascade->add(TestApps::Component->new(body => 'object'));
@@ -381,8 +386,15 @@ subtest 'Pages redirect endpoints and ordinary closures compose as apps' => sub 
         return \@sent;
     };
 
+    my $fixed = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->moved_permanently(
+            $scope, '/new', as => 'text',
+        );
+        await Future->wrap($response->respond($scope, $receive, $send));
+    };
     my $sent = $run->(
-        PAGI::Pages->moved_permanently('/new', as => 'text'),
+        $fixed,
         { type => 'http', method => 'GET', path => '/old' },
     );
     is $sent->[0]{status}, 301, 'status';
@@ -400,7 +412,7 @@ subtest 'Pages redirect endpoints and ordinary closures compose as apps' => sub 
             preserve_query => 1,
             as             => 'text',
         );
-        await Future->wrap($response->respond($send));
+        await Future->wrap($response->respond($scope, $receive, $send));
     };
     $sent = $run->(
         $dynamic,
@@ -411,8 +423,13 @@ subtest 'Pages redirect endpoints and ordinary closures compose as apps' => sub 
         'ordinary closure computes the target and asks Pages to preserve query';
     is $sent->[0]{status}, 302, 'default status';
 
+    my $secure_default = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->redirect($scope, '/x', as => 'text');
+        await Future->wrap($response->respond($scope, $receive, $send));
+    };
     $sent = $run->(
-        PAGI::Pages->redirect('/x', as => 'text'),
+        $secure_default,
         { type => 'http', method => 'GET', path => '/y', query_string => 'a=1' },
     );
     %h = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
@@ -428,11 +445,18 @@ subtest 'Pages terminal endpoints participate in Cascade catch handling' => sub 
         return \@sent;
     };
 
+    my $not_found = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->not_found($scope, as => 'text');
+        await Future->wrap($response->respond($scope, $receive, $send));
+    };
+    my $gone = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->gone($scope, as => 'text');
+        await Future->wrap($response->respond($scope, $receive, $send));
+    };
     my $cascade = PAGI::App::Cascade->new(
-        apps => [
-            PAGI::Pages->not_found(as => 'text'),
-            PAGI::Pages->gone(as => 'text'),
-        ],
+        apps => [$not_found, $gone],
     )->to_app;
     my $sent = $run->(
         $cascade,

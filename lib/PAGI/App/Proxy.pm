@@ -101,7 +101,7 @@ sub to_app {
         my $sock = $self->_connect_backend($host, $port, $timeout);
 
         unless ($sock) {
-            await $self->_send_bad_gateway($scope, $send);
+            await $self->_send_bad_gateway($scope, $receive, $send);
             return;
         }
 
@@ -147,10 +147,10 @@ sub _connect_backend {
 }
 
 async sub _send_bad_gateway {
-    my ($self, $scope, $send) = @_;
+    my ($self, $scope, $receive, $send) = @_;
 
     my $response = PAGI::Pages->bad_gateway($scope);
-    await Future->wrap($response->respond($send));
+    await Future->wrap($response->respond($scope, $receive, $send));
 }
 
 1;

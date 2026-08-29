@@ -8,13 +8,13 @@ use overload ();
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::App::Router::Builder ();
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing::Router ();
 
 sub request_handler {
     return sub {
         my ($request) = @_;
-        return PAGI::Response->text('ok');
+        return PAGI::Response::Text->new('ok');
     };
 }
 

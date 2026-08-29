@@ -8,7 +8,7 @@ use Future::AsyncAwait;
 use lib 'lib';
 use PAGI::App::Router::Builder ();
 use PAGI::Routing qw(middleware);
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Test::Client ();
 
 our ($CLASS_BUILD_TRACE, $CLASS_RUNTIME_TRACE);
@@ -100,7 +100,7 @@ sub handler {
     return sub {
         ++$$counter if $counter;
         push @$trace, 'handler' if $trace;
-        return PAGI::Response->text($body);
+        return PAGI::Response::Text->new($body);
     };
 }
 

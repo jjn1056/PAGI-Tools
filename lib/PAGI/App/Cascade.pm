@@ -14,10 +14,17 @@ PAGI::App::Cascade - Try apps in sequence until success
 =head1 SYNOPSIS
 
     use PAGI::App::Cascade;
+    use Future::AsyncAwait;
     use PAGI::Pages ();
 
+    my $not_found = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->not_found($scope, as => 'text');
+        await $response->respond($scope, $receive, $send);
+    };
+
     my $app = PAGI::App::Cascade->new(
-        apps => [$static_app, PAGI::Pages->not_found(as => 'text')],
+        apps => [$static_app, $not_found],
         catch => [404, 405],
     )->to_app;
 

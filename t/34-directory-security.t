@@ -606,8 +606,10 @@ subtest 'decoded non-ASCII listing values emit UTF-8 octets' => sub {
 
     my @path_events;
     $component->_send_listing(
+        native_scope('GET', '/', []),
+        sub { return Future->done({ type => 'http.disconnect' }) },
         sub { push @path_events, $_[0]; return Future->done },
-        native_scope('GET', '/', []), $root, "\x{2615}",
+        $root, "\x{2615}",
     )->get;
     ok(!utf8::is_utf8($path_events[1]{body}),
         'decoded listing path is normalized to output octets');

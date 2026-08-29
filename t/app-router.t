@@ -7,7 +7,7 @@ use Future;
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
-use PAGI::Response ();
+use PAGI::Response::Text ();
 
 sub channels {
     my @events;
@@ -59,7 +59,7 @@ sub handler {
             scope => $request->scope,
             params => $request->path_params,
         } if $calls;
-        return PAGI::Response->text($label);
+        return PAGI::Response::Text->new($label);
     };
 }
 
@@ -86,7 +86,8 @@ subtest 'ordinary HTTP routing uses Request handlers and shared path grammar' =>
     is($calls[0]{params}, { path => 'docs/readme.txt' },
         'the wildcard preserves its remaining path');
 
-    my $missing = run_scope($app, path => '/missing');
+    my $missing = run_scope($app, path => '/missing',
+        headers => [['Accept', 'text/html']]);
     is($missing->[0]{status}, 404,
         'an unknown path receives the Compose automatic 404');
     is(response_header($missing, 'Content-Type'), 'text/html; charset=utf-8',
