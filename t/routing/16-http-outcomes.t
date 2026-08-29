@@ -7,7 +7,6 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
-use PAGI::Response;
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route mount middleware);
 use PAGI::Routing::Compiler;
@@ -125,14 +124,68 @@ subtest 'Router renders direct NONE and PARTIAL outcomes with negotiated Pages r
     like(response_body($none), qr/"status"\s*:\s*404/,
         'NONE emits the negotiated problem representation');
 
+    my $none_text = run_app(
+        $app,
+        path => '/missing', raw_path => '/missing',
+        headers => [['accept', 'text/plain']],
+    );
+    is(response_header($none_text, 'Content-Type'),
+        'text/plain; charset=utf-8',
+        'NONE also negotiates the concrete text representation');
+    like(response_body($none_text), qr/404\s+Not Found/,
+        'NONE text representation retains Pages status semantics');
+
     my $partial = run_app(
         $app, method => 'TRACE', path => '/items', raw_path => '/items',
+        headers => [['accept', 'text/plain']],
     );
     is(response_status($partial), 405, 'PARTIAL renders 405');
-    is(response_header($partial, 'Content-Type'), 'application/problem+json',
+    is(response_header($partial, 'Content-Type'), 'text/plain; charset=utf-8',
         'PARTIAL uses normal request negotiation');
     is(response_headers($partial, 'Allow'), ['GET, HEAD, POST'],
         'PARTIAL emits one first-seen method union');
+    like(response_body($partial), qr/405\s+Method Not Allowed/,
+        'PARTIAL text representation retains Pages status semantics');
+};
+
+subtest 'stock outcomes await start and body send failures without retry' => sub {
+    my $app = router(routes => [
+        route('/items' => \&text_handler, methods => 'GET'),
+    ])->to_app;
+
+    for my $outcome (
+        ['NONE', scope(path => '/missing', raw_path => '/missing')],
+        ['PARTIAL', scope(
+            method => 'POST', path => '/items', raw_path => '/items',
+        )],
+    ) {
+        my ($label, $request_scope) = @$outcome;
+        for my $stage (qw(start body)) {
+            my $failure = bless {}, "Local::Router${label}${stage}SendFailure";
+            my @attempted;
+            my $future = Future->wrap($app->(
+                $request_scope,
+                \&receive,
+                sub {
+                    my ($event) = @_;
+                    push @attempted, $event->{type};
+                    return Future->fail($failure)
+                        if $stage eq 'start'
+                            || $event->{type} eq 'http.response.body';
+                    return Future->done;
+                },
+            ));
+            my $caught;
+            eval { $future->get; 1 } or $caught = $@;
+
+            is(refaddr($caught), refaddr($failure),
+                "$label $stage send failure identity propagates");
+            is(\@attempted, $stage eq 'start'
+                    ? ['http.response.start']
+                    : ['http.response.start', 'http.response.body'],
+                "$label $stage send failure causes no retry or extra event");
+        }
+    }
 };
 
 subtest 'later FULL and Mount FULL selections retain declaration-order ownership' => sub {

@@ -96,13 +96,15 @@ PAGI::Compose::ResponseGuard - Internal Compose HTTP completion guard
 
 =head1 DESCRIPTION
 
-This private wrapper observes HTTP response lifecycle events without copying or
-rewriting them. It rejects a response body sent before response start without
-forwarding that invalid event -- the rejection is a failed C<Future> (the
-typed exception as its failure), not a synchronous C<die>. After normal
-application completion it throws a typed incomplete-response exception unless
-response start and a terminal body were observed; if C<http.response.start>
-declared C<trailers =E<gt> 1>, a terminal body is not enough on its own --
+This private wrapper observes only the HTTP events actually sent by the inner
+native application. It neither receives nor inspects Response objects or their
+mutation state, and it does not buffer or rewrite a downstream response. It
+rejects a response body sent before response start without forwarding that
+invalid event -- the rejection is a failed C<Future> (the typed exception as
+its failure), not a synchronous C<die>. After normal application completion it
+throws a typed incomplete-response exception unless response start and a
+terminal body were observed; if C<http.response.start> declared
+C<trailers =E<gt> 1>, a terminal body is not enough on its own --
 C<http.response.trailers> must also have been sent, or completion fails with
 the C<awaiting_trailers> stage. Inner application exceptions pass through
 unchanged. Non-HTTP scopes are delegated with their original channels.

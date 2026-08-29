@@ -14,7 +14,8 @@ use lib 'lib';
 use PAGI::Middleware::ErrorHandler;
 use PAGI::Pages ();
 use PAGI::Request ();
-use PAGI::Response ();
+use PAGI::Response::JSON ();
+use PAGI::Response::Text ();
 
 my $loop = IO::Async::Loop->new;
 
@@ -96,7 +97,7 @@ sub header_value {
         return $self;
     }
     sub respond {
-        my ($self, $send) = @_;
+        my ($self, $scope, $receive, $send) = @_;
         return (async sub {
             await Future->wrap($send->({
                 type    => 'http.response.start',
@@ -218,7 +219,7 @@ subtest 'immediate custom renderer receives and preserves exception status' => s
         handler => sub {
             my ($request, $original) = @_;
             ($seen_request, $seen_error) = ($request, $original);
-            return PAGI::Response->json({ error => 'custom' });
+            return PAGI::Response::JSON->new({ error => 'custom' });
         },
     );
     my ($future, $events) = invoke($middleware, async sub { die $error });
@@ -227,8 +228,8 @@ subtest 'immediate custom renderer receives and preserves exception status' => s
     ok $future->is_done, 'custom renderer completes';
     is ref($seen_request), 'PAGI::Request', 'renderer receives a strict Request';
     is refaddr($seen_error), refaddr($error), 'renderer receives original object';
-    is $seen_request->response->status, 200,
-        'callback Request has no hidden seeded response';
+    ok !$seen_request->can('response'),
+        'callback Request has no hidden response bridge';
     is $events->[0]{status}, 418, 'inferred exception status seeds returned response';
     is header_value($events->[0], 'content-type'), 'application/json',
         'renderer selects its own content type';
@@ -239,7 +240,7 @@ subtest 'Future custom renderer owns explicit status and headers' => sub {
         status  => 401,
         handler => sub {
             my ($request, $error) = @_;
-            return Future->done(PAGI::Response->text(
+            return Future->done(PAGI::Response::Text->new(
                 'custom future',
                 status       => 409,
                 content_type => 'application/vnd.error+json',
@@ -266,7 +267,7 @@ subtest 'invalid exception status claim reaches custom handler with a safe seed'
         handler  => sub {
             my ($request, $received_error) = @_;
             $handler_error = $received_error;
-            return PAGI::Response->text('safe custom response');
+            return PAGI::Response::Text->new('safe custom response');
         },
     );
 
@@ -431,30 +432,40 @@ subtest 'throwing exception stringification cannot replace the safe response' =>
         'catalog-safe detail remains available';
 };
 
-subtest 'status-aware response values receive the fallback status' => sub {
+subtest 'concrete Response values receive the fallback status' => sub {
     my $middleware = PAGI::Middleware::ErrorHandler->new(
-        handler => sub { Local::DetachedResponse->new },
+        handler => sub {
+            return PAGI::Response::Text->new(
+                'concrete', headers => ['X-Response' => 'concrete'],
+            );
+        },
     );
-    my ($future, $events) = invoke($middleware, async sub { die "detached" });
+    my ($future, $events) = invoke($middleware, async sub { die "concrete" });
     settle($future);
 
-    ok $future->is_done, 'detached status-aware value is accepted';
-    is $events->[0]{status}, 500, 'detached response receives the fallback status';
-    is header_value($events->[0], 'content-type'), 'application/detached',
-        'detached response headers pass through';
+    ok $future->is_done, 'concrete Response value is accepted';
+    is $events->[0]{status}, 500, 'concrete Response receives the fallback status';
+    is header_value($events->[0], 'x-response'), 'concrete',
+        'concrete Response headers pass through';
 };
 
-subtest 'renderer requires a status-aware response value' => sub {
-    my $middleware = PAGI::Middleware::ErrorHandler->new(
-        handler => sub { Local::RespondOnly->new },
-    );
-    my ($future, $events) = invoke($middleware, async sub { die "original" });
-    settle($future);
+subtest 'renderer requires a concrete PAGI::Response value' => sub {
+    for my $case (
+        ['response-like value', Local::DetachedResponse->new],
+        ['respond-only value', Local::RespondOnly->new],
+    ) {
+        my ($label, $value) = @$case;
+        my $middleware = PAGI::Middleware::ErrorHandler->new(
+            handler => sub { return $value },
+        );
+        my ($future, $events) = invoke($middleware, async sub { die "original" });
+        settle($future);
 
-    ok $future->is_failed, 'invalid renderer result fails outward';
-    like $future->failure, qr/handler did not return a status-aware response/,
-        'respondable value without status_try uses the status-aware diagnostic';
-    is scalar(@$events), 0, 'invalid result emits no response';
+        ok $future->is_failed, "$label fails outward";
+        like $future->failure, qr/handler did not return a PAGI::Response/,
+            "$label is rejected by the nominal Response contract";
+        is scalar(@$events), 0, "$label emits no response";
+    }
 };
 
 subtest 'renderer exception propagates outward' => sub {
@@ -707,7 +718,9 @@ subtest 'failed-Future custom handler and response send failures propagate' => s
     @attempted = ();
     $middleware = PAGI::Middleware::ErrorHandler->new(
         on_error => sub { push @reported, $_[0]; return Future->done },
-        handler  => sub { Future->done(Local::DetachedResponse->new) },
+        handler  => sub {
+            return Future->done(PAGI::Response::Text->new('custom response'));
+        },
     );
     $future = invoke_with_send(
         $middleware,

@@ -6,8 +6,8 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
+use PAGI::Pages ();
 use PAGI::Request;
-use PAGI::Response::Problem ();
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
@@ -124,10 +124,8 @@ sub _compile_router_body {
     my $http_default = defined $router->http_default
         ? PAGI::Utils::to_app($router->http_default)
         : $class->_compile_http_handler(sub {
-            return PAGI::Response::Problem->new({
-                title  => 'Not Found',
-                status => 404,
-            });
+            my ($request) = @_;
+            return PAGI::Pages->not_found($request);
         });
 
     my $dispatcher = $class->_compile_dispatcher(
@@ -241,9 +239,9 @@ sub _compile_dispatcher {
             $state->{router_generated} = 1;
             $state->{allowed_methods} = [@{$decision->{allowed_methods}}];
 
-            my $response = PAGI::Response::Problem->new(
-                { title => 'Method Not Allowed', status => 405 },
-                headers => ['Allow' => join(', ', @{$decision->{allowed_methods}})],
+            my $response = PAGI::Pages->method_not_allowed(
+                $scope,
+                allow => $decision->{allowed_methods},
             );
             await Future->wrap($response->respond($scope, $receive, $send));
             return;
@@ -719,9 +717,10 @@ PAGI::Routing::Compiler - Internal declarative routing compiler
 Compiles declarative routing descriptions into fresh application graphs. A
 Router scans its declarations in order. A full Route or Mount invokes its
 compiled application and owns the request. HTTP PARTIAL produces a concrete
-L<PAGI::Response::Problem> 405 with the first-seen method union, while HTTP
-NONE invokes the Router's compiled C<http_default> or the stock concrete
-Problem 404.
+Pages-backed 405 Response with the first-seen method union, while HTTP NONE
+invokes the Router's compiled C<http_default> or constructs the stock
+Pages-backed 404 Response. Both stock outcomes negotiate from the active
+request metadata and emit through the complete native triplet.
 WebSocket and SSE misses retain their protocol-specific denial and close
 outcomes and never invoke C<http_default>.
 

@@ -10,7 +10,6 @@ use Future::AsyncAwait;
 use Scalar::Util 'blessed';
 use PAGI::Request;
 use PAGI::Pages ();
-use PAGI::Utils ();
 
 my %PUBLIC_OPTION = map { $_ => 1 } qw(development on_error status handler);
 
@@ -65,11 +64,12 @@ facts. Statuses such as 401, 405, 407, and 426 therefore require a handler.
 =item * handler (default: undef)
 
 Optional renderer invoked as C<< $handler->($request, $original_error) >>.
-It must return an immediate or Future-backed PAGI response value implementing
-C<status_try> and C<respond>. ErrorHandler applies the configured or
-exception-provided status through C<status_try> only after the handler returns;
-an explicit renderer status wins. It then emits the value through C<respond>.
-A custom renderer owns its response content type and cache policy unchanged.
+It must return an immediate or Future-backed concrete L<PAGI::Response> value.
+ErrorHandler applies the configured or exception-provided
+status through C<status_try> only after the handler returns; an explicit
+renderer status wins. It then emits the value through
+C<respond($scope, $receive, $send)>. A custom renderer owns its response
+content type and cache policy unchanged.
 
 Use the handler seam to force a fixed Pages representation:
 
@@ -81,13 +81,13 @@ Use the handler seam to force a fixed Pages representation:
         );
     }
 
-The wrapper is required: ErrorHandler supplies C<($request, $error)>, while the
-deferred Pages endpoint accepts exactly one request source. The wrapper instead
-calls the Pages factory with C<$request> as its source and C<as> as a factory
-option. Passing the deferred endpoint directly therefore rejects the
-two-argument callback invocation. The wrapper may inspect C<$error> when it
-deliberately chooses safe page fields, but Pages does not consume that callback
-metadata itself.
+The wrapper is required: ErrorHandler supplies C<($request, $error)>, while a
+Pages factory accepts one explicit request source followed by its own named
+options. The wrapper calls the Pages factory with C<$request> as its source and
+C<as> as a factory option. Passing the factory directly would instead treat the
+extra error argument as Pages input and reject it. The wrapper may inspect
+C<$error> when it deliberately chooses safe page fields, but Pages does not
+consume that callback metadata itself.
 
 =back
 
@@ -169,9 +169,9 @@ sub wrap {
                 $response = await Future->wrap(
                     $self->{handler}->($request, $error),
                 );
-                croak 'handler did not return a status-aware response'
-                    unless PAGI::Utils::is_response($response)
-                        && $response->can('status_try');
+                croak 'handler did not return a PAGI::Response'
+                    unless blessed($response)
+                        && $response->isa('PAGI::Response');
                 $response->status_try($status);
             }
             else {
@@ -198,7 +198,13 @@ sub wrap {
                 }
             }
 
-            await Future->wrap($response->respond($wrapped_send));
+            await Future->wrap(
+                $response->respond(
+                    $request_scope,
+                    $receive,
+                    $wrapped_send,
+                ),
+            );
         }
     };
 }
@@ -233,7 +239,15 @@ async sub _development_for_request {
 sub _pages_accepts_status {
     my ($self, $status) = @_;
     return eval {
-        PAGI::Pages->status($status);
+        PAGI::Pages->status({
+            type         => 'http',
+            method       => 'GET',
+            path         => '/',
+            root_path    => '',
+            query_string => '',
+            headers      => [],
+            http_version => '1.1',
+        }, $status);
         1;
     } ? 1 : 0;
 }

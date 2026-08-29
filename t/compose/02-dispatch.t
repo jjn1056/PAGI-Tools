@@ -9,12 +9,12 @@ use FindBin qw($Bin);
 use lib "$Bin/lib", "$Bin/../lib";
 use ComposeTest qw(scope run_scope capture_send);
 use PAGI::Compose qw(compose);
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(route websocket sse);
 
 subtest 'routes mode dispatches HTTP WebSocket and SSE' => sub {
     my $app = compose(routes => [
-        route('/' => sub { return PAGI::Response->text('home') }),
+        route('/' => sub { return PAGI::Response::Text->new('home') }),
         websocket('/ws' => async sub {
             my ($c) = @_;
             await $c->accept;

@@ -5,7 +5,7 @@ use Test2::V0;
 use Scalar::Util qw(refaddr);
 use overload ();
 use PAGI::Compose qw(compose);
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(route middleware);
 
 {
@@ -43,7 +43,7 @@ my ($lowercase_error, $lowercase_stderr);
 like($lowercase_error, qr/Can't continue after import errors/, 'lowercase tag is rejected');
 like($lowercase_stderr, qr/"all" is not defined/, 'diagnostic names the invalid tag');
 
-my $leaf = route('/' => sub { return PAGI::Response->text('home') });
+my $leaf = route('/' => sub { return PAGI::Response::Text->new('home') });
 my $factory = sub { my ($inner) = @_; return $inner };
 my $bare_configured = ComposeConfiguredMiddleware->new;
 my $mw = middleware('RequestId', header => 'X-Request-ID');
@@ -72,7 +72,9 @@ is(refaddr($stored->[3]), refaddr($mw),
 is(refaddr($composition->lifespan->{startup}), refaddr($startup), 'callback identity is retained');
 ok(!overload::Method($composition, '&{}'), 'composition has no coderef overload');
 
-push @$routes, route('/mutated' => sub { return PAGI::Response->text('bad') });
+push @$routes, route('/mutated' => sub {
+    return PAGI::Response::Text->new('bad');
+});
 push @$middleware, middleware(sub { return $_[0] });
 $lifespan->{shutdown} = sub { return };
 push @{$composition->routes}, $leaf;

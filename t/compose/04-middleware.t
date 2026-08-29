@@ -9,8 +9,8 @@ use lib "$Bin/lib";
 use ComposeTest qw(scope run_scope);
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
-use PAGI::Response ();
-use PAGI::Routing qw(route middleware router);
+use PAGI::Response::Text ();
+use PAGI::Routing qw(route middleware request_app router);
 
 {
     package ComposeDirectMiddleware;
@@ -214,7 +214,9 @@ subtest 'application middleware sees delegated protocols and Router outcomes' =>
         };
     };
     my $routing_app = compose(
-        routes => [route('/present' => sub { return PAGI::Response->text('present') })],
+        routes => [route('/present' => sub {
+            return PAGI::Response::Text->new('present');
+        })],
         middleware => [$outcome_observer],
     )->to_app;
     my $events = run_scope($routing_app, scope(type => 'http', path => '/missing'));
@@ -227,7 +229,9 @@ subtest 'Router-owned 404 and 405 cross the complete author stack' => sub {
     my @trace;
     my $app = compose(
         routes => [
-            route('/items' => sub { return PAGI::Response->text('item') }, methods => 'GET'),
+            route('/items' => sub {
+                return PAGI::Response::Text->new('item');
+            }, methods => 'GET'),
         ],
         middleware => [
             tracing_factory('author outer', \@trace),
@@ -274,7 +278,7 @@ subtest 'author ErrorHandler response crosses only earlier middleware' => sub {
                 handler => sub {
                     my ($request) = @_;
                     push @trace, 'author ErrorHandler render';
-                    return PAGI::Response->text('author 500');
+                    return PAGI::Response::Text->new('author 500');
                 },
             ),
             middleware(tracing_factory('author inner', \@trace)),
@@ -297,7 +301,10 @@ subtest 'a retained Router owns its configured HTTP default inside Compose safet
     my $pages = ComposeOwnedPages->new(as => 'text');
     my $routing = router(
         routes => [],
-        http_default => $pages->not_found,
+        http_default => request_app(sub {
+            my ($request) = @_;
+            return $pages->not_found($request);
+        }),
     );
     my $events = run_scope(compose(app => $routing)->to_app,
         scope(path => '/missing'));

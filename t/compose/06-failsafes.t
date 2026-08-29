@@ -10,7 +10,7 @@ use lib "$Bin/lib";
 use ComposeTest qw(scope capture_send);
 use PAGI::Compose qw(compose);
 use PAGI::Exception::IncompleteResponse;
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(router route mount);
 use PAGI::Test::Client;
 
@@ -101,22 +101,22 @@ sub assert_client_pages_error {
 
 sub route_set {
     return [
-        route('/items' => sub { return PAGI::Response->text('get') }, methods => 'GET'),
-        route('/items' => sub { return PAGI::Response->text('post') }, methods => 'POST'),
+        route('/items' => sub { return PAGI::Response::Text->new('get') }, methods => 'GET'),
+        route('/items' => sub { return PAGI::Response::Text->new('post') }, methods => 'POST'),
         route('/explicit/404' => sub {
-            return PAGI::Response->text('application 404', status => 404);
+            return PAGI::Response::Text->new('application 404', status => 404);
         }),
         route('/explicit/405' => sub {
-            return PAGI::Response->text('application 405', status => 405);
+            return PAGI::Response::Text->new('application 405', status => 405);
         }),
         route('/explicit/406' => sub {
-            return PAGI::Response->text('application 406', status => 406);
+            return PAGI::Response::Text->new('application 406', status => 406);
         }),
         route('/explicit/415' => sub {
-            return PAGI::Response->text('application 415', status => 415);
+            return PAGI::Response::Text->new('application 415', status => 415);
         }),
         route('/explicit/500' => sub {
-            return PAGI::Response->text('application 500', status => 500);
+            return PAGI::Response::Text->new('application 500', status => 500);
         }),
     ];
 }
@@ -273,7 +273,7 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
     local $ENV{PAGI_ENV} = 'invalid-compose-environment';
 
     my $routing = compose(routes => [
-        route('/known' => sub { return PAGI::Response->text('known') }),
+        route('/known' => sub { return PAGI::Response::Text->new('known') }),
     ])->to_app;
     my ($route_events, $route_warnings, $route_error) = run_request(
         $routing, scope(path => '/missing'),

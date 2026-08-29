@@ -321,13 +321,20 @@ subtest 'the public surface is method-oriented and has no legacy machinery' => s
         'base new rejects silently discarded configuration');
     isa_ok($base->to_router, 'PAGI::Routing::Router');
     is(ref($base->to_app), 'CODE', 'an empty Endpoint compiles to an app');
-    my $missing = PAGI::Test::Client->new(app => $base->to_app)->get('/missing');
+    my $missing = PAGI::Test::Client->new(app => $base->to_app)->get(
+        '/missing', headers => { Accept => 'application/problem+json' },
+    );
     is($missing->status, 404,
         'direct Endpoint to_app emits the Router stock HTTP NONE response');
     is($missing->header('Content-Type'), 'application/problem+json',
-        'the stock HTTP NONE response is a concrete problem value');
-    is($missing->json, { status => 404, title => 'Not Found' },
-        'the direct Router response contains the stock concrete problem');
+        'the stock HTTP NONE response negotiates a concrete problem value');
+    is($missing->json, {
+        type   => 'about:blank',
+        title  => 'Not Found',
+        status => 404,
+        detail => 'The requested resource was not found.',
+    },
+        'the direct Router response contains the negotiated stock problem');
 };
 
 subtest 'the Endpoint facade follows the App Router composition grammar' => sub {
