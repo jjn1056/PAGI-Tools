@@ -9,12 +9,120 @@ our $JSON_ERROR_BODY_LIMIT = 1500;
 
 sub new {
     my ($class, %args) = @_;
-    return bless {
-        status    => $args{status} // 200,
-        headers   => $args{headers} // [],
-        body      => $args{body} // '',
-        exception => $args{exception},
+    croak 'events must be an arrayref of captured HTTP response events'
+        unless ref($args{events}) eq 'ARRAY';
+
+    my $self = bless {
+        status            => 200,
+        headers           => [],
+        body              => '',
+        exception         => $args{exception},
+        _response_started => 0,
+        _body_complete    => 0,
     }, $class;
+
+    $self->_capture_event($_) for @{$args{events}};
+    return $self;
+}
+
+# Internal captured-wire ingestion shared by direct construction and the
+# Test Client's live send callback. Filehandle events must be decoded while
+# the application still owns an open handle, so the Client passes each event
+# here as it is sent instead of implementing a second decoder.
+sub _capture_event {
+    my ($self, $event) = @_;
+    my $type = $event->{type} // '';
+
+    if ($type eq 'http.response.start') {
+        return if $self->{_response_started};
+        $self->{_response_started} = 1;
+        $self->{status} = $event->{status} // 200;
+        @{$self->{headers}} = @{$event->{headers} // []};
+    }
+    elsif ($type eq 'http.response.body') {
+        return unless $self->{_response_started};
+        return if $self->{_body_complete};
+
+        $self->{body} .= _response_body_bytes($event);
+        $self->{_body_complete} = 1 unless $event->{more} // 0;
+    }
+
+    return;
+}
+
+sub _response_body_bytes {
+    my ($event) = @_;
+
+    return $event->{body} // '' if exists $event->{body};
+
+    if (exists $event->{file}) {
+        return _read_file_bytes(
+            $event->{file},
+            $event->{offset} // 0,
+            $event->{length},
+        );
+    }
+
+    if (exists $event->{fh}) {
+        return _read_fh_bytes(
+            $event->{fh},
+            $event->{offset} // 0,
+            $event->{length},
+        );
+    }
+
+    return '';
+}
+
+sub _read_file_bytes {
+    my ($path, $offset, $length) = @_;
+
+    open my $fh, '<:raw', $path
+        or croak "Cannot open file response '$path': $!";
+
+    seek($fh, $offset, 0)
+        or croak "Cannot seek file response '$path': $!"
+        if $offset;
+
+    my $content = _slurp_fh_bytes($fh, $length);
+    close $fh;
+
+    return $content;
+}
+
+sub _read_fh_bytes {
+    my ($fh, $offset, $length) = @_;
+
+    seek($fh, $offset, 0)
+        or croak "Cannot seek filehandle response: $!"
+        if $offset;
+
+    return _slurp_fh_bytes($fh, $length);
+}
+
+sub _slurp_fh_bytes {
+    my ($fh, $length) = @_;
+
+    my $content = '';
+    my $remaining = $length;
+
+    while (1) {
+        my $to_read = 65536;
+        if (defined $remaining) {
+            last if $remaining <= 0;
+            $to_read = $remaining if $remaining < $to_read;
+        }
+
+        my $bytes_read = read($fh, my $chunk, $to_read);
+        croak "Cannot read response body from filehandle: $!"
+            unless defined $bytes_read;
+        last if $bytes_read == 0;
+
+        $content .= $chunk;
+        $remaining -= $bytes_read if defined $remaining;
+    }
+
+    return $content;
 }
 
 # Status code
@@ -160,13 +268,24 @@ applications that emit the wire events this class reports.
 =head2 new
 
     my $res = PAGI::Test::Response->new(
-        status  => 200,
-        headers => [['content-type', 'text/plain']],
-        body    => 'Hello',
+        events => [
+            {
+                type    => 'http.response.start',
+                status  => 200,
+                headers => [['content-type', 'text/plain']],
+            },
+            {
+                type => 'http.response.body',
+                body => 'Hello',
+                more => 0,
+            },
+        ],
     );
 
-Creates a new response object. Typically you don't call this directly;
-it's created by L<PAGI::Test::Client> methods.
+Decodes captured HTTP response events into a new response object. Body events
+may carry ordinary C<body> bytes or opaque C<file> / C<fh> sources with
+optional C<offset> and C<length> windows. Typically you don't call this
+directly; it's created by L<PAGI::Test::Client> methods.
 
 =head1 STATUS METHODS
 
