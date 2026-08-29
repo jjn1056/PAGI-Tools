@@ -270,6 +270,10 @@ subtest 'File preserves the complete shared MIME table' => sub {
         print {$fh} $extension;
         close $fh or die "cannot close $path: $!";
     }
+    my $unknown = File::Spec->catfile($root, 'sample.unknown');
+    open my $unknown_fh, '>', $unknown or die "cannot create $unknown: $!";
+    print {$unknown_fh} 'unknown';
+    close $unknown_fh or die "cannot close $unknown: $!";
 
     my $client = PAGI::Test::Client->new(
         app => PAGI::App::File->new(root => $root),
@@ -279,42 +283,57 @@ subtest 'File preserves the complete shared MIME table' => sub {
         is($client->get("/sample.$extension")->content_type,
             $types{$extension}, ".$extension retains its shared MIME type");
     }
+
+    my $custom = PAGI::Test::Client->new(
+        app => PAGI::App::File->new(
+            root => $root, default_type => 'application/x-example',
+        ),
+        raise_app_exceptions => 1,
+    );
+    is($custom->get('/sample.unknown')->content_type,
+        'application/x-example',
+        'App::File retains its configured unknown-suffix MIME fallback');
 };
 
-subtest 'class constructor returns a serving component and preserves subclasses' => sub {
+subtest 'from_app_path returns a serving component and preserves subclasses' => sub {
     my $home = File::Spec->catdir($Bin, 'app-file-fixtures', 'one');
     local $ENV{PAGI_HOME} = $home;
 
-    my $files = PAGI::App::File->app_path('static');
+    my $files = PAGI::App::File->from_app_path('static');
     isa_ok($files, 'PAGI::App::File');
     is(fetched_text($files, '/marker.txt'), "caller one\n",
         'one path component resolves into a serving file root');
 
-    my $nested = PAGI::App::File->app_path('static', 'nested');
+    my $nested = PAGI::App::File->from_app_path('static', 'nested');
     is(fetched_text($nested, '/marker.txt'), "caller one nested\n",
         'multiple path components resolve into a serving file root');
 
-    my $whole_home = PAGI::App::File->app_path();
+    my $whole_home = PAGI::App::File->from_app_path();
     is(fetched_text($whole_home, '/static/marker.txt'), "caller one\n",
         'no path components serve application home');
 
-    my $subclass = Local::AppFileSubclass->app_path('static');
+    my $subclass = Local::AppFileSubclass->from_app_path('static');
     isa_ok($subclass, 'Local::AppFileSubclass');
 
-    like(dies { PAGI::App::File::app_path($files, 'other') },
-        qr/app_path.*class constructor/i,
+    like(dies { PAGI::App::File::from_app_path($files, 'other') },
+        qr/from_app_path.*class constructor/i,
         'object invocation is rejected before path resolution');
-    like(dies { PAGI::App::File::app_path([], 'other') },
-        qr/app_path.*class constructor/i,
+    like(dies { PAGI::App::File::from_app_path([], 'other') },
+        qr/from_app_path.*class constructor/i,
         'unblessed reference invocation is rejected');
+    ok(!PAGI::App::File->can('app_path'),
+        'the unreleased ambiguous class constructor has no alias');
+    is(PAGI::Utils::app_path('static'),
+        File::Spec->canonpath(File::Spec->catfile($home, 'static')),
+        'the Utils app_path function remains a path-string utility');
 };
 
 subtest 'component validation is the shared Utils contract' => sub {
     local $ENV{PAGI_HOME} = File::Spec->catdir($Bin, 'app-file-fixtures', 'one');
-    like(dies { PAGI::App::File->app_path({}) },
+    like(dies { PAGI::App::File->from_app_path({}) },
         qr/app_path.*component 1.*relative/i,
         'a reference-valued component retains the shared positional diagnostic');
-    like(dies { PAGI::App::File->app_path('static', '') },
+    like(dies { PAGI::App::File->from_app_path('static', '') },
         qr/app_path.*component 2.*relative/i,
         'a later invalid component reports its shared position');
 };
@@ -332,7 +351,7 @@ subtest 'ordinary use sites retain independent caller origins' => sub {
 subtest 'root-level test script uses script fallback' => sub {
     local $ENV{PAGI_HOME};
     delete $ENV{PAGI_HOME};
-    my $files = PAGI::App::File->app_path('app-file-script-static');
+    my $files = PAGI::App::File->from_app_path('app-file-script-static');
     is(fetched_text($files, '/marker.txt'), "script caller\n",
         'main package call resolves beside the test script');
 };

@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use Carp qw(croak);
-use Encode qw(encode FB_CROAK);
 use Future;
 use HTTP::Date ();
 use JSON::MaybeXS ();
@@ -13,7 +12,12 @@ use Scalar::Util qw(blessed);
 use PAGI::Pages::_Catalog;
 use PAGI::Request;
 use PAGI::Request::Negotiate;
-use PAGI::Response;
+use PAGI::Response ();
+use PAGI::Response::Empty ();
+use PAGI::Response::HTML ();
+use PAGI::Response::JSON ();
+use PAGI::Response::Problem ();
+use PAGI::Response::Text ();
 use PAGI::Utils::Scope ();
 
 my %REPRESENTATION = map { $_ => 1 } qw(auto html json text);
@@ -726,27 +730,34 @@ sub _replace_header {
 sub _response_for {
     my ($self, $scope, $page) = @_;
     my $headers = $self->_assembled_headers($scope, $page);
+    if (PAGI::Response::_status_forbids_body($page->{status})) {
+        return PAGI::Response::Empty->new(
+            status => $page->{status}, headers => $headers,
+        );
+    }
+
     my $representation = $self->_select_representation($scope, $page);
     my $hook_page = _descriptor_for_hook($page);
-    my ($body, $content_type);
 
     if ($representation eq 'html') {
         my $rendered = $self->render_html($hook_page);
         _reject_future($rendered);
         croak 'render_html must return a Unicode scalar'
             unless defined($rendered) && !ref($rendered);
-        $body = encode('UTF-8', $rendered, FB_CROAK);
-        $content_type = 'text/html; charset=utf-8';
+        return PAGI::Response::HTML->new(
+            $rendered, status => $page->{status}, headers => $headers,
+        );
     }
-    elsif ($representation eq 'text') {
+    if ($representation eq 'text') {
         my $rendered = $self->render_text($hook_page);
         _reject_future($rendered);
         croak 'render_text must return a Unicode scalar'
             unless defined($rendered) && !ref($rendered);
-        $body = encode('UTF-8', $rendered, FB_CROAK);
-        $content_type = 'text/plain; charset=utf-8';
+        return PAGI::Response::Text->new(
+            $rendered, status => $page->{status}, headers => $headers,
+        );
     }
-    elsif ($page->{kind} eq 'error') {
+    if ($page->{kind} eq 'error') {
         my $rendered = $self->render_problem($hook_page);
         _reject_future($rendered);
         croak 'render_problem must return a hashref'
@@ -768,35 +779,23 @@ sub _response_for {
         elsif ($page->{status} == 511) {
             delete $problem{login};
         }
-        $body = eval { JSON::MaybeXS::encode_json(\%problem) };
-        croak "PAGI::Pages could not encode problem JSON: $@" if $@;
-        $content_type = 'application/problem+json';
-    }
-    else {
-        my $rendered = $self->render_json($hook_page);
-        _reject_future($rendered);
-        croak 'render_json must return a hashref'
-            unless ref($rendered) eq 'HASH' && !blessed($rendered);
-        my %json = %$rendered;
-        if ($page->{kind} eq 'redirect') {
-            $json{status} = $page->{status};
-            $json{location} = $page->{location};
-        }
-        $body = eval { JSON::MaybeXS::encode_json(\%json) };
-        croak "PAGI::Pages could not encode JSON: $@" if $@;
-        $content_type = 'application/json';
+        return PAGI::Response::Problem->new(
+            \%problem, status => $page->{status}, headers => $headers,
+        );
     }
 
-    my $response = PAGI::Response->new($scope);
-    $response->status($page->{status});
-    my @headers = @$headers;
-    while (@headers) {
-        my ($name, $value) = splice(@headers, 0, 2);
-        $response->header($name, $value);
+    my $rendered = $self->render_json($hook_page);
+    _reject_future($rendered);
+    croak 'render_json must return a hashref'
+        unless ref($rendered) eq 'HASH' && !blessed($rendered);
+    my %json = %$rendered;
+    if ($page->{kind} eq 'redirect') {
+        $json{status} = $page->{status};
+        $json{location} = $page->{location};
     }
-    $response->headers->set('Content-Type', $content_type);
-    $response->send_raw($body);
-    return $response;
+    return PAGI::Response::JSON->new(
+        \%json, status => $page->{status}, headers => $headers,
+    );
 }
 
 sub _assembled_headers {

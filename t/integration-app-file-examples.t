@@ -18,20 +18,20 @@ my @cases = (
         name  => 'endpoint demo',
         file  => "$Bin/../examples/endpoint-demo/app.pl",
         title => qr/PAGI Endpoint Demo/,
-        shape => qr{mount\('/'\s*,\s*app\s*=>\s*PAGI::App::File->app_path\('public'\)\s*\)},
+        shape => qr{mount\('/'\s*,\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\s*\)},
         class => 'PAGI::Compose',
     },
     {
         name  => 'SSE dashboard',
         file  => "$Bin/../examples/sse-dashboard/app.pl",
         title => qr/PAGI Live Dashboard/,
-        shape => qr{PAGI::App::File->app_path\('public'\)->to_app},
+        shape => qr{PAGI::App::File->from_app_path\('public'\)->to_app},
     },
     {
         name  => 'contact form',
         file  => "$Bin/../examples/13-contact-form/app.pl",
         title => qr/Contact Form/,
-        shape => qr{PAGI::App::File->app_path\('public'\)->to_app},
+        shape => qr{PAGI::App::File->from_app_path\('public'\)->to_app},
     },
 );
 
@@ -69,7 +69,7 @@ for my $case (@cases) {
                     qr/\$ctx\b|PAGI::Context|->request|->websocket|->sse/,
                     'endpoint callbacks do not reach through a Context object');
                 like($source,
-                    qr/async sub get \{\n        my \(\$self, \$request\) = \@_;\n        return PAGI::Response->json\(\\\@messages\);/,
+                    qr/async sub get \{\n        my \(\$self, \$request\) = \@_;\n        return PAGI::Response::JSON->new\(\\\@messages\);/,
                     'HTTP GET accepts its direct request object');
                 like($source,
                     qr/async sub post \{\n        my \(\$self, \$request\) = \@_;\n        my \$data = await \$request->json;/,

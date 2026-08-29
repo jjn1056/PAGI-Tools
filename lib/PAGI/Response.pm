@@ -77,6 +77,14 @@ Constructs a reusable L<PAGI::Response::Stream>. The callback receives a fresh
 per-invocation L<PAGI::Response::Writer>; await every write Future to preserve
 backpressure.
 
+=head2 file_response
+
+    my $response = file_response('/srv/reports/monthly.pdf');
+
+Constructs a reusable L<PAGI::Response::File> for one trusted, already
+selected filesystem path. Use L<PAGI::App::File> instead when an untrusted
+request URL path must be resolved under a configured root.
+
 =cut
 
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);

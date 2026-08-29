@@ -74,7 +74,7 @@ sub to_app {
         my ($scope, $receive, $send) = @_;
         my $request = PAGI::Request->new($scope, $receive);
         my $response = await $endpoint->dispatch($request);
-        await Future->wrap($response->respond($send));
+        await Future->wrap($response->respond($scope, $receive, $send));
     };
 }
 
@@ -173,7 +173,8 @@ values.
 B<Handler contract:> Every HTTP handler MUST return a L<PAGI::Response> value
 (immediately or through a Future). Returning nothing (or a non-response value)
 causes dispatch to croak. C<dispatch> returns the response without sending it;
-C<to_app> is responsible for emitting it with C<< $response->respond($send) >>.
+C<to_app> is responsible for emitting it with
+C<< $response->respond($scope, $receive, $send) >>.
 
 B<Singleton:> C<to_app> creates a single endpoint instance that serves the
 entire application lifetime. State stored in C<$self> persists across

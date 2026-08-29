@@ -13,6 +13,7 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::File;
 use PAGI::App::File::Result;
+use PAGI::Response::File;
 
 sub write_file {
     my ($path, $contents) = @_;
@@ -428,13 +429,15 @@ subtest 'probe snapshots deterministically drive metadata and errno policy' => s
         'an unexpected inspection error propagates its captured message');
 };
 
-subtest 'serve consumes every Result kind and reuses located file metadata' => sub {
+subtest 'serve keeps Result policy but delegates selected-file preflight and delivery' => sub {
     my $file_path = File::Spec->catfile($root_abs, 'served.txt');
-    my $files = Local::ProbeFile->new(root => $root, probes => {
-        $file_path => stat_snapshot(S_IFREG() | 0644, 17, 1234, 1),
-    });
-    my $result = $files->locate('/served.txt');
-    my $after_locate = $files->probe_count;
+    write_file($file_path, '0123456789abcdefg');
+    my $files = PAGI::App::File->new(root => $root);
+    ok(!$files->can('_single_byte_range'),
+        'App::File no longer owns a second range parser');
+    my $result = PAGI::App::File::Result->new(
+        kind => 'file', path => $file_path, size => 999, mtime => 1,
+    );
     my @events;
 
     $files->serve(http_scope(path => '/served.txt'), sub {
@@ -442,14 +445,21 @@ subtest 'serve consumes every Result kind and reuses located file metadata' => s
         return Future->done;
     }, $result)->get;
 
-    is($files->probe_count, $after_locate,
-        'serve reuses located metadata without another stat');
     is($events[0]{status}, 200, 'a file Result receives a successful response');
     is(event_header($events[0], 'content-length'), 17,
-        'response length comes from the Result metadata');
+        'shared request preflight owns metadata instead of stale Result values');
     is($events[1]{file}, $result->path,
         'GET delegates opening to the server');
     ok(!exists $events[1]{fh}, 'application does not open a filehandle');
+
+    my @direct_events;
+    PAGI::Response::File->new($file_path)->respond(
+        http_scope(path => '/unrelated-url'),
+        sub { return Future->done({ type => 'http.disconnect' }) },
+        sub { push @direct_events, $_[0]; return Future->done },
+    )->get;
+    is(\@events, \@direct_events,
+        'App::File selected-file output is the shared File response plan');
 
     for my $case (
         [missing   => 404],
@@ -553,13 +563,17 @@ subtest 'unsupported methods avoid location and receive the shared 405' => sub {
         'direct serve uses the same exact Allow field');
 };
 
-subtest 'interleaved serve Futures retain request-local Result metadata' => sub {
+subtest 'interleaved serve Futures retain request-local shared plans' => sub {
     my $files = PAGI::App::File->new(root => $root);
+    my $first_path = File::Spec->catfile($root_abs, 'first.txt');
+    my $second_path = File::Spec->catfile($root_abs, 'second.json');
+    write_file($first_path, 'first-bytes');
+    write_file($second_path, 'x' x 22);
     my $first = PAGI::App::File::Result->new(
-        kind => 'file', path => '/virtual/first.txt', size => 11, mtime => 101,
+        kind => 'file', path => $first_path, size => 11, mtime => 101,
     );
     my $second = PAGI::App::File::Result->new(
-        kind => 'file', path => '/virtual/second.json', size => 22, mtime => 202,
+        kind => 'file', path => $second_path, size => 22, mtime => 202,
     );
     my ($first_gate, $second_gate) = (Future->new, Future->new);
     my (@first_events, @second_events);
@@ -588,7 +602,7 @@ subtest 'interleaved serve Futures retain request-local Result metadata' => sub 
     $second_future->get;
     ok(!$first_future->is_ready,
         'completing the second request does not complete the first');
-    is($second_events[1]{file}, '/virtual/second.json',
+    is($second_events[1]{file}, $second_path,
         'second body retains the second Result path');
     is($second_events[1]{offset}, 2,
         'second body retains its request-local range offset');
@@ -597,10 +611,44 @@ subtest 'interleaved serve Futures retain request-local Result metadata' => sub 
 
     $first_gate->done;
     $first_future->get;
-    is($first_events[1]{file}, '/virtual/first.txt',
+    is($first_events[1]{file}, $first_path,
         'first body retains the first Result path after interleaving');
     ok(!exists $first_events[1]{offset} && !exists $first_events[1]{length},
         'first full body does not inherit the second request range');
+};
+
+subtest 'selected-file preflight and send failures remain pre-start or asynchronous' => sub {
+    my $path = File::Spec->catfile($root_abs, 'failure-boundary.txt');
+    write_file($path, 'delivery');
+    my $files = PAGI::App::File->new(root => $root);
+    my $result = $files->locate('/failure-boundary.txt');
+    unlink $path or die "cannot remove $path before preflight: $!";
+
+    my @missing_events;
+    like(dies {
+        $files->serve(http_scope(path => '/failure-boundary.txt'), sub {
+            push @missing_events, $_[0];
+            return Future->done;
+        }, $result)->get;
+    }, qr/(?:inspect|regular readable).*selected file/i,
+        'a selected file removed after location fails shared preflight');
+    is(\@missing_events, [],
+        'selected-file preflight failure occurs before response start');
+
+    write_file($path, 'delivery');
+    $result = $files->locate('/failure-boundary.txt');
+    my @send_events;
+    like(dies {
+        $files->serve(http_scope(path => '/failure-boundary.txt'), sub {
+            push @send_events, $_[0];
+            return @send_events == 1
+                ? Future->done
+                : Future->fail("delegated file send failed\n");
+        }, $result)->get;
+    }, qr/delegated file send failed/,
+        'selected-file delivery awaits and propagates the send Future');
+    is(scalar @send_events, 2,
+        'send failure follows exactly one start and one file event');
 };
 
 subtest 'index probing skips ineligible candidates and stops at forbidden' => sub {

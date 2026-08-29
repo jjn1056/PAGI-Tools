@@ -15,6 +15,8 @@ use lib 'lib';
 use PAGI::App::Directory;
 use PAGI::App::File;
 use PAGI::App::URLMap;
+use PAGI::Response::File;
+use PAGI::Routing::HeadBoundary;
 use PAGI::Test::Client;
 
 {
@@ -101,6 +103,21 @@ sub run_native {
         native_scope($method, $path, $headers),
         sub { return Future->done({ type => 'http.disconnect' }) },
         sub { push @events, $_[0]; return Future->done },
+    )->get;
+    return \@events;
+}
+
+sub run_selected_file {
+    my ($path, $method, $headers) = @_;
+    my @events;
+    my ($scope, $send) = PAGI::Routing::HeadBoundary->prepare(
+        native_scope($method, '/unrelated-url-path', $headers),
+        sub { push @events, $_[0]; return Future->done },
+    );
+    PAGI::Response::File->new($path)->respond(
+        $scope,
+        sub { return Future->done({ type => 'http.disconnect' }) },
+        $send,
     )->get;
     return \@events;
 }
@@ -478,6 +495,21 @@ subtest 'file and index responses retain File ETag, range, and file events' => s
         my $file_events = run_native($file, 'GET', $path);
         is($directory_events, $file_events,
             "$path native file event matches File");
+        my $selected = $file->locate($path);
+        my $selected_events = run_selected_file(
+            $selected->path, 'GET', [],
+        );
+        is($directory_events, $selected_events,
+            "$path delegates selected-file planning to File Response");
+
+        my $selected_range_events = run_selected_file(
+            $selected->path, 'GET', [['range', 'bytes=1-3']],
+        );
+        my $directory_range_events = run_native(
+            $directory, 'GET', $path, [['range', 'bytes=1-3']],
+        );
+        is($directory_range_events, $selected_range_events,
+            "$path Directory range delivery uses the shared File plan");
 
         my $head_events = run_native($directory, 'HEAD', $path);
         is($head_events->[0], $directory_events->[0],

@@ -294,9 +294,10 @@ an index-free directory receives an HTML or JSON listing.  It uses the one
 inherited C<locate> result for each GET or HEAD request and delegates every
 non-directory result to inherited C<serve>.
 
-L<PAGI::App::File> therefore remains the owner of file and index responses,
-ETags, ranges, conditional requests, file events, and negotiated 403 and 404
-responses.  It also handles unsupported methods before location and returns
+L<PAGI::App::File> therefore remains the owner of safe file and index
+selection plus negotiated 403 and 404 responses, while selected files use the
+shared L<PAGI::Response::File> ETag, range, conditional, and file-event plan.
+The parent also handles unsupported methods before location and returns
 the negotiated 405 response with C<Allow: GET, HEAD>.  Directory listings are
 available only to GET and HEAD.  HEAD preserves the matching GET status and
 headers while emitting no listing bytes.

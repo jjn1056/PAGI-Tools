@@ -17,7 +17,7 @@ my $app_file = "$Bin/../examples/app-01-file/app.pl";
 my $source = source_text($app_file);
 
 like($source,
-    qr/PAGI::App::File->app_path\('static'\)->to_app/,
+    qr/PAGI::App::File->from_app_path\('static'\)->to_app/,
     'root-level example uses script-fallback alternate constructor');
 unlike($source,
     qr/File::Basename|File::Spec|dirname\s*\(|PAGI::App::File->new\s*\(/,

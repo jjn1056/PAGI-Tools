@@ -24,7 +24,7 @@ use PAGI::Pages;
 package MessageAPI {
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
-    use PAGI::Response;
+    use PAGI::Response::JSON;
 
     my @messages = (
         { id => 1, text => 'Hello, World!' },
@@ -34,7 +34,7 @@ package MessageAPI {
 
     async sub get {
         my ($self, $request) = @_;
-        return PAGI::Response->json(\@messages);
+        return PAGI::Response::JSON->new(\@messages);
     }
 
     async sub post {
@@ -46,7 +46,7 @@ package MessageAPI {
         # Notify SSE subscribers -- awaited, not fired and forgotten.
         await MessageEvents::broadcast($message);
 
-        return PAGI::Response->json($message, status => 201);
+        return PAGI::Response::JSON->new($message, status => 201);
     }
 }
 
@@ -176,7 +176,7 @@ my $require_json = sub {
                 my $response = PAGI::Pages->unsupported_media_type($scope,
                     as     => 'json',
                     detail => 'Content-Type must be application/json');
-                return await $response->respond($send);
+                return await $response->respond($scope, $receive, $send);
             }
         }
 
@@ -210,6 +210,6 @@ $router->mount('/events',
 );
 
 # Static files as fallback for everything else (no middleware)
-$router->mount('/', app => PAGI::App::File->app_path('public'));
+$router->mount('/', app => PAGI::App::File->from_app_path('public'));
 
 compose(app => $router);
