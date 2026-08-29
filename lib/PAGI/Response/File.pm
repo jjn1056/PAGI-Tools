@@ -36,8 +36,12 @@ a root with traversal, hidden-file, index, missing, and forbidden policy.
 
 Construction validates configuration only. Existence, readability, metadata,
 logical-window bounds, conditionals, and client ranges are evaluated before
-response start for each invocation. The application opens no filehandle; it
-sends and awaits exactly one PAGI C<http.response.body> file event.
+response start for each invocation. The application opens no filehandle. Each
+plan sends and awaits exactly one terminal PAGI C<http.response.body> event.
+A full or ranged delivery plan uses an opaque C<file> event (normally status
+200 or 206); a matching conditional plan (304) and an invalid-range plan (416)
+use an ordinary empty C<body> event. An explicitly configured non-200 status
+replaces the full plan's 200 while retaining its file delivery.
 
 This deferred lifecycle lets a reusable value follow deployment replacement
 and rotation of its selected path. A missing or unreadable direct File is a
@@ -282,15 +286,110 @@ sub _boolean {
     return;
 }
 
-=head1 OPTIONS
+=head1 CONSTRUCTOR AND FACTORY CONTRACT
 
-C<filename> selects an attachment disposition unless C<inline> is true.
-C<offset> and C<length> define the backing window for a complete logical 200
-representation; they do not themselves create C<Content-Range>. A client
-Range applies inside that logical representation and its offset is added to
-the configured physical offset. C<handle_ranges> defaults true. C<etag>
-accepts false, true/omission for automatic metadata-plus-window identity, or
-a validated explicit entity tag.
+    use PAGI::Response qw(file_response);
+
+    my $response = file_response($path,
+        status        => 200,
+        content_type  => 'application/pdf',
+        headers       => ['Cache-Control' => 'private'],
+        filename      => 'monthly.pdf',
+        inline        => 0,
+        offset        => 1024,
+        length        => 65536,
+        handle_ranges => 1,
+        etag          => 1,
+    );
+
+C<file_response($path, %options)> and
+C<< PAGI::Response::File->new($path, %options) >> accept the same contract.
+The class form requires an explicit C<use PAGI::Response::File ();>; importing
+the base factory alone does not eagerly load concrete subclasses.
+
+C<$path> is a trusted, already selected path. It must be a defined, nonempty,
+non-reference scalar and must contain no NUL byte. Construction does not check
+whether it exists, is regular, or is readable; those checks occur during every
+request preflight.
+
+The only accepted option names are C<status>, C<content_type>, C<headers>,
+C<filename>, C<inline>, C<offset>, C<length>, C<handle_ranges>, and C<etag>.
+Options are flat name/value pairs; an odd list, non-scalar/empty option name,
+unknown name, or duplicate name croaks synchronously.
+
+=over 4
+
+=item * C<status>
+
+Uses the common Response status validation and defaults to 200. An explicit
+status must be an integer from 100 through 599, but body-forbidden 1xx, 204,
+205, and 304 are rejected. File additionally rejects an explicit 206: only a
+valid request Range plan may select 206. Range handling is enabled only while
+the configured status is 200. A matched C<If-None-Match> plan can select 304
+for any configured status; when range handling is enabled, an invalid processed
+Range selects 416.
+
+=item * C<content_type>
+
+Uses the common Response scalar-or-C<undef> contract. When absent or C<undef>,
+request preflight selects a media type from the path extension and falls back
+to C<application/octet-stream>. A configured scalar overrides that planned
+field.
+
+=item * C<headers>
+
+Uses the common even-length flat arrayref. Every name is a defined, nonempty,
+non-reference scalar and every value is a defined non-reference scalar; nested
+pairs are rejected. File owns calculated C<Content-Length>,
+C<Content-Range>, and C<ETag>, so supplying any of those fields through the
+constructor or C<header> croaks (and preflight checks the mutable header
+collection again). An application-supplied C<Transfer-Encoding> is removed at
+emission. When C<filename> or true C<inline> generates Content-Disposition, it
+replaces an application-supplied field of that name.
+
+=item * C<filename>
+
+Optional. It must be a defined non-reference scalar and may not contain bytes
+C<0x00> through C<0x1f> or C<0x7f>. It does not select or alter C<$path>.
+Without true C<inline>, it generates an attachment Content-Disposition;
+backslash and double quote are escaped in the quoted filename parameter.
+
+=item * C<inline>
+
+Optional exact boolean scalar C<0> or C<1>; the default is false. True emits an
+inline Content-Disposition, with a filename parameter when C<filename> is also
+present. False with no C<filename> emits no generated disposition.
+
+=item * C<offset>, C<length>
+
+Optional nonnegative integer scalars containing only ASCII digits. Preflight
+defaults C<offset> to zero and C<length> to the selected file size minus the
+offset. It then requires C<offset> not to exceed the file size and
+C<length> not to exceed the remaining bytes. Supplying either option makes the
+resulting offset/length pair the physical window backing one complete logical
+representation; it does not itself select 206 or create Content-Range. A
+client Range is measured inside that logical length, then its start is added
+to the physical offset.
+
+=item * C<handle_ranges>
+
+Optional exact boolean scalar C<0> or C<1>; the default is true. When true,
+the configured status is 200, and the request method is exactly GET, File
+parses one strict byte Range. False suppresses Range parsing; it does not remove
+the planned C<Accept-Ranges: bytes> field. HEAD does not parse Range.
+
+=item * C<etag>
+
+Defaults to automatic generation from file metadata plus the logical window.
+A false scalar (C<0> or the empty string) disables ETag. Exact C<1> requests
+automatic generation. Every other value must be an unflagged valid strong or
+weak quoted entity-tag; references, C<undef>, other true scalars, and malformed
+tags croak.
+
+=back
+
+C<If-None-Match> compares the first field value exactly with the selected
+ETag. File does not implement Last-Modified, If-Modified-Since, or If-Range.
 
 For example, C<offset =E<gt> 1024, length =E<gt> 65536> is advertised as one
 65536-byte 200 representation. C<Range: bytes=100-199> then produces logical
@@ -298,23 +397,20 @@ C<Content-Range: bytes 100-199/65536> and a physical file event at offset 1124
 for 100 bytes. A configured window alone never claims that a client requested
 a range.
 
-File owns calculated C<Content-Length>, C<Content-Range>, and C<ETag>; callers
-cannot supply those fields directly or select status 206 without a request
-range plan. The initial conditional surface is intentionally limited to exact
-C<If-None-Match>; it does not implement Last-Modified, If-Modified-Since, or
-If-Range.
-
 =head1 METHODS
 
 C<respond> performs all file inspection before response start, then awaits
-response start and one body event. C<to_app> captures a reusable configuration
-snapshot. C<is_buffered> returns false, C<body> croaks, and
+response start and the plan's one terminal body event. C<to_app> captures a
+reusable configuration snapshot. C<is_buffered> returns false, C<body> croaks,
+and
 C<protocol_response_capability> returns C<undef>.
 
 The capability opt-out is independent of buffering: Stream remains eligible
-for protocol denial because it emits ordinary body events, while File uses the
-opaque form that PAGI Www explicitly excludes from WebSocket denial and SSE
-decline bodies.
+for protocol denial because it emits only ordinary body events. File opts out
+because a successful delivery plan may emit an opaque C<file> event from the
+C<file>/C<fh> vocabulary that PAGI Www explicitly excludes from WebSocket
+denial and SSE decline bodies; the fact that its 304/416 plans use ordinary
+empty bodies does not change that class-level capability.
 
 =cut
 

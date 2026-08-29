@@ -1043,7 +1043,9 @@ See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
 =head2 deny
 
-    await $ws->deny(PAGI::Response::Text->new(
+    use PAGI::Response qw(text_response);
+
+    await $ws->deny(text_response(
         'Unauthorized',
         status  => 401,
         headers => ['www-authenticate' => 'Bearer'],

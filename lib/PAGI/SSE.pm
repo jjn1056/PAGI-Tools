@@ -1091,7 +1091,9 @@ C<on_connect> runs), C<start> arms it immediately after sending C<sse.start>
 
 =head2 decline
 
-    await $sse->decline(PAGI::Response::Text->new(
+    use PAGI::Response qw(text_response);
+
+    await $sse->decline(text_response(
         'Unauthorized',
         status  => 401,
         headers => ['www-authenticate' => 'Bearer'],
@@ -1146,12 +1148,14 @@ nothing was ever armed, so there's nothing to disarm.
 B<The supported auth-gate pattern> is to call C<decline> from inside
 C<on_connect> (see L<PAGI::Endpoint::SSE/on_connect>):
 
+    use PAGI::Response qw(text_response);
+
     async sub on_connect {
         my ($self, $sse) = @_;
 
         unless (authorized($sse)) {
             await $sse->decline(
-                PAGI::Response::Text->new('Unauthorized', status => 401),
+                text_response('Unauthorized', status => 401),
             );
             return;
         }

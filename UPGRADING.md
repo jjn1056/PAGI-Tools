@@ -43,7 +43,7 @@ There are no compatibility aliases for the removed forms.
 | --- | --- |
 | `$request->response` | construct the desired concrete Response directly |
 | `PAGI::Response->new($scope)` as a mutable builder/scope source | construct a complete response; pass Request/protocol/scope to Session, Stash, State, CSRF, URL, or Transport helpers |
-| `PAGI::Response->text($s)` | `text_response($s)` or `PAGI::Response::Text->new($s)` |
+| `PAGI::Response->text($s)` | `text_response($s)` |
 | `PAGI::Response->html($s)` | `html_response($s)` |
 | `PAGI::Response->json($v)` | `json_response($v)` |
 | `PAGI::Response->send($s, charset => $name)` | explicitly encode and pass bytes plus Content-Type to `response(...)` |

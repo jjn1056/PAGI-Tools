@@ -5,7 +5,9 @@ use warnings;
 
 use Encode qw(encode);
 use Future;
+use IPC::Open3 qw(open3);
 use JSON::MaybeXS qw(decode_json);
+use Symbol qw(gensym);
 use Test2::V0;
 
 use lib 'lib';
@@ -61,6 +63,33 @@ sub body_from {
     return join '', map { $_->{body} // '' }
         grep { ($_->{type} // '') eq 'http.response.body' } @$events;
 }
+
+sub run_perl_snippet {
+    my ($snippet) = @_;
+    my $stderr = gensym;
+    my $pid = open3(undef, my $stdout, $stderr,
+        $^X, '-Ilib', '-e', $snippet);
+    my $out = do { local $/; <$stdout> // '' };
+    my $err = do { local $/; <$stderr> // '' };
+    waitpid $pid, 0;
+    return ($? >> 8, $out . $err);
+}
+
+subtest 'documented class form explicitly loads its concrete subclass' => sub {
+    open my $fh, '<', 'lib/PAGI/Response.pm' or die $!;
+    my $pod = do { local $/; <$fh> };
+    my ($indented) = $pod =~ /
+        Use\ either\ explicit\ class\ construction\ or\ the\ matching\ optional\ export:\n\n
+        ((?:[ ]{4}[^\n]*\n)+)
+    /x;
+    ok(defined $indented, 'primary class/factory example is present');
+
+    $indented =~ s/^[ ]{4}//mg;
+    my ($status, $output) = run_perl_snippet($indented);
+    is($status, 0,
+        'primary class-form example compiles and executes in a fresh process')
+        or diag($output);
+};
 
 subtest 'Response factories replace the mutable builder and Request bridge' => sub {
     my $request = PAGI::Request->new(http_scope(), \&receive_http);

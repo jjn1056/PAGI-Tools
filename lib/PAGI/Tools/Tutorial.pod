@@ -63,7 +63,7 @@ Returning JSON is just as short:
   );
 
 From here the tutorial builds up: routing requests to handlers (PART 2),
-reading form and JSON input (PART 3), the full response builder (PART 4),
+reading form and JSON input (PART 3), the concrete Response class family (PART 4),
 real-time and streaming (PART 5), middleware (PART 6), and composing larger
 applications (PART 7).
 
@@ -564,6 +564,7 @@ guess whether it is finite.
       response text_response html_response json_response
       redirect_response empty_response file_response stream_response
   );
+  use PAGI::Response::Text ();
 
   my $text = PAGI::Response::Text->new('Hello'); # class form
   my $json = json_response({ ok => \1 });          # factory form
@@ -711,8 +712,10 @@ L<PAGI::WebSocket> simplifies WebSocket connections:
 
 Before C<accept>, a concrete finite or Stream Response can deny the handshake:
 
+  use PAGI::Response qw(text_response);
+
   await $ws->deny(
-      PAGI::Response::Text->new('Unauthorized', status => 401),
+      text_response('Unauthorized', status => 401),
   );
 
 The optional denial extension maps ordinary body events. File is rejected
@@ -1177,10 +1180,12 @@ passing a configured instance (parentheses required):
 
 Or per-route:
 
+  use PAGI::Response qw(text_response);
+
   my $auth = MyApp::Middleware::Auth->new(secret => 'secret-key');
   $router->get('/admin' => [$auth] => sub {
       my ($request) = @_;
-      return PAGI::Response::Text->new('admin');
+      return text_response('admin');
   });
 
 =head3 Middleware Patterns
@@ -1441,11 +1446,13 @@ mounts and its C<default>, L<PAGI::App::Cascade> entries, and the
 C<app> argument to L<PAGI::Test::Client>, L<PAGI::Lifespan/new>, and
 L<PAGI::Lifespan/wrap>. Put together:
 
+  use PAGI::Response qw(text_response);
+
   my $app = builder {
       enable 'AccessLog';
       mount '/static' => PAGI::App::File->new(root => 'public');
       mount '/api'    => MyApp::API->new;
-      PAGI::Response::Text->new('no such page', status => 404);
+      text_response('no such page', status => 404);
   };
 
 Compilation happens exactly once, when the composition point receives

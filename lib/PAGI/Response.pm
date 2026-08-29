@@ -38,6 +38,7 @@ representation or delivery behavior:
 Use either explicit class construction or the matching optional export:
 
     use PAGI::Response qw(json_response);
+    use PAGI::Response::JSON ();
     my $one = PAGI::Response::JSON->new({ ok => \1 });
     my $two = json_response({ ok => \1 });
 

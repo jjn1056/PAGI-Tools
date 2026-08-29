@@ -229,8 +229,8 @@ known path such as `PUT /welcome`.
 
 | Starlette | PAGI::Tools |
 | --- | --- |
-| `JSONResponse(value)` | `json_response($value)` / `PAGI::Response::JSON->new($value)` |
-| `FileResponse(path)` | `file_response($path)` / `PAGI::Response::File->new($path)` |
+| `JSONResponse(value)` | `json_response($value)` |
+| `FileResponse(path)` | `file_response($path)` |
 | response is ASGI-callable | response implements `to_app` |
 | `Route('/', endpoint)` | exact `route('/' => handler-or-component)` |
 | `Mount('/x', app=...)` | subtree-owning `mount('/x', app => ...)` |

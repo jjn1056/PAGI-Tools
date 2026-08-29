@@ -1023,6 +1023,7 @@ component object with a C<to_app> method:
     my $client = PAGI::Test::Client->new(app => MyApp::Main->new(%opts));
 
     # Terminal Response object (also an instantiated to_app component)
+    use PAGI::Response::Text ();
     my $client = PAGI::Test::Client->new(
         app => PAGI::Response::Text->new('ready'),
     );
