@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-27
 
-**Status:** Approved design; implementation planning authorized
+**Status:** Approved design; amended 2026-08-28 for PAGI 0.5 settlement
 
 **Scope:** Replace the all-purpose `PAGI::Response` body modes with a small,
 extensible HTTP response family; make every response a complete terminal PAGI
@@ -11,6 +11,16 @@ streaming request-body APIs; define output-stream backpressure; reduce
 `PAGI::Pages` to negotiated response policy; and reuse HTTP response values for
 WebSocket denial and SSE decline without conflating HTTP streaming with live
 protocol connections
+
+**Settlement amendment:** PAGI 0.002006 (core 0.5 / Www 0.4) and
+PAGI::Server 0.002010 now define pending-I/O settlement at disconnect. This
+amendment reverses two earlier Stream commitments: disconnect never
+manufactures a failed Writer operation, and there is no
+failure-versus-disconnect simultaneity for the framework to arbitrate. A
+genuine validation/resource send failure still propagates; a send pending when
+disconnect is detected resolves successfully after the server is finished with
+its event. The Stream runner retains proactive cancellation of its own producer
+work, but never cancels a PAGI send Future.
 
 ## 1. Decision
 
@@ -101,11 +111,15 @@ Pages arity-overloaded endpoint convention.
 | Repository | Work item | Branch | Base | Owned changes | Deployment boundary | Push target |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | HTTP response family and streaming | `main` | `main@c5d0c301e2a59fb7451b3848e541b2fbfe1873de` | This design specification only | Documentation/design; no runtime change | None requested |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI` | Pending-I/O settlement contract | released `main` | PAGI `0.002006`, core 0.5 / Www 0.4 | Read-only normative dependency after the settlement amendment | Published on CPAN | None |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Server` | Pending-I/O settlement conformance | released `main` | PAGI::Server `0.002010` | Read-only integration reference after the settlement amendment | Published on CPAN | None |
 
-The eventual implementation is confined to PAGI-Tools unless it discovers a
-protocol contradiction. The reviewed PAGI specification already supports the
-required HTTP body, file, WebSocket-denial, and SSE-decline event shapes; this
-design does not currently require a PAGI specification or PAGI::Server change.
+The implementation remains confined to PAGI-Tools. During Task 4 the original
+design exposed a protocol ambiguity around I/O already pending at disconnect.
+That ambiguity was resolved upstream and released as PAGI 0.002006 (core 0.5 /
+Www 0.4); PAGI::Server 0.002010 conforms and pins the contract over HTTP/1,
+HTTP/2, WebSocket, and SSE. Those released repositories are authoritative
+dependencies, not implementation scope for this campaign.
 
 Before implementation begins, its execution plan must record a fresh work map
 with the then-current branch and base, production/test/document/example
@@ -911,19 +925,22 @@ on_drain($cb)        -> self
 `more => 1`. `write_text` strictly UTF-8 encodes one character scalar before
 delegating to `write`. Neither method buffers multiple chunks.
 
-`bytes_written` counts bytes whose send Future settled as accepted for
-delivery while the connection still reported connected. It does not claim
-that the client received those bytes, does not count the terminal empty event,
-and does not increment for a failed or detected post-disconnect write.
+`bytes_written` counts bytes whose send Future settled while the connection
+still reported connected. It does not claim that the client received those
+bytes, does not count the terminal empty event, and does not increment when
+the await-then-check invariant reports that the server discarded a pending
+send because the connection ended.
 
 Writer permits exactly one outstanding write. Starting another write before
 the prior write Future settles croaks rather than relying on PAGI's unspecified
 overlapping-send behavior or building a hidden queue.
 
-Every write waits for the PAGI `$send` Future. Resolution means that the
-server accepted the event for delivery, not that the client received its
-bytes. Under PAGI, that Future may remain pending while server buffers are
-above a watermark. Therefore:
+Every write waits for the PAGI `$send` Future. Under PAGI 0.5, resolution
+means that the server is finished with the event: it either accepted the
+event for outbound processing or discarded it because the connection ended.
+The Future does not distinguish those outcomes; Writer consults
+`pagi.connection` after awaiting it. While connected, the Future may remain
+pending while server buffers are above a watermark. Therefore:
 
 ```perl
 await $writer->write($chunk);
@@ -995,9 +1012,16 @@ object; isolated direct harnesses without it retain output behavior but
 `is_disconnected` returns `undef` and proactive disconnect observation is not
 available.
 
-At Writer construction, Stream registers a synchronous `on_disconnect`
-callback that records the reason, marks the writer disconnected, and resolves
-an internal signal. The callback does not perform asynchronous cleanup itself.
+At Writer construction, Stream registers one `on_disconnect` callback that
+records the reason, marks the writer disconnected, and resolves an internal
+signal. The callback does not perform asynchronous cleanup itself. PAGI 0.5
+guarantees that disconnect callback delivery does not re-enter an
+application's call into `$send` or `$receive`; registration after an already
+completed transition may still invoke immediately and must remain safe.
+`disconnect_future` stays optional in PAGI, so the first implementation builds
+its portable private signal from mandatory `on_disconnect` rather than
+requiring that convenience method.
+
 The Stream runner races that signal against the producer Future without
 consuming `$receive`:
 
@@ -1006,16 +1030,17 @@ consuming `$receive`:
   cleanup exactly once; the Stream application then completes without a
   replacement response because the server already owns the abnormal
   disconnect outcome;
-- `write` checks connection state before and after awaiting `$send`, because
-  PAGI defines a post-disconnect send as a successful no-op rather than a
-  disconnect error. If either check observes a disconnect, the `write` Future
-  fails with a disconnect-specific error containing the available reason.
-  This makes an awaiting producer stop through its normal failure path. The
-  Stream runner recognizes that error as the already-recorded connection
-  disconnect outcome: it cancels remaining work, runs cleanup once, emits no
-  terminal event, and does not report or rethrow it as an application
-  failure;
+- `write` awaits `$send` and then checks connection state. PAGI 0.5 guarantees
+  that a send pending at disconnect resolves successfully only after the
+  synchronous connection facts have transitioned, making this
+  await-then-check race-free. Writer never manufactures a disconnect failure,
+  does not count discarded bytes, and returns normally. A later producer step
+  observes `is_disconnected`; `pipe_from` stops between chunks, while the
+  runner's proactive signal cancels producer work that is waiting somewhere
+  other than a write;
 - a genuine failed send Future still fails the current write and producer;
+- abort waits for any in-flight send to settle and never cancels it, because
+  PAGI leaves application cancellation of send Futures unspecified;
 - normal close sends the terminal event once;
 - an exception after response start marks the writer aborted, runs local
   cleanup once, sends no false terminal success event, and is rethrown; and
@@ -1855,8 +1880,10 @@ Every send Future is awaited. Validation/resource failures from `$send` are
 propagated. After the response has started, the implementation must never send
 a second response start or disguise truncation as successful completion.
 
-A client disconnect is not inferred from a send failure: PAGI defines sends
-after disconnect as no-ops. Stream observes `pagi.connection` as specified in
+A client disconnect is not inferred from a send failure. PAGI 0.5 defines both
+sends issued after disconnect and sends still pending when disconnect is
+detected as successful settlement once the server is finished with the event.
+Stream observes `pagi.connection` after awaiting the send, as specified in
 Section 13.4. Other response classes complete their finite emission normally;
 the server-owned connection object remains authoritative for the actual
 delivery outcome.
@@ -2114,8 +2141,11 @@ This ordering is advisory until the implementation plan verifies dependencies.
 - immediate and Future-backed on-close callbacks;
 - connection disconnect before producer start, during unrelated producer work,
   during a pending write, and after normal completion;
-- post-disconnect send no-op is detected through connection state rather than
-  misclassified as a successful delivered chunk;
+- a send pending at disconnect resolves normally, its resumed Writer observes
+  the completed connection transition, and discarded bytes are not counted;
+- genuine validation/resource send failures still propagate and are never
+  rewritten as disconnect outcomes;
+- abort awaits rather than cancels an in-flight send;
 - disconnect reason and tri-state capability reporting;
 - producer cancellation and exactly-once asynchronous cleanup on disconnect;
 - `pipe_from` with immediate/Future chunks, empty chunks, EOF, failure, and
@@ -2226,8 +2256,9 @@ The streaming POD must prominently state that `await $writer->write(...)` is
 the primary backpressure boundary, forbid overlapping writes, and show
 request-to-response `pipe_from` without raw PAGI. It must separately document
 transport watermark controls, connection-based disconnect detection,
-exactly-once asynchronous cleanup, and the fact that ordinary HTTP Stream has
-no reconnection semantics.
+PAGI 0.5 await-then-check settlement, proactive producer cancellation without
+send cancellation, exactly-once asynchronous cleanup, and the fact that
+ordinary HTTP Stream has no reconnection semantics.
 
 Pages POD must say it returns concrete Responses and is neither an app nor an
 arity-overloaded endpoint. It must show `\&welcome_page`, an explicit class
