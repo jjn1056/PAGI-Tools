@@ -4,6 +4,7 @@ use warnings;
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
+use File::Temp qw(tempdir);
 use IO::Async::Loop;
 
 use PAGI::Middleware::SSE::Retry;
@@ -16,6 +17,12 @@ use PAGI::Middleware::JSONBody;
 use PAGI::Middleware::Maintenance;
 use PAGI::Middleware::RateLimit;
 use PAGI::Middleware::TrustedHosts;
+use PAGI::Middleware::CORS;
+use PAGI::Middleware::Healthcheck;
+use PAGI::Middleware::HTTPSRedirect;
+use PAGI::Middleware::ReverseProxy;
+use PAGI::Middleware::Rewrite;
+use PAGI::Middleware::Static;
 
 my $loop = IO::Async::Loop->new;
 
@@ -94,6 +101,7 @@ subtest 'SSE::Retry - passes through non-SSE' => sub {
 };
 
 subtest 'HTTP policy middleware preserves non-HTTP event streams and send settlement' => sub {
+    my $static_root = tempdir(CLEANUP => 1);
     my @cases = (
         ['Auth::Basic', sub {
             PAGI::Middleware::Auth::Basic->new(
@@ -124,6 +132,25 @@ subtest 'HTTP policy middleware preserves non-HTTP event streams and send settle
         }],
         ['TrustedHosts', sub {
             PAGI::Middleware::TrustedHosts->new(hosts => ['example.com']);
+        }],
+        ['CORS', sub { PAGI::Middleware::CORS->new }],
+        ['Healthcheck', sub {
+            PAGI::Middleware::Healthcheck->new(path => '/events');
+        }],
+        ['HTTPSRedirect', sub {
+            PAGI::Middleware::HTTPSRedirect->new;
+        }],
+        ['ReverseProxy', sub {
+            PAGI::Middleware::ReverseProxy->new(trust_all => 1);
+        }],
+        ['Rewrite', sub {
+            PAGI::Middleware::Rewrite->new(
+                rules => [{ from => '/events', to => '/elsewhere' }],
+                redirect => 1,
+            );
+        }],
+        ['Static', sub {
+            PAGI::Middleware::Static->new(root => $static_root);
         }],
     );
 

@@ -106,11 +106,71 @@ subtest 'CORS handles preflight OPTIONS request' => sub {
 
     ok !$app_called, 'app not called for preflight';
     is $sent[0]{status}, 204, 'preflight returns 204';
+    is $sent[1], {
+        type => 'http.response.body',
+        body => '',
+        more => 0,
+    }, 'preflight sends one terminal empty body event';
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
     is $headers{'access-control-allow-origin'}, 'https://example.com', 'Allow-Origin header present';
     like $headers{'access-control-allow-methods'}, qr/POST/, 'Allow-Methods contains POST';
     like $headers{'access-control-allow-headers'}, qr/Content-Type/, 'Allow-Headers present';
+    ok !exists($headers{'content-type'}) && !exists($headers{'content-length'})
+        && !exists($headers{'transfer-encoding'}),
+        'body-forbidden preflight has no representation framing fields';
+};
+
+subtest 'CORS preflight rejects an unknown origin without delegating' => sub {
+    my $mw = PAGI::Middleware::CORS->new(
+        origins => ['https://allowed.com'],
+    );
+    my $app_called = 0;
+    my $wrapped = $mw->wrap(async sub { $app_called++ });
+    my @events;
+
+    run_async(async sub {
+        await $wrapped->(
+            {
+                type    => 'http',
+                path    => '/api/data',
+                method  => 'OPTIONS',
+                headers => [['origin', 'https://evil.com']],
+            },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; push @events, $event },
+        );
+    });
+
+    is $app_called, 0, 'unknown-origin preflight does not reach downstream';
+    is $events[0]{status}, 204, 'unknown-origin preflight is still complete';
+    is [grep { $_->[0] =~ /^access-control/i } @{$events[0]{headers}}], [],
+        'unknown-origin preflight receives no CORS permission fields';
+    is $events[1], {
+        type => 'http.response.body', body => '', more => 0,
+    }, 'unknown-origin preflight retains the empty terminal event';
+};
+
+subtest 'CORS preflight uses the native HTTP triplet' => sub {
+    my $mw = PAGI::Middleware::CORS->new;
+    my $wrapped = $mw->wrap(async sub { die 'preflight reached downstream' });
+    my @events;
+    my $future = $wrapped->(
+        {
+            type    => 'http',
+            path    => '/api/data',
+            method  => 'OPTIONS',
+            headers => [['origin', 'https://example.com']],
+        },
+        undef,
+        async sub { my ($event) = @_; push @events, $event },
+    );
+    $loop->await($future);
+
+    ok $future->is_failed, 'invalid receive callback rejects preflight emission';
+    like [$future->failure]->[0], qr/receive.*coderef/i,
+        'preflight reports the native receive requirement';
+    is \@events, [], 'triplet validation happens before response start';
 };
 
 subtest 'CORS adds headers to actual requests' => sub {
@@ -119,18 +179,22 @@ subtest 'CORS adds headers to actual requests' => sub {
         credentials => 1,
     );
 
+    my ($start, $body);
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
-        await $send->({
+        $start = {
             type    => 'http.response.start',
             status  => 200,
             headers => [['content-type', 'application/json']],
-        });
-        await $send->({
+            extension_sentinel => 'kept',
+        };
+        $body = {
             type => 'http.response.body',
             body => '{"data":"test"}',
             more => 0,
-        });
+        };
+        await $send->($start);
+        await $send->($body);
     };
 
     my $wrapped = $mw->wrap($app);
@@ -153,6 +217,40 @@ subtest 'CORS adds headers to actual requests' => sub {
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
     is $headers{'access-control-allow-origin'}, 'https://example.com', 'Origin header on response';
     is $headers{'access-control-allow-credentials'}, 'true', 'Credentials header present';
+    is refaddr($sent[0]), refaddr($start),
+        'credentialed CORS mutates literal response metadata in place';
+    is refaddr($sent[1]), refaddr($body),
+        'credentialed CORS forwards the downstream body event by identity';
+    is $sent[0]{extension_sentinel}, 'kept',
+        'credentialed CORS preserves response-start extension fields';
+};
+
+subtest 'CORS wildcard simple request retains literal star policy' => sub {
+    my $mw = PAGI::Middleware::CORS->new(origins => ['*']);
+    my $wrapped = $mw->wrap(async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type => 'http.response.start', status => 200, headers => [],
+        });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    });
+    my @events;
+
+    run_async(async sub {
+        await $wrapped->(
+            {
+                type    => 'http', path => '/', method => 'GET',
+                headers => [['origin', 'https://site.example']],
+            },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; push @events, $event },
+        );
+    });
+
+    is [response_header_values($events[0], 'Access-Control-Allow-Origin')],
+        ['*'], 'simple wildcard request retains literal star policy';
+    is [response_header_values($events[0], 'Access-Control-Allow-Credentials')],
+        [], 'simple wildcard request does not enable credentials';
 };
 
 subtest 'CORS rejects unknown origins' => sub {

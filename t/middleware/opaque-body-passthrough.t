@@ -10,12 +10,12 @@ use lib 'lib';
 use PAGI::Middleware::ETag;
 use PAGI::Middleware::GZip;
 use PAGI::Middleware::ContentLength;
-use PAGI::Response;
+use PAGI::Response::File;
 use PAGI::Test::Client;
 
 # C2: ETag/GZip/ContentLength must not destroy or mis-frame opaque
 # (file/fh) response bodies. Each is composed over (a) a
-# PAGI::Response->send_file app and (b) a raw fh-body app, and must
+# PAGI::Response::File app and (b) a raw fh-body app, and must
 # deliver the file byte-identical, with the correct status, and without
 # adding its own transform header.
 
@@ -26,15 +26,19 @@ binmode $fh;
 print {$fh} $file_content;
 close $fh;
 
-# (a) An app built from PAGI::Response->send_file -- sets its own
+# (a) An app built from PAGI::Response::File -- sets its own
 # content-type/content-length/content-disposition and emits a body event
 # with a `file` key (no `body`, no `more`).
-sub send_file_app {
-    return PAGI::Response->send_file($path)->to_app;
+sub file_response_app {
+    return PAGI::Response::File->new($path)->to_app;
 }
 
+my $file_response_etag = PAGI::Test::Client->new(
+    app => file_response_app(),
+)->get('/')->header('etag');
+
 # (b) A raw app that emits an opaque `fh` body event directly, without any
-# of send_file's header bookkeeping.
+# of File's header bookkeeping.
 sub fh_app {
     return async sub {
         my ($scope, $receive, $send) = @_;
@@ -52,7 +56,7 @@ sub fh_app {
 }
 
 my %scenarios = (
-    'PAGI::Response->send_file' => \&send_file_app,
+    'PAGI::Response::File' => \&file_response_app,
     'fh body event'             => \&fh_app,
 );
 
@@ -78,7 +82,13 @@ for my $mw_name (sort keys %middleware) {
             is $res->content, $file_content, 'body delivered byte-identical to the file';
 
             if ($mw_name eq 'ETag') {
-                ok !defined($res->header('etag')), 'no ETag header was added';
+                if ($scenario_name eq 'PAGI::Response::File') {
+                    is $res->header('etag'), $file_response_etag,
+                        "the app's own File ETag is left untouched";
+                }
+                else {
+                    ok !defined($res->header('etag')), 'no ETag header was added';
+                }
             }
             elsif ($mw_name eq 'GZip') {
                 ok !defined($res->header('content-encoding')), 'no Content-Encoding header was added';
@@ -89,7 +99,7 @@ for my $mw_name (sort keys %middleware) {
                         'no Content-Length synthesized for an opaque body without one already';
                 }
                 else {
-                    # send_file sets its own accurate Content-Length; the
+                    # File sets its own accurate Content-Length; the
                     # middleware must leave it alone, not recompute it.
                     is $res->header('content-length'), length($file_content),
                         "the app's own Content-Length is left untouched";

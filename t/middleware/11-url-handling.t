@@ -102,7 +102,10 @@ subtest 'Rewrite middleware - redirect mode' => sub {
     };
 
     my $wrapped = $rewrite->wrap($app);
-    my $scope = make_scope(path => '/old');
+    my $scope = make_scope(
+        path    => '/old',
+        headers => [['Accept', 'application/json']],
+    );
 
     my @events;
     run_async { $wrapped->($scope, async sub { {} }, async sub  {
@@ -111,6 +114,8 @@ subtest 'Rewrite middleware - redirect mode' => sub {
     is $events[0]{status}, 302, 'redirect status';
     my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
     is $headers{location}, '/new', 'redirect location';
+    is $headers{'content-type'}, 'text/html; charset=utf-8',
+        'redirect target uses the semantic Redirect representation';
 };
 
 subtest 'Rewrite redirect preserves raw query before target fragment' => sub {
@@ -138,7 +143,7 @@ subtest 'Rewrite redirect preserves raw query before target fragment' => sub {
         'raw query is inserted before the first fragment';
 };
 
-subtest 'redirect middleware constructors accept exactly Pages redirect statuses' => sub {
+subtest 'redirect middleware constructors accept exactly Redirect statuses' => sub {
     my @factories = (
         Rewrite => sub {
             PAGI::Middleware::Rewrite->new(
@@ -315,7 +320,10 @@ subtest 'HTTPSRedirect - redirects HTTP to HTTPS' => sub {
     my $scope = make_scope(
         scheme  => 'http',
         path    => '/test',
-        headers => [['Host', 'example.com']],
+        headers => [
+            ['Host', 'example.com'],
+            ['Accept', 'application/json'],
+        ],
     );
 
     my @events;
@@ -325,6 +333,8 @@ subtest 'HTTPSRedirect - redirects HTTP to HTTPS' => sub {
     is $events[0]{status}, 301, 'redirect status';
     my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
     is $headers{location}, 'https://example.com/test', 'redirects to HTTPS';
+    is $headers{'content-type'}, 'text/html; charset=utf-8',
+        'HTTPS target uses the semantic Redirect representation';
 };
 
 subtest 'HTTPSRedirect - passes through HTTPS' => sub {
@@ -561,7 +571,7 @@ subtest 'HTTPSRedirect - invalid authority negotiates Pages 400' => sub {
     }
 };
 
-subtest 'redirect middleware inherits Pages target validation before sending' => sub {
+subtest 'redirect middleware inherits Redirect target validation before sending' => sub {
     my @cases = (
         [
             Rewrite => sub {
@@ -601,14 +611,14 @@ subtest 'redirect middleware inherits Pages target validation before sending' =>
             );
             $loop->await($future);
             ok $future->is_failed, "$name rejects unsafe logical target";
-            like [$future->failure]->[0], qr/redirect target.*URI-reference/i,
-                "$name reports Pages target validation";
+            like [$future->failure]->[0], qr/redirect location.*URI-reference/i,
+                "$name reports Redirect target validation";
             is \@events, [], "$name rejects target before response start";
         }
     }
 };
 
-subtest 'Pages-backed redirect awaits and propagates send failure' => sub {
+subtest 'semantic Redirect awaits and propagates send failure' => sub {
     my $diagnostic = "redirect send sentinel\n";
     my $wrapped = PAGI::Middleware::Rewrite->new(
         rules => [{ from => '/old', to => '/new' }],
@@ -623,7 +633,7 @@ subtest 'Pages-backed redirect awaits and propagates send failure' => sub {
 
     ok $future->is_failed, 'redirect wrapper remains failed';
     is [$future->failure]->[0], $diagnostic,
-        'exact Pages response send failure propagates';
+        'exact Redirect response send failure propagates';
 };
 
 subtest 'HTTPSRedirect - non-HTTP downstream exception propagates' => sub {
@@ -1151,6 +1161,23 @@ subtest 'Healthcheck - liveness probe' => sub {
         my ($e) = @_; push @events, $e }) };
 
     is $events[0]{status}, 200, 'liveness always returns 200';
+};
+
+subtest 'Healthcheck owned responses use the native HTTP triplet' => sub {
+    my $health = PAGI::Middleware::Healthcheck->new(path => '/health');
+    my $wrapped = $health->wrap(async sub { die 'health request reached downstream' });
+    my @events;
+    my $future = $wrapped->(
+        make_scope(path => '/health'),
+        undef,
+        async sub { my ($event) = @_; push @events, $event },
+    );
+    $loop->await($future);
+
+    ok $future->is_failed, 'invalid receive callback rejects health emission';
+    like [$future->failure]->[0], qr/receive.*coderef/i,
+        'health response reports the native receive requirement';
+    is \@events, [], 'triplet validation happens before health response start';
 };
 
 done_testing;

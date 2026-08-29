@@ -6,7 +6,7 @@ use parent 'PAGI::Middleware';
 use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
-use PAGI::Pages;
+use PAGI::Response::Redirect ();
 
 =head1 NAME
 
@@ -27,12 +27,12 @@ PAGI::Middleware::Rewrite - URL rewriting middleware
 
 =head1 DESCRIPTION
 
-PAGI::Middleware::Rewrite rewrites request paths before passing to the
-inner application. Supports both exact matches and regex patterns. Redirect
-mode renders through L<PAGI::Pages> using the original request scope, preserves
-the incoming raw query without re-encoding, and places it before the first
-target fragment. Rule selection and internal rewriting remain local, and there
-is no Pages configuration option.
+PAGI::Middleware::Rewrite rewrites request paths before passing to the inner
+application. Supports both exact matches and regex patterns. Redirect mode
+renders through L<PAGI::Response::Redirect>, preserves the incoming raw query
+without re-encoding, and places it before the first target fragment. Rule
+selection and internal rewriting remain local, and there is no redirect
+representation configuration option.
 
 =head1 CONFIGURATION
 
@@ -101,7 +101,7 @@ sub wrap {
 
         # Redirect mode
         if ($self->{redirect}) {
-            await $self->_send_redirect($scope, $send, $new_path);
+            await $self->_send_redirect($scope, $receive, $send, $new_path);
             return;
         }
 
@@ -148,14 +148,33 @@ sub _apply_rules {
 }
 
 async sub _send_redirect {
-    my ($self, $scope, $send, $location) = @_;
-    my $response = PAGI::Pages->redirect(
-        $scope,
-        $location,
-        status         => $self->{redirect_code},
-        preserve_query => 1,
+    my ($self, $scope, $receive, $send, $location) = @_;
+    my $response = PAGI::Response::Redirect->new(
+        _location_with_raw_query($location, $scope->{query_string}),
+        status => $self->{redirect_code},
     );
-    await Future->wrap($response->respond($send));
+    await Future->wrap($response->respond($scope, $receive, $send));
+}
+
+sub _location_with_raw_query {
+    my ($target, $query) = @_;
+    return $target unless defined($query) && !ref($query) && length($query);
+
+    my $fragment = '';
+    my $fragment_at = index($target, '#');
+    if ($fragment_at >= 0) {
+        $fragment = substr($target, $fragment_at);
+        $target = substr($target, 0, $fragment_at);
+    }
+
+    if (index($target, '?') < 0) {
+        $target .= '?';
+    }
+    elsif (!(substr($target, -1, 1) eq '?'
+            && index($target, '?') == length($target) - 1)) {
+        $target .= '&';
+    }
+    return $target . $query . $fragment;
 }
 
 1;
@@ -171,10 +190,10 @@ Regex patterns can use capture groups:
 This would rewrite C</blog/2024/01> to C</archive/2024-01>.
 
 Internal rewrite mode passes the rewritten scope to the inner application and
-does not invoke Pages. Unmatched HTTP requests and all non-HTTP scopes retain
-their existing pass-through behavior. Redirect mode passes the unmodified
-logical rule target to Pages, which validates it and performs fragment-safe
-query preservation before sending the response.
+does not construct a Response. Unmatched HTTP requests and all non-HTTP scopes
+retain their existing pass-through behavior. Redirect mode passes the
+unmodified logical rule target to Redirect after fragment-safe raw-query
+preservation. Redirect validates the final Location before sending it.
 
 =head1 SEE ALSO
 
