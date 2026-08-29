@@ -346,6 +346,20 @@ subtest 'strict single ranges operate against full files and logical windows' =>
     is($full_range->[1]{offset}, 2,
         'full-file client range becomes its physical offset');
 
+    my $non_success = run_response(
+        file_response($path, status => 404),
+        http_scope(headers => [['range', 'bytes=2-5']]),
+    );
+    is($non_success->[0]{status}, 404,
+        'Range cannot replace an explicit non-200 response status');
+    ok(!defined event_header($non_success->[0], 'content-range'),
+        'a non-200 baseline does not advertise partial content');
+    is(event_header($non_success->[0], 'content-length'), 10,
+        'a non-200 baseline retains the full representation length');
+    is($non_success->[1], {
+        type => 'http.response.body', file => $path,
+    }, 'a non-200 baseline retains full file delivery');
+
     for my $case (
         ['zero suffix', [['range', 'bytes=-0']]],
         ['empty range', [['range', '']]],
@@ -433,6 +447,44 @@ subtest 'trusted path ownership, snapshots, and send settlement stay explicit' =
     }, qr/start failed/, 'response-start send failure propagates');
     is(scalar @failed_start_events, 1,
         'a failed start prevents the file event');
+
+    for my $phase (qw(start body)) {
+        subtest "cancellation during pending $phase send" => sub {
+            my $pending = Future->new;
+            my $send_cancellations = 0;
+            $pending->on_cancel(sub { ++$send_cancellations });
+            my @cancel_events;
+
+            my $cancelled_response = file_response($selected)->respond(
+                http_scope(), receive(),
+                sub {
+                    push @cancel_events, $_[0];
+                    if ($phase eq 'start') {
+                        return $pending if @cancel_events == 1;
+                        return Future->done;
+                    }
+                    return Future->done if @cancel_events == 1;
+                    return $pending;
+                },
+            );
+
+            is(scalar @cancel_events, $phase eq 'start' ? 1 : 2,
+                "response reaches the pending $phase send");
+            $cancelled_response->cancel;
+            ok($cancelled_response->is_cancelled,
+                'caller cancellation settles the response Future');
+            is($send_cancellations, 0,
+                "response cancellation does not cancel the pending $phase send");
+            ok(!$pending->is_ready,
+                "the server retains ownership of the pending $phase send");
+
+            $pending->done;
+            is($send_cancellations, 0,
+                "settling the $phase send does not manufacture cancellation");
+            is(scalar @cancel_events, $phase eq 'start' ? 1 : 2,
+                'cancellation does not emit another event');
+        };
+    }
 };
 
 subtest 'HEAD suppression remains an enclosing wire-boundary responsibility' => sub {
@@ -443,7 +495,9 @@ subtest 'HEAD suppression remains an enclosing wire-boundary responsibility' => 
     my @wire_events;
     my $terminal = Future->new;
     my ($scope, $send) = PAGI::Routing::HeadBoundary->prepare(
-        http_scope(method => 'HEAD'),
+        http_scope(
+            method => 'HEAD', headers => [['range', 'bytes=0-3']],
+        ),
         sub {
             push @wire_events, $_[0];
             return @wire_events == 2 ? $terminal : Future->done;
@@ -456,6 +510,8 @@ subtest 'HEAD suppression remains an enclosing wire-boundary responsibility' => 
         'HEAD retains GET-equivalent selected-file status');
     is(event_header($wire_events[0], 'content-length'), 19,
         'HEAD retains GET-equivalent selected-file length');
+    ok(!defined event_header($wire_events[0], 'content-range'),
+        'HEAD ignores Range and retains full-representation metadata');
     is($wire_events[1], {
         type => 'http.response.body', body => '', more => 0,
     }, 'outer HeadBoundary suppresses the file event');

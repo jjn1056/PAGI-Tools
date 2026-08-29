@@ -1142,8 +1142,8 @@ subtest 'Static responses are byte-for-byte File-engine responses' => sub {
         );
         is($wrapped_head_case, $direct_head_case,
             "Static HEAD exactly preserves File handling for $label");
-        is($wrapped_head_case->[0]{status}, 416,
-            "$label HEAD retains the strict shared status");
+        is($wrapped_head_case->[0]{status}, 200,
+            "$label HEAD ignores Range and retains the full status");
     }
 
     my $direct_head = capture_events($file_app, $scope_for->('HEAD'));

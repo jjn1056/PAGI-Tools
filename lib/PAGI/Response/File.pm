@@ -165,7 +165,8 @@ sub _plan_for_scope {
     my @args = (
         path          => $self->{_path},
         scope         => $scope,
-        handle_ranges => $self->{_handle_ranges},
+        handle_ranges => $self->{_handle_ranges} && $self->status == 200
+            ? 1 : 0,
         etag          => $self->{_etag_policy},
     );
     push @args, offset => $self->{_offset} if exists $self->{_offset};
@@ -211,8 +212,8 @@ async sub _respond_with_plan {
         type    => 'http.response.start',
         status  => $status,
         headers => $self->_wire_headers_for_plan($plan),
-    }));
-    await Future->wrap($send->($plan->body_event));
+    }))->without_cancel;
+    await Future->wrap($send->($plan->body_event))->without_cancel;
     return;
 }
 

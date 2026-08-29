@@ -152,7 +152,9 @@ sub new {
     push @base_headers, ['etag', $etag] if defined $etag;
 
     my $range;
-    if ($handle_ranges) {
+    my $method = $scope->{method};
+    if ($handle_ranges
+            && defined($method) && !ref($method) && $method eq 'GET') {
         my @values = _header_values($scope, 'range');
         $range = join ',', map {
             defined($_) && !ref($_) ? $_ : ''

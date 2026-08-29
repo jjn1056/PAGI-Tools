@@ -65,10 +65,14 @@ sub event_header {
 
 sub assert_head_parity {
     my ($component, $path, $headers, $label) = @_;
-    my $get = run_native($component, 'GET', $path, $headers);
+    my $range_free_headers = [grep {
+        lc($_->[0]) ne 'range'
+    } @$headers];
+    my $get = run_native($component, 'GET', $path, $range_free_headers);
     my $head = run_native($component, 'HEAD', $path, $headers);
 
-    is($head->[0], $get->[0], "$label HEAD preserves GET status and headers");
+    is($head->[0], $get->[0],
+        "$label HEAD preserves range-free GET status and headers");
     is($head->[1], {
         type => 'http.response.body', body => '', more => 0,
     }, "$label HEAD emits one terminal empty body event");
