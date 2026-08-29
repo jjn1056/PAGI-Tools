@@ -15,17 +15,23 @@ use PAGI::Response ();
 
 =head1 NAME
 
-PAGI::Response::Writer - per-invocation backpressured Stream writer
+PAGI::Response::Writer - sequential per-invocation HTTP Stream writer
 
 =head1 DESCRIPTION
 
 A Writer is created internally for one L<PAGI::Response::Stream> invocation.
-It is not a Response, application value, or publicly constructible object.
+It is not a Response, application value, or publicly constructible object;
+applications never attach one to a Response.
 
 Every C<write> returns a Future chained to the invocation's PAGI send Future.
 Applications must await that Future before producing the next chunk.  Only one
 write may be outstanding; Writer never hides a queue or buffers multiple
 chunks.
+
+    await $writer->write($bytes);       # primary backpressure boundary
+    await $writer->write_text($chars);  # strict UTF-8, same boundary
+
+B<Every write must be awaited before another starts.>
 
 =cut
 
@@ -410,9 +416,12 @@ sub _publish_disconnect {
     await $writer->write_text($characters);
 
 C<write> sends one nonterminal body event and settles only when the PAGI send
-Future settles. Under PAGI 0.5 that Future resolves after the server accepts or
-discards the event; Writer then checks connection state and counts bytes only
-while still connected. A disconnect never manufactures a write failure.
+Future settles. Under PAGI 0.002007 that Future resolves after the server
+accepts the event into outbound processing or finishes discarding it after disconnect;
+resolution is not proof that the client received it. Writer then checks
+connection state and counts bytes only while still connected. A disconnect
+never manufactures a write failure. Genuine validation or resource failures
+from C<$send> still propagate.
 C<write_text> performs strict UTF-8 encoding first. Await each write before
 starting another.
 
@@ -453,6 +462,20 @@ watermark state.
 These methods expose the invocation's optional C<pagi.transport> flow-control
 capability. Without it, buffered amount is zero, watermarks are undefined,
 the writer is writable, and registrations are chainable no-ops.
+
+Those operational fallbacks differ deliberately from the top-level
+C<transport($request)> helper, which returns C<undef> when the optional
+capability is absent. Awaiting every write remains the portable backpressure
+mechanism even when transport watermarks are available.
+
+=head1 DISCONNECT OWNERSHIP
+
+Writer never reads C<$receive>, reconnects, cancels an in-flight send, or turns
+disconnect into a failed write. PAGI settles a pending send after updating
+connection state; Writer's race-free order is await, then check. If the server
+discarded that event, C<bytes_written> does not count it. Stream may cancel its
+own producer when its separate disconnect signal wins and waits for any
+in-flight send before exactly-once cleanup.
 
 =cut
 

@@ -32,6 +32,11 @@ the appropriate CORS headers to responses. Actual responses remain literal
 downstream events whose start metadata is amended in place. Preflight policy
 is computed here and emitted as a bodyless L<PAGI::Response::Empty>.
 
+CORS is request policy, not representation metadata, so it is deliberately not
+a Response method. Replace response-level C<cors(...)> calls with this
+middleware. For one unconditional literal C<Access-Control-*> field only, use
+the ordinary L<PAGI::Response/header> method instead.
+
 =head1 CONFIGURATION
 
 =over 4

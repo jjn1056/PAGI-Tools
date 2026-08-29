@@ -16,31 +16,83 @@ use Socket ();
 
 =head1 NAME
 
-PAGI::Response - complete buffered byte response value
+PAGI::Response - reusable HTTP response values and response factories
+
+=head1 CLASS MODEL
+
+Every response is a complete value. Its concrete class identifies its
+representation or delivery behavior:
+
+    Class                             Factory
+    --------------------------------  -----------------
+    PAGI::Response                    response
+    PAGI::Response::Text              text_response
+    PAGI::Response::HTML              html_response
+    PAGI::Response::JSON              json_response
+    PAGI::Response::Problem           problem_response
+    PAGI::Response::Redirect          redirect_response
+    PAGI::Response::Empty             empty_response
+    PAGI::Response::File              file_response
+    PAGI::Response::Stream            stream_response
+
+Use either explicit class construction or the matching optional export:
+
+    use PAGI::Response qw(json_response);
+    my $one = PAGI::Response::JSON->new({ ok => \1 });
+    my $two = json_response({ ok => \1 });
+
+C<PAGI::Response> exports nothing by default. C<:all> exports all nine
+factories. Each concrete subclass may export only its own factory. Factory
+functions have fixed class mappings; they do not inspect the caller or choose
+an application subclass.
+
+=head1 MEMORY AND DELIVERY
+
+The base, Text, HTML, JSON, Problem, Redirect, and Empty classes hold their
+complete encoded bytes in memory. JSON and Problem serialize one finite Perl
+value; they do not turn iterators into incremental JSON. File keeps a selected
+path and sends a PAGI C<file> event after request-time preflight. Stream runs a
+fresh producer per invocation and awaits each body send. Choose File or Stream
+explicitly when the complete body should not be buffered.
+
+The base class accepts one defined, unblessed, unflagged byte scalar and never
+guesses an encoding. Unicode belongs to Text or HTML; structured data belongs
+to JSON or Problem. For another charset, encode explicitly and provide the
+matching Content-Type.
 
 =head1 SYNOPSIS
 
-    my $response = PAGI::Response->new(
-        $bytes,
+    use Encode qw(encode);
+    use PAGI::Response qw(response json_response);
+
+    my $json = json_response(
+        { created => \1 },
         status  => 201,
         headers => ['X-Request-ID' => $request_id],
     );
 
-    await $response->respond($scope, $receive, $send);
+    my $latin1 = response(
+        encode('ISO-8859-1', $text),
+        content_type => 'text/plain; charset=iso-8859-1',
+    );
 
-    mount('/health', app => $response->to_app);
+    await $json->respond($scope, $receive, $send);
 
-=head1 DESCRIPTION
+=head1 VALUE AND APPLICATION BOUNDARIES
 
-The base response is an already-encoded finite byte body.  It stores no
-request scope, receive callback, send callback, connection state, file, or
-stream.  An unchanged response can therefore be emitted for multiple HTTP
-invocations.  Header changes are allowed before emission; each emission uses
-an invocation-local snapshot.
+A Response stores no request scope, receive/send callbacks, connection,
+Writer, or per-request mutation. An unchanged value can be emitted
+concurrently. Header mutation before emission is supported, but mutating a
+Response concurrently with emission is not. Every C<respond> call takes an
+invocation-local snapshot; C<to_app> captures its stable snapshot when called.
 
-Unicode text and structured values belong to representation subclasses.  The
-base class accepts only an unflagged byte scalar.  C<default_content_type> and
-C<render> are the finite-representation subclass hooks.
+A Response is not a terminal deployed root. C<to_app> produces one HTTP-only
+native application; L<PAGI::Compose> remains the usual root owner for lifespan,
+HEAD suppression, ErrorHandler, and incomplete-response policy. Invoking a
+Response app with WebSocket, SSE, lifespan, or another non-HTTP scope croaks
+before sending. That is an application failure, not a guaranteed denial wire
+response. Use L<PAGI::WebSocket/deny> or L<PAGI::SSE/decline> for controlled
+pre-start protocol rejection.
 
 =head1 METHODS
 
@@ -50,7 +102,10 @@ C<render> are the finite-representation subclass hooks.
 
 Creates a complete buffered response.  The supported options are C<status>,
 C<content_type>, and C<headers>, where C<headers> is an even-length flat
-arrayref of name/value pairs.
+arrayref of name/value pairs. Unknown, duplicate, odd, or malformed options
+croak synchronously. Status defaults to 200 and body-bearing construction
+rejects 1xx, 204, 205, and 304. Default Content-Type is
+C<application/octet-stream>.
 
 =head2 respond
 
@@ -58,11 +113,31 @@ arrayref of name/value pairs.
 
 Validates a native HTTP triplet, sends C<http.response.start>, waits for its
 Future, then sends and waits for one terminal C<http.response.body> event.
+Every send Future is awaited. C<respond($send)> has been removed; the complete
+triplet keeps request-local File planning and Stream connection state out of
+the reusable value. Preflight errors occur before start where possible; a
+genuine failed send Future propagates, and failure after start never sends a
+replacement response.
 
 =head2 to_app
 
 Returns an async HTTP application coderef with a response snapshot captured
-when C<to_app> is called.
+when C<to_app> is called. Calling it again after deliberate metadata mutation
+captures a fresh snapshot.
+
+=head2 metadata
+
+    status / has_status / status_try
+    headers / header / header_all / has_header / header_try / remove_header
+    content_type / has_content_type / content_type_try
+    cookie / delete_cookie
+    is_buffered / body
+
+C<header($name, $value)> appends and preserves repeated-field order;
+C<content_type> replaces Content-Type. The C<*_try> setters are chainable and
+do not overwrite an explicit value. C<body> is read-only encoded bytes for
+buffered responses and croaks for File and Stream. C<is_buffered> reports the
+memory strategy, independently of protocol adaptation.
 
 =head2 protocol_response_capability
 
@@ -81,6 +156,26 @@ L<PAGI::Response::File> returns C<undef>. PAGI Www denial bodies permit only
 the body form and do not use C<file> or C<fh>; see
 L<PAGI::Spec::Www/"WebSocket Denial Response (extension)"> and
 L<PAGI::Spec::Www/"Decline SSE - send event">.
+
+=head1 SUBCLASSING
+
+Finite application subclasses override only C<default_content_type> and
+C<render($value)>, returning encoded bytes:
+
+    package MyApp::CSVResponse;
+    use parent 'PAGI::Response';
+
+    sub default_content_type { 'text/csv; charset=utf-8' }
+    sub render {
+        my ($self, $rows) = @_;
+        return encode_rows_as_utf8($rows);
+    }
+
+Constructor dispatch preserves subclass identity. Delivery internals used by
+File and Stream are not a public subclass seam. A delivery subclass that emits
+something outside ordinary body events must override
+C<protocol_response_capability> and opt out unless a matching future token is
+defined.
 
 =head2 stream_response
 
@@ -103,6 +198,14 @@ backpressure.
 Constructs a reusable L<PAGI::Response::File> for one trusted, already
 selected filesystem path. Use L<PAGI::App::File> instead when an untrusted
 request URL path must be resolved under a configured root.
+
+=head1 TEST RESPONSES ARE DIFFERENT VALUES
+
+L<PAGI::Test::Response> is a captured-wire decoder returned by the test
+client. It reconstructs status, headers, buffered body bytes, text, and JSON
+from events, including C<file> and C<fh> events. It is not this production
+Response value and cannot be returned from a handler or emitted with
+C<respond>.
 
 =cut
 

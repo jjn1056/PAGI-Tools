@@ -39,7 +39,23 @@ event after normal producer completion.
 
 The producer must await each Writer C<write> Future. That Future is the
 response-side backpressure contract; Stream does not prefetch chunks or hide
-an unbounded queue.
+an unbounded queue. Starting a second write before the first settles is an
+error. Awaiting the send means the server accepted the event into outbound
+processing or finished discarding it after disconnect; it never proves client
+delivery.
+
+Stream is an ordinary HTTP response. It is not WebSocket or SSE, has no
+receive loop and no reconnection, Last-Event-ID, retry, or keepalive semantics.
+A later request receives a fresh Writer and producer invocation.
+
+A request-body source can be relayed without raw PAGI:
+
+    my $input = $request->body_stream(max_bytes => 100 * 1024 * 1024);
+    return stream_response(async sub {
+        my ($writer) = @_;
+        await $writer->pipe_from($input);
+        die 'upload was truncated' if $input->truncated;
+    });
 
 =cut
 
@@ -222,12 +238,42 @@ Returns false.
 
 =head1 DISCONNECTS AND FAILURES
 
-Connection disconnects are observed through one private signal built from the
-mandatory C<on_disconnect> capability. Stream waits for any active PAGI send,
+When C<pagi.connection> is present, disconnects are observed through one
+private signal built from its required C<on_disconnect> facet. Stream waits for
+any active PAGI send,
 cancels only remaining producer-owned work, runs local cleanup, omits terminal
 success, and completes as the server-owned connection outcome. Genuine
 producer and send errors run the same cleanup but remain application failures;
 disconnect never manufactures or arbitrates a Writer failure.
+
+Under PAGI 0.002007, a send already pending when disconnect occurs resolves only
+after connection state has changed. Writer therefore awaits the send and then
+checks C<pagi.connection>. The write returns normally, discarded bytes are not
+counted, and the producer's next state check or the runner's disconnect signal
+stops further work. Stream may cancel its own still-pending producer Future,
+but it never cancels a server-owned send Future. Cleanup callbacks are awaited
+once in registration order; cleanup failures are reported without replacing a
+primary delivery failure.
+
+PAGI 0.002007 makes each returned C<disconnect_future> observer
+cancellation-isolated. Code that uses this optional capability calls it again
+to obtain an observer for each race and passes that observer directly to
+C<Future-E<gt>wait_any>; no extra C<without_cancel> shield is needed. Stream
+itself remains portable by building its signal from mandatory
+C<on_disconnect>.
+
+=head1 HEAD REQUESTS
+
+The enclosing Router/Compose HEAD boundary suppresses wire body events outside
+application middleware. Stream still runs the complete GET producer so those
+layers see equivalent GET and HEAD metadata. That may be expensive. Declare a
+lightweight HEAD route before the GET route when producer work should be
+avoided:
+
+    route('/export' => \&head_export, methods => ['HEAD']);
+    route('/export' => stream_response(\&produce_export), methods => ['GET']);
+
+Declaration order matters because a GET route also supplies automatic HEAD.
 
 =cut
 

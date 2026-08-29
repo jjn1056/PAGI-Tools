@@ -72,11 +72,12 @@ The final value of the block is the fallback application and is coerced via
 L<PAGI::Utils/to_app>. Return a native coderef or an instantiated component
 object directly:
 
-    use PAGI::Pages ();
+    use PAGI::Pages qw(not_found_page);
+    use PAGI::Routing qw(request_app);
 
     my $app = builder {
         enable 'ContentLength';
-        PAGI::Pages->not_found;
+        request_app(\&not_found_page);
     };
 
 =cut
@@ -268,8 +269,9 @@ Build the composed application. C<$inner_app> is the fallback when no Builder
 mount matches. It accepts a native coderef or instantiated component object
 with C<to_app>; package-name strings are rejected synchronously. This means
 C<builder { ...; $router }> and
-C<builder { ...; PAGI::Pages->not_found }> work without an explicit
-C<< ->to_app >> call. Class strings remain available to C<enable> and
+C<builder { ...; request_app(\&not_found_page) }> work without an explicit
+C<< ->to_app >> call. Pages functions are Request handlers, so the named
+adapter is required at this native application boundary. Class strings remain available to C<enable> and
 C<enable_if> because those are middleware-loading positions, not application
 positions.
 

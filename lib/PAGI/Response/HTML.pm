@@ -15,12 +15,16 @@ PAGI::Response::HTML - buffered UTF-8 HTML response
 
 =head1 SYNOPSIS
 
+    use PAGI::Response::HTML qw(html_response);
     my $response = PAGI::Response::HTML->new('<p>Hello</p>');
+    my $same = html_response('<p>Hello</p>');
 
 =head1 DESCRIPTION
 
-Renders one character scalar as strict UTF-8 bytes with an HTML UTF-8 content
-type.
+Buffers one defined character scalar as strict UTF-8 bytes with
+C<text/html; charset=utf-8>. Common C<status>, flat C<headers>, and
+C<content_type> options are accepted. The class encodes markup but does not
+escape or sanitize it.
 
 =cut
 

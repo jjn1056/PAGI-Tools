@@ -39,6 +39,12 @@ logical-window bounds, conditionals, and client ranges are evaluated before
 response start for each invocation. The application opens no filehandle; it
 sends and awaits exactly one PAGI C<http.response.body> file event.
 
+This deferred lifecycle lets a reusable value follow deployment replacement
+and rotation of its selected path. A missing or unreadable direct File is a
+pre-start application/resource failure, not App::File routing policy. If a
+deployment requires startup validation, perform explicit C<-f>/C<-r> checks in
+startup or lifespan code.
+
 File returns C<undef> from C<protocol_response_capability> and therefore cannot
 serve a WebSocket denial or SSE decline. This is the PAGI Www conformance
 boundary: denial response bodies permit only the ordinary C<body> form and do
@@ -286,6 +292,12 @@ the configured physical offset. C<handle_ranges> defaults true. C<etag>
 accepts false, true/omission for automatic metadata-plus-window identity, or
 a validated explicit entity tag.
 
+For example, C<offset =E<gt> 1024, length =E<gt> 65536> is advertised as one
+65536-byte 200 representation. C<Range: bytes=100-199> then produces logical
+C<Content-Range: bytes 100-199/65536> and a physical file event at offset 1124
+for 100 bytes. A configured window alone never claims that a client requested
+a range.
+
 File owns calculated C<Content-Length>, C<Content-Range>, and C<ETag>; callers
 cannot supply those fields directly or select status 206 without a request
 range plan. The initial conditional surface is intentionally limited to exact
@@ -298,6 +310,11 @@ C<respond> performs all file inspection before response start, then awaits
 response start and one body event. C<to_app> captures a reusable configuration
 snapshot. C<is_buffered> returns false, C<body> croaks, and
 C<protocol_response_capability> returns C<undef>.
+
+The capability opt-out is independent of buffering: Stream remains eligible
+for protocol denial because it emits ordinary body events, while File uses the
+opaque form that PAGI Www explicitly excludes from WebSocket denial and SSE
+decline bodies.
 
 =cut
 

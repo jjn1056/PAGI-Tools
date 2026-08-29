@@ -182,10 +182,15 @@ inspection is needed. The compact direct form is
 C<< compose(app => router(%router_options)) >>; retaining the Router also keeps
 its inspection API available while Compose still owns the deployed boundary:
 
+    use PAGI::Routing qw(request_app router);
+
     my $pages = MyApp::Pages->new;
     my $routing = router(
         routes       => \@nodes,
-        http_default => $pages->not_found,
+        http_default => request_app(sub {
+            my ($request) = @_;
+            return $pages->not_found($request);
+        }),
     );
     my $app = compose(app => $routing)->to_app;
 

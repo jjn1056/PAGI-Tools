@@ -183,6 +183,19 @@ constructor validation performs no request I/O. The description never stores
 a request match, protocol object, or handler result. Collection and hash
 accessors return shallow copies.
 
+Route and Mount have deliberately different path ownership:
+
+    Route('/x')       exact complete path leaf
+    Route('/*path')   explicit real catchall leaf
+    Mount('/x')       selected owner of /x and its complete subtree
+
+Target shape never changes that rule. A Response or another instantiated
+C<to_app> component is still an exact, method-aware Route target with normal
+constraints, middleware, naming, FULL/PARTIAL scanning, 405/Allow behavior,
+and GET-supplied automatic HEAD. A coderef is a Request handler unless the
+C<raw> marker explicitly gives it the native triplet contract. Package-name
+strings are not application values.
+
 An inline provider such as C<{id:&Int}> is resolved in the package that
 directly called C<route>, C<websocket>, C<sse>, or C<new>. Re-exporting a
 constructor preserves the consuming package as that caller; wrapping it in

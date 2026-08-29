@@ -20,6 +20,11 @@ logical-window, and strict single-range planning for
 L<PAGI::Response::File> and L<PAGI::App::File>. It receives only an already
 selected trusted filesystem path and never interprets a request URL path.
 
+It is not an application constructor or public policy seam. File and App::File
+share it so MIME type, ETag, If-None-Match, logical-window arithmetic, 206/416,
+and PAGI C<file> events cannot drift. Request-path traversal, hidden-file,
+index, missing, and forbidden decisions remain exclusively in App::File.
+
 =cut
 
 my %MIME_TYPES = (

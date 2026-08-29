@@ -15,12 +15,17 @@ PAGI::Response::JSON - buffered UTF-8 JSON response
 
 =head1 SYNOPSIS
 
+    use PAGI::Response::JSON qw(json_response);
     my $response = PAGI::Response::JSON->new({ ok => \1 });
+    my $same = json_response({ ok => \1 });
 
 =head1 DESCRIPTION
 
-Encodes one JSON::MaybeXS-compatible Perl value as UTF-8 JSON bytes.  Object
-member order is intentionally not canonicalized.
+Buffers one JSON::MaybeXS-compatible finite Perl value as UTF-8 JSON bytes
+with C<application/json>. Common C<status>, flat C<headers>, and
+C<content_type> options are accepted. Object member order is unspecified and
+is not a byte-stability contract. Signatures, hashes, and canonical caches
+need an application Response subclass with an explicitly canonical encoder.
 
 =cut
 

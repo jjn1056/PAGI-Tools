@@ -1,6 +1,27 @@
 # Revision history for PAGI-Tools
 
 0.002003 - UNRELEASED
+  - BREAKING: Replaced the mutable, request-bound PAGI::Response builder with
+    complete concrete Response values and exported factories: Response::Text,
+    ::HTML, ::JSON, ::Problem, ::Redirect, ::Empty, ::File, and ::Stream.
+    `respond` now takes the complete native ($scope, $receive, $send) triplet;
+    Request's response bridge and the generic text/html/json/send/send_raw/
+    redirect/empty/send_file/stream/writer finishers are removed. Buffered
+    response bodies are byte strings; Text and HTML perform explicit charset
+    encoding, while File and Stream retain non-buffered delivery ownership.
+    Stream Writer writes are awaitable backpressure points under PAGI's send-
+    settlement contract, and disconnect settles pending writes without
+    counting discarded bytes. File validates the filesystem at request-time
+    preflight, applies logical windows before Range policy, and opts out of
+    `body-events-v1` so PAGI servers may preserve file events.
+  - BREAKING: PAGI::Pages functions are ordinary response-valued handlers that
+    require an explicit Request or HTTP-capable scope. Native application
+    positions now use `request_app`; Route and Mount retain their distinct leaf
+    versus prefix/path-rewrite ownership. App::File's application-root
+    constructor is `from_app_path`, while PAGI::Utils::app_path remains a path
+    utility. WebSocket `deny` and SSE `decline` now accept a finite Response;
+    accepted WebSocket/SSE sessions remain live protocol loops, not HTTP
+    Response applications.
   - BREAKING: PAGI::Middleware::Lint no longer keeps its own copy of
     send-sequencing state; it delegates event-order legality (duplicate
     http.response.start, body before start, sends after completion,
@@ -103,29 +124,28 @@
   - BREAKING: Removed the entire `PAGI` Context class family, without a
     compatibility alias or replacement hook. Normal HTTP, WebSocket, and SSE
     callbacks receive `PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE`
-    directly; HTTP callbacks return detached `PAGI::Response` values. Response
-    shortcuts now use direct Response factories. URL generation, stash,
+    directly; HTTP callbacks return complete concrete Response values. Response
+    construction uses the concrete class/factory family. URL generation, stash,
     session, state, CSRF, and transport access use their explicitly imported
     owning helpers. ErrorHandler custom renderers receive `($request, $error)`
-    and must return a value implementing `status_try` and `respond`; an explicit
-    renderer status wins over the derived exception/configured status. Removed
+    and must return a Response; an explicit renderer status wins over the
+    derived exception/configured status. Removed
     along with the class family are Endpoint factory overrides, protocol
     assertions and type maps, raw channel accessors, the generic event
     dispatcher, and the cached HTTP Response accumulator plus guarded send.
-    `status_try` remains a Response method and ErrorHandler's fallback-status
-    mechanism. Native raw applications and all middleware retain
+    ErrorHandler's fallback-status mechanism remains. Native raw applications
+    and all middleware retain
     `($scope, $receive, $send)`.
     Extension protocols provide their own object. Endpoint disconnect hooks are
-    synchronous. `PAGI::Request->response` remains temporary compatibility for
-    this release but is not recommended for new code.
+    synchronous. `PAGI::Request->response` is removed.
   - PAGI::Endpoint::SSE no longer sends `sse.start` after
     `on_connect` has already declined the request -- previously `handle()`
     unconditionally awaited `run()` regardless of what `on_connect` did, so
     a Cookbook-style raw decline left a stray `sse.start` on the wire after
     the response was already complete, a first-send-wins violation the
-    server must raise on. New PAGI::SSE::decline(status/headers/body) gives
-    apps a real API for this (parity with PAGI::WebSocket::deny): it sends
-    the HTTP response, marks the connection closed, drops any keepalive
+    server must raise on. `PAGI::SSE::decline($response)` gives apps a finite
+    HTTP denial API (parity with `PAGI::WebSocket::deny($response)`): it sends
+    an eligible Response, marks the connection closed, drops any keepalive
     requested before `on_connect` ran, and turns `start`/`run`/`send`/
     `send_json`/`send_event`/`send_comment`/`keepalive` into safe no-ops
     afterward. `handle()` also now skips `run()` outright once the
@@ -298,8 +318,8 @@
     directly: PAGI::Request for HTTP, PAGI::WebSocket for WebSocket, and
     PAGI::SSE for SSE. PAGI::Request construction is strict HTTP-only
     `($scope, $receive)`. Raw applications and all middleware retain the native
-    `($scope, $receive, $send)` contract, and Response return behavior is
-    unchanged.
+    `($scope, $receive, $send)` contract. HTTP handlers return complete
+    concrete Response values directly or through a Future.
   - New PAGI::Routing::URL, PAGI::State, PAGI::CSRF, and PAGI::Transport
     facades make Router-, lifespan-, middleware-, and server-owned capabilities
     explicit. PAGI::Stash and PAGI::Session now accept the same Request or raw
@@ -310,9 +330,8 @@
     and minimal connection access. `is_disconnected` is now tri-state and
     returns undef when no connection capability exists; advanced flow control
     uses PAGI::Transport. Router URL, Stash, Session, CSRF, and the removed
-    outgoing response shortcuts do not transfer to Request. The existing
-    `PAGI::Request->response` factory remains installed; its redesign is
-    deferred with the wider Response review.
+    outgoing response shortcuts do not transfer to Request, and the former
+    `PAGI::Request->response` bridge is removed.
   - PAGI::Endpoint::Router replaces `new_context` with the explicit HTTP-only
     `new_request($scope, $receive)` helper; compiled dispatch constructs direct
     protocol objects independently of that override seam.

@@ -1070,6 +1070,20 @@ The Response is invoked with a shallow HTTP-scope clone whose C<type> is
 C<http> and C<method> is C<GET>; the live WebSocket scope and all nested
 references are left unchanged.
 
+"Successful settlement" means the PAGI server validated and consumed the
+mapped start event and accepted it into outbound processing, or finished
+discarding it after the connection ended. It does not mean the client received
+it. Before that settlement, a genuine start-send failure leaves the WebSocket
+connecting. At settlement, denial commits and the object becomes closed; a
+later body failure cannot reopen the handshake.
+
+A body send pending at disconnect resolves under the same PAGI 0.002007
+settlement rule rather than failing merely because the peer vanished. Disconnect cleanup
+therefore follows authoritative connection state and the protocol's disconnect
+watcher/event, never an inferred send failure. Genuine validation and resource
+send failures still propagate. C<deny> never starts a live WebSocket receive
+loop or introduces reconnection behavior.
+
 See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
 =head1 STATE ACCESSORS

@@ -15,12 +15,16 @@ PAGI::Response::Text - buffered UTF-8 plain-text response
 
 =head1 SYNOPSIS
 
+    use PAGI::Response::Text qw(text_response);
     my $response = PAGI::Response::Text->new("Hello, \x{263A}");
+    my $same = text_response("Hello, \x{263A}");
 
 =head1 DESCRIPTION
 
-Renders one character scalar as strict UTF-8 bytes with a plain-text UTF-8
-content type.
+Buffers one defined character scalar as strict UTF-8 bytes with
+C<text/plain; charset=utf-8>. Common C<status>, flat C<headers>, and
+C<content_type> options are accepted. Use byte-oriented L<PAGI::Response> when
+the caller must choose another encoding explicitly.
 
 =cut
 

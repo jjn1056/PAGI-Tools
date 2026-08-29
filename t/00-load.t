@@ -73,6 +73,11 @@ for my $module (@load_modules) {
     ok($loaded, "$module loads") or diag($@);
 }
 
+ok(
+    !PAGI::Test::Response->isa('PAGI::Response'),
+    'captured-wire Test::Response is not a production Response value',
+);
+
 my @removed_modules = (
     join('::', qw(PAGI Routing Trace)),
     join('::', qw(PAGI Routing Trace Recorder)),

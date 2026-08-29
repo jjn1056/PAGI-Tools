@@ -10,7 +10,7 @@ use lib 'lib';
 
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
-use PAGI::Response;
+use PAGI::Response qw(text_response);
 use PAGI::Routing qw(mount route router);
 
 {
@@ -22,7 +22,7 @@ use PAGI::Routing qw(mount route router);
         $r->mount('/child', routes => sub {
             my ($child) = @_;
             $child->get('/' => sub {
-                return PAGI::Response->text('endpoint child');
+                return main::text_response('endpoint child');
             });
         })->name('child');
         $r->get('/native', raw => $self->app_as('native'));
@@ -192,7 +192,7 @@ subtest 'representative Cookbook forms construct and dispatch' => sub {
     };
 
     my $declarative = router(routes => [
-        route('/leaf' => sub { return PAGI::Response->text('leaf') },
+        route('/leaf' => sub { return text_response('leaf') },
             middleware => [$factory]),
         route('/raw', raw => response_app(200, 'raw')),
         mount('/app', app => response_app(200, sub {
@@ -200,7 +200,7 @@ subtest 'representative Cookbook forms construct and dispatch' => sub {
             return 'app:' . $scope->{path} . ':' . $scope->{root_path};
         })),
         mount('/routes', routes => [
-            route('/' => sub { return PAGI::Response->text('routes') }),
+            route('/' => sub { return text_response('routes') }),
         ]),
     ])->to_app;
 
@@ -226,7 +226,7 @@ subtest 'representative Cookbook forms construct and dispatch' => sub {
     $mutable->mount('/mutable', routes => sub {
         my ($child) = @_;
         ++$callback_calls;
-        $child->get('/' => sub { return PAGI::Response->text('mutable') });
+        $child->get('/' => sub { return text_response('mutable') });
     })->name('mutable');
     my ($mutable_events, $mutable_error) = run_http(
         $mutable->to_app, path => '/mutable', raw_path => '/mutable',

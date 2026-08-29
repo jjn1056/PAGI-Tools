@@ -46,17 +46,21 @@ in this distribution simply make the common cases shorter. Here is the same
 response built as a L<PAGI::Response> value:
 
   use Future::AsyncAwait;
-  use PAGI::Response;
+  use PAGI::Response qw(text_response json_response);
 
   my $app = async sub {
       my ($scope, $receive, $send) = @_;
-      await PAGI::Response->text('Hello, world!')->respond($send);
+      await text_response('Hello, world!')->respond(
+          $scope, $receive, $send,
+      );
   };
 
 C<PAGI::Response> assembles the two events for you, and C<respond> sends them.
 Returning JSON is just as short:
 
-  await PAGI::Response->json({ hello => 'world' })->respond($send);
+  await json_response({ hello => 'world' })->respond(
+      $scope, $receive, $send,
+  );
 
 From here the tutorial builds up: routing requests to handlers (PART 2),
 reading form and JSON input (PART 3), the full response builder (PART 4),
@@ -73,16 +77,16 @@ handlers receive their direct protocol objects:
 
   use Future::AsyncAwait;
   use PAGI::Routing qw(:routes);
-  use PAGI::Response;
+  use PAGI::Response qw(html_response json_response);
 
   async sub home {
       my ($request) = @_;
-      return PAGI::Response->html('<h1>Home</h1>');
+      return html_response('<h1>Home</h1>');
   }
 
   async sub user {
       my ($request) = @_;
-      return PAGI::Response->json({ id => $request->path_param('id') });
+      return json_response({ id => $request->path_param('id') });
   }
 
   my $routing = router(
@@ -274,18 +278,18 @@ handlers use the same direct protocol contract as C<PAGI::Routing>:
   use PAGI::App::Router;
   use PAGI::Compose qw(compose);
   use PAGI::Routing qw(middleware);
-  use PAGI::Response;
+  use PAGI::Response qw(text_response json_response);
 
   my $router = PAGI::App::Router->new;
 
   $router->get('/' => sub {
       my ($request) = @_;
-      return PAGI::Response->text('Home');
+      return text_response('Home');
   })->name('home');
 
   $router->post('/users' => sub {
       my ($request) = @_;
-      return PAGI::Response->json({ created => 1 }, status => 201);
+      return json_response({ created => 1 }, status => 201);
   })->name('create_user');
 
   $router->get('/users/{id}' => [
@@ -295,7 +299,7 @@ handlers use the same direct protocol contract as C<PAGI::Routing>:
       middleware('Session', cookie_name => 'sid'),
   ] => sub {
       my ($request) = @_;
-      return PAGI::Response->json({ id => $request->path_param('id') });
+      return json_response({ id => $request->path_param('id') });
   })->name('show_user');
 
   # Native three-channel applications must say raw.
@@ -534,130 +538,97 @@ outbound watermark and drain operations live on C<transport($request)>.
 
 =head1 PART 4: BUILDING RESPONSES
 
-=head2 4.1 PAGI::Response - Fluent Response Builder
+=head2 4.1 PAGI::Response - Concrete Response Values
 
-L<PAGI::Response> provides a fluent interface for building HTTP responses. Instead of manually constructing C<http.response.start> and C<http.response.body> events, you use chainable methods.
+L<PAGI::Response> is a class family, not a mutable body-mode builder. The class
+or factory name tells you what is buffered and how it is delivered:
 
-=head3 Creating a Response
+  Class                             Factory
+  --------------------------------  -----------------
+  PAGI::Response                    response
+  PAGI::Response::Text              text_response
+  PAGI::Response::HTML              html_response
+  PAGI::Response::JSON              json_response
+  PAGI::Response::Problem           problem_response
+  PAGI::Response::Redirect          redirect_response
+  PAGI::Response::Empty             empty_response
+  PAGI::Response::File              file_response
+  PAGI::Response::Stream            stream_response
 
-  use v5.40;
-  use Future::AsyncAwait;
-  use PAGI::Response;
+The first seven hold their complete encoded bytes in memory. File keeps one
+trusted selected path and uses a PAGI C<file> event. Stream runs a fresh
+producer and Writer for each invocation. Nothing consumes a source merely to
+guess whether it is finite.
 
-  async sub app {
-      my ($scope, $receive, $send) = @_;
+  use PAGI::Response qw(
+      response text_response html_response json_response
+      redirect_response empty_response file_response stream_response
+  );
 
-      die "Expected http scope" unless $scope->{type} eq 'http';
+  my $text = PAGI::Response::Text->new('Hello'); # class form
+  my $json = json_response({ ok => \1 });          # factory form
 
-      # Create a response value (no connection yet)
-      my $res = PAGI::Response->new($scope);
+The base C<response($bytes)> accepts already encoded bytes. Text and HTML
+strictly encode Unicode as UTF-8; JSON serializes one finite Perl value and
+does not promise object member order. For another charset, encode explicitly:
 
-      # Build the response, then send it via respond($send)
-      await $res->text('Hello, World!')->respond($send);
-  }
+  use Encode qw(encode);
+  my $latin1 = response(
+      encode('ISO-8859-1', $text),
+      content_type => 'text/plain; charset=iso-8859-1',
+  );
 
-  \&app;
+Common options are C<status>, C<content_type>, and flat C<headers>. Metadata
+methods such as C<status>, C<header>, C<content_type>, C<cookie>, and their
+C<*_try>/inspection forms remain available before emission. Each emission
+takes an invocation-local snapshot. The Response stores no scope or connection,
+so an unchanged preconstructed value can serve concurrent requests.
 
-=head3 Simple Responses
+Normal Request handlers return a Response and let Routing emit it:
 
-L<PAGI::Response> provides methods for common response types. Each body
-method sets the body and returns C<$self>, so you chain C<respond($send)>
-to transmit:
-
-  my $res = PAGI::Response->new($scope);
-
-  # Plain text
-  await $res->text('Hello, World!')->respond($send);
-
-  # HTML
-  await $res->html('<h1>Hello, World!</h1>')->respond($send);
-
-  # JSON
-  await $res->json({ message => 'Hello, World!' })->respond($send);
-
-  # Empty response (204 No Content)
-  await $res->empty()->respond($send);
-
-Factory class methods build a detached response value you can use directly:
-
-  # Build and send inline
-  await PAGI::Response->json({ ok => \1 })->respond($send);
-
-  # Ordinary App routes receive Request and return the value.
   $router->get('/health' => sub {
       my ($request) = @_;
-      return PAGI::Response->json({ ok => \1 });
+      return json_response(
+          { ok => \1 },
+          status  => 200,
+          headers => ['X-Request-ID' => request_id($request)],
+      );
   });
 
-Key points:
+A raw PAGI application owns all three native channels and emits explicitly:
 
-=over 4
+  my $app = async sub {
+      my ($scope, $receive, $send) = @_;
+      my $response = json_response({ created => \1 }, status => 201);
+      await $response->respond($scope, $receive, $send);
+  };
 
-=item * C<text()> sets Content-Type to text/plain; charset=utf-8
+C<to_app> snapshots a Response into an HTTP-only native application. A
+non-HTTP scope fails before emission; controlled WebSocket denial and SSE
+decline use their protocol methods instead. Compose remains the deployed-root
+owner for lifespan, errors, response completion, and final HEAD suppression.
 
-=item * C<html()> sets Content-Type to text/html; charset=utf-8
+File construction validates option shape, not the filesystem. Existence,
+readability, metadata, conditions, and range planning happen at request-time
+preflight. If configuration must fail at startup, check it explicitly during
+startup. C<offset>/C<length> describe a complete logical 200 representation;
+only a valid client Range produces 206 and Content-Range.
 
-=item * C<json()> sets Content-Type to application/json (no charset; JSON is always UTF-8)
+Stream backpressure is the Future returned by each write:
 
-=item * All methods automatically encode strings to UTF-8 bytes
+  return stream_response(async sub {
+      my ($writer) = @_;
+      await $writer->write("one\n");
+      await $writer->write("two\n");
+  });
 
-=back
-
-=head3 Status and Headers
-
-Use chainable methods to set status and headers before sending. In a raw
-app the chain ends with C<respond($send)>:
-
-  await $res->status(201)
-            ->header('X-Request-ID', '12345')
-            ->header('X-Custom', 'value')
-            ->content_type('application/json')
-            ->json({ created => 1 })
-            ->respond($send);
-
-Alternatively, pass C<status> and C<headers> as options directly to the
-body factory:
-
-  await PAGI::Response->json({ created => 1 },
-      status  => 201,
-      headers => ['X-Request-ID' => '12345'],   # flat [ name => value, ... ]
-  )->respond($send);
-
-Chainable methods:
-
-=over 4
-
-=item * C<status($code)> - Set HTTP status (default: 200)
-
-=item * C<header($name, $value)> - Add a response header
-
-=item * C<content_type($type)> - Set Content-Type header
-
-=item * C<cookie($name, $value, %opts)> - Set a cookie
-
-=back
-
-=head3 Redirects
-
-C<redirect> takes the destination URL and an optional B<positional> status
-(default 302). In a raw app, chain C<respond($send)> to transmit:
-
-  # Temporary redirect (302 Found - default)
-  await $res->redirect('/new-page')->respond($send);
-
-  # Permanent redirect (301 Moved Permanently)
-  await $res->redirect('/modern', 301)->respond($send);
-
-  # See Other (303 - used after POST)
-  await $res->redirect('/success', 303)->respond($send);
-
-The factory form works the same way:
-
-  await PAGI::Response->redirect('/login', 302)->respond($send);
-
-B<Note:> C<redirect()> sets the body and returns C<$self>; the response is
-not transmitted until C<respond($send)> is called. Use C<return> after
-the await if you have more code below.
+Never overlap writes. A send settles when the server accepted or discarded the
+event, not when the client received it. Writer awaits and then checks connection
+state; a disconnected discarded chunk is not counted. Stream may cancel its
+own producer, never a send Future, and runs local cleanup exactly once. An
+ordinary HTTP Stream has no WebSocket/SSE reconnection semantics. HEAD normally
+runs the whole producer behind the outer body-suppression boundary; put a
+lightweight explicit HEAD route before an expensive streaming GET route.
 
 =head2 4.2 PAGI::Pages - Conventional Negotiated Responses
 
@@ -665,13 +636,15 @@ Use L<PAGI::Pages> when the response is a conventional welcome, HTTP error, or
 redirect rather than an application-owned literal document. A Request call
 returns an ordinary Response for Router to send:
 
-  use PAGI::Pages;
+  use PAGI::Pages qw(welcome_page gone_page);
+  use PAGI::Routing qw(request_app);
+  use PAGI::Response qw(json_response);
 
   route('/items/{id}' => async sub {
       my ($request) = @_;
       my $item = await find_item($request->path_param('id'));
       return PAGI::Pages->not_found($request) unless $item;
-      return PAGI::Response->json($item);
+      return json_response($item);
   });
 
 A raw app constructs the same unsent value, may modify it, and explicitly owns
@@ -679,20 +652,18 @@ the send:
 
   my $response = PAGI::Pages->not_found($scope, as => 'text');
   $response->header('X-Request-ID' => $request_id);
-  await $response->respond($send);
+  await $response->respond($scope, $receive, $send);
 
-Without a Request or scope, the call returns a plain coderef that works as a
-normal route target or native HTTP app:
+Pages always requires an explicit Request/protocol/scope source and returns a
+concrete Response. Exported functions are ordinary one-Request handlers, not
+arity-overloaded native apps:
 
-  route('/' => PAGI::Pages->welcome);
-  route('/old' => PAGI::Pages->redirect('/new', status => 308));
-  mount('/gone', app => PAGI::Pages->gone);
+  route('/' => \&welcome_page);
+  mount('/gone', app => request_app(\&gone_page));
 
-The route forms are exact and method-aware. The mount owns C</gone> and its
-entire subtree for every HTTP method; a terminal Pages app ignores the
-remaining child path. A direct deferred-endpoint triplet is HTTP-only. Deploy
-it through C<< compose(app => $endpoint)->to_app >> when the root must also own
-lifespan and an application-root HEAD body boundary.
+C<request_app> is the named conversion for a native application position. A
+Route remains an exact method-aware leaf; a Mount owns its selected prefix and
+complete subtree.
 
 Automatic representation selection negotiates HTML, RFC 9457 problem JSON for
 errors (ordinary JSON for welcome and redirects), and text. Use C<< as =>
@@ -738,6 +709,15 @@ L<PAGI::WebSocket> simplifies WebSocket connections:
 
   await $ws->close(1000, 'Goodbye');
 
+Before C<accept>, a concrete finite or Stream Response can deny the handshake:
+
+  await $ws->deny(
+      PAGI::Response::Text->new('Unauthorized', status => 401),
+  );
+
+The optional denial extension maps ordinary body events. File is rejected
+before start; without the extension WebSocket uses its policy-close fallback.
+
 =head2 5.2 PAGI::SSE - Server-Sent Events Helper
 
 L<PAGI::SSE> simplifies Server-Sent Events:
@@ -760,6 +740,19 @@ L<PAGI::SSE> simplifies Server-Sent Events:
 
   # Wait for disconnect
   await $sse->run;
+
+Before C<start>, decline with the same Response vocabulary:
+
+  await $sse->decline(
+      PAGI::Pages->not_found($sse),
+  );
+
+Denial/decline start-send settlement commits the protocol response slot; it is
+server acceptance/settlement, not proof of client delivery. Pending body sends
+at disconnect resolve normally under PAGI 0.002007. Cleanup follows protocol state
+and disconnect watchers rather than an invented send failure. HTTP Stream is a
+finite request's body delivery mechanism; WebSocket and live SSE retain their
+own connection, event, keepalive, and reconnection lifecycles.
 
 =head1 PART 6: MIDDLEWARE
 
@@ -1187,7 +1180,7 @@ Or per-route:
   my $auth = MyApp::Middleware::Auth->new(secret => 'secret-key');
   $router->get('/admin' => [$auth] => sub {
       my ($request) = @_;
-      return PAGI::Response->text('admin');
+      return PAGI::Response::Text->new('admin');
   });
 
 =head3 Middleware Patterns
@@ -1267,7 +1260,7 @@ L<PAGI::App::File> serves static files with security, caching, and streaming:
 
   use PAGI::App::File;
 
-  my $static = PAGI::App::File->app_path('public');
+  my $static = PAGI::App::File->from_app_path('public');
   $router->mount('/static', app => $static);
 
 Features:
@@ -1305,19 +1298,25 @@ the same lexical boundary:
       my $path = path_from_root('/var/www/files', $untrusted_path);
       unless (defined $path) {
           my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($send));
+          return await Future->wrap(
+              $response->respond($scope, $receive, $send),
+          );
       }
 
       # Replace the safe default with application-specific authorization.
       my $authorized = 0;
       unless ($authorized) {
           my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($send));
+          return await Future->wrap(
+              $response->respond($scope, $receive, $send),
+          );
       }
 
       unless (-f $path && -r $path) {
           my $response = PAGI::Pages->not_found($scope);
-          return await Future->wrap($response->respond($send));
+          return await Future->wrap(
+              $response->respond($scope, $receive, $send),
+          );
       }
 
       await Future->wrap($send->({
@@ -1446,7 +1445,7 @@ L<PAGI::Lifespan/wrap>. Put together:
       enable 'AccessLog';
       mount '/static' => PAGI::App::File->new(root => 'public');
       mount '/api'    => MyApp::API->new;
-      PAGI::Response->text('no such page')->status(404);
+      PAGI::Response::Text->new('no such page', status => 404);
   };
 
 Compilation happens exactly once, when the composition point receives

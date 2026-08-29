@@ -126,6 +126,16 @@ unnamed mounts use this same representation:
     mount('/api', app => $api_app, name => 'api')
     mount('/public', routes => [ route('/status' => $handler) ])
 
+The ownership comparison is:
+
+    Route('/x')       exact complete path leaf
+    Route('/*path')   explicit real catchall leaf
+    Mount('/x')       selected owner of /x and its complete subtree
+
+A terminal mounted Response therefore ignores the rewritten remaining child
+path. That can be useful, but a developer who wants only one complete path
+normally wants Route. Package-name strings are not application values.
+
 Its normalized prefix pattern is compiled during construction. Constructor
 work validates/builds configuration only and emits no events.
 

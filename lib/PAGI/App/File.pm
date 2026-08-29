@@ -45,7 +45,13 @@ path to it.
 
 =head1 DESCRIPTION
 
-PAGI::App::File serves static files from a configured root directory.
+PAGI::App::File serves static files from a configured root directory. It
+resolves an untrusted request URL path and owns traversal, hidden-file, index,
+missing, forbidden, and method policy. After it selects one trusted regular
+path, it delegates metadata and delivery planning to
+L<PAGI::Response::File>. A direct File Response is the complementary value: it
+sends one path the application already selected and never interprets the
+request URL.
 
 =head2 Features
 
@@ -460,6 +466,17 @@ preserves subclasses, so C<< MyApp::Files->from_app_path('static') >> returns a
 C<MyApp::Files> object. With no path components it selects the application
 home. All arguments are path components; use C<< ->new(root =E<gt> ...) >>
 when advanced file-app options are required.
+
+Do not confuse this class constructor with L<PAGI::Utils/app_path>, which
+returns an absolute path string for application-owned selection:
+
+    my $path = app_path('public', 'index.html');
+    my $app  = PAGI::App::File->from_app_path('static');
+
+Filesystem existence is not required at component construction. Request-time
+selection and File preflight observe the current tree. Applications that need
+startup configuration validation must perform explicit checks during startup
+or lifespan handling.
 
 Its C<PAGI_HOME> precedence and path-component semantics are shared with
 L<PAGI::Utils/app_path>. Each ordinary C<use PAGI::App::File> records that

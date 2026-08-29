@@ -47,7 +47,7 @@ guessing:
 
   async sub home {
       my ($request) = @_;
-      return PAGI::Response->html('<h1>Home</h1>');
+      return PAGI::Response::html_response('<h1>Home</h1>');
   }
 
   1;
@@ -159,11 +159,17 @@ C</api/>.
 
 A separately configured child can own local missing-route presentation:
 
+  use PAGI::Routing qw(request_app);
+
   my $api = router(
       routes => [route('/items' => \&items)],
-      http_default => PAGI::Pages->not_found(
-          detail => 'No API route matched.',
-      ),
+      http_default => request_app(sub {
+          my ($request) = @_;
+          return PAGI::Pages->not_found(
+              $request,
+              detail => 'No API route matched.',
+          );
+      }),
   );
   my $root = router(routes => [
       mount('/api', app => $api, name => 'api'),
@@ -184,10 +190,10 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   use Types::Standard qw(Int);
 
   use PAGI::Compose qw(compose);
-  use PAGI::Pages;
-  use PAGI::Response;
-  use PAGI::Routing qw(route mount);
-  use PAGI::Routing::URL qw(url url_for path_for);
+  use PAGI::Pages qw(welcome_page not_found_page);
+  use PAGI::Response qw(file_response json_response);
+  use PAGI::Routing qw(route mount router request_app);
+  use PAGI::Routing::URL qw(url_for path_for);
   use PAGI::Utils qw(app_path);
 
   my $manager_file = app_path('public', 'index.html');
@@ -206,28 +212,29 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
       return $state->get('apples_db');
   }
 
-  sub apple_manager($request) {
-      return PAGI::Response->send_file($manager_file, inline => 1);
-  }
-
   async sub list_apples($request) {
       my $db = apples_db($request);
-      my @apples = map {
-          +{
-              %{$db->{$_}},
-              url => url_for($request, 'read', { apple_id => $_ }),
-          }
-      } sort { $a <=> $b } keys %$db;
 
-      return PAGI::Response->json(\@apples);
+      return json_response([
+          map {
+              +{
+                  %{$db->{$_}},
+                  url => url_for(
+                      $request,
+                      'read',
+                      { apple_id => $_ },
+                  ),
+              }
+          } sort { $a <=> $b } keys %$db
+      ]);
   }
 
   async sub read_apple($request) {
-      my $apple_id = $request->path_param('apple_id');
-      my $apple = apples_db($request)->{$apple_id};
+      my $id = $request->path_param('apple_id');
+      my $apple = apples_db($request)->{$id};
 
-      return PAGI::Response->json($apple) if $apple;
-      return PAGI::Response->json(
+      return json_response($apple) if $apple;
+      return json_response(
           { error => 'Apple not found' },
           status => 404,
       );
@@ -236,74 +243,107 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   async sub create_apple($request) {
       my $db = apples_db($request);
       my $data = await $request->json;
-      my $new_id = max(0, keys %$db) + 1;
-      my $new_apple = { id => $new_id, %$data };
-      $db->{$new_id} = $new_apple;
+      my $id = max(0, keys %$db) + 1;
+      my $apple = { id => $id, %$data };
+      $db->{$id} = $apple;
 
-      my $location = path_for($request, 'read', { apple_id => $new_id });
-      return PAGI::Response->json(
-          $new_apple,
+      return json_response(
+          $apple,
           status  => 201,
-          headers => [Location => $location],
+          headers => [
+              Location => path_for(
+                  $request,
+                  'read',
+                  { apple_id => $id },
+              ),
+          ],
       );
   }
 
   async sub update_apple($request) {
       my $db = apples_db($request);
-      my $apple_id = $request->path_param('apple_id');
-      return PAGI::Response->json(
-          { error => 'Apple not found' }, status => 404,
-      ) unless exists $db->{$apple_id};
+      my $id = $request->path_param('apple_id');
+
+      return json_response(
+          { error => 'Apple not found' },
+          status => 404,
+      ) unless exists $db->{$id};
 
       my $data = await $request->json;
-      $db->{$apple_id} = { %{$db->{$apple_id}}, %$data };
-      return PAGI::Response->json($db->{$apple_id});
+      $db->{$id} = { %{$db->{$id}}, %$data };
+      return json_response($db->{$id});
   }
 
   async sub delete_apple($request) {
       my $db = apples_db($request);
-      my $apple_id = $request->path_param('apple_id');
-      return PAGI::Response->json(
-          { error => 'Apple not found' }, status => 404,
-      ) unless exists $db->{$apple_id};
+      my $id = $request->path_param('apple_id');
 
-      my $deleted_apple = delete $db->{$apple_id};
-      return PAGI::Response->json({
+      return json_response(
+          { error => 'Apple not found' },
+          status => 404,
+      ) unless exists $db->{$id};
+
+      return json_response({
           success => \1,
-          deleted => $deleted_apple,
+          deleted => delete $db->{$id},
       });
   }
 
-  compose(
-      routes => [
-          route('/' => \&apple_manager,
-              name => 'home', desc => 'Apple manager SPA'),
-          route('/welcome' => PAGI::Pages->welcome,
-              name => 'welcome', desc => 'PAGI welcome page'),
-          mount('/apples',
-              routes => [
-                  route('/' => \&list_apples,
-                      methods => ['GET'], name => 'list'),
-                  route('/' => \&create_apple,
-                      methods => ['POST'], name => 'create'),
-                  route('/{apple_id:&Int}' => \&read_apple,
-                      methods => ['GET'], name => 'read'),
-                  route('/{apple_id:&Int}' => \&update_apple,
-                      methods => ['PUT'], name => 'update'),
-                  route('/{apple_id:&Int}' => \&delete_apple,
-                      methods => ['DELETE'], name => 'delete'),
-              ],
-              name => 'apples',
-              desc => 'Apples API namespace'),
-      ],
-      lifespan => {
-          startup => \&startup,
-      },
-  );
+  sub root_not_found($request) {
+      return not_found_page(
+          $request,
+          detail => 'That page does not exist in the Apple demo.',
+      );
+  }
 
+  compose(
+      app => router(
+          routes => [
+              route('/' => file_response($manager_file, inline => 1),
+                  name => 'home',
+                  desc => 'Apple manager SPA',
+              ),
+              route('/welcome' => \&welcome_page,
+                  name => 'welcome',
+                  desc => 'PAGI welcome page',
+              ),
+              mount('/apples',
+                  routes => [
+                      route('/' => \&list_apples,
+                          methods => ['GET'], name => 'list'),
+                      route('/' => \&create_apple,
+                          methods => ['POST'], name => 'create'),
+                      route('/{apple_id:&Int}' => \&read_apple,
+                          methods => ['GET'], name => 'read'),
+                      route('/{apple_id:&Int}' => \&update_apple,
+                          methods => ['PUT'], name => 'update'),
+                      route('/{apple_id:&Int}' => \&delete_apple,
+                          methods => ['DELETE'], name => 'delete'),
+                  ],
+                  name => 'apples',
+                  desc => 'Apples API namespace',
+              ),
+          ],
+          http_default => request_app(\&root_not_found),
+      ),
+      lifespan => { startup => \&startup },
+  );
 C</apples> and C</apples/> reach the child C</> leaves. The selected child owns
 C<PATCH /apples> and its C<Allow: GET, HEAD, POST>. Constraint C<Int> validates
 the decoded capture but does not coerce it.
+
+The root file is an instantiated File Response on an exact Route, not a Mount:
+C</> alone selects it. C</welcome> is an ordinary function handler. The
+C</apples> Mount owns that complete subtree, so child 404 and 405 outcomes do
+not fall through to root siblings. Inside that logical namespace, local
+reverse address C<read> means C</apples/read>; there is no namespace
+deduplication rule.
+
+The root C<http_default> is converted explicitly with C<request_app>. It runs
+only for Router NONE, so an unknown path stays 404 while a known path with the
+wrong method retains the Router's authoritative 405 and Allow field. A
+catch-all Route would be a real FULL/PARTIAL candidate and would change those
+method outcomes.
 
 =head2 Declarative Middleware Placement and Helpers
 
@@ -382,15 +422,19 @@ negotiated 405 with authoritative C<Allow>:
 
   use PAGI::Compose qw(compose);
   use PAGI::Pages;
-  use PAGI::Routing qw(router);
+  use PAGI::Routing qw(router request_app);
 
   my $pages = PAGI::Pages->new;
 
   my $routing = router(
       routes       => \@routes,
-      http_default => $pages->not_found(
-          detail => 'No application route matched.',
-      ),
+      http_default => request_app(sub {
+          my ($request) = @_;
+          return $pages->not_found(
+              $request,
+              detail => 'No application route matched.',
+          );
+      }),
   );
   my $app = compose(app => $routing)->to_app;
 
@@ -567,7 +611,7 @@ L<PAGI::App::File> and let it own the complete file response:
 
   use PAGI::App::File;
 
-  my $files = PAGI::App::File->app_path('public')->to_app;
+  my $files = PAGI::App::File->from_app_path('public')->to_app;
 
 For a raw handler that genuinely needs custom policy, validate the request
 path before any filesystem check and emit only the returned lexical path:
@@ -584,12 +628,12 @@ path before any filesystem check and emit only the returned lexical path:
       my $path = path_from_root('/var/www/files', $untrusted_path);
       unless (defined $path) {
           my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($send));
+          return await Future->wrap($response->respond($scope, $receive, $send));
       }
 
       unless (-f $path && -r $path) {
           my $response = PAGI::Pages->not_found($scope);
-          return await Future->wrap($response->respond($send));
+          return await Future->wrap($response->respond($scope, $receive, $send));
       }
 
       await Future->wrap($send->({
@@ -619,7 +663,7 @@ the single emission:
 
   route('/normal' => async sub {
       my ($request) = @_;
-      return PAGI::Response->text('Hello');
+      return PAGI::Response::text_response('Hello');
   });
 
 A raw endpoint owns every event and receives all channels:
@@ -854,12 +898,12 @@ Request handlers:
   $router->get('/users/{id}' => sub {
       my ($request) = @_;
       my $id = $request->path_param('id');
-      return PAGI::Response->json({ id => $id, name => "User $id" });
+      return PAGI::Response::json_response({ id => $id, name => "User $id" });
   })->name('user');
 
   $router->get('/posts/{post_id}/comments/{comment_id}' => sub {
       my ($request) = @_;
-      return PAGI::Response->json({
+      return PAGI::Response::json_response({
           post_id    => $request->path_param('post_id'),
           comment_id => $request->path_param('comment_id'),
       });
@@ -876,7 +920,7 @@ Use C<*name> syntax to capture multiple path segments:
 
   $router->get('/files/*path' => sub {
       my ($request) = @_;
-      return PAGI::Response->text('File path: ' . $request->path_param('path'));
+      return PAGI::Response::text_response('File path: ' . $request->path_param('path'));
   })->name('file');
 
 Wildcards match one or more segments; C<{name}> matches one. Treat wildcard
@@ -952,7 +996,7 @@ C<wrap>, or L<PAGI::Routing::Middleware> description:
       middleware('Session', cookie_name => 'sid'),
   ] => sub {
       my ($request) = @_;
-      return PAGI::Response->text('Admin panel');
+      return PAGI::Response::text_response('Admin panel');
   });
 
 Declaration normalizes these entries. During C<to_app>, each factory is called
@@ -969,7 +1013,7 @@ parent should retain their names, metadata, and structure:
   my $api_router = PAGI::App::Router->new;
   $api_router->get('/users' => sub {
       my ($request) = @_;
-      return PAGI::Response->json([{ id => 1, name => 'Alice' }]);
+      return PAGI::Response::json_response([{ id => 1, name => 'Alice' }]);
   })->name('users');
 
   my $main_router = PAGI::App::Router->new;
@@ -979,7 +1023,7 @@ parent should retain their names, metadata, and structure:
       my ($reports) = @_;
       $reports->get('/' => sub {
           my ($request) = @_;
-          return PAGI::Response->json({ report => 'current' });
+          return PAGI::Response::json_response({ report => 'current' });
       })->name('index');
   })->name('reports');
 
@@ -1036,19 +1080,19 @@ L<PAGI::Endpoint::Router> provides an object-oriented approach to routing. You d
       $r->get('/people/{id}' => 'show')->name('show');
       $r->get('/closure' => sub {
           my ($request) = @_;
-          return PAGI::Response->text('ordinary Request closure');
+          return PAGI::Response::text_response('ordinary Request closure');
       })->name('closure');
   }
 
   async sub home {
       my ($self, $request) = @_;
-      return PAGI::Response->html('<h1>Welcome!</h1>');
+      return PAGI::Response::html_response('<h1>Welcome!</h1>');
   }
 
   async sub show {
       my ($self, $request) = @_;
       my $person = await $self->{repository}->find($request->path_param('id'));
-      return PAGI::Response->json($person);
+      return PAGI::Response::json_response($person);
   }
 
   1;
@@ -1169,7 +1213,7 @@ server lifespan and is read through L<PAGI::State>:
 
   async sub home {
       my ($self, $request) = @_;
-      return PAGI::Response->json({
+      return PAGI::Response::json_response({
           service => $self->{repository}->service_name,
           uptime  => time() - app_state($request)->get('started_at'),
       });
@@ -1262,7 +1306,7 @@ local wrapping method explicitly with C<middleware_as>:
 
   async sub admin_page {
       my ($self, $request) = @_;
-      return PAGI::Response->html('<h1>Admin Panel</h1>');
+      return PAGI::Response::html_response('<h1>Admin Panel</h1>');
   }
 
   1;
@@ -1306,7 +1350,7 @@ boundary:
 
   async sub list_users {
       my ($self, $request) = @_;
-      return PAGI::Response->json([
+      return PAGI::Response::json_response([
           { id => 1, name => 'Alice' },
           { id => 2, name => 'Bob' },
       ]);
@@ -1315,13 +1359,13 @@ boundary:
   async sub get_user {
       my ($self, $request) = @_;
       my $id = $request->path_param('id');
-      return PAGI::Response->json({ id => $id, name => "User $id" });
+      return PAGI::Response::json_response({ id => $id, name => "User $id" });
   }
 
   async sub create_user {
       my ($self, $request) = @_;
       my $data = await $request->json;
-      return PAGI::Response->json({ id => 3, name => $data->{name} }, status => 201);
+      return PAGI::Response::json_response({ id => 3, name => $data->{name} }, status => 201);
   }
 
   1;
@@ -1350,7 +1394,7 @@ boundary:
 
   async sub home {
       my ($self, $request) = @_;
-      return PAGI::Response->html('<h1>Home</h1>');
+      return PAGI::Response::html_response('<h1>Home</h1>');
   }
 
   1;
@@ -1395,7 +1439,7 @@ state in Compose lifespan state, and every declaration inspectable:
   sub index {
       my ($self, $request) = @_;
       my @people = $self->{repository}->all;
-      return PAGI::Response->json({
+      return PAGI::Response::json_response({
           people => \@people,
           first  => path_for($request, 'show', { id => $people[0]{id} }),
       });
@@ -1403,7 +1447,7 @@ state in Compose lifespan state, and every declaration inspectable:
 
   sub show {
       my ($self, $request) = @_;
-      return PAGI::Response->json(
+      return PAGI::Response::json_response(
           $self->{repository}->find($request->path_param('id')),
       );
   }
@@ -1454,7 +1498,7 @@ state in Compose lifespan state, and every declaration inspectable:
 
   sub home {
       my ($self, $request) = @_;
-      return PAGI::Response->json({
+      return PAGI::Response::json_response({
           people => path_for($request, 'people/index'),
           events => path_for($request, 'events'),
           uptime => time() - app_state($request)->get('started_at'),
@@ -1494,7 +1538,7 @@ state in Compose lifespan state, and every declaration inspectable:
 
   sub admin {
       my ($self, $request) = @_;
-      return PAGI::Response->json({
+      return PAGI::Response::json_response({
           ready => app_state($request)->get('db')->ping ? \1 : \0,
       });
   }
@@ -1651,6 +1695,97 @@ stock WebSocket and SSE misses intact. Compose, not Router, owns root lifespan.
 OpenAPI/schema generation and C<include_in_schema> remain deferred; the
 inspectable immutable tree is a future seam, not a shipped schema API.
 
+=head1 RESPONSE DELIVERY RECIPES
+
+=head2 Relay a Request Body with Backpressure
+
+Request-body input and response output can remain incremental without raw
+PAGI. C<pipe_from> requests the next input chunk only after the previous output
+write settles:
+
+  use Future::AsyncAwait;
+  use PAGI::Response qw(stream_response);
+
+  async sub echo_upload($request) {
+      my $input = $request->body_stream(max_bytes => 100 * 1024 * 1024);
+
+      return stream_response(
+          async sub ($writer) {
+              await $writer->pipe_from($input);
+              die 'upload was truncated' if $input->truncated;
+          },
+          content_type => 'application/octet-stream',
+      );
+  }
+
+Always await C<write>, C<write_text>, or C<pipe_from>. One outstanding write is
+allowed; overlap fails rather than building a queue. Optional Writer transport
+watermarks help push-style sources, but awaiting each send is the portable
+backpressure boundary.
+
+PAGI send settlement means the server accepted an event into outbound
+processing or finished discarding it after disconnect, not that the client
+received it. Writer checks connection state after settlement and does not count
+a discarded chunk. Stream may cancel producer-owned work, never the send
+Future, and cleanup runs once. It has no WebSocket/SSE reconnect behavior.
+
+HEAD normally executes the whole producer behind the outer suppression
+boundary. Put a cheap explicit HEAD Route before an expensive GET Route:
+
+  route('/export' => \&head_export, methods => ['HEAD']);
+  route('/export' => stream_response(\&produce_export), methods => ['GET']);
+
+=head2 Send One Selected File
+
+C<file_response> receives a trusted path selected by the application:
+
+  use PAGI::Response qw(file_response);
+
+  route('/report' => file_response(
+      '/srv/reports/monthly.pdf',
+      filename => 'monthly.pdf',
+  ));
+
+Construction validates options but defers filesystem inspection until each
+request's preflight. Validate explicitly during startup if a missing deployment
+file must prevent startup. C<offset>/C<length> expose one logical 200
+representation; only a valid client Range produces 206. Use
+L<PAGI::App::File> instead when an untrusted URL path must be resolved beneath
+a configured root.
+
+=head2 Guard a Response Application Across Protocols
+
+C<to_app> creates an HTTP-only application. Non-HTTP invocation is an
+application failure, not an automatic WebSocket denial or SSE decline. A root
+that intentionally handles those handshakes can make that policy explicit:
+
+  use Future::AsyncAwait;
+  use PAGI::Response qw(text_response);
+  use PAGI::SSE;
+  use PAGI::WebSocket;
+
+  my $response = text_response('Temporarily unavailable', status => 503);
+  my $http = $response->to_app;
+
+  my $guard = async sub {
+      my ($scope, $receive, $send) = @_;
+      return await $http->($scope, $receive, $send)
+          if $scope->{type} eq 'http';
+      return await PAGI::WebSocket->new($scope, $receive, $send)
+          ->deny($response)
+          if $scope->{type} eq 'websocket';
+      return await PAGI::SSE->new($scope, $receive, $send)
+          ->decline($response)
+          if $scope->{type} eq 'sse';
+      die "unsupported scope type '$scope->{type}'";
+  };
+
+Base, finite subclasses, Empty, Redirect, Stream, and subclasses preserving
+C<body-events-v1> are eligible. File is rejected before start because PAGI Www
+denial bodies exclude C<file>/C<fh>. Mapped-start settlement commits protocol
+ownership; later cleanup follows state/disconnect watchers rather than treating
+disconnect as a failed send.
+
 =head1 AUTHENTICATION & SESSIONS
 
 =head2 Session Management
@@ -1671,35 +1806,38 @@ that hashref with a convenient (and typo-catching) API.
 
   $router->get('/login', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope);
 
       # Set session data
       my $session = PAGI::Session->new($scope);
       $session->set(user_id  => 123);
       $session->set(username => 'alice');
 
-      await $res->text('Logged in!')->respond($send);
+      await PAGI::Response::text_response('Logged in!')->respond(
+          $scope, $receive, $send,
+      );
   });
 
   $router->get('/profile', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope);
 
       # Read session data (the second arg is a default for optional keys)
       my $session = PAGI::Session->new($scope);
       my $username = $session->get('username', 'Guest');
 
-      await $res->text("Hello, $username!")->respond($send);
+      await PAGI::Response::text_response("Hello, $username!")->respond(
+          $scope, $receive, $send,
+      );
   });
 
   $router->get('/logout', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope);
 
       # Clear session data
       PAGI::Session->new($scope)->clear;
 
-      await $res->text('Logged out!')->respond($send);
+      await PAGI::Response::text_response('Logged out!')->respond(
+          $scope, $receive, $send,
+      );
   });
 
   # Wrap the router with the session middleware
@@ -1724,8 +1862,9 @@ that hashref with a convenient (and typo-catching) API.
 
   $router->get('/', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope);
-      await $res->text('Protected content')->respond($send);
+      await PAGI::Response::text_response('Protected content')->respond(
+          $scope, $receive, $send,
+      );
   });
 
   # Protect every route with Basic Auth
@@ -1752,13 +1891,14 @@ that hashref with a convenient (and typo-catching) API.
 
   $router->get('/api/me', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope);
 
       # Claims from the validated token: the middleware stores
       # { type => 'bearer', token => ..., claims => ... } under 'pagi.auth'
       my $claims = $scope->{'pagi.auth'}{claims};
 
-      await $res->json({ user => $claims })->respond($send);
+      await PAGI::Response::json_response({ user => $claims })->respond(
+          $scope, $receive, $send,
+      );
   });
 
   # Verify Bearer tokens with a custom validator (returns claims or undef).
@@ -1970,9 +2110,10 @@ application code should write this:
       # Auth check before we commit to a stream.
       unless (authorized($sse->query_param('token'))) {
           return await $sse->decline(
-              status  => 401,
-              headers => [['content-type', 'text/plain']],
-              body    => 'Unauthorized',
+              PAGI::Response::text_response(
+                  'Unauthorized',
+                  status => 401,
+              ),
           );
       }
 
@@ -1998,7 +2139,7 @@ good.
 =back
 
   # Tell EventSource to stop reconnecting: a bare 204.
-  await $sse->decline(status => 204);
+  await $sse->decline(PAGI::Response::empty_response(status => 204));
 
 A decline is not a disconnect: no C<sse.disconnect> event ever follows it,
 because the stream never started. If your code calls C<< $sse->receive >> (or
@@ -2022,7 +2163,7 @@ C<< PAGI::SSE->new >>), then marks the connection closed. This is what it is
 doing on your behalf -- shown so the underlying contract is explicit, not as
 a recommended application style:
 
-  # Equivalent to: await $sse->decline(status => 401, headers => [...], body => 'Unauthorized');
+  # Equivalent to adapting text_response('Unauthorized', status => 401).
   await $send->({
       type    => 'sse.http.response.start',
       status  => 401,
@@ -2060,10 +2201,11 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
 
   $router->post('/signup', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope);
 
       # Respond immediately -- the client does not wait for the email
-      await $res->status(201)->json({ status => 'created' })->respond($send);
+      await PAGI::Response::json_response(
+          { status => 'created' }, status => 201,
+      )->respond($scope, $receive, $send);
 
       # Fire-and-forget: scheduled now, runs on later event-loop ticks
       # (after this handler returns). Always add on_fail() before retain()
@@ -2116,14 +2258,16 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
 
   $router->post('/generate-pdf', raw => async sub {
       my ($scope, $receive, $send) = @_;
-      my $res = PAGI::Response->new($scope);
 
       # Option A: Wait for result (blocks this request only)
       my $result = await $pdf_worker->call(args => ['report']);
-      await $res->json({ result => $result })->respond($send);
+      await PAGI::Response::json_response({ result => $result })->respond(
+          $scope, $receive, $send,
+      );
 
       # Option B: respond immediately, generate in the background
-      # await $res->json({ status => 'processing' })->respond($send);
+      # await PAGI::Response::json_response({ status => 'processing' })
+      #     ->respond($scope, $receive, $send);
       # my $f = $pdf_worker->call(args => ['report']);
       # $f->on_done(sub { warn "PDF ready: $_[0]\n" });
       # $f->on_fail(sub { warn "PDF failed: $_[0]\n" });
@@ -2150,7 +2294,6 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
 
       if ($req->method eq 'POST') {
           my $form = await $req->form_params;
@@ -2158,10 +2301,14 @@ See C<examples/background-tasks/> for complete working examples.
           my $password = $form->{password};
 
           # Validate and process...
-          await $res->redirect('/dashboard')->respond($send);
+          await PAGI::Response::redirect_response('/dashboard')->respond(
+              $scope, $receive, $send,
+          );
       }
       else {
-          await $res->html(<<'HTML')->respond($send);
+          await PAGI::Response::html_response(<<'HTML')->respond(
+              $scope, $receive, $send,
+          );
   <form method="POST">
       <input name="username" placeholder="Username">
       <input name="password" type="password" placeholder="Password">
@@ -2185,7 +2332,6 @@ See C<examples/background-tasks/> for complete working examples.
       my ($scope, $receive, $send) = @_;
 
       my $req = PAGI::Request->new($scope, $receive);
-      my $res = PAGI::Response->new($scope);
 
       if ($req->method eq 'POST') {
           # uploads() returns a Hash::MultiValue keyed by form field name;
@@ -2205,10 +2351,14 @@ See C<examples/background-tasks/> for complete working examples.
               # my $content = $upload->slurp;
           }
 
-          await $res->json({ uploaded => scalar(@files) })->respond($send);
+          await PAGI::Response::json_response({
+              uploaded => scalar(@files),
+          })->respond($scope, $receive, $send);
       }
       else {
-          await $res->html(<<'HTML')->respond($send);
+          await PAGI::Response::html_response(<<'HTML')->respond(
+              $scope, $receive, $send,
+          );
   <form method="POST" enctype="multipart/form-data">
       <input type="file" name="file" multiple>
       <button type="submit">Upload</button>
@@ -2262,8 +2412,8 @@ tests or one-liners:
       -e 'PAGI::App::File->new(root => ".")->to_app'
 
   # Quick redirect
-  pagi-server -MPAGI::Compose -MPAGI::Pages \
-      -e 'PAGI::Compose::compose(app => PAGI::Pages->redirect("https://example.com"))->to_app'
+  pagi-server -MPAGI::Response \
+      -e 'PAGI::Response::redirect_response("https://example.com")->to_app'
 
 =head2 Loading Modules with -M
 
@@ -2409,26 +2559,26 @@ For more control (authentication, logging, custom headers):
       my $filepath = path_from_root('/var/www/files', $filename);
       unless (defined $filepath) {
           my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($send));
+          return await Future->wrap($response->respond($scope, $receive, $send));
       }
 
       # Authentication and authorization are separate from path validation.
       my $user = authenticate($scope);
       unless ($user && can_download($user, $filepath)) {
           my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($send));
+          return await Future->wrap($response->respond($scope, $receive, $send));
       }
 
       unless (-f $filepath && -r $filepath) {
           my $response = PAGI::Pages->not_found($scope);
-          return await Future->wrap($response->respond($send));
+          return await Future->wrap($response->respond($scope, $receive, $send));
       }
 
       # Validate request-derived header data independently.
       my ($download_name) = $filename =~ /\A([A-Za-z0-9][A-Za-z0-9._-]*)\z/;
       unless (defined $download_name) {
           my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($send));
+          return await Future->wrap($response->respond($scope, $receive, $send));
       }
 
       # Send file response directly via raw protocol events (XSendfile middleware will intercept)
@@ -2492,120 +2642,71 @@ is an easy drop-in for this:
 For plain filehandles, either use C<file =E<gt> $path> directly, or use
 L<IO::File::WithPath>. See L<PAGI::Middleware::XSendfile> for details.
 
-=head1 RESPONSE STATE & LIFECYCLE
+=head1 RESPONSE VALUES, EMISSION, AND TEST CAPTURE
 
-A C<PAGI::Response> is a detached value: building it is fully separate from
-sending it. That split means there is no single "is this done?" flag — instead
-there are a few distinct signals, each answering a different question. This
-section maps them so you can tell, at any point, what is going on.
+A production L<PAGI::Response> is a complete reusable value. Its concrete class
+identifies the representation or delivery behavior, and construction performs
+no protocol I/O. It stores no request scope, send callback, connection, or
+per-invocation Writer.
 
-=head2 The three phases
+=head2 Metadata and invocation state
 
-A response moves through three phases. Each has its own signal:
+Response metadata is inspectable before emission:
 
-=over 4
+  status / has_status / status_try
+  headers / header / header_all / has_header / header_try / remove_header
+  content_type / has_content_type / content_type_try
+  cookie / delete_cookie
+  is_buffered / body
 
-=item 1. B<Build> — the handler accumulates status, headers, and a body source
-on the value. No connection, no I/O. The signal here is L<PAGI::Response/has_body_source>:
-"has a body source been registered?"
+Every constructed Response is already complete; there is no incomplete
+body-mode state to query. Connection facts belong to the active
+L<PAGI::Request> or raw C<pagi.connection>. An unchanged Response may be
+emitted concurrently because each C<respond> invocation takes its own snapshot.
+Do not mutate a Response concurrently with emission.
 
-=item 2. B<Send committed> — a raw C<< $res->respond($send) >> has begun
-emitting the response and has taken the connection. The signal is
-L<PAGI::Response/is_sent>:
-"has this response gone out?" It is set at the moment the send is committed, so
-a second send is rejected.
+A normal handler returns the value:
 
-=item 3. B<Finished> — every byte has been emitted; for a stream, the callback
-has run to completion and the writer is closed. There is no flag for this: it is
-the resolution of the Future returned by C<respond>. C<await>-ing the send B<is>
-waiting for "finished".
+  async sub create_item {
+      my ($request) = @_;
+      my $item = await create_from($request);
+      return PAGI::Response::json_response($item, status => 201);
+  }
 
-=back
+A raw application owns the full native triplet and one explicit emission:
 
-The reason "finished" is a Future and not a flag is the same reason the value is
-detached: PAGI never models a half-sent live byte-sink as state on the value.
-"Committed" is a flag; "finished" is the thing you C<await>.
+  my $res = PAGI::Response::json_response($data, status => 200);
+  await $res->respond($scope, $receive, $send);
 
-=head2 The signals you can inspect
+Do not emit inside a normal Request handler and then return the same value to
+Routing. Handler completion still requires one Response; application
+fallthrough needs an explicit Router outcome or application sentinel, never a
+partially built Response.
 
-  Signal                      Phase          Question it answers
-  --------------------------  -------------  -------------------------------------
-  has_status                  build          Was a status code set explicitly?
-  has_header($name)           build          Was this header set?
-  has_content_type            build          Was Content-Type set?
-  has_body_source             build          Was a body (bytes/file/stream) set?
-  is_sent                     send           Has the response been emitted?
-  (Future from respond)       finished       Has every byte been written?
-  $writer->bytes_written      finished*      How many bytes streamed so far?
-  $writer->is_closed          finished*      Has the stream writer been closed?
+=head2 Streaming state belongs to Writer
 
-The C<$writer> signals (*) apply only while streaming, on the
-L<PAGI::Response::Writer> handed to your C<stream> callback or returned by
-C<writer>. They describe the live stream; the response value itself only carries
-the build and send signals.
+L<PAGI::Response::Stream> creates one invocation-local
+L<PAGI::Response::Writer>. Await every C<write> before producing another chunk.
+Its Future is the response-side backpressure boundary. C<bytes_written> counts
+only chunks whose sends settled while the connection still reported connected;
+settlement never proves client delivery. C<is_closed>, C<is_disconnected>, and
+C<disconnect_reason> describe that Writer invocation, not the reusable Stream
+value.
 
-=head2 has_body_source is intent, not bytes
+=head2 Test Response is a captured-wire decoder
 
-The signal most likely to surprise you is C<has_body_source>. It reports that a
-body B<source> is registered — not that bytes exist, and not that anything was
-sent. For a stream this matters: the callback is stored at build time and does
-not run until C<respond>, so a freshly-registered stream has produced zero bytes
-yet C<has_body_source> is already true. That is deliberate and is the only
-coherent meaning — C<respond> is what drives the stream, so "are there bytes
-yet?" is unanswerable at build time and irrelevant to "is there a body to send?"
+L<PAGI::Test::Response> is deliberately a different class. The test client
+feeds it captured response events; it reconstructs status, headers, body bytes,
+decoded text, and JSON, including bytes referenced by C<file> and C<fh> events.
+It is not a production Response, cannot be returned from a handler, and does
+not have C<respond> or C<to_app>.
 
-This mirrors the distinction Node.js draws between C<writableEnded> ("the
-producer declared it is done") and C<writableFinished> ("all data has been
-flushed"). C<has_body_source> is the former, decoupled from any I/O;
-C<await>-ing C<respond> is the latter.
+  my $captured = $client->get('/items/1');
+  is($captured->status, 200);
+  is($captured->json, { id => 1 });
 
-Intentional empty bodies count as a registered source: C<empty>, C<redirect>,
-and C<send_raw('')> all set an (empty) body, so C<has_body_source> is true for
-them. Only a response that never had a body method called reports false.
-
-=head2 Handler and raw-application ownership
-
-A normal HTTP handler returns one detached L<PAGI::Response> value. The Router
-or Endpoint compiler validates and emits it; there is no hidden response for a
-handler to populate and no automatic status fallback. Construct the value
-directly:
-
-    async sub create_item {
-        my ($request) = @_;
-        my $item = await create_from($request);
-        return PAGI::Response->json($item, status => 201);
-    }
-
-A raw application owns all three native channels and therefore owns the one
-send step too:
-
-    my $res = PAGI::Response->json($data, status => 200);
-    await $res->respond($send);
-
-Do not call C<respond> inside a normal Request handler, and do not return an
-already-sent value to a compiler that owns response emission.
-
-=over 4
-
-=item * B<Check C<is_sent> before a raw second send.> A caller that used
-C<< ->writer($send) >> has already emitted headers (C<writer> marks the response
-sent), but C<has_body_source> stays false because the live-writer path bypasses
-the body slots. C<is_sent> is the relevant double-send guard.
-
-=item * B<C<has_status> and C<has_body_source> describe build intent.> A C<302>
-redirect or a C<204> can have no body source yet still be a real response. Use
-these predicates when inspecting a detached value, not to infer Router
-fallthrough.
-
-=item * B<Never inspect the private slots.> Use C<has_body_source>, not
-C<< exists $res->{_stream} >> and friends — those are private and may change
-(see L<PAGI::Response/SUBCLASSING (FRAMEWORK INTEGRATION)>). The predicate is
-the supported way to ask.
-
-=back
-
-For a framework built above PAGI, make fallthrough an explicit sentinel rather
-than inferring it from an empty Response.
+This distinction keeps test assertions about observed wire output separate from
+the reusable value that produced it.
 
 =head1 TESTING
 

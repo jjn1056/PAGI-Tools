@@ -16,17 +16,22 @@ PAGI::Response::Problem - buffered RFC 9457 problem response
 
 =head1 SYNOPSIS
 
+    use PAGI::Response::Problem qw(problem_response);
     my $response = PAGI::Response::Problem->new({
         type   => '/problems/invalid-input',
         title  => 'Invalid input',
         status => 422,
     });
+    my $same = problem_response({ title => 'Conflict', status => 409 });
 
 =head1 DESCRIPTION
 
-Validates an RFC 9457 problem hashref before rendering it as UTF-8 JSON.  The
-optional C<type>, C<title>, C<status>, C<detail>, and C<instance> members are
-validated when present; other JSON-encodable members are extensions.
+Validates an unblessed RFC 9457 problem hashref before buffering it as UTF-8
+JSON with C<application/problem+json>. C<type>, C<title>, C<status>, C<detail>,
+and C<instance> are optional and validated when present; other JSON-encodable
+members are extensions. Missing C<type> has the effective RFC value
+C<about:blank> without inserting that member. A document C<status> supplies
+the HTTP status unless an equal constructor status is given; mismatches croak.
 
 =cut
 

@@ -288,7 +288,8 @@ sub _app_path_from_origin {
     return File::Spec->canonpath(File::Spec->catfile($home, @components));
 }
 
-# True if $x is a PAGI response value: a blessed object that can respond($send).
+# True if $x is a PAGI response value: a blessed object with the Response
+# emission contract. Production Responses receive ($scope, $receive, $send).
 # The single source of truth for the "did the handler return a response?" check
 # (used by the endpoint and router dispatch paths).
 sub is_response {

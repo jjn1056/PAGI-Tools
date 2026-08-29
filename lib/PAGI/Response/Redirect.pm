@@ -16,12 +16,16 @@ PAGI::Response::Redirect - buffered HTTP redirect response
 
 =head1 SYNOPSIS
 
+    use PAGI::Response::Redirect qw(redirect_response);
     my $response = PAGI::Response::Redirect->new('/next', status => 303);
+    my $same = redirect_response('/next', status => 303);
 
 =head1 DESCRIPTION
 
-Owns a redirect status, URI-reference Location header, and a small escaped
-HTML body that points to the same location.
+Buffers a small escaped HTML document and owns its validated URI-reference
+Location. Status defaults to 302 and must be 301, 302, 303, 307, or 308.
+Common flat C<headers> and C<content_type> are accepted, but callers cannot
+compete with the response-owned Location field.
 
 =cut
 

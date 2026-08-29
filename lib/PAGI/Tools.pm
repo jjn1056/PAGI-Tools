@@ -41,38 +41,38 @@ middleware suite — so the same application reads like this:
 
     use PAGI::App::Router;
     use PAGI::Compose qw(compose);
-    use PAGI::Response;
+    use PAGI::Response qw(json_response);
     use Future::AsyncAwait;
 
     my $router = PAGI::App::Router->new;
 
     $router->get('/' => async sub {
         my ($request) = @_;
-        return PAGI::Response->json({ hello => 'world' });
+        return json_response({ hello => 'world' });
     })->name('home');
 
     $router->get('/users/{id}' => async sub {
         my ($request) = @_;
-        return PAGI::Response->json({ id => $request->path_param('id') });
+        return json_response({ id => $request->path_param('id') });
     })->name('user');
 
     my $routing = $router->to_router; # retain one immutable snapshot
     my $app = compose(app => $routing)->to_app; # complete deployed app
 
 For a small conventional landing page or HTTP error, L<PAGI::Pages> builds an
-ordinary negotiated Response or a terminal endpoint:
+ordinary negotiated concrete Response:
 
-    use PAGI::Pages;
+    use PAGI::Pages qw(welcome_page);
 
     my $response = PAGI::Pages->not_found($request);
-    my $endpoint = PAGI::Pages->welcome;
+    my $handler  = \&welcome_page;
 
 For a conventional static tree, use the rooted file component rather than
 constructing paths or reading files in a handler:
 
     use PAGI::App::File;
 
-    my $static = PAGI::App::File->app_path('public')->to_app;
+    my $static = PAGI::App::File->from_app_path('public')->to_app;
 
 Its request-path construction is lexical and performs no I/O; the PAGI server
 opens the resulting C<file> event. Configured symlinks extend administrator
@@ -95,11 +95,11 @@ Use the functional frontend when the declarations are already immutable:
 
     use PAGI::Routing qw(:routes);
     use PAGI::Compose qw(compose);
-    use PAGI::Response;
+    use PAGI::Response qw(json_response);
 
     async sub home {
         my ($request) = @_;
-        return PAGI::Response->json({ hello => 'world' });
+        return json_response({ hello => 'world' });
     }
 
     my $routing = router(routes => [
@@ -116,6 +116,15 @@ C</person/show>; L<PAGI::Routing::URL> can generate request-relative links from
 the active placement, with compact or named path/query/fragment arguments. Its helpers
 return strings or croak, perform no protocol I/O, and do not replace normal
 authorization checks.
+
+Response classes make representation and delivery cost explicit. Base, Text,
+HTML, JSON, Problem, Redirect, and Empty are finite buffered values; File sends
+one already selected path; Stream produces chunks with awaited send-Future
+backpressure. Route and Mount retain separate ownership:
+
+    Route('/x')       exact complete path leaf
+    Route('/*path')   explicit real catchall leaf
+    Mount('/x')       selected owner of /x and its complete subtree
 
 The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
 route metadata, constraints, GET/HEAD behavior, Router-owned 404/405 outcomes,
@@ -218,7 +227,7 @@ L<PAGI::Transport>, and L<PAGI::Routing::URL> - explicitly imported optional
 scope capabilities
 
 =item * L<PAGI::Pages> - negotiated conventional welcome, redirect, and HTTP
-error Responses and terminal endpoints
+error Responses returned by ordinary Request handlers
 
 =item * L<PAGI::Routing>, L<PAGI::App::Router>, and
 L<PAGI::Endpoint::Router> - immutable functional, mutable imperative, and

@@ -1119,6 +1119,19 @@ already started fails before another event is sent. The Response is invoked
 with a shallow HTTP-scope clone whose C<type> is C<http> and C<method> is
 C<GET>; the live SSE scope and all nested references are left unchanged.
 
+Mapped-start settlement means the PAGI server validated and consumed the event
+and accepted it into outbound processing, or finished discarding it after the
+connection ended. It does not prove client delivery. A body send pending at
+disconnect resolves under PAGI 0.002007 rather than manufacturing a disconnect
+failure. Post-commit cleanup therefore follows authoritative SSE/connection
+state and disconnect watchers, not send-Future failure; genuine validation and
+resource failures still propagate.
+
+This decline response is finite HTTP handshake output. It is separate from the
+live SSE protocol's event formatting, Last-Event-ID, retry, keepalive, and
+reconnection lifecycle. L<PAGI::Response::Stream> does not replace or subclass
+that live protocol behavior.
+
 After C<decline>, C<start>, C<run>, and the send methods (C<send>,
 C<send_json>, C<send_event>, C<send_comment>, C<keepalive>) all become B<safe
 no-ops> -- they return without touching the wire instead of croaking, since

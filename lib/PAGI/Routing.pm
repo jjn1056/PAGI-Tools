@@ -72,7 +72,7 @@ Compose owns the application root and lifespan.
 
     use PAGI::Routing qw(:routes :middleware);
     use PAGI::Compose qw(compose);
-    use PAGI::Response;
+    use PAGI::Response qw(json_response);
 
     use Future::AsyncAwait;
     use MyApp::Routes::Home ();
@@ -92,7 +92,7 @@ Compose owns the application root and lifespan.
                 routes => [
                     route('/users/{id}' => async sub {
                         my ($request) = @_;
-                        return PAGI::Response->json({
+                        return json_response({
                             id => $request->path_param('id'),
                         });
                     },
@@ -551,22 +551,22 @@ application boundaries are required. If a selected native target sends
 nothing, Compose treats that as incomplete output and renders 500 rather than
 inventing a routing 404.
 
-L<PAGI::Pages> supplies terminal negotiated endpoints without a Router-specific
-adapter:
+L<PAGI::Pages> supplies ordinary negotiated Response-returning handlers. Use
+C<request_app> only when one must occupy a native application position:
 
-    use PAGI::Pages;
+    use PAGI::Pages qw(gone_page);
 
     route('/old' => sub {
         my ($request) = @_;
         return PAGI::Pages->permanent_redirect($request, '/new');
     });
-    mount('/gone', app => PAGI::Pages->gone);
+    mount('/gone', app => request_app(\&gone_page));
 
 The normal handler passes its Request source to Pages and returns the resulting
-Response. It is still one exact, method-aware route. The native Pages endpoint
-in the second form owns the complete C</gone> subtree for every HTTP method and
-ignores the remaining child path. Choose C<route> or C<mount> for that routing
-boundary deliberately.
+Response. It is still one exact, method-aware route. The explicit adapter in
+the second form creates a native application; its Mount owns the complete
+C</gone> subtree and the handler sees the rewritten child request. Choose
+C<route> or C<mount> for that routing boundary deliberately.
 
 C<not_found> is not a catch-all route. A final C<< route('/*path' =E<gt> ...) >>
 is a normal route with captures, middleware, and method matching. A GET-only

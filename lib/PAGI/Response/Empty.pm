@@ -15,12 +15,15 @@ PAGI::Response::Empty - buffered zero-byte response
 
 =head1 SYNOPSIS
 
+    use PAGI::Response::Empty qw(empty_response);
     my $response = PAGI::Response::Empty->new;
+    my $same = empty_response(status => 205);
 
 =head1 DESCRIPTION
 
-Owns a zero-byte body.  Its HTTP status defaults to 204 and it does not add a
-default Content-Type header.
+Owns a buffered zero-byte body. Status defaults to 204 and no Content-Type is
+added or permitted. Flat headers are accepted; framing fields forbidden by a
+1xx, 204, or 304 status are omitted on emission.
 
 =cut
 

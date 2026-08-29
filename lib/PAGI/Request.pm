@@ -1163,19 +1163,23 @@ objects like L<PAGI::Stash> and L<PAGI::Session>:
 
     my $stash = PAGI::Stash->new($req);
 
-=head2 response
+=head2 Constructing responses
 
-    my $res = $req->response;
+Request owns HTTP input and remains the scope source for request-local helpers;
+it does not manufacture or cache a Response. Construct the desired concrete
+L<PAGI::Response> value directly and return it from a normal handler:
 
-Temporary compatibility factory for a detached L<PAGI::Response> bound to this
-request's scope. The response is a value, not a connection; it is created only
-when requested. Build it up and send it with C<< $res->respond($send) >> from a
-raw application:
+    use PAGI::Response qw(json_response);
 
-    await $req->response->status(201)->json($data)->respond($send);
+    sub create_item {
+        my ($request) = @_;
+        return json_response({ created => \1 }, status => 201);
+    }
 
-New code should construct C<PAGI::Response> directly. Normal Request handlers
-return the value and let their Router or Endpoint own response emission.
+Only a raw native application owns response emission. It passes the complete
+native triplet to C<respond>:
+
+    await $response->respond($scope, $receive, $send);
 
 =head2 Per-Request Shared State
 

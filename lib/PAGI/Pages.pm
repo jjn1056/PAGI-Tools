@@ -1145,6 +1145,9 @@ arity-overloaded endpoint factory. A no-source call croaks. Native placement
 uses L<PAGI::Routing/request_app>; a real raw closure calls the Response
 C<respond($scope, $receive, $send)> method explicitly.
 
+C<ref($response)> identifies the concrete representation selected by policy;
+Pages does not hide it behind a generic mutable Response.
+
 The returned class identifies the selected representation:
 
 =over 4
