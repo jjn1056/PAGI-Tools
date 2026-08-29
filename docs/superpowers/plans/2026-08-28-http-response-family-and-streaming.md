@@ -6,7 +6,7 @@
 
 **Architecture:** `PAGI::Response` becomes the byte-oriented base and application boundary; finite subclasses render once, while File and Stream own request-time delivery. Stream relies on PAGI 0.5's deterministic pending-I/O settlement: Writer awaits each send and checks connection state, while the Stream runner alone owns proactive producer cancellation and exactly-once cleanup. Routing adapts Request handlers and instantiated `to_app` components without arity inference, Pages selects a concrete representation, and WebSocket/SSE adapt eligible HTTP response events into their denial event families.
 
-**Tech Stack:** Perl 5.18-compatible distribution code; Perl 5.40 signatures only in modern examples; `Future`, `Future::AsyncAwait`, `JSON::MaybeXS`, `PAGI::Headers`, `PAGI::Request::BodyStream`, `PAGI::Transport`, `Test2::V0`, POD, and Dist::Zilla. Disconnect tests use contract-faithful direct doubles rather than the currently stale `PAGI::Test::Client` HTTP mock. PAGI 0.002006 defines the required core 0.5 / Www 0.4 settlement contract; PAGI::Server 0.002010 is the integration reference. No new runtime CPAN dependency.
+**Tech Stack:** Perl 5.18-compatible distribution code; Perl 5.40 signatures only in modern examples; `Future`, `Future::AsyncAwait`, `JSON::MaybeXS`, `PAGI::Headers`, `PAGI::Request::BodyStream`, `PAGI::Transport`, `Test2::V0`, POD, and Dist::Zilla. Disconnect tests use contract-faithful direct doubles rather than the currently stale `PAGI::Test::Client` HTTP mock. PAGI 0.002007 is the current core 0.5 / Www 0.4 authority and makes each `disconnect_future()` observer cancellation-isolated; PAGI::Server 0.002011 is the integration reference. No new runtime CPAN dependency.
 
 **Spec:** `docs/superpowers/specs/2026-08-27-http-response-family-and-streaming-design.md`, originally approved at commit `498d5d0c0ecaffdd4e9a149bbf95d01e10913eea` and amended on 2026-08-28 by approved deviations `DEV-001` and `DEV-002` for PAGI 0.5 settlement.
 
@@ -28,7 +28,7 @@
 - File bodies remain server-delivered PAGI `file` events. Do not replace them with blocking application-owned filehandle streaming.
 - Stream never starts a competing `$receive` loop. Disconnect observation uses `pagi.connection`; ordinary HTTP Stream has no reconnection behavior.
 - Build Stream's private disconnect signal from mandatory `pagi.connection->on_disconnect`; do not require optional `disconnect_future`. Retain proactive cancellation only for Stream-owned producer work and run local cleanup exactly once.
-- Until `PAGI::Test::Client` is separately corrected for PAGI 0.5 settlement, do not use its HTTP mock for Writer/Stream disconnect assertions. Use direct doubles that honor await-then-check settlement or a PAGI::Server 0.002010+ integration environment.
+- Until `PAGI::Test::Client` is separately corrected for PAGI 0.5 settlement, do not use its HTTP mock for Writer/Stream disconnect assertions. Use direct doubles that honor await-then-check settlement or a PAGI::Server 0.002011+ integration environment. Task 13 makes `PAGI::Test::ConnectionState` return a fresh cancellation-isolated `disconnect_future()` observer per call; new code races that observer directly without adding another defensive `without_cancel` shield.
 - Route remains an exact method-aware leaf; Mount remains prefix/subtree composition. Instantiated `to_app` objects are accepted as Route targets, while coderef apps still require `raw`.
 - Pages owns negotiated policy and presentation hooks only. It returns concrete Responses and is neither middleware nor a native arity-overloaded application.
 - WebSocket/SSE own protocol state and event-prefix adaptation. A File response is rejected before denial/decline response start.
@@ -51,8 +51,8 @@ Record and reconfirm this map before implementation, whenever architecture or sc
 | Repository | Ticket | Execution branch | Base | Owned changes | Deployment boundary | Push target |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | HTTP response family and streaming | isolated feature branch/worktree created by the selected execution skill | reviewed `main` containing spec `498d5d0` and this plan; record exact execution SHA | Response family, Request bridge removal, Routing/Pages/File/WS/SSE/Endpoint/middleware consumers, tests, examples, live POD/docs, upgrade/audit evidence named below | Unreleased PAGI-Tools `0.002003`; no deployment, CPAN release, tag, or merge in this plan | None unless the user separately authorizes publication |
-| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI` | Pending-I/O settlement contract | released `main`, PAGI `0.002006` | core spec 0.5 / Www 0.4 | Read-only authority; no changes owned by this campaign | Published on CPAN before Task 4 resumes | None |
-| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Server` | Pending-I/O settlement conformance | released `main`, PAGI::Server `0.002010` | conforms to PAGI core 0.5 / Www 0.4 | Read-only integration reference; no changes owned by this campaign | Published on CPAN before Task 4 resumes | None |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI` | Pending-I/O settlement contract | released `main`, PAGI `0.002007` | core spec 0.5 / Www 0.4, including cancellation-isolated disconnect observers | Read-only authority; no changes owned by this campaign | Published on CPAN | None |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Server` | Pending-I/O settlement conformance | released `main`, PAGI::Server `0.002011` | conforms to PAGI core 0.5 / Www 0.4 and isolates disconnect observers | Read-only integration reference; no changes owned by this campaign | Published on CPAN | None |
 
 ## Execution Tracking and Deviation Control
 
@@ -375,9 +375,9 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 - [ ] **Step 6: Rebase Writer on PAGI 0.5 settlement.** Store only invocation-local send, connection/transport handles, monotonic local state, counters, one outstanding-operation marker, callbacks, and disconnect reason. Every `write` awaits the exact `$send` Future without exposing cancellation to it, clears the outstanding marker on settlement, then refreshes connection state. If disconnected, return normally and do not increment `bytes_written`; never manufacture a disconnect exception. Propagate genuine failed/cancelled send outcomes according to their own settlement. `pipe_from` is a sequential Future chain that checks `is_disconnected` after each write and before requesting another chunk. `_abort` joins any active send and never cancels it. Delete `_Operation`, deferred-disconnect publication, and failure-observation logic rather than adapting them.
 
-- [ ] **Step 7: Simplify Stream's runner around one disconnect owner.** Snapshot configuration in `to_app`, emit/await start, create one Writer, and build one private Future from mandatory `on_disconnect`. Race that signal against the producer solely to cancel unrelated Stream-owned producer work proactively. The callback records facts and resolves the signal; it performs no asynchronous cleanup. Stream centralizes once-only abort/close cleanup, never cancels a PAGI send Future, emits no terminal event after disconnect, and propagates genuine producer/send failures without any same-turn precedence inspection. Reject non-HTTP scopes through the shared Response contract. Add `PAGI::Server 0.002010` under `develop` prerequisites as the integration reference, not a runtime dependency.
+- [ ] **Step 7: Simplify Stream's runner around one disconnect owner.** Snapshot configuration in `to_app`, emit/await start, create one Writer, and build one private Future from mandatory `on_disconnect`. Race that signal against the producer solely to cancel unrelated Stream-owned producer work proactively. The callback records facts and resolves the signal; it performs no asynchronous cleanup. Stream centralizes once-only abort/close cleanup, never cancels a PAGI send Future, emits no terminal event after disconnect, and propagates genuine producer/send failures without any same-turn precedence inspection. Reject non-HTTP scopes through the shared Response contract. Add `PAGI::Server 0.002011` under `develop` prerequisites as the integration reference, not a runtime dependency.
 
-- [ ] **Step 8: Run GREEN and compatibility gates.** Run Step 5, then Router HEAD tests proving Stream HEAD runs/awaits its producer while suppressing body events and an earlier explicit HEAD route avoids producer invocation. Verify the installed integration reference is PAGI::Server 0.002010 or newer when running any server-backed probe. Compile/podcheck all four modules under project Perl 5.42.2, syntax-check `cpanfile`, and run `git diff --check`.
+- [ ] **Step 8: Run GREEN and compatibility gates.** Run Step 5, then Router HEAD tests proving Stream HEAD runs/awaits its producer while suppressing body events and an earlier explicit HEAD route avoids producer invocation. Verify the installed integration reference is PAGI::Server 0.002011 or newer when running any server-backed probe. Compile/podcheck all four modules under project Perl 5.42.2, syntax-check `cpanfile`, and run `git diff --check`.
 
 - [ ] **Step 9: Commit, report, review, and update the ledger.** Stage only the Task 4 files changed by the PAGI 0.5 correction and commit `fix: align streaming with PAGI 0.5 settlement`. Record `f92e568`, `3aa0bfe`, and `c40e08c` as the earlier implementation/review chain, the discarded uncommitted fix round as obsolete WIP, and the corrective commit as the new review target. Obtain independent review before protocol integration and final consumers.
 
@@ -622,18 +622,21 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 - Modify: `lib/PAGI/Test/Client.pm`
 - Modify: `lib/PAGI/Test/Response.pm`
+- Modify: `lib/PAGI/Test/ConnectionState.pm`
 - Modify: `t/test-client/01-response.t`, `02-client-http.t`, `03-websocket.t`, `04-sse.t`, `05-lifespan.t`, `06-integration.t`, `07-multi-value.t`, `08-exception-handling.t`
 - Modify: `t/test-client-app-coercion.t`, `t/test-client-scope-method.t`
+- Modify: `t/test/connection-state.t`
 
 **Interfaces:**
 
 - Test Client accepts a coderef or instantiated `to_app` root and records wire events.
 - Test Response decodes wire results, repeated headers, and opaque body/file events; it is not a production Response constructor.
+- Test ConnectionState retains one private disconnect master and returns a fresh cancellation-isolated observer from every `disconnect_future()` call, matching PAGI 0.002007 and PAGI::Server 0.002011. A caller races the returned observer directly; toolkit code does not add a second defensive shield.
 
-- [ ] **Step 1: Rewrite utility contract tests first.** Pin app coercion, HTTP/WebSocket/SSE/lifespan operation, repeated headers, exceptions, file/body events, and absence of dependencies on removed mutable Response internals.
-- [ ] **Step 2: Run RED.** Run all ten named files together. Expected failures must be utility-owned coercion or event decoding; failures in the application under test remain with its earlier owner.
-- [ ] **Step 3: Implement the utility migration.** Keep captured-wire semantics, use final app coercion, and remove builder assumptions. Do not make Test Response inherit from or proxy production Response.
-- [ ] **Step 4: Run GREEN, compile/POD, and commit.** Rerun Step 2, compile/podcheck both modules, run `git diff --check`, commit `refactor: migrate response test utilities`, and obtain independent utility review.
+- [ ] **Step 1: Rewrite utility contract tests first.** Pin app coercion, HTTP/WebSocket/SSE/lifespan operation, repeated headers, exceptions, file/body events, and absence of dependencies on removed mutable Response internals. Add the reference cancellation-isolation regression: let work win `wait_any($work, $conn->disconnect_future)`, then obtain a fresh observer and prove a later disconnect resolves it while the first losing observer remains cancelled.
+- [ ] **Step 2: Run RED.** Run all ten Test Client files plus `t/test/connection-state.t` together. Expected failures must be utility-owned coercion, event decoding, or the raw-shared disconnect Future; failures in the application under test remain with its earlier owner.
+- [ ] **Step 3: Implement the utility migration.** Keep captured-wire semantics, use final app coercion, and remove builder assumptions. Do not make Test Response inherit from or proxy production Response. Keep one private cached disconnect master, but return `$master->without_cancel` from every accessor call so each caller receives a fresh isolated observer; do not scatter defensive shielding through consumers.
+- [ ] **Step 4: Run GREEN, compile/POD, and commit.** Rerun Step 2, compile/podcheck all three modules, run `git diff --check`, commit `refactor: migrate response test utilities`, and obtain independent utility review.
 
 ---
 
@@ -739,7 +742,7 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 - [ ] **Step 3: Perform adversarial probes.** At minimum probe: unchanged Response concurrent emission; mutation after `to_app`; component Route method union; Stream overlapping writes, a send pending at disconnect resolving normally, resumed connection-state visibility, no send cancellation, proactive producer cancellation, and exactly-once cleanup; file logical-window physical offsets and deferred existence; Pages repeated Accept; ErrorHandler after-start failure; protocol shallow scope clone/File rejection; and Apple DELETE of an unknown root path returning custom 404 rather than wildcard 405.
 
-- [ ] **Step 4: Run compatibility, POD, and live-surface gates.** Compile every changed distribution module with project Perl 5.42.2, podcheck every changed POD, run `t/00-load.t`, run the full obsolete-spelling search, verify no unexpected runtime dependency, confirm any server-backed settlement probe uses PAGI::Server 0.002010 or newer, and run `git diff --check`.
+- [ ] **Step 4: Run compatibility, POD, and live-surface gates.** Compile every changed distribution module with project Perl 5.42.2, podcheck every changed POD, run `t/00-load.t`, run the full obsolete-spelling search, verify no unexpected runtime dependency, confirm any server-backed settlement probe uses PAGI::Server 0.002011 or newer, and run `git diff --check`.
 
 - [ ] **Step 5: Pause for Phase A review.** Obtain independent exhaustive review of the audit map, adversarial evidence, all corrections, exact HEAD, and the reserved suite/build commands. Do not run the full suite until the reviewer approves Phase B.
 

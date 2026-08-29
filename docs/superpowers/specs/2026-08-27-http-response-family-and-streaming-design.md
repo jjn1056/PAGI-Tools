@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-27
 
-**Status:** Approved design; amended 2026-08-28 for PAGI 0.5 settlement
+**Status:** Approved design; amended 2026-08-28 for PAGI 0.5 settlement and
+2026-08-29 for cancellation-isolated disconnect observers
 
 **Scope:** Replace the all-purpose `PAGI::Response` body modes with a small,
 extensible HTTP response family; make every response a complete terminal PAGI
@@ -12,8 +13,9 @@ streaming request-body APIs; define output-stream backpressure; reduce
 WebSocket denial and SSE decline without conflating HTTP streaming with live
 protocol connections
 
-**Settlement amendment:** PAGI 0.002006 (core 0.5 / Www 0.4) and
-PAGI::Server 0.002010 now define pending-I/O settlement at disconnect. This
+**Settlement amendment:** PAGI 0.002007 (core 0.5 / Www 0.4) and
+PAGI::Server 0.002011 now define pending-I/O settlement at disconnect and
+cancellation-isolated `disconnect_future()` observers. This
 amendment reverses two earlier Stream commitments: disconnect never
 manufactures a failed Writer operation, and there is no
 failure-versus-disconnect simultaneity for the framework to arbitrate. A
@@ -111,13 +113,15 @@ Pages arity-overloaded endpoint convention.
 | Repository | Work item | Branch | Base | Owned changes | Deployment boundary | Push target |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | HTTP response family and streaming | `main` | `main@c5d0c301e2a59fb7451b3848e541b2fbfe1873de` | This design specification only | Documentation/design; no runtime change | None requested |
-| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI` | Pending-I/O settlement contract | released `main` | PAGI `0.002006`, core 0.5 / Www 0.4 | Read-only normative dependency after the settlement amendment | Published on CPAN | None |
-| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Server` | Pending-I/O settlement conformance | released `main` | PAGI::Server `0.002010` | Read-only integration reference after the settlement amendment | Published on CPAN | None |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI` | Pending-I/O settlement contract | released `main` | PAGI `0.002007`, core 0.5 / Www 0.4 | Read-only normative dependency after the settlement amendment | Published on CPAN | None |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Server` | Pending-I/O settlement conformance | released `main` | PAGI::Server `0.002011` | Read-only integration reference after the settlement amendment | Published on CPAN | None |
 
 The implementation remains confined to PAGI-Tools. During Task 4 the original
 design exposed a protocol ambiguity around I/O already pending at disconnect.
 That ambiguity was resolved upstream and released as PAGI 0.002006 (core 0.5 /
-Www 0.4); PAGI::Server 0.002010 conforms and pins the contract over HTTP/1,
+Www 0.4); PAGI 0.002007 clarifies that every `disconnect_future()` observer
+is cancellation-isolated, and PAGI::Server 0.002011 conforms and pins the
+contract over HTTP/1,
 HTTP/2, WebSocket, and SSE. Those released repositories are authoritative
 dependencies, not implementation scope for this campaign.
 
@@ -1042,6 +1046,15 @@ completed transition may still invoke immediately and must remain safe.
 its portable private signal from mandatory `on_disconnect` rather than
 requiring that convenience method.
 
+When code does use `disconnect_future`, PAGI 0.002007 guarantees a fresh
+cancellation-isolated observer for every call. It may be passed directly to
+`Future->wait_any`; when it loses, only that observer is cancelled and the
+connection's private master plus later observers remain live. A loop obtains a
+fresh observer for each race. Consumers do not add a redundant
+`without_cancel` shield, which would teach the obsolete shared-Future hazard.
+`PAGI::Test::ConnectionState` mirrors this contract in the Test Client utility
+task by retaining one private master and returning an isolated observer.
+
 The Stream runner races that signal against the producer Future without
 consuming `$receive`:
 
@@ -1381,7 +1394,8 @@ event follows the terminal decline.
 
 Both methods await every adapted send Future and preserve multi-chunk `more`
 flags. The successful resolution of the mapped start send is the commitment
-boundary: under PAGI 0.002006 it means the server validated and consumed the
+boundary: under current PAGI 0.002007 (with the send contract introduced in
+0.002006) it means the server validated and consumed the
 event and accepted it into outbound processing (or discarded it after the
 connection ended). It does not mean the client received the event. Here,
 "committed" means only that the denial owns the response slot under the
