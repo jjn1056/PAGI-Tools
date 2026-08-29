@@ -100,7 +100,7 @@ sub wrap {
         }
 
         if ($too_large) {
-            await $self->_send_error($scope, $send, 413);
+            await $self->_send_error($scope, $receive, $send, 413);
             return;
         }
 
@@ -168,11 +168,11 @@ sub _get_header {
 }
 
 async sub _send_error {
-    my ($self, $scope, $send, $status) = @_;
+    my ($self, $scope, $receive, $send, $status) = @_;
     die "PAGI::Middleware::FormBody does not own status $status"
         unless $status == 413;
     my $response = PAGI::Pages->content_too_large($scope);
-    await Future->wrap($response->respond($send));
+    await Future->wrap($response->respond($scope, $receive, $send));
 }
 
 1;

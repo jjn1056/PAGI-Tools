@@ -107,7 +107,9 @@ sub wrap {
         my ($allowed, $remaining, $reset) = $self->_check_rate_limit($key);
 
         if (!$allowed) {
-            await $self->_send_rate_limited($scope, $send, $remaining, $reset);
+            await $self->_send_rate_limited(
+                $scope, $receive, $send, $remaining, $reset,
+            );
             return;
         }
 
@@ -185,7 +187,7 @@ sub _check_rate_limit {
 }
 
 async sub _send_rate_limited {
-    my ($self, $scope, $send, $remaining, $reset) = @_;
+    my ($self, $scope, $receive, $send, $remaining, $reset) = @_;
 
     my $retry_after = $reset - _now();
     $retry_after = 1 if $retry_after < 1;
@@ -199,7 +201,7 @@ async sub _send_rate_limited {
             'X-RateLimit-Reset'     => $reset,
         ],
     );
-    await Future->wrap($response->respond($send));
+    await Future->wrap($response->respond($scope, $receive, $send));
 }
 
 # Class method to reset rate limits (useful for testing)

@@ -161,7 +161,7 @@ sub wrap {
 
         # Use timing-safe comparison to prevent timing attacks
         if (!$submitted_token || !$cookie_token || !secure_compare($submitted_token, $cookie_token)) {
-            await $self->_send_error($scope, $send, 403);
+            await $self->_send_error($scope, $receive, $send, 403);
             return;
         }
 
@@ -211,11 +211,11 @@ sub _get_header {
 }
 
 async sub _send_error {
-    my ($self, $scope, $send, $status) = @_;
+    my ($self, $scope, $receive, $send, $status) = @_;
     die "PAGI::Middleware::CSRF does not own status $status"
         unless $status == 403;
     my $response = PAGI::Pages->forbidden($scope);
-    await Future->wrap($response->respond($send));
+    await Future->wrap($response->respond($scope, $receive, $send));
 }
 
 1;

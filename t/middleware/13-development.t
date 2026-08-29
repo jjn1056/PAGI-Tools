@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use JSON::MaybeXS ();
@@ -30,6 +31,34 @@ sub make_scope {
 sub run_async (&) {
     my ($code) = @_;
     $loop->await($code->());
+}
+
+sub assert_maintenance_settlement {
+    my ($maintenance, $label) = @_;
+    my ($start_gate, $body_gate) = (Future->new, Future->new);
+    my @events;
+    my $wrapped = $maintenance->wrap(async sub {
+        die "$label rejection reached downstream";
+    });
+    my $running = $wrapped->(
+        make_scope(headers => [['Accept', 'text/plain']]),
+        sub { Future->done({ type => 'http.disconnect' }) },
+        sub {
+            push @events, $_[0];
+            return @events == 1 ? $start_gate : $body_gate;
+        },
+    );
+
+    is scalar(@events), 1, "$label emits only response start before settlement";
+    ok !$running->is_ready, "$label waits for response-start settlement";
+    $start_gate->done;
+    is scalar(@events), 2, "$label emits one body after response-start settlement";
+    ok !$running->is_ready, "$label waits for terminal-body settlement";
+    $body_gate->done;
+    is dies { $loop->await($running) }, undef,
+        "$label completes after the terminal send settles";
+    ok !$start_gate->is_cancelled && !$body_gate->is_cancelled,
+        "$label does not cancel server-owned send Futures";
 }
 
 # ===================
@@ -358,6 +387,20 @@ subtest 'Maintenance middleware - option presence selects the literal branch' =>
         like $events[1]{body}, qr/Under Maintenance/,
             "the presence of $option retains the literal default body";
     }
+};
+
+subtest 'maintenance-owned rejections await concrete response emission' => sub {
+    assert_maintenance_settlement(
+        PAGI::Middleware::Maintenance->new(enabled => 1),
+        'default Pages 503',
+    );
+    assert_maintenance_settlement(
+        PAGI::Middleware::Maintenance->new(
+            enabled => 1,
+            body    => 'literal maintenance',
+        ),
+        'literal concrete 503',
+    );
 };
 
 subtest 'Maintenance middleware - passes through when disabled' => sub {

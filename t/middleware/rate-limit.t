@@ -3,6 +3,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use JSON::MaybeXS ();
@@ -115,6 +116,40 @@ subtest 'default 429 negotiates through Pages and retains rate-limit fields' => 
     my $problem = JSON::MaybeXS::decode_json($limited[1]{body});
     is $problem->{status}, 429, 'problem status matches the wire status';
     is $problem->{title}, 'Too Many Requests', 'problem uses the stock title';
+};
+
+subtest 'rate-limit rejection awaits concrete response emission' => sub {
+    PAGI::Middleware::RateLimit->_clear_buckets();
+    my $mw = PAGI::Middleware::RateLimit->new(
+        requests_per_second => 0.1,
+        burst               => 1,
+    );
+    my $wrapped = $mw->wrap($simple_app);
+    make_request($wrapped, '10.30.40.50');
+
+    my ($start_gate, $body_gate) = (Future->new, Future->new);
+    my @events;
+    my $running = $wrapped->(
+        make_scope('10.30.40.50', [['Accept', 'text/plain']]),
+        sub { Future->done({ type => 'http.disconnect' }) },
+        sub {
+            push @events, $_[0];
+            return @events == 1 ? $start_gate : $body_gate;
+        },
+    );
+
+    is scalar(@events), 1,
+        '429 emits only response start before settlement';
+    ok !$running->is_ready, '429 waits for response-start settlement';
+    $start_gate->done;
+    is scalar(@events), 2,
+        '429 emits one body after response-start settlement';
+    ok !$running->is_ready, '429 waits for terminal-body settlement';
+    $body_gate->done;
+    is dies { $loop->await($running) }, undef,
+        '429 completes after the terminal send settles';
+    ok !$start_gate->is_cancelled && !$body_gate->is_cancelled,
+        '429 does not cancel server-owned send Futures';
 };
 
 # =============================================================================

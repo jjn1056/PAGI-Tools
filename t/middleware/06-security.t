@@ -3,6 +3,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use JSON::MaybeXS qw(decode_json);
@@ -15,7 +16,7 @@ use PAGI::Middleware::SecurityHeaders;
 use PAGI::Middleware::TrustedHosts;
 use PAGI::Middleware::CSRF;
 use PAGI::Headers;
-use PAGI::Response;
+use PAGI::Response::Text;
 
 my $loop = IO::Async::Loop->new;
 
@@ -29,6 +30,31 @@ sub response_header_values {
     my ($event, $name) = @_;
     return map { $_->[1] }
         grep { lc($_->[0]) eq lc($name) } @{$event->{headers}};
+}
+
+sub assert_owned_response_settlement {
+    my ($wrapped, $scope, $receive, $label) = @_;
+    my ($start_gate, $body_gate) = (Future->new, Future->new);
+    my @events;
+    my $running = $wrapped->(
+        $scope,
+        $receive,
+        sub {
+            push @events, $_[0];
+            return @events == 1 ? $start_gate : $body_gate;
+        },
+    );
+
+    is scalar(@events), 1, "$label emits only response start before settlement";
+    ok !$running->is_ready, "$label waits for response-start settlement";
+    $start_gate->done;
+    is scalar(@events), 2, "$label emits one body after response-start settlement";
+    ok !$running->is_ready, "$label waits for terminal-body settlement";
+    $body_gate->done;
+    is dies { $loop->await($running) }, undef,
+        "$label completes after the terminal send settles";
+    ok !$start_gate->is_cancelled && !$body_gate->is_cancelled,
+        "$label does not cancel server-owned send Futures";
 }
 
 # =============================================================================
@@ -743,6 +769,35 @@ subtest 'TrustedHosts preserves non-HTTP pass-through gate' => sub {
     is $seen_scope, $scope, 'WebSocket scope with duplicate Host passes through untouched';
 };
 
+subtest 'security-owned rejections await concrete response emission' => sub {
+    my @cases = (
+        [
+            'TrustedHosts 400',
+            PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'])
+                ->wrap(async sub { die 'TrustedHosts rejection reached downstream' }),
+            {
+                type => 'http', method => 'GET', path => '/', headers => [],
+            },
+        ],
+        [
+            'CSRF 403',
+            PAGI::Middleware::CSRF->new(secret => 'test-secret')
+                ->wrap(async sub { die 'CSRF rejection reached downstream' }),
+            {
+                type => 'http', method => 'POST', path => '/', headers => [],
+            },
+        ],
+    );
+
+    for my $case (@cases) {
+        assert_owned_response_settlement(
+            $case->[1], $case->[2],
+            sub { Future->done({ type => 'http.disconnect' }) },
+            $case->[0],
+        );
+    }
+};
+
 subtest 'TrustedHosts does not catch downstream exceptions' => sub {
     my $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com']);
     my $diagnostic = "TrustedHosts downstream sentinel\n";
@@ -1072,11 +1127,11 @@ subtest "CSRF enforce => 'app' preserves an application-owned Response" => sub {
     my $send = async sub { my ($event) = @_; push @sent, $event };
     my $wrapped = $mw->wrap(async sub {
         my ($scope, $receive, $downstream_send) = @_;
-        my $response = PAGI::Response->text(
+        my $response = PAGI::Response::Text->new(
             'application-owned CSRF rejection',
             status => 403,
         );
-        await $response->respond($downstream_send);
+        await $response->respond($scope, $receive, $downstream_send);
     });
 
     run_async(async sub {
