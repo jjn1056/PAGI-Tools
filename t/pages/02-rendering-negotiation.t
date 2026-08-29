@@ -308,6 +308,15 @@ subtest 'auto negotiation selects the documented representation families' => sub
     my $repeated = send_response(PAGI::Pages->not_found($repeated_scope));
     is(header($repeated, 'Content-Type'), 'text/plain; charset=utf-8',
         'repeated Accept fields are combined in wire order');
+
+    my $later_winner_scope = http_scope();
+    $later_winner_scope->{headers} = [
+        ['Accept' => 'application/xml'],
+        ['Accept' => 'text/plain'],
+    ];
+    my $later_winner = send_response(PAGI::Pages->not_found($later_winner_scope));
+    is(header($later_winner, 'Content-Type'), 'text/plain; charset=utf-8',
+        'a later repeated Accept field can supply the winning supported type');
 };
 
 subtest 'fixed representation ignores Accept and does not add Vary' => sub {

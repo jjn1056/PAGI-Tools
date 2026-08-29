@@ -164,11 +164,57 @@ subtest 'response invocation and to_app use stable snapshots' => sub {
     is scalar @one, 1, 'first concurrent invocation emitted its start';
     is scalar @two, 1, 'second concurrent invocation emitted its start';
     $one_start->done;
-    $two_start->done;
     $one_emission->get;
+    is \@one, [
+        {
+            type    => 'http.response.start',
+            status  => 202,
+            headers => [
+                ['Content-Type' => 'application/octet-stream'],
+                ['X-Later' => 'yes'],
+                ['content-length' => 4],
+            ],
+        },
+        { type => 'http.response.body', body => 'body', more => 0 },
+    ], 'first invocation completes its own start/body sequence';
+    is \@two, [
+        {
+            type    => 'http.response.start',
+            status  => 202,
+            headers => [
+                ['Content-Type' => 'application/octet-stream'],
+                ['X-Later' => 'yes'],
+                ['content-length' => 4],
+            ],
+        },
+    ], 'second invocation remains blocked without a crossed body';
+
+    $two_start->done;
     $two_emission->get;
-    is $one[0]{status}, 202, 'unchanged response can serve one invocation';
-    is $two[0]{status}, 202, 'unchanged response can serve concurrently elsewhere';
+    is \@one, [
+        {
+            type    => 'http.response.start',
+            status  => 202,
+            headers => [
+                ['Content-Type' => 'application/octet-stream'],
+                ['X-Later' => 'yes'],
+                ['content-length' => 4],
+            ],
+        },
+        { type => 'http.response.body', body => 'body', more => 0 },
+    ], 'settling the second invocation does not alter the first sequence';
+    is \@two, [
+        {
+            type    => 'http.response.start',
+            status  => 202,
+            headers => [
+                ['Content-Type' => 'application/octet-stream'],
+                ['X-Later' => 'yes'],
+                ['content-length' => 4],
+            ],
+        },
+        { type => 'http.response.body', body => 'body', more => 0 },
+    ], 'second invocation completes its own start/body sequence';
 
     my @snapshot;
     $app->(http_scope(), receive(), sub { push @snapshot, $_[0]; Future->done })->get;
