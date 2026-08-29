@@ -6,6 +6,7 @@ use warnings;
 use Carp qw(croak);
 use Cookie::Baker ();
 use Exporter qw(import);
+use Future;
 use Future::AsyncAwait;
 use PAGI::Headers ();
 use Scalar::Util qw(blessed);
@@ -88,6 +89,16 @@ request URL path must be resolved under a configured root.
 =cut
 
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);
+my %DIRECT_PROTOCOL_RESPONSE = map { $_ => 1 } qw(
+    PAGI::Response
+    PAGI::Response::Text
+    PAGI::Response::HTML
+    PAGI::Response::JSON
+    PAGI::Response::Problem
+    PAGI::Response::Redirect
+    PAGI::Response::Empty
+    PAGI::Response::Stream
+);
 
 our @EXPORT_OK = qw(
     response text_response html_response json_response problem_response
@@ -462,6 +473,109 @@ sub _validate_http_triplet {
         unless defined $scope->{type} && !ref($scope->{type}) && $scope->{type} eq 'http';
     croak 'Response receive must be a coderef' unless ref($receive) eq 'CODE';
     croak 'Response send must be a coderef' unless ref($send) eq 'CODE';
+    return;
+}
+
+# Private bridge used by protocol handshake denials. It deliberately keeps the
+# complete Response triplet intact: only the top-level scope type/method and
+# emitted event type are adapted. The mapped send Future remains server-owned.
+sub _validate_protocol_response {
+    my ($response, $operation) = @_;
+    $operation //= 'Protocol response';
+    croak "$operation requires exactly one concrete PAGI::Response"
+        unless blessed($response) && $response->isa('PAGI::Response');
+    croak "$operation does not support PAGI::Response::File"
+        if $response->isa('PAGI::Response::File');
+    return;
+}
+
+async sub _respond_for_protocol {
+    my ($response, $scope, $receive, $send, $prefix, $operation) = @_;
+    _validate_protocol_response($response, $operation);
+    croak "$operation requires a protocol scope hashref"
+        unless ref($scope) eq 'HASH' && !blessed($scope);
+    croak "$operation receive must be a coderef" unless ref($receive) eq 'CODE';
+    croak "$operation send must be a coderef" unless ref($send) eq 'CODE';
+    croak "$operation requires a protocol response prefix"
+        unless defined($prefix) && !ref($prefix) && length($prefix);
+
+    my %http_scope = (
+        %$scope,
+        type   => 'http',
+        method => 'GET',
+    );
+    my $emission_state = 'initial';
+
+    my $map_event = sub {
+        my ($event) = @_;
+        croak "$operation Response events must be unblessed hashrefs"
+            unless @_ == 1 && ref($event) eq 'HASH' && !blessed($event);
+
+        my $type = $event->{type} // '';
+        croak "$operation cannot adapt opaque file/fh response bodies"
+            if exists($event->{file}) || exists($event->{fh});
+
+        my %mapped = %$event;
+        if ($type eq 'http.response.start') {
+            croak "$operation cannot adapt responses that declare trailers"
+                if exists $event->{trailers};
+            croak "$operation received duplicate or out-of-order response start"
+                unless $emission_state eq 'initial';
+            $mapped{type} = "$prefix.start";
+            $emission_state = 'body';
+        }
+        elsif ($type eq 'http.response.body') {
+            croak "$operation received response body before response start"
+                unless $emission_state eq 'body';
+            $mapped{type} = "$prefix.body";
+            $emission_state = 'complete' unless $event->{more};
+        }
+        else {
+            croak "$operation cannot adapt unknown HTTP response event '$type'";
+        }
+
+        return \%mapped;
+    };
+
+    my $mapped_send = async sub {
+        my ($event) = @_;
+        my $mapped = $map_event->($event);
+
+        await Future->wrap($send->($mapped))->without_cancel;
+        return;
+    };
+
+    if ($DIRECT_PROTOCOL_RESPONSE{ref $response}) {
+        await Future->wrap(
+            $response->respond(\%http_scope, $receive, $mapped_send),
+        );
+    }
+    else {
+        # An arbitrary Response subclass may emit its own event sequence. Fully
+        # validate that finite sequence before replay so a late opaque/trailer/
+        # unknown event cannot leave a partially started protocol response.
+        my @mapped_events;
+        my $validate_send = sub {
+            my ($event) = @_;
+            push @mapped_events, $map_event->($event);
+            return Future->done;
+        };
+        await Future->wrap(
+            $response->respond(\%http_scope, $receive, $validate_send),
+        );
+        croak "$operation Response did not emit response start"
+            if $emission_state eq 'initial';
+        croak "$operation Response did not emit a terminal response body"
+            unless $emission_state eq 'complete';
+        for my $event (@mapped_events) {
+            await Future->wrap($send->($event))->without_cancel;
+        }
+    }
+
+    croak "$operation Response did not emit response start"
+        if $emission_state eq 'initial';
+    croak "$operation Response did not emit a terminal response body"
+        unless $emission_state eq 'complete';
     return;
 }
 

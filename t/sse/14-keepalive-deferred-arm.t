@@ -6,6 +6,7 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use PAGI::Response::Text;
 use PAGI::SSE;
 
 # DEVIATION D-1 (signed off by John 2026-08-25): sse.keepalive sent before
@@ -84,7 +85,7 @@ subtest 'decline clears a recorded-but-never-armed pending keepalive' => sub {
     my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
 
     $sse->keepalive(25)->get;               # recorded, not yet sent (pre-start)
-    $sse->decline(status => 401)->get;
+    $sse->decline(PAGI::Response::Text->new('Unauthorized', status => 401))->get;
 
     # No sse.keepalive ever reaches the wire -- it was never armed, so
     # there is nothing to disarm either.
@@ -102,7 +103,7 @@ subtest 'start() after decline does not resurrect a cleared pending keepalive' =
     my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
 
     $sse->keepalive(25)->get;
-    $sse->decline(status => 401)->get;
+    $sse->decline(PAGI::Response::Text->new('Unauthorized', status => 401))->get;
     my $before = scalar @sent;
 
     $sse->start->get;   # safe no-op per Task 8 -- must not arm anything either

@@ -7,6 +7,7 @@ use Future;
 
 use lib 'lib';
 use PAGI::Endpoint::SSE;
+use PAGI::Response::Text;
 use PAGI::Test::Client;
 
 # DEVIATION D-1 (signed off by John 2026-08-25): Endpoint::SSE::handle arms
@@ -87,7 +88,7 @@ package DeclineWithKeepalive {
 
     async sub on_connect {
         my ($self, $sse) = @_;
-        await $sse->decline(status => 401, body => 'Unauthorized');
+        await $sse->decline(PAGI::Response::Text->new('Unauthorized', status => 401));
     }
 }
 

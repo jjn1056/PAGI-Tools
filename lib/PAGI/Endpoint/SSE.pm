@@ -142,7 +142,9 @@ streaming -- an auth gate, for example:
         my ($self, $sse) = @_;
 
         unless (authorized($sse)) {
-            await $sse->decline(status => 401, body => 'Unauthorized');
+            await $sse->decline(
+                PAGI::Response::Text->new('Unauthorized', status => 401),
+            );
             return;
         }
 

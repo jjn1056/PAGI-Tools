@@ -7,6 +7,7 @@ use Future;
 
 use lib 'lib';
 use PAGI::Endpoint::SSE;
+use PAGI::Response::Text;
 use PAGI::Test::Client;
 
 # A2 end-to-end: an Endpoint::SSE subclass that declines from on_connect
@@ -24,11 +25,11 @@ package DeclineOnConnect {
 
     async sub on_connect {
         my ($self, $sse) = @_;
-        await $sse->decline(
+        await $sse->decline(PAGI::Response::Text->new(
+            'Unauthorized',
             status  => 401,
-            headers => [['content-type', 'text/plain'], ['www-authenticate', 'Bearer']],
-            body    => 'Unauthorized',
-        );
+            headers => ['www-authenticate' => 'Bearer'],
+        ));
     }
 }
 
@@ -54,7 +55,7 @@ package DeclineThenTryToStream {
 
     async sub on_connect {
         my ($self, $sse) = @_;
-        await $sse->decline(status => 403, body => 'Forbidden');
+        await $sse->decline(PAGI::Response::Text->new('Forbidden', status => 403));
     }
 }
 

@@ -6,6 +6,7 @@ use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
+use PAGI::Response ();
 use Scalar::Util qw(blessed);
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 
@@ -308,17 +309,18 @@ async sub keepalive {
     return $self;
 }
 
-# Decline the request with a real HTTP response instead of starting the SSE
-# stream (auth gate, not-found, etc.). Parity with PAGI::WebSocket->deny.
-# Sends sse.http.response.start + sse.http.response.body (single terminal
-# chunk, more => 0) and marks the connection closed; start/run/send* methods
-# become safe no-ops afterward. See PAGI::Spec::Www "SSE Response Denial".
+# Decline the request with a concrete HTTP Response instead of starting SSE.
+# See PAGI::Spec::Www "SSE Response Denial".
 async sub decline {
-    my ($self, %opts) = @_;
+    my ($self, @args) = @_;
+    croak 'SSE decline requires exactly one concrete PAGI::Response'
+        unless @args == 1;
+    my $response = $args[0];
+    PAGI::Response::_validate_protocol_response($response, 'SSE decline');
 
-    my $status  = $opts{status}  // 403;
-    my $headers = $opts{headers} // [];
-    my $body    = defined $opts{body} ? $opts{body} : '';
+    return $self if $self->{_declined};
+    croak 'SSE decline is only valid before start while pending'
+        unless $self->{_state} eq 'pending';
 
     # A keepalive requested before this connection was ever accepted (e.g.
     # the Endpoint::SSE keepalive_interval, requested before on_connect
@@ -327,32 +329,19 @@ async sub decline {
     # nothing was ever sent, so there's nothing to disarm, just drop it.
     delete $self->{_pending_keepalive};
 
-    # Defensive: if a keepalive somehow WAS already armed (sent live) before
-    # decline() was called, disarm it -- the server's periodic timer would
-    # otherwise keep firing sse.comment pings after the response terminal,
-    # the same first-send-wins violation a stray sse.start would be. Sent
-    # directly (not via keepalive(), which is about to become a no-op
-    # below). This path shouldn't be reachable through the documented API
-    # (decline is only legal pre-start, and keepalive only arms live once
-    # started), but is kept as a defense-in-depth backstop.
-    if ($self->{_keepalive_armed}) {
-        await $self->{send}->({ type => 'sse.keepalive', interval => 0, comment => '' });
-        $self->{_keepalive_armed} = 0;
-    }
-
-    await $self->{send}->({
-        type    => 'sse.http.response.start',
-        status  => $status,
-        headers => $headers,
-    });
-    await $self->{send}->({
-        type => 'sse.http.response.body',
-        body => $body,
-        more => 0,
-    });
+    await PAGI::Response::_respond_for_protocol(
+        $response,
+        $self->{scope},
+        $self->{receive},
+        $self->{send},
+        'sse.http.response',
+        'SSE decline',
+    );
 
     $self->{_declined} = 1;
-    $self->_set_state('closed');
+    $self->{_disconnect_reason} //= 'declined';
+    $self->_set_closed;
+    await $self->_run_close_callbacks;
 
     return $self;
 }
@@ -1096,36 +1085,27 @@ C<on_connect> runs), C<start> arms it immediately after sending C<sse.start>
 
 =head2 decline
 
-    await $sse->decline;
-    await $sse->decline(
+    await $sse->decline(PAGI::Response::Text->new(
+        'Unauthorized',
         status  => 401,
-        headers => [ [ 'content-type', 'text/plain' ], [ 'www-authenticate', 'Bearer' ] ],
-        body    => 'Unauthorized',
-    );
+        headers => ['www-authenticate' => 'Bearer'],
+    ));
 
 Declines the request with a real HTTP response instead of starting the SSE
 stream -- an auth gate, a not-found, a rate limit, anything that should
 return an ordinary response rather than open an event stream. This is the
 SSE parity of L<PAGI::WebSocket/deny>.
 
-Sends C<sse.http.response.start> (with C<status> and C<headers>) followed by
-C<sse.http.response.body> as a single terminal chunk (C<< more => 0 >>), then
-marks the connection closed. Per the B<first-send-wins> rule (see
+Maps the Response's HTTP start/body events in order to
+C<sse.http.response.start> and C<sse.http.response.body>, retaining multi-chunk
+C<more> values and send backpressure, then marks the request closed. File,
+filehandle, trailer, and unknown events are rejected. Per the
+B<first-send-wins> rule (see
 L<PAGI::Spec::Www/"SSE Response Denial">), this must happen B<before>
 C<start> or any send method has run -- declining after the stream has
-already started is a protocol violation the server will raise on.
-
-Options (all optional):
-
-=over 4
-
-=item * C<status> - HTTP status code. Defaults to C<403>.
-
-=item * C<headers> - Arrayref of C<< [name, value] >> pairs. Defaults to C<[]>.
-
-=item * C<body> - Response body string. Defaults to C<''>.
-
-=back
+already started fails before another event is sent. The Response is invoked
+with a shallow HTTP-scope clone whose C<type> is C<http> and C<method> is
+C<GET>; the live SSE scope and all nested references are left unchanged.
 
 After C<decline>, C<start>, C<run>, and the send methods (C<send>,
 C<send_json>, C<send_event>, C<send_comment>, C<keepalive>) all become B<safe
@@ -1145,7 +1125,9 @@ C<on_connect> (see L<PAGI::Endpoint::SSE/on_connect>):
         my ($self, $sse) = @_;
 
         unless (authorized($sse)) {
-            await $sse->decline(status => 401, body => 'Unauthorized');
+            await $sse->decline(
+                PAGI::Response::Text->new('Unauthorized', status => 401),
+            );
             return;
         }
 
