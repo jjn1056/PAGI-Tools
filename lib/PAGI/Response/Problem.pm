@@ -32,6 +32,9 @@ and C<instance> are optional and validated when present; other JSON-encodable
 members are extensions. Missing C<type> has the effective RFC value
 C<about:blank> without inserting that member. A document C<status> supplies
 the HTTP status unless an equal constructor status is given; mismatches croak.
+When the document contains C<status>, that agreement remains response-owned:
+an incompatible status mutation is rejected, and snapshots validate the
+agreement again before any event can be emitted.
 
 =cut
 
@@ -59,10 +62,41 @@ sub new {
         }
     }
 
-    return $class->SUPER::new($problem, @pairs);
+    my $self = $class->SUPER::new($problem, @pairs);
+    $self->{_problem_document_status} = 0 + $problem->{status}
+        if exists $problem->{status};
+    return $self;
 }
 
 sub default_content_type { 'application/problem+json' }
+
+sub status {
+    my ($self, $status) = @_;
+    return $self->SUPER::status if @_ == 1;
+
+    PAGI::Response::_validate_status($status);
+    croak 'Problem document and HTTP statuses must agree'
+        if exists($self->{_problem_document_status})
+            && 0 + $status != $self->{_problem_document_status};
+    return $self->SUPER::status($status);
+}
+
+sub _snapshot {
+    my ($self) = @_;
+    $self->_validate_problem_status_invariant;
+    my $copy = $self->SUPER::_snapshot;
+    $copy->{_problem_document_status} = $self->{_problem_document_status}
+        if exists $self->{_problem_document_status};
+    return $copy;
+}
+
+sub _validate_problem_status_invariant {
+    my ($self) = @_;
+    return unless exists $self->{_problem_document_status};
+    croak 'Problem document and HTTP statuses must agree'
+        unless $self->status == $self->{_problem_document_status};
+    return;
+}
 
 sub _validate_problem {
     my ($problem) = @_;

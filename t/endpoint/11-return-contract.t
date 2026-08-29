@@ -7,6 +7,7 @@ use PAGI::Request;
 use PAGI::Response;
 use PAGI::Response::JSON ();
 use PAGI::Response::Text ();
+use PAGI::Test::Response;
 
 { package T::Ep; use parent 'PAGI::Endpoint::HTTP'; use Future::AsyncAwait;
   async sub get { my ($self, $request) = @_; return PAGI::Response::JSON->new({ hi => 1 }) } }
@@ -16,6 +17,11 @@ use PAGI::Response::Text ();
   sub get { return 'not a response' } }
 { package T::Count; use parent 'PAGI::Endpoint::HTTP'; use Future::AsyncAwait;
   async sub get { my ($self, $request) = @_; $self->{n}++; return PAGI::Response::Text->new("n=$self->{n}") } }
+{ package T::Value; use parent 'PAGI::Endpoint::HTTP';
+  sub get { my ($self) = @_; return $self->{value} } }
+{ package T::EndpointResponseSubclass; use parent 'PAGI::Response::Text'; }
+{ package T::EndpointRespondOnly; sub new { bless {}, shift } sub respond { Future->done } }
+{ package T::EndpointToAppOnly; sub new { bless {}, shift } sub to_app { sub { Future->done } } }
 
 sub recorder { my @e; my $s = sub { push @e, $_[0]; Future->done }; return ($s, \@e) }
 
@@ -40,6 +46,28 @@ subtest 'handler returning a non-response croaks' => sub {
     ))->get },
         qr/T::Invalid->get did not return a response/,
         'invalid return retains the Endpoint diagnostic');
+};
+
+subtest 'handler return contract is nominal PAGI::Response, not method duck typing' => sub {
+    my @invalid = (
+        ['respond-only object', T::EndpointRespondOnly->new],
+        ['to_app-only object', T::EndpointToAppOnly->new],
+        ['captured Test::Response', PAGI::Test::Response->new(events => [])],
+    );
+    for my $case (@invalid) {
+        my ($label, $value) = @$case;
+        like(dies {
+            T::Value->new(value => $value)->dispatch(PAGI::Request->new(
+                { type => 'http', method => 'GET' }, sub { Future->done },
+            ))->get;
+        }, qr/T::Value->get did not return a response/,
+            "$label is rejected at the Endpoint boundary");
+    }
+
+    my $subclass = T::EndpointResponseSubclass->new('nominal');
+    is(T::Value->new(value => $subclass)->dispatch(PAGI::Request->new(
+        { type => 'http', method => 'GET' }, sub { Future->done },
+    ))->get, $subclass, 'a concrete Response subclass remains accepted');
 };
 
 subtest '405 for unhandled method, with Allow' => sub {

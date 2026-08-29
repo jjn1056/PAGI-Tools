@@ -7,6 +7,11 @@ use Test2::V0;
 use PAGI::Response qw(stream_response);
 use PAGI::Response::Stream;
 
+{
+    package T::StreamSubclass;
+    use parent 'PAGI::Response::Stream';
+}
+
 sub http_scope {
     my (%changes) = @_;
     return {
@@ -124,6 +129,29 @@ subtest 'immediate producer completion and to_app configuration snapshots are su
         ['X-Snapshot' => 'old'],
         ['Content-Type' => 'application/octet-stream'],
     ], 'to_app retains the compiled header snapshot without calculating Content-Length');
+};
+
+subtest 'Stream exposes no inherited buffered body, including through subclasses' => sub {
+    my $stream = PAGI::Response::Stream->new(sub { $_[0]->write('base') });
+    like(dies { $stream->body }, qr/Stream response has no buffered body/,
+        'direct Stream body access croaks with the unbuffered diagnostic');
+
+    my $subclass = T::StreamSubclass->new(sub { $_[0]->write('subclass') });
+    like(dies { $subclass->body }, qr/Stream response has no buffered body/,
+        'a Stream subclass inherits the unbuffered body contract');
+
+    my @events;
+    $subclass->to_app->(
+        http_scope(), receive(),
+        sub { push @events, $_[0]; Future->done },
+    )->get;
+    is([map { $_->{type} } @events], [
+        'http.response.start',
+        'http.response.body',
+        'http.response.body',
+    ], 'compiled Stream application emits without consulting buffered body');
+    is($events[1]{body}, 'subclass',
+        'compiled subclass still streams its producer bytes');
 };
 
 subtest 'Stream validates construction and the native HTTP triplet before sending' => sub {

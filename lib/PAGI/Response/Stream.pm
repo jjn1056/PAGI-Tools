@@ -72,6 +72,10 @@ sub new {
 
 sub is_buffered { return 0 }
 
+sub body {
+    croak 'Stream response has no buffered body';
+}
+
 sub _snapshot {
     my ($self) = @_;
     my %copy = (
@@ -295,6 +299,11 @@ continues to await any active server-owned send before running cleanup.
 =head2 is_buffered
 
 Returns false.
+
+=head2 body
+
+Croaks with C<Stream response has no buffered body>. Stream output belongs to
+each invocation's producer and is never represented by one buffered scalar.
 
 =head1 DISCONNECTS AND FAILURES
 

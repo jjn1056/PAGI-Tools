@@ -482,6 +482,30 @@ sub _validate_uri_reference {
     return $value;
 }
 
+# Insert one already-raw query string before the target's first fragment.
+# Validation policy belongs to the caller because middleware and Pages obtain
+# their target/query data through different trust boundaries.
+sub _location_with_raw_query {
+    my ($target, $query) = @_;
+    return $target unless defined($query) && !ref($query) && length($query);
+
+    my $fragment = '';
+    my $fragment_at = index($target, '#');
+    if ($fragment_at >= 0) {
+        $fragment = substr($target, $fragment_at);
+        $target = substr($target, 0, $fragment_at);
+    }
+
+    if (index($target, '?') < 0) {
+        $target .= '?';
+    }
+    elsif (!(substr($target, -1, 1) eq '?'
+            && index($target, '?') == length($target) - 1)) {
+        $target .= '&';
+    }
+    return $target . $query . $fragment;
+}
+
 sub _is_uri_reference {
     my ($reference) = @_;
     my $fragment_at = index($reference, '#');

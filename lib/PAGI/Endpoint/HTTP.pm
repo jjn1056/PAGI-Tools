@@ -172,9 +172,11 @@ Each receives:
 Use C<$request> for request data and L<PAGI::Response> for building response
 values.
 
-B<Handler contract:> Every HTTP handler MUST return a L<PAGI::Response> value
-(immediately or through a Future). Returning nothing (or a non-response value)
-causes dispatch to croak. C<dispatch> returns the response without sending it;
+B<Handler contract:> Every HTTP handler MUST return a nominal
+L<PAGI::Response> value or subclass (immediately or through a Future). An
+object that merely implements C<respond> or C<to_app> is not a Response value.
+Returning nothing (or another non-response value) causes dispatch to croak.
+C<dispatch> returns the response without sending it;
 C<to_app> is responsible for emitting it with
 C<< $response->respond($scope, $receive, $send) >>.
 

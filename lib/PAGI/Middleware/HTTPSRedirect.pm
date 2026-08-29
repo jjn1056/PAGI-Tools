@@ -167,7 +167,9 @@ sub _is_excluded {
 async sub _send_redirect {
     my ($self, $scope, $receive, $send, $location) = @_;
     my $response = PAGI::Response::Redirect->new(
-        _location_with_raw_query($location, $scope->{query_string}),
+        PAGI::Response::_location_with_raw_query(
+            $location, $scope->{query_string},
+        ),
         status => $self->{redirect_code},
     );
     await Future->wrap($response->respond($scope, $receive, $send));
@@ -178,27 +180,6 @@ async sub _send_error {
     croak "HTTPSRedirect does not own status $status" unless $status == 400;
     my $response = PAGI::Pages->bad_request($scope);
     await Future->wrap($response->respond($scope, $receive, $send));
-}
-
-sub _location_with_raw_query {
-    my ($target, $query) = @_;
-    return $target unless defined($query) && !ref($query) && length($query);
-
-    my $fragment = '';
-    my $fragment_at = index($target, '#');
-    if ($fragment_at >= 0) {
-        $fragment = substr($target, $fragment_at);
-        $target = substr($target, 0, $fragment_at);
-    }
-
-    if (index($target, '?') < 0) {
-        $target .= '?';
-    }
-    elsif (!(substr($target, -1, 1) eq '?'
-            && index($target, '?') == length($target) - 1)) {
-        $target .= '&';
-    }
-    return $target . $query . $fragment;
 }
 
 1;

@@ -422,22 +422,10 @@ sub _redirect_location {
     my $query = $scope->{query_string};
     return $target unless defined($query) && !ref($query) && length($query);
     _validate_uri_reference('query_string', $query);
-
-    my $fragment = '';
-    my $fragment_at = index($target, '#');
-    if ($fragment_at >= 0) {
-        $fragment = substr($target, $fragment_at);
-        $target = substr($target, 0, $fragment_at);
-    }
-
-    if (index($target, '?') < 0) {
-        $target .= '?';
-    }
-    elsif (!(substr($target, -1, 1) eq '?'
-            && index($target, '?') == length($target) - 1)) {
-        $target .= '&';
-    }
-    return _validate_uri_reference('redirect target', $target . $query . $fragment);
+    return _validate_uri_reference(
+        'redirect target',
+        PAGI::Response::_location_with_raw_query($target, $query),
+    );
 }
 
 sub _error_factory {

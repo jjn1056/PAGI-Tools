@@ -240,11 +240,13 @@ Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions. An
 optional C<http_default> declares an HTTP application; construction validates
 it but does not compile it. A directly compiled Router owns normal routing
-outcomes. HTTP NONE invokes C<http_default>, or the stock concrete Problem 404
-when it is absent. HTTP PARTIAL emits the built-in concrete Problem 405 with one
-authoritative C<Allow> union. The HTTP default never handles PARTIAL,
-WebSocket, or SSE misses. Router ignores lifespan; L<PAGI::Compose> owns that
-scope at a deployed root.
+outcomes. HTTP NONE invokes C<http_default>, or the stock 404 when it is absent.
+HTTP PARTIAL emits the built-in 405 with one authoritative C<Allow> union. Both
+stock misses use L<PAGI::Pages> content negotiation and return a concrete HTML,
+Text, or Problem response according to C<Accept>; they are not unconditionally
+Problem responses. The HTTP default never handles PARTIAL, WebSocket, or SSE
+misses. Router ignores lifespan; L<PAGI::Compose> owns that scope at a deployed
+root.
 
 =head2 route, websocket, sse
 

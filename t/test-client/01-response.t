@@ -85,6 +85,32 @@ subtest 'decodes captured filehandle events with offset and length' => sub {
     close $fh;
 };
 
+subtest 'filehandle events normalize omitted and explicit zero offsets' => sub {
+    for my $case (
+        ['omitted offset', {}],
+        ['explicit zero offset', { offset => 0 }],
+    ) {
+        my ($label, $offset) = @$case;
+        my $content = 'abcdefghij';
+        open my $fh, '<', \$content or die "Cannot open scalar handle: $!";
+        seek($fh, 5, 0) or die "Cannot pre-position scalar handle: $!";
+
+        my $res = PAGI::Test::Response->new(events => [
+            { type => 'http.response.start', status => 200, headers => [] },
+            {
+                type   => 'http.response.body',
+                fh     => $fh,
+                %$offset,
+                length => 3,
+                more   => 0,
+            },
+        ]);
+
+        is($res->content, 'abc', "$label reads from PAGI's default byte offset zero");
+        close $fh;
+    }
+};
+
 subtest 'basic response accessors' => sub {
     my $res = captured_response(
         status  => 200,

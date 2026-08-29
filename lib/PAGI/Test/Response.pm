@@ -94,8 +94,7 @@ sub _read_fh_bytes {
     my ($fh, $offset, $length) = @_;
 
     seek($fh, $offset, 0)
-        or croak "Cannot seek filehandle response: $!"
-        if $offset;
+        or croak "Cannot seek filehandle response: $!";
 
     return _slurp_fh_bytes($fh, $length);
 }

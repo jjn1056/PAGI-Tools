@@ -25,7 +25,10 @@ PAGI::Response::Redirect - buffered HTTP redirect response
 Buffers a small escaped HTML document and owns its validated URI-reference
 Location. Status defaults to 302 and must be 301, 302, 303, 307, or 308.
 Common flat C<headers> and C<content_type> are accepted, but callers cannot
-compete with the response-owned Location field.
+compete with the response-owned Location field. The chosen status and exact
+single Location remain tied to the buffered HTML body. Mutations that would
+stale those semantics are rejected directly or, for the mutable header
+container, when the response is snapshotted before emission.
 
 =cut
 
@@ -50,7 +53,7 @@ sub new {
     $location = encode('UTF-8', $location, FB_CROAK);
     my $options = PAGI::Response::_parse_options(@pairs);
     my $status = exists($options->{status}) ? $options->{status} : 302;
-    _validate_redirect_status($status);
+    $status = _validate_redirect_status($status);
     _reject_location_header($options->{headers}) if exists $options->{headers};
 
     push @pairs, status => 302 unless exists $options->{status};
@@ -61,6 +64,8 @@ sub new {
         . '">' . $escaped . '</a>.</p></body></html>';
     my $self = $class->SUPER::new($body, @pairs);
     PAGI::Response::header($self, 'Location', $location);
+    $self->{_redirect_status} = $status;
+    $self->{_redirect_location} = $location;
     return $self;
 }
 
@@ -69,7 +74,10 @@ sub default_content_type { 'text/html; charset=utf-8' }
 sub status {
     my ($self, $status) = @_;
     return $self->SUPER::status if @_ == 1;
-    _validate_redirect_status($status);
+    $status = _validate_redirect_status($status);
+    croak 'Redirect status is response-owned'
+        if exists($self->{_redirect_status})
+            && $status != $self->{_redirect_status};
     return $self->SUPER::status($status);
 }
 
@@ -79,6 +87,34 @@ sub header {
     croak 'Redirect Location is response-owned'
         if defined($name) && !ref($name) && lc($name) eq 'location';
     return $self->SUPER::header($name, $value);
+}
+
+sub remove_header {
+    my ($self, $name) = @_;
+    croak 'Redirect Location is response-owned'
+        if defined($name) && !ref($name) && lc($name) eq 'location';
+    return $self->SUPER::remove_header($name);
+}
+
+sub _snapshot {
+    my ($self) = @_;
+    $self->_validate_redirect_invariants;
+    my $copy = $self->SUPER::_snapshot;
+    $copy->{_redirect_status} = $self->{_redirect_status};
+    $copy->{_redirect_location} = $self->{_redirect_location};
+    return $copy;
+}
+
+sub _validate_redirect_invariants {
+    my ($self) = @_;
+    croak 'Redirect status is response-owned'
+        unless $self->status == $self->{_redirect_status};
+
+    my @locations = $self->{_headers}->get_all('Location');
+    croak 'Redirect requires exactly one canonical Location'
+        unless @locations == 1
+            && $locations[0] eq $self->{_redirect_location};
+    return;
 }
 
 sub _validate_redirect_status {

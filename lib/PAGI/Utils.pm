@@ -288,13 +288,13 @@ sub _app_path_from_origin {
     return File::Spec->canonpath(File::Spec->catfile($home, @components));
 }
 
-# True if $x is a PAGI response value: a blessed object with the Response
-# emission contract. Production Responses receive ($scope, $receive, $send).
+# True if $x is a nominal PAGI::Response value. Production Responses receive
+# ($scope, $receive, $send).
 # The single source of truth for the "did the handler return a response?" check
 # (used by the endpoint and router dispatch paths).
 sub is_response {
     my ($x) = @_;
-    return blessed($x) && $x->can('respond') ? 1 : 0;
+    return blessed($x) && $x->isa('PAGI::Response') ? 1 : 0;
 }
 
 async sub handle_lifespan {
@@ -554,10 +554,12 @@ middleware class name there, not in an application position.
 
     croak "handler did not return a response" unless is_response($value);
 
-Returns 1 if C<$value> is a PAGI response value -- a blessed object with a
-C<respond> method -- and 0 otherwise. This is the single source of truth for the
-"did the handler return a response?" check used across the endpoint and router
-dispatch paths, so those checks stay consistent (same predicate, same C<croak>
-diagnostics) instead of each re-deriving C<< blessed($x) && $x->can('respond') >>.
+Returns 1 if C<$value> is a nominal L<PAGI::Response> value (including a
+subclass) and 0 otherwise. Objects that merely implement C<respond> or C<to_app>
+are application adapters, not Response values. This is the single source of
+truth for the "did the handler return a response?" check used across the
+endpoint and router dispatch paths, so those checks stay consistent (same
+predicate, same C<croak> diagnostics) instead of each re-deriving the nominal
+check.
 
 =cut
