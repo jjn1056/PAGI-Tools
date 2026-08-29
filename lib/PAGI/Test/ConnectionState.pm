@@ -33,7 +33,7 @@ sub new {
         _reason             => undef,
         _disc_cbs           => [],
         _comp_cbs           => [],
-        _future             => undef,       # lazy disconnect_future, like production
+        _disconnect_master  => undef,       # private lazy signal; never exposed directly
     }, $class;
 }
 
@@ -74,10 +74,13 @@ sub _mark_response_complete { $_[0]->{_response_complete} = 1; return }
     my $future = $conn->disconnect_future;  # always a Future
     my $reason = await $future;
 
-Returns a Future that resolves, with the reason, on an B<abnormal>
-disconnect; stays pending forever after a B<clean> completion (use
-C<on_complete> to observe that case instead). The Future is created lazily on
-first call, exactly like production L<PAGI::Server::ConnectionState>:
+Returns a fresh cancellation-isolated Future observer that resolves, with the
+reason, on an B<abnormal> disconnect; stays pending forever after a B<clean>
+completion (use C<on_complete> to observe that case instead). One private
+master Future is created lazily on first call, exactly like production
+L<PAGI::Server::ConnectionState>, and every call returns a new
+C<without_cancel> observer so cancelling one race cannot cancel the master or
+later observers:
 
 =over 4
 
@@ -101,18 +104,16 @@ disconnect.
 sub disconnect_future {
     my ($self) = @_;
 
-    return $self->{_future} if $self->{_future};
-
-    $self->{_future} = Future->new;
+    my $master = $self->{_disconnect_master} ||= Future->new;
 
     # Resolve immediately only for an already-abnormal end. A clean
     # completion leaves this pending forever -- on_complete is the signal
     # for that case.
-    if (!$self->{_connected} && !$self->{_completed}) {
-        $self->{_future}->done($self->{_reason});
+    if (!$self->{_connected} && !$self->{_completed} && !$master->is_ready) {
+        $master->done($self->{_reason});
     }
 
-    return $self->{_future};
+    return $master->without_cancel;
 }
 
 # Late registration fires immediately for the terminal state that occurred —
@@ -164,8 +165,8 @@ sub _mark_disconnected {
     return unless $self->{_connected};
     $self->{_connected} = 0;
     $self->{_reason}    = $reason // 'unknown';   # coerce like production
-    if ($self->{_future} && !$self->{_future}->is_ready) {
-        $self->{_future}->done($self->{_reason});
+    if ($self->{_disconnect_master} && !$self->{_disconnect_master}->is_ready) {
+        $self->{_disconnect_master}->done($self->{_reason});
     }
     _fire($_, $self->{_reason}) for @{$self->{_disc_cbs}};
     @{$self->{_disc_cbs}} = ();

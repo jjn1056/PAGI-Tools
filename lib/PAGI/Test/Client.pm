@@ -1107,6 +1107,11 @@ component object with a C<to_app> method:
     # Component object
     my $client = PAGI::Test::Client->new(app => MyApp::Main->new(%opts));
 
+    # Terminal Response object (also an instantiated to_app component)
+    my $client = PAGI::Test::Client->new(
+        app => PAGI::Response::Text->new('ready'),
+    );
+
 Package-name strings are rejected synchronously. Load and construct the
 component explicitly so configuration and object identity stay visible:
 
@@ -1165,7 +1170,10 @@ When B<true>: Exceptions propagate to the test, useful for debugging:
 
 =head1 HTTP METHODS
 
-All HTTP methods return a L<PAGI::Test::Response> object.
+All HTTP methods return a L<PAGI::Test::Response> object decoded from the
+events the application sent. This remains true when C<app> is a production
+L<PAGI::Response>: the client returns captured wire data, not that production
+object or a proxy for it.
 
 =head2 get
 

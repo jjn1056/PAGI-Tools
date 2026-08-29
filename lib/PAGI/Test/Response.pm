@@ -58,6 +58,17 @@ sub header {
     return undef;
 }
 
+# All values for one header, preserving captured wire order
+sub header_all {
+    my ($self, $name) = @_;
+    $name = lc($name);
+    return [
+        map { $_->[1] }
+        grep { lc($_->[0]) eq $name }
+        @{$self->{headers}}
+    ];
+}
+
 # All headers as hashref (last value wins for duplicates)
 sub headers {
     my ($self) = @_;
@@ -139,8 +150,10 @@ PAGI::Test::Response - HTTP response wrapper for testing
 
 =head1 DESCRIPTION
 
-PAGI::Test::Response wraps HTTP response data from test requests,
-providing convenient accessors for status, headers, and body content.
+PAGI::Test::Response wraps captured HTTP wire data from test requests,
+providing convenient accessors for status, headers, and body content. It is
+not a subclass or proxy of L<PAGI::Response>; production Response objects are
+applications that emit the wire events this class reports.
 
 =head1 CONSTRUCTOR
 
@@ -201,6 +214,14 @@ Returns undef if no exception occurred.
 
 Returns the value of a header. Case-insensitive lookup.
 Returns undef if header not present.
+
+=head2 header_all
+
+    my $values = $res->header_all('Set-Cookie');
+
+Returns every value for a header as an arrayref, preserving captured wire
+order. Header lookup is case-insensitive. Returns an empty arrayref if the
+header is not present.
 
 =head2 headers
 
