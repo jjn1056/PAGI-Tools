@@ -3,13 +3,26 @@ use warnings;
 
 use Test2::V0;
 use Future;
+use JSON::MaybeXS qw(decode_json);
 use Scalar::Util qw(refaddr);
 
-use PAGI::Compose qw(compose);
 use PAGI::Pages;
 use PAGI::Pages::_Catalog;
 use PAGI::Request;
-use PAGI::Routing qw(route mount);
+use PAGI::Routing qw(route mount request_app);
+use PAGI::SSE;
+use PAGI::WebSocket;
+
+my @CATALOG_FUNCTIONS = map { $_ . '_page' }
+    @{PAGI::Pages::_Catalog->_named_methods};
+my @COMMON_FUNCTIONS = qw(
+    welcome_page status_page redirect_page not_found_page unauthorized_page
+    forbidden_page method_not_allowed_page conflict_page too_many_requests_page
+    internal_server_error_page bad_gateway_page service_unavailable_page
+);
+my @ALL_FUNCTIONS = (
+    qw(welcome_page status_page redirect_page), @CATALOG_FUNCTIONS,
+);
 
 sub http_scope {
     my (%args) = @_;
@@ -18,9 +31,25 @@ sub http_scope {
         method       => $args{method} || 'GET',
         path         => defined $args{path} ? $args{path} : '/',
         headers      => $args{headers} || [],
-        http_version => '1.1',
-        query_string => '',
+        http_version => exists($args{http_version})
+            ? $args{http_version} : '1.1',
+        query_string => exists($args{query_string})
+            ? $args{query_string} : '',
     };
+}
+
+sub protocol_scope {
+    my ($type, %args) = @_;
+    my $scope = http_scope(%args);
+    $scope->{type} = $type;
+    return $scope;
+}
+
+sub http_request {
+    my (%args) = @_;
+    return PAGI::Request->new(
+        http_scope(%args), sub { Future->done },
+    );
 }
 
 sub run_app {
@@ -44,24 +73,10 @@ sub response_header {
     return;
 }
 
-sub http_request {
-    my (%args) = @_;
-    return PAGI::Request->new(
-        http_scope(%args),
-        sub { return Future->done },
-    );
-}
-
 {
     package Local::ScopeBearer;
     sub new { bless { scope => $_[1] }, $_[0] }
     sub scope { shift->{scope} }
-}
-
-{
-    package Local::MalformedScopeBearer;
-    sub new { bless {}, shift }
-    sub scope { return [] }
 }
 
 {
@@ -119,183 +134,185 @@ subtest 'constructor policy is strict and request-independent' => sub {
     my $one = $pages->not_found(http_scope());
     my $two = $pages->not_found(http_scope());
     isnt(refaddr($one), refaddr($two), 'instance calls create fresh Responses');
-    isa_ok($one, ['PAGI::Response']);
-    isa_ok($two, ['PAGI::Response']);
+    is(ref($one), 'PAGI::Response::Text',
+        'configured instance returns the exact concrete class');
+    is(ref($two), 'PAGI::Response::Text',
+        'configured policy is reusable without request state');
 };
 
-subtest 'immediate and deferred invocation preserve response ownership' => sub {
-    my $scope = http_scope();
-    my @events;
-    my $send = sub { push @events, $_[0]; return Future->done };
-    my $request = PAGI::Request->new($scope, sub { Future->done });
+subtest 'exports are opt-in and the common and all bundles are exact' => sub {
+    is(\@PAGI::Pages::EXPORT, [], 'Pages exports nothing by default');
+    is(\@PAGI::Pages::EXPORT_OK, \@ALL_FUNCTIONS,
+        'the optional export list contains every and only page function');
+    is($PAGI::Pages::EXPORT_TAGS{common}, \@COMMON_FUNCTIONS,
+        ':common contains exactly the approved twelve functions');
+    is($PAGI::Pages::EXPORT_TAGS{all}, \@ALL_FUNCTIONS,
+        ':all contains exactly the generic and catalog-derived functions');
 
-    my $response = PAGI::Pages->not_found($request, as => 'text');
-    isa_ok($response, ['PAGI::Response']);
-    is(\@events, [], 'immediate Request form is unsent');
-    is($response->status, 404, 'immediate Request response has the named status');
+    my $common_ok = eval q{
+        package Local::CommonPageImports;
+        PAGI::Pages->import(':common');
+        1;
+    };
+    is($common_ok, 1, ':common imports successfully');
+    my $all_ok = eval q{
+        package Local::AllPageImports;
+        PAGI::Pages->import(':all');
+        1;
+    };
+    is($all_ok, 1, ':all imports successfully');
 
-    my $scope_response = PAGI::Pages->welcome($scope, as => 'text');
-    isa_ok($scope_response, ['PAGI::Response']);
-    is($scope_response->status, 200, 'immediate scope welcome has status 200');
-    is(\@events, [], 'immediate scope form is unsent');
-
-    my $endpoint = PAGI::Pages->not_found(as => 'text');
-    is(ref($endpoint), 'CODE', 'deferred endpoint is a plain coderef');
-    ok(!ref($endpoint) || !eval { $endpoint->can('to_app') },
-        'deferred endpoint is not a Pages endpoint object');
-    like(dies { $endpoint->($request, bless({}, 'Local::Snapshot')) },
-        qr/invalid PAGI::Pages endpoint invocation/,
-        'deferred Request form rejects ignored callback metadata');
-    isa_ok($endpoint->($scope), ['PAGI::Response']);
-    is(\@events, [], 'deferred Request and scope-only forms remain unsent');
-
-    my $native = $endpoint->($scope, sub { Future->done }, $send);
-    isa_ok($native, ['Future'], 'native triplet returns a Future');
-    Future->wrap($native)->get;
-    is($events[0]{status}, 404, 'native triplet sends the page');
-    is([map { $_->{type} } @events],
-        [qw(http.response.start http.response.body)],
-        'native triplet sends one complete buffered response');
+    for my $name (@ALL_FUNCTIONS) {
+        is(Local::CommonPageImports->can($name) ? 1 : 0,
+            (grep { $_ eq $name } @COMMON_FUNCTIONS) ? 1 : 0,
+            ":common membership for $name is exact");
+        ok(Local::AllPageImports->can($name), ":all exports $name");
+    }
+    ok(!main->can('welcome_page'), 'plain use PAGI::Pages imports no handler');
 };
 
-subtest 'Request and scope-bearing sources return unsent responses' => sub {
+subtest 'class and export forms return the same concrete values' => sub {
     my $request = http_request(headers => [['Accept' => 'text/plain']]);
-    my $class_welcome = PAGI::Pages->welcome($request);
-    isa_ok($class_welcome, ['PAGI::Response']);
-    is($class_welcome->status, 200, 'class welcome accepts a strict Request');
+    my @cases = (
+        [welcome_page => sub { PAGI::Pages->welcome($request, as => 'text') },
+            'PAGI::Response::Text', 200],
+        [not_found_page => sub { PAGI::Pages->not_found($request, as => 'json') },
+            'PAGI::Response::Problem', 404],
+        [status_page => sub { PAGI::Pages->status($request, 410, as => 'text') },
+            'PAGI::Response::Text', 410],
+        [redirect_page => sub {
+            PAGI::Pages->redirect($request, '/next', status => 308, as => 'json')
+        }, 'PAGI::Response::JSON', 308],
+    );
+
+    for my $case (@cases) {
+        my ($name, $method_call, $class, $status) = @$case;
+        my $function = Local::AllPageImports->can($name);
+        my $from_function = $name eq 'status_page'
+            ? $function->($request, 410, as => 'text')
+            : $name eq 'redirect_page'
+                ? $function->($request, '/next', status => 308, as => 'json')
+                : $name eq 'not_found_page'
+                    ? $function->($request, as => 'json')
+                    : $function->($request, as => 'text');
+        my $from_method = $method_call->();
+        is(ref($from_function), $class, "$name returns exact $class identity");
+        is($from_function->status, $status, "$name returns status $status");
+        if ($class eq 'PAGI::Response::Text') {
+            is($from_function->body, $from_method->body,
+                "$name bytes agree with its class method");
+        }
+        else {
+            is(decode_json($from_function->body), decode_json($from_method->body),
+                "$name JSON value agrees with its class method");
+        }
+    }
+};
+
+subtest 'every page call requires an explicit metadata source' => sub {
+    my @methods = (
+        qw(welcome status redirect moved_permanently found see_other
+           temporary_redirect permanent_redirect),
+        @{PAGI::Pages::_Catalog->_named_methods},
+    );
+    for my $method (@methods) {
+        like(dies { PAGI::Pages->$method() },
+            qr/explicit.*(?:Request|metadata).*source/i,
+            "$method rejects a no-source factory call");
+    }
+    for my $name (@ALL_FUNCTIONS) {
+        my $function = Local::AllPageImports->can($name);
+        like(dies { $function->() },
+            qr/explicit.*(?:Request|metadata).*source/i,
+            "$name requires an explicit source");
+    }
 
     my $pages = PAGI::Pages->new(as => 'text');
-    my $instance_welcome = $pages->welcome($request);
-    isa_ok($instance_welcome, ['PAGI::Response']);
-    is($instance_welcome->status, 200, 'configured instance welcome accepts a Request');
+    like(dies { $pages->not_found },
+        qr/explicit.*(?:Request|metadata).*source/i,
+        'configured instances also reject no-source calls');
+};
 
-    my $named = PAGI::Pages->not_found($request);
-    isa_ok($named, ['PAGI::Response']);
-    is($named->status, 404, 'named error accepts a Request');
+subtest 'Request and protocol metadata sources do not change protocol state' => sub {
+    my $request = http_request(headers => [['Accept' => 'text/plain']]);
+    is(ref(PAGI::Pages->welcome($request)), 'PAGI::Response::Text',
+        'Request metadata negotiates a concrete text response');
 
-    my $custom = $pages->status(
-        $request, 599,
-        type => 'https://example.test/problems/upstream-timeout',
-        title => 'Upstream Timeout',
-        detail => 'The upstream did not answer.',
+    my (@websocket_events, @sse_events);
+    my $websocket_scope = protocol_scope(
+        'websocket', headers => [['Accept' => 'application/problem+json']],
     );
-    isa_ok($custom, ['PAGI::Response']);
-    is($custom->status, 599, 'status accepts a Request');
+    my $websocket = PAGI::WebSocket->new(
+        $websocket_scope,
+        sub { Future->done },
+        sub { push @websocket_events, $_[0]; Future->done },
+    );
+    my $websocket_response = PAGI::Pages->not_found($websocket);
+    is(ref($websocket_response), 'PAGI::Response::Problem',
+        'WebSocket handshake metadata negotiates a Problem response');
+    is(\@websocket_events, [], 'Pages emits no WebSocket events');
+    ok(!$websocket->is_connected, 'Pages does not accept the WebSocket');
 
-    my $redirect = PAGI::Pages->permanent_redirect($request, '/new');
-    isa_ok($redirect, ['PAGI::Response']);
-    is($redirect->status, 308, 'named redirect accepts a Request');
+    my $sse_scope = protocol_scope(
+        'sse', headers => [['Accept' => 'text/html']],
+    );
+    my $sse = PAGI::SSE->new(
+        $sse_scope,
+        sub { Future->done },
+        sub { push @sse_events, $_[0]; Future->done },
+    );
+    my $sse_response = PAGI::Pages->welcome($sse);
+    is(ref($sse_response), 'PAGI::Response::HTML',
+        'SSE handshake metadata negotiates an HTML response');
+    is(\@sse_events, [], 'Pages emits no SSE events');
+    ok(!$sse->is_started, 'Pages does not start SSE');
 
-    my $endpoint = PAGI::Pages->not_found;
-    my $response = $endpoint->($request);
-    isa_ok($response, ['PAGI::Response']);
-    my @events;
-    Future->wrap($response->respond(sub {
-        push @events, $_[0];
-        return Future->done;
-    }))->get;
-    is(response_header(\@events, 'Content-Type'),
-        'text/plain; charset=utf-8',
-        'one-Request endpoint invocation negotiates a text response');
+    is(ref(PAGI::Pages->not_found(
+        protocol_scope('websocket'), as => 'text')),
+        'PAGI::Response::Text', 'an unblessed WebSocket scope is accepted');
+    is(ref(PAGI::Pages->not_found(
+        protocol_scope('sse'), as => 'text')),
+        'PAGI::Response::Text', 'an unblessed SSE scope is accepted');
 
-    my $bearer = Local::ScopeBearer->new(http_scope());
-    isa_ok($endpoint->($bearer), ['PAGI::Response'],
-        'endpoint accepts another Task 1 scope-bearing source');
-    like(dies { $endpoint->(Local::MalformedScopeBearer->new) },
-        qr/requires an unblessed scope hashref or object with scope\(\)/,
-        'malformed scope-bearing object has the Task 1 diagnostic');
-    like(dies { $endpoint->(Local::ScopeBearer->new({ type => 'websocket' })) },
-        qr/requires HTTP scope.*websocket/,
-        'non-HTTP scope-bearing object is rejected explicitly');
-
-    like(dies { $endpoint->($request, sub { Future->done }) },
-        qr/invalid PAGI::Pages endpoint invocation/,
-        'two-argument Request endpoint invocation is rejected');
-    like(dies { $endpoint->($request, bless({}, 'Local::Snapshot')) },
-        qr/invalid PAGI::Pages endpoint invocation/,
-        'Request endpoint rejects arbitrary callback metadata');
-    like(dies {
-        $endpoint->($request, sub { Future->done }, sub { Future->done });
-    }, qr/invalid PAGI::Pages endpoint invocation/,
-        'Request triplet is not a native sending invocation');
-    like(dies {
-        $endpoint->($bearer, sub { Future->done }, sub { Future->done });
-    }, qr/invalid PAGI::Pages endpoint invocation/,
-        'scope-bearing object triplet is not a native sending invocation');
+    like(dies { PAGI::Pages->not_found(Local::ScopeBearer->new(http_scope())) },
+        qr/Request|WebSocket|SSE|scope/i,
+        'an arbitrary scope-bearing object is not a supported source');
+    like(dies { PAGI::Pages->not_found({ type => 'lifespan' }) },
+        qr/http-capable|HTTP.*metadata|lifespan/i,
+        'lifespan metadata is rejected');
+    like(dies { PAGI::Pages->not_found({ type => 'unknown' }) },
+        qr/http-capable|HTTP.*metadata|unknown/i,
+        'unknown metadata is rejected');
 };
 
-subtest 'class calls are fresh and retain subclass class dispatch' => sub {
-    local $Local::CountingPages::NEW_COUNT = 0;
-    local @Local::CountingPages::RENDERED_BY;
-
-    my $first = Local::CountingPages->not_found(http_scope(), as => 'text');
-    my $second = Local::CountingPages->not_found(http_scope(), as => 'text');
-    isa_ok($first, ['PAGI::Response']);
-    isa_ok($second, ['PAGI::Response']);
-    is($Local::CountingPages::NEW_COUNT, 2,
-        'each subclass class call constructs a fresh subclass instance');
-    isnt(refaddr($Local::CountingPages::RENDERED_BY[0]),
-        refaddr($Local::CountingPages::RENDERED_BY[1]),
-        'each class call renders through its distinct subclass instance');
-
-    my $instance = Local::CountingPages->new(as => 'text');
-    my $identity = refaddr($instance);
-    local @Local::CountingPages::RENDERED_BY;
-    $instance->welcome(http_scope());
-    is(refaddr($Local::CountingPages::RENDERED_BY[0]), $identity,
-        'instance invocation retains instance identity for hooks');
-};
-
-subtest 'scope and channel validation is explicit' => sub {
-    my $endpoint = PAGI::Pages->not_found(as => 'text');
-    my $http = http_scope();
-    my $receive = sub { Future->done };
-    my $send = sub { Future->done };
-
+subtest 'source, option, and status validation is explicit' => sub {
     like(dies { PAGI::Pages->not_found({}) }, qr/scope type is required/,
-        'missing immediate scope type is rejected');
-    like(dies { PAGI::Pages->not_found({ type => [] }) }, qr/scope type is required/,
-        'reference immediate scope type is rejected');
-    like(dies { PAGI::Pages->not_found({ type => 'websocket' }) },
-        qr/requires HTTP scope.*websocket/, 'non-HTTP immediate scope is rejected');
+        'missing scope type is rejected');
+    like(dies { PAGI::Pages->not_found({ type => [] }) },
+        qr/scope type is required/, 'reference scope type is rejected');
+    like(dies { PAGI::Pages->not_found([]) },
+        qr/explicit.*(?:Request|metadata).*source/i,
+        'non-source references are rejected');
 
-    like(dies { $endpoint->() }, qr/invalid PAGI::Pages endpoint invocation/,
-        'empty endpoint call is rejected');
-    like(dies { $endpoint->($http, $receive) },
-        qr/invalid PAGI::Pages endpoint invocation/, 'two-channel call is rejected');
-    like(dies { $endpoint->($http, [], $send) },
-        qr/invalid PAGI::Pages endpoint invocation/, 'non-coderef receive is rejected');
-    like(dies { $endpoint->($http, $receive, {}) },
-        qr/invalid PAGI::Pages endpoint invocation/, 'non-coderef send is rejected');
-    like(dies { $endpoint->($http, $receive, $send, 'extra') },
-        qr/invalid PAGI::Pages endpoint invocation/, 'four-channel call is rejected');
-    like(dies { $endpoint->({}) }, qr/scope type is required/,
-        'missing deferred scope type has the explicit type diagnostic');
-    like(dies { $endpoint->({ type => 'sse' }) }, qr/requires HTTP scope.*sse/,
-        'non-HTTP deferred scope has the explicit type diagnostic');
-    like(dies { $endpoint->([]) }, qr/invalid PAGI::Pages endpoint invocation/,
-        'non-scope reference is rejected');
-
-};
-
-subtest 'page calls validate options and status recipes before capture' => sub {
-    like(dies { PAGI::Pages->not_found(unknown => 1) },
-        qr/unknown PAGI::Pages error option/, 'unknown option fails before endpoint creation');
-    like(dies { PAGI::Pages->welcome(detail => 'not configurable') },
-        qr/unknown PAGI::Pages welcome option/, 'welcome accepts only its documented options');
-    like(dies { PAGI::Pages->not_found('as') }, qr/key\/value pairs/,
-        'odd method option list is rejected');
+    like(dies { PAGI::Pages->not_found(http_scope(), unknown => 1) },
+        qr/unknown PAGI::Pages error option/,
+        'unknown error options are rejected after the source');
+    like(dies { PAGI::Pages->welcome(
+        http_scope(), detail => 'not configurable') },
+        qr/unknown PAGI::Pages welcome option/,
+        'welcome accepts only its documented options');
+    like(dies { PAGI::Pages->not_found(http_scope(), 'as') },
+        qr/key\/value pairs/, 'odd option lists are rejected');
 
     for my $bad (399, 600, 'five hundred', []) {
-        like(dies { PAGI::Pages->status($bad) }, qr/status must be an integer from 400 to 599/,
-            'invalid status is rejected before capture');
+        like(dies { PAGI::Pages->status(http_scope(), $bad) },
+            qr/status must be an integer from 400 to 599/,
+            'invalid status is rejected after the source');
     }
-    like(dies { PAGI::Pages->status(http_scope(), {}) },
-        qr/status must be an integer from 400 to 599/,
-        'a reference status after an explicit scope is rejected');
-    like(dies { PAGI::Pages->status(599, detail => 'missing semantics') },
+    like(dies { PAGI::Pages->status(
+        http_scope(), 599, detail => 'missing semantics') },
         qr/custom status 599 requires type, title, and detail/,
-        'unknown status requires explicit semantics');
+        'unknown status requires explicit problem semantics');
 
     my $custom = PAGI::Pages->status(
         http_scope(), 599,
@@ -307,83 +324,66 @@ subtest 'page calls validate options and status recipes before capture' => sub {
     is($custom->status, 599, 'strict valid custom status returns a Response');
 
     for my $method (@{PAGI::Pages::_Catalog->_named_methods}) {
-        ok(PAGI::Pages->can($method), "$method is an ordinary installed method");
+        ok(PAGI::Pages->can($method), "$method is an installed class method");
     }
     ok(!PAGI::Pages->can('not_foud'), 'a typo is not dynamically recovered');
-    like(dies { PAGI::Pages->not_foud }, qr/Can't locate object method/,
-        'a typo fails as an ordinary missing method');
 };
 
-subtest 'one endpoint composes as Route, Mount, Compose, and a raw app' => sub {
-    my $endpoint = PAGI::Pages->not_found(as => 'text');
+subtest 'page functions are Request handlers, not native applications' => sub {
+    my $welcome_handler = Local::CommonPageImports->can('welcome_page');
+    my $not_found_handler = Local::CommonPageImports->can('not_found_page');
 
-    my $route_app = route('/terminal' => $endpoint)->to_app;
-    is(run_app($route_app, http_scope(path => '/terminal'))->[0]{status}, 404,
-        'Route invokes the endpoint as a Request handler');
-    is(run_app($route_app, http_scope(path => '/terminal/child'))->[0]{status}, 404,
-        q{standalone Route's wrapper Router owns the descendant miss as stock 404});
+    my $route_app = route('/welcome' => $welcome_handler)->to_app;
+    my $welcome = run_app($route_app, http_scope(path => '/welcome'));
+    is($welcome->[0]{status}, 200,
+        'an exported page function works directly as a Route handler');
+    like($welcome->[1]{body}, qr/<!doctype html>/i,
+        'Route emits the handler-returned concrete Response');
 
-    my $mount = mount('/terminal', app => $endpoint);
-    is(refaddr($mount->app), refaddr($endpoint),
-        'Mount retains the endpoint as its base application');
-
-    my $composed = compose(app => $endpoint)->to_app;
-    is(run_app($composed, http_scope(path => '/anywhere'))->[0]{status}, 404,
-        'Compose invokes the endpoint as its native target');
-    is(run_app($endpoint, http_scope(path => '/raw'))->[0]{status}, 404,
-        'direct native triplet invocation sends the page');
-
-    my @direct_events;
-    my $direct_send = sub { push @direct_events, $_[0]; return Future->done };
+    my @native_events;
     like(dies {
-        $endpoint->({ type => 'lifespan' }, sub { Future->done }, $direct_send)
-    }, qr/requires HTTP scope.*lifespan/,
-        'direct lifespan invocation is rejected synchronously');
-    is(\@direct_events, [], 'direct lifespan rejection emits no HTTP events');
+        $not_found_handler->(
+            http_scope(), sub { Future->done },
+            sub { push @native_events, $_[0]; Future->done },
+        );
+    }, qr/PAGI::Pages|option|key\/value/i,
+        'native three-argument function invocation is rejected');
+    is(\@native_events, [], 'rejected native placement emits no event');
 
-    my @lifespan_input = (
-        { type => 'lifespan.startup' },
-        { type => 'lifespan.shutdown' },
-    );
-    my $lifespan = run_app(
-        $composed,
-        { type => 'lifespan' },
-        sub { return Future->done(shift @lifespan_input) },
-    );
-    is($lifespan, [
-        { type => 'lifespan.startup.complete' },
-        { type => 'lifespan.shutdown.complete' },
-    ], 'Compose owns server-root lifespan startup and shutdown');
+    my $native = request_app($not_found_handler);
+    my $mounted = mount('/missing', app => $native)->to_app;
+    is(run_app($mounted, http_scope(path => '/missing/child'))->[0]{status},
+        404, 'request_app explicitly adapts a function for Mount');
+
+    my $raw = sub {
+        my ($scope, $receive, $send) = @_;
+        my $response = PAGI::Pages->not_found($scope, as => 'text');
+        return $response->respond($scope, $receive, $send);
+    };
+    my $raw_events = run_app($raw, http_scope(path => '/raw'));
+    is($raw_events->[0]{status}, 404,
+        'a real raw closure constructs then explicitly emits a Response');
+    is(response_header($raw_events, 'Content-Type'),
+        'text/plain; charset=utf-8', 'raw emission preserves representation');
 };
 
-subtest 'outer composition owns HEAD suppression without rewriting dispatch' => sub {
-    my $endpoint = PAGI::Pages->not_found(as => 'text');
-    my $head_scope = http_scope(method => 'HEAD');
-    my $raw = run_app($endpoint, $head_scope);
-    ok(length($raw->[1]{body}), 'direct raw invocation preserves the HEAD representation body');
+subtest 'configured subclasses are safe across concurrent response sends' => sub {
+    local $Local::CountingPages::NEW_COUNT = 0;
+    local @Local::CountingPages::RENDERED_BY;
+    my $first = Local::CountingPages->not_found(http_scope(), as => 'text');
+    my $second = Local::CountingPages->not_found(http_scope(), as => 'text');
+    is($Local::CountingPages::NEW_COUNT, 2,
+        'each subclass class call constructs a fresh policy instance');
+    isnt(refaddr($Local::CountingPages::RENDERED_BY[0]),
+        refaddr($Local::CountingPages::RENDERED_BY[1]),
+        'class hooks render through distinct subclass instances');
 
-    my $composed = compose(app => $endpoint)->to_app;
-    my $head = run_app($composed, http_scope(method => 'HEAD'));
-    is($head->[1]{body}, '', 'Compose outer boundary suppresses the final HEAD body');
-    is(response_header($head, 'Content-Length'), length($raw->[1]{body}),
-        'Compose preserves GET-equivalent Content-Length for HEAD');
-
-    my $custom = compose(routes => [
-        route('/custom' => PAGI::Pages->not_found(as => 'text'), methods => ['HEAD']),
-        route('/custom' => PAGI::Pages->welcome(as => 'text'), methods => ['GET']),
-    ])->to_app;
-    my $custom_head = run_app($custom, http_scope(method => 'HEAD', path => '/custom'));
-    my $custom_get = run_app($custom, http_scope(method => 'GET', path => '/custom'));
-    is($custom_head->[0]{status}, 404, 'custom HEAD route is selected without method rewriting');
-    is($custom_head->[1]{body}, '', 'custom HEAD route body is suppressed at the wire edge');
-    is($custom_get->[0]{status}, 200, 'the distinct GET route remains independently reachable');
-};
-
-subtest 'compiled endpoint is safe across concurrent in-flight calls' => sub {
     local @Local::ConcurrentPages::PAGE_IDS;
-    my $endpoint = Local::ConcurrentPages->new(as => 'auto')->not_found;
+    my $pages = Local::ConcurrentPages->new(as => 'auto');
     my $html_scope = http_scope(headers => [['Accept' => 'text/html']]);
     my $text_scope = http_scope(headers => [['Accept' => 'text/plain']]);
+    my $html_response = $pages->not_found($html_scope);
+    my $text_response = $pages->not_found($text_scope);
     my (@html_events, @text_events);
     my $html_gate = Future->new;
     my $text_gate = Future->new;
@@ -398,12 +398,14 @@ subtest 'compiled endpoint is safe across concurrent in-flight calls' => sub {
         return ++$text_calls == 1 ? $text_gate : Future->done;
     };
 
-    my $html_future = Future->wrap(
-        $endpoint->($html_scope, sub { Future->done }, $html_send));
-    my $text_future = Future->wrap(
-        $endpoint->($text_scope, sub { Future->done }, $text_send));
+    my $html_future = Future->wrap($html_response->respond(
+        $html_scope, sub { Future->done }, $html_send,
+    ));
+    my $text_future = Future->wrap($text_response->respond(
+        $text_scope, sub { Future->done }, $text_send,
+    ));
     ok(!$html_future->is_ready && !$text_future->is_ready,
-        'both sends are independently held in flight');
+        'both concrete Responses remain independently in flight');
 
     $text_gate->done;
     $text_future->get;
@@ -411,12 +413,10 @@ subtest 'compiled endpoint is safe across concurrent in-flight calls' => sub {
     $html_gate->done;
     $html_future->get;
 
-    is(response_header(\@html_events, 'Content-Type'), 'text/html; charset=utf-8',
-        'HTML request retains its negotiated representation');
-    is(response_header(\@text_events, 'Content-Type'), 'text/plain; charset=utf-8',
-        'text request retains its negotiated representation');
-    like($html_events[1]{body}, qr/<!doctype html>/i, 'HTML body does not leak text rendering');
-    unlike($text_events[1]{body}, qr/<!doctype html>/i, 'text body does not leak HTML rendering');
+    is(response_header(\@html_events, 'Content-Type'),
+        'text/html; charset=utf-8', 'HTML response retains its representation');
+    is(response_header(\@text_events, 'Content-Type'),
+        'text/plain; charset=utf-8', 'text response retains its representation');
     isnt(refaddr($Local::ConcurrentPages::PAGE_IDS[0]),
         refaddr($Local::ConcurrentPages::PAGE_IDS[1]),
         'concurrent hooks receive distinct request-local descriptors');

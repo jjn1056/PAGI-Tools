@@ -2,8 +2,9 @@
 
 This runnable example puts `PAGI::Pages` behind one `PAGI::Compose` application
 root. It demonstrates the Welcome page, fixed redirects, negotiated errors,
-the difference between Route and Mount, both Response ownership models, and
-lifespan startup and shutdown.
+ordinary exported Request handlers, explicit native adaptation, the difference
+between Route and Mount, both Response ownership models, and lifespan startup
+and shutdown.
 
 Run it from the PAGI-Tools checkout:
 
@@ -21,20 +22,27 @@ curl -i http://localhost:5000/old
 ```
 
 `route('/old' => ...)` is an exact route, so `/old/child` does not reach its
-redirect endpoint. `mount('/terminal', app => ...)` transfers the entire
+redirect handler. `mount('/terminal', app => request_app(\&gone_page))`
+explicitly adapts the ordinary Request handler and transfers the entire
 subtree to an opaque terminal application, so both `/terminal` and every
 descendant such as `/terminal/anything` return the configured Gone page for
 every HTTP method.
 
+Page functions are ordinary Request handlers and work directly in Route:
+
+```perl
+route('/' => \&welcome_page);
+route('/missing' => \&not_found_page);
+```
+
 The `/request` handler receives `PAGI::Request`.
-`PAGI::Pages->not_found($request)` returns an
-ordinary unsent `PAGI::Response`; the handler adds `X-Demo` and returns it so
-Router can own the send step:
+`not_found_page($request)` returns an ordinary unsent concrete Response; the
+handler adds `X-Demo` and returns it so Router can own the send step:
 
 ```perl
 route('/request' => sub {
     my ($request) = @_;
-    my $response = PAGI::Pages->not_found($request, as => 'text');
+    my $response = not_found_page($request, as => 'text');
     $response->header('X-Demo' => 'Request response value');
     return $response;
 });
@@ -47,11 +55,16 @@ sending it are separate operations:
 ```perl
 route('/raw', raw => async sub {
     my ($scope, $receive, $send) = @_;
-    my $response = PAGI::Pages->not_found($scope, as => 'text');
+    my $response = not_found_page($scope, as => 'text');
     $response->header('X-Demo' => 'raw response value');
-    await Future->wrap($response->respond($send));
+    await Future->wrap($response->respond($scope, $receive, $send));
 });
 ```
+
+Page functions never arity-switch into native applications. Use
+`request_app(\&handler)` for Mount, Compose `app`, or another native placement.
+Only a real raw closure owns `($scope, $receive, $send)` and calls full-triplet
+`respond` itself.
 
 Compose owns the deployed protocol boundary around those routes, including
 lifespan startup/shutdown and response/error safety. The enclosed Router owns

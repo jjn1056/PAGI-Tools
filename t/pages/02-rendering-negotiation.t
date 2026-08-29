@@ -77,7 +77,9 @@ sub send_response {
         push @events, $_[0];
         return Future->done;
     };
-    Future->wrap($response->respond($send))->get;
+    Future->wrap($response->respond(
+        http_scope(), sub { Future->done }, $send,
+    ))->get;
     return \@events;
 }
 
@@ -243,6 +245,19 @@ sub http_request {
     }
 }
 
+subtest 'body-forbidden descriptors use the concrete Empty response' => sub {
+    my $response = PAGI::Pages->new->_response_for(http_scope(), {
+        kind => 'welcome', status => 204, title => 'No Content', detail => '',
+        documentation => $WELCOME_URL, as => 'text', headers => [],
+        cache_control => undef,
+    });
+    is(ref($response), 'PAGI::Response::Empty',
+        'body-forbidden policy selects the exact Empty class');
+    is($response->body, '', 'Empty retains an exact zero-byte body');
+    ok(!$response->has_content_type,
+        'Empty does not manufacture representation metadata');
+};
+
 subtest 'auto negotiation selects the documented representation families' => sub {
     my @cases = (
         [undef,                      'text/html; charset=utf-8'],
@@ -254,7 +269,14 @@ subtest 'auto negotiation selects the documented representation families' => sub
     );
     for my $case (@cases) {
         my ($accept, $expected) = @$case;
-        my $events = send_response(PAGI::Pages->not_found(http_scope(accept => $accept)));
+        my $response = PAGI::Pages->not_found(http_scope(accept => $accept));
+        my $class = $expected eq 'text/html; charset=utf-8'
+            ? 'PAGI::Response::HTML'
+            : $expected eq 'text/plain; charset=utf-8'
+                ? 'PAGI::Response::Text' : 'PAGI::Response::Problem';
+        is(ref($response), $class,
+            defined $accept ? "Accept $accept returns $class" : "missing Accept returns $class");
+        my $events = send_response($response);
         is(header($events, 'Content-Type'), $expected,
             defined $accept ? "Accept $accept selects $expected" : "missing Accept selects $expected");
         is(header($events, 'Vary'), 'Accept', 'auto negotiation emits Vary: Accept');
@@ -315,7 +337,8 @@ subtest 'auto Vary merge is case-insensitive and duplicate-free' => sub {
 subtest 'Request source preserves configured negotiated rendering' => sub {
     my $pages = PAGI::Pages->new(as => 'auto', default => 'text');
     my $response = $pages->welcome(http_request(accept => 'application/json'));
-    isa_ok($response, ['PAGI::Response']);
+    is(ref($response), 'PAGI::Response::JSON',
+        'welcome negotiation returns the exact JSON class');
 
     my $events = send_response($response);
     is(header($events, 'Content-Type'), 'application/json',
@@ -436,32 +459,39 @@ subtest 'every named error renders its own registered status semantics' => sub {
 };
 
 subtest 'problem semantics and extensions are validated before rendering' => sub {
-    like(dies { PAGI::Pages->not_found(type => 'https://example.test/problems/custom') },
+    like(dies { PAGI::Pages->not_found(
+        http_scope(), type => 'https://example.test/problems/custom') },
         qr/type and title must be supplied together/,
         'registered status rejects a custom type without title');
-    like(dies { PAGI::Pages->not_found(title => 'Custom') },
+    like(dies { PAGI::Pages->not_found(http_scope(), title => 'Custom') },
         qr/type and title must be supplied together/,
         'registered status rejects a custom title without type');
     like(dies {
-        PAGI::Pages->not_found(type => 'relative/problem', title => 'Custom')
+        PAGI::Pages->not_found(
+            http_scope(), type => 'relative/problem', title => 'Custom')
     }, qr/type must be an absolute URI/, 'custom problem type must be absolute');
     like(dies {
-        PAGI::Pages->not_found(type => 'about:blank', title => 'Custom')
+        PAGI::Pages->not_found(
+            http_scope(), type => 'about:blank', title => 'Custom')
     }, qr/type cannot be about:blank/, 'custom problem type cannot use about:blank');
     like(dies {
         PAGI::Pages->not_found(
+            http_scope(),
             type => "https://example.test/problems/\x{2603}", title => 'Custom')
     }, qr/type must be an absolute URI/,
         'custom problem type requires an ASCII wire URI');
 
     for my $reserved (qw(type title status detail instance)) {
-        like(dies { PAGI::Pages->not_found(extensions => {$reserved => 'replace'}) },
+        like(dies { PAGI::Pages->not_found(
+            http_scope(), extensions => {$reserved => 'replace'}) },
             qr/reserved problem member/, "$reserved cannot be supplied as an extension");
     }
-    like(dies { PAGI::Pages->not_found(instance => "bad\ninstance") },
+    like(dies { PAGI::Pages->not_found(
+        http_scope(), instance => "bad\ninstance") },
         qr/instance must be a URI-reference scalar/,
         'instance rejects control characters');
-    like(dies { PAGI::Pages->not_found(instance => "/requests/\x{2603}") },
+    like(dies { PAGI::Pages->not_found(
+        http_scope(), instance => "/requests/\x{2603}") },
         qr/instance must be a URI-reference scalar/,
         'instance requires an ASCII wire URI-reference');
 };
@@ -478,17 +508,24 @@ subtest 'subclass rendering hooks dispatch through the invoked policy' => sub {
         'welcome JSON dispatches through render_json');
 };
 
-subtest 'nested extension values are request-local across endpoint calls' => sub {
-    my $endpoint = Local::NestedMutationPages->not_found(
-        as => 'json',
-        extensions => { metadata => { token => 'original' } },
-    );
-    my $first = decode_json(body(send_response($endpoint->(http_scope()))));
-    my $second = decode_json(body(send_response($endpoint->(http_scope()))));
+subtest 'nested extension values are isolated from callers and hooks' => sub {
+    my $extensions = { metadata => { token => 'original' } };
+    my $first = decode_json(body(send_response(
+        Local::NestedMutationPages->not_found(
+            http_scope(), as => 'json', extensions => $extensions,
+        ),
+    )));
+    my $second = decode_json(body(send_response(
+        Local::NestedMutationPages->not_found(
+            http_scope(), as => 'json', extensions => $extensions,
+        ),
+    )));
     is($first->{seen_token}, 'original',
-        'first call receives the captured extension value');
+        'first call receives a safe copy of the extension value');
     is($second->{seen_token}, 'original',
-        'renderer mutation cannot leak into a later endpoint call');
+        'renderer mutation cannot leak into a later call');
+    is($extensions, { metadata => { token => 'original' } },
+        'renderer mutation cannot reach the caller-owned structure');
 };
 
 subtest 'stock favicon is inline exact-status SVG with documented seams' => sub {
@@ -532,30 +569,27 @@ subtest 'full HTML overrides own favicon inclusion' => sub {
 
 subtest 'renderer failures and Future-valued hooks occur before send' => sub {
     my @cases = (
-        [Local::FutureHTMLPages->not_found(as => 'html'),
+        [sub { Local::FutureHTMLPages->not_found(http_scope(), as => 'html') },
             qr/renderer must return an immediate value/, 'Future HTML renderer'],
-        [Local::FutureTextPages->not_found(as => 'text'),
+        [sub { Local::FutureTextPages->not_found(http_scope(), as => 'text') },
             qr/renderer must return an immediate value/, 'Future text renderer'],
-        [Local::FutureProblemPages->not_found(as => 'json'),
+        [sub { Local::FutureProblemPages->not_found(http_scope(), as => 'json') },
             qr/renderer must return an immediate value/, 'Future problem renderer'],
-        [Local::FutureJSONPages->welcome(as => 'json'),
+        [sub { Local::FutureJSONPages->welcome(http_scope(), as => 'json') },
             qr/renderer must return an immediate value/, 'Future JSON renderer'],
-        [Local::FutureFaviconPages->not_found(as => 'html'),
+        [sub { Local::FutureFaviconPages->not_found(http_scope(), as => 'html') },
             qr/renderer must return an immediate value/, 'Future favicon hook'],
-        [Local::ControlFaviconPages->not_found(as => 'html'),
+        [sub { Local::ControlFaviconPages->not_found(http_scope(), as => 'html') },
             qr/favicon_href.*URI-reference/i, 'control-bearing favicon hook'],
-        [Local::BadJSONPages->not_found(as => 'json'),
+        [sub { Local::BadJSONPages->not_found(http_scope(), as => 'json') },
             qr/(?:circular|JSON|encode)/i, 'JSON encoding failure'],
-        [Local::BadShapePages->not_found(as => 'json'),
+        [sub { Local::BadShapePages->not_found(http_scope(), as => 'json') },
             qr/render_problem must return a hashref/, 'invalid renderer shape'],
     );
     for my $case (@cases) {
-        my ($endpoint, $error, $label) = @$case;
+        my ($build, $error, $label) = @$case;
         my @events;
-        my $send = sub { push @events, $_[0]; return Future->done };
-        like(dies {
-            $endpoint->(http_scope(), sub { Future->done }, $send)
-        }, $error, "$label is rejected synchronously");
+        like(dies { $build->() }, $error, "$label is rejected synchronously");
         is(\@events, [], "$label emits no response event");
     }
 };

@@ -43,7 +43,9 @@ sub send_response {
         push @events, $_[0];
         return Future->done;
     };
-    Future->wrap($response->respond($send))->get;
+    Future->wrap($response->respond(
+        http_scope(), sub { Future->done }, $send,
+    ))->get;
     return \@events;
 }
 
@@ -90,7 +92,8 @@ subtest 'redirect methods select only their documented statuses' => sub {
     }
 
     for my $status (300, 304, 305, 306, 309, 399, '302.0', 'x') {
-        like(dies { PAGI::Pages->redirect('/next', status => $status) },
+        like(dies { PAGI::Pages->redirect(
+            http_scope(), '/next', status => $status) },
             qr/status.*301.*302.*303.*307.*308/i,
             "generic redirect rejects unsupported status $status");
     }
@@ -100,7 +103,8 @@ subtest 'redirect methods select only their documented statuses' => sub {
         ['supported numeric with noncanonical string facet', dualvar(301, '999')],
     ) {
         my ($label, $status) = @$case;
-        like(dies { PAGI::Pages->redirect('/next', status => $status) },
+        like(dies { PAGI::Pages->redirect(
+            http_scope(), '/next', status => $status) },
             qr/status.*301.*302.*303.*307.*308/i,
             "generic redirect rejects $label");
     }
@@ -110,7 +114,8 @@ subtest 'redirect methods select only their documented statuses' => sub {
         for my $numeric_status (@supported) {
             next if $numeric_status eq $string_status;
             my $status = dualvar(0 + $numeric_status, $string_status);
-            like(dies { PAGI::Pages->redirect('/next', status => $status) },
+            like(dies { PAGI::Pages->redirect(
+                http_scope(), '/next', status => $status) },
                 qr/status.*301.*302.*303.*307.*308/i,
                 "generic redirect rejects string $string_status with numeric "
                     . $numeric_status);
@@ -123,32 +128,38 @@ subtest 'redirect methods select only their documented statuses' => sub {
     is($matching->status, 307,
         'generic redirect stores a matching dualvar as the intended status');
 
-    like(dies { PAGI::Pages->found('/next', status => 302) }, qr/status/i,
+    like(dies { PAGI::Pages->found(
+        http_scope(), '/next', status => 302) }, qr/status/i,
         'named redirect rejects a supplied status option even when it matches');
 };
 
-subtest 'redirect supports immediate and deferred Pages invocation forms' => sub {
+subtest 'redirect requires a source and returns an unsent Response' => sub {
     my $scope = http_scope();
     my @events;
     my $send = sub { push @events, $_[0]; return Future->done };
     my $request = PAGI::Request->new($scope, sub { Future->done });
 
     my $class = PAGI::Pages->redirect($request, '/class', as => 'text');
+    is(ref($class), 'PAGI::Response::Text',
+        'fixed text redirect returns the concrete Text class');
     is($class->header('Location'), '/class', 'class immediate Request call returns redirect');
 
     my $pages = PAGI::Pages->new(as => 'text');
     my $instance = $pages->found($scope, '/instance');
+    is(ref($instance), 'PAGI::Response::Text',
+        'configured redirect returns its concrete representation class');
     is($instance->header('Location'), '/instance', 'instance immediate scope call returns redirect');
 
-    my $endpoint = PAGI::Pages->see_other('/endpoint', as => 'text');
-    is(ref($endpoint), 'CODE', 'deferred redirect is a plain coderef');
-    is($endpoint->($request)->header('Location'), '/endpoint',
-        'deferred Request call returns an unsent redirect');
-    is($endpoint->($scope)->header('Location'), '/endpoint',
-        'deferred scope-only call returns an unsent redirect');
-
-    Future->wrap($endpoint->($scope, sub { Future->done }, $send))->get;
-    is($events[0]{status}, 303, 'deferred native triplet sends the redirect');
+    like(dies { PAGI::Pages->see_other('/endpoint', as => 'text') },
+        qr/explicit.*source|metadata source/i,
+        'no-source redirect factory is rejected');
+    like(dies {
+        PAGI::Pages->see_other(
+            $scope, sub { Future->done }, sub { Future->done },
+        )
+    }, qr/PAGI::Pages|option|redirect/i,
+        'native three-argument redirect invocation is rejected');
+    is(\@events, [], 'redirect construction never emits events');
 };
 
 subtest 'redirect validates its target and options before construction' => sub {
@@ -157,15 +168,19 @@ subtest 'redirect validates its target and options before construction' => sub {
             qr/target.*URI-reference/i,
             'redirect rejects control, wide, and reference targets');
     }
-    is(PAGI::Pages->redirect('https://example.test/path')->(http_scope())
-        ->header('Location'), 'https://example.test/path',
+    is(PAGI::Pages->redirect(
+        http_scope(), 'https://example.test/path')->header('Location'),
+        'https://example.test/path',
         'absolute target is preserved');
-    is(PAGI::Pages->redirect('../relative/path')->(http_scope())
-        ->header('Location'), '../relative/path', 'relative target is preserved');
+    is(PAGI::Pages->redirect(
+        http_scope(), '../relative/path')->header('Location'),
+        '../relative/path', 'relative target is preserved');
 
-    like(dies { PAGI::Pages->redirect('/next', type => 'https://example.test') },
+    like(dies { PAGI::Pages->redirect(
+        http_scope(), '/next', type => 'https://example.test') },
         qr/unknown PAGI::Pages redirect option/, 'problem options are not redirect options');
-    like(dies { PAGI::Pages->redirect('/next', preserve_query => []) },
+    like(dies { PAGI::Pages->redirect(
+        http_scope(), '/next', preserve_query => []) },
         qr/preserve_query.*Boolean/i, 'preserve_query requires a Boolean scalar');
 };
 
@@ -173,6 +188,8 @@ subtest 'redirect bodies and Location share the one final target' => sub {
     my $target = q{/next?existing=1&x=<tag>#part};
 
     my $html = PAGI::Pages->redirect(http_scope(), $target, as => 'html');
+    is(ref($html), 'PAGI::Response::HTML',
+        'fixed HTML redirect returns the concrete HTML class');
     is($html->header('Location'), $target, 'HTML Location is the exact target');
     my $html_body = decoded_body($html);
     like($html_body, qr{href="/next\?existing=1&amp;x=&lt;tag&gt;#part"},
@@ -181,10 +198,14 @@ subtest 'redirect bodies and Location share the one final target' => sub {
         'HTML escapes the target as link text');
 
     my $text = PAGI::Pages->redirect(http_scope(), $target, as => 'text');
+    is(ref($text), 'PAGI::Response::Text',
+        'fixed text redirect returns the concrete Text class');
     is(decoded_body($text), "302 Found\n\nThe requested resource has moved.\n\nLocation:\n$target\n",
         'text includes the unchanged final target');
 
     my $json = PAGI::Pages->permanent_redirect(http_scope(), $target, as => 'json');
+    is(ref($json), 'PAGI::Response::JSON',
+        'fixed JSON redirect returns the concrete JSON class');
     my $json_events = send_response($json);
     is(header($json_events, 'Content-Type'), 'application/json',
         'redirect JSON is ordinary application/json');
@@ -262,18 +283,6 @@ subtest 'query preservation rejects unsafe raw query data before response constr
         }, qr/query_string.*URI-reference/i,
             'unsafe preserved query is rejected before response construction');
 
-        my @events;
-        my $endpoint = PAGI::Pages->redirect('/search',
-            preserve_query => 1, as => 'text');
-        like(dies {
-            $endpoint->(
-                http_scope(query_string => $query),
-                sub { Future->done },
-                sub { push @events, $_[0]; return Future->done },
-            );
-        }, qr/query_string.*URI-reference/i,
-            'unsafe preserved query rejects native invocation before response start');
-        is(\@events, [], 'unsafe preserved query emits no response event');
     }
 };
 
@@ -292,7 +301,8 @@ subtest 'redirect cache and retry fields follow redirect policy' => sub {
         'redirect accepts Retry-After delay seconds');
 
     like(dies { PAGI::Pages->redirect(
-        '/next', retry_after => 30, headers => ['Retry-After' => '60'],
+        http_scope(), '/next', retry_after => 30,
+        headers => ['Retry-After' => '60'],
     ) }, qr/retry_after.*conflict|conflict.*Retry-After/i,
         'redirect rejects conflicting semantic and raw Retry-After values');
 };

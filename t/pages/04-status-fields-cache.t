@@ -41,7 +41,9 @@ sub send_response {
         push @events, $_[0];
         return Future->done;
     };
-    Future->wrap($response->respond($send))->get;
+    Future->wrap($response->respond(
+        http_scope(), sub { Future->done }, $send,
+    ))->get;
     return \@events;
 }
 
@@ -104,14 +106,14 @@ subtest 'semantic status fields are normalized exactly' => sub {
     my $empty = PAGI::Pages->method_not_allowed(
         http_scope(), as => 'text', allow => [],
     );
-    is([$empty->header_all('Allow')], [''],
+    is($empty->header_all('Allow'), [''],
         '405 emits one legal empty Allow field');
 
     my $multiple = PAGI::Pages->unauthorized(
         http_scope(), as => 'text',
         challenge => ['Basic realm="one"', 'Bearer realm="two"'],
     );
-    is([$multiple->header_all('WWW-Authenticate')], [
+    is($multiple->header_all('WWW-Authenticate'), [
         'Basic realm="one"', 'Bearer realm="two"',
     ], 'multiple authentication challenges remain separate field lines');
 };
@@ -136,7 +138,7 @@ subtest 'mandatory fields can come from validated raw headers' => sub {
         my $response = PAGI::Pages->$method(
             http_scope(), as => 'text', headers => $headers,
         );
-        is([$response->header_all($name)], $want,
+        is($response->header_all($name), $want,
             "$method accepts and preserves its raw mandatory field");
     }
 
@@ -145,7 +147,7 @@ subtest 'mandatory fields can come from validated raw headers' => sub {
         challenge => 'Basic realm="semantic"',
         headers => ['WWW-Authenticate' => 'Bearer realm="raw"'],
     );
-    is([$mixed->header_all('WWW-Authenticate')], [
+    is($mixed->header_all('WWW-Authenticate'), [
         'Bearer realm="raw"', 'Basic realm="semantic"',
     ], 'raw and semantic challenges coexist as separate field lines');
 };
@@ -196,7 +198,7 @@ subtest 'mandatory fields and Upgrade request versions are enforced' => sub {
     );
     for my $case (@missing) {
         my ($method, $error) = @$case;
-        like(dies { PAGI::Pages->$method(as => 'text') }, $error,
+        like(dies { PAGI::Pages->$method(http_scope(), as => 'text') }, $error,
             "$method rejects missing mandatory information");
     }
 
@@ -210,7 +212,8 @@ subtest 'mandatory fields and Upgrade request versions are enforced' => sub {
     );
     for my $case (@blank_challenges) {
         my ($method, $args, $label) = @$case;
-        like(dies { PAGI::Pages->$method(@$args) }, qr/nonempty|challenge/i,
+        like(dies { PAGI::Pages->$method(http_scope(), @$args) },
+            qr/nonempty|challenge/i,
             "$label rejects an OWS-only authentication challenge");
     }
 
@@ -225,19 +228,13 @@ subtest 'mandatory fields and Upgrade request versions are enforced' => sub {
         'an absent HTTP version uses the request default of HTTP/1.1');
 
     for my $version ('1.0', '2', '3') {
-        my @events;
-        my $endpoint = PAGI::Pages->upgrade_required(
-            as => 'text', upgrade => 'websocket',
-        );
         like(dies {
-            $endpoint->(
+            PAGI::Pages->upgrade_required(
                 http_scope(version => $version),
-                sub { Future->done },
-                sub { push @events, $_[0]; return Future->done },
+                as => 'text', upgrade => 'websocket',
             );
         }, qr/HTTP\/1\.1|version|Upgrade/i,
             "426 rejects explicit HTTP/$version");
-        is(\@events, [], "HTTP/$version validation happens before response start");
     }
 };
 
@@ -256,7 +253,8 @@ subtest 'single-valued semantic and raw fields cannot conflict' => sub {
     );
     for my $case (@conflicts) {
         my ($method, $args) = @$case;
-        like(dies { PAGI::Pages->$method(@$args) }, qr/conflict|both|raw/i,
+        like(dies { PAGI::Pages->$method(http_scope(), @$args) },
+            qr/conflict|both|raw/i,
             "$method rejects semantic/raw field conflict");
     }
 };
@@ -283,7 +281,7 @@ subtest 'Retry-After accepts delay seconds and canonical IMF-fixdate only' => su
         'tomorrow',
     ) {
         like(dies {
-            PAGI::Pages->content_too_large(retry_after => $bad)
+            PAGI::Pages->content_too_large(http_scope(), retry_after => $bad)
         }, qr/Retry-After|retry_after|IMF-fixdate/i,
             "invalid or obsolete Retry-After '$bad' is rejected");
     }
@@ -311,7 +309,7 @@ subtest 'semantic values reject malformed shapes without numeric truncation' => 
     );
     for my $case (@bad) {
         my ($method, $args, $error) = @$case;
-        like(dies { PAGI::Pages->$method(@$args) }, $error,
+        like(dies { PAGI::Pages->$method(http_scope(), @$args) }, $error,
             "$method rejects malformed $args->[0]");
     }
 };
@@ -327,7 +325,8 @@ subtest 'semantic options are accepted only by their relevant statuses' => sub {
         [login_url => '/login'],
     );
     for my $args (@unrelated) {
-        like(dies { PAGI::Pages->bad_request(@$args) }, qr/not valid|unrelated|option/i,
+        like(dies { PAGI::Pages->bad_request(http_scope(), @$args) },
+            qr/not valid|unrelated|option/i,
             "$args->[0] is rejected for an unrelated status");
     }
 };
@@ -338,7 +337,7 @@ subtest 'raw headers are fully validated before entering the response' => sub {
         'lOcAtIoN', 'cache-CONTROL', 'ConNection',
     ) {
         like(dies {
-            PAGI::Pages->not_found(headers => [$owned => 'value'])
+            PAGI::Pages->not_found(http_scope(), headers => [$owned => 'value'])
         }, qr/response-owned/, "$owned is rejected case-insensitively");
     }
 
@@ -351,38 +350,40 @@ subtest 'raw headers are fully validated before entering the response' => sub {
     for my $case (@bad_values) {
         my ($value, $label) = @$case;
         like(dies {
-            PAGI::Pages->not_found(headers => ['X-Test' => $value])
+            PAGI::Pages->not_found(http_scope(), headers => ['X-Test' => $value])
         }, qr/field-value scalar/, "$label header value is rejected");
     }
 
     for my $name ('Bad Name', 'Bad:Name', "Wide-\x{2603}", []) {
         like(dies {
-            PAGI::Pages->not_found(headers => [$name => 'value'])
+            PAGI::Pages->not_found(http_scope(), headers => [$name => 'value'])
         }, qr/header name must be an HTTP token/,
             'invalid or reference-valued header name is rejected');
     }
 
-    like(dies { PAGI::Pages->not_found(headers => {}) },
+    like(dies { PAGI::Pages->not_found(http_scope(), headers => {}) },
         qr/even-length arrayref/, 'non-array raw headers are rejected');
-    like(dies { PAGI::Pages->not_found(headers => ['X-One']) },
+    like(dies { PAGI::Pages->not_found(http_scope(), headers => ['X-One']) },
         qr/even-length arrayref/, 'odd raw header lists are rejected');
 };
 
 subtest 'problem extensions cannot replace authoritative members' => sub {
     for my $member (qw(type title status detail instance)) {
         like(dies {
-            PAGI::Pages->not_found(extensions => {$member => 'replacement'})
+            PAGI::Pages->not_found(
+                http_scope(), extensions => {$member => 'replacement'})
         }, qr/reserved problem member/,
             "$member cannot collide with a standard problem member");
     }
     like(dies {
         PAGI::Pages->network_authentication_required(
-            extensions => {login => '/other'},
+            http_scope(), extensions => {login => '/other'},
         )
     }, qr/login.*reserved|reserved.*login/i,
         '511 reserves the login problem member');
     is(dies {
-        PAGI::Pages->not_found(extensions => {login => '/advisory'})
+        PAGI::Pages->not_found(
+            http_scope(), extensions => {login => '/advisory'})
     }, undef, 'login remains an ordinary extension for non-511 problems');
 };
 
@@ -458,7 +459,8 @@ subtest 'error and welcome cache policies are exact' => sub {
            request_header_fields_too_large network_authentication_required)
     ) {
         like(dies {
-            PAGI::Pages->$method(cache_control => 'public, max-age=60')
+            PAGI::Pages->$method(
+                http_scope(), cache_control => 'public, max-age=60')
         }, qr/no-store|cache_control|cache/i,
             "$method rejects a cache value that weakens no-store");
         my $response = PAGI::Pages->$method(
@@ -483,7 +485,7 @@ subtest 'automatic Vary merging preserves caller tokens and adds Accept once' =>
         http_scope(),
         headers => [Vary => 'Origin, Accept-Encoding', vary => 'origin'],
     );
-    is([$response->header_all('Vary')], ['Origin, Accept-Encoding, Accept'],
+    is($response->header_all('Vary'), ['Origin, Accept-Encoding, Accept'],
         'Vary is merged case-insensitively without losing caller tokens');
 };
 

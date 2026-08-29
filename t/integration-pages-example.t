@@ -11,7 +11,7 @@ my $load_error = $@ || $!;
 ok(!$load_error, 'Pages example loads cleanly') or diag($load_error);
 isa_ok($app, 'PAGI::Compose');
 
-subtest 'Pages example exercises route, mount, Request, raw, and lifespan forms' => sub {
+subtest 'Pages example exercises handler, adapter, raw, and lifespan forms' => sub {
     plan skip_all => 'Pages example did not load'
         unless ref($app) eq 'PAGI::Compose';
 
@@ -54,7 +54,7 @@ subtest 'Pages example exercises route, mount, Request, raw, and lifespan forms'
         my $mounted = $client->get('/terminal/child',
             headers => { Accept => 'text/plain' });
         is($mounted->status, 410,
-            'Mount owns a descendant path with its terminal Pages app');
+            'request_app adapts the Gone handler for Mount ownership');
         is($mounted->content_type, 'text/plain; charset=utf-8',
             'mounted endpoint negotiates text');
         like($mounted->text, qr/^410 Gone/m,

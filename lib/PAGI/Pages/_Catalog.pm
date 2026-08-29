@@ -3,6 +3,20 @@ package PAGI::Pages::_Catalog;
 use strict;
 use warnings;
 
+=encoding UTF-8
+
+=head1 NAME
+
+PAGI::Pages::_Catalog - private checked-in HTTP error page catalog
+
+=head1 DESCRIPTION
+
+Provides fresh descriptor, method-name, and exported page-function-name
+snapshots to L<PAGI::Pages>. This private module performs no runtime registry
+lookup.
+
+=cut
+
 my %ERRORS = (
     400 => {
         status => 400, method => 'bad_request', title => 'Bad Request',
@@ -177,6 +191,11 @@ sub _code_for_method {
 
 sub _named_methods {
     return [ map { $ERRORS{$_}{method} } sort { $a <=> $b } keys %ERRORS ];
+}
+
+sub _named_page_functions {
+    return [ map { $ERRORS{$_}{method} . '_page' }
+        sort { $a <=> $b } keys %ERRORS ];
 }
 
 1;
