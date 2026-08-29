@@ -200,7 +200,7 @@ sub close {
         $self->{_active_close} = undef
             if $self->{_active_close} && $self->{_active_close} == $active;
         $delivery->fail($@) unless $delivery->is_ready || $delivery->is_cancelled;
-        return $finished;
+        return $finished->without_cancel;
     }
 
     $active->{send} = $send_future;
@@ -223,7 +223,7 @@ sub close {
         $delivery->done unless $delivery->is_ready || $delivery->is_cancelled;
     });
 
-    return $finished;
+    return $finished->without_cancel;
 }
 
 async sub _finish_close {
@@ -249,7 +249,6 @@ sub _abort {
         my $active = $self->{$slot} or next;
         if ($slot eq '_active_close' && $self->{_close_future}) {
             push @active_settlements, $self->{_close_future}->without_cancel;
-            next;
         }
         my $send = $active->{send};
         push @active_settlements, $send->without_cancel if $send;

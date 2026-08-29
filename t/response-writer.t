@@ -750,6 +750,40 @@ subtest 'repeated close joins pending terminal delivery and Stream awaits it' =>
     is($terminal_calls, 1, 'settling joined close does not duplicate terminal output');
 };
 
+subtest 'cancelling the first close view cannot bypass its pending terminal send' => sub {
+    my $terminal_send = Future->new;
+    my $send_cancelled = 0;
+    my $cleanup_calls = 0;
+    my $first_close;
+    $terminal_send->on_cancel(sub { ++$send_cancelled });
+
+    my $running = PAGI::Response::Stream->new(sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { ++$cleanup_calls });
+        $first_close = $writer->close;
+        $first_close->cancel;
+        return $first_close;
+    })->respond(
+        http_scope(), quiet_receive(),
+        sub {
+            my ($event) = @_;
+            return Future->done if $event->{type} eq 'http.response.start';
+            return $terminal_send;
+        },
+    );
+
+    ok($first_close->is_cancelled, 'application cancellation settles only its close view');
+    is($send_cancelled, 0, 'application cancellation never cancels the PAGI send');
+    ok(!$running->is_ready, 'Stream abort still joins the active terminal send');
+    is($cleanup_calls, 0, 'cleanup cannot outrun the active terminal send');
+
+    $terminal_send->done;
+    like(dies { $running->get }, qr/Stream producer Future was cancelled/,
+        'producer cancellation is reported only after terminal settlement');
+    is($send_cancelled, 0, 'terminal settlement path never cancels the PAGI send');
+    is($cleanup_calls, 1, 'terminal settlement runs cleanup exactly once');
+};
+
 subtest 'repeated close joins pending cleanup and Stream awaits it' => sub {
     my $cleanup_wait = Future->new;
     my ($first_close, $second_close);
