@@ -105,7 +105,8 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
     use parent 'PAGI::Endpoint::Router';
     use Future::AsyncAwait;
     use PAGI::Compose qw(compose);
-    use PAGI::Response ();
+    use PAGI::Response::JSON ();
+    use PAGI::Response::Text ();
     use PAGI::Routing qw(middleware);
 
     sub new {
@@ -135,7 +136,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 
     sub show {
         my ($self, $request) = @_;
-        return PAGI::Response->json(
+        return PAGI::Response::JSON->new(
             $self->{repository}->find($request->path_param('id')),
         );
     }
@@ -232,7 +233,7 @@ to the active placement, while an absolute name starts with C</>.
     $r->get('/method' => 'show');
     $r->get('/closure' => sub {
         my ($request) = @_;
-        return PAGI::Response->text('closure');
+        return PAGI::Response::Text->new('closure');
     });
 
 A plain unqualified string in handler position is validated with C<can> while

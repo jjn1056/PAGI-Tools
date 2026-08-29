@@ -10,6 +10,8 @@ use lib 'lib';
 use PAGI::Endpoint::HTTP;
 use PAGI::Request;
 use PAGI::Response;
+use PAGI::Response::Empty ();
+use PAGI::Response::Text ();
 
 package TestEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
@@ -18,21 +20,21 @@ package TestEndpoint {
     sub get {
         my ($self, $request) = @_;
         $self->{get_request} = $request;
-        return PAGI::Response->text("GET response");
+        return PAGI::Response::Text->new("GET response");
     }
 
     sub post {
         my ($self, $request) = @_;
         $self->{post_request} = $request;
-        return Future->done(PAGI::Response->text("POST response", status => 201));
+        return Future->done(PAGI::Response::Text->new("POST response", status => 201));
     }
 }
 
 package ExplicitHeadEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
 
-    sub get  { PAGI::Response->text('GET response') }
-    sub head { PAGI::Response->empty(status => 202) }
+    sub get  { PAGI::Response::Text->new('GET response') }
+    sub head { PAGI::Response::Empty->new(status => 202) }
 }
 
 my $make_request = sub {
@@ -82,7 +84,7 @@ subtest 'returns 405 for unimplemented method' => sub {
     my $response = $endpoint->dispatch($request)->get;
 
     is($response->status, 405, '405 status for unimplemented');
-    is [$response->header_all('Allow')], ['GET, HEAD, OPTIONS, POST'],
+    is $response->header_all('Allow'), ['GET, HEAD, OPTIONS, POST'],
         '405 retains one sorted complete Allow field';
 };
 

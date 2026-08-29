@@ -9,6 +9,7 @@ use Carp qw(croak);
 use PAGI::Pages;
 use PAGI::Request;
 use PAGI::Response;
+use PAGI::Response::Empty ();
 use PAGI::Utils qw(is_response);
 
 sub new {
@@ -41,9 +42,9 @@ async sub dispatch {
     # OPTIONS - return allowed methods (auto-respond unless overridden)
     if ($http_method eq 'options' && !$self->can('options')) {
         my $allow = join(', ', $self->allowed_methods);
-        $response = PAGI::Response->new($request->scope)
-            ->header('Allow', $allow)
-            ->empty;
+        $response = PAGI::Response::Empty->new(
+            headers => ['Allow' => $allow],
+        );
     }
     # HEAD falls back to GET if not explicitly defined
     elsif ($http_method eq 'head' && !$self->can('head') && $self->can('get')) {
@@ -91,26 +92,27 @@ PAGI::Endpoint::HTTP - Class-based HTTP endpoint handler
     package MyApp::UserAPI;
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
-    use PAGI::Response ();
+    use PAGI::Response::Empty ();
+    use PAGI::Response::JSON ();
 
     async sub get {
         my ($self, $request) = @_;
         my $users = get_all_users();
-        return PAGI::Response->json($users);
+        return PAGI::Response::JSON->new($users);
     }
 
     async sub post {
         my ($self, $request) = @_;
         my $data = await $request->json;
         my $user = create_user($data);
-        return PAGI::Response->json($user, status => 201);
+        return PAGI::Response::JSON->new($user, status => 201);
     }
 
     async sub delete {
         my ($self, $request) = @_;
         my $id = $request->path_param('id');
         delete_user($id);
-        return PAGI::Response->empty(status => 204);
+        return PAGI::Response::Empty->new(status => 204);
     }
 
     # Use with PAGI server

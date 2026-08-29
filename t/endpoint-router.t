@@ -11,6 +11,7 @@ use lib 'lib';
 use lib "$Bin/lib";
 use PAGI::Endpoint::Router ();
 use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Test::Client ();
 use PAGI::Compose qw(compose);
 use TestApps::AppPath::Endpoint ();
@@ -43,7 +44,7 @@ sub run_scope {
         my ($self, $request) = @_;
         push @Local::BindingEndpoint::calls,
             ['role', Scalar::Util::refaddr($self), scalar @_, ref($request)];
-        return PAGI::Response->text('role');
+        return PAGI::Response::Text->new('role');
     }
 }
 
@@ -54,7 +55,7 @@ sub run_scope {
         my ($self, $request) = @_;
         push @Local::BindingEndpoint::calls,
             ['inherited', Scalar::Util::refaddr($self), scalar @_, ref($request)];
-        return PAGI::Response->text('inherited');
+        return PAGI::Response::Text->new('inherited');
     }
 }
 
@@ -80,7 +81,7 @@ sub run_scope {
         $r->get('/closure' => sub {
             $coderef_arity = scalar @_;
             $coderef_context = $_[0];
-            return PAGI::Response->text('closure');
+            return PAGI::Response::Text->new('closure');
         });
         $r->websocket('/socket' => 'socket_handler');
         $r->sse('/events' => 'event_handler');
@@ -89,13 +90,13 @@ sub run_scope {
     sub sync_handler {
         my ($self, $request) = @_;
         push @calls, ['sync', Scalar::Util::refaddr($self), scalar @_, ref($request)];
-        return PAGI::Response->text($self->{configured});
+        return PAGI::Response::Text->new($self->{configured});
     }
 
     sub future_handler {
         my ($self, $request) = @_;
         push @calls, ['future', Scalar::Util::refaddr($self), scalar @_, ref($request)];
-        return Future->done(PAGI::Response->text('future'));
+        return Future->done(PAGI::Response::Text->new('future'));
     }
 
     sub socket_handler {
@@ -126,7 +127,7 @@ sub run_scope {
     sub show {
         my ($self, $request) = @_;
         $self->{receiver} = Scalar::Util::refaddr($self);
-        return PAGI::Response->text($self->{label});
+        return PAGI::Response::Text->new($self->{label});
     }
 }
 
@@ -167,7 +168,7 @@ sub run_scope {
         $r->get('/closure' => sub {
             $self->{coderef_arity} = scalar @_;
             $self->{coderef_context} = $_[0];
-            return PAGI::Response->text('closure');
+            return PAGI::Response::Text->new('closure');
         });
         $r->mount('/admin', routes => sub {
             my ($admin) = @_;
@@ -180,7 +181,7 @@ sub run_scope {
         my $array_routes = [
             route('/leaf' => sub {
                 $self->{array_coderef_arity} = scalar @_;
-                return PAGI::Response->text('array leaf');
+                return PAGI::Response::Text->new('array leaf');
             }, name => 'leaf'),
         ];
         $self->{array_routes} = $array_routes;
@@ -190,13 +191,13 @@ sub run_scope {
     sub index {
         my ($self, $request) = @_;
         push @{$self->{receivers}}, Scalar::Util::refaddr($self);
-        return PAGI::Response->text('index');
+        return PAGI::Response::Text->new('index');
     }
 
     sub users {
         my ($self, $request) = @_;
         push @{$self->{receivers}}, Scalar::Util::refaddr($self);
-        return PAGI::Response->text('users');
+        return PAGI::Response::Text->new('users');
     }
 
     sub _native_response {
@@ -289,7 +290,7 @@ sub run_scope {
         });
     }
 
-    sub leaf { return PAGI::Response->text('callback leaf') }
+    sub leaf { return PAGI::Response::Text->new('callback leaf') }
 }
 
 {
@@ -320,16 +321,13 @@ subtest 'the public surface is method-oriented and has no legacy machinery' => s
         'base new rejects silently discarded configuration');
     isa_ok($base->to_router, 'PAGI::Routing::Router');
     is(ref($base->to_app), 'CODE', 'an empty Endpoint compiles to an app');
-    my $missing = PAGI::Test::Client->new(app => $base->to_app)->get(
-        '/missing', headers => { Accept => 'text/plain' },
-    );
+    my $missing = PAGI::Test::Client->new(app => $base->to_app)->get('/missing');
     is($missing->status, 404,
         'direct Endpoint to_app emits the Router stock HTTP NONE response');
-    is($missing->header('Content-Type'), 'text/plain; charset=utf-8',
-        'the stock HTTP NONE response negotiates its representation');
-    is($missing->text,
-        "404 Not Found\n\nThe requested resource was not found.\n",
-        'the direct Router response contains the stock not-found document');
+    is($missing->header('Content-Type'), 'application/problem+json',
+        'the stock HTTP NONE response is a concrete problem value');
+    is($missing->json, { status => 404, title => 'Not Found' },
+        'the direct Router response contains the stock concrete problem');
 };
 
 subtest 'the Endpoint facade follows the App Router composition grammar' => sub {
@@ -568,13 +566,13 @@ subtest 'handler validation is early and HTTP response validation stays shared' 
         my ($self, $r) = @_;
         $r->get('/request' => sub {
             $self->{compiled_request} = ref($_[0]);
-            return PAGI::Response->text('request');
+            return PAGI::Response::Text->new('request');
         });
         $r->get('/state' => sub {
             my ($request) = @_;
             $self->{scope_has_state} = exists $request->scope->{state} ? 1 : 0;
             $self->{request_state} = $request->state;
-            return PAGI::Response->text('state');
+            return PAGI::Response::Text->new('state');
         });
     }
 }

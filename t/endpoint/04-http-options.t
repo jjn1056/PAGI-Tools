@@ -9,6 +9,7 @@ use lib 'lib';
 use PAGI::Endpoint::HTTP;
 use PAGI::Request;
 use PAGI::Response;
+use PAGI::Response::Empty ();
 
 package CRUDEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
@@ -16,15 +17,15 @@ package CRUDEndpoint {
 
     sub get {
         my ($self, $request) = @_;
-        return PAGI::Response->empty;
+        return PAGI::Response::Empty->new;
     }
     sub post {
         my ($self, $request) = @_;
-        return PAGI::Response->empty;
+        return PAGI::Response::Empty->new;
     }
     sub delete {
         my ($self, $request) = @_;
-        return PAGI::Response->empty;
+        return PAGI::Response::Empty->new;
     }
 }
 

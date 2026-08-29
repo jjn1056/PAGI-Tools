@@ -5,15 +5,17 @@ use Future::AsyncAwait;
 use Future;
 use PAGI::Request;
 use PAGI::Response;
+use PAGI::Response::JSON ();
+use PAGI::Response::Text ();
 
 { package T::Ep; use parent 'PAGI::Endpoint::HTTP'; use Future::AsyncAwait;
-  async sub get { my ($self, $request) = @_; return PAGI::Response->json({ hi => 1 }) } }
+  async sub get { my ($self, $request) = @_; return PAGI::Response::JSON->new({ hi => 1 }) } }
 { package T::Void; use parent 'PAGI::Endpoint::HTTP'; use Future::AsyncAwait;
   async sub get { my ($self, $request) = @_; return } }
 { package T::Invalid; use parent 'PAGI::Endpoint::HTTP';
   sub get { return 'not a response' } }
 { package T::Count; use parent 'PAGI::Endpoint::HTTP'; use Future::AsyncAwait;
-  async sub get { my ($self, $request) = @_; $self->{n}++; return PAGI::Response->text("n=$self->{n}") } }
+  async sub get { my ($self, $request) = @_; $self->{n}++; return PAGI::Response::Text->new("n=$self->{n}") } }
 
 sub recorder { my @e; my $s = sub { push @e, $_[0]; Future->done }; return ($s, \@e) }
 

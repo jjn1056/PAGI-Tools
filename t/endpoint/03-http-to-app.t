@@ -8,6 +8,8 @@ use Future;
 use lib 'lib';
 use PAGI::Endpoint::HTTP;
 use PAGI::Response;
+use PAGI::Response::Empty ();
+use PAGI::Response::Text ();
 
 package HelloEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
@@ -16,7 +18,7 @@ package HelloEndpoint {
     sub get {
         my ($self, $request) = @_;
         my $name = $request->query_param('name') // 'World';
-        return PAGI::Response->text("Hello, $name");
+        return PAGI::Response::Text->new("Hello, $name");
     }
 }
 
@@ -26,7 +28,7 @@ package ScopeValidationEndpoint {
 
     sub get {
         ++$calls;
-        return PAGI::Response->empty;
+        return PAGI::Response::Empty->new;
     }
 }
 

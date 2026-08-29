@@ -10,6 +10,8 @@ use PAGI::Endpoint::HTTP;
 use PAGI::Endpoint::WebSocket;
 use PAGI::Endpoint::SSE;
 use PAGI::Response;
+use PAGI::Response::Empty ();
+use PAGI::Response::JSON ();
 
 # A realistic multi-protocol endpoint setup
 package MyApp::UserAPI {
@@ -18,17 +20,17 @@ package MyApp::UserAPI {
 
     async sub get {
         my ($self, $request) = @_;
-        return PAGI::Response->json({ users => ['alice', 'bob'] });
+        return PAGI::Response::JSON->new({ users => ['alice', 'bob'] });
     }
 
     async sub post {
         my ($self, $request) = @_;
-        return PAGI::Response->json({ created => 1 }, status => 201);
+        return PAGI::Response::JSON->new({ created => 1 }, status => 201);
     }
 
     async sub delete {
         my ($self, $request) = @_;
-        return PAGI::Response->empty(status => 204);
+        return PAGI::Response::Empty->new(status => 204);
     }
 }
 

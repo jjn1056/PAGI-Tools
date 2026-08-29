@@ -9,6 +9,7 @@ use Scalar::Util ();
 use lib 'lib';
 use PAGI::Endpoint::Router ();
 use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(middleware);
 use PAGI::Test::Client ();
 
@@ -157,7 +158,7 @@ sub run_scope {
         my ($self, $request) = @_;
         push @order, 'handler';
         push @handler_scopes, $request->scope;
-        return PAGI::Response->text('admin');
+        return PAGI::Response::Text->new('admin');
     }
 
     sub socket {
@@ -182,7 +183,7 @@ sub run_scope {
     sub routes {
         my ($self, $r) = @_;
         $r->get('/bad' => [$self->middleware_as('missing')] => sub {
-            return PAGI::Response->text('bad');
+            return PAGI::Response::Text->new('bad');
         });
     }
 }
@@ -193,7 +194,7 @@ sub run_scope {
     sub routes {
         my ($self, $r) = @_;
         $r->get('/bad' => [$self->middleware_as('async_factory')] => sub {
-            return PAGI::Response->text('bad');
+            return PAGI::Response::Text->new('bad');
         });
     }
     sub async_factory {
@@ -233,7 +234,7 @@ sub run_scope {
         my ($self, $request) = @_;
         $self->{handler_receiver} = Scalar::Util::refaddr($self);
         push @order, 'leaf';
-        return PAGI::Response->text('nested');
+        return PAGI::Response::Text->new('nested');
     }
 }
 

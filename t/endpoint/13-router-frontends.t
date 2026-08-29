@@ -8,6 +8,7 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::Endpoint::Router ();
 use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing::URL ();
 use PAGI::Test::Client ();
 
@@ -44,7 +45,7 @@ sub run_scope {
         };
         $self->{closure} = sub {
             my ($request) = @_;
-            return PAGI::Response->text('closure');
+            return PAGI::Response::Text->new('closure');
         };
         return $self;
     }
@@ -93,7 +94,7 @@ sub run_scope {
 
     sub method_handler {
         my ($self, $request) = @_;
-        return PAGI::Response->text('method');
+        return PAGI::Response::Text->new('method');
     }
 }
 
@@ -179,7 +180,7 @@ subtest 'Endpoint rejects malformed raw leaf declarations through the App builde
         my $params = { %{$request->scope->{path_params}} };
         if (!exists $params->{tenant}) {
             ++$self->{opaque_calls};
-            return PAGI::Response->text('opaque child');
+            return PAGI::Response::Text->new('opaque child');
         }
         my $record = {
             receiver => Scalar::Util::refaddr($self),
@@ -193,7 +194,7 @@ subtest 'Endpoint rejects malformed raw leaf declarations through the App builde
             ),
         };
         push @{$self->{seen}}, $record;
-        return PAGI::Response->text($record->{relative});
+        return PAGI::Response::Text->new($record->{relative});
     }
 }
 
@@ -263,7 +264,7 @@ subtest 'explicit child snapshots expose each named Endpoint placement' => sub {
         $r->get('/throws' => 'throws');
     }
 
-    sub known { return PAGI::Response->text('known') }
+    sub known { return PAGI::Response::Text->new('known') }
 
     sub throws { die "selected endpoint explosion\n" }
 
@@ -353,7 +354,7 @@ subtest 'Endpoint http_default owns HTTP NONE and no other outcome' => sub {
     sub routes { $_[1]->get('/leaf' => 'leaf')->name('leaf') }
     sub leaf {
         my ($self, $request) = @_;
-        return PAGI::Response->text('mount ' . $request->path_param('mount'));
+        return PAGI::Response::Text->new('mount ' . $request->path_param('mount'));
     }
 }
 
@@ -384,11 +385,11 @@ subtest 'Endpoint http_default owns HTTP NONE and no other outcome' => sub {
     }
     sub callback_leaf {
         my ($self, $request) = @_;
-        return PAGI::Response->text('callback ' . $request->path_param('group'));
+        return PAGI::Response::Text->new('callback ' . $request->path_param('group'));
     }
     sub provider_leaf {
         my ($self, $request) = @_;
-        return PAGI::Response->text('leaf ' . $request->path_param('leaf'));
+        return PAGI::Response::Text->new('leaf ' . $request->path_param('leaf'));
     }
 }
 

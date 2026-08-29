@@ -8,6 +8,7 @@ use Future;
 use lib 'lib';
 use PAGI::Request;
 use PAGI::Response;
+use PAGI::Response::Text ();
 
 subtest 'can create endpoint subclass' => sub {
     require PAGI::Endpoint::HTTP;
@@ -18,7 +19,7 @@ subtest 'can create endpoint subclass' => sub {
 
         async sub get {
             my ($self, $request) = @_;
-            return PAGI::Response->text("Hello");
+            return PAGI::Response::Text->new("Hello");
         }
     }
 
