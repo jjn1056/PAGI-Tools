@@ -32,7 +32,7 @@ sub new {
         scope             => $scope,
         receive           => $receive,
         send              => $send,
-        _state            => 'pending',  # pending -> started -> closed
+        _state            => 'pending',  # pending -> declining -> closed, or started -> closed
         _on_close         => [],
         _on_error         => [],
         _disconnect_reason => undef,     # Set when disconnect received
@@ -242,6 +242,8 @@ sub _set_closed {
 async sub start {
     my ($self, %opts) = @_;
 
+    croak 'SSE decline response is pending'
+        if $self->{_state} eq 'declining';
     # Idempotent - don't start twice
     return $self if $self->is_started || $self->is_closed;
 
@@ -311,45 +313,64 @@ async sub keepalive {
 
 # Decline the request with a concrete HTTP Response instead of starting SSE.
 # See PAGI::Spec::Www "SSE Response Denial".
-async sub decline {
+sub decline {
     my ($self, @args) = @_;
     croak 'SSE decline requires exactly one concrete PAGI::Response'
         unless @args == 1;
     my $response = $args[0];
     PAGI::Response::_validate_protocol_response($response, 'SSE decline');
 
-    return $self if $self->{_declined};
+    return Future->done($self) if $self->{_declined};
+    croak 'SSE decline response is pending'
+        if $self->{_state} eq 'declining';
     croak 'SSE decline is only valid before start while pending'
         unless $self->{_state} eq 'pending';
 
+    $self->{_state} = 'declining';
     my $committed = 0;
-    my $completed = eval {
-        await PAGI::Response::_respond_for_protocol(
-            $response,
-            $self->{scope},
-            $self->{receive},
-            $self->{send},
-            'sse.http.response',
-            'SSE decline',
-            sub {
-                $committed = 1;
-                $self->{_declined} = 1;
-                $self->{_disconnect_reason} //= 'declined';
+    my $lifecycle = async sub {
+        my $completed = eval {
+            await PAGI::Response::_respond_for_protocol(
+                $response,
+                $self->{scope},
+                $self->{receive},
+                $self->{send},
+                'sse.http.response',
+                'SSE decline',
+                sub {
+                    $committed = 1;
+                    $self->{_declined} = 1;
+                    $self->{_disconnect_reason} //= 'declined';
 
-                # This deferred record has never reached the server. Retain it
-                # until start actually commits so a failed start remains retryable.
-                delete $self->{_pending_keepalive};
-                $self->_set_closed;
-            },
-        );
-        1;
-    };
-    my $error = $@ unless $completed;
+                    # This deferred record has never reached the server. Retain it
+                    # until start actually commits so a failed start remains retryable.
+                    delete $self->{_pending_keepalive};
+                    $self->_set_closed;
+                },
+            );
+            1;
+        };
+        my $error = $@ unless $completed;
 
-    await $self->_run_close_callbacks if $committed;
-    die $error unless $completed;
+        if (!$committed) {
+            $self->{_state} = 'pending'
+                if $self->{_state} eq 'declining';
+            die $error unless $completed;
+        }
 
-    return $self;
+        await $self->_run_close_callbacks if $committed;
+        die $error unless $completed;
+        return $self;
+    }->();
+
+    $self->{_response_lifecycle} = $lifecycle;
+    $lifecycle->on_ready(sub {
+        my ($ready) = @_;
+        delete $self->{_response_lifecycle}
+            if $self->{_response_lifecycle}
+                && $self->{_response_lifecycle} == $ready;
+    });
+    return $lifecycle->without_cancel;
 }
 
 # Single header lookup (case-insensitive, returns last value)
@@ -660,6 +681,8 @@ async sub _note_disconnected {
 async sub close {
     my ($self, %opts) = @_;
 
+    croak 'SSE decline response is pending'
+        if $self->{_state} eq 'declining';
     return $self if $self->is_closed;
 
     # Record the reason so on_close callbacks (and the server access log) see it.
@@ -1129,6 +1152,12 @@ failure. Post-commit cleanup therefore follows authoritative SSE/connection
 state and disconnect watchers, not send-Future failure; genuine validation and
 resource failures still propagate.
 
+Before mapped-start settlement, C<connection_state> is C<declining> and no
+other first event may claim the response slot. A genuine start-send failure
+releases that reservation and restores C<pending>, including any deferred
+keepalive. Cancelling the Future returned to the caller does not cancel a PAGI
+send or abandon the retained decline lifecycle and its cleanup.
+
 This decline response is finite HTTP handshake output. It is separate from the
 live SSE protocol's event formatting, Last-Event-ID, retry, keepalive, and
 reconnection lifecycle. L<PAGI::Response::Stream> does not replace or subclass
@@ -1193,7 +1222,7 @@ where there was never a stream to wait on.
 
     if ($sse->is_started) { ... }
     if ($sse->is_closed) { ... }
-    my $state = $sse->connection_state;    # 'pending', 'started', 'closed'
+    my $state = $sse->connection_state;    # pending, declining, started, closed
 
 =head2 is_connected
 

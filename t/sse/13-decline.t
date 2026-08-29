@@ -537,15 +537,113 @@ subtest 'mapped start-send failure preserves pending state and deferred keepaliv
     is($sent[-1]{interval}, 17, 'the original deferred interval is preserved');
 };
 
-subtest 'cancelling decline never cancels the server-owned send Future' => sub {
-    my $send_future = Future->new;
-    my $sse = sse(sse_scope(), sub { return $send_future });
+subtest 'pending decline start reserves the first-event slot' => sub {
+    my @claimants = (
+        start   => sub { $_[0]->start },
+        close   => sub { $_[0]->close },
+        decline => sub { $_[0]->decline(PAGI::Response::Text->new('competing')) },
+    );
+
+    while (@claimants) {
+        my ($name, $claim) = splice @claimants, 0, 2;
+        my @sent;
+        my $start = Future->new;
+        my $sse = sse(sse_scope(), sub {
+            push @sent, $_[0];
+            return $start if $_[0]{type} eq 'sse.http.response.start';
+            return Future->done;
+        });
+        $sse->keepalive(17, 'reserved')->get;
+        my $decline = $sse->decline(PAGI::Response::Text->new('reserved'));
+
+        is($sse->connection_state, 'declining', 'pending start has a distinct reserved state');
+        like(dies { $claim->($sse)->get }, qr/decline response.*pending/i,
+            "$name fails locally while decline owns the response slot");
+        is([map { $_->{type} } @sent], ['sse.http.response.start'],
+            "$name emits no competing first event");
+
+        $start->fail("controlled decline start failure\n");
+        like(dies { $decline->get }, qr/controlled decline start failure/,
+            'the genuine pre-commit send failure reaches the observer');
+        is($sse->connection_state, 'pending',
+            'a genuine pre-commit failure releases the reservation');
+        ok(exists $sse->{_pending_keepalive},
+            'pre-commit failure retains deferred keepalive');
+    }
+};
+
+subtest 'cancelling decline during start leaves the retained lifecycle authoritative' => sub {
+    my @sent;
+    my $start = Future->new;
+    my $start_cancelled = 0;
+    my $close_calls = 0;
+    $start->on_cancel(sub { ++$start_cancelled });
+    my $sse = sse(sse_scope(), sub {
+        push @sent, $_[0];
+        return $start if $_[0]{type} eq 'sse.http.response.start';
+        return Future->done;
+    });
+    $sse->on_close(sub { ++$close_calls });
+    $sse->keepalive(21, 'pending')->get;
     my $decline = $sse->decline(PAGI::Response::Text->new('pending'));
 
     $decline->cancel;
-    ok($decline->is_cancelled, 'caller cancellation is observed by decline Future');
-    ok(!$send_future->is_cancelled, 'pending server send remains owned by server');
-    $send_future->done;
+    ok($decline->is_cancelled, 'caller cancellation settles only the public observer');
+    is($start_cancelled, 0, 'caller cancellation never cancels the start send');
+    is($sse->connection_state, 'declining', 'the response slot remains reserved');
+    like(dies { $sse->start->get }, qr/decline response.*pending/i,
+        'live start cannot claim the reserved slot');
+    is(scalar @sent, 1, 'no competing event was sent');
+
+    $start->done;
+    is([map { $_->{type} } @sent], [
+        'sse.http.response.start', 'sse.http.response.body',
+    ], 'retained lifecycle emits the terminal buffered body after start settles');
+    is($sse->connection_state, 'closed', 'start settlement commits and closes decline');
+    ok(!exists $sse->{_pending_keepalive}, 'commit discards deferred keepalive');
+    is($close_calls, 1, 'decline cleanup runs exactly once after cancellation');
+    ok(!exists $sse->{_response_lifecycle}, 'completed lifecycle releases its retention slot');
+};
+
+subtest 'cancelling decline during a body send preserves producer and cleanup ownership' => sub {
+    my @sent;
+    my $body_send = Future->new;
+    my $body_cancelled = 0;
+    my $writer_cleanup = 0;
+    my $close_calls = 0;
+    $body_send->on_cancel(sub { ++$body_cancelled });
+    my $stream = PAGI::Response::Stream->new(async sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { ++$writer_cleanup });
+        await $writer->write('pending');
+    });
+    my $sse = sse(sse_scope(), sub {
+        push @sent, $_[0];
+        return $body_send
+            if $_[0]{type} eq 'sse.http.response.body' && $_[0]{more};
+        return Future->done;
+    });
+    $sse->on_close(sub { ++$close_calls });
+    my $decline = $sse->decline($stream);
+
+    is([map { $_->{type} } @sent], [
+        'sse.http.response.start', 'sse.http.response.body',
+    ], 'stream is parked in its first mapped body send');
+    $decline->cancel;
+    is($body_cancelled, 0, 'public cancellation never cancels the body send');
+    my $before = scalar @sent;
+    $sse->start->get;
+    $sse->decline(PAGI::Response::Text->new('again'))->get;
+    is(scalar @sent, $before, 'committed decline admits no competing event');
+
+    $body_send->done;
+    is($sent[-1], {
+        type => 'sse.http.response.body', body => '', more => 0,
+    }, 'retained producer still applies the normal terminal-body policy');
+    is($body_cancelled, 0, 'body settlement path never cancels the send');
+    is($writer_cleanup, 1, 'Stream Writer cleanup runs exactly once');
+    is($close_calls, 1, 'SSE decline cleanup runs exactly once');
+    is($sse->connection_state, 'closed', 'decline remains closed');
 };
 
 done_testing;

@@ -87,10 +87,35 @@ sub _stream_wire_headers {
     return $self->{_headers}->to_pairs;
 }
 
-async sub respond {
+sub respond {
     my ($self, $scope, $receive, $send) = @_;
     PAGI::Response::_validate_http_triplet($scope, $receive, $send);
     my $snapshot = $self->_snapshot;
+
+    my $control = {
+        cancel_signal => Future->new,
+    };
+    my $lifecycle = $snapshot->_run_lifecycle(
+        $scope, $receive, $send, $control->{cancel_signal},
+    );
+    $control->{lifecycle} = $lifecycle;
+    $lifecycle->on_ready(sub {
+        my ($ready) = @_;
+        delete $control->{lifecycle}
+            if $control->{lifecycle} && $control->{lifecycle} == $ready;
+    });
+
+    my $observer = $lifecycle->without_cancel;
+    my $cancel_signal = $control->{cancel_signal};
+    $observer->on_cancel(sub {
+        $cancel_signal->done('caller_cancelled')
+            unless $cancel_signal->is_ready || $cancel_signal->is_cancelled;
+    });
+    return $observer;
+}
+
+async sub _run_lifecycle {
+    my ($snapshot, $scope, $receive, $send, $cancel_signal) = @_;
 
     await Future->wrap($send->({
         type    => 'http.response.start',
@@ -103,6 +128,11 @@ async sub respond {
         connection => $scope->{'pagi.connection'},
         transport  => $scope->{'pagi.transport'},
     );
+    if ($cancel_signal->is_ready) {
+        await $writer->_abort;
+        await $writer->_cleanup;
+        return;
+    }
     if ($writer->is_disconnected) {
         await $writer->_abort;
         await $writer->_cleanup;
@@ -124,10 +154,21 @@ async sub respond {
     my $producer = Future->wrap($producer_returned);
     my $producer_outcome = _producer_outcome($producer);
     my $disconnect_outcome = _disconnect_outcome($writer->_disconnect_signal);
+    my $cancel_outcome = _cancel_outcome($cancel_signal);
     my $outcome = await Future->wait_any(
+        $cancel_outcome,
         $disconnect_outcome,
         $producer_outcome,
     );
+
+    if ($outcome->{kind} eq 'caller_cancelled') {
+        my $abort = $writer->_abort;
+        $producer->cancel
+            if !$producer->is_ready && !$producer->is_cancelled;
+        await $abort;
+        await $writer->_cleanup;
+        return;
+    }
 
     if ($outcome->{kind} eq 'disconnect') {
         await $writer->_abort;
@@ -203,13 +244,29 @@ sub _disconnect_outcome {
     my ($signal) = @_;
     my $outcome = Future->new;
     $signal->on_ready(sub {
+        my ($ready_signal) = @_;
         return if $outcome->is_ready || $outcome->is_cancelled;
-        if ($signal->is_failed) {
-            $outcome->fail($signal->failure);
-        } elsif ($signal->is_cancelled) {
+        if ($ready_signal->is_failed) {
+            $outcome->fail($ready_signal->failure);
+        } elsif ($ready_signal->is_cancelled) {
             $outcome->done({ kind => 'disconnect' });
         } else {
             $outcome->done({ kind => 'disconnect' });
+        }
+    });
+    return $outcome;
+}
+
+sub _cancel_outcome {
+    my ($signal) = @_;
+    my $outcome = Future->new;
+    $signal->on_ready(sub {
+        my ($ready_signal) = @_;
+        return if $outcome->is_ready || $outcome->is_cancelled;
+        if ($ready_signal->is_failed) {
+            $outcome->fail($ready_signal->failure);
+        } else {
+            $outcome->done({ kind => 'caller_cancelled' });
         }
     });
     return $outcome;
@@ -231,6 +288,9 @@ the application's delivery promise.
 These methods implement the native HTTP triplet and reusable Response
 application contracts. Disconnect observation uses only the synchronous
 C<pagi.connection> capability. Stream never starts a competing receive loop.
+Cancelling the returned Future cancels only the caller's observer and signals
+the retained Stream lifecycle to stop producer-owned work. That lifecycle
+continues to await any active server-owned send before running cleanup.
 
 =head2 is_buffered
 

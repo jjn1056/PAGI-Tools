@@ -507,15 +507,136 @@ subtest 'mapped start-send failure preserves the connecting state' => sub {
     ok($ws->is_connected, 'successful accept establishes the still-live connection');
 };
 
-subtest 'cancelling deny never cancels the server-owned send Future' => sub {
-    my $send_future = Future->new;
-    my $ws = websocket(ws_scope(), sub { return $send_future });
+subtest 'pending denial start reserves the first-event slot' => sub {
+    my @claimants = (
+        accept => sub { $_[0]->accept },
+        close  => sub { $_[0]->close },
+        deny   => sub { $_[0]->deny(PAGI::Response::Text->new('competing')) },
+    );
+
+    while (@claimants) {
+        my ($name, $claim) = splice @claimants, 0, 2;
+        my @sent;
+        my $start = Future->new;
+        my $ws = websocket(ws_scope(), sub {
+            push @sent, $_[0];
+            return $start if $_[0]{type} eq 'websocket.http.response.start';
+            return Future->done;
+        });
+        my $denial = $ws->deny(PAGI::Response::Text->new('reserved'));
+
+        is($ws->connection_state, 'denying', 'pending start has a distinct reserved state');
+        like(dies { $claim->($ws)->get }, qr/denial response.*pending/i,
+            "$name fails locally while denial owns the response slot");
+        is([map { $_->{type} } @sent], ['websocket.http.response.start'],
+            "$name emits no competing first event");
+
+        $start->fail("controlled denial start failure\n");
+        like(dies { $denial->get }, qr/controlled denial start failure/,
+            'the genuine pre-commit send failure reaches the observer');
+        is($ws->connection_state, 'connecting',
+            'a genuine pre-commit failure releases the reservation');
+    }
+};
+
+subtest 'cancelling deny during start leaves the retained lifecycle authoritative' => sub {
+    my @sent;
+    my $start = Future->new;
+    my $start_cancelled = 0;
+    my $close_calls = 0;
+    $start->on_cancel(sub { ++$start_cancelled });
+    my $ws = websocket(ws_scope(), sub {
+        push @sent, $_[0];
+        return $start if $_[0]{type} eq 'websocket.http.response.start';
+        return Future->done;
+    });
+    $ws->on_close(sub { ++$close_calls });
     my $denial = $ws->deny(PAGI::Response::Text->new('pending'));
 
     $denial->cancel;
-    ok($denial->is_cancelled, 'caller cancellation is observed by deny Future');
-    ok(!$send_future->is_cancelled, 'pending server send remains owned by server');
-    $send_future->done;
+    ok($denial->is_cancelled, 'caller cancellation settles only the public observer');
+    is($start_cancelled, 0, 'caller cancellation never cancels the start send');
+    is($ws->connection_state, 'denying', 'the response slot remains reserved');
+    like(dies { $ws->accept->get }, qr/denial response.*pending/i,
+        'accept cannot claim the reserved slot');
+    is(scalar @sent, 1, 'no competing event was sent');
+
+    $start->done;
+    is([map { $_->{type} } @sent], [
+        'websocket.http.response.start', 'websocket.http.response.body',
+    ], 'retained lifecycle emits the terminal buffered body after start settles');
+    is($ws->connection_state, 'closed', 'start settlement commits and closes denial');
+    is($close_calls, 1, 'denial cleanup runs exactly once after cancellation');
+    ok(!exists $ws->{_response_lifecycle}, 'completed lifecycle releases its retention slot');
+};
+
+subtest 'cancelling deny during a body send preserves producer and cleanup ownership' => sub {
+    my @sent;
+    my $body_send = Future->new;
+    my $body_cancelled = 0;
+    my $writer_cleanup = 0;
+    my $close_calls = 0;
+    $body_send->on_cancel(sub { ++$body_cancelled });
+    my $stream = PAGI::Response::Stream->new(async sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { ++$writer_cleanup });
+        await $writer->write('pending');
+    });
+    my $ws = websocket(ws_scope(), sub {
+        push @sent, $_[0];
+        return $body_send
+            if $_[0]{type} eq 'websocket.http.response.body' && $_[0]{more};
+        return Future->done;
+    });
+    $ws->on_close(sub { ++$close_calls });
+    my $denial = $ws->deny($stream);
+
+    is([map { $_->{type} } @sent], [
+        'websocket.http.response.start', 'websocket.http.response.body',
+    ], 'stream is parked in its first mapped body send');
+    $denial->cancel;
+    is($body_cancelled, 0, 'public cancellation never cancels the body send');
+    my $before = scalar @sent;
+    $ws->accept->get;
+    like(dies { $ws->deny(PAGI::Response::Text->new('again'))->get },
+        qr/(?:connecting|before accept)/i, 'a competing denial cannot follow commitment');
+    is(scalar @sent, $before, 'committed denial admits no competing event');
+
+    $body_send->done;
+    is($sent[-1], {
+        type => 'websocket.http.response.body', body => '', more => 0,
+    }, 'retained producer still applies the normal terminal-body policy');
+    is($body_cancelled, 0, 'body settlement path never cancels the send');
+    is($writer_cleanup, 1, 'Stream Writer cleanup runs exactly once');
+    is($close_calls, 1, 'WebSocket denial cleanup runs exactly once');
+    is($ws->connection_state, 'closed', 'denial remains closed');
+};
+
+subtest 'cancelling policy-close fallback retains send and cleanup ownership' => sub {
+    my @sent;
+    my $close_send = Future->new;
+    my $close_cancelled = 0;
+    my $close_calls = 0;
+    $close_send->on_cancel(sub { ++$close_cancelled });
+    my $ws = websocket(ws_scope(extensions => {}), sub {
+        push @sent, $_[0];
+        return $close_send;
+    });
+    $ws->on_close(sub { ++$close_calls });
+    my $denial = $ws->deny(PAGI::Response::Text->new('ignored'));
+
+    $denial->cancel;
+    is($close_cancelled, 0, 'fallback send remains server-owned');
+    is($ws->connection_state, 'denying', 'fallback reserves the response slot');
+    like(dies { $ws->accept->get }, qr/denial response.*pending/i,
+        'accept fails locally while the fallback is pending');
+    is(scalar @sent, 1, 'fallback cancellation sends no competing event');
+
+    $close_send->done;
+    is($ws->connection_state, 'closed', 'fallback eventually closes');
+    is($ws->close_code, 1008, 'fallback retains its policy close code');
+    is($close_calls, 1, 'fallback cleanup runs exactly once');
+    is($close_cancelled, 0, 'fallback settlement never cancels the send');
 };
 
 subtest 'supports_denial_response reports the advertised extension' => sub {

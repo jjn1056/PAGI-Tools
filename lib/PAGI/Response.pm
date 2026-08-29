@@ -661,7 +661,7 @@ async sub _respond_for_protocol {
         my $type = ref($event) eq 'HASH' ? ($event->{type} // '') : '';
         my $mapped = $map_event->($event);
 
-        await Future->wrap($send->($mapped))->without_cancel;
+        await Future->wrap($send->($mapped));
         if ($type eq 'http.response.start') {
             $start_committed = 1;
             $on_start_committed->();

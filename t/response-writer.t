@@ -4,6 +4,7 @@ use utf8;
 
 use Future;
 use Future::AsyncAwait;
+use Scalar::Util qw(weaken);
 use Test2::V0;
 
 use PAGI::Request;
@@ -453,6 +454,112 @@ subtest 'disconnect before producer start completes quietly without consuming re
     is($producer_calls, 0, 'already-disconnected connection skips producer invocation');
     is($receive_calls, 0, 'Stream never starts a competing receive loop');
     is(terminal_events(\@events), [], 'disconnect outcome emits no terminal success');
+};
+
+subtest 'caller cancellation before start settlement never cancels the start send' => sub {
+    my $start = Future->new;
+    my $start_cancelled = 0;
+    my $producer_calls = 0;
+    my @events;
+    $start->on_cancel(sub { ++$start_cancelled });
+    my $running = PAGI::Response::Stream->new(sub { ++$producer_calls })->respond(
+        http_scope(), quiet_receive(),
+        sub {
+            push @events, $_[0];
+            return $start;
+        },
+    );
+
+    $running->cancel;
+    ok($running->is_cancelled, 'caller sees its observer cancelled');
+    is($start_cancelled, 0, 'start send remains server-owned');
+    is($producer_calls, 0, 'producer has not started');
+
+    $start->done;
+    is($producer_calls, 0, 'retained lifecycle does not start producer after cancellation');
+    is([map { $_->{type} } @events], ['http.response.start'],
+        'cancelled lifecycle emits no terminal success body');
+    is($start_cancelled, 0, 'start settlement path never cancels the send');
+};
+
+subtest 'caller cancellation stops unrelated producer work and retains cleanup' => sub {
+    my $work = Future->new;
+    my $cleanup_wait = Future->new;
+    my $work_cancelled = 0;
+    my $cleanup_calls = 0;
+    my $writer;
+    my @events;
+    $work->on_cancel(sub { ++$work_cancelled });
+    my $running = PAGI::Response::Stream->new(sub {
+        ($writer) = @_;
+        $writer->on_close(sub { ++$cleanup_calls; return $cleanup_wait });
+        return $work;
+    })->respond(
+        http_scope(), quiet_receive(),
+        sub { push @events, $_[0]; Future->done },
+    );
+
+    $running->cancel;
+    is($work_cancelled, 1, 'cancellation is requested from producer-owned work');
+    is($cleanup_calls, 1, 'retained lifecycle starts cleanup');
+    is(terminal_events(\@events), [], 'cancellation emits no terminal success');
+
+    $cleanup_wait->done;
+    $writer->close->get;
+    is($cleanup_calls, 1, 'cleanup remains exactly once after lifecycle completion');
+};
+
+subtest 'caller cancellation during write awaits the send before cleanup' => sub {
+    my $body_send = Future->new;
+    my $send_cancelled = 0;
+    my $write_cancelled = 0;
+    my $cleanup_calls = 0;
+    my $write;
+    my @events;
+    $body_send->on_cancel(sub { ++$send_cancelled });
+    my $running = PAGI::Response::Stream->new(sub {
+        my ($writer) = @_;
+        $writer->on_close(sub { ++$cleanup_calls });
+        $write = $writer->write('pending');
+        $write->on_cancel(sub { ++$write_cancelled });
+        return $write;
+    })->respond(
+        http_scope(), quiet_receive(),
+        sub {
+            my ($event) = @_;
+            push @events, $event;
+            return Future->done if $event->{type} eq 'http.response.start';
+            return $body_send;
+        },
+    );
+
+    $running->cancel;
+    is($write_cancelled, 1, 'producer-facing write is cancelled promptly');
+    is($send_cancelled, 0, 'underlying send is never cancelled');
+    is($cleanup_calls, 0, 'cleanup cannot outrun the active send');
+
+    $body_send->done;
+    is($send_cancelled, 0, 'send settles through its server-owned path');
+    is($cleanup_calls, 1, 'cleanup runs once after send settlement');
+    is(terminal_events(\@events), [], 'cancellation sends no false terminal body');
+};
+
+subtest 'normal completion releases the private disconnect signal' => sub {
+    my $weak_signal;
+    {
+        my $running = PAGI::Response::Stream->new(sub {
+            my ($writer) = @_;
+            $weak_signal = $writer->_disconnect_signal;
+            weaken($weak_signal);
+            return;
+        })->respond(
+            http_scope(), quiet_receive(), sub { Future->done },
+        );
+        $running->get;
+        undef $running;
+    }
+    is($weak_signal, undef,
+        'normal completion leaves no self-cycle through the disconnect observer');
 };
 
 subtest 'disconnect cancels unrelated producer work and awaits exactly-once cleanup' => sub {

@@ -32,7 +32,7 @@ sub new {
         scope   => $scope,
         receive => $receive,
         send    => $send,
-        _state  => 'connecting',  # connecting -> connected -> closed
+        _state  => 'connecting',  # connecting -> denying -> closed, or connected -> closed
         _close_code   => undef,
         _close_reason => undef,
         _on_close     => [],
@@ -364,6 +364,8 @@ async sub _trigger_error {
 async sub accept {
     my ($self, %opts) = @_;
 
+    croak 'WebSocket denial response is pending'
+        if $self->{_state} eq 'denying';
     return $self if $self->is_closed;
 
     my $event = {
@@ -382,6 +384,8 @@ async sub accept {
 async sub close {
     my ($self, $code, $reason) = @_;
 
+    croak 'WebSocket denial response is pending'
+        if $self->{_state} eq 'denying';
     # Idempotent - don't send close twice
     return if $self->is_closed;
 
@@ -413,8 +417,10 @@ sub supports_denial_response {
 # close when the server does not advertise the denial extension. Valid only
 # before accept.
 # See L<PAGI::Spec::Www/"WebSocket Denial Response">.
-async sub deny {
+sub deny {
     my ($self, @args) = @_;
+    croak 'WebSocket denial response is pending'
+        if $self->{_state} eq 'denying';
     croak 'WebSocket deny is only valid before accept while connecting'
         unless $self->{_state} eq 'connecting';
     croak 'WebSocket deny requires exactly one concrete PAGI::Response'
@@ -422,29 +428,58 @@ async sub deny {
     my $response = $args[0];
     PAGI::Response::_validate_protocol_response($response, 'WebSocket denial');
 
-    if (!$self->supports_denial_response) {
-        await Future->wrap($self->{send}->({
-            type => 'websocket.close', code => 1008, reason => '',
-        }))->without_cancel;
-        $self->_set_closed(1008, '');
-        return $self;
-    }
+    $self->{_state} = 'denying';
+    my $committed = 0;
+    my $lifecycle = async sub {
+        my $completed = eval {
+            if (!$self->supports_denial_response) {
+                await Future->wrap($self->{send}->({
+                    type => 'websocket.close', code => 1008, reason => '',
+                }));
+                $committed = 1;
+                $self->_set_closed(1008, '');
+            }
+            else {
+                await PAGI::Response::_respond_for_protocol(
+                    $response,
+                    $self->{scope},
+                    $self->{receive},
+                    $self->{send},
+                    'websocket.http.response',
+                    'WebSocket denial',
+                    sub {
+                        # The accepted HTTP start owns the handshake response
+                        # slot even while its body remains in flight. It is not
+                        # a WebSocket close frame, so the RFC 6455 close fields
+                        # remain undefined.
+                        $committed = 1;
+                        $self->{_state} = 'closed';
+                    },
+                );
+            }
+            1;
+        };
+        my $error = $@ unless $completed;
 
-    await PAGI::Response::_respond_for_protocol(
-        $response,
-        $self->{scope},
-        $self->{receive},
-        $self->{send},
-        'websocket.http.response',
-        'WebSocket denial',
-        sub {
-            # The accepted HTTP start owns the handshake response slot even
-            # while its body remains in flight. It is not a WebSocket close
-            # frame, so the RFC 6455 close fields remain undefined.
-            $self->{_state} = 'closed';
-        },
-    );
-    return $self;
+        if (!$committed) {
+            $self->{_state} = 'connecting'
+                if $self->{_state} eq 'denying';
+            die $error unless $completed;
+        }
+
+        await $self->_run_close_callbacks if $committed;
+        die $error unless $completed;
+        return $self;
+    }->();
+
+    $self->{_response_lifecycle} = $lifecycle;
+    $lifecycle->on_ready(sub {
+        my ($ready) = @_;
+        delete $self->{_response_lifecycle}
+            if $self->{_response_lifecycle}
+                && $self->{_response_lifecycle} == $ready;
+    });
+    return $lifecycle->without_cancel;
 }
 
 # Send text message
@@ -1075,9 +1110,12 @@ references are left unchanged.
 "Successful settlement" means the PAGI server validated and consumed the
 mapped start event and accepted it into outbound processing, or finished
 discarding it after the connection ended. It does not mean the client received
-it. Before that settlement, a genuine start-send failure leaves the WebSocket
-connecting. At settlement, denial commits and the object becomes closed; a
-later body failure cannot reopen the handshake.
+it. While that send is pending, C<connection_state> is C<denying> and no other
+first event may claim the response slot. A genuine start-send failure releases
+the reservation and leaves the WebSocket connecting. At settlement, denial
+commits and the object becomes closed; a later body failure cannot reopen the
+handshake. Cancelling the Future returned to the caller does not cancel a PAGI
+send or abandon the retained denial lifecycle and its cleanup.
 
 A body send pending at disconnect resolves under the same PAGI 0.002007
 settlement rule rather than failing merely because the peer vanished. Disconnect cleanup
@@ -1094,7 +1132,7 @@ See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
     if ($ws->is_connected) { ... }
     if ($ws->is_closed) { ... }
-    my $state = $ws->connection_state; # 'connecting', 'connected', 'closed'
+    my $state = $ws->connection_state; # connecting, denying, connected, closed
 
 =head2 close_code, close_reason
 
