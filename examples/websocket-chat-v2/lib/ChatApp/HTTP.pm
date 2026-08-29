@@ -14,7 +14,7 @@ use ChatApp::State qw(
 );
 
 my $JSON = JSON::MaybeXS->new->utf8->canonical;
-my $STATIC_APP = PAGI::App::File->app_path('public')->to_app;
+my $STATIC_APP = PAGI::App::File->from_app_path('public')->to_app;
 
 sub handler {
     return async sub  {
@@ -62,7 +62,7 @@ async sub _handle_api {
             my $response = PAGI::Pages->not_found($scope,
                 as     => 'json',
                 detail => 'Room not found');
-            return await $response->respond($send);
+            return await $response->respond($scope, $receive, $send);
         }
     }
     elsif ($path =~ m{^/api/room/([^/]+)/users$} && $method eq 'GET') {
@@ -75,7 +75,7 @@ async sub _handle_api {
             my $response = PAGI::Pages->not_found($scope,
                 as     => 'json',
                 detail => 'Room not found');
-            return await $response->respond($send);
+            return await $response->respond($scope, $receive, $send);
         }
     }
     elsif ($path eq '/api/stats' && $method eq 'GET') {
@@ -86,7 +86,7 @@ async sub _handle_api {
         my $response = PAGI::Pages->not_found($scope,
             as     => 'json',
             detail => 'No API route matched');
-        return await $response->respond($send);
+        return await $response->respond($scope, $receive, $send);
     }
 
     my $body = $JSON->encode($data);

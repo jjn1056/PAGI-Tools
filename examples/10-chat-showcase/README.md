@@ -69,7 +69,7 @@ mount or falling through to static serving.
 
 Inside that HTTP boundary, `/api/...` dispatch runs first. Every other HTTP
 request is delegated to one caller-relative
-`PAGI::App::File->app_path('public')->to_app`, which owns index selection,
+`PAGI::App::File->from_app_path('public')->to_app`, which owns index selection,
 streaming, MIME types, ranges, conditional requests, and negotiated errors.
 The example does not duplicate filesystem path filtering or read static files
 into application memory.

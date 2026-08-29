@@ -15,7 +15,7 @@ use ChatApp::State qw(
 );
 
 my $JSON = JSON::MaybeXS->new->utf8->canonical;
-my $STATIC_APP = PAGI::App::File->app_path('public')->to_app;
+my $STATIC_APP = PAGI::App::File->from_app_path('public')->to_app;
 
 # API Handlers
 sub _rooms_handler {

@@ -2,9 +2,9 @@ package MyApp::Person::Blogs;
 
 use v5.40;
 use Types::Standard qw(Int);
-use PAGI::Pages;
-use PAGI::Response;
-use PAGI::Routing qw(router route);
+use PAGI::Pages qw(not_found_page);
+use PAGI::Response qw(html_response);
+use PAGI::Routing qw(router route request_app);
 use PAGI::Routing::URL qw(path_for url_for);
 use MyApp::View ();
 
@@ -20,7 +20,7 @@ sub list_blogs($request) {
     my $person = $data->person($person_id);
 
     unless ($person) {
-        return PAGI::Response->html(
+        return html_response(
             MyApp::View->document(
                 'Blogs not found',
                 '    <h1>Blogs not found</h1>',
@@ -42,7 +42,7 @@ sub list_blogs($request) {
     # ../show resolves from /person/blog to /person/show and inherits person_id.
     my $person_path = path_for($request, '../show');
 
-    return PAGI::Response->html(MyApp::View->document(
+    return html_response(MyApp::View->document(
         "Blogs by $person->{name}",
         qq{    <a href="$person_path">$person->{name}</a>\n}
             . "    <h1>Blogs</h1>\n    <ul>\n"
@@ -58,7 +58,7 @@ sub show_blog($request) {
 
     unless ($blog) {
         my $blogs_path = path_for($request, 'index');
-        return PAGI::Response->html(
+        return html_response(
             MyApp::View->document(
                 'Blog not found',
                 qq{    <a href="$blogs_path">Blogs</a>\n}
@@ -76,7 +76,7 @@ sub show_blog($request) {
         fragment => 'comments',
     );
 
-    return PAGI::Response->html(MyApp::View->document(
+    return html_response(MyApp::View->document(
         $blog->{title},
         qq{    <a href="$home_path">Home</a> / }
             . qq{<a href="$person_path">Person</a> / }
@@ -85,6 +85,11 @@ sub show_blog($request) {
             . qq{<p>$blog->{body}</p></article>\n}
             . qq{    <a href="$canonical">Comments view</a>},
     ));
+}
+
+sub blogs_not_found($request) {
+    return not_found_page($request,
+        detail => 'No Blogs route matched this path.');
 }
 
 sub routing($class) {
@@ -100,8 +105,7 @@ sub routing($class) {
             ),
         ],
         desc => 'Blog routes',
-        http_default => PAGI::Pages->not_found(
-            detail => 'No Blogs route matched this path.'),
+        http_default => request_app(\&blogs_not_found),
     );
 }
 

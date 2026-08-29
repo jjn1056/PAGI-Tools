@@ -3,8 +3,8 @@ use parent 'PAGI::Endpoint::Router';
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use PAGI::Pages;
-use PAGI::Response;
+use PAGI::Pages qw(not_found_page unauthorized_page);
+use PAGI::Response qw(html_response json_response);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::State qw(app_state);
 
@@ -40,9 +40,9 @@ sub routes {
 
 async sub api_not_found {
     my ($self, $scope, $receive, $send) = @_;
-    my $response = PAGI::Pages->not_found($scope,
+    my $response = not_found_page($scope,
         detail => 'No API Endpoint route matched');
-    await $response->respond($send);
+    await $response->respond($scope, $receive, $send);
 }
 
 sub require_demo_token {
@@ -54,10 +54,10 @@ sub require_demo_token {
         return await $inner->($scope, $receive, $send)
             if ($request->header('x-demo-token') // '') eq 'demo-token';
 
-        my $response = PAGI::Pages->unauthorized($scope,
+        my $response = unauthorized_page($scope,
             challenge => 'DemoToken realm="endpoint-router-demo"',
             detail    => 'demo token required');
-        return await $response->respond($send);
+        return await $response->respond($scope, $receive, $send);
     };
 }
 
@@ -69,7 +69,7 @@ async sub index {
 
     my $alice = path_for($request, 'show', { user_id => 1 });
     my $resource = $state->get('resource')->{name};
-    return PAGI::Response->html(<<"HTML");
+    return html_response(<<"HTML");
 <!doctype html>
 <title>Demo API</title>
 <h1>Demo API</h1>
@@ -86,8 +86,8 @@ async sub show {
 
     my $user_id = $request->path_param('user_id');
     my ($user) = grep { $_->{id} == $user_id } @USERS;
-    return PAGI::Response->html("<h1>$user->{name}</h1>") if $user;
-    return PAGI::Pages->not_found($request,
+    return html_response("<h1>$user->{name}</h1>") if $user;
+    return not_found_page($request,
         detail => 'User not found');
 }
 
@@ -95,7 +95,7 @@ async sub status {
     my ($self, $request) = @_;
     my $state = app_state($request)
         or die 'endpoint-router-demo requires Compose lifespan state';
-    return PAGI::Response->json({
+    return json_response({
         status   => 'ready',
         resource => $state->get('resource')->{name},
     });

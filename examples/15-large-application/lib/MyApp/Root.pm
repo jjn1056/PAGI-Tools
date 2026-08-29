@@ -3,9 +3,9 @@ package MyApp::Root;
 use v5.40;
 use PAGI::App::File;
 use PAGI::Compose qw(compose);
-use PAGI::Pages;
-use PAGI::Response;
-use PAGI::Routing qw(router route mount);
+use PAGI::Pages qw(welcome_page not_found_page);
+use PAGI::Response qw(html_response);
+use PAGI::Routing qw(router route mount request_app);
 use PAGI::Routing::URL qw(path_for);
 use MyApp::Data;
 use MyApp::Person ();
@@ -28,7 +28,7 @@ sub home($request) {
     my $pagi_path = path_for($request, '/pagi');
     my $count = scalar @{$state->get('data')->people};
 
-    return PAGI::Response->html(MyApp::View->document(
+    return html_response(MyApp::View->document(
         'My PAGI People',
         qq{    <h1>My PAGI People</h1>\n}
             . qq{    <p>This application contains $count people.</p>\n}
@@ -38,7 +38,12 @@ sub home($request) {
 }
 
 sub pagi($request) {
-    return PAGI::Pages->welcome($request);
+    return welcome_page($request);
+}
+
+sub root_not_found($request) {
+    return not_found_page($request,
+        detail => 'No root route matched this path.');
 }
 
 sub routing($class) {
@@ -53,7 +58,7 @@ sub routing($class) {
                 desc => 'Pages Welcome response from Request',
             ),
             mount('/static',
-                app => PAGI::App::File->app_path('static')),
+                app => PAGI::App::File->from_app_path('static')),
             mount('/person',
                 app  => MyApp::Person->routing,
                 name => 'person',
@@ -61,8 +66,7 @@ sub routing($class) {
             ),
         ],
         desc => 'MyApp root routes',
-        http_default => PAGI::Pages->not_found(
-            detail => 'No root route matched this path.'),
+        http_default => request_app(\&root_not_found),
     );
 }
 

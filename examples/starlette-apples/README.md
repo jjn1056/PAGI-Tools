@@ -81,10 +81,10 @@ use List::Util qw(max);
 use Types::Standard qw(Int);
 
 use PAGI::Compose qw(compose);
-use PAGI::Pages;
-use PAGI::Response;
-use PAGI::Routing qw(route mount);
-use PAGI::Routing::URL qw(url url_for path_for);
+use PAGI::Pages qw(welcome_page not_found_page);
+use PAGI::Response qw(file_response json_response);
+use PAGI::Routing qw(route mount router request_app);
+use PAGI::Routing::URL qw(url_for path_for);
 use PAGI::Utils qw(app_path);
 
 my $manager_file = app_path('public', 'index.html');
@@ -103,28 +103,29 @@ sub apples_db($request) {
     return $state->get('apples_db');
 }
 
-sub apple_manager($request) {
-    return PAGI::Response->send_file($manager_file, inline => 1);
-}
-
 async sub list_apples($request) {
     my $db = apples_db($request);
-    my @apples = map {
-        +{
-            %{$db->{$_}},
-            url => url_for($request, 'read', { apple_id => $_ }),
-        }
-    } sort { $a <=> $b } keys %$db;
 
-    return PAGI::Response->json(\@apples);
+    return json_response([
+        map {
+            +{
+                %{$db->{$_}},
+                url => url_for(
+                    $request,
+                    'read',
+                    { apple_id => $_ },
+                ),
+            }
+        } sort { $a <=> $b } keys %$db
+    ]);
 }
 
 async sub read_apple($request) {
-    my $apple_id = $request->path_param('apple_id');
-    my $apple = apples_db($request)->{$apple_id};
+    my $id = $request->path_param('apple_id');
+    my $apple = apples_db($request)->{$id};
 
-    return PAGI::Response->json($apple) if $apple;
-    return PAGI::Response->json(
+    return json_response($apple) if $apple;
+    return json_response(
         { error => 'Apple not found' },
         status => 404,
     );
@@ -133,117 +134,125 @@ async sub read_apple($request) {
 async sub create_apple($request) {
     my $db = apples_db($request);
     my $data = await $request->json;
-    my $new_id = max(0, keys %$db) + 1;
-    my $new_apple = { id => $new_id, %$data };
-    $db->{$new_id} = $new_apple;
+    my $id = max(0, keys %$db) + 1;
+    my $apple = { id => $id, %$data };
+    $db->{$id} = $apple;
 
-    my $location = path_for($request, 'read', { apple_id => $new_id });
-    return PAGI::Response->json(
-        $new_apple,
+    return json_response(
+        $apple,
         status  => 201,
-        headers => [Location => $location],
+        headers => [
+            Location => path_for(
+                $request,
+                'read',
+                { apple_id => $id },
+            ),
+        ],
     );
 }
 
 async sub update_apple($request) {
     my $db = apples_db($request);
-    my $apple_id = $request->path_param('apple_id');
-    return PAGI::Response->json(
-        { error => 'Apple not found' }, status => 404,
-    ) unless exists $db->{$apple_id};
+    my $id = $request->path_param('apple_id');
+
+    return json_response(
+        { error => 'Apple not found' },
+        status => 404,
+    ) unless exists $db->{$id};
 
     my $data = await $request->json;
-    $db->{$apple_id} = { %{$db->{$apple_id}}, %$data };
-    return PAGI::Response->json($db->{$apple_id});
+    $db->{$id} = { %{$db->{$id}}, %$data };
+    return json_response($db->{$id});
 }
 
 async sub delete_apple($request) {
     my $db = apples_db($request);
-    my $apple_id = $request->path_param('apple_id');
-    return PAGI::Response->json(
-        { error => 'Apple not found' }, status => 404,
-    ) unless exists $db->{$apple_id};
+    my $id = $request->path_param('apple_id');
 
-    my $deleted_apple = delete $db->{$apple_id};
-    return PAGI::Response->json({
+    return json_response(
+        { error => 'Apple not found' },
+        status => 404,
+    ) unless exists $db->{$id};
+
+    return json_response({
         success => \1,
-        deleted => $deleted_apple,
+        deleted => delete $db->{$id},
     });
 }
 
+sub root_not_found($request) {
+    return not_found_page(
+        $request,
+        detail => 'That page does not exist in the Apple demo.',
+    );
+}
+
 compose(
-    routes => [
-        route('/' => \&apple_manager,
-            name => 'home', desc => 'Apple manager SPA'),
-        route('/welcome' => PAGI::Pages->welcome,
-            name => 'welcome', desc => 'PAGI welcome page'),
-        mount('/apples',
-            routes => [
-                route('/' => \&list_apples,
-                    methods => ['GET'], name => 'list'),
-                route('/' => \&create_apple,
-                    methods => ['POST'], name => 'create'),
-                route('/{apple_id:&Int}' => \&read_apple,
-                    methods => ['GET'], name => 'read'),
-                route('/{apple_id:&Int}' => \&update_apple,
-                    methods => ['PUT'], name => 'update'),
-                route('/{apple_id:&Int}' => \&delete_apple,
-                    methods => ['DELETE'], name => 'delete'),
-            ],
-            name => 'apples',
-            desc => 'Apples API namespace'),
-    ],
-    lifespan => {
-        startup => \&startup,
-    },
+    app => router(
+        routes => [
+            route('/' => file_response($manager_file, inline => 1),
+                name => 'home',
+                desc => 'Apple manager SPA',
+            ),
+            route('/welcome' => \&welcome_page,
+                name => 'welcome',
+                desc => 'PAGI welcome page',
+            ),
+            mount('/apples',
+                routes => [
+                    route('/' => \&list_apples,
+                        methods => ['GET'], name => 'list'),
+                    route('/' => \&create_apple,
+                        methods => ['POST'], name => 'create'),
+                    route('/{apple_id:&Int}' => \&read_apple,
+                        methods => ['GET'], name => 'read'),
+                    route('/{apple_id:&Int}' => \&update_apple,
+                        methods => ['PUT'], name => 'update'),
+                    route('/{apple_id:&Int}' => \&delete_apple,
+                        methods => ['DELETE'], name => 'delete'),
+                ],
+                name => 'apples',
+                desc => 'Apples API namespace',
+            ),
+        ],
+        http_default => request_app(\&root_not_found),
+    ),
+    lifespan => { startup => \&startup },
 );
 ```
 
-The handlers above use the compact delegated functions. A longer handler can
-keep the equally explicit facade form:
-
-```perl
-my $urls = url($request);
-my $self = $urls->url_for('read', { apple_id => $apple_id });
-my $edit = $urls->url_for('update', { apple_id => $apple_id });
-```
-
-Each call is local to this request and reuses the Resolver already installed
-in its routing frame; it does not recompile the route graph.
-
-The final wildcard considered during design is intentionally absent. Each
-Router already renders negotiated Not Found and Method Not Allowed outcomes. A
-wildcard route would be a real match, so it could hide a method mismatch such
-as `PATCH /apples` and incorrectly turn the 405 into a 404.
+The handlers return concrete response values. The exact root file is a Route
+component, `/welcome` remains a normal Request handler, and `/apples` is a
+subtree-owning child Router. The custom root 404 is the Router's
+`http_default`, so it handles unknown paths without swallowing the 405 for a
+known path such as `PUT /welcome`.
 
 | Starlette | PAGI::Tools |
 | --- | --- |
-| `Starlette(routes=[...])` | `compose(routes => [...])`, retained as a component object |
-| `Route(...)` | `route(...)` leaves inside one `mount('/apples', routes => [...])` child Router |
-| `Request` | `PAGI::Request` passed directly to the handler |
-| `JSONResponse(...)` | `PAGI::Response->json(...)` |
-| `{apple_id:int}` | `{apple_id:&Int}` from `Types::Standard` |
-| converter validates and converts | constraint validates without coercion |
-| root application default 404/405 | selected root or child Router renders Not Found/Method Not Allowed |
+| `JSONResponse(value)` | `json_response($value)` / `PAGI::Response::JSON->new($value)` |
+| `FileResponse(path)` | `file_response($path)` / `PAGI::Response::File->new($path)` |
+| response is ASGI-callable | response implements `to_app` |
+| `Route('/', endpoint)` | exact `route('/' => handler-or-component)` |
+| `Mount('/x', app=...)` | subtree-owning `mount('/x', app => ...)` |
+| `StreamingResponse(iterator)` | `stream_response(async sub ($writer) { ... })` |
 
 These APIs are related, but they are not identical. The PAGI mount creates an
 explicit namespace boundary that the flat Python route list does not have.
-Perl imports also make ownership visible: `PAGI::Response` owns response
-construction and `PAGI::Routing::URL` owns reverse routing rather than making
-either capability intrinsic to Request. A broader Response redesign remains a
-separate deferred project; this example uses the current explicit factory.
-Starlette's `int` converter places an integer in `request.path_params`; PAGI's
-`Int` constraint validates the decoded path capture but leaves the original
-scalar for the handler.
+Perl imports also make ownership visible: `PAGI::Response` exports explicit
+response factories, while `PAGI::Routing::URL` owns reverse routing rather than
+making either capability intrinsic to Request. Starlette's `int` converter
+places an integer in `request.path_params`; PAGI's `Int` constraint validates
+the decoded path capture but leaves the original scalar for the handler.
 
 That distinction is visible at the boundary. `/apples/999` matches a resource
 route and returns the handler's JSON `{ "error": "Apple not found" }`.
 `/apples/not-an-int` fails the route constraint, while `/elsewhere` matches no
-route at all; the apples child and root Router render those misses at their
-respective boundaries. The child also owns `PATCH /apples` and its
-`Allow: GET, HEAD, POST`. Both `/apples` and `/apples/` reach the child `/`
-index. `Types::Standard::Int` accepts `-1`, so `/apples/-1` reaches the handler
-and returns the application JSON rather than a routing response.
+route at all; the apples child and custom root default render those misses at
+their respective boundaries. Unknown methods such as `DELETE /elsewhere`
+remain 404. The child owns `PATCH /apples` and its `Allow: GET, HEAD, POST`.
+Both `/apples` and `/apples/` reach the child `/` index.
+`Types::Standard::Int` accepts `-1`, so `/apples/-1` reaches the handler and
+returns the application JSON rather than a routing response.
 
 ## Run
 

@@ -6,7 +6,7 @@ use Future::AsyncAwait;
 
 use MyApp::API;
 use PAGI::App::File;
-use PAGI::Response;
+use PAGI::Response qw(html_response);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::State qw(app_state);
 
@@ -23,7 +23,7 @@ sub routes {
     $r->mount('/api', app => $self->{api}->to_router)->name('api');
     $r->websocket('/status' => 'status_socket')->name('status_socket');
 
-    $r->mount('/', app => PAGI::App::File->app_path('public'));
+    $r->mount('/', app => PAGI::App::File->from_app_path('public'));
 }
 
 async sub home {
@@ -33,7 +33,7 @@ async sub home {
     $state->get('metrics')->{requests}++;
 
     my $api_index = path_for($request, '/api/index');
-    return PAGI::Response->html(<<"HTML");
+    return html_response(<<"HTML");
 <!doctype html>
 <title>Endpoint Router Demo</title>
 <h1>Endpoint Router Demo</h1>

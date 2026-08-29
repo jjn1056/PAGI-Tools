@@ -31,7 +31,7 @@ sub maybe_sleep {
 
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
-use PAGI::Response;
+use PAGI::Response qw(html_response json_response);
 use PAGI::Request;
 
 #---------------------------------------------------------
@@ -152,9 +152,8 @@ my $router = PAGI::App::Router->new;
 # Index page
 $router->get('/', raw => async sub {
     my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($scope);
 
-    await $res->html(<<'HTML')->respond($send);
+    my $response = html_response(<<'HTML');
 <!DOCTYPE html>
 <html>
 <head><title>Background Tasks Demo</title></head>
@@ -190,18 +189,19 @@ document.getElementById('signup').onsubmit = async (e) => {
 </body>
 </html>
 HTML
+    await $response->respond($scope, $receive, $send);
 });
 
 # GOOD: Fire-and-forget async I/O
 $router->get('/async', raw => async sub {
     my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($scope);
 
     # Response goes out immediately
-    await $res->json({
+    my $response = json_response({
         status => 'ok',
         message => 'Response sent! Async tasks running in background.',
-    })->respond($send);
+    });
+    await $response->respond($scope, $receive, $send);
 
     # Fire-and-forget with error logging (on_fail + retain pattern)
     fire_and_forget(send_welcome_email('user@example.com'));
@@ -214,13 +214,13 @@ $router->get('/async', raw => async sub {
 # GOOD: CPU-bound work in subprocess
 $router->get('/blocking', raw => async sub {
     my ($scope, $receive, $send) = @_;
-    my $res = PAGI::Response->new($scope);
 
     # Response goes out immediately
-    await $res->json({
+    my $response = json_response({
         status => 'ok',
         message => 'Response sent! Heavy computation running in subprocess.',
-    })->respond($send);
+    });
+    await $response->respond($scope, $receive, $send);
 
     # Fire-and-forget: runs in child process, doesn't block event loop
     run_blocking_task("heavy_computation", 3);
@@ -231,16 +231,16 @@ $router->get('/blocking', raw => async sub {
 $router->post('/signup', raw => async sub {
     my ($scope, $receive, $send) = @_;
     my $req = PAGI::Request->new($scope, $receive);
-    my $res = $req->response;
 
     my $data = await $req->json;
     my $email = $data->{email} // 'unknown@example.com';
 
     # Respond immediately - user doesn't wait for email
-    await $res->status(201)->json({
+    my $response = json_response({
         status => 'created',
         message => "Account created! Check $email for welcome email.",
-    })->respond($send);
+    }, status => 201);
+    await $response->respond($scope, $receive, $send);
 
     # Fire-and-forget async tasks (non-blocking)
     fire_and_forget(send_welcome_email($email));

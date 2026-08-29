@@ -55,7 +55,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 10. `endpoint-demo` - high-level HTTP endpoint with `PAGI::Endpoint::HTTP`
 11. `endpoint-router-demo` - composing Endpoint routes with callback children, explicit discoverable child Routers, `app_as`, and `http_default`
 12. `full-demo` - kitchen-sink demo combining multiple toolkit features
-13. `pages` - Compose-rooted `PAGI::Pages` demo covering Welcome, redirects, negotiated HTML/problem JSON/text errors, Route versus Mount, Request-returned Responses, raw `respond($send)`, and lifespan
+13. `pages` - Compose-rooted `PAGI::Pages` demo covering Welcome, redirects, negotiated HTML/problem JSON/text errors, Route versus Mount, Request-returned Responses, raw full-triplet `respond`, and lifespan
 14. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
 15. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
 16. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`

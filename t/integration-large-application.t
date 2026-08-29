@@ -84,7 +84,7 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
     unlike($root_app, qr/use PAGI::Utils qw\(app_path\)/,
         'Root no longer needs the functional application path helper');
     like($root_app,
-        qr/mount\('\/static'\s*,\s*app\s*=>\s*PAGI::App::File->app_path\('static'\)\)/,
+        qr/mount\('\/static'\s*,\s*app\s*=>\s*PAGI::App::File->from_app_path\('static'\)\)/,
         'static mount uses the concise App File component constructor');
     unlike($root_app, qr/PAGI::App::File->new\s*\(|File::Basename|File::Spec|__FILE__|\$STATIC_ROOT/,
         'Root contains no manual or expanded static-root construction');

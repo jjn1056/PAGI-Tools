@@ -54,17 +54,18 @@ lib/MyApp/
 - Root mounts `PAGI::App::File` with `app =>` at `/static`. That mount stays an
   opaque application boundary: the resolver knows its prefix but does not
   inspect named routes below it.
-- Root uses `PAGI::App::File->app_path('static')`, a component constructor that
+- Root uses `PAGI::App::File->from_app_path('static')`, a component constructor that
   derives application home from the calling `lib/MyApp/Root.pm`, appends the
   platform-aware static component, and can be mounted directly. `PAGI_HOME`
   remains the override for nonstandard deployments.
 - `MyApp::Data` is created during startup and shared through
   `$request->state->get('data')`. `MyApp::View` renders the shared HTML
   document shell without introducing a template engine.
-- Root and Blogs configure `PAGI::Pages->not_found(...)` endpoints as their
-  Router `http_default` values. The details identify which selected Router
-  owns an unmatched path without turning a wildcard into a normal route.
-- Root's named `/pagi` route returns `PAGI::Pages->welcome($request)`. The home
+- Root and Blogs adapt named `not_found_page` Request handlers with
+  `request_app(...)` for their Router `http_default` values. The details
+  identify which selected Router owns an unmatched path without turning a
+  wildcard into a normal route.
+- Root's named `/pagi` route returns `welcome_page($request)`. The home
   page reaches it through a generated `path_for('/pagi')` link, demonstrating an
   ordinary Pages Response returned from a selected Request handler without
   replacing the application's branded or domain-specific missing pages.

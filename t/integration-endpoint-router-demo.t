@@ -25,7 +25,7 @@ subtest 'Main mounts its application-relative public component' => sub {
     my $path = "$Bin/../examples/endpoint-router-demo/lib/MyApp/Main.pm";
     my $source = source_text($path);
     like($source,
-        qr{mount\('/'\s*,\s*app\s*=>\s*PAGI::App::File->app_path\('public'\)\)},
+        qr{mount\('/'\s*,\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
         'module-layout Router mounts the returned component');
     unlike($source, qr/PAGI::App::File->app_path\('public'\)->to_app/,
         'module passes the component to the Router without compiling it');

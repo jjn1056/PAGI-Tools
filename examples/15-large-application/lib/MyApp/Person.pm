@@ -3,7 +3,7 @@ package MyApp::Person;
 use v5.40;
 use utf8;
 use Types::Standard qw(Int);
-use PAGI::Response;
+use PAGI::Response qw(html_response);
 use PAGI::Routing qw(router route mount);
 use PAGI::Routing::URL qw(path_for);
 use MyApp::Person::Blogs ();
@@ -26,7 +26,7 @@ sub list_people($request) {
             qq{      <li><a href="$path">$person->{name}</a></li>};
     }
 
-    return PAGI::Response->html(MyApp::View->document(
+    return html_response(MyApp::View->document(
         'People',
         "    <h1>People</h1>\n    <ul>\n"
             . join("\n", @items)
@@ -40,7 +40,7 @@ sub show_person($request) {
 
     unless ($person) {
         my $people_path = path_for($request, 'index');
-        return PAGI::Response->html(
+        return html_response(
             MyApp::View->document(
                 'Person not found',
                 qq{    <a href="$people_path">People</a>\n}
@@ -54,7 +54,7 @@ sub show_person($request) {
     my $blogs_path = path_for($request, 'blog/index');
     my $home_path = path_for($request, '/home');
 
-    return PAGI::Response->html(MyApp::View->document(
+    return html_response(MyApp::View->document(
         $person->{name},
         qq{    <a href="$home_path">Home</a>\n}
             . qq{    <h1>$person->{name}</h1>\n}

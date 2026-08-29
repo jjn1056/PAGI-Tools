@@ -7,7 +7,7 @@ use File::Basename qw(dirname);
 use File::Spec;
 
 use PAGI::Request;
-use PAGI::Response;
+use PAGI::Response qw(json_response);
 use PAGI::App::File;
 
 my $UPLOAD_DIR = File::Spec->catdir(dirname(__FILE__), 'uploads');
@@ -38,7 +38,8 @@ my $app = async sub {
 
     # Route: POST /submit - handle form
     if ($method eq 'POST' && $path eq '/submit') {
-        return await _handle_submit($req, $send);
+        my $response = await _handle_submit($req);
+        return await $response->respond($scope, $receive, $send);
     }
 
     # All other requests: serve static files from public/
@@ -46,7 +47,7 @@ my $app = async sub {
 };
 
 async sub _handle_submit {
-    my ($req, $send) = @_;
+    my ($req) = @_;
 
     # 5MB per-file limit; applies to the whole multipart parse (uploads included)
     my $form = await $req->form_params(max_file_size => 5 * 1024 * 1024);
@@ -100,18 +101,16 @@ async sub _handle_submit {
         }
     }
 
-    my $res = $req->response;
-
     # Return errors if any
     if (@errors) {
-        return await $res->status(400)->json({
+        return json_response({
             success => 0,
             errors  => \@errors,
-        })->respond($send);
+        }, status => 400);
     }
 
     # Success response
-    return await $res->json({
+    return json_response({
         success => 1,
         message => 'Thank you for your message!',
         data    => {
@@ -122,7 +121,7 @@ async sub _handle_submit {
             subscribe => ($subscribe eq 'yes' ? 1 : 0),
             attachment => $saved_file,
         },
-    })->respond($send);
+    });
 }
 
 async sub _handle_lifespan {

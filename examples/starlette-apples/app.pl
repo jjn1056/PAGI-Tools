@@ -6,10 +6,10 @@ use List::Util qw(max);
 use Types::Standard qw(Int);
 
 use PAGI::Compose qw(compose);
-use PAGI::Pages;
-use PAGI::Response;
-use PAGI::Routing qw(route mount);
-use PAGI::Routing::URL qw(url url_for path_for);
+use PAGI::Pages qw(welcome_page not_found_page);
+use PAGI::Response qw(file_response json_response);
+use PAGI::Routing qw(route mount router request_app);
+use PAGI::Routing::URL qw(url_for path_for);
 use PAGI::Utils qw(app_path);
 
 my $manager_file = app_path('public', 'index.html');
@@ -28,28 +28,29 @@ sub apples_db($request) {
     return $state->get('apples_db');
 }
 
-sub apple_manager($request) {
-    return PAGI::Response->send_file($manager_file, inline => 1);
-}
-
 async sub list_apples($request) {
     my $db = apples_db($request);
-    my @apples = map {
-        +{
-            %{$db->{$_}},
-            url => url_for($request, 'read', { apple_id => $_ }),
-        }
-    } sort { $a <=> $b } keys %$db;
 
-    return PAGI::Response->json(\@apples);
+    return json_response([
+        map {
+            +{
+                %{$db->{$_}},
+                url => url_for(
+                    $request,
+                    'read',
+                    { apple_id => $_ },
+                ),
+            }
+        } sort { $a <=> $b } keys %$db
+    ]);
 }
 
 async sub read_apple($request) {
-    my $apple_id = $request->path_param('apple_id');
-    my $apple = apples_db($request)->{$apple_id};
+    my $id = $request->path_param('apple_id');
+    my $apple = apples_db($request)->{$id};
 
-    return PAGI::Response->json($apple) if $apple;
-    return PAGI::Response->json(
+    return json_response($apple) if $apple;
+    return json_response(
         { error => 'Apple not found' },
         status => 404,
     );
@@ -58,67 +59,88 @@ async sub read_apple($request) {
 async sub create_apple($request) {
     my $db = apples_db($request);
     my $data = await $request->json;
-    my $new_id = max(0, keys %$db) + 1;
-    my $new_apple = { id => $new_id, %$data };
-    $db->{$new_id} = $new_apple;
+    my $id = max(0, keys %$db) + 1;
+    my $apple = { id => $id, %$data };
+    $db->{$id} = $apple;
 
-    my $location = path_for($request, 'read', { apple_id => $new_id });
-    return PAGI::Response->json(
-        $new_apple,
+    return json_response(
+        $apple,
         status  => 201,
-        headers => [Location => $location],
+        headers => [
+            Location => path_for(
+                $request,
+                'read',
+                { apple_id => $id },
+            ),
+        ],
     );
 }
 
 async sub update_apple($request) {
     my $db = apples_db($request);
-    my $apple_id = $request->path_param('apple_id');
-    return PAGI::Response->json(
-        { error => 'Apple not found' }, status => 404,
-    ) unless exists $db->{$apple_id};
+    my $id = $request->path_param('apple_id');
+
+    return json_response(
+        { error => 'Apple not found' },
+        status => 404,
+    ) unless exists $db->{$id};
 
     my $data = await $request->json;
-    $db->{$apple_id} = { %{$db->{$apple_id}}, %$data };
-    return PAGI::Response->json($db->{$apple_id});
+    $db->{$id} = { %{$db->{$id}}, %$data };
+    return json_response($db->{$id});
 }
 
 async sub delete_apple($request) {
     my $db = apples_db($request);
-    my $apple_id = $request->path_param('apple_id');
-    return PAGI::Response->json(
-        { error => 'Apple not found' }, status => 404,
-    ) unless exists $db->{$apple_id};
+    my $id = $request->path_param('apple_id');
 
-    my $deleted_apple = delete $db->{$apple_id};
-    return PAGI::Response->json({
+    return json_response(
+        { error => 'Apple not found' },
+        status => 404,
+    ) unless exists $db->{$id};
+
+    return json_response({
         success => \1,
-        deleted => $deleted_apple,
+        deleted => delete $db->{$id},
     });
 }
 
+sub root_not_found($request) {
+    return not_found_page(
+        $request,
+        detail => 'That page does not exist in the Apple demo.',
+    );
+}
+
 compose(
-    routes => [
-        route('/' => \&apple_manager,
-            name => 'home', desc => 'Apple manager SPA'),
-        route('/welcome' => PAGI::Pages->welcome,
-            name => 'welcome', desc => 'PAGI welcome page'),
-        mount('/apples',
-            routes => [
-                route('/' => \&list_apples,
-                    methods => ['GET'], name => 'list'),
-                route('/' => \&create_apple,
-                    methods => ['POST'], name => 'create'),
-                route('/{apple_id:&Int}' => \&read_apple,
-                    methods => ['GET'], name => 'read'),
-                route('/{apple_id:&Int}' => \&update_apple,
-                    methods => ['PUT'], name => 'update'),
-                route('/{apple_id:&Int}' => \&delete_apple,
-                    methods => ['DELETE'], name => 'delete'),
-            ],
-            name => 'apples',
-            desc => 'Apples API namespace'),
-    ],
-    lifespan => {
-        startup => \&startup,
-    },
+    app => router(
+        routes => [
+            route('/' => file_response($manager_file, inline => 1),
+                name => 'home',
+                desc => 'Apple manager SPA',
+            ),
+            route('/welcome' => \&welcome_page,
+                name => 'welcome',
+                desc => 'PAGI welcome page',
+            ),
+            mount('/apples',
+                routes => [
+                    route('/' => \&list_apples,
+                        methods => ['GET'], name => 'list'),
+                    route('/' => \&create_apple,
+                        methods => ['POST'], name => 'create'),
+                    route('/{apple_id:&Int}' => \&read_apple,
+                        methods => ['GET'], name => 'read'),
+                    route('/{apple_id:&Int}' => \&update_apple,
+                        methods => ['PUT'], name => 'update'),
+                    route('/{apple_id:&Int}' => \&delete_apple,
+                        methods => ['DELETE'], name => 'delete'),
+                ],
+                name => 'apples',
+                desc => 'Apples API namespace',
+            ),
+        ],
+        http_default => request_app(\&root_not_found),
+    ),
+    lifespan => { startup => \&startup },
 );

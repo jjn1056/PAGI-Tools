@@ -17,18 +17,18 @@ Visit http://localhost:5000/
 ```perl
 package MessageAPI;
 use parent 'PAGI::Endpoint::HTTP';
-use PAGI::Response;
+use PAGI::Response::JSON;
 
 async sub get {
     my ($self, $request) = @_;
-    return PAGI::Response->json(\@messages);
+    return PAGI::Response::JSON->new(\@messages);
 }
 
 async sub post {
     my ($self, $request) = @_;
     my $data = await $request->json;
     ...
-    return PAGI::Response->json($message, status => 201);
+    return PAGI::Response::JSON->new($message, status => 201);
 }
 ```
 
@@ -85,7 +85,7 @@ explicitly:
 my $response = PAGI::Pages->unsupported_media_type($scope,
     as     => 'json',
     detail => 'Content-Type must be application/json');
-return await $response->respond($send);
+return await $response->respond($scope, $receive, $send);
 ```
 
 Successful endpoint payloads remain application-owned JSON. `PAGI::Pages`
@@ -106,7 +106,7 @@ HTTP child were to complete silently, the outer response guard would treat it
 as incomplete output (500), not as a trusted routing 404.
 
 ```perl
-$router->mount('/', app => PAGI::App::File->app_path('public'));
+$router->mount('/', app => PAGI::App::File->from_app_path('public'));
 ```
 
 ## Routes

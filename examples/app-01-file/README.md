@@ -8,7 +8,7 @@ The example uses the caller-relative component constructor, so the app file
 needs no manual `__FILE__` or platform-path handling:
 
 ```perl
-PAGI::App::File->app_path('static')->to_app;
+PAGI::App::File->from_app_path('static')->to_app;
 ```
 
 `PAGI_ENV=development` prints one `PAGI::App::File: attempting ...` line to

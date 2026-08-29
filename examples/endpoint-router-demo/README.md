@@ -76,7 +76,7 @@ needed for this child.
 `Main` mounts its static files with:
 
 ```perl
-$r->mount('/', app => PAGI::App::File->app_path('public'));
+$r->mount('/', app => PAGI::App::File->from_app_path('public'));
 ```
 
 Because `MyApp::Main` lives under `lib/MyApp/Main.pm`, the constructor resolves
@@ -93,12 +93,13 @@ $r->get('/index' => [$self->middleware_as('require_demo_token')] => 'index');
 The factory is native PAGI middleware: it receives `($scope, $receive, $send)`
 and returns an application. It uses `$self->new_request($scope, $receive)`
 only there to inspect the request header. Its denial response is constructed
-through `PAGI::Pages->unauthorized($scope, ...)` and explicitly sent through
-`$send`, including the required `WWW-Authenticate` challenge.
+through `unauthorized_page($scope, ...)` and explicitly emitted with the full
+`($scope, $receive, $send)` triplet, including the required
+`WWW-Authenticate` challenge.
 
 Compiled Endpoint HTTP methods receive `PAGI::Request` directly. The
 missing-user branch demonstrates the other Pages form:
-`PAGI::Pages->not_found($request, ...)` returns an unsent Response value,
+`not_found_page($request, ...)` returns an unsent Response value,
 which the Endpoint adapter sends after the handler returns it. Reverse routes,
 state, and responses come from their owning `PAGI::Routing::URL`,
 `PAGI::State`, and `PAGI::Response` imports.

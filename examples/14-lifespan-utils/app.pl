@@ -1,5 +1,5 @@
 use Future::AsyncAwait;
-use PAGI::Pages;
+use PAGI::Pages qw(welcome_page);
 use PAGI::Utils qw(handle_lifespan);
 
 use warnings;
@@ -18,8 +18,8 @@ async sub pagi {
     # Rest of app (example)
     die "Unsupported scope type: $scope->{type}" unless $scope->{type} eq 'http';
 
-    return await PAGI::Pages->welcome($scope,
-        as => 'text')->respond($send);
+    my $response = welcome_page($scope, as => 'text');
+    return await $response->respond($scope, $receive, $send);
 }
 
 \&pagi;

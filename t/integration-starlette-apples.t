@@ -114,6 +114,9 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         'selected child Router negotiates the routing miss');
     is($invalid_id->json->{title}, 'Not Found',
         'routing miss uses the stock Pages title');
+    is($invalid_id->json->{detail},
+        'The requested resource was not found.',
+        'selected child Router keeps its stock 404 detail');
     ok(!exists $invalid_id->json->{error},
         'routing miss never reaches the application error branch');
 
@@ -173,7 +176,27 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
     is($unknown->content_type, 'application/problem+json',
         'root routing miss negotiates problem JSON');
     is($unknown->json->{title}, 'Not Found',
-        'root routing miss uses the stock Pages response');
+        'root routing miss uses the shared Pages response');
+    is($unknown->json->{detail},
+        'That page does not exist in the Apple demo.',
+        'root routing miss uses the application-owned default detail');
+
+    my $unknown_delete = $client->delete('/elsewhere',
+        headers => { Accept => 'application/problem+json' });
+    is($unknown_delete->status, 404,
+        'unknown DELETE is a Router NONE 404, not a wildcard 405');
+    is($unknown_delete->json->{detail},
+        'That page does not exist in the Apple demo.',
+        'custom root default handles unknown methods as well as GET');
+
+    my $welcome_wrong_method = $client->put('/welcome',
+        headers => { Accept => 'application/problem+json' });
+    is($welcome_wrong_method->status, 405,
+        'known welcome path preserves its method-owned 405');
+    is($welcome_wrong_method->header('Allow'), 'GET, HEAD',
+        'known welcome path publishes its exact method union');
+    is($welcome_wrong_method->json->{title}, 'Method Not Allowed',
+        'root default does not swallow a known-path 405');
     });
 };
 

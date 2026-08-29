@@ -49,7 +49,8 @@ Runs in a child process, doesn't block the event loop.
 For very fast operations (<10ms) after response - just call directly after `await`:
 
 ```perl
-await $res->json({ status => 'ok' })->respond($send);
+my $response = json_response({ status => 'ok' });
+await $response->respond($scope, $receive, $send);
 quick_sync_task("log");  # runs after response is sent
 ```
 

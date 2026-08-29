@@ -2,14 +2,14 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
-use PAGI::Response;
+use PAGI::Response qw(json_response);
 use PAGI::Routing qw(route middleware);
 
 async sub home {
     my ($request) = @_;
     my $state = $request->state
         or die 'compose example requires lifespan state';
-    return PAGI::Response->json({
+    return json_response({
         message => $state->get('message'),
         request_id => $request->scope->{request_id},
     });
