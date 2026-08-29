@@ -633,13 +633,30 @@ subtest 'new_request is explicit and is not the compiler Request factory' => sub
         'routing compilation and dispatch do not call the override');
 };
 
-subtest 'Endpoint seeds no state and Compose exposes server-owned lifespan state' => sub {
+subtest 'Endpoint preserves absent and caller-supplied state' => sub {
     my $endpoint = bless {}, 'Local::HelperEndpoint';
     my $plain_scope = scope(path => '/state', raw_path => '/state');
     run_scope($endpoint->to_app, $plain_scope);
     ok(!$endpoint->{scope_has_state}, 'Endpoint does not add state to a request scope');
     is($plain_scope->{state}, undef, 'the caller scope remains without state');
     is($endpoint->{request_state}, undef, 'Request reports absent state as undef');
+
+    my $state = { caller_value => 'present' };
+    my $stateful_scope = scope(
+        path => '/state', raw_path => '/state', state => $state,
+    );
+    run_scope($endpoint->to_app, $stateful_scope);
+    ok($endpoint->{scope_has_state}, 'Endpoint passes caller state to Request');
+    is($endpoint->{request_state}->get('caller_value'), 'present',
+        'Request exposes the caller-supplied state data');
+    is(refaddr($endpoint->{request_state}->data), refaddr($state),
+        'Request retains caller state identity');
+    is(refaddr($stateful_scope->{state}), refaddr($state),
+        'Endpoint does not replace caller-owned scope state');
+};
+
+subtest 'Compose exposes server-owned lifespan state' => sub {
+    my $endpoint = bless {}, 'Local::HelperEndpoint';
 
     my $state = {};
     my $composed = compose(
