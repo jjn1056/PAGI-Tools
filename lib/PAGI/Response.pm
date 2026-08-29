@@ -64,6 +64,24 @@ Future, then sends and waits for one terminal C<http.response.body> event.
 Returns an async HTTP application coderef with a response snapshot captured
 when C<to_app> is called.
 
+=head2 protocol_response_capability
+
+    my $capability = $response->protocol_response_capability;
+
+Returns the inheritable versioned token C<body-events-v1>. It promises that
+C<respond> emits one C<http.response.start> followed only by ordinary byte
+C<http.response.body> events: no trailers and no opaque C<file> or C<fh> body.
+The token describes event vocabulary, not memory strategy;
+L<PAGI::Response::Stream> inherits it while retaining incremental emission and
+real send-Future backpressure. A subclass that introduces another delivery
+form must override this method and return C<undef> unless a later specification
+defines a matching capability.
+
+L<PAGI::Response::File> returns C<undef>. PAGI Www denial bodies permit only
+the body form and do not use C<file> or C<fh>; see
+L<PAGI::Spec::Www/"WebSocket Denial Response (extension)"> and
+L<PAGI::Spec::Www/"Decline SSE - send event">.
+
 =head2 stream_response
 
     my $response = stream_response(
@@ -89,17 +107,6 @@ request URL path must be resolved under a configured root.
 =cut
 
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);
-my %DIRECT_PROTOCOL_RESPONSE = map { $_ => 1 } qw(
-    PAGI::Response
-    PAGI::Response::Text
-    PAGI::Response::HTML
-    PAGI::Response::JSON
-    PAGI::Response::Problem
-    PAGI::Response::Redirect
-    PAGI::Response::Empty
-    PAGI::Response::Stream
-);
-
 our @EXPORT_OK = qw(
     response text_response html_response json_response problem_response
     redirect_response empty_response file_response stream_response
@@ -272,6 +279,8 @@ sub delete_cookie {
 }
 
 sub is_buffered { 1 }
+
+sub protocol_response_capability { return 'body-events-v1' }
 
 sub body {
     my ($self) = @_;
@@ -484,13 +493,16 @@ sub _validate_protocol_response {
     $operation //= 'Protocol response';
     croak "$operation requires exactly one concrete PAGI::Response"
         unless blessed($response) && $response->isa('PAGI::Response');
-    croak "$operation does not support PAGI::Response::File"
-        if $response->isa('PAGI::Response::File');
+    my $capability = $response->protocol_response_capability;
+    croak "$operation cannot adapt " . ref($response)
+        . " without the body-events-v1 protocol response capability"
+        unless defined($capability) && !ref($capability)
+            && $capability eq 'body-events-v1';
     return;
 }
 
 async sub _respond_for_protocol {
-    my ($response, $scope, $receive, $send, $prefix, $operation) = @_;
+    my ($response, $scope, $receive, $send, $prefix, $operation, $on_start_committed) = @_;
     _validate_protocol_response($response, $operation);
     croak "$operation requires a protocol scope hashref"
         unless ref($scope) eq 'HASH' && !blessed($scope);
@@ -498,6 +510,8 @@ async sub _respond_for_protocol {
     croak "$operation send must be a coderef" unless ref($send) eq 'CODE';
     croak "$operation requires a protocol response prefix"
         unless defined($prefix) && !ref($prefix) && length($prefix);
+    croak "$operation requires a start-commit callback"
+        unless ref($on_start_committed) eq 'CODE';
 
     my %http_scope = (
         %$scope,
@@ -505,6 +519,7 @@ async sub _respond_for_protocol {
         method => 'GET',
     );
     my $emission_state = 'initial';
+    my $start_committed = 0;
 
     my $map_event = sub {
         my ($event) = @_;
@@ -539,43 +554,35 @@ async sub _respond_for_protocol {
 
     my $mapped_send = async sub {
         my ($event) = @_;
+        my $type = ref($event) eq 'HASH' ? ($event->{type} // '') : '';
         my $mapped = $map_event->($event);
 
         await Future->wrap($send->($mapped))->without_cancel;
+        if ($type eq 'http.response.start') {
+            $start_committed = 1;
+            $on_start_committed->();
+        }
         return;
     };
 
-    if ($DIRECT_PROTOCOL_RESPONSE{ref $response}) {
-        await Future->wrap(
-            $response->respond(\%http_scope, $receive, $mapped_send),
-        );
-    }
-    else {
-        # An arbitrary Response subclass may emit its own event sequence. Fully
-        # validate that finite sequence before replay so a late opaque/trailer/
-        # unknown event cannot leave a partially started protocol response.
-        my @mapped_events;
-        my $validate_send = sub {
-            my ($event) = @_;
-            push @mapped_events, $map_event->($event);
-            return Future->done;
-        };
-        await Future->wrap(
-            $response->respond(\%http_scope, $receive, $validate_send),
-        );
-        croak "$operation Response did not emit response start"
-            if $emission_state eq 'initial';
-        croak "$operation Response did not emit a terminal response body"
-            unless $emission_state eq 'complete';
-        for my $event (@mapped_events) {
-            await Future->wrap($send->($event))->without_cancel;
-        }
-    }
+    await Future->wrap(
+        $response->respond(\%http_scope, $receive, $mapped_send),
+    );
 
     croak "$operation Response did not emit response start"
         if $emission_state eq 'initial';
-    croak "$operation Response did not emit a terminal response body"
-        unless $emission_state eq 'complete';
+    unless ($emission_state eq 'complete') {
+        my $connection = $http_scope{'pagi.connection'};
+        my $disconnected = blessed($connection)
+            && $connection->can('is_connected')
+            && !$connection->is_connected;
+        if ($disconnected && $connection->can('response_complete')) {
+            my $complete = $connection->response_complete;
+            $disconnected = 0 if defined($complete) && $complete;
+        }
+        croak "$operation Response did not emit a terminal response body"
+            unless $start_committed && $disconnected;
+    }
     return;
 }
 

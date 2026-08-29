@@ -322,26 +322,32 @@ async sub decline {
     croak 'SSE decline is only valid before start while pending'
         unless $self->{_state} eq 'pending';
 
-    # A keepalive requested before this connection was ever accepted (e.g.
-    # the Endpoint::SSE keepalive_interval, requested before on_connect
-    # runs) must not survive a decline. In the normal case that's just a
-    # deferred, never-armed record (see keepalive()'s DEFERRED ARM note) --
-    # nothing was ever sent, so there's nothing to disarm, just drop it.
-    delete $self->{_pending_keepalive};
+    my $committed = 0;
+    my $completed = eval {
+        await PAGI::Response::_respond_for_protocol(
+            $response,
+            $self->{scope},
+            $self->{receive},
+            $self->{send},
+            'sse.http.response',
+            'SSE decline',
+            sub {
+                $committed = 1;
+                $self->{_declined} = 1;
+                $self->{_disconnect_reason} //= 'declined';
 
-    await PAGI::Response::_respond_for_protocol(
-        $response,
-        $self->{scope},
-        $self->{receive},
-        $self->{send},
-        'sse.http.response',
-        'SSE decline',
-    );
+                # This deferred record has never reached the server. Retain it
+                # until start actually commits so a failed start remains retryable.
+                delete $self->{_pending_keepalive};
+                $self->_set_closed;
+            },
+        );
+        1;
+    };
+    my $error = $@ unless $completed;
 
-    $self->{_declined} = 1;
-    $self->{_disconnect_reason} //= 'declined';
-    $self->_set_closed;
-    await $self->_run_close_callbacks;
+    await $self->_run_close_callbacks if $committed;
+    die $error unless $completed;
 
     return $self;
 }
@@ -1096,10 +1102,16 @@ stream -- an auth gate, a not-found, a rate limit, anything that should
 return an ordinary response rather than open an event stream. This is the
 SSE parity of L<PAGI::WebSocket/deny>.
 
-Maps the Response's HTTP start/body events in order to
+The Response must advertise the inheritable C<body-events-v1> protocol
+capability. Its HTTP start/body events are mapped incrementally in order to
 C<sse.http.response.start> and C<sse.http.response.body>, retaining multi-chunk
-C<more> values and send backpressure, then marks the request closed. File,
-filehandle, trailer, and unknown events are rejected. Per the
+C<more> values and send backpressure. Successful mapped-start settlement owns
+the response slot immediately, discards deferred keepalive, and leaves the SSE
+object closed after either completion or a later failure. A failed start send
+leaves the request pending. File returns no capability because PAGI Www permits
+only the body form and not C<file>/C<fh> for a decline; trailer and unknown
+events are also rejected. See
+L<PAGI::Spec::Www/"Decline SSE - send event">. Per the
 B<first-send-wins> rule (see
 L<PAGI::Spec::Www/"SSE Response Denial">), this must happen B<before>
 C<start> or any send method has run -- declining after the stream has

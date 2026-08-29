@@ -18,6 +18,7 @@ use PAGI::Response::Problem;
 use PAGI::Response::Redirect;
 use PAGI::Response::Stream;
 use PAGI::Response::Text;
+use PAGI::Test::ConnectionState;
 use PAGI::WebSocket;
 
 sub ws_scope {
@@ -217,11 +218,27 @@ subtest 'Response receives a shallow HTTP scope clone without protocol mutation'
     is($scope->{method}, 'POST', 'live protocol scope method is unchanged');
 };
 
-subtest 'mapped Stream sends remain sequential and backpressured' => sub {
+{
+    package T::InheritedProtocolStream;
+    use parent -norequire, 'PAGI::Response::Stream';
+}
+
+subtest 'protocol response capability is inherited without implying buffering' => sub {
+    is(PAGI::Response->new('base')->protocol_response_capability,
+        'body-events-v1', 'base advertises the versioned byte-body capability');
+    is(PAGI::Response::Stream->new(sub {})->protocol_response_capability,
+        'body-events-v1', 'Stream inherits the byte-body capability');
+    is(T::InheritedProtocolStream->new(sub {})->protocol_response_capability,
+        'body-events-v1', 'a delivery-preserving Stream subclass inherits it');
+    is(PAGI::Response::File->new(__FILE__)->protocol_response_capability,
+        undef, 'File explicitly opts out of denial-body delivery');
+};
+
+subtest 'an inherited Stream reaches mapped sends incrementally and commits at start settlement' => sub {
     my @sent;
     my @settlements;
     my $producer_calls = 0;
-    my $stream = PAGI::Response::Stream->new(async sub {
+    my $stream = T::InheritedProtocolStream->new(async sub {
         my ($writer) = @_;
         ++$producer_calls;
         await $writer->write('first');
@@ -229,6 +246,7 @@ subtest 'mapped Stream sends remain sequential and backpressured' => sub {
     });
     my $ws = websocket(ws_scope(), sub {
         push @sent, $_[0];
+        return Future->done if $_[0]{type} eq 'websocket.accept';
         my $settlement = Future->new;
         push @settlements, $settlement;
         return $settlement;
@@ -241,9 +259,18 @@ subtest 'mapped Stream sends remain sequential and backpressured' => sub {
     ok(!$denial->is_ready, 'deny awaits response start');
 
     $settlements[0]->done;
+    is($ws->connection_state, 'closed',
+        'successful mapped start settlement commits the response slot immediately');
     is($producer_calls, 1, 'producer starts after response start settles');
     is([map { $_->{body} // '<start>' } @sent], ['<start>', 'first'],
         'first chunk follows start');
+
+    my $before_accept = scalar @sent;
+    my $accept = $ws->accept;
+    ok($accept->is_ready, 'accept is an immediate no-op after denial commitment');
+    is(scalar @sent, $before_accept, 'accept cannot send after denial commitment');
+    like(dies { $ws->deny(PAGI::Response::Text->new('again'))->get },
+        qr/(?:connecting|before accept)/i, 'a second denial cannot claim the committed slot');
 
     $settlements[1]->done;
     is([map { $_->{body} // '<start>' } @sent], ['<start>', 'first', 'second'],
@@ -271,6 +298,27 @@ subtest 'mapped Stream sends remain sequential and backpressured' => sub {
         return;
     }
 
+    package T::UnsupportedProtocolResponse;
+    use Future::AsyncAwait;
+    use parent -norequire, 'PAGI::Response';
+    our $calls = 0;
+    sub protocol_response_capability { return undef }
+    async sub respond {
+        my ($self, @args) = @_;
+        ++$calls;
+        await $self->SUPER::respond(@args);
+        return;
+    }
+
+    package T::ProducerFailureResponse;
+    use Future::AsyncAwait;
+    use parent -norequire, 'PAGI::Response';
+    async sub respond {
+        my ($self, $scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 503, headers => [] });
+        die "producer failed after response start\n";
+    }
+
     package T::ExplodingResponse;
     use Future::AsyncAwait;
     use parent -norequire, 'PAGI::Response';
@@ -278,41 +326,126 @@ subtest 'mapped Stream sends remain sequential and backpressured' => sub {
     async sub respond { ++$calls; die "custom response was invoked\n" }
 }
 
-subtest 'File, fh, trailers, and unknown response events fail before denial start' => sub {
+subtest 'unsupported response capabilities fail before denial start' => sub {
     my ($fh, $path) = tempfile();
     print {$fh} 'file';
     close $fh;
 
-    my @invalid = (
+    my @unsupported = (
         ['File response', PAGI::Response::File->new($path), qr/File/i],
+        ['explicit custom opt-out', T::UnsupportedProtocolResponse->new('opaque'), qr/capability/i],
+    );
+
+    for my $case (@unsupported) {
+        my ($name, $response, $error) = @$case;
+        subtest $name => sub {
+            my @sent;
+            local $T::UnsupportedProtocolResponse::calls = 0;
+            my $ws = websocket(ws_scope(), sub { push @sent, $_[0]; Future->done });
+            like(dies { $ws->deny($response)->get }, $error, 'unsupported response is rejected');
+            is(\@sent, [], 'no protocol response event was sent');
+            is($ws->connection_state, 'connecting', 'handshake state remains live');
+            is($T::UnsupportedProtocolResponse::calls, 0,
+                'unsupported custom delivery is rejected before invocation')
+                if $name eq 'explicit custom opt-out';
+        };
+    }
+};
+
+subtest 'advertised invalid events fail before that event, without rolling back committed start' => sub {
+    my @invalid = (
+        ['declared trailers', T::InvalidProtocolResponse->new([{
+            type => 'http.response.start', status => 200, headers => [], trailers => 1,
+        }]), qr/trailer/i, 0],
         ['fh body', T::InvalidProtocolResponse->new([
             { type => 'http.response.start', status => 200, headers => [] },
             { type => 'http.response.body', fh => 'opaque', more => 0 },
-        ]), qr/(?:fh|opaque|body)/i],
-        ['declared trailers', T::InvalidProtocolResponse->new([{
-            type => 'http.response.start', status => 200, headers => [], trailers => 1,
-        }]), qr/trailer/i],
+        ]), qr/(?:fh|opaque|body)/i, 1],
         ['trailer event', T::InvalidProtocolResponse->new([
             { type => 'http.response.start', status => 200, headers => [] },
             { type => 'http.response.trailers', headers => [] },
-        ]), qr/trailer|event/i],
+        ]), qr/trailer|event/i, 1],
         ['unknown event', T::InvalidProtocolResponse->new([
             { type => 'http.response.start', status => 200, headers => [] },
             { type => 'http.response.push' },
         ]),
-            qr/unknown|event/i],
+            qr/unknown|event/i, 1],
     );
 
     for my $case (@invalid) {
-        my ($name, $response, $error) = @$case;
+        my ($name, $response, $error, $start_commits) = @$case;
         subtest $name => sub {
             my @sent;
             my $ws = websocket(ws_scope(), sub { push @sent, $_[0]; Future->done });
             like(dies { $ws->deny($response)->get }, $error, 'invalid response is rejected');
-            is(\@sent, [], 'no protocol response event was sent');
-            is($ws->connection_state, 'connecting', 'handshake state remains live');
+            is([map { $_->{type} } @sent],
+                $start_commits ? ['websocket.http.response.start'] : [],
+                'the invalid event itself never reaches the protocol send');
+            is($ws->connection_state, $start_commits ? 'closed' : 'connecting',
+                'state reflects whether mapped start committed');
         };
     }
+};
+
+subtest 'a producer failure after mapped start propagates and leaves denial committed' => sub {
+    my @sent;
+    my $ws = websocket(ws_scope(), sub { push @sent, $_[0]; Future->done });
+
+    like(dies { $ws->deny(T::ProducerFailureResponse->new('unused'))->get },
+        qr/producer failed after response start/, 'producer failure reaches the caller');
+    is([map { $_->{type} } @sent], ['websocket.http.response.start'],
+        'mapped start reached the protocol before the producer failed');
+    is($ws->connection_state, 'closed', 'post-start producer failure cannot reopen the slot');
+};
+
+subtest 'a mapped body-send failure propagates and leaves denial committed' => sub {
+    my @sent;
+    my $ws = websocket(ws_scope(), sub {
+        push @sent, $_[0];
+        return Future->done if $_[0]{type} eq 'websocket.http.response.start';
+        return Future->fail("denial body resource failed\n");
+    });
+
+    like(dies { $ws->deny(PAGI::Response::Text->new('body'))->get },
+        qr/denial body resource failed/, 'genuine body-send failure reaches the caller');
+    is([map { $_->{type} } @sent], [
+        'websocket.http.response.start', 'websocket.http.response.body',
+    ], 'body send was attempted only after mapped start committed');
+    is($ws->connection_state, 'closed', 'post-start send failure cannot reopen the slot');
+};
+
+subtest 'disconnect during a backpressured mapped body settles normally' => sub {
+    my $connection = PAGI::Test::ConnectionState->new;
+    my @sent;
+    my $body_send;
+    my $body_cancelled = 0;
+    my $stream = PAGI::Response::Stream->new(async sub {
+        my ($writer) = @_;
+        await $writer->write('pending');
+    });
+    my $ws = websocket(ws_scope('pagi.connection' => $connection), sub {
+        push @sent, $_[0];
+        return Future->done if $_[0]{type} eq 'websocket.http.response.start';
+        $body_send = Future->new;
+        $body_send->on_cancel(sub { $body_cancelled = 1 });
+        return $body_send;
+    });
+
+    my $denial = $ws->deny($stream);
+    is([map { $_->{type} } @sent], [
+        'websocket.http.response.start', 'websocket.http.response.body',
+    ], 'the first body write is parked on the real mapped send');
+    ok(!$denial->is_ready, 'denial remains pending on body backpressure');
+
+    $connection->_mark_disconnected('client_closed');
+    ok(!$body_send->is_ready, 'disconnect does not manufacture body-send settlement');
+    ok(!$body_cancelled, 'disconnect never cancels the server-owned body send');
+    $body_send->done;
+
+    ok(lives { $denial->get }, 'successful post-disconnect settlement remains a normal outcome');
+    is($body_cancelled, 0, 'mapped body send was awaited without cancellation');
+    is($ws->connection_state, 'closed', 'denial remains committed after disconnect');
+    is(scalar @sent, 2, 'disconnect suppresses terminal success without another send');
 };
 
 subtest 'deny accepts exactly one concrete Response and only while connecting' => sub {
@@ -354,13 +487,24 @@ subtest 'without the extension deny uses policy-close and never invokes the cust
     is($ws->close_code, 1008, 'fallback records policy close code');
 };
 
-subtest 'denial send failures propagate and do not close early' => sub {
-    my $failure = Future->fail("denial transport failed\n");
-    my $ws = websocket(ws_scope(), sub { return $failure });
+subtest 'mapped start-send failure preserves the connecting state' => sub {
+    my @sent;
+    my $calls = 0;
+    my $ws = websocket(ws_scope(), sub {
+        push @sent, $_[0];
+        return ++$calls == 1
+            ? Future->fail("denial transport failed\n")
+            : Future->done;
+    });
 
     like(dies { $ws->deny(PAGI::Response::Text->new('no'))->get },
         qr/denial transport failed/, 'send failure reaches caller');
-    is($ws->connection_state, 'connecting', 'failed denial does not claim closure');
+    is($ws->connection_state, 'connecting', 'failed start does not claim the response slot');
+    $ws->accept->get;
+    is([map { $_->{type} } @sent], [
+        'websocket.http.response.start', 'websocket.accept',
+    ], 'accept remains available after pre-commit failure');
+    ok($ws->is_connected, 'successful accept establishes the still-live connection');
 };
 
 subtest 'cancelling deny never cancels the server-owned send Future' => sub {

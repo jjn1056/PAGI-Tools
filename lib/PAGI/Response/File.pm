@@ -39,6 +39,13 @@ logical-window bounds, conditionals, and client ranges are evaluated before
 response start for each invocation. The application opens no filehandle; it
 sends and awaits exactly one PAGI C<http.response.body> file event.
 
+File returns C<undef> from C<protocol_response_capability> and therefore cannot
+serve a WebSocket denial or SSE decline. This is the PAGI Www conformance
+boundary: denial response bodies permit only the ordinary C<body> form and do
+not use C<file> or C<fh>. See
+L<PAGI::Spec::Www/"WebSocket Denial Response (extension)"> and
+L<PAGI::Spec::Www/"Decline SSE - send event">.
+
 =cut
 
 our @EXPORT_OK = qw(file_response);
@@ -115,6 +122,8 @@ sub new {
 sub default_content_type { return undef }
 
 sub is_buffered { return 0 }
+
+sub protocol_response_capability { return undef }
 
 sub body {
     croak 'File response has no buffered body';
@@ -287,7 +296,8 @@ If-Range.
 
 C<respond> performs all file inspection before response start, then awaits
 response start and one body event. C<to_app> captures a reusable configuration
-snapshot. C<is_buffered> returns false and C<body> croaks.
+snapshot. C<is_buffered> returns false, C<body> croaks, and
+C<protocol_response_capability> returns C<undef>.
 
 =cut
 

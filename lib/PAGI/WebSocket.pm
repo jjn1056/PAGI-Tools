@@ -364,6 +364,8 @@ async sub _trigger_error {
 async sub accept {
     my ($self, %opts) = @_;
 
+    return $self if $self->is_closed;
+
     my $event = {
         type => 'websocket.accept',
     };
@@ -435,10 +437,13 @@ async sub deny {
         $self->{send},
         'websocket.http.response',
         'WebSocket denial',
+        sub {
+            # The accepted HTTP start owns the handshake response slot even
+            # while its body remains in flight. It is not a WebSocket close
+            # frame, so the RFC 6455 close fields remain undefined.
+            $self->{_state} = 'closed';
+        },
     );
-
-    # HTTP denial is not a WebSocket close frame, so close_code stays undefined.
-    $self->{_state} = 'closed';
     return $self;
 }
 
@@ -1049,12 +1054,17 @@ accepting it. Valid only before C<accept>. Marks the connection closed on
 return.
 
 When the server advertises the C<websocket.http.response> extension
-(C<supports_denial_response()> is true), the Response's HTTP start/body events
-are mapped in order to C<websocket.http.response.start> and
+(C<supports_denial_response()> is true), the Response must advertise the
+inheritable C<body-events-v1> protocol capability. Its HTTP start/body events
+are mapped incrementally in order to C<websocket.http.response.start> and
 C<websocket.http.response.body>, retaining multi-chunk C<more> values and send
-backpressure. File, filehandle, trailer, and unknown events are rejected. When
-the extension is absent, the Response body is ignored and denial falls back to
-a C<websocket.close> with policy code 1008.
+backpressure. Successful mapped-start settlement permanently owns the handshake
+response slot even while the body is pending or later fails. File returns no
+capability because PAGI Www permits only the body form and does not use
+C<file>/C<fh> for denial bodies; trailer and unknown events are also rejected.
+When the extension is absent, the Response body is ignored and denial falls
+back to a C<websocket.close> with policy code 1008. See
+L<PAGI::Spec::Www/"WebSocket Denial Response (extension)">.
 
 The Response is invoked with a shallow HTTP-scope clone whose C<type> is
 C<http> and C<method> is C<GET>; the live WebSocket scope and all nested
