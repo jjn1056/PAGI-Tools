@@ -1726,7 +1726,10 @@ coderef whose meaning changes by invocation arity.
 This is the intended full shape after this response work. It deliberately
 retains the existing lifespan-backed `apples_db` helper so the response change
 can be evaluated independently. Whether that helper should become a lexical
-demo fixture or a repository object is `LATER-APPLE-DATA`.
+demo fixture or a repository object is `LATER-APPLE-DATA`. The CRUD handlers
+run inside logical namespace `/apples`, so relative reverse address `read`
+resolves to `/apples/read`; spelling it `apples/read` there would duplicate the
+active namespace.
 
 ```perl
 #!/usr/bin/env perl
@@ -1767,7 +1770,7 @@ async sub list_apples($request) {
                 %{$db->{$_}},
                 url => url_for(
                     $request,
-                    'apples/read',
+                    'read',
                     { apple_id => $_ },
                 ),
             }
@@ -1799,7 +1802,7 @@ async sub create_apple($request) {
         headers => [
             Location => path_for(
                 $request,
-                'apples/read',
+                'read',
                 { apple_id => $id },
             ),
         ],
