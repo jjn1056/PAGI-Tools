@@ -7,7 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
-use PAGI::Response;
+use PAGI::Response::Text ();
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::SSE;
@@ -677,7 +677,7 @@ subtest 'protocol selection is declaration ordered, protocol local, and mount aw
     my $app = router(routes => [
         route('/shared' => sub {
             push @trace, 'http';
-            return PAGI::Response->text('http');
+            return PAGI::Response::Text->new('http');
         }),
         websocket('/shared' => async sub {
             push @trace, 'first websocket';
@@ -753,7 +753,7 @@ subtest 'the first prefix Mount owns every protocol and middleware boundary' => 
         };
     });
     my $first = router(routes => [
-        route('/http' => sub { return PAGI::Response->text('first http') }),
+        route('/http' => sub { return PAGI::Response::Text->new('first http') }),
         websocket('/socket' => async sub {
             await $_[0]->close(1000, 'first websocket');
         }),
@@ -820,7 +820,7 @@ subtest 'HTTP selection ignores WebSocket and SSE leaves without warnings' => su
         sse('/sse-only' => sub { return 'inert' }),
         websocket('/shared' => sub { return 'inert' }),
         sse('/shared' => sub { return 'inert' }),
-        route('/shared' => sub { return PAGI::Response->text('http leaf') }),
+        route('/shared' => sub { return PAGI::Response::Text->new('http leaf') }),
     ])->to_app;
 
     my @warnings;

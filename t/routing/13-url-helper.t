@@ -8,7 +8,7 @@ use Types::Standard qw(Int);
 
 use lib 'lib';
 use PAGI::Request;
-use PAGI::Response;
+use PAGI::Response::Text ();
 use PAGI::WebSocket;
 use PAGI::SSE;
 use PAGI::Middleware::ReverseProxy;
@@ -653,7 +653,7 @@ subtest 'ReverseProxy normalizes authority before TrustedHosts and url_for' => s
     my $routing = router(routes => [
         route('/external' => sub {
             my ($request) = @_;
-            return PAGI::Response->text(url_for($request, '/external'));
+            return PAGI::Response::Text->new(url_for($request, '/external'));
         }, name => 'external'),
     ]);
     my $proxy = PAGI::Middleware::ReverseProxy->new(
@@ -753,7 +753,7 @@ subtest 'real compiled frames follow the active Router placement' => sub {
                 logical_namespace => $frame->{logical_namespace},
                 captures => { %{$frame->{captures}} },
             };
-            return PAGI::Response->text('person');
+            return PAGI::Response::Text->new('person');
         }, name => 'show'),
     ]);
     my $app = router(routes => [

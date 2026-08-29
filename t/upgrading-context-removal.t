@@ -10,7 +10,9 @@ use PAGI::Endpoint::HTTP;
 use PAGI::Endpoint::SSE;
 use PAGI::Endpoint::WebSocket;
 use PAGI::Middleware::ErrorHandler;
-use PAGI::Response;
+use PAGI::Response qw(
+    html_response json_response redirect_response text_response
+);
 use PAGI::Stash qw(stash);
 use PAGI::Test::Client;
 
@@ -46,7 +48,7 @@ subtest 'declarative Router callbacks remain direct protocol objects' => sub {
     $router->get('/request/{name}' => sub {
         my ($request) = @_;
         $request_seen = $request;
-        return PAGI::Response->text('hello ' . $request->path_param('name'));
+        return text_response('hello ' . $request->path_param('name'));
     });
 
     $router->websocket('/socket' => async sub {
@@ -114,25 +116,25 @@ subtest 'native applications call the lexical raw send channel' => sub {
 
 subtest 'direct Response factories replace the four HTTP shortcuts' => sub {
     my $text = PAGI::Test::Client->new(
-        app => PAGI::Response->text('Created', status => 201),
+        app => text_response('Created', status => 201),
     )->get('/');
     is([$text->status, $text->text], [201, 'Created'],
         'text constructs the complete response directly');
 
     my $html = PAGI::Test::Client->new(
-        app => PAGI::Response->html('<h1>Created</h1>', status => 201),
+        app => html_response('<h1>Created</h1>', status => 201),
     )->get('/');
     is([$html->status, $html->text], [201, '<h1>Created</h1>'],
         'html constructs the complete response directly');
 
     my $json = PAGI::Test::Client->new(
-        app => PAGI::Response->json({ created => 1 }, status => 201),
+        app => json_response({ created => 1 }, status => 201),
     )->get('/');
     is([$json->status, $json->json], [201, { created => 1 }],
         'json constructs the complete response directly');
 
     my $redirect = PAGI::Test::Client->new(
-        app => PAGI::Response->redirect('/items'),
+        app => redirect_response('/items'),
     )->get('/');
     is([$redirect->status, $redirect->header('location')], [302, '/items'],
         'redirect constructs the complete response directly');
@@ -144,7 +146,7 @@ subtest 'ErrorHandler receives Request and preserves explicit status' => sub {
     my $app = PAGI::Middleware::ErrorHandler->new(
         handler => sub {
             ($request_seen, $error_seen) = @_;
-            return PAGI::Response->text('custom error', status => 409);
+            return text_response('custom error', status => 409);
         },
     )->wrap(sub { die $error });
 

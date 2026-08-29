@@ -6,7 +6,7 @@ use Future::AsyncAwait;
 use lib 'lib';
 use PAGI::Utils qw(handle_lifespan);
 use PAGI::App::Router;
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Test::Client;
 
 subtest 'handle_lifespan runs hooks in order' => sub {
@@ -130,7 +130,7 @@ subtest 'pod-style usage with Test::Client' => sub {
     my $router = PAGI::App::Router->new;
     $router->get('/' => sub {
         my ($request) = @_;
-        return PAGI::Response->text('ok');
+        return PAGI::Response::Text->new('ok');
     });
     my $router_app = $router->to_app;
 
@@ -160,7 +160,7 @@ subtest 'handle_lifespan in inner app with outer hooks' => sub {
     my $router = PAGI::App::Router->new;
     $router->get('/' => sub {
         my ($request) = @_;
-        return PAGI::Response->text('ok');
+        return PAGI::Response::Text->new('ok');
     });
     my $router_app = $router->to_app;
 

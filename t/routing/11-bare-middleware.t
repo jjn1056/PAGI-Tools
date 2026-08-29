@@ -8,7 +8,7 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib";
 use Scalar::Util qw(refaddr);
 use TestApps::FakeMiddleware;
-use PAGI::Response;
+use PAGI::Response::Text ();
 use PAGI::Routing qw(router route websocket sse mount middleware);
 
 {
@@ -75,7 +75,7 @@ subtest 'all four middleware entry forms normalize without protocol work' => sub
     my $child = router(routes => []);
     my @forms = (
         ['Router', sub { return router(routes => [], middleware => $_[0]) }],
-        ['HTTP route', sub { return route('/http' => sub { return PAGI::Response->text('ok') }, middleware => $_[0]) }],
+        ['HTTP route', sub { return route('/http' => sub { return PAGI::Response::Text->new('ok') }, middleware => $_[0]) }],
         ['WebSocket route', sub { return websocket('/socket' => async sub { await $_[0]->close }, middleware => $_[0]) }],
         ['SSE route', sub { return sse('/events' => async sub { await $_[0]->close }, middleware => $_[0]) }],
         ['routes-shorthand Mount', sub { return mount('/shorthand', routes => [], middleware => $_[0]) }],
@@ -118,7 +118,7 @@ subtest 'router, routes-shorthand Mount, and HTTP route factories keep nested or
             mount('/api', routes => [
                 route('/item' => sub {
                     push @runs, 'handler:http';
-                    return PAGI::Response->text('ok');
+                    return PAGI::Response::Text->new('ok');
                 }, middleware => [$route_factory]),
             ], middleware => [$mount_factory]),
         ],
@@ -150,7 +150,7 @@ subtest 'Router, Mount, and Route middleware remain native three-argument apps' 
             mount('/api', routes => [
                 route('/item' => sub {
                     push @handler_argument_counts, scalar @_;
-                    return PAGI::Response->text('ok');
+                    return PAGI::Response::Text->new('ok');
                 }, middleware => [$recording_factory->('Route')]),
             ], middleware => [$recording_factory->('Mount')]),
         ],
@@ -216,7 +216,7 @@ subtest 'bare router factory surrounds unanswered routing and mixed lists retain
         return sub { push @runs, 'explicit'; return $inner->(@_) };
     });
     my $app = router(
-        routes => [route('/present' => sub { return PAGI::Response->text('present') })],
+        routes => [route('/present' => sub { return PAGI::Response::Text->new('present') })],
         middleware => [$observer, $explicit],
     )->to_app;
 
@@ -230,7 +230,7 @@ subtest 'bare router factory surrounds unanswered routing and mixed lists retain
 
 subtest 'bare factory timing and failures remain compile-time behavior' => sub {
     my $builds = 0;
-    my $description = route('/fresh' => sub { return PAGI::Response->text('fresh') },
+    my $description = route('/fresh' => sub { return PAGI::Response::Text->new('fresh') },
         middleware => [sub { ++$builds; return $_[0] }]);
     my $one = $description->to_app;
     my $two = $description->to_app;
@@ -240,7 +240,7 @@ subtest 'bare factory timing and failures remain compile-time behavior' => sub {
     is($builds, 2, 'requests do not rerun the factory');
 
     like dies {
-        route('/bad' => sub { return PAGI::Response->text('bad') },
+        route('/bad' => sub { return PAGI::Response::Text->new('bad') },
             middleware => [sub { return 'not an app' }])->to_app
     }, qr/middleware factory must return PAGI app coderef/,
         'invalid bare factory result fails at to_app';
@@ -283,7 +283,7 @@ subtest 'mixed direct entry forms resolve only while compiling and retain order'
 
     my $description = route('/mixed' => sub {
         push @trace, 'handler';
-        return PAGI::Response->text('mixed');
+        return PAGI::Response::Text->new('mixed');
     }, middleware => [
         '^TestApps::FakeMiddleware',
         $factory,
@@ -314,7 +314,7 @@ subtest 'mixed direct entry forms resolve only while compiling and retain order'
     {
         local *TestApps::FakeMiddleware::wrap = sub { return 'not an app' };
         like dies {
-            route('/invalid-class' => sub { return PAGI::Response->text('bad') }, middleware => [
+            route('/invalid-class' => sub { return PAGI::Response::Text->new('bad') }, middleware => [
                 '^TestApps::FakeMiddleware',
             ])->to_app
         }, qr/middleware wrap must return PAGI app coderef/,

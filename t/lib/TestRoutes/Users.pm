@@ -2,7 +2,7 @@ package TestRoutes::Users;
 
 use strict;
 use warnings;
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::App::Router;
 
 sub router {
@@ -10,12 +10,12 @@ sub router {
 
     $r->get('/' => sub {
         my ($request) = @_;
-        return PAGI::Response->text('users_list');
+        return PAGI::Response::Text->new('users_list');
     })->name('list');
 
     $r->get('/{id}' => sub {
         my ($request) = @_;
-        return PAGI::Response->text('user_detail');
+        return PAGI::Response::Text->new('user_detail');
     })->name('show');
 
     return $r;

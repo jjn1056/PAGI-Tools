@@ -7,9 +7,9 @@ use PAGI::Compose qw(compose);
 use PAGI::CSRF qw(csrf);
 use PAGI::Endpoint::Router;
 use PAGI::Middleware::ErrorHandler;
-use PAGI::Pages;
+use PAGI::Pages qw(not_found_page);
 use PAGI::Request;
-use PAGI::Response;
+use PAGI::Response qw(json_response);
 use PAGI::Routing qw(route);
 use PAGI::Routing::URL qw(path_for url_for);
 use PAGI::Session qw(session);
@@ -51,13 +51,13 @@ subtest 'normal HTTP handlers receive Request and return Response values' => sub
         route('/things/{id}' => sub {
             my ($request) = @_;
             $seen_request = $request;
-            return PAGI::Response->json({
+            return json_response({
                 id   => $request->path_param('id'),
                 path => path_for($request, 'show', { id => 42 }),
                 url  => url_for($request, 'show', { id => 42 }),
             });
         }, name => 'show'),
-        route('/missing' => PAGI::Pages->not_found),
+        route('/missing' => \&not_found_page),
     ])->to_app;
 
     my $client = PAGI::Test::Client->new(app => $app);
@@ -71,7 +71,7 @@ subtest 'normal HTTP handlers receive Request and return Response values' => sub
         url  => 'http://testserver/things/42',
     }, 'URL exports use the selected request-local routing frame');
     is($client->get('/missing')->status, 404,
-        'a Pages endpoint also accepts the normal Request position');
+        'a Pages function accepts the normal Request handler position');
 
     ok(!PAGI::Request->can('url_for'),
         'reverse routing is not intrinsic Request input');

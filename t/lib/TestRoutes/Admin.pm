@@ -2,7 +2,7 @@ package TestRoutes::Admin;
 
 use strict;
 use warnings;
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::App::Router;
 
 sub to_app {
@@ -10,12 +10,12 @@ sub to_app {
 
     $r->get('/' => sub {
         my ($request) = @_;
-        return PAGI::Response->text('admin_dashboard');
+        return PAGI::Response::Text->new('admin_dashboard');
     });
 
     $r->get('/settings' => sub {
         my ($request) = @_;
-        return PAGI::Response->text('admin_settings');
+        return PAGI::Response::Text->new('admin_settings');
     });
 
     return $r->to_app;

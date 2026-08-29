@@ -10,7 +10,7 @@ use lib 'lib';
 
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
-use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(middleware mount route router);
 
 {
@@ -22,7 +22,7 @@ use PAGI::Routing qw(middleware mount route router);
         $r->http_default($self->app_as('not_found_app'));
         $r->mount('/child', routes => sub {
             my ($child) = @_;
-            $child->get('/' => sub { return PAGI::Response->text('endpoint child') });
+            $child->get('/' => sub { return PAGI::Response::Text->new('endpoint child') });
         })->name('child');
     }
 
@@ -144,7 +144,7 @@ subtest 'executable routing-composition migration matrix' => sub {
     my $functional_mount;
     ok(lives {
         $functional_mount = mount('/functional', routes => [
-            route('/' => sub { return PAGI::Response->text('functional child') }),
+            route('/' => sub { return PAGI::Response::Text->new('functional child') }),
         ]);
     }, 'functional Mount accepts a structural route list');
     my ($functional_events, $functional_error) = run_http(
@@ -174,7 +174,7 @@ subtest 'executable routing-composition migration matrix' => sub {
         $mutable->mount('/mutable', routes => sub {
             my ($child) = @_;
             ++$callback_calls;
-            $child->get('/' => sub { return PAGI::Response->text('mutable child') });
+            $child->get('/' => sub { return PAGI::Response::Text->new('mutable child') });
             return 'ignored';
         })->name('mutable');
     }, 'mutable Mount routes callback is accepted');
@@ -218,7 +218,7 @@ subtest 'Mount normalization and raw versus mounted application positions' => su
         route('/exact', raw => $capture->('raw')),
         mount('/prefix', app => $capture->('mount')),
         mount('/normalized', routes => [
-            route('/' => sub { return PAGI::Response->text('normalized') }),
+            route('/' => sub { return PAGI::Response::Text->new('normalized') }),
         ]),
     ])->to_app;
 
@@ -375,7 +375,7 @@ subtest 'Router http_default replaces application 404 middleware' => sub {
             await Future->wrap(response_app(404, 'custom missing')->(@_));
         },
         routes => [
-            route('/items' => sub { return PAGI::Response->text('items') },
+            route('/items' => sub { return PAGI::Response::Text->new('items') },
                 methods => 'GET'),
         ],
     );
@@ -408,7 +408,7 @@ subtest 'nested Router owns its outcomes and Mount app/routes are explicit' => s
             await Future->wrap(response_app(404, 'child missing')->(@_));
         },
         routes => [
-            route('/item' => sub { return PAGI::Response->text('child item') },
+            route('/item' => sub { return PAGI::Response::Text->new('child item') },
                 methods => 'GET'),
         ],
     );
@@ -420,11 +420,11 @@ subtest 'nested Router owns its outcomes and Mount app/routes are explicit' => s
         routes => [
             mount('/child', app => $child),
             mount('/inline', routes => [
-                route('/item' => sub { return PAGI::Response->text('inline item') }),
+                route('/item' => sub { return PAGI::Response::Text->new('inline item') }),
             ]),
             route('/child/missing' => sub {
                 ++$later_parent;
-                return PAGI::Response->text('later parent');
+                return PAGI::Response::Text->new('later parent');
             }),
         ],
     )->to_app;
