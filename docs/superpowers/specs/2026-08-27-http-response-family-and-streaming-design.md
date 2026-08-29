@@ -449,6 +449,7 @@ cookie($name, $value, %options)
 delete_cookie($name, %options)
 is_buffered()
 body()
+protocol_response_capability()
 ```
 
 The `*_try` methods are non-overwriting chainers and return the Response:
@@ -473,6 +474,25 @@ Stream. `body` is a read-only encoded-byte accessor for buffered responses. It
 croaks on File and Stream rather than returning a misleading partial value.
 Body mutation happens only through construction of the appropriate response
 class.
+
+`protocol_response_capability` is an inheritable Response-subclass contract.
+The base class returns the versioned token `body-events-v1`, promising that
+`respond` emits only one `http.response.start` followed by one or more
+`http.response.body` events containing ordinary byte bodies. The promise
+excludes trailers and opaque `file`/`fh` bodies, but does not imply buffering:
+Stream inherits the same capability while retaining incremental emission and
+send-Future backpressure. File returns `undef`. Its opt-out follows the PAGI
+Www denial-response contract, which permits only the body form and explicitly
+does not use `file` or `fh` for denial responses.
+
+A subclass that preserves its parent's delivery vocabulary inherits the
+capability naturally. A subclass that overrides delivery to introduce an
+unsupported event or body form must override the hook and return `undef` (or a
+future capability token defined by a later specification). Advertising
+`body-events-v1` while emitting another form is a broken subclass contract;
+the adapter detects and fails the invalid event but cannot roll back a start
+event already accepted by the server. `is_buffered` remains the independent
+memory-strategy predicate.
 
 `to_app` captures a stable response snapshot when called. Later mutation of
 the original Response does not mutate the compiled application. Calling
@@ -1305,11 +1325,14 @@ await $sse->decline(
 );
 ```
 
-`deny` and `decline` require a `PAGI::Response` instance. They validate that the
-response can be represented using byte body events before sending anything.
-Buffered, Empty, Redirect, and Stream responses are eligible. File responses
-are rejected before response start because the PAGI denial protocols permit
-`body` chunks but not `file` or `fh` events.
+`deny` and `decline` require a `PAGI::Response` instance whose
+`protocol_response_capability` is `body-events-v1`. The capability validates
+the response's event vocabulary before sending anything without predicting or
+buffering its body. Buffered, Empty, Redirect, and Stream responses are
+eligible, including subclasses that preserve the inherited contract. File
+responses are rejected before response start because the PAGI Www denial-body
+definitions say that only the body form applies and `file`/`fh` are not used
+for denial responses.
 
 The live protocol object creates this request-local emission scope:
 
@@ -1339,7 +1362,11 @@ http.response.body   -> websocket.http.response.body  | sse.http.response.body
 ```
 
 Only those event types are accepted. A response attempting trailers, file,
-fh, or another HTTP event fails before an invalid protocol event is emitted.
+fh, or another HTTP event fails before that invalid event is emitted. No
+adapter buffers an arbitrary Response to discover its vocabulary. If a broken
+custom subclass violates an advertised capability after start was accepted,
+the Future fails and protocol cleanup runs, but the accepted start cannot be
+unsent.
 
 ### 16.2 Protocol state remains authoritative
 
@@ -1352,8 +1379,27 @@ SSE decline is core and sends the adapted response. It remains valid only
 before `sse.start`. Pending keepalive state is discarded and no live stream
 event follows the terminal decline.
 
-Both methods await every adapted send Future, preserve multi-chunk `more`
-flags, mark the protocol object closed exactly once, and propagate failures.
+Both methods await every adapted send Future and preserve multi-chunk `more`
+flags. The successful resolution of the mapped start send is the commitment
+boundary: under PAGI 0.002006 it means the server validated and consumed the
+event and accepted it into outbound processing (or discarded it after the
+connection ended). It does not mean the client received the event. Here,
+"committed" means only that the denial owns the response slot under the
+protocol's first-send-wins rule.
+
+When start commits, the WebSocket or SSE object immediately becomes unusable
+for accept/start or a second denial/decline. SSE then discards pending
+keepalive state. Successful completion or any later failure leaves the
+protocol closed and runs SSE close cleanup exactly once. Failure before start
+commit preserves the original connecting/pending state and pending keepalive.
+
+The mapping send inherits PAGI's send-settlement contract. In particular, a
+mapped body send parked by backpressure when disconnect occurs resolves
+successfully after the connection-state transition; it does not produce a
+disconnect-derived failure. Post-start cleanup therefore follows the
+WebSocket/SSE disconnect event or connection close watcher rather than
+inferring disconnect from send-Future failure. Genuine validation and resource
+send failures still propagate normally.
 
 ### 16.3 Why SSE does not subclass Stream
 
