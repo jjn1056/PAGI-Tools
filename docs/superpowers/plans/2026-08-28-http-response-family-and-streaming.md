@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-27-http-response-family-and-streaming-design.md`, originally approved at commit `498d5d0c0ecaffdd4e9a149bbf95d01e10913eea` and amended on 2026-08-28 by approved deviations `DEV-001` and `DEV-002` for PAGI 0.5 settlement.
 
+**Execution-order amendment:** After reviewed Task 5, the user approved replacing the original broad Tasks 8–10 with ownership-cone Tasks 8–14. A task must make every owned test green, may defer only inspected failures caused by a named later half-migration, and must stop for design review when progress requires compatibility shims, duplicated policy, compensating state, test bypasses, or successive special cases. Clean final-API migration of additional direct callers is scope accounting, not by itself a design failure.
+
 ## Global Constraints
 
 - The approved contract is the specification above as amended by `DEV-001` and `DEV-002`. If implementation evidence conflicts with it, stop, record a deviation, and obtain the user's decision before dependent work continues.
@@ -30,10 +32,12 @@
 - Route remains an exact method-aware leaf; Mount remains prefix/subtree composition. Instantiated `to_app` objects are accepted as Route targets, while coderef apps still require `raw`.
 - Pages owns negotiated policy and presentation hooks only. It returns concrete Responses and is neither middleware nor a native arity-overloaded application.
 - WebSocket/SSE own protocol state and event-prefix adaptation. A File response is rejected before denial/decline response start.
-- Use `apply_patch` for edits and exact deletions. Stage only the current task's named files.
+- Use `apply_patch` for edits and exact deletions. Stage only files inside the current task's behavioral ownership cone. A newly discovered direct caller or fixture may join that cone when it migrates cleanly to the already-approved final API and is recorded in the ledger; a compatibility shim, duplicated policy, or unrelated behavior change requires a deviation ruling before work continues.
 - Use strict TDD per task: write or migrate focused assertions, run and preserve the semantic RED, implement the minimum contract, then run the named GREEN gate.
+- Every test in the current task's behavioral ownership cone must pass. A failing test owned by a later task may remain red only after inspection identifies the exact half-migrated API and records the later owning task; any unrelated or ambiguous failure stops the current task for investigation.
+- File-count growth is not itself a design failure. Stop when implementation starts accumulating compatibility adapters, duplicated policy, compensating state flags, test-only bypasses, or successive special cases needed merely to force the code through a gate; reassess the design rather than normalizing the workaround.
 - Every implementation task ends with one focused commit and independent specification/code-quality review before a dependent task begins.
-- Run the repository-wide `prove -lr t` suite only in Task 12. Do not run `dzil test`; run exactly one `dzil build` after the final suite.
+- Run the repository-wide `prove -lr t` suite only in Task 16. Do not run `dzil test`; run exactly one `dzil build` after the final suite.
 - Functional test commands use project Perl:
 
   ```bash
@@ -67,18 +71,22 @@ Starting HEAD: record the exact 40-character execution SHA
 
 | Task | Status | Implementation SHA | Review/fix SHAs | Focused verification | Full-suite/build evidence | Verdict |
 |---|---|---|---|---|---|---|
-| 1 | pending | — | — | — | deferred to Task 12 | — |
-| 2 | pending | — | — | — | deferred to Task 12 | — |
-| 3 | pending | — | — | — | deferred to Task 12 | — |
-| 4 | pending | — | — | — | deferred to Task 12 | — |
-| 5 | pending | — | — | — | deferred to Task 12 | — |
-| 6 | pending | — | — | — | deferred to Task 12 | — |
-| 7 | pending | — | — | — | deferred to Task 12 | — |
-| 8 | pending | — | — | — | deferred to Task 12 | — |
-| 9 | pending | — | — | — | deferred to Task 12 | — |
-| 10 | pending | — | — | — | deferred to Task 12 | — |
-| 11 | pending | — | — | — | deferred to Task 12 | — |
-| 12 | pending | — | — | — | final gate | — |
+| 1 | pending | — | — | — | deferred to Task 16 | — |
+| 2 | pending | — | — | — | deferred to Task 16 | — |
+| 3 | pending | — | — | — | deferred to Task 16 | — |
+| 4 | pending | — | — | — | deferred to Task 16 | — |
+| 5 | pending | — | — | — | deferred to Task 16 | — |
+| 6 | pending | — | — | — | deferred to Task 16 | — |
+| 7 | pending | — | — | — | deferred to Task 16 | — |
+| 8 | pending | — | — | — | deferred to Task 16 | — |
+| 9 | pending | — | — | — | deferred to Task 16 | — |
+| 10 | pending | — | — | — | deferred to Task 16 | — |
+| 11 | pending | — | — | — | deferred to Task 16 | — |
+| 12 | pending | — | — | — | deferred to Task 16 | — |
+| 13 | pending | — | — | — | deferred to Task 16 | — |
+| 14 | pending | — | — | — | deferred to Task 16 | — |
+| 15 | pending | — | — | — | deferred to Task 16 | — |
+| 16 | pending | — | — | — | final gate | — |
 
 ## Deviations
 
@@ -86,7 +94,7 @@ Starting HEAD: record the exact 40-character execution SHA
 |---|---|---|---|---|---|
 ```
 
-Write the starting SHA plus one newline to `starting-head`. Create `public-surface-inventory.md` beside the ledger. Inventory every public Response, Pages, File, WebSocket, SSE, Endpoint, Routing, ErrorHandler, and response-building middleware method/export before production edits, with columns `owner`, `current API`, `classification`, `replacement/retention task`, and `final evidence`. The only permitted classifications are `retained`, `replaced by approved design`, and `deferred by approved design`; zero rows may remain unclassified at Task 12.
+Write the starting SHA plus one newline to `starting-head`. Create `public-surface-inventory.md` beside the ledger. Inventory every public Response, Pages, File, WebSocket, SSE, Endpoint, Routing, ErrorHandler, and response-building middleware method/export before production edits, with columns `owner`, `current API`, `classification`, `replacement/retention task`, and `final evidence`. The only permitted classifications are `retained`, `replaced by approved design`, and `deferred by approved design`; zero rows may remain unclassified at Task 16.
 
 A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting decision` status, exact evidence, affected tasks, and the user's explicit ruling before dependent work proceeds. Ordinary corrections that preserve the approved contract are not deviations. Update the ledger row in the same task turn as each commit/review with actual Files/Tests counts, elapsed time, syntax/POD evidence, commit SHA, and reviewer verdict.
 
@@ -108,7 +116,7 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 | Specification area | Owning tasks |
 | --- | --- |
-| §§1–7 decisions, goals, non-goals, governing designs | Global constraints, Tasks 1 and 12 inventory/audit |
+| §§1–7 decisions, goals, non-goals, governing designs | Global constraints, Task 1 inventory, and Task 16 audit |
 | §8 base hierarchy and subclass responsibilities | Tasks 1, 2, 4, and 5 |
 | §9 constructors, options, logical file windows, and exports | Tasks 1, 2, 4, and 5 |
 | §10 full-triplet emission, `to_app`, Route/Mount ownership | Tasks 1 and 3 |
@@ -117,12 +125,12 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 | §14 File versus App::File lifecycle | Task 5 |
 | §15 Pages policy/functions/subclassing | Task 6 |
 | §16 WebSocket denial and SSE decline | Task 7 |
-| §§17–19 before/after forms and Apple application | Tasks 10 and 11 |
-| §§20–21 validation, failures, middleware, CORS, and HEAD | Tasks 1–9 with final audit in Task 12 |
-| §23 consumer/migration inventory | Tasks 1, 8, 9, 10, and 11 |
-| §24 required tests | Corresponding Tasks 1–11; exhaustive evidence in Task 12 |
-| §25 documentation and upgrade requirements | Task 11 |
-| §26 success criteria and distribution readiness | Task 12 |
+| §§17–19 before/after forms and Apple application | Tasks 14 and 15 |
+| §§20–21 validation, failures, middleware, CORS, and HEAD | Tasks 1–13 with final audit in Task 16 |
+| §23 consumer/migration inventory | Tasks 1 and 8–15 |
+| §24 required tests | Corresponding Tasks 1–15; exhaustive evidence in Task 16 |
+| §25 documentation and upgrade requirements | Task 15 |
+| §26 success criteria and distribution readiness | Task 16 |
 
 ---
 
@@ -423,7 +431,7 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 ---
 
-### Task 6: Reduce Pages to Negotiated Response Policy
+### Task 6: Finish Pages as Negotiated Response Policy
 
 **Files:**
 
@@ -434,39 +442,23 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 - Modify: `t/pages/03-invocation-composition.t`
 - Modify: `t/pages/04-status-fields-cache.t`
 - Modify: `t/pages/05-redirects.t`
+- Modify: `examples/pages/app.pl`
+- Modify: `examples/pages/README.md`
 - Modify: `t/integration-pages-example.t`
 
 **Interfaces:**
 
-- Pages class methods require an explicit Request/HTTP-capable metadata source and return one concrete Response immediately.
-- Produces ordinary opt-in handlers/functions `welcome_page`, `status_page`, `redirect_page`, and every catalog-derived `*_page`; `:common` and `:all` are exact, with no default exports.
-- Removes no-source endpoint factories and three-argument native invocation.
+- Class methods require one explicit Request or HTTP-capable metadata source and return one concrete Response immediately.
+- Produces ordinary Request handlers `welcome_page`, `status_page`, `redirect_page`, and each catalog-derived `*_page`; `:common` and `:all` are exact and nothing exports by default.
+- Removes no-source endpoint factories and three-argument native invocation. Native placement uses `request_app` explicitly.
 
-- [ ] **Step 1: Rewrite invocation tests to the single-source contract.** Assert `PAGI::Pages->not_found($request)` and `not_found_page($request)` return the same concrete class/bytes/metadata. No-source class/function calls and three-argument invocation croak. A page function works directly as an ordinary Route handler and fails if placed directly at a native app option without `request_app`.
-
-- [ ] **Step 2: Pin representation identity and negotiation.** For HTML, text, JSON, problem JSON, redirect, and empty outcomes, assert exact Response subclass, status, content type, body bytes, Vary/Cache-Control, and repeated Accept combination. Preserve total-failure/default behavior and every catalog status.
-
-- [ ] **Step 3: Preserve Pages policy tests.** Retain mandatory 401/405/407/426 fields, hostile copy encoding, RFC 9457 members, redirect query/fragment safety, favicon hooks, request IDs, dates/retry fields, cache policy, and configured subclass concurrency. Hooks remain synchronous values; Future returns croak.
-
-- [ ] **Step 4: Pin protocol metadata-only sources.** WebSocket/SSE sources may select a representation without changing protocol state. Unknown, lifespan, malformed, or non-HTTP-capable sources fail. Pages does not emit events itself.
-
-- [ ] **Step 5: Run RED.** Run:
-
-  ```bash
-  prove -lv t/pages/01-catalog.t t/pages/02-rendering-negotiation.t \
-    t/pages/03-invocation-composition.t t/pages/04-status-fields-cache.t \
-    t/pages/05-redirects.t t/integration-pages-example.t
-  ```
-
-  Expected: generic Response identity, endpoint arity behavior, duplicate rendering, and direct emission assumptions fail.
-
-- [ ] **Step 6: Replace Pages transport work with concrete constructors.** Keep descriptor normalization, negotiation, safe detail, catalog, headers, favicon, and presentation hooks. HTML/text hooks feed Text/HTML; Perl structures feed JSON/Problem; redirects/empty use their semantic classes. Delete `_endpoint`, arity inspection, raw app emission, and duplicate UTF-8/JSON/Content-Length code.
-
-- [ ] **Step 7: Add exports without caller magic.** Each exported function accepts the same explicit source/options as its class method. `:common` and `:all` contain exactly the spec sets. Configured subclass instances remain supported through methods, not first-party factory dynamic dispatch.
-
-- [ ] **Step 8: Run GREEN and gates.** Run Step 5, then ErrorHandler contract tests as characterization only; do not migrate ErrorHandler until Task 8. Compile/podcheck Pages/Catalog and run `git diff --check`.
-
-- [ ] **Step 9: Commit, report, review, and update the ledger.** Stage exactly the eight files and commit `refactor: make Pages return concrete responses`. Obtain independent policy/negotiation review before Task 8.
+- [ ] **Step 1: Rewrite the Pages invocation tests before production code.** Replace helper emission with `respond($scope,$receive,$send)`. Assert method/function class identity and bytes, explicit-source requirements, direct Route handler use, native-app rejection without `request_app`, and configured subclass behavior.
+- [ ] **Step 2: Pin all representation and policy behavior.** Cover HTML, text, JSON, problem JSON, Redirect, Empty, every catalog status, repeated Accept, Vary, mandatory 401/405/407/426 fields, hostile text, cache fields, retry dates, redirect query/fragment safety, favicon hooks, request IDs, and Future-returning hook rejection.
+- [ ] **Step 3: Rewrite the Pages example as a final consumer.** Route ordinary page functions directly; wrap any native raw-app placement with `request_app`; emit explicitly only in a real three-argument raw closure. Synchronize its README source.
+- [ ] **Step 4: Run semantic RED.** Run `prove -lv t/pages/01-catalog.t t/pages/02-rendering-negotiation.t t/pages/03-invocation-composition.t t/pages/04-status-fields-cache.t t/pages/05-redirects.t t/integration-pages-example.t`. Expected failures are old arity/emission/export assumptions; classify any ErrorHandler or other later-owner failure rather than migrating it here.
+- [ ] **Step 5: Complete the final Pages implementation.** Retain descriptor normalization, negotiation, catalog, headers, safe copy, favicon, and synchronous presentation hooks. Use the concrete classes already introduced by Tasks 1–2; delete `_endpoint`, arity inspection, raw app emission, and duplicate encoding/Content-Length work.
+- [ ] **Step 6: Run GREEN and ownership checks.** Rerun Step 4, compile/podcheck Pages and Catalog, verify the example compiles with its declared Perl, and run `git diff --check`. Every Pages/example failure must be green; unrelated later-owner failures are recorded with exact owning task and are not fixed here.
+- [ ] **Step 7: Commit and review.** Stage only the Pages ownership cone and commit `refactor: make Pages return concrete responses`. Obtain independent negotiation/policy review before Tasks 9, 11, 12, and 14.
 
 ---
 
@@ -485,231 +477,191 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 **Interfaces:**
 
-- Produces `await $ws->deny($response)` and `await $sse->decline($response)` only.
-- Eligible Response events are adapted from HTTP start/body to the protocol prefix; File/fh/trailer/unknown events fail before protocol response start.
-- Live WebSocket/SSE send/backpressure/reconnect semantics remain unchanged.
+- Produces only `await $ws->deny($response)` and `await $sse->decline($response)`.
+- Adapts eligible HTTP start/body events to protocol denial/decline events; rejects File/fh/trailer/unknown events before protocol response start.
+- Does not alter live protocol send, backpressure, keepalive, close, or reconnection behavior.
 
-- [ ] **Step 1: Write the response matrix first.** Cover base bytes, Text/HTML/JSON/Problem, Redirect, Empty, and multi-chunk Stream responses. Assert exact start/body mapping, `more` preservation, every send Future awaited, and the original Response remains reusable.
-
-- [ ] **Step 2: Pin emission-scope identity rules.** Capture the scope seen by Response and assert a shallow top-level clone: only `type => http` and `method => GET` are replaced; all other scalar values and nested references, including state/connection/extensions, are preserved; original protocol scope is unchanged.
-
-- [ ] **Step 3: Pin invalid/state paths.** Reject File before any event, reject wrong/undef/non-Response arguments, WebSocket denial after accept, and SSE decline after start. Without WebSocket denial extension, preserve the policy-close fallback and ignore the custom body. SSE clears deferred keepalive, closes once, and sends no live event after decline.
-
-- [ ] **Step 4: Run RED.** Run:
-
-  ```bash
-  prove -lv t/websocket/denial-response.t t/websocket/deny-close-code.t \
-    t/sse/13-decline.t t/endpoint/10-sse-decline.t \
-    t/integration/sse-decline-end-to-end.t
-  ```
-
-  Expected: old `%opts` APIs, missing Response adapters, and File/Stream behavior fail.
-
-- [ ] **Step 5: Implement one private event adapter per protocol or one narrow internal helper.** Build the exact shallow HTTP scope, invoke the Response through full-triplet emission with a validating send wrapper, map only start/body events, and preserve failures. Preflight `is_buffered`/class capability so File cannot emit start before rejection; Stream remains allowed.
-
-- [ ] **Step 6: Remove duplicate mini-response construction.** Delete status/header/body option parsing from `deny`/`decline`; retain state machines, extension/fallback, keepalive cleanup, close transitions, and existing live send methods unchanged.
-
-- [ ] **Step 7: Run GREEN plus live protocol gates.** Run Step 4 and focused send/lifecycle/backpressure suites:
-
-  ```bash
-  prove -lv t/websocket/03-lifecycle.t t/websocket/04-send.t \
-    t/sse/03-start.t t/sse/04-send.t t/sse/06-lifecycle.t \
-    t/sse/14-keepalive-deferred-arm.t
-  ```
-
-  Compile/podcheck both modules and run `git diff --check`.
-
-- [ ] **Step 8: Commit, report, review, and update the ledger.** Stage exactly the eight files and commit `refactor: share Responses with protocol denials`. Obtain independent protocol-state review before Tasks 9–12.
+- [ ] **Step 1: Write the response matrix first.** Cover base, Text, HTML, JSON, Problem, Redirect, Empty, and multi-chunk Stream; exact event mapping and `more`; send settlement; response reuse; and shallow HTTP emission scope identity.
+- [ ] **Step 2: Pin invalid and state transitions.** Cover File rejection, invalid arguments, denial after WebSocket accept, decline after SSE start, policy-close fallback without denial extension, deferred keepalive cancellation, and exactly-once close.
+- [ ] **Step 3: Run RED.** Run `prove -lv t/websocket/denial-response.t t/websocket/deny-close-code.t t/sse/13-decline.t t/endpoint/10-sse-decline.t t/integration/sse-decline-end-to-end.t`. If only the server-backed test cannot bind in the sandbox, record that exact environmental failure and rerun only that test with approved host access; do not change code for it.
+- [ ] **Step 4: Implement the narrow adapters.** Clone the top-level scope, replace only type/method, invoke full-triplet Response emission through a validating send wrapper, map only start/body events, and preserve failures. Remove old `%opts` mini-response construction without adding a generalized adapter hierarchy.
+- [ ] **Step 5: Run GREEN plus live-protocol gates.** Rerun Step 3 and `prove -lv t/websocket/03-lifecycle.t t/websocket/04-send.t t/sse/03-start.t t/sse/04-send.t t/sse/06-lifecycle.t t/sse/14-keepalive-deferred-arm.t`; compile/podcheck touched modules and run `git diff --check`.
+- [ ] **Step 6: Commit and review.** Commit `refactor: share Responses with protocol denials` and obtain independent protocol-state review.
 
 ---
 
-### Task 8: Migrate Endpoint, ErrorHandler, Compose, and Router Emission Boundaries
+### Task 8: Migrate Endpoint HTTP and Router Boundaries
 
 **Files:**
 
 - Modify: `lib/PAGI/Endpoint/HTTP.pm`
 - Modify: `lib/PAGI/Endpoint/Router.pm`
+- Modify: `t/endpoint/01-http-constructor.t`
+- Modify: `t/endpoint/02-http-dispatch.t`
+- Modify: `t/endpoint/03-http-to-app.t`
+- Modify: `t/endpoint/04-http-options.t`
+- Modify: `t/endpoint/10-integration.t`
+- Modify: `t/endpoint/11-return-contract.t`
+- Modify: `t/endpoint/12-route-middleware.t`
+- Modify: `t/endpoint/13-router-frontends.t`
+- Modify: `t/endpoint-router.t`
+
+**Interfaces:**
+
+- Endpoint handlers return immediate or Future-backed concrete Responses; `dispatch` never emits.
+- Native `to_app` boundaries normalize with `Future->wrap`, validate `PAGI::Response`, and await `respond($scope,$receive,$send)` once.
+- String return support, middleware, automatic HEAD/OPTIONS/405, frontend identity, and nested Endpoint routing retain their documented meaning using final Response constructors.
+
+- [ ] **Step 1: Migrate the complete Endpoint HTTP test cone first.** Replace removed factory spellings in test handlers with concrete classes/exports; assert synchronous/Future/string returns, invalid diagnostics, automatic methods, middleware, nested Router, URL placement, and one full-triplet emission.
+- [ ] **Step 2: Run RED.** Run `prove -lv t/endpoint/01-http-constructor.t t/endpoint/02-http-dispatch.t t/endpoint/03-http-to-app.t t/endpoint/04-http-options.t t/endpoint/10-integration.t t/endpoint/11-return-contract.t t/endpoint/12-route-middleware.t t/endpoint/13-router-frontends.t t/endpoint-router.t`. Expected failures are the old result adapter or boundary emission only.
+- [ ] **Step 3: Implement the Endpoint migration.** Replace mutable automatic OPTIONS/string response construction with concrete Response values, keep dispatch value-only, and make both HTTP and Router native boundaries use the full triplet. Do not add handler arity inference or a compatibility method.
+- [ ] **Step 4: Run GREEN and inspect adjacent protocol tests.** Rerun Step 2; run Endpoint WebSocket/SSE constructor/lifecycle tests as characterization and assign any protocol-only failure to Task 7 rather than changing it here. Compile/podcheck both modules and run `git diff --check`.
+- [ ] **Step 5: Commit and review.** Commit `refactor: emit endpoint response values` and obtain independent Endpoint contract review.
+
+---
+
+### Task 9: Migrate ErrorHandler, Compose Guard, and Router Stock Outcomes
+
+**Files:**
+
 - Modify: `lib/PAGI/Compose/ResponseGuard.pm`
 - Modify: `lib/PAGI/Middleware/ErrorHandler.pm`
 - Modify: `lib/PAGI/Routing/Compiler.pm`
-- Modify: `t/endpoint/02-http-dispatch.t`
-- Modify: `t/endpoint/03-http-to-app.t`
-- Modify: `t/endpoint/11-return-contract.t`
-- Modify: `t/endpoint/13-router-frontends.t`
+- Modify: `t/compose/01-description.t`
+- Modify: `t/compose/02-dispatch.t`
+- Modify: `t/compose/03-lifespan.t`
+- Modify: `t/compose/04-middleware.t`
+- Modify: `t/compose/05-head-concurrency.t`
+- Modify: `t/compose/06-failsafes.t`
 - Modify: `t/compose/07-response-guard.t`
 - Modify: `t/middleware/03-error-handler.t`
 - Modify: `t/middleware/error-handler-contract.t`
+- Modify: `t/routing/16-http-outcomes.t`
 
 **Interfaces:**
 
-- Endpoint/Router handlers continue returning immediate/Future Responses; only native app boundaries emit using the full triplet.
-- ErrorHandler passes a direct Request plus error to custom handlers, accepts immediate/Future concrete Responses, applies safe status seeding, and emits full-triplet without replacing the original error on renderer failure.
-- Compose ResponseGuard continues detecting actual event completion; it does not inspect mutable Response state.
+- ErrorHandler custom handlers receive `(PAGI::Request, $error)` and return immediate/Future concrete Responses.
+- ResponseGuard observes actual events and never inspects Response mutation state.
+- Router stock 404/405 outcomes use Pages/concrete Responses with authoritative Allow and one full-triplet send.
 
-- [ ] **Step 1: Rewrite boundary tests before code.** Assert Endpoint `dispatch` returns but does not emit a concrete Response; `to_app` emits once with `respond($scope,$receive,$send)`. Assert immediate/Future returns, invalid return diagnostics, automatic HEAD/OPTIONS/405, route middleware, and frontend identity remain unchanged.
-
-- [ ] **Step 2: Pin ErrorHandler ordering/failure behavior.** Cover safe 500 and claimed status, custom `(Request,error) -> Response`, Pages adapter use, invalid/out-of-range/throwing status claims, async reporting, handler failure, send failure, before-start replacement, after-start report-and-rethrow, last-resort bytes, and exception identity. Ensure a custom handler receives two arguments and a one-source Pages factory is wrapped explicitly rather than passed directly.
-
-- [ ] **Step 3: Pin guard and Router stock responses.** A normal completed Response is accepted, silent completion remains an incomplete-response failure, HEAD completion remains valid, and one Router stock 404/405 uses Pages/concrete Responses with authoritative `Allow` and no second send.
-
-- [ ] **Step 4: Run RED.** Run:
-
-  ```bash
-  prove -lv t/endpoint/02-http-dispatch.t t/endpoint/03-http-to-app.t \
-    t/endpoint/11-return-contract.t t/endpoint/13-router-frontends.t \
-    t/compose/07-response-guard.t t/middleware/03-error-handler.t \
-    t/middleware/error-handler-contract.t t/routing/16-http-outcomes.t
-  ```
-
-  Expected: one-argument `respond`, removed generic finishers, and old Pages callback adaptation fail.
-
-- [ ] **Step 5: Migrate each native boundary.** Normalize immediate values with `Future->wrap`, validate `PAGI::Response`, and await `$response->respond($scope,$receive,$send)`. Do not let dispatch methods emit. Preserve ResponseGuard's event observer and ErrorHandler's outermost production-safe environment handling.
-
-- [ ] **Step 6: Run GREEN and adjacent gates.** Run Step 4 plus `t/compose/05-head-concurrency.t`, `t/compose/06-failsafes.t`, and `t/endpoint/10-integration.t`. Compile/podcheck all five modules and run `git diff --check`.
-
-- [ ] **Step 7: Commit, report, review, and update the ledger.** Stage exactly the twelve files and commit `refactor: emit response values at native boundaries`. Obtain independent error/failure-path review before Task 9.
+- [ ] **Step 1: Rewrite the full Compose/ErrorHandler test cone first.** Use final Response factories in route fixtures. Pin safe status seeding, reporting order, handler/render/send failures, before-start replacement, after-start report-and-rethrow, last-resort bytes, environment resolution, response completion, HEAD, concurrency, and silent-app failure.
+- [ ] **Step 2: Run RED.** Run `prove -lv t/compose/01-description.t t/compose/02-dispatch.t t/compose/03-lifespan.t t/compose/04-middleware.t t/compose/05-head-concurrency.t t/compose/06-failsafes.t t/compose/07-response-guard.t t/middleware/03-error-handler.t t/middleware/error-handler-contract.t t/routing/16-http-outcomes.t`. Expected failures are old Pages callbacks, mutable Response use, or one-argument emission.
+- [ ] **Step 3: Migrate native failure boundaries cleanly.** Use explicit Pages calls or `request_app`, concrete Responses, `Future->wrap`, and full-triplet emission. Preserve original exception identity and production-safe last-resort behavior. Do not buffer ordinary downstream responses or teach ResponseGuard about Response objects.
+- [ ] **Step 4: Run GREEN and failure-path probes.** Rerun Step 2, add focused start/body send-failure probes if absent, compile/podcheck the three modules, and run `git diff --check`.
+- [ ] **Step 5: Commit and review.** Commit `refactor: emit concrete failsafe responses` and obtain independent error/failure-path review.
 
 ---
 
-### Task 9: Migrate Remaining First-Party Apps, Middleware, and Test Utilities
+### Task 10: Migrate First-Party Apps and Routers
 
 **Files:**
 
-- Modify: `lib/PAGI/App/Cascade.pm`
-- Modify: `lib/PAGI/App/Directory.pm`
-- Modify: `lib/PAGI/App/Healthcheck.pm`
-- Modify: `lib/PAGI/App/Loader.pm`
-- Modify: `lib/PAGI/App/Proxy.pm`
-- Modify: `lib/PAGI/App/Router.pm`
-- Modify: `lib/PAGI/App/Throttle.pm`
-- Modify: `lib/PAGI/App/URLMap.pm`
-- Modify: `lib/PAGI/App/WrapCGI.pm`
-- Modify: `lib/PAGI/App/WrapPSGI.pm`
-- Modify: `lib/PAGI/Middleware/Auth/Basic.pm`
-- Modify: `lib/PAGI/Middleware/Auth/Bearer.pm`
-- Modify: `lib/PAGI/Middleware/CORS.pm`
-- Modify: `lib/PAGI/Middleware/CSRF.pm`
-- Modify: `lib/PAGI/Middleware/ContentNegotiation.pm`
-- Modify: `lib/PAGI/Middleware/FormBody.pm`
-- Modify: `lib/PAGI/Middleware/Healthcheck.pm`
-- Modify: `lib/PAGI/Middleware/HTTPSRedirect.pm`
-- Modify: `lib/PAGI/Middleware/JSONBody.pm`
-- Modify: `lib/PAGI/Middleware/Maintenance.pm`
-- Modify: `lib/PAGI/Middleware/RateLimit.pm`
-- Modify: `lib/PAGI/Middleware/ReverseProxy.pm`
-- Modify: `lib/PAGI/Middleware/Rewrite.pm`
-- Modify: `lib/PAGI/Middleware/Static.pm`
-- Modify: `lib/PAGI/Middleware/TrustedHosts.pm`
+- Inspect and classify, modifying every `runtime response owner` or `POD-only` file: `lib/PAGI/App/{Cascade,Directory,Healthcheck,Loader,Proxy,Router,Throttle,URLMap,WrapCGI,WrapPSGI}.pm`
+- Modify: `t/app/02-routing.t`, `t/app/03-router.t`, `t/app/04-utilities.t`, `t/app/07-routing-composition.t`
+- Modify: `t/app-proxy.t`, `t/app-router.t`, `t/app-router-mount-routes.t`, `t/app-wrapcgi-env.t`
+- Modify: `t/app-router/01-builder-core.t`, `t/app-router/02-declaration-package.t`, `t/app-router/03-composition-order.t`, `t/app-router/04-snapshots-cycles.t`, `t/app-router/05-middleware-order.t`, `t/app-router/06-public-api.t`, `t/app-router/07-public-reverse-metadata.t`
+- Modify: `t/router-middleware.t`, `t/router-named-routes.t`
+
+**Interfaces:**
+
+- Apps that own an HTTP outcome use concrete Responses and full-triplet emission; event-forwarding apps remain event applications.
+- App::Router retains declaration order, middleware, Allow, mount ownership, and named-route behavior without growing a second response abstraction.
+
+- [ ] **Step 1: Classify each production app.** Record `runtime response owner`, `event-forwarding only`, `POD-only`, or `inspected/no change`; do not stage inspected files. Inventory every fixture used by the named tests before editing.
+- [ ] **Step 2: Migrate tests and run RED.** Replace removed factory spellings in the complete app/router cone, then run all named tests in one `prove -lv` command. Expected runtime failures must map to a classified app; an unrelated failure stops the task.
+- [ ] **Step 3: Migrate only outcome owners.** Use final Response constructors and full-triplet emission where the app itself owns the response. Preserve proxy/CGI/PSGI event passthrough and App::Router matching/order semantics. Do not add a common app-response adapter merely to reduce repetition.
+- [ ] **Step 4: Run GREEN and live search.** Rerun the exact Step 2 gate, compile/podcheck changed apps, search `lib/PAGI/App` and its test cone for removed factories/emission, classify remaining removal assertions, and run `git diff --check`.
+- [ ] **Step 5: Commit and review.** Commit `refactor: migrate first-party app responses` and obtain independent app/router review.
+
+---
+
+### Task 11: Migrate Policy, Authentication, and Body Middleware Responses
+
+**Files:**
+
+- Inspect and classify, modifying every file with an owned rejection or obsolete POD: `lib/PAGI/Middleware/Auth/Basic.pm`, `Auth/Bearer.pm`, `CSRF.pm`, `ContentNegotiation.pm`, `FormBody.pm`, `JSONBody.pm`, `Maintenance.pm`, `RateLimit.pm`, `TrustedHosts.pm`
+- Modify: `t/middleware/06-security.t`, `09-body-parsing.t`, `10-session-auth.t`, `12-protocol-specific.t`, `13-development.t`, `rate-limit.t`
+
+**Interfaces:**
+
+- Middleware-owned rejections use Pages or concrete Responses and preserve challenges, Allow, retry fields, safe JSON/body diagnostics, negotiation, and protocol pass-through.
+- Downstream responses remain event streams; middleware does not buffer or convert them into Response objects.
+
+- [ ] **Step 1: Inventory each owned rejection and rewrite its assertions.** Pin exact status, content type, body, challenge/retry fields, immediate/Future send settlement, and non-HTTP pass-through. Replace removed factory syntax only in fixtures inside this cone.
+- [ ] **Step 2: Run RED.** Run the six named suites together. Expected failures are only owned rejection construction/emission; an event-forwarding failure or unrelated state change stops the task.
+- [ ] **Step 3: Implement the narrow response migrations.** Use Pages for catalog/status policy and concrete classes for module-specific structures. Retain each middleware's existing interception boundary; do not introduce a shared catch-all responder or duplicate Pages rendering.
+- [ ] **Step 4: Run GREEN and search.** Rerun Step 2, compile/podcheck changed modules, search this module/test cone for removed factories and one-argument emission, and run `git diff --check`.
+- [ ] **Step 5: Commit and review.** Commit `refactor: migrate middleware policy responses` and obtain independent security/policy review.
+
+---
+
+### Task 12: Migrate Redirect, CORS, Health, and Static Middleware Responses
+
+**Files:**
+
+- Inspect and classify, modifying every file with an owned outcome or obsolete POD: `lib/PAGI/Middleware/CORS.pm`, `Healthcheck.pm`, `HTTPSRedirect.pm`, `ReverseProxy.pm`, `Rewrite.pm`, `Static.pm`
+- Modify: `t/middleware/04-static.t`, `06-security.t`, `11-url-handling.t`, `12-protocol-specific.t`, `13-development.t`, `cors-warning.t`, `opaque-body-passthrough.t`, `conditional-get.t`, `etag.t`, `15-xsendfile.t`
+
+**Interfaces:**
+
+- Redirect and health outcomes use semantic Response classes; CORS remains middleware policy over literal response metadata.
+- Static/file/fh events remain opaque and unbuffered through middleware; no response-value conversion is applied to downstream streams.
+
+- [ ] **Step 1: Pin the transformation ownership boundaries.** Cover redirects, health responses, CORS simple/credentialed/rejected/preflight behavior, static missing/method/range behavior, and opaque file/fh passthrough without accidental buffering.
+- [ ] **Step 2: Run RED.** Run the ten named suites together. Expected failures are removed response helpers or CORS ownership only; range/file regressions stop the task and return to the shared File contract rather than being patched locally.
+- [ ] **Step 3: Migrate owned outcomes.** Use Redirect for redirect targets, Empty for body-forbidden statuses, the existing negotiated Text/JSON/Problem representation for health outcomes, and Pages for catalog statuses. Keep CORS in middleware and preserve downstream event interception. Do not add a generalized Response wrapper around Static or raw file events.
+- [ ] **Step 4: Run GREEN and search.** Rerun Step 2, compile/podcheck changed modules, run the rooted-path security gate from Task 5, search this cone for obsolete helpers, and run `git diff --check`.
+- [ ] **Step 5: Commit and review.** Commit `refactor: migrate middleware transport responses` and obtain independent HTTP/security review.
+
+---
+
+### Task 13: Migrate Test Client and Test Response Utilities
+
+**Files:**
+
 - Modify: `lib/PAGI/Test/Client.pm`
 - Modify: `lib/PAGI/Test/Response.pm`
-- Modify: `t/app/02-routing.t`
-- Modify: `t/app/03-router.t`
-- Modify: `t/app/04-utilities.t`
-- Modify: `t/app/07-routing-composition.t`
-- Modify: `t/app-proxy.t`
-- Modify: `t/app-router.t`
-- Modify: `t/app-wrapcgi-env.t`
-- Modify: `t/middleware/04-static.t`
-- Modify: `t/middleware/06-security.t`
-- Modify: `t/middleware/09-body-parsing.t`
-- Modify: `t/middleware/10-session-auth.t`
-- Modify: `t/middleware/11-url-handling.t`
-- Modify: `t/middleware/12-protocol-specific.t`
-- Modify: `t/middleware/13-development.t`
-- Modify: `t/middleware/cors-warning.t`
-- Modify: `t/middleware/rate-limit.t`
-- Modify: `t/test-client/01-response.t`
-- Modify: `t/test-client/02-client-http.t`
-- Modify: `t/test-client/06-integration.t`
-- Modify: `t/test-client/07-multi-value.t`
-- Modify: `t/test-client/08-exception-handling.t`
+- Modify: `t/test-client/01-response.t`, `02-client-http.t`, `03-websocket.t`, `04-sse.t`, `05-lifespan.t`, `06-integration.t`, `07-multi-value.t`, `08-exception-handling.t`
+- Modify: `t/test-client-app-coercion.t`, `t/test-client-scope-method.t`
 
 **Interfaces:**
 
-- First-party HTTP outcomes are concrete Responses emitted with the full native triplet or returned from Request handlers.
-- CORS policy remains `PAGI::Middleware::CORS`; literal headers remain Response metadata.
-- Test Client/Test Response continue exposing recorded wire results rather than depending on Response builder internals.
+- Test Client accepts a coderef or instantiated `to_app` root and records wire events.
+- Test Response decodes wire results, repeated headers, and opaque body/file events; it is not a production Response constructor.
 
-- [ ] **Step 1: Reconcile the exact listed files with the inventory before edits.** In the ledger/report, classify every production file above as `runtime change`, `POD-only migration`, or `inspected/no change`, and record the listed focused tests. Files classified `inspected/no change` are not staged. Any newly discovered live consumer is a deviation requiring controller approval before editing.
-
-- [ ] **Step 2: Add or migrate focused tests for every runtime consumer.** Exercise at least one success and each module-owned error outcome. Assert exact status/content type/body/required headers, immediate/Future send handling, non-HTTP behavior, and no use of removed finishers. For CORS, preserve simple, credentialed, rejected-origin, and preflight behavior after `Response->cors` removal.
-
-- [ ] **Step 3: Run the exact focused RED gate.** Run every test listed in this task in one `prove -lv` invocation and save the command verbatim in `task-9-report.md`. Expected failures must be only removed Response/Pages/deny/decline spellings or full-triplet emission; investigate any unrelated failure before production edits.
-
-- [ ] **Step 4: Migrate apps and middleware with the narrowest owner.** Request handlers return a factory/class Response. Native apps/middleware call `respond($scope,$receive,$send)` only where they themselves own emission. Apps that already forward downstream events remain event middleware and must not grow Response buffering. Preserve method `Allow`, authentication challenges, proxy/rewrite redirects, Retry-After/rate-limit fields, JSON/body parse diagnostics, and protocol pass-through.
-
-- [ ] **Step 5: Migrate test utilities without weakening wire assertions.** Test Client accepts coderef or instantiated `to_app` root as already specified. Test Response continues decoding captured event streams, including repeated headers and file/body events; it does not become a constructor for production Responses.
-
-- [ ] **Step 6: Run GREEN, syntax, POD, and live-source search.** Rerun the exact Step 3 command. Compile every changed module with project Perl 5.42.2, podcheck modules with POD, and run:
-
-  ```bash
-  rg -n --glob 'lib/**' --glob 't/**' \
-    'PAGI::Response->(text|html|json|send|send_raw|send_file|stream|empty|redirect)|->respond\(\$send\)|->cors\(|->deny\([^\)]*(status|body)|->decline\([^\)]*(status|body)'
-  git diff --check
-  ```
-
-  Remaining matches must be explicit removal/upgrade assertions or receive a ledger classification.
-
-- [ ] **Step 7: Commit, report, review, and update the ledger.** Stage only listed files classified as changed and commit `refactor: migrate first-party response consumers`. Obtain independent review of every changed runtime category before examples/docs depend on it.
+- [ ] **Step 1: Rewrite utility contract tests first.** Pin app coercion, HTTP/WebSocket/SSE/lifespan operation, repeated headers, exceptions, file/body events, and absence of dependencies on removed mutable Response internals.
+- [ ] **Step 2: Run RED.** Run all ten named files together. Expected failures must be utility-owned coercion or event decoding; failures in the application under test remain with its earlier owner.
+- [ ] **Step 3: Implement the utility migration.** Keep captured-wire semantics, use final app coercion, and remove builder assumptions. Do not make Test Response inherit from or proxy production Response.
+- [ ] **Step 4: Run GREEN, compile/POD, and commit.** Rerun Step 2, compile/podcheck both modules, run `git diff --check`, commit `refactor: migrate response test utilities`, and obtain independent utility review.
 
 ---
 
-### Task 10: Migrate Every Live Example, Led by the Starlette Apples Comparison
+### Task 14: Migrate Every Live Example, Led by the Starlette Apples Comparison
 
 **Files:**
 
-- Modify: `examples/starlette-apples/app.pl`
-- Modify: `examples/starlette-apples/README.md`
-- Modify: `examples/15-large-application/lib/MyApp/Root.pm`
-- Modify: `examples/15-large-application/lib/MyApp/Person.pm`
-- Modify: `examples/15-large-application/lib/MyApp/Person/Blogs.pm`
-- Modify: `examples/15-large-application/README.md`
-- Modify: `examples/pages/app.pl`
-- Modify: `examples/pages/README.md`
-- Modify: `examples/endpoint-router-demo/lib/MyApp/API.pm`
-- Modify: `examples/endpoint-router-demo/lib/MyApp/Main.pm`
-- Modify: `examples/endpoint-router-demo/README.md`
-- Modify: `examples/13-contact-form/app.pl`
-- Modify: `examples/14-lifespan-utils/app.pl`
-- Modify: `examples/background-tasks/app.pl`
-- Modify: `examples/compose/app.pl`
-- Modify: `examples/declarative-routing/app.pl`
-- Modify: `examples/declarative-routing/lib/MyApp/Routes/Home.pm`
-- Modify: `examples/endpoint-demo/app.pl`
-- Modify: `examples/test-lifespan-shutdown/app.pl`
-- Modify: `examples/websocket-chat-v2/lib/ChatApp/HTTP.pm`
-- Modify: `t/integration-starlette-apples.t`
-- Modify: `t/integration-large-application.t`
-- Modify: `t/integration-pages-example.t`
-- Modify: `t/integration-endpoint-router-demo.t`
-- Modify: `t/integration-compose-demo.t`
-- Modify: `t/integration-declarative-routing-demo.t`
-- Modify: `t/integration-lifespan-utils-example.t`
-- Modify: `t/integration-websocket-chat-v2.t`
+- Modify: `examples/starlette-apples/app.pl`, `README.md`
+- Inspect and classify, modifying every remaining obsolete caller or synchronized prose block: `examples/15-large-application/lib/MyApp/{Root,Person}.pm`, `Person/Blogs.pm`, `README.md`
+- Inspect and classify, modifying every remaining obsolete caller or synchronized prose block: `examples/endpoint-router-demo/lib/MyApp/{API,Main}.pm`, `README.md`
+- Inspect and classify, modifying every remaining obsolete caller: `examples/13-contact-form/app.pl`, `14-lifespan-utils/app.pl`, `background-tasks/app.pl`, `compose/app.pl`, `declarative-routing/app.pl`, `declarative-routing/lib/MyApp/Routes/Home.pm`, `endpoint-demo/app.pl`, `test-lifespan-shutdown/app.pl`, `websocket-chat-v2/lib/ChatApp/HTTP.pm`
+- Inspect already migrated: `examples/pages`, `app-01-file`, `sse-dashboard`
+- Modify corresponding integration tests: `t/integration-starlette-apples.t`, `integration-large-application.t`, `integration-endpoint-router-demo.t`, `integration-compose-demo.t`, `integration-declarative-routing-demo.t`, `integration-lifespan-utils-example.t`, `integration-websocket-chat-v2.t`
 
 **Interfaces:**
 
-- Apple `/` is exact `route('/' => file_response(...))`, `/welcome` is `\&welcome_page`, `/apples` remains a child Router, and root custom 404 uses `http_default => request_app(\&root_not_found)`.
-- CRUD handlers use `json_response`; no handler manually emits.
-- READMEs preserve synchronized complete source blocks and the untouched Python comparison.
+- Apple `/` is `route('/' => file_response(...))`; `/welcome` is `\&welcome_page`; `/apples` is a child Router; root custom 404 is `http_default => request_app(\&root_not_found)`.
+- CRUD handlers use `json_response`; handlers never emit manually. README preserves the unchanged Python comparison and synchronized Perl source.
 
-- [ ] **Step 1: Reconcile the named example set.** Search `examples/` for removed Response finishers, Pages no-source endpoint calls, `respond($send)`, denial/decline `%opts`, and `PAGI::App::File->app_path`. Every match must already be in the named file list; a new match is a scope deviation requiring approval before editing. Classify named files with no live migration as inspected/no-change and do not stage them.
-
-- [ ] **Step 2: Rewrite integration assertions first.** For Apples, pin `/` file SPA, `/welcome`, list/create/read/update/delete, URL generation, invalid typed ID, child 404/405, root custom 404 for every method, exact 405 `Allow`, and no catchall route. Assert source-copy synchronization and unchanged Python block hash.
-
-- [ ] **Step 3: Run RED.** Run the four named integration tests plus every frozen additional example integration. Expected: old constructors/factories or direct Page app shape fail; no unrelated behavior regression.
-
-- [ ] **Step 4: Migrate Apples exactly to spec §19.** Use `PAGI::Response qw(file_response json_response)`, Pages function exports, and `PAGI::Routing qw(route mount router request_app)`. Keep the lifespan-backed database helper unchanged. Preserve Perl 5.40 signatures and the current SPA asset.
-
-- [ ] **Step 5: Migrate remaining examples by ownership.** Handlers return concrete Responses; raw apps emit full-triplet; native defaults use `request_app`; file subtrees use App::File `from_app_path`; selected files use File Response; protocol denial/decline receives a Response. Do not introduce compact routing syntax or simplify example data architecture.
-
-- [ ] **Step 6: Synchronize README source and run GREEN.** Rerun Step 3. Compare the Apple README Perl block byte-for-byte with `app.pl`, verify the Python block SHA recorded before edits is unchanged, compile every changed example with its declared Perl version, and run `git diff --check`.
-
-- [ ] **Step 7: Commit, report, review, and update the ledger.** Stage only the frozen example/test set and commit `examples: adopt concrete response values`. Obtain independent example clarity and behavior review before public docs.
+- [ ] **Step 1: Freeze the complete live-example inventory.** Search examples for removed factories, Pages no-source calls, one-argument respond, denial/decline `%opts`, and old File constructor. Add a clean final-API caller to this task without a deviation when its integration gate proves the same migration; stop if a workaround or new behavior would be required.
+- [ ] **Step 2: Rewrite integrations first.** Pin the complete Apple behavior matrix, source synchronization, Python block hash, and each named example's public behavior. Run all named integrations and classify any failure against Tasks 6–13 before editing the example.
+- [ ] **Step 3: Migrate Apples exactly to spec §19.** Use `file_response`, `json_response`, Pages handler exports, and `request_app`; retain lifespan database and SPA assets.
+- [ ] **Step 4: Migrate remaining examples with final ownership.** Handlers return Responses, raw apps emit full triplet, defaults use `request_app`, file trees use `from_app_path`, selected files use File Response, and protocol rejection receives a Response. Do not introduce compact routing syntax or change example data architecture.
+- [ ] **Step 5: Run GREEN and synchronization gates.** Rerun all named integrations, compile changed examples with declared Perl, compare README source blocks, confirm the Python block hash, search examples for obsolete spellings, and run `git diff --check`.
+- [ ] **Step 6: Commit and review.** Commit `examples: adopt concrete response values` and obtain independent behavior/clarity review.
 
 ---
 
-### Task 11: Publish the Class Model and Complete Upgrade Guide
+### Task 15: Publish the Class Model and Complete Upgrade Guide
 
 **Files:**
 
@@ -769,11 +721,11 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 ---
 
-### Task 12: Exhaustive Contract Audit, Full Suite, and Distribution Build
+### Task 16: Exhaustive Contract Audit, Full Suite, and Distribution Build
 
 **Files:**
 
-- Create ignored evidence: `.superpowers/sdd/2026-08-28-http-response-family-and-streaming/task-12-audit-report.md`
+- Create ignored evidence: `.superpowers/sdd/2026-08-28-http-response-family-and-streaming/task-16-audit-report.md`
 - Modify production/tests/docs only for independently reviewed corrections authorized through the deviation ledger
 
 **Interfaces:**
@@ -782,7 +734,7 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 - [ ] **Step 1: Audit the spec and public inventory before running the suite.** Map every requirement in spec §§6, 8–16, 20–21, 23–26 to a committed implementation/test/doc location. Confirm all inventory rows have a final classification/evidence and no unapproved API disappeared. Confirm historical docs were not rewritten.
 
-- [ ] **Step 2: Run a changed-test focused gate.** Construct the exact union of test files changed by Tasks 1–11, deduplicate it, and run once under project Perl. Record Files/Tests, elapsed time, exit status, and warnings. Any defect gets a narrow TDD correction plus independent review before continuing.
+- [ ] **Step 2: Run a changed-test focused gate.** Construct the exact union of test files changed by Tasks 1–15, deduplicate it, and run once under project Perl. Record Files/Tests, elapsed time, exit status, and warnings. Any defect gets a narrow TDD correction plus independent review before continuing.
 
 - [ ] **Step 3: Perform adversarial probes.** At minimum probe: unchanged Response concurrent emission; mutation after `to_app`; component Route method union; Stream overlapping writes, a send pending at disconnect resolving normally, resumed connection-state visibility, no send cancellation, proactive producer cancellation, and exactly-once cleanup; file logical-window physical offsets and deferred existence; Pages repeated Accept; ErrorHandler after-start failure; protocol shallow scope clone/File rejection; and Apple DELETE of an unknown root path returning custom 404 rather than wildcard 405.
 
@@ -800,7 +752,7 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 - [ ] **Step 7: Build and inspect one distribution archive.** After a passing suite, run project-Perl `dzil build` exactly once. Do not run `dzil test`. Verify archive integrity, version `0.002002` with `Changes` carrying `0.002003 UNRELEASED`, prerequisites, all new Response modules, live docs/tests/examples required for shipping, absence of historical docs/VCS/evidence/symlinks, no duplicate entries, and expected `MetaNoIndex`/PruneFiles behavior. Restore any generated tracked README side effect exactly to reviewed HEAD.
 
-- [ ] **Step 8: Close evidence without committing audit-only files.** Record final HEAD, suite/build commands and counts, archive path/size/SHA-256/entry counts, exclusions, final `git status --short`, and `git diff --check`. Update every ledger row and mark Task 12 complete only if tracked status is clean and no release blocker remains. Do not push, merge, tag, release, delete worktrees, or remove build artifacts without separate user authorization.
+- [ ] **Step 8: Close evidence without committing audit-only files.** Record final HEAD, suite/build commands and counts, archive path/size/SHA-256/entry counts, exclusions, final `git status --short`, and `git diff --check`. Update every ledger row and mark Task 16 complete only if tracked status is clean and no release blocker remains. Do not push, merge, tag, release, delete worktrees, or remove build artifacts without separate user authorization.
 
 ---
 
