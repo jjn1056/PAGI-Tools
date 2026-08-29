@@ -681,6 +681,7 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 - Modify: `lib/PAGI/Response/File.pm`
 - Modify: `lib/PAGI/Response/File/Plan.pm`
 - Modify: `lib/PAGI/Pages.pm`
+- Modify: `lib/PAGI/Request.pm`
 - Modify: `lib/PAGI/Routing.pm`
 - Modify: `lib/PAGI/Routing/Route.pm`
 - Modify: `lib/PAGI/Routing/Mount.pm`
@@ -688,6 +689,7 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 - Modify: `lib/PAGI/SSE.pm`
 - Modify: `lib/PAGI/App/File.pm`
 - Modify: `lib/PAGI/Middleware/CORS.pm`
+- Inspect and modify when the live-prose gate finds obsolete guidance: `lib/PAGI/Compose.pm`, `lib/PAGI/Middleware/Builder.pm`, `lib/PAGI/Utils.pm`
 - Modify: `lib/PAGI/Tools.pm`
 - Modify: `lib/PAGI/Tools/Tutorial.pod`
 - Modify: `lib/PAGI/Tools/Cookbook.pod`
@@ -719,7 +721,7 @@ A scope conflict receives the next stable `DEV-NNN` identifier, an `awaiting dec
 
 - [ ] **Step 5: Update Tutorial, Cookbook, front page, README, Changes, and UPGRADING.** Preserve developed prose while replacing obsolete examples. Include the complete Apple before/after reasoning, raw PAGI example, CORS middleware migration, startup file-validation tradeoff, Thunderhorse-facing handler changes, and all spec §25 table rows. Mark features as shipped only once their tasks are committed; Changes remains `0.002003 UNRELEASED`.
 
-- [ ] **Step 6: Run GREEN and doc gates.** Rerun Step 2. Podcheck every changed POD/module, compile executable snippets through cookbook/upgrading tests, ensure all new modules load, run the obsolete live-source search across `lib/`, `t/`, `examples/`, README, UPGRADING, and Changes while exempting historical `docs/superpowers`, then run `git diff --check`.
+- [ ] **Step 6: Run GREEN and doc gates.** Rerun Step 2. Podcheck every changed POD/module, compile executable snippets through cookbook/upgrading tests, ensure all new modules load, and require zero obsolete live guidance across `lib/`, `examples/`, README, current UPGRADING guidance, and current Changes prose while exempting historical `docs/superpowers` and explicitly labeled Before/removal history. Inventory and classify every obsolete `t/` hit for Task 16; deliberate negative/guard evidence remains, while behavioral fixtures are migrated there. Then run `git diff --check`.
 
 - [ ] **Step 7: Commit, report, review, and update the ledger.** Stage exactly the documented files and commit `docs: explain the response family migration`. Obtain independent technical-copy and API-completeness review before final audit.
 
