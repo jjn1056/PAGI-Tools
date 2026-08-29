@@ -89,6 +89,7 @@ async sub respond {
     );
     if ($writer->is_disconnected) {
         await $writer->_abort;
+        await $writer->_cleanup;
         return;
     }
 
@@ -100,6 +101,7 @@ async sub respond {
     unless ($producer_called) {
         my $error = $@;
         await $writer->_abort;
+        await $writer->_cleanup;
         die $error;
     }
 
@@ -111,19 +113,11 @@ async sub respond {
         $producer_outcome,
     );
 
-    # wait_any resolves by readiness, not by error priority. A producer/send
-    # failure that is already observable in the disconnect turn remains the
-    # application outcome even when the disconnect signal won the race.
-    if ($outcome->{kind} eq 'disconnect' && $producer->is_failed) {
-        my @failure = $producer->failure;
-        $outcome = {
-            kind    => 'producer_failed',
-            failure => \@failure,
-        };
-    }
-
     if ($outcome->{kind} eq 'disconnect') {
         await $writer->_abort;
+        $producer->cancel
+            if !$producer->is_ready && !$producer->is_cancelled;
+        await $writer->_cleanup;
         return;
     }
 
@@ -131,17 +125,19 @@ async sub respond {
         my $failure = $outcome->{failure};
         my $error = $failure->[0];
         await $writer->_abort;
-        return if PAGI::Response::Writer->_is_disconnect_error($error);
+        await $writer->_cleanup;
         die $error;
     }
 
     if ($outcome->{kind} eq 'producer_cancelled') {
         await $writer->_abort;
+        await $writer->_cleanup;
         die "Stream producer Future was cancelled\n";
     }
 
     if ($writer->is_disconnected) {
         await $writer->_abort;
+        await $writer->_cleanup;
         return;
     }
 
@@ -150,7 +146,7 @@ async sub respond {
     $close_error = $@ unless $closed;
     unless ($closed) {
         await $writer->_abort;
-        return if PAGI::Response::Writer->_is_disconnect_error($close_error);
+        await $writer->_cleanup;
         die $close_error;
     }
 
@@ -170,10 +166,6 @@ sub to_app {
 sub _producer_outcome {
     my ($producer) = @_;
     my $outcome = Future->new;
-    $outcome->on_cancel(sub {
-        $producer->cancel
-            if !$producer->is_ready && !$producer->is_cancelled;
-    });
     $producer->on_ready(sub {
         return if $outcome->is_ready || $outcome->is_cancelled;
         if ($producer->is_failed) {
@@ -194,9 +186,6 @@ sub _producer_outcome {
 sub _disconnect_outcome {
     my ($signal) = @_;
     my $outcome = Future->new;
-    $outcome->on_cancel(sub {
-        $signal->cancel if !$signal->is_ready && !$signal->is_cancelled;
-    });
     $signal->on_ready(sub {
         return if $outcome->is_ready || $outcome->is_cancelled;
         if ($signal->is_failed) {
@@ -233,9 +222,12 @@ Returns false.
 
 =head1 DISCONNECTS AND FAILURES
 
-Connection disconnects cancel pending producer work, run local cleanup, omit
-terminal success, and complete as the server-owned connection outcome. Genuine
-producer and send errors run the same cleanup but remain application failures.
+Connection disconnects are observed through one private signal built from the
+mandatory C<on_disconnect> capability. Stream waits for any active PAGI send,
+cancels only remaining producer-owned work, runs local cleanup, omits terminal
+success, and completes as the server-owned connection outcome. Genuine
+producer and send errors run the same cleanup but remain application failures;
+disconnect never manufactures or arbitrates a Writer failure.
 
 =cut
 

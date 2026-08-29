@@ -45,6 +45,7 @@ on 'test' => sub {
 
 # Development
 on 'develop' => sub {
+    requires 'PAGI::Server', '0.002010';
     requires 'Dist::Zilla', '6.030';
     requires 'Dist::Zilla::Plugin::MetaJSON';
     requires 'Dist::Zilla::Plugin::MetaResources';

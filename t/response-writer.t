@@ -10,7 +10,6 @@ use PAGI::Request;
 use PAGI::Request::BodyStream;
 use PAGI::Response::Stream;
 use PAGI::Response::Writer;
-use PAGI::Test::ConnectionState;
 use PAGI::Transport qw(transport);
 
 {
@@ -53,6 +52,64 @@ use PAGI::Transport qw(transport);
         return ref($item) eq 'CODE' ? $item->() : $item;
     }
     sub calls { return $_[0]{calls} }
+}
+
+{
+    package T::PAGI05Connection;
+
+    sub new {
+        return bless {
+            connected    => 1,
+            reason       => undef,
+            callbacks    => [],
+            notification => 0,
+            in_send      => 0,
+        }, shift;
+    }
+
+    sub is_connected { return $_[0]{connected} ? 1 : 0 }
+    sub disconnect_reason { return $_[0]{reason} }
+
+    sub on_disconnect {
+        my ($self, $callback) = @_;
+        if ($self->{connected}) {
+            push @{$self->{callbacks}}, $callback;
+        } else {
+            $callback->($self->{reason});
+        }
+        return $self;
+    }
+
+    sub transition {
+        my ($self, $reason) = @_;
+        return $self unless $self->{connected};
+        $self->{connected} = 0;
+        $self->{reason} = $reason;
+        $self->{notification} = 1;
+        return $self;
+    }
+
+    sub deliver_disconnect {
+        my ($self) = @_;
+        die "on_disconnect delivered inside send\n" if $self->{in_send};
+        return $self unless delete $self->{notification};
+        $_->($self->{reason}) for @{$self->{callbacks}};
+        return $self;
+    }
+
+    sub send_event {
+        my ($self, $handler, $event) = @_;
+        ++$self->{in_send};
+        my ($returned, $ok);
+        $ok = eval {
+            $returned = $handler->($event);
+            1;
+        };
+        my $error = $@;
+        --$self->{in_send};
+        die $error unless $ok;
+        return $returned;
+    }
 }
 
 sub http_scope {
@@ -373,7 +430,7 @@ subtest 'pipe_from propagates a Future-backed next_chunk failure after waiting' 
 };
 
 subtest 'disconnect before producer start completes quietly without consuming receive' => sub {
-    my $connection = PAGI::Test::ConnectionState->new;
+    my $connection = T::PAGI05Connection->new;
     my $start = Future->new;
     my @events;
     my $receive_calls = 0;
@@ -381,10 +438,16 @@ subtest 'disconnect before producer start completes quietly without consuming re
     my $running = PAGI::Response::Stream->new(sub { ++$producer_calls })->respond(
         http_scope('pagi.connection' => $connection),
         quiet_receive(\$receive_calls),
-        sub { push @events, $_[0]; return $start },
+        sub {
+            my ($event) = @_;
+            return $connection->send_event(sub {
+                push @events, $event;
+                return $start;
+            }, $event);
+        },
     );
 
-    $connection->_mark_disconnected('before_producer');
+    $connection->transition('before_producer')->deliver_disconnect;
     $start->done;
     $running->get;
     is($producer_calls, 0, 'already-disconnected connection skips producer invocation');
@@ -393,7 +456,7 @@ subtest 'disconnect before producer start completes quietly without consuming re
 };
 
 subtest 'disconnect cancels unrelated producer work and awaits exactly-once cleanup' => sub {
-    my $connection = PAGI::Test::ConnectionState->new;
+    my $connection = T::PAGI05Connection->new;
     my $work = Future->new;
     my $cleanup_wait = Future->new;
     my $work_cancelled = 0;
@@ -412,15 +475,27 @@ subtest 'disconnect cancels unrelated producer work and awaits exactly-once clea
         return $work;
     })->respond(
         http_scope('pagi.connection' => $connection), quiet_receive(),
-        sub { push @events, $_[0]; Future->done },
+        sub {
+            my ($event) = @_;
+            return $connection->send_event(sub {
+                push @events, $event;
+                return Future->done;
+            }, $event);
+        },
     );
 
-    $connection->_mark_disconnected('client_gone');
-    is($work_cancelled, 1, 'disconnect requests cancellation of pending producer work');
+    $connection->transition('client_gone');
+    is($writer->is_disconnected, 1,
+        'synchronous state is visible before deferred callback delivery');
+    is($work_cancelled, 0,
+        'polling state alone does not impersonate the mandatory callback signal');
+    $connection->deliver_disconnect;
+    is($work_cancelled, 1, 'disconnect requests cancellation of unrelated producer work');
     is($writer->is_disconnected, 1, 'Writer records the disconnection');
     is($writer->disconnect_reason, 'client_gone', 'Writer retains the connection reason');
     ok(!$running->is_ready, 'runner awaits Future-backed cleanup');
     is(\@cleanup, ['first'], 'cleanup callbacks run sequentially');
+    $work->done unless $work->is_ready || $work->is_cancelled;
     $cleanup_wait->done;
     $running->get;
     is(\@cleanup, ['first', 'last'], 'a failed callback does not prevent later cleanup');
@@ -431,331 +506,213 @@ subtest 'disconnect cancels unrelated producer work and awaits exactly-once clea
     is(\@cleanup, ['first', 'last'], 'cleanup remains exactly once after local close');
 };
 
-subtest 'disconnect fails a pending write Future and cancels its send' => sub {
-    my $connection = PAGI::Test::ConnectionState->new;
-    my $body_send = Future->new;
-    my $send_cancelled = 0;
-    my ($writer, $write);
-    my @events;
-    $body_send->on_cancel(sub { ++$send_cancelled });
-    my $running = PAGI::Response::Stream->new(sub {
-        ($writer) = @_;
-        $write = $writer->write('pending');
-        return $write;
-    })->respond(
-        http_scope('pagi.connection' => $connection), quiet_receive(),
-        sub {
-            push @events, $_[0];
-            return $_[0]{type} eq 'http.response.start' ? Future->done : $body_send;
-        },
-    );
-
-    $connection->_mark_disconnected('during_send');
-    ok($write->is_failed, 'disconnect fails rather than cancels the public write Future');
-    like([$write->failure]->[0], qr/disconnect.*during_send/i,
-        'pending write failure contains the disconnect reason');
-    is($send_cancelled, 1, 'pending send work is cancelled');
-    $running->get;
-    is($writer->bytes_written, 0, 'disconnected pending delivery is not counted');
-    is(terminal_events(\@events), [], 'pending-write disconnect emits no terminal success');
-};
-
-subtest 're-entrant body-send disconnect settles only after send returns' => sub {
-    for my $mode (qw(pending failed throwing)) {
-        subtest $mode => sub {
-            my $connection = PAGI::Test::ConnectionState->new;
+subtest 'PAGI 0.5 disconnect settles active sends without failing or cancelling Writer work' => sub {
+    for my $operation (qw(body terminal)) {
+        subtest $operation => sub {
+            my $connection = T::PAGI05Connection->new;
             my $pending_send = Future->new;
+            my $cleanup_wait = Future->new;
             my $send_cancelled = 0;
             my $cleanup_calls = 0;
-            my ($writer, $write);
-            my @events;
+            my ($writer, $operation_future, $producer_future);
+            my @offered;
+            my @accepted;
             $pending_send->on_cancel(sub { ++$send_cancelled });
+            $pending_send->on_done(sub {
+                push @accepted, $offered[-1] if $connection->is_connected;
+            });
 
             my $running = PAGI::Response::Stream->new(sub {
                 ($writer) = @_;
-                $writer->on_close(sub { ++$cleanup_calls });
-                $write = $writer->write('reentrant body');
-                return $write;
+                $writer->on_close(sub {
+                    ++$cleanup_calls;
+                    return $cleanup_wait if $operation eq 'terminal';
+                    return;
+                });
+                $operation_future = $operation eq 'body'
+                    ? $writer->write('pending body')
+                    : $writer->close;
+                $producer_future = $operation_future;
+                return $producer_future;
             })->respond(
                 http_scope('pagi.connection' => $connection), quiet_receive(),
                 sub {
                     my ($event) = @_;
-                    push @events, $event;
-                    return Future->done if $event->{type} eq 'http.response.start';
-
-                    $connection->_mark_disconnected("reentrant_body_$mode");
-                    return $pending_send if $mode eq 'pending';
-                    return Future->fail("reentrant body failed Future\n")
-                        if $mode eq 'failed';
-                    die "reentrant body synchronous throw\n";
+                    return $connection->send_event(sub {
+                        push @offered, $event;
+                        return Future->done if $event->{type} eq 'http.response.start';
+                        return $pending_send;
+                    }, $event);
                 },
             );
 
-            if ($mode eq 'pending') {
-                ok($write->is_failed,
-                    're-entrant disconnect fails the public pending write');
-                like([$write->failure]->[0], qr/disconnect.*reentrant_body_pending/i,
-                    'pending write keeps the disconnect reason');
-                is($send_cancelled, 1,
-                    'the send Future returned after disconnect is immediately cancelled');
-                ok(lives { $running->get },
-                    'disconnect remains a quiet connection outcome');
-            } elsif ($mode eq 'failed') {
-                like(dies { $running->get }, qr/reentrant body failed Future/,
-                    'an already-failed returned send Future beats disconnect');
-            } else {
-                like(dies { $running->get }, qr/reentrant body synchronous throw/,
-                    'a synchronous send throw beats re-entrant disconnect');
-            }
+            ok(!$operation_future->is_ready, 'public operation waits for send settlement');
+            $connection->transition("pending_$operation")->deliver_disconnect;
+            ok(!$operation_future->is_ready,
+                'disconnect does not manufacture an operation settlement');
+            is($send_cancelled, 0, 'disconnect never cancels the PAGI send Future');
+            ok(!$running->is_ready, 'abort waits for the active PAGI send Future');
+            is($cleanup_calls, 0, 'cleanup does not outrun the active send');
 
-            $pending_send->cancel
-                if !$pending_send->is_ready && !$pending_send->is_cancelled;
-            is($cleanup_calls, 1, 'cleanup runs once for the selected primary outcome');
-            is(terminal_events(\@events), [], 'no re-entrant body case emits terminal success');
+            $pending_send->done;
+            if ($operation eq 'terminal') {
+                ok(!$operation_future->is_ready,
+                    'terminal operation retains Writer-owned cleanup backpressure');
+                ok(!$operation_future->is_cancelled,
+                    'producer cancellation does not cancel Writer-owned close cleanup');
+                ok(!$running->is_ready,
+                    'runner waits for terminal cleanup after send settlement');
+                is($cleanup_calls, 1, 'terminal cleanup starts after send settlement');
+                $cleanup_wait->done;
+            }
+            ok($operation_future->is_done,
+                'public operation resolves normally with the discarded send');
+            ok(lives { $operation_future->get },
+                'the discarded send produces no disconnect-derived Writer error');
+            ok(lives { $running->get }, 'disconnect remains a quiet connection outcome');
+            is($send_cancelled, 0, 'settlement path never cancels the send Future');
+            is($cleanup_calls, 1, 'cleanup runs exactly once after send settlement');
+            is($writer->is_disconnected, 1, 'Writer exposes transitioned connection state');
+            is($writer->disconnect_reason, "pending_$operation",
+                'Writer exposes the exact disconnect reason');
+            is($writer->bytes_written, 0, 'discarded output does not count as written');
+            is(terminal_events(\@accepted), [],
+                'a discarded operation records no terminal success');
         };
     }
 };
 
-subtest 'an already-ready producer failure beats simultaneous disconnect' => sub {
-    my $connection = PAGI::Test::ConnectionState->new;
-    my $cleanup_calls = 0;
+subtest 'pipe_from stops before another pull after a discarded send settles' => sub {
+    my $connection = T::PAGI05Connection->new;
+    my $pending_send = Future->new;
+    my $send_cancelled = 0;
+    my $source = T::Source->new('first', 'must not be pulled', undef);
+    my ($writer, $pipe);
     my @events;
-    my $running = PAGI::Response::Stream->new(sub {
-        my ($writer) = @_;
-        $writer->on_close(sub { ++$cleanup_calls });
-        $connection->_mark_disconnected('producer_failure_turn');
-        return Future->fail("producer failure already observable\n");
-    })->respond(
-        http_scope('pagi.connection' => $connection), quiet_receive(),
-        sub { push @events, $_[0]; Future->done },
-    );
+    $pending_send->on_cancel(sub { ++$send_cancelled });
 
-    like(dies { $running->get }, qr/producer failure already observable/,
-        'observable producer failure is primary over the same-turn disconnect');
-    is($cleanup_calls, 1, 'simultaneous producer failure cleans up once');
-    is(terminal_events(\@events), [],
-        'simultaneous producer failure emits no terminal success');
-};
-
-subtest 're-entrant terminal-send disconnect preserves primary outcome' => sub {
-    for my $mode (qw(pending failed throwing)) {
-        subtest $mode => sub {
-            my $connection = PAGI::Test::ConnectionState->new;
-            my $pending_send = Future->new;
-            my $send_cancelled = 0;
-            my $cleanup_calls = 0;
-            my @events;
-            $pending_send->on_cancel(sub { ++$send_cancelled });
-
-            my $running = PAGI::Response::Stream->new(sub {
-                $_[0]->on_close(sub { ++$cleanup_calls });
-                return 'producer done';
-            })->respond(
-                http_scope('pagi.connection' => $connection), quiet_receive(),
-                sub {
-                    my ($event) = @_;
-                    if ($event->{type} eq 'http.response.start') {
-                        push @events, $event;
-                        return Future->done;
-                    }
-
-                    $connection->_mark_disconnected("reentrant_terminal_$mode");
-                    return $pending_send if $mode eq 'pending';
-                    return Future->fail("reentrant terminal failed Future\n")
-                        if $mode eq 'failed';
-                    die "reentrant terminal synchronous throw\n";
-                },
-            );
-
-            if ($mode eq 'pending') {
-                is($send_cancelled, 1,
-                    'terminal send returned after disconnect is immediately cancelled');
-                ok(lives { $running->get },
-                    'terminal disconnect remains a quiet outcome');
-            } elsif ($mode eq 'failed') {
-                like(dies { $running->get }, qr/reentrant terminal failed Future/,
-                    'an already-failed terminal Future beats disconnect');
-            } else {
-                like(dies { $running->get }, qr/reentrant terminal synchronous throw/,
-                    'a synchronous terminal throw beats re-entrant disconnect');
-            }
-
-            $pending_send->cancel
-                if !$pending_send->is_ready && !$pending_send->is_cancelled;
-            is($cleanup_calls, 1, 'terminal outcome runs cleanup exactly once');
-            is(terminal_events(\@events), [],
-                'a re-entrant terminal case is never recorded as terminal success');
-        };
-    }
-};
-
-subtest 'async producer classifies re-entrant send before publishing disconnect' => sub {
-    for my $operation (qw(body terminal)) {
-        subtest $operation => sub {
-            for my $mode (qw(pending failed throwing)) {
-                subtest $mode => sub {
-                    my $connection = PAGI::Test::ConnectionState->new;
-                    my $producer_gate = Future->new;
-                    my $pending_send = Future->new;
-                    my $send_cancelled = 0;
-                    my $cleanup_calls = 0;
-                    my ($writer, $operation_future, $producer_future);
-                    my @successful_events;
-                    my $delivery_calls = 0;
-                    $pending_send->on_cancel(sub { ++$send_cancelled });
-
-                    my $producer = async sub {
-                        ($writer) = @_;
-                        $writer->on_close(sub { ++$cleanup_calls });
-                        await $producer_gate;
-                        $operation_future = $operation eq 'body'
-                            ? $writer->write('gated body')
-                            : $writer->close;
-                        await $operation_future;
-                        return;
-                    };
-                    my $running = PAGI::Response::Stream->new(sub {
-                        $producer_future = $producer->(@_);
-                        return $producer_future;
-                    })->respond(
-                        http_scope('pagi.connection' => $connection), quiet_receive(),
-                        sub {
-                            my ($event) = @_;
-                            if ($event->{type} eq 'http.response.start') {
-                                push @successful_events, $event;
-                                return Future->done;
-                            }
-
-                            ++$delivery_calls;
-                            $connection->_mark_disconnected(
-                                "gated_${operation}_$mode",
-                            );
-                            return $pending_send if $mode eq 'pending';
-                            return Future->fail("gated $operation failed Future\n")
-                                if $mode eq 'failed';
-                            die "gated $operation synchronous throw\n";
-                        },
-                    );
-
-                    ok(!$producer_future->is_ready,
-                        'producer is pending on the controlled gate');
-                    ok(!$running->is_ready,
-                        'Stream wait_any is installed around the pending producer');
-                    is($delivery_calls, 0,
-                        'no body or terminal send starts before the gate opens');
-
-                    $producer_gate->done;
-                    is($delivery_calls, 1,
-                        'the gated producer starts exactly one delivery');
-
-                    my $operation_error = $operation_future
-                        && $operation_future->is_failed
-                        ? '' . [$operation_future->failure]->[0]
-                        : '<operation did not fail>';
-                    my $producer_error = $producer_future->is_failed
-                        ? '' . [$producer_future->failure]->[0]
-                        : '<producer did not fail>';
-
-                    if ($mode eq 'pending') {
-                        like($operation_error, qr/disconnect.*gated_${operation}_pending/i,
-                            'pending operation fails with the internal disconnect reason');
-                        ok($producer_future->is_cancelled,
-                            'published true disconnect cancels the pending producer');
-                        ok(lives { $running->get },
-                            'the runner keeps a true disconnect quiet');
-                        is($send_cancelled, 1,
-                            'the pending send is cancelled after send returns');
-                    } else {
-                        my $genuine = $mode eq 'failed'
-                            ? "gated $operation failed Future"
-                            : "gated $operation synchronous throw";
-                        like($operation_error, qr/\Q$genuine\E/,
-                            'operation preserves the genuine same-turn send error');
-                        like($producer_error, qr/\Q$genuine\E/,
-                            'producer preserves the genuine same-turn send error');
-                        like(dies { $running->get }, qr/\Q$genuine\E/,
-                            'runner rethrows the genuine same-turn send error');
-                    }
-
-                    $pending_send->cancel
-                        if !$pending_send->is_ready && !$pending_send->is_cancelled;
-                    is($cleanup_calls, 1, 'cleanup runs exactly once');
-                    is($writer->bytes_written, 0, 'no failed delivery counts bytes');
-                    is(terminal_events(\@successful_events), [],
-                        'no failed delivery is recorded as terminal success');
-                    my $active_slot = $operation eq 'body'
-                        ? $writer->{_active_write}
-                        : $writer->{_active_close};
-                    ok(!$active_slot, 'the settled operation clears its active state');
-                };
-            }
-        };
-    }
-};
-
-subtest 'disconnect immediately after send settlement still fails that write' => sub {
-    my $connection = PAGI::Test::ConnectionState->new;
-    my $body_send = Future->new;
-    my ($writer, $write);
-    my @events;
-    $body_send->on_done(sub { $connection->_mark_disconnected('after_settlement') });
     my $running = PAGI::Response::Stream->new(sub {
         ($writer) = @_;
-        $write = $writer->write('accepted-noop');
-        return $write;
+        $pipe = $writer->pipe_from($source);
+        return $pipe;
     })->respond(
         http_scope('pagi.connection' => $connection), quiet_receive(),
         sub {
-            push @events, $_[0];
-            return $_[0]{type} eq 'http.response.start' ? Future->done : $body_send;
+            my ($event) = @_;
+            return $connection->send_event(sub {
+                push @events, $event;
+                return Future->done if $event->{type} eq 'http.response.start';
+                return $pending_send;
+            }, $event);
+        },
+    );
+
+    is($source->calls, 1, 'only the first source item is pulled before send settlement');
+    $connection->transition('relay_disconnected')->deliver_disconnect;
+    ok(!$running->is_ready, 'relay abort waits for its pending send');
+    is($send_cancelled, 0, 'relay disconnect does not cancel the send Future');
+    $pending_send->done;
+    ok(lives { $pipe->get }, 'pipe_from resolves normally after the discarded send');
+    ok(lives { $running->get }, 'relay disconnect completes quietly');
+    is($source->calls, 1, 'no source item is pulled after disconnect is observed');
+    is($writer->bytes_written, 0, 'discarded relay bytes are not counted');
+    is(terminal_events(\@events), [], 'relay disconnect emits no terminal event');
+};
+
+subtest 'disconnect after accepted write settlement cancels only later producer work' => sub {
+    my $connection = T::PAGI05Connection->new;
+    my $body_send = Future->new;
+    my $later_work = Future->new;
+    my $later_cancelled = 0;
+    my ($writer, $write);
+    my @events;
+    $later_work->on_cancel(sub { ++$later_cancelled });
+
+    my $running = PAGI::Response::Stream->new(async sub {
+        ($writer) = @_;
+        $write = $writer->write('accepted');
+        await $write;
+        await $later_work;
+    })->respond(
+        http_scope('pagi.connection' => $connection), quiet_receive(),
+        sub {
+            my ($event) = @_;
+            return $connection->send_event(sub {
+                push @events, $event;
+                return Future->done if $event->{type} eq 'http.response.start';
+                return $body_send;
+            }, $event);
         },
     );
 
     $body_send->done;
-    ok($write->is_failed, 'post-settlement connection state overrides send success');
-    like([$write->failure]->[0], qr/disconnect.*after_settlement/i,
-        'post-settlement failure keeps its disconnect reason');
-    $running->get;
-    is($writer->bytes_written, 0, 'post-disconnect no-op is not counted as accepted bytes');
-    is(terminal_events(\@events), [], 'post-settlement disconnect emits no terminal success');
+    ok($write->is_done, 'connected send settlement resolves the public write');
+    is($writer->bytes_written, 8, 'connected settled bytes are counted');
+    ok(!$running->is_ready, 'producer continues into unrelated pending work');
+    $connection->transition('after_settlement')->deliver_disconnect;
+    is($later_cancelled, 1, 'later disconnect cancels only producer-owned work');
+    ok(lives { $running->get }, 'later disconnect remains quiet');
+    is($writer->bytes_written, 8, 'later disconnect does not retroactively discard bytes');
+    is(terminal_events(\@events), [], 'later disconnect suppresses terminal success');
 };
 
-subtest 'pre-send disconnect fails write, while disconnect after completion is not retroactive' => sub {
-    my $before = PAGI::Test::ConnectionState->new;
-    my ($before_writer, $before_write);
-    my @before_events;
-    my $before_running = PAGI::Response::Stream->new(sub {
-        ($before_writer) = @_;
-        $before->_mark_disconnected('before_send');
-        $before_write = $before_writer->write('never queued');
-        return $before_write;
+subtest 'a controlled validation send failure stays an application failure' => sub {
+    my $connection = T::PAGI05Connection->new;
+    my $body_send = Future->new;
+    my $cleanup_calls = 0;
+    my ($write, $writer);
+    my @events;
+    my $running = PAGI::Response::Stream->new(sub {
+        ($writer) = @_;
+        $writer->on_close(sub { ++$cleanup_calls });
+        $write = $writer->write('invalid event resource');
+        return $write;
     })->respond(
-        http_scope('pagi.connection' => $before), quiet_receive(),
-        sub { push @before_events, $_[0]; Future->done },
+        http_scope('pagi.connection' => $connection), quiet_receive(),
+        sub {
+            my ($event) = @_;
+            return $connection->send_event(sub {
+                push @events, $event;
+                return Future->done if $event->{type} eq 'http.response.start';
+                return $body_send;
+            }, $event);
+        },
     );
-    ok($before_write->is_failed, 'pre-send disconnect returns a failed write Future');
-    like([$before_write->failure]->[0], qr/disconnect.*before_send/i,
-        'pre-send diagnostic includes its reason');
-    $before_running->get;
-    is(scalar @before_events, 1, 'pre-send disconnect does not enqueue a body');
 
-    my $after = PAGI::Test::ConnectionState->new;
-    my ($after_writer, $cleanup_calls) = (undef, 0);
-    my @after_events;
-    my $after_running = PAGI::Response::Stream->new(sub {
-        ($after_writer) = @_;
-        $after_writer->on_close(sub { ++$cleanup_calls });
-        return $after_writer->write('complete');
+    $body_send->fail("event resource validation failed\n");
+    like(dies { $write->get }, qr/event resource validation failed/,
+        'controlled send failure fails the public write');
+    like(dies { $running->get }, qr/event resource validation failed/,
+        'controlled send failure remains the producer/application failure');
+    is($cleanup_calls, 1, 'genuine send failure runs cleanup exactly once');
+    is($writer->bytes_written, 0, 'failed send counts no bytes');
+    is(terminal_events(\@events), [], 'failed send emits no terminal success');
+};
+
+subtest 'disconnect after normal completion is not retroactive' => sub {
+    my $connection = T::PAGI05Connection->new;
+    my ($writer, $cleanup_calls) = (undef, 0);
+    my @events;
+    my $running = PAGI::Response::Stream->new(sub {
+        ($writer) = @_;
+        $writer->on_close(sub { ++$cleanup_calls });
+        return $writer->write('complete');
     })->respond(
-        http_scope('pagi.connection' => $after), quiet_receive(),
-        sub { push @after_events, $_[0]; Future->done },
+        http_scope('pagi.connection' => $connection), quiet_receive(),
+        sub {
+            my ($event) = @_;
+            return $connection->send_event(sub {
+                push @events, $event;
+                return Future->done;
+            }, $event);
+        },
     );
-    $after_running->get;
-    is($after_writer->bytes_written, 8, 'normal connected write is counted');
+    $running->get;
+    is($writer->bytes_written, 8, 'normal connected write is counted');
     is($cleanup_calls, 1, 'normal completion ran cleanup once');
-    is(scalar @{terminal_events(\@after_events)}, 1, 'normal completion sent terminal success');
-    $after->_mark_disconnected('too_late');
-    is(scalar @{terminal_events(\@after_events)}, 1,
+    is(scalar @{terminal_events(\@events)}, 1, 'normal completion sent terminal success');
+    $connection->transition('too_late')->deliver_disconnect;
+    is(scalar @{terminal_events(\@events)}, 1,
         'later disconnect cannot retract or duplicate completed output');
     is($cleanup_calls, 1, 'later disconnect does not repeat cleanup');
 };

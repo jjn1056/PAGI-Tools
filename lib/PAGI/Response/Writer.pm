@@ -62,6 +62,7 @@ sub _new {
         _active_write      => undef,
         _active_close      => undef,
         _close_future      => undef,
+        _abort_future      => undef,
         _on_close          => [],
         _cleanup_future    => undef,
     }, $class;
@@ -88,21 +89,13 @@ sub write {
     return Future->fail("Writer already closed\n") if $self->{_closed};
 
     $self->_refresh_disconnect;
-    return Future->fail($self->_disconnect_error) if $self->{_disconnected};
 
     my $delivery = Future->new;
     my $active = {
-        delivery            => $delivery,
-        send                => undef,
-        in_send_call        => 1,
-        deferred_disconnect => 0,
+        delivery => $delivery,
+        send     => undef,
     };
     $self->{_active_write} = $active;
-    $delivery->on_ready(sub {
-        $self->{_active_write} = undef
-            if $self->{_active_write}
-                && $self->{_active_write}{delivery} == $delivery;
-    });
 
     my $send_future;
     my $called = eval {
@@ -113,41 +106,34 @@ sub write {
         }));
         1;
     };
-    $active->{in_send_call} = 0;
     unless ($called) {
-        $delivery->fail($@)
-            unless $delivery->is_ready || $delivery->is_cancelled;
-        $self->_discard_deferred_disconnect_signal($active);
+        $self->{_active_write} = undef
+            if $self->{_active_write} && $self->{_active_write} == $active;
+        $delivery->fail($@) unless $delivery->is_ready || $delivery->is_cancelled;
         return $delivery;
     }
 
     $active->{send} = $send_future;
     $send_future->on_ready(sub {
-        return if $delivery->is_ready || $delivery->is_cancelled;
+        $self->{_active_write} = undef
+            if $self->{_active_write} && $self->{_active_write} == $active;
+
         if ($send_future->is_failed) {
-            $delivery->fail($send_future->failure);
+            $delivery->fail($send_future->failure)
+                unless $delivery->is_ready || $delivery->is_cancelled;
             return;
         }
         if ($send_future->is_cancelled) {
-            $delivery->fail("Stream send Future was cancelled\n");
+            $delivery->fail("Stream send Future was cancelled\n")
+                unless $delivery->is_ready || $delivery->is_cancelled;
             return;
         }
 
         $self->_refresh_disconnect;
-        return if $delivery->is_ready || $delivery->is_cancelled;
-        if ($self->{_disconnected}) {
-            $delivery->fail($self->_disconnect_error);
-            return;
-        }
-
-        $self->{_bytes_written} += length $bytes;
-        $delivery->done;
+        $self->{_bytes_written} += length $bytes
+            unless $self->{_disconnected};
+        $delivery->done unless $delivery->is_ready || $delivery->is_cancelled;
     });
-    $delivery->on_cancel(sub {
-        $send_future->cancel
-            if !$send_future->is_ready && !$send_future->is_cancelled;
-    });
-    $self->_settle_deferred_disconnect($active);
 
     return $delivery;
 }
@@ -170,11 +156,13 @@ sub pipe_from {
 async sub _pipe_from {
     my ($self, $source) = @_;
     while (1) {
+        last if $self->is_disconnected;
         my $returned = $source->next_chunk;
         my $chunk = await Future->wrap($returned);
         last unless defined $chunk;
         next unless length $chunk;
         await $self->write($chunk);
+        last if $self->is_disconnected;
     }
     return;
 }
@@ -188,22 +176,14 @@ sub close {
         if $self->{_active_write};
 
     $self->_refresh_disconnect;
-    return Future->fail($self->_disconnect_error) if $self->{_disconnected};
 
     $self->{_closed} = 1;
     my $delivery = Future->new;
     my $active = {
-        delivery            => $delivery,
-        send                => undef,
-        in_send_call        => 1,
-        deferred_disconnect => 0,
+        delivery => $delivery,
+        send     => undef,
     };
     $self->{_active_close} = $active;
-    $delivery->on_ready(sub {
-        $self->{_active_close} = undef
-            if $self->{_active_close}
-                && $self->{_active_close}{delivery} == $delivery;
-    });
 
     my $finished = $self->_finish_close($delivery);
     $self->{_close_future} = $finished;
@@ -216,39 +196,32 @@ sub close {
         }));
         1;
     };
-    $active->{in_send_call} = 0;
     unless ($called) {
-        $delivery->fail($@)
-            unless $delivery->is_ready || $delivery->is_cancelled;
-        $self->_discard_deferred_disconnect_signal($active);
+        $self->{_active_close} = undef
+            if $self->{_active_close} && $self->{_active_close} == $active;
+        $delivery->fail($@) unless $delivery->is_ready || $delivery->is_cancelled;
         return $finished;
     }
 
     $active->{send} = $send_future;
     $send_future->on_ready(sub {
-        return if $delivery->is_ready || $delivery->is_cancelled;
+        $self->{_active_close} = undef
+            if $self->{_active_close} && $self->{_active_close} == $active;
+
         if ($send_future->is_failed) {
-            $delivery->fail($send_future->failure);
+            $delivery->fail($send_future->failure)
+                unless $delivery->is_ready || $delivery->is_cancelled;
             return;
         }
         if ($send_future->is_cancelled) {
-            $delivery->fail("Stream terminal send Future was cancelled\n");
+            $delivery->fail("Stream terminal send Future was cancelled\n")
+                unless $delivery->is_ready || $delivery->is_cancelled;
             return;
         }
 
         $self->_refresh_disconnect;
-        return if $delivery->is_ready || $delivery->is_cancelled;
-        if ($self->{_disconnected}) {
-            $delivery->fail($self->_disconnect_error);
-            return;
-        }
-        $delivery->done;
+        $delivery->done unless $delivery->is_ready || $delivery->is_cancelled;
     });
-    $delivery->on_cancel(sub {
-        $send_future->cancel
-            if !$send_future->is_ready && !$send_future->is_cancelled;
-    });
-    $self->_settle_deferred_disconnect($active);
 
     return $finished;
 }
@@ -266,19 +239,28 @@ async sub _finish_close {
 
 sub _abort {
     my ($self) = @_;
+    return $self->{_abort_future}->without_cancel if $self->{_abort_future};
+
     $self->{_closed} = 1;
     $self->{_aborted} = 1;
 
+    my @active_settlements;
     for my $slot (qw(_active_write _active_close)) {
         my $active = $self->{$slot} or next;
-        my $delivery = $active->{delivery};
-        $delivery->fail("Stream aborted\n")
-            unless $delivery->is_ready || $delivery->is_cancelled;
+        if ($slot eq '_active_close' && $self->{_close_future}) {
+            push @active_settlements, $self->{_close_future}->without_cancel;
+            next;
+        }
         my $send = $active->{send};
-        $send->cancel if $send && !$send->is_ready && !$send->is_cancelled;
+        push @active_settlements, $send->without_cancel if $send;
     }
 
-    return $self->_cleanup;
+    my $completion = async sub {
+        await Future->wait_all(@active_settlements);
+        return;
+    }->();
+    $self->{_abort_future} = $completion;
+    return $completion->without_cancel;
 }
 
 sub _cleanup {
@@ -397,63 +379,19 @@ sub _refresh_disconnect {
         return 0 if defined($complete) && $complete;
     }
 
-    $self->_record_disconnect($connection->disconnect_reason);
+    $self->{_disconnected} = 1;
+    my $reason = $connection->disconnect_reason;
+    $self->{_disconnect_reason} = $reason
+        if defined($reason) && length($reason);
     return 1;
 }
 
 sub _record_disconnect {
     my ($self, $reason) = @_;
-    return if $self->{_disconnected};
     $self->{_disconnected} = 1;
     $self->{_disconnect_reason} = $reason
         if defined($reason) && length($reason);
-    my $error = $self->_disconnect_error;
-    my $defer_signal = 0;
-
-    for my $slot (qw(_active_write _active_close)) {
-        my $active = $self->{$slot} or next;
-        if ($active->{in_send_call}) {
-            # State is visible immediately, but publishing the signal here
-            # would let Stream abort before the send return is classified.
-            $active->{deferred_disconnect} = 1;
-            $defer_signal = 1;
-            next;
-        }
-        my $delivery = $active->{delivery};
-        $delivery->fail($error)
-            unless $delivery->is_ready || $delivery->is_cancelled;
-        my $send = $active->{send};
-        $send->cancel if $send && !$send->is_ready && !$send->is_cancelled;
-    }
-
-    $self->_publish_disconnect unless $defer_signal;
-    return;
-}
-
-sub _settle_deferred_disconnect {
-    my ($self, $active) = @_;
-    return unless $active->{deferred_disconnect};
-
-    my $send = $active->{send};
-    if ($send && $send->is_failed) {
-        $self->_discard_deferred_disconnect_signal($active);
-        return;
-    }
-
-    my $delivery = $active->{delivery};
-    $delivery->fail($self->_disconnect_error)
-        unless $delivery->is_ready || $delivery->is_cancelled;
-
-    $send->cancel
-        if $send && !$send->is_ready && !$send->is_cancelled;
-    $active->{deferred_disconnect} = 0;
     $self->_publish_disconnect;
-    return;
-}
-
-sub _discard_deferred_disconnect_signal {
-    my ($self, $active) = @_;
-    $active->{deferred_disconnect} = 0;
     return;
 }
 
@@ -465,19 +403,6 @@ sub _publish_disconnect {
     return;
 }
 
-sub _disconnect_error {
-    my ($self) = @_;
-    return PAGI::Response::Writer::_Disconnect->new(
-        $self->{_disconnect_reason},
-    );
-}
-
-sub _is_disconnect_error {
-    my ($class, $error) = @_;
-    return blessed($error)
-        && $error->isa('PAGI::Response::Writer::_Disconnect');
-}
-
 =head1 METHODS
 
 =head2 write, write_text
@@ -485,9 +410,12 @@ sub _is_disconnect_error {
     await $writer->write($encoded_bytes);
     await $writer->write_text($characters);
 
-C<write> sends one nonterminal body event and settles only when the send Future
-settles while the connection remains connected. C<write_text> performs strict
-UTF-8 encoding first. Await each write before starting another.
+C<write> sends one nonterminal body event and settles only when the PAGI send
+Future settles. Under PAGI 0.5 that Future resolves after the server accepts or
+discards the event; Writer then checks connection state and counts bytes only
+while still connected. A disconnect never manufactures a write failure.
+C<write_text> performs strict UTF-8 encoding first. Await each write before
+starting another.
 
 =head2 pipe_from
 
@@ -495,7 +423,8 @@ UTF-8 encoding first. Await each write before starting another.
 
 Pulls immediate or Future-backed C<next_chunk> results sequentially. Empty
 chunks are skipped, and the next pull never starts before the previous write
-settles.
+settles. The relay stops before another source pull once connection state
+reports a disconnect.
 
 =head2 close, is_closed
 
@@ -527,25 +456,5 @@ capability. Without it, buffered amount is zero, watermarks are undefined,
 the writer is writable, and registrations are chainable no-ops.
 
 =cut
-
-package PAGI::Response::Writer::_Disconnect;
-
-use strict;
-use warnings;
-use overload '""' => '_as_string', fallback => 1;
-
-sub new {
-    my ($class, $reason) = @_;
-    return bless { reason => $reason }, $class;
-}
-
-sub reason { return $_[0]{reason} }
-
-sub _as_string {
-    my ($self) = @_;
-    return defined($self->{reason}) && length($self->{reason})
-        ? "Stream disconnected ($self->{reason})\n"
-        : "Stream disconnected\n";
-}
 
 1;
