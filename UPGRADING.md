@@ -364,8 +364,9 @@ my $response = json_response(
 await invoke_app($response, $scope, $receive, $send);
 ```
 
-Normal Route and Endpoint handlers return a Response and do not emit it.
-`to_app` exposes the exact Response as one native HTTP-only application.
+Normal Route and Endpoint handlers return application values and do not emit
+them directly; Response objects are the common case. `to_app` exposes the exact
+Response as one native HTTP-only application.
 Calling that application with WebSocket, SSE, lifespan, or an unknown scope
 fails before emission; that application error does not promise a denial wire
 response. Compose protocol-aware policy explicitly when controlled denial is
@@ -1749,9 +1750,10 @@ $r->get('/people' => sub {
 ```
 
 **After (shipped):** an ordinary HTTP handler receives one strict
-`PAGI::Request` and returns a `PAGI::Response` or a `Future` resolving to one.
-WebSocket and SSE handlers receive `PAGI::WebSocket` and `PAGI::SSE`
-respectively.
+`PAGI::Request` and returns an application value, immediately or through a
+`Future`. Response objects are the common case; native CODE and other
+instantiated `to_app` objects are also valid. WebSocket and SSE handlers receive
+`PAGI::WebSocket` and `PAGI::SSE` respectively.
 
 ```perl
 use PAGI::Response;

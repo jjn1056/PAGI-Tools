@@ -600,7 +600,8 @@ invocation derives a request-local delivery plan before its first send. The
 Response stores no scope or connection, so an unchanged preconstructed value
 can serve concurrent requests.
 
-Normal Request handlers return a Response and let Routing emit it:
+Normal Request handlers return application values for Routing to invoke. A
+Response object is the common case:
 
   $router->get('/health' => sub {
       my ($request) = @_;
