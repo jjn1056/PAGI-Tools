@@ -3,12 +3,14 @@ package PAGI::Utils;
 use strict;
 use warnings;
 use Exporter ();
+use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use File::Basename qw(basename dirname);
 use File::Spec;
 use Scalar::Util qw(blessed);
 use PAGI::Lifespan;
+use PAGI::Utils::_App;
 
 my @PAGI_ENVIRONMENTS = qw(development test staging production);
 my %VALID_PAGI_ENV = map { $_ => 1 } @PAGI_ENVIRONMENTS;
@@ -20,7 +22,7 @@ my @PATH_EXPORTS = qw(
 );
 
 our @EXPORT_OK = (
-    qw(handle_lifespan to_app is_response),
+    qw(handle_lifespan to_app as_app invoke_app is_response),
     @ENV_EXPORTS,
     @PATH_EXPORTS,
 );
@@ -320,6 +322,20 @@ sub to_app {
     croak ref($value) . '->to_app must return a coderef'
         unless ref($app) eq 'CODE';
     return $app;
+}
+
+sub as_app {
+    my ($code) = @_;
+    croak 'as_app() requires a native coderef'
+        unless ref($code) eq 'CODE';
+    return PAGI::Utils::_App->new($code);
+}
+
+async sub invoke_app {
+    my ($value, $scope, $receive, $send) = @_;
+    my $app = to_app($value);
+    my $returned = $app->($scope, $receive, $send);
+    return await Future->wrap($returned);
 }
 
 sub _validate_app_value {

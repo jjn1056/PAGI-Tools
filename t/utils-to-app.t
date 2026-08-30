@@ -5,6 +5,11 @@ use Test2::V0;
 use PAGI::Utils qw(to_app);
 
 {
+    package Local::UtilsDefaultImports;
+    use PAGI::Utils;
+}
+
+{
     package Local::App;
     our $CALLS = 0;
     our $COMPILED = sub { return 'compiled' };
@@ -40,5 +45,9 @@ like(dies { to_app([]) }, qr/coderef or instantiated object.*to_app/i,
     'unblessed references are not apps');
 like(dies { to_app(undef) }, qr/coderef or instantiated object.*to_app/i,
     'undefined is not an app');
+ok(!Local::UtilsDefaultImports->can('as_app'),
+    'as_app is not exported by default');
+ok(!Local::UtilsDefaultImports->can('invoke_app'),
+    'invoke_app is not exported by default');
 
 done_testing;
