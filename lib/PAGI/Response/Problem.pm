@@ -33,8 +33,8 @@ members are extensions. Missing C<type> has the effective RFC value
 C<about:blank> without inserting that member. A document C<status> supplies
 the HTTP status unless an equal constructor status is given; mismatches croak.
 When the document contains C<status>, that agreement remains response-owned:
-an incompatible status mutation is rejected, and snapshots validate the
-agreement again before any event can be emitted.
+an incompatible status mutation is rejected, and each invocation validates
+the agreement again before any event can be emitted.
 
 =cut
 
@@ -81,13 +81,10 @@ sub status {
     return $self->SUPER::status($status);
 }
 
-sub _snapshot {
+sub _emission_plan {
     my ($self) = @_;
     $self->_validate_problem_status_invariant;
-    my $copy = $self->SUPER::_snapshot;
-    $copy->{_problem_document_status} = $self->{_problem_document_status}
-        if exists $self->{_problem_document_status};
-    return $copy;
+    return $self->SUPER::_emission_plan;
 }
 
 sub _validate_problem_status_invariant {

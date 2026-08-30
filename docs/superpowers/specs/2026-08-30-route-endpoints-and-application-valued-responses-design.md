@@ -263,8 +263,8 @@ The implementation must:
 9. centralize app normalization and invocation in `PAGI::Utils`;
 10. make Pages class methods and exported functions equivalent deferred app
    factories;
-11. preserve Response snapshot, File, Stream, HEAD, WebSocket-denial, SSE-
-    decline, backpressure, and settlement behavior;
+11. preserve Response per-invocation delivery plans, File, Stream, HEAD,
+    WebSocket-denial, SSE-decline, backpressure, and settlement behavior;
 12. align `PAGI::Endpoint::HTTP` and the shared Router frontends;
 13. make existing middleware work through the common app invocation path
     without redesigning middleware; and
@@ -610,8 +610,8 @@ return file_response($path, inline => 1);
 return stream_response(async sub ($writer) { ... });
 ```
 
-They emit one terminal HTTP response, reject unsupported scope types, preserve
-invocation-local snapshots, and follow the existing body, File, Stream,
+They emit one terminal HTTP response, reject unsupported scope types, derive
+invocation-local delivery plans, and follow the existing body, File, Stream,
 backpressure, disconnect, and settlement contracts.
 
 ### 9.3 Returned arbitrary apps: advanced dynamic delegation
@@ -654,8 +654,9 @@ in an explicitly labelled advanced section.
 Every `PAGI::Response` subclass remains an independently usable application
 component through `to_app`. The public `respond` method is removed. Response
 continues to expose construction, metadata, header, cookie, body inspection,
-subclass rendering, snapshot, and `protocol_response_capability` contracts
-already defined by the response-family design.
+subclass rendering, per-invocation delivery, and
+`protocol_response_capability` contracts already defined by the
+response-family design.
 
 Response delivery moves behind a protected/private emission seam used by:
 
@@ -669,19 +670,35 @@ The private seam is not a second public application protocol. Subclasses use
 the documented representation and delivery hooks, not a public `respond`
 compatibility method.
 
-### 10.2 Snapshot timing
+### 10.2 Exact-object retention and invocation timing
 
-`Response->to_app` captures a stable snapshot when called.
+`Response->to_app` retains the exact Response object. PAGI does not clone,
+freeze, reconstruct, serialize, or inspect arbitrary Response subclass
+storage. This preserves subclass identity and configured state instead of
+manufacturing a partial second object.
 
-- A Response placed directly in Route is snapshotted at Router compilation.
-- A Response returned from a handler is snapshotted when that result is
-  invoked for the request.
-- Calling `to_app` again captures a new snapshot.
-- An unchanged compiled snapshot can serve concurrent invocations.
+- A Response placed directly in Route remains the object retained when Router
+  compilation calls its `to_app`.
+- A Response returned from a handler remains the object whose `to_app` is
+  invoked for that request.
+- Calling `to_app` again creates another application closure over the same
+  object.
+- Deliberate later mutation affects later invocations of every retained
+  application closure. That shared-object behavior is caller-owned.
 
-Mutation after a particular `to_app` call does not affect that compiled app.
-This is the same fresh-compilation contract as the existing response-family
-design.
+Each invocation validates and derives plain wire or delivery values before its
+first send. Buffered responses capture body, status, and wire headers. File
+builds its complete request-local delivery plan. Stream captures producer,
+status, and wire headers before starting its unchanged lifecycle. Redirect and
+Problem validate their response-owned invariants during that derivation, so a
+stale object fails before response start.
+
+An invocation uses only those captured values after its first send, so later
+mutation cannot split that invocation's event sequence. An unchanged object
+can serve concurrent invocations, each with its own request-local plan and
+lifecycle. Concurrent mutation while an invocation is deriving its values is
+unsupported; this contract does not claim arbitrary concurrent mutation
+safety.
 
 ### 10.3 Protocol denial and settlement preservation
 
@@ -1329,7 +1346,8 @@ verification must establish these outcomes:
 - Request handlers return immediate or Future-backed Response and general app
   values with the documented per-invocation compilation, failure, remaining-
   body, unchanged-scope, and concurrency behavior;
-- every Response subclass preserves snapshot, HEAD, File, range, Stream,
+- every Response subclass preserves exact-object retention, per-invocation
+  delivery planning, HEAD, File, range, Stream,
   backpressure, disconnect, cancellation, denial, decline, and settlement
   behavior through `to_app` and `invoke_app`;
 - the final mechanical `respond` removal passes the existing lifecycle and

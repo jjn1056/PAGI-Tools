@@ -158,22 +158,6 @@ sub header {
     return $self->SUPER::header($name, $value);
 }
 
-sub _snapshot {
-    my ($self) = @_;
-    my %copy = (
-        _path          => $self->{_path},
-        _etag_policy   => $self->{_etag_policy},
-        _handle_ranges => $self->{_handle_ranges},
-        _headers       => $self->{_headers}->clone,
-    );
-    $copy{_status} = $self->{_status} if $self->has_status;
-    for my $name (qw(filename inline offset length)) {
-        $copy{"_$name"} = $self->{"_$name"}
-            if exists $self->{"_$name"};
-    }
-    return bless \%copy, ref($self);
-}
-
 sub _plan_for_scope {
     my ($self, $scope) = @_;
     for my $header (@{$self->{_headers}->to_pairs}) {
@@ -227,30 +211,30 @@ async sub _respond_with_plan {
         unless blessed($plan) && $plan->isa('PAGI::Response::File::Plan');
 
     my $status = $plan->status == 200 ? $self->status : $plan->status;
+    my $headers = $self->_wire_headers_for_plan($plan);
+    my $body_event = $plan->body_event;
     await Future->wrap($send->({
         type    => 'http.response.start',
         status  => $status,
-        headers => $self->_wire_headers_for_plan($plan),
+        headers => $headers,
     }))->without_cancel;
-    await Future->wrap($send->($plan->body_event))->without_cancel;
+    await Future->wrap($send->($body_event))->without_cancel;
     return;
 }
 
 async sub respond {
     my ($self, $scope, $receive, $send) = @_;
     PAGI::Response::_validate_http_triplet($scope, $receive, $send);
-    my $snapshot = $self->_snapshot;
-    my $plan = $snapshot->_plan_for_scope($scope);
-    await $snapshot->_respond_with_plan($send, $plan);
+    my $plan = $self->_plan_for_scope($scope);
+    await $self->_respond_with_plan($send, $plan);
     return;
 }
 
 sub to_app {
     my ($self) = @_;
-    my $snapshot = $self->_snapshot;
     return async sub {
         my ($scope, $receive, $send) = @_;
-        await $snapshot->respond($scope, $receive, $send);
+        await $self->respond($scope, $receive, $send);
         return;
     };
 }
@@ -400,9 +384,10 @@ a range.
 =head1 METHODS
 
 C<respond> performs all file inspection before response start, then awaits
-response start and the plan's one terminal body event. C<to_app> captures a
-reusable configuration snapshot. C<is_buffered> returns false, C<body> croaks,
-and
+response start and the plan's one terminal body event. C<to_app> retains the
+exact File object, so later deliberate changes affect later invocations while
+each request keeps its complete pre-start plan. C<is_buffered> returns false,
+C<body> croaks, and
 C<protocol_response_capability> returns C<undef>.
 
 The capability opt-out is independent of buffering: Stream remains eligible

@@ -18,6 +18,41 @@ sub receive { sub { Future->done({ type => 'http.request', body => '', more => 0
     sub calls { $_[0]{calls} }
 }
 
+{
+    package T::ConfiguredResponse;
+    use Scalar::Util qw(refaddr);
+    use parent -norequire, 'PAGI::Response';
+
+    my %configured_status;
+
+    sub new {
+        my ($class, $body, $status, @pairs) = @_;
+        my $self = $class->SUPER::new($body, @pairs);
+        $configured_status{refaddr($self)} = $status;
+        return $self;
+    }
+
+    sub configure_status {
+        my ($self, $status) = @_;
+        PAGI::Response::_validate_status($status);
+        $configured_status{refaddr($self)} = 0 + $status;
+        return $self;
+    }
+
+    sub replace_body {
+        my ($self, $body) = @_;
+        PAGI::Response::_require_bytes('configured response body', $body);
+        $self->{_body} = $body;
+        return $self;
+    }
+
+    sub status {
+        my ($self, $status) = @_;
+        return $self->SUPER::status($status) if @_ == 2;
+        return $configured_status{refaddr($self)} // $self->SUPER::status;
+    }
+}
+
 subtest 'base bytes retain metadata and byte invariants' => sub {
     my $bytes = "abc\x00";
     my $res = PAGI::Response->new(
@@ -149,79 +184,65 @@ subtest 'respond validates the full triplet, awaits each send, and protects fram
         'legacy one-argument respond is rejected as an invalid scope';
 };
 
-subtest 'response invocation and to_app use stable snapshots' => sub {
-    my $res = PAGI::Response->new('body', status => 201, headers => ['X-Original' => 'yes']);
+subtest 'to_app retains the exact Response and each invocation captures one delivery plan' => sub {
+    my $res = T::ConfiguredResponse->new(
+        'first', 201, headers => ['X-Version' => 'first'],
+    );
     my $app = $res->to_app;
-    $res->status(202)->remove_header('X-Original')->header('X-Later' => 'yes');
+    $res->configure_status(202)
+        ->replace_body('second')
+        ->remove_header('X-Version')
+        ->header('X-Version' => 'second');
 
-    my (@one, @two);
-    my ($one_start, $two_start) = (Future->new, Future->new);
-    my ($one_calls, $two_calls) = (0, 0);
-    my $send_one = sub { push @one, $_[0]; return ++$one_calls == 1 ? $one_start : Future->done };
-    my $send_two = sub { push @two, $_[0]; return ++$two_calls == 1 ? $two_start : Future->done };
-    my $one_emission = $res->respond(http_scope(), receive(), $send_one);
-    my $two_emission = $res->respond(http_scope(), receive(), $send_two);
-    is scalar @one, 1, 'first concurrent invocation emitted its start';
-    is scalar @two, 1, 'second concurrent invocation emitted its start';
-    $one_start->done;
-    $one_emission->get;
-    is \@one, [
-        {
-            type    => 'http.response.start',
-            status  => 202,
-            headers => [
-                ['Content-Type' => 'application/octet-stream'],
-                ['X-Later' => 'yes'],
-                ['content-length' => 4],
-            ],
+    my @first;
+    my $first_start = Future->new;
+    my $first_calls = 0;
+    my $first_emission = $app->(
+        http_scope(), receive(),
+        sub {
+            push @first, $_[0];
+            return ++$first_calls == 1 ? $first_start : Future->done;
         },
-        { type => 'http.response.body', body => 'body', more => 0 },
-    ], 'first invocation completes its own start/body sequence';
-    is \@two, [
-        {
-            type    => 'http.response.start',
-            status  => 202,
-            headers => [
-                ['Content-Type' => 'application/octet-stream'],
-                ['X-Later' => 'yes'],
-                ['content-length' => 4],
-            ],
-        },
-    ], 'second invocation remains blocked without a crossed body';
+    );
+    is scalar @first, 1, 'the first invocation emits its captured start event';
+    ok !$first_emission->is_ready, 'the first invocation awaits response start';
 
-    $two_start->done;
-    $two_emission->get;
-    is \@one, [
+    $res->configure_status(203)
+        ->replace_body('third')
+        ->remove_header('X-Version')
+        ->header('X-Version' => 'third');
+    $first_start->done;
+    $first_emission->get;
+    is \@first, [
         {
             type    => 'http.response.start',
             status  => 202,
             headers => [
                 ['Content-Type' => 'application/octet-stream'],
-                ['X-Later' => 'yes'],
-                ['content-length' => 4],
+                ['X-Version' => 'second'],
+                ['content-length' => 6],
             ],
         },
-        { type => 'http.response.body', body => 'body', more => 0 },
-    ], 'settling the second invocation does not alter the first sequence';
-    is \@two, [
-        {
-            type    => 'http.response.start',
-            status  => 202,
-            headers => [
-                ['Content-Type' => 'application/octet-stream'],
-                ['X-Later' => 'yes'],
-                ['content-length' => 4],
-            ],
-        },
-        { type => 'http.response.body', body => 'body', more => 0 },
-    ], 'second invocation completes its own start/body sequence';
+        { type => 'http.response.body', body => 'second', more => 0 },
+    ], 'mutation while start is parked cannot split one start/body plan';
 
-    my @snapshot;
-    $app->(http_scope(), receive(), sub { push @snapshot, $_[0]; Future->done })->get;
-    is $snapshot[0]{status}, 201, 'to_app retained status at compilation';
-    is $snapshot[0]{headers}, [
-        ['X-Original' => 'yes'], ['Content-Type' => 'application/octet-stream'], ['content-length' => 4],
-    ], 'to_app retained header snapshot at compilation';
+    my @second;
+    $app->(
+        http_scope(), receive(),
+        sub { push @second, $_[0]; Future->done },
+    )->get;
+    is \@second, [
+        {
+            type    => 'http.response.start',
+            status  => 203,
+            headers => [
+                ['Content-Type' => 'application/octet-stream'],
+                ['X-Version' => 'third'],
+                ['content-length' => 5],
+            ],
+        },
+        { type => 'http.response.body', body => 'third', more => 0 },
+    ], 'a later invocation observes later deliberate subclass and metadata changes';
 };
 
 {

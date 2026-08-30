@@ -28,7 +28,7 @@ Common flat C<headers> and C<content_type> are accepted, but callers cannot
 compete with the response-owned Location field. The chosen status and exact
 single Location remain tied to the buffered HTML body. Mutations that would
 stale those semantics are rejected directly or, for the mutable header
-container, when the response is snapshotted before emission.
+container, while deriving the invocation's delivery values before emission.
 
 =cut
 
@@ -96,13 +96,10 @@ sub remove_header {
     return $self->SUPER::remove_header($name);
 }
 
-sub _snapshot {
+sub _emission_plan {
     my ($self) = @_;
     $self->_validate_redirect_invariants;
-    my $copy = $self->SUPER::_snapshot;
-    $copy->{_redirect_status} = $self->{_redirect_status};
-    $copy->{_redirect_location} = $self->{_redirect_location};
-    return $copy;
+    return $self->SUPER::_emission_plan;
 }
 
 sub _validate_redirect_invariants {

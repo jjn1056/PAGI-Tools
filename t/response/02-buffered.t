@@ -187,7 +187,7 @@ subtest 'Problem validates RFC 9457 members without materializing omissions' => 
         'Problem rejects duplicate constructor option names');
 };
 
-subtest 'Problem preserves explicit document status through mutation and snapshots' => sub {
+subtest 'Problem validates its document status before each retained-object invocation' => sub {
     my $locked = problem_response({ title => 'Locked', status => 422 });
     like(dies { $locked->status(409) }, qr/Problem document and HTTP statuses must agree/,
         'incompatible public status mutation is rejected');
@@ -204,24 +204,39 @@ subtest 'Problem preserves explicit document status through mutation and snapsho
             sub { push @events, $_[0]; Future->done },
         )->get;
     }, qr/Problem document and HTTP statuses must agree/,
-        'snapshot validation catches a fully qualified base mutation');
+        'invocation validation catches a fully qualified base mutation');
     is(\@events, [], 'an invalid Problem emits no event');
-    like(dies { $bypassed->to_app }, qr/Problem document and HTTP statuses must agree/,
-        'to_app refuses to capture an inconsistent Problem');
+    my $bypassed_app;
+    is(dies { $bypassed_app = $bypassed->to_app }, undef,
+        'to_app retains an inconsistent Problem without starting a response');
+    SKIP: {
+        skip 'current object-copy implementation rejects before invocation', 2
+            unless $bypassed_app;
+        my @bypassed_app_events;
+        like(dies {
+            $bypassed_app->(
+                { type => 'http' },
+                sub { Future->done },
+                sub { push @bypassed_app_events, $_[0]; Future->done },
+            )->get;
+        }, qr/Problem document and HTTP statuses must agree/,
+            'a retained inconsistent Problem is rejected at invocation');
+        is(\@bypassed_app_events, [], 'retained invalid Problem emits no event');
+    }
 
     my $stable = problem_response({ title => 'Stable', status => 422 });
     my $app = $stable->to_app;
     PAGI::Response::status($stable, 409);
-    my @snapshot_events;
-    $app->(
-        { type => 'http' },
-        sub { Future->done },
-        sub { push @snapshot_events, $_[0]; Future->done },
-    )->get;
-    is($snapshot_events[0]{status}, 422,
-        'compiled app retains the agreed Problem HTTP status');
-    is(decode_json($snapshot_events[1]{body})->{status}, 422,
-        'compiled app retains the matching document status');
+    my @later_events;
+    like(dies {
+        $app->(
+            { type => 'http' },
+            sub { Future->done },
+            sub { push @later_events, $_[0]; Future->done },
+        )->get;
+    }, qr/Problem document and HTTP statuses must agree/,
+        'mutation after to_app affects the later invocation');
+    is(\@later_events, [], 'later invalid Problem mutation fails before start');
 };
 
 subtest 'Redirect validates status and URI references then builds safe finite HTML' => sub {
@@ -300,11 +315,19 @@ subtest 'Redirect preserves response-owned status, Location, and body invariants
             "headers->$name mutation is rejected before emission");
         is(\@events, [], "headers->$name mutation emits no event");
 
-        my $for_snapshot = redirect_response('/canonical');
-        $mutate->($for_snapshot);
-        like(dies { $for_snapshot->to_app },
-            qr/Redirect requires exactly one canonical Location/,
-            "headers->$name mutation is rejected before to_app snapshot");
+        my $for_app = redirect_response('/canonical');
+        my $app = $for_app->to_app;
+        $mutate->($for_app);
+        my @app_events;
+        like(dies {
+            $app->(
+                { type => 'http' },
+                sub { Future->done },
+                sub { push @app_events, $_[0]; Future->done },
+            )->get;
+        }, qr/Redirect requires exactly one canonical Location/,
+            "headers->$name mutation after to_app is rejected at invocation");
+        is(\@app_events, [], "headers->$name retained-object failure emits no event");
     }
 
     my $status_bypass = redirect_response('/canonical');
@@ -317,25 +340,23 @@ subtest 'Redirect preserves response-owned status, Location, and body invariants
             sub { push @status_events, $_[0]; Future->done },
         )->get;
     }, qr/Redirect status is response-owned/,
-        'snapshot validation catches a fully qualified base status mutation');
+        'invocation validation catches a fully qualified base status mutation');
     is(\@status_events, [], 'a stale redirect body emits no event');
 
     my $stable = redirect_response('/canonical');
     my $app = $stable->to_app;
     $stable->headers->set('Location', '/mutated');
     PAGI::Response::status($stable, 301);
-    my @snapshot_events;
-    $app->(
-        { type => 'http' },
-        sub { Future->done },
-        sub { push @snapshot_events, $_[0]; Future->done },
-    )->get;
-    is($snapshot_events[0]{status}, 302,
-        'compiled app retains the canonical redirect status');
-    is(header_values($snapshot_events[0]{headers}, 'Location'), ['/canonical'],
-        'compiled app retains exactly one canonical Location');
-    like(decode('UTF-8', $snapshot_events[1]{body}, FB_CROAK), qr{/canonical},
-        'compiled app retains the body matching its canonical Location');
+    my @later_events;
+    like(dies {
+        $app->(
+            { type => 'http' },
+            sub { Future->done },
+            sub { push @later_events, $_[0]; Future->done },
+        )->get;
+    }, qr/Redirect status is response-owned/,
+        'invalid status mutation after to_app affects the later invocation');
+    is(\@later_events, [], 'later invalid Redirect mutation fails before start');
 };
 
 subtest 'Empty owns zero bytes without a default content type' => sub {

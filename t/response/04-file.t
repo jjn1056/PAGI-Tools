@@ -12,6 +12,19 @@ use PAGI::Response::File;
 use PAGI::Response::File::Plan;
 use PAGI::Routing::HeadBoundary;
 
+{
+    package T::ConfigurableFile;
+    use parent 'PAGI::Response::File';
+
+    sub select_path {
+        my ($self, $path) = @_;
+        die "configured File path must be a nonempty scalar\n"
+            unless defined($path) && !ref($path) && length($path);
+        $self->{_path} = $path;
+        return $self;
+    }
+}
+
 sub http_scope {
     my (%changes) = @_;
     return {
@@ -394,25 +407,55 @@ subtest 'strict single ranges operate against full files and logical windows' =>
         'disabled range handling sends the complete logical window');
 };
 
-subtest 'trusted path ownership, snapshots, and send settlement stay explicit' => sub {
+subtest 'trusted path ownership, retained configuration, and send settlement stay explicit' => sub {
     my $root = tempdir(CLEANUP => 1);
     my $selected = File::Spec->catfile($root, 'selected.txt');
+    my $second = File::Spec->catfile($root, 'second.txt');
+    my $third = File::Spec->catfile($root, 'third.txt');
     my $url_named = File::Spec->catfile($root, 'request-path-is-not-a-file');
     write_file($selected, 'selected');
+    write_file($second, 'second');
+    write_file($third, 'third');
     write_file($url_named, 'must not be selected');
 
-    my $response = file_response($selected, headers => ['X-Snapshot' => 'old']);
+    my $response = T::ConfigurableFile->new(
+        $selected, headers => ['X-Version' => 'first'],
+    );
     my $app = $response->to_app;
-    $response->remove_header('X-Snapshot')->header('X-Snapshot' => 'new');
+    $response->select_path($second)
+        ->remove_header('X-Version')
+        ->header('X-Version' => 'second');
+
+    my $app_start = Future->new;
     my @app_events;
-    $app->(
+    my $app_calls = 0;
+    my $app_running = $app->(
         http_scope(path => '/request-path-is-not-a-file'), receive(),
-        sub { push @app_events, $_[0]; Future->done },
-    )->get;
-    is($app_events[1]{file}, $selected,
+        sub {
+            push @app_events, $_[0];
+            return ++$app_calls == 1 ? $app_start : Future->done;
+        },
+    );
+    $response->select_path($third)
+        ->remove_header('X-Version')
+        ->header('X-Version' => 'third');
+    $app_start->done;
+    $app_running->get;
+
+    is($app_events[1]{file}, $second,
         'File never maps the untrusted request URL path to disk');
-    is(event_header($app_events[0], 'x-snapshot'), 'old',
-        'to_app captures an independent File configuration snapshot');
+    is(event_header($app_events[0], 'x-version'), 'second',
+        'mutation while start is parked does not split the request-local File plan');
+
+    my @later_events;
+    $app->(
+        http_scope(), receive(),
+        sub { push @later_events, $_[0]; Future->done },
+    )->get;
+    is($later_events[1]{file}, $third,
+        'a later invocation observes the later selected path');
+    is(event_header($later_events[0], 'x-version'), 'third',
+        'a later invocation observes later Response metadata');
 
     my $start_gate = Future->new;
     my $body_gate = Future->new;

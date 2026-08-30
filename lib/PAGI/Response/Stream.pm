@@ -76,31 +76,30 @@ sub body {
     croak 'Stream response has no buffered body';
 }
 
-sub _snapshot {
-    my ($self) = @_;
-    my %copy = (
-        _producer => $self->{_producer},
-        _headers  => $self->{_headers}->clone,
-    );
-    $copy{_status} = $self->{_status} if $self->has_status;
-    return bless \%copy, ref($self);
-}
-
 sub _stream_wire_headers {
     my ($self) = @_;
     return $self->{_headers}->to_pairs;
 }
 
+sub _stream_delivery_plan {
+    my ($self) = @_;
+    return {
+        producer => $self->{_producer},
+        status   => $self->status,
+        headers  => $self->_stream_wire_headers,
+    };
+}
+
 sub respond {
     my ($self, $scope, $receive, $send) = @_;
     PAGI::Response::_validate_http_triplet($scope, $receive, $send);
-    my $snapshot = $self->_snapshot;
+    my $plan = $self->_stream_delivery_plan;
 
     my $control = {
         cancel_signal => Future->new,
     };
-    my $lifecycle = $snapshot->_run_lifecycle(
-        $scope, $receive, $send, $control->{cancel_signal},
+    my $lifecycle = $self->_run_lifecycle(
+        $plan, $scope, $receive, $send, $control->{cancel_signal},
     );
     $control->{lifecycle} = $lifecycle;
     $lifecycle->on_ready(sub {
@@ -119,12 +118,12 @@ sub respond {
 }
 
 async sub _run_lifecycle {
-    my ($snapshot, $scope, $receive, $send, $cancel_signal) = @_;
+    my ($self, $plan, $scope, $receive, $send, $cancel_signal) = @_;
 
     await Future->wrap($send->({
         type    => 'http.response.start',
-        status  => $snapshot->status,
-        headers => $snapshot->_stream_wire_headers,
+        status  => $plan->{status},
+        headers => $plan->{headers},
     }));
 
     my $writer = PAGI::Response::Writer->_new(
@@ -145,7 +144,7 @@ async sub _run_lifecycle {
 
     my $producer_returned;
     my $producer_called = eval {
-        $producer_returned = $snapshot->{_producer}->($writer);
+        $producer_returned = $plan->{producer}->($writer);
         1;
     };
     unless ($producer_called) {
@@ -216,10 +215,9 @@ async sub _run_lifecycle {
 
 sub to_app {
     my ($self) = @_;
-    my $snapshot = $self->_snapshot;
     return async sub {
         my ($scope, $receive, $send) = @_;
-        await $snapshot->respond($scope, $receive, $send);
+        await $self->respond($scope, $receive, $send);
         return;
     };
 }

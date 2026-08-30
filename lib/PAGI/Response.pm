@@ -84,8 +84,10 @@ matching Content-Type.
 A Response stores no request scope, receive/send callbacks, connection,
 Writer, or per-request mutation. An unchanged value can be emitted
 concurrently. Header mutation before emission is supported, but mutating a
-Response concurrently with emission is not. Every C<respond> call takes an
-invocation-local snapshot; C<to_app> captures its stable snapshot when called.
+Response concurrently with emission is not. C<to_app> retains the exact
+Response object. Each invocation derives its own plain delivery values before
+response start, so deliberate mutation affects later invocations without
+splitting an invocation already in progress.
 
 A Response is not a terminal deployed root. C<to_app> produces one HTTP-only
 native application; L<PAGI::Compose> remains the usual root owner for lifespan,
@@ -122,9 +124,9 @@ replacement response.
 
 =head2 to_app
 
-Returns an async HTTP application coderef with a response snapshot captured
-when C<to_app> is called. Calling it again after deliberate metadata mutation
-captures a fresh snapshot.
+Returns an async HTTP application coderef retaining this exact Response.
+Deliberate later mutation affects later invocations. Concurrent mutation while
+an invocation derives its delivery values is unsupported.
 
 =head2 metadata
 
@@ -392,14 +394,14 @@ sub body {
     return $body;
 }
 
-sub _snapshot {
+sub _emission_plan {
     my ($self) = @_;
-    my %copy = (
-        _body    => $self->{_body},
-        _headers => $self->{_headers}->clone,
-    );
-    $copy{_status} = $self->{_status} if $self->has_status;
-    return bless \%copy, ref($self);
+    my $body = $self->body;
+    return {
+        body    => $body,
+        status  => $self->status,
+        headers => $self->_wire_headers(length $body),
+    };
 }
 
 sub _wire_headers {
@@ -417,23 +419,23 @@ sub _wire_headers {
 async sub respond {
     my ($self, $scope, $receive, $send) = @_;
     _validate_http_triplet($scope, $receive, $send);
-    my $snapshot = $self->_snapshot;
-    my $body = $snapshot->{_body};
+    my $plan = $self->_emission_plan;
     await $send->({
         type    => 'http.response.start',
-        status  => $snapshot->status,
-        headers => $snapshot->_wire_headers(length $body),
+        status  => $plan->{status},
+        headers => $plan->{headers},
     });
-    await $send->({ type => 'http.response.body', body => $body, more => 0 });
+    await $send->({
+        type => 'http.response.body', body => $plan->{body}, more => 0,
+    });
     return;
 }
 
 sub to_app {
     my ($self) = @_;
-    my $snapshot = $self->_snapshot;
     return async sub {
         my ($scope, $receive, $send) = @_;
-        await $snapshot->respond($scope, $receive, $send);
+        await $self->respond($scope, $receive, $send);
         return;
     };
 }

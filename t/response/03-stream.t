@@ -10,6 +10,13 @@ use PAGI::Response::Stream;
 {
     package T::StreamSubclass;
     use parent 'PAGI::Response::Stream';
+
+    sub replace_producer {
+        my ($self, $producer) = @_;
+        die "configured producer must be a coderef\n" unless ref($producer) eq 'CODE';
+        $self->{_producer} = $producer;
+        return $self;
+    }
 }
 
 sub http_scope {
@@ -111,24 +118,75 @@ subtest 'start settles before producer invocation and producer Future completion
         'producer completion triggers one automatic terminal event');
 };
 
-subtest 'immediate producer completion and to_app configuration snapshots are supported' => sub {
-    my $producer_calls = 0;
-    my $stream = PAGI::Response::Stream->new(
-        sub { ++$producer_calls; return 'immediate completion' },
+subtest 'to_app retains Stream and each invocation captures producer and start values' => sub {
+    my @producer_calls;
+    my $stream = T::StreamSubclass->new(
+        sub { push @producer_calls, 'first'; return $_[0]->write('first') },
         status  => 202,
-        headers => ['X-Snapshot' => 'old'],
+        headers => ['X-Version' => 'first'],
     );
     my $app = $stream->to_app;
-    $stream->status(203)->remove_header('X-Snapshot')->header('X-Snapshot' => 'new');
+    $stream->status(203)
+        ->remove_header('X-Version')
+        ->header('X-Version' => 'second');
+    $stream->replace_producer(
+        sub { push @producer_calls, 'second'; return $_[0]->write('second') },
+    );
 
-    my @events;
-    $app->(http_scope(), receive(), sub { push @events, $_[0]; Future->done })->get;
-    is($producer_calls, 1, 'an immediate producer result is wrapped and awaited');
-    is($events[0]{status}, 202, 'to_app retains the compiled status snapshot');
-    is($events[0]{headers}, [
-        ['X-Snapshot' => 'old'],
-        ['Content-Type' => 'application/octet-stream'],
-    ], 'to_app retains the compiled header snapshot without calculating Content-Length');
+    my @first;
+    my $start = Future->new;
+    my $send_calls = 0;
+    my $running = $app->(
+        http_scope(), receive(),
+        sub {
+            push @first, $_[0];
+            return ++$send_calls == 1 ? $start : Future->done;
+        },
+    );
+    is(\@producer_calls, [], 'producer waits for response-start settlement');
+
+    $stream->status(206)
+        ->remove_header('X-Version')
+        ->header('X-Version' => 'third');
+    $stream->replace_producer(
+        sub { push @producer_calls, 'third'; return $_[0]->write('third') },
+    );
+    $start->done;
+    $running->get;
+
+    is(\@producer_calls, ['second'],
+        'mutation while start is parked does not replace this invocation producer');
+    is(\@first, [
+        {
+            type    => 'http.response.start',
+            status  => 203,
+            headers => [
+                ['Content-Type' => 'application/octet-stream'],
+                ['X-Version' => 'second'],
+            ],
+        },
+        { type => 'http.response.body', body => 'second', more => 1 },
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'the first invocation uses one pre-start Stream delivery plan');
+
+    my @second;
+    $app->(
+        http_scope(), receive(),
+        sub { push @second, $_[0]; Future->done },
+    )->get;
+    is(\@producer_calls, ['second', 'third'],
+        'a later invocation observes the later producer change');
+    is($second[0], {
+        type    => 'http.response.start',
+        status  => 206,
+        headers => [
+            ['Content-Type' => 'application/octet-stream'],
+            ['X-Version' => 'third'],
+        ],
+    }, 'a later invocation observes later status and header changes');
+    is($second[1], {
+        type => 'http.response.body', body => 'third', more => 1,
+    }, 'a later invocation runs the newly configured producer');
 };
 
 subtest 'Stream exposes no inherited buffered body, including through subclasses' => sub {
