@@ -313,18 +313,19 @@ async sub _send_protocol_not_found {
 sub _compile_protocol_leaf {
     my ($class, $route) = @_;
 
+    my $endpoint = $route->endpoint;
     my $app;
-    if ($route->is_raw || ref($route->target) ne 'CODE') {
-        my $raw_app = PAGI::Utils::to_app($route->target);
+    if (ref($endpoint) ne 'CODE') {
+        my $compiled = PAGI::Utils::to_app($endpoint);
         $app = async sub {
             my ($scope, $receive, $send) = @_;
-            my $returned = $raw_app->($scope, $receive, $send);
+            my $returned = $compiled->($scope, $receive, $send);
             await Future->wrap($returned);
             return;
         };
     }
     else {
-        my $handler = $route->target;
+        my $handler = $endpoint;
         my $kind = $route->kind;
         $app = async sub {
             my ($scope, $receive, $send) = @_;
