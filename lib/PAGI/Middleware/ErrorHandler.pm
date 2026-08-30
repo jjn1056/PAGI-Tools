@@ -69,25 +69,24 @@ It must return an immediate or Future-backed concrete L<PAGI::Response> value.
 ErrorHandler applies the configured or exception-provided
 status through C<status_try> only after the handler returns; an explicit
 renderer status wins. It then emits the value through
-C<respond($scope, $receive, $send)>. A custom renderer owns its response
+the Response application contract. A custom renderer owns its response
 content type and cache policy unchanged.
 
-Use the handler seam to force a fixed Pages representation:
+Use the handler seam to force a fixed representation:
 
+    use PAGI::Response qw(problem_response);
     handler => sub {
         my ($request, $error) = @_;
-        return PAGI::Pages->internal_server_error(
-            $request,
-            as => 'json',
-        );
+        return problem_response({
+            title  => 'Internal Server Error',
+            status => 500,
+        });
     }
 
-The wrapper is required: ErrorHandler supplies C<($request, $error)>, while a
-Pages factory accepts one explicit request source followed by its own named
-options. The wrapper calls the Pages factory with C<$request> as its source and
-C<as> as a factory option. Passing the factory directly would instead treat the
-extra error argument as Pages input and reject it. The wrapper may inspect
-C<$error> when it deliberately chooses safe page fields, but Pages does not
+The wrapper may inspect C<$request> or C<$error> when it deliberately chooses
+safe response fields. ErrorHandler requires a concrete Response from this
+custom renderer; source-free Pages application values belong at Route,
+Mount, Router-default, or Compose application boundaries instead. Pages does not
 consume that callback metadata itself.
 
 =back

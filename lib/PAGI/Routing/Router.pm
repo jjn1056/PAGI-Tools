@@ -83,7 +83,10 @@ PAGI::Routing::Router - Immutable declarative router description
 Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions.
 Construction accepts C<routes>, C<middleware>, C<desc>, and an optional native
-C<http_default>. It validates direct nodes, middleware descriptors,
+C<http_default>. A CODE default is a native three-channel application; an
+instantiated C<to_app> object is normalized as one. A source-free Pages
+application works directly, while a custom one-Request default uses
+L<PAGI::Utils/request_response>. The Router validates direct nodes, middleware descriptors,
 descriptions, canonical slash addresses, and child Router ancestry. A Router
 description remains placement-free: mounting it never writes a parent path or
 local name onto the child. This is compile-time configuration only; the object
@@ -112,7 +115,7 @@ C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
 identity. C<desc> returns the declaration value. C<http_default> returns the
 declared HTTP application unchanged, or undef when it was omitted. It is
 validated at construction but not compiled there. Leaf/mount-only accessors
-such as C<name>, C<path>, C<target>, C<methods>, and C<constraints> return
+such as C<name>, C<path>, C<endpoint>, C<methods>, and C<constraints> return
 undef.
 
 =head1 METHODS
@@ -167,6 +170,9 @@ Retain that coderef rather than compiling per request.
 HTTP exhaustion is a complete Router outcome. NONE invokes C<http_default> when
 configured and otherwise emits the stock concrete 404 response.
 PARTIAL emits the Router's compliant 405 with an authoritative C<Allow> header.
+Resolved Route methods include explicit declarations, one construction-time
+C<allowed_methods> snapshot from an application object, or the GET plus
+automatic HEAD default. Scalar C<< methods => '*' >> is unrestricted.
 Selected child Router outcomes remain owned by that child. L<PAGI::Compose>
 remains useful at an application root for middleware, lifespan, error handling,
 and response lifecycle safety; it is not required to make Router 404 or 405

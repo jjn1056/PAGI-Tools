@@ -11,6 +11,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Endpoint::Router ();
 use PAGI::Response::Text ();
 use PAGI::Routing qw(middleware mount route router sse websocket);
+use PAGI::Utils qw(as_app);
 
 sub scope {
     my (%change) = @_;
@@ -198,7 +199,6 @@ sub immutable_node_projection {
         name => $node->name,
         desc => $node->desc,
         methods => $node->methods,
-        is_raw => $node->can('is_raw') && $node->is_raw ? 1 : 0,
     };
     my $child = $node->can('app') && blessed($node->app)
         && $node->app->isa('PAGI::Routing::Router') ? $node->app : undef;
@@ -365,34 +365,34 @@ my @migration_cases = (
                     {
                         kind => 'route', path => '/resource/{id}',
                         name => 'post_resource', desc => 'POST resource',
-                        methods => ['POST'], is_raw => 0,
+                        methods => ['POST'],
                     },
                     {
                         kind => 'route', path => '/resource/{id}',
                         name => 'get_resource', desc => 'GET resource',
-                        methods => ['GET', 'HEAD'], is_raw => 0,
+                        methods => ['GET', 'HEAD'],
                     },
                     {
                         kind => 'mount', path => '/api/{tenant}', name => 'api',
-                        desc => 'API boundary', methods => undef, is_raw => 0,
+                        desc => 'API boundary', methods => undef,
                         router => {
                             desc => 'Child routes',
                             routes => [{
                                 kind => 'route', path => '/detail/{child_id}',
                                 name => 'detail', desc => 'Mounted detail',
-                                methods => ['GET', 'HEAD'], is_raw => 0,
+                                methods => ['GET', 'HEAD'],
                             }],
                         },
                     },
                     {
                         kind => 'websocket', path => '/socket/{room}',
                         name => 'socket', desc => 'Socket route',
-                        methods => undef, is_raw => 0,
+                        methods => undef,
                     },
                     {
                         kind => 'sse', path => '/events/{stream}',
                         name => 'events', desc => 'Event route',
-                        methods => undef, is_raw => 0,
+                        methods => undef,
                     },
                 ],
             };
@@ -499,15 +499,17 @@ my @migration_cases = (
         },
     },
     {
-        name => 'raw is an explicit native-channel route form',
+        name => 'as_app is the explicit native-channel Route form',
         run  => sub {
             my @seen;
             my $router = PAGI::App::Router->new;
-            $router->get('/raw' => raw => native_app('raw', \@seen));
-            is(response_body(run_scope($router->to_app, scope(path => '/raw'))),
-                'raw', 'the raw target emits its native response');
-            is($seen[0]{arg_count}, 3, 'raw receives scope, receive, and send');
-            is($seen[0]{scope}{path}, '/raw', 'raw does not strip its matched path');
+            $router->get('/native' => as_app(native_app('native', \@seen)));
+            is(response_body(run_scope($router->to_app, scope(path => '/native'))),
+                'native', 'the application endpoint emits its native response');
+            is($seen[0]{arg_count}, 3,
+                'the application endpoint receives scope, receive, and send');
+            is($seen[0]{scope}{path}, '/native',
+                'the exact Route does not strip its matched path');
         },
     },
     {
@@ -894,78 +896,81 @@ my @migration_cases = (
         },
     },
     {
-        name => 'raw routes and opaque mounts have different ownership',
+        name => 'application Routes and opaque Mounts have different ownership',
         run  => sub {
-            my (@raw_seen, @mount_seen);
+            my (@route_seen, @mount_seen);
             my $router = PAGI::App::Router->new;
-            $router->get('/raw-http/{id}' => raw =>
-                channel_probe('raw-http', \@raw_seen))->name('raw_http');
-            $router->websocket('/raw-ws/{room}' => raw =>
-                channel_probe('raw-ws', \@raw_seen))->name('raw_ws');
-            $router->sse('/raw-sse/{channel}' => raw =>
-                channel_probe('raw-sse', \@raw_seen))->name('raw_sse');
+            $router->get('/native-http/{id}' =>
+                as_app(channel_probe('native-http', \@route_seen)))
+                ->name('native_http');
+            $router->websocket('/native-ws/{room}' =>
+                as_app(channel_probe('native-ws', \@route_seen)))
+                ->name('native_ws');
+            $router->sse('/native-sse/{channel}' =>
+                as_app(channel_probe('native-sse', \@route_seen)))
+                ->name('native_sse');
             $router->mount('/opaque/{tenant}',
                 app => channel_probe('mount', \@mount_seen));
 
             my $routing = $router->to_router;
             is([map { $routing->route_named($_)->kind }
-                    qw(/raw_http /raw_ws /raw_sse)],
+                    qw(/native_http /native_ws /native_sse)],
                 [qw(route websocket sse)],
-                'raw leaves remain visible with their protocol kinds');
+                'application leaves remain visible with their protocol kinds');
             ok(!defined $routing->route_named('/opaque/hidden'),
                 'opaque mount internals are not inspectable');
 
             my $app = $routing->to_app;
             my ($http_events, $http_receive, $http_send) =
                 run_scope_with_channels($app, scope(
-                    method => 'GET', path => '/raw-http/7', root_path => '/edge'));
+                    method => 'GET', path => '/native-http/7', root_path => '/edge'));
             my ($ws_events, $ws_receive, $ws_send) =
                 run_scope_with_channels($app, scope(
                     type => 'websocket', method => undef,
-                    path => '/raw-ws/lobby', root_path => '/edge'));
+                    path => '/native-ws/lobby', root_path => '/edge'));
             my ($sse_events, $sse_receive, $sse_send) =
                 run_scope_with_channels($app, scope(
                     type => 'sse', method => undef,
-                    path => '/raw-sse/news', root_path => '/edge'));
+                    path => '/native-sse/news', root_path => '/edge'));
 
             is([map { [$_->{label}, $_->{scope}{type}, $_->{arg_count}] }
-                    @raw_seen], [
-                    ['raw-http', 'http', 3],
-                    ['raw-ws', 'websocket', 3],
-                    ['raw-sse', 'sse', 3],
-                ], 'explicit raw HTTP, WebSocket, and SSE own native channels');
-            is([map { refaddr($_->{receive}) } @raw_seen], [
+                    @route_seen], [
+                    ['native-http', 'http', 3],
+                    ['native-ws', 'websocket', 3],
+                    ['native-sse', 'sse', 3],
+                ], 'application-valued HTTP, WebSocket, and SSE Routes own native channels');
+            is([map { refaddr($_->{receive}) } @route_seen], [
                 refaddr($http_receive),
                 refaddr($ws_receive),
                 refaddr($sse_receive),
-            ], 'raw leaves receive the exact supplied receive channels');
-            ok((grep { ref($_->{send}) eq 'CODE' } @raw_seen) == 3,
-                'raw leaves receive the Router-owned send boundary');
-            is([map { [$_->{scope}{path}, $_->{scope}{root_path}] } @raw_seen], [
-                ['/raw-http/7', '/edge'],
-                ['/raw-ws/lobby', '/edge'],
-                ['/raw-sse/news', '/edge'],
-            ], 'raw leaves preserve path and root_path');
+            ], 'application Routes receive the exact supplied receive channels');
+            ok((grep { ref($_->{send}) eq 'CODE' } @route_seen) == 3,
+                'application Routes receive the Router-owned send boundary');
+            is([map { [$_->{scope}{path}, $_->{scope}{root_path}] } @route_seen], [
+                ['/native-http/7', '/edge'],
+                ['/native-ws/lobby', '/edge'],
+                ['/native-sse/news', '/edge'],
+            ], 'application Routes preserve path and root_path');
             is([$http_events, $ws_events, $sse_events], [[], [], []],
-                'the raw probes own events without compiler response adaptation');
+                'the application probes own events without response adaptation');
 
             is([map {
                     my $frame = $_->{scope}{'pagi.routing'}{frames}[-1];
                     [$frame->{match}{kind}, $frame->{match}{name}]
-                } @raw_seen], [
-                    ['route', '/raw_http'],
-                    ['websocket', '/raw_ws'],
-                    ['sse', '/raw_sse'],
-                ], 'raw leaves publish selected leaf metadata');
+                } @route_seen], [
+                    ['route', '/native_http'],
+                    ['websocket', '/native_ws'],
+                    ['sse', '/native_sse'],
+                ], 'application Routes publish selected leaf metadata');
 
             my $wrong = run_scope($app, scope(
-                method => 'POST', path => '/raw-http/7'));
+                method => 'POST', path => '/native-http/7'));
             is(response_status($wrong), 405,
-                'raw-route method exhaustion emits the built-in 405');
+                'application-Route method exhaustion emits the built-in 405');
             is(response_header($wrong, 'Allow'), 'GET, HEAD',
-                'raw HTTP contributes its methods to the public response');
-            is(scalar @raw_seen, 3,
-                'the wrong-method request never invokes the raw HTTP target');
+                'the default GET application Route contributes automatic HEAD');
+            is(scalar @route_seen, 3,
+                'the wrong-method request never invokes the application endpoint');
 
             run_scope($app, scope(method => 'POST',
                 path => '/opaque/acme/http', root_path => '/edge'));

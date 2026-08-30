@@ -253,6 +253,11 @@ WebSocket and SSE handlers use their protocol-object operations and may complete
 immediately or through a Future. All response validation and protocol events
 belong to the shared compiler.
 
+For HTTP application objects, explicit Route methods win; otherwise
+C<allowed_methods> is snapshotted once when the immutable Route is built;
+otherwise GET plus automatic HEAD is used. Only scalar C<< methods => '*' >>
+is unrestricted. WebSocket and SSE leaves never consult that HTTP capability.
+
 =head1 APPLICATION LEAVES
 
 Endpoint accepts application objects at leaf positions after the optional
@@ -266,6 +271,11 @@ The application owns the native C<($scope, $receive, $send)> channels and
 route middleware still wraps it. An ordinary method-name target binds
 C<($endpoint, $protocol)>. An ordinary handler coderef passes through
 unchanged and receives one protocol object.
+
+A dynamic application returned by an HTTP handler is normalized per request.
+It receives the unchanged scope and remaining body stream, receives no
+lifespan replay, and remains opaque to the outer Router's reverse/schema
+metadata. Synchronous method handlers run inline and may block the event loop.
 
 =head1 MIDDLEWARE
 
@@ -359,7 +369,7 @@ method or protocol-object factory override.
 Each C<to_router> returns a fresh immutable snapshot, and each C<to_app>
 compiles one retained snapshot. Matching, middleware folds, Router-owned HTTP
 outcomes, first-seen method evidence, route metadata, reverse resolution, and
-request-local scope cloning are exactly those documented by
+request-local routing state are exactly those documented by
 L<PAGI::App::Router>. Endpoint adds only method binding over that machinery and
 forwards the Router's one-shot native C<http_default> declaration without
 adding separate fallback callback accessors.

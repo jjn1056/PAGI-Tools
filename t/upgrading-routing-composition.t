@@ -12,6 +12,7 @@ use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Response::Text ();
 use PAGI::Routing qw(middleware mount route router);
+use PAGI::Utils qw(as_app);
 
 {
     package Local::UpgradeEndpoint;
@@ -204,7 +205,7 @@ subtest 'executable routing-composition migration matrix' => sub {
         [404, 'endpoint missing'], 'app_as supplies a native application');
 };
 
-subtest 'Mount normalization and raw versus mounted application positions' => sub {
+subtest 'Route application and Mount positions preserve different ownership' => sub {
     my @seen;
     my $capture = sub {
         my ($kind) = @_;
@@ -215,7 +216,7 @@ subtest 'Mount normalization and raw versus mounted application positions' => su
         };
     };
     my $app = router(routes => [
-        route('/exact', raw => $capture->('raw')),
+        route('/exact' => as_app($capture->('route'))),
         mount('/prefix', app => $capture->('mount')),
         mount('/normalized', routes => [
             route('/' => sub { return PAGI::Response::Text->new('normalized') }),
@@ -234,9 +235,9 @@ subtest 'Mount normalization and raw versus mounted application positions' => su
     run_http($app, path => '/exact', raw_path => '/exact');
     run_http($app, path => '/prefix/tail', raw_path => '/prefix/tail');
     is(\@seen, [
-        ['raw', '/exact', ''],
+        ['route', '/exact', ''],
         ['mount', '/tail', '/prefix'],
-    ], 'raw keeps an exact leaf while Mount consumes and records its prefix');
+    ], 'Route keeps an exact leaf while Mount consumes and records its prefix');
 };
 
 subtest 'public documentation publishes one final routing model' => sub {
@@ -249,6 +250,24 @@ subtest 'public documentation publishes one final routing model' => sub {
         'lib/PAGI/Routing.pm',
     ) {
         like(slurp_file($file), $lead, "$file leads with the five-part model");
+    }
+
+    my $callable_mapping = qr{
+        Route\s+CODE\s+endpoint.*?one\s+(?:Request/WebSocket/SSE|Request,
+            \s*WebSocket,\s*or\s*SSE).*?
+        Route\s+to_app\s+object.*?native\s+PAGI\s+application.*?
+        Mount/Compose/default\s+CODE.*?native\s+PAGI\s+application.*?
+        handler\s+result.*?native\s+CODE.*?instantiated\s+to_app\s+object
+    }six;
+    for my $file (
+        'README.md',
+        'UPGRADING.md',
+        'lib/PAGI/Routing.pm',
+        'lib/PAGI/Tools/Tutorial.pod',
+        'lib/PAGI/Tools/Cookbook.pod',
+    ) {
+        like(slurp_file($file), $callable_mapping,
+            "$file publishes the complete callable mapping");
     }
 
     my @live_docs = (
@@ -364,6 +383,32 @@ subtest 'public documentation publishes one final routing model' => sub {
         'release note stays inside unreleased 0.002003');
     like($changes, qr/Route matches a complete URL leaf/,
         'release note records the routing composition redesign');
+
+    my @application_docs = (
+        'README.md', 'Changes', 'lib/PAGI/Tools.pm',
+        'lib/PAGI/Routing.pm', 'lib/PAGI/Routing/Route.pm',
+        'lib/PAGI/App/Router.pm', 'lib/PAGI/Endpoint/Router.pm',
+        'lib/PAGI/Pages.pm', 'lib/PAGI/Compose.pm',
+        'lib/PAGI/Middleware/Builder.pm',
+        'lib/PAGI/Tools/Tutorial.pod', 'lib/PAGI/Tools/Cookbook.pod',
+    );
+    for my $file (@application_docs) {
+        my $source = slurp_file($file);
+        unlike($source,
+            qr/\brequest_app\b|\b(?:welcome|status|redirect|not_found|gone|unauthorized|forbidden|method_not_allowed|conflict|too_many_requests|internal_server_error|bad_gateway|service_unavailable)_page\b|\braw\s*=>/,
+            "$file contains no retired application-boundary spelling");
+    }
+
+    my $route_pod = slurp_file('lib/PAGI/Routing/Route.pm');
+    unlike($route_pod, qr/C<raw>|C<target>|C<is_raw>|normal or raw target/i,
+        'Route POD has no deferred raw-marker or removed-accessor language');
+
+    my $cookbook = slurp_file('lib/PAGI/Tools/Cookbook.pod');
+    unlike($cookbook, qr/C<\/welcome> is an ordinary function handler/,
+        'Cookbook identifies the direct welcome() value as an application');
+    like($cookbook,
+        qr/deliberate mutation after C<to_app>.*caller-owned.*unwise.*valid/is,
+        'Cookbook records the approved exact-object mutation gotcha');
 };
 
 subtest 'Router http_default replaces application 404 middleware' => sub {
@@ -504,15 +549,15 @@ subtest 'native application positions reject package strings' => sub {
     }, qr/mount app must be a coderef or instantiated object with to_app/,
         'mutable Mount app rejects a package string');
     like(dies {
-        PAGI::App::Router->new->get('/raw' => raw => 'Local::LegacyApp');
-    }, qr/raw application must be a coderef or instantiated object with to_app/,
-        'raw application rejects a package string');
+        PAGI::App::Router->new->get('/application' => 'Local::LegacyApp');
+    }, qr/route endpoint must be a coderef or instantiated object with to_app/,
+        'Route application position rejects a package string');
     ok(!$INC{'Local/LegacyApp.pm'}, 'rejection never loads the package');
 };
 
 subtest 'direct Router remains low-level and Compose supplies safety' => sub {
     my $routing = router(routes => [
-        route('/silent' => raw => sub { return Future->done }),
+        route('/silent' => as_app(sub { return Future->done })),
     ]);
 
     my ($direct, $direct_error, $direct_warnings) = run_http(
@@ -577,7 +622,6 @@ subtest 'Router and Compose have no retired evidence channel and Context stays a
         'check' . 'point',
         'attempt' . 's',
         join('_', qw(routing declined)),
-        join('_', qw(allowed methods)),
     );
     for my $file (@files) {
         open my $handle, '<', $file or die "Cannot read $file: $!";

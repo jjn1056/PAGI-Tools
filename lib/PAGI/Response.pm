@@ -65,6 +65,7 @@ matching Content-Type.
 
     use Encode qw(encode);
     use PAGI::Response qw(response json_response);
+    use PAGI::Utils qw(invoke_app);
 
     my $json = json_response(
         { created => \1 },
@@ -77,7 +78,7 @@ matching Content-Type.
         content_type => 'text/plain; charset=iso-8859-1',
     );
 
-    await $json->respond($scope, $receive, $send);
+    await invoke_app($json, $scope, $receive, $send);
 
 =head1 VALUE AND APPLICATION BOUNDARIES
 
@@ -110,23 +111,17 @@ croak synchronously. Status defaults to 200 and body-bearing construction
 rejects 1xx, 204, 205, and 304. Default Content-Type is
 C<application/octet-stream>.
 
-=head2 respond
-
-    await $response->respond($scope, $receive, $send)
-
-Validates a native HTTP triplet, sends C<http.response.start>, waits for its
-Future, then sends and waits for one terminal C<http.response.body> event.
-Every send Future is awaited. C<respond($send)> has been removed; the complete
-triplet keeps request-local File planning and Stream connection state out of
-the reusable value. Preflight errors occur before start where possible; a
-genuine failed send Future propagates, and failure after start never sends a
-replacement response.
-
 =head2 to_app
 
 Returns an async HTTP application coderef retaining this exact Response.
 Deliberate later mutation affects later invocations. Concurrent mutation while
 an invocation derives its delivery values is unsupported.
+
+At a native triplet boundary, use L<PAGI::Utils/invoke_app> to invoke this or
+any other application value. Every send Future is awaited. Preflight errors
+occur before start where possible; a genuine failed send Future propagates,
+and failure after start never sends a replacement response. There is no public
+Response-specific emission method.
 
 =head2 metadata
 
@@ -147,7 +142,7 @@ memory strategy, independently of protocol adaptation.
     my $capability = $response->protocol_response_capability;
 
 Returns the inheritable versioned token C<body-events-v1>. It promises that
-C<respond> emits one C<http.response.start> followed only by ordinary byte
+C<to_app> emits one C<http.response.start> followed only by ordinary byte
 C<http.response.body> events: no trailers and no opaque C<file> or C<fh> body.
 The token describes event vocabulary, not memory strategy;
 L<PAGI::Response::Stream> inherits it while retaining incremental emission and
@@ -207,8 +202,8 @@ request URL path must be resolved under a configured root.
 L<PAGI::Test::Response> is a captured-wire decoder returned by the test
 client. It reconstructs status, headers, buffered body bytes, text, and JSON
 from events, including C<file> and C<fh> events. It is not this production
-Response value and cannot be returned from a handler or emitted with
-C<respond>.
+Response value and cannot be returned from a handler or invoked as a production
+application.
 
 =cut
 

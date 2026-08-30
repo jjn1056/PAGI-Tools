@@ -1135,7 +1135,8 @@ the response slot immediately, discards deferred keepalive, and leaves the SSE
 object closed after either completion or a later failure. A failed start send
 leaves the request pending. File returns no capability because PAGI Www permits
 only the body form and not C<file>/C<fh> for a decline; trailer and unknown
-events are also rejected. See
+events are also rejected. The concrete Response is invoked through its
+application contract; Response has no separate public emission method. See
 L<PAGI::Spec::Www/"Decline SSE - send event">. Per the
 B<first-send-wins> rule (see
 L<PAGI::Spec::Www/"SSE Response Denial">), this must happen B<before>

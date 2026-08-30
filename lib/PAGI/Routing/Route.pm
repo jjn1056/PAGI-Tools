@@ -198,12 +198,12 @@ PAGI::Routing::Route - Immutable declarative route description
 
 A route represents an HTTP, WebSocket, or SSE leaf. Its C<name>, when supplied,
 is one local logical address segment: it is nonempty, contains no slash, and
-is not C<.> or C<..>; dots are literal characters. The ordinary target is a
+is not C<.> or C<..>; dots are literal characters. A CODE endpoint is a
 coderef handler: HTTP receives one L<PAGI::Request>, WebSocket receives one
 L<PAGI::WebSocket>, and SSE receives one L<PAGI::SSE>. An instantiated object
-with C<to_app> is a component target, compiled once through
-L<PAGI::Utils/to_app>. C<raw> remains the explicit marker for a native coderef
-app. Route targets never load package names; middleware positions retain their separate explicit
+with C<to_app> is a native application endpoint, compiled once through
+L<PAGI::Utils/to_app>. Wrap a native coderef with L<PAGI::Utils/as_app>.
+Route endpoints never load package names; middleware positions retain their separate explicit
 class-loading contract. Its path pattern is compiled during construction, and
 constructor validation performs no request I/O. The description never stores
 a request match, protocol object, or handler result. Collection and hash
@@ -216,11 +216,19 @@ Route and Mount have deliberately different path ownership:
     Mount('/x')       selected owner of /x and its complete subtree
 
 Target shape never changes that rule. A Response or another instantiated
-C<to_app> component is still an exact, method-aware Route target with normal
+C<to_app> component is still an exact, method-aware Route endpoint with normal
 constraints, middleware, naming, FULL/PARTIAL scanning, 405/Allow behavior,
 and GET-supplied automatic HEAD. A coderef is a Request handler unless the
-C<raw> marker explicitly gives it the native triplet contract. Package-name
-strings are not application values.
+C<as_app> wrapper explicitly gives it the native triplet contract. Package-
+name strings are not application values.
+
+Explicit HTTP C<methods> wins. Otherwise an application object's
+C<allowed_methods> capability is called once in list context at construction;
+otherwise the Route defaults to GET plus automatic HEAD. Only scalar
+C<< methods => '*' >> is unrestricted. WebSocket and SSE Routes do not accept
+C<methods> and never consult C<allowed_methods>. A routed Endpoint::HTTP object
+therefore contributes its advertised verbs and OPTIONS to Router selection;
+the Router owns unsupported-method 405 and C<Allow> outcomes.
 
 An inline provider such as C<{id:&Int}> is resolved in the package that
 directly called C<route>, C<websocket>, C<sse>, or C<new>. Re-exporting a
@@ -230,8 +238,8 @@ called from a role method likewise resolves providers in the role package.
 
 =head1 ACCESSORS
 
-C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<target>, C<is_raw>,
-C<methods>, and C<constraints> return the corresponding declaration values.
+C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<endpoint>, C<methods>,
+and C<constraints> return the corresponding declaration values.
 C<middleware> returns a fresh arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
 identity. C<routes> returns undef for a leaf route.
@@ -240,7 +248,7 @@ values are accepted by HTTP, WebSocket, and SSE leaves, returned as declared,
 and validate decoded captures only during a request match or reverse render.
 Only HTTP routes accept C<methods>. An inline provider and explicit constraint
 may target the same parameter; the inline predicate runs first and both must
-pass before the normal or raw target is selected.
+pass before the endpoint is selected.
 
 =head1 METHODS
 
@@ -249,10 +257,17 @@ pass before the normal or raw target is selected.
 Synchronously compiles this route through a fresh complete one-node router on
 every call. Compilation resolves middleware and component targets but emits no
 events. The returned app performs matching and invokes the handler later;
-normal HTTP dispatch awaits and emits the returned Response exactly once through
-C<< respond($scope, $receive, $send) >>,
+normal HTTP dispatch awaits and invokes the returned application value against
+the original triplet,
 normal WebSocket/SSE dispatch awaits the direct protocol handler's completion,
-and raw dispatch leaves event ownership with the target. Every middleware
+and application endpoints retain native event ownership. Every middleware
 wrapper remains a native C<($scope, $receive, $send)> application.
+
+A dynamically returned object's C<to_app> runs once per handler invocation.
+It receives the unchanged scope and remaining body stream, with no body or
+lifespan replay, and remains opaque to the outer Router's reverse and schema
+metadata. Expensive static objects belong directly in Route or another native
+application position. Synchronous handlers run inline and can block the event
+loop.
 
 =cut

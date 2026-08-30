@@ -33,6 +33,13 @@ All three materialize the same immutable Router and share Pattern parsing,
 Resolver slash addresses, Compiler dispatch, metadata, constraints, GET/HEAD,
 Router-owned HTTP outcomes, reverse routing, and written declaration order.
 
+Callable meaning depends on its structural position:
+
+  Route CODE endpoint        -> one Request/WebSocket/SSE argument
+  Route to_app object        -> native PAGI application
+  Mount/Compose/default CODE -> native PAGI application
+  handler result             -> native CODE or instantiated to_app object
+
 =head2 A Declarative Route Tree with Package Handlers
 
 Load handler packages normally and pass fully qualified coderefs. This gives
@@ -152,6 +159,12 @@ That is one exact/wildcard HTTP leaf. It participates in methods, automatic
 HEAD, partial matching, and names, and receives the original routed path. A
 C<< mount('/files', app =E<gt> $file_app) >> owns a protocol-capable prefix,
 receives the implicit remainder in child C<path>, and extends C<root_path>.
+Without explicit methods, C<as_app($native)> contributes GET plus automatic
+HEAD. Use the scalar C<methods =E<gt> '*'> for unrestricted delegation.
+For an object endpoint, an explicit Route declaration wins; otherwise Route
+takes one construction-time C<allowed_methods> snapshot. The Router owns
+method mismatch, the first-seen C<Allow> union, and selection. An Endpoint::HTTP
+object still owns its advertised OPTIONS behavior once selected.
 
 Mounts are declaration-ordered owners. Put a narrow mount before a broad one.
 C<mount('/api')> accepts both C</api> and C</api/> directly and passes child
@@ -160,17 +173,11 @@ C</api/>.
 
 A separately configured child can own local missing-route presentation:
 
-  use PAGI::Routing qw(request_app);
-
   my $api = router(
       routes => [route('/items' => \&items)],
-      http_default => request_app(sub {
-          my ($request) = @_;
-          return PAGI::Pages->not_found(
-              $request,
-              detail => 'No API route matched.',
-          );
-      }),
+      http_default => PAGI::Pages->not_found(
+          detail => 'No API route matched.',
+      ),
   );
   my $root = router(routes => [
       mount('/api', app => $api, name => 'api'),
@@ -328,7 +335,7 @@ C<PATCH /apples> and its C<Allow: GET, HEAD, POST>. Constraint C<Int> validates
 the decoded capture but does not coerce it.
 
 The root file is an instantiated File Response on an exact Route, not a Mount:
-C</> alone selects it. C</welcome> is an ordinary function handler. The
+C</> alone selects it. C</welcome> is a source-free Pages application endpoint. The
 C</apples> Mount owns that complete subtree, so child 404 and 405 outcomes do
 not fall through to root siblings. Inside that logical namespace, local
 reverse address C<read> means C</apples/read>; there is no namespace
@@ -417,19 +424,15 @@ negotiated 405 with authoritative C<Allow>:
 
   use PAGI::Compose qw(compose);
   use PAGI::Pages;
-  use PAGI::Routing qw(router request_app);
+  use PAGI::Routing qw(router);
 
   my $pages = PAGI::Pages->new;
 
   my $routing = router(
       routes       => \@routes,
-      http_default => request_app(sub {
-          my ($request) = @_;
-          return $pages->not_found(
-              $request,
-              detail => 'No application route matched.',
-          );
-      }),
+      http_default => $pages->not_found(
+          detail => 'No application route matched.',
+      ),
   );
   my $app = compose(app => $routing)->to_app;
 
@@ -491,19 +494,21 @@ handled request and falls back to safe production output if resolution fails.
 The built-in renderer negotiates through Pages. To fix one representation, use
 the existing handler seam:
 
+  use PAGI::Response qw(problem_response);
+
   middleware('ErrorHandler',
       handler => sub {
           my ($request, $error) = @_;
-          return PAGI::Pages->internal_server_error(
-              $request,
-              as => 'json',
-          );
+          return problem_response({
+              title  => 'Internal Server Error',
+              status => 500,
+          });
       })
 
-The wrapper adapts ErrorHandler's C<($request, $error)> callback to the single
-request source accepted by a Pages endpoint. A direct Pages endpoint is not a
-two-argument ErrorHandler callback; the wrapper may use C<$error> to choose
-safe page fields when needed.
+The callback receives C<($request, $error)> and may use either value to choose
+safe fields before returning a concrete Response. Source-free Pages values are
+applications; this custom ErrorHandler seam deliberately retains its concrete
+Response contract.
 
 A custom renderer remains authoritative for its own content and headers.
 
@@ -596,7 +601,7 @@ There is no inherited method lookup, C<AUTOLOAD>, module loading, registry
 fallback, or regex fallback after provider intent. Regex and inline
 C<{id:\d+}> constraints are anchored over the complete value. Predicates must
 be synchronous; database/resource checks belong in selected middleware or the
-handler. The same rules select normal/raw HTTP, WebSocket, SSE, and all mount
+handler. The same rules select handler/application HTTP, WebSocket, SSE, and all mount
 forms, and C<path_for>/C<url_for> enforce them for named routes.
 
 C<*path> captures decoded values including C<..>, repeated separators, and
@@ -608,13 +613,13 @@ L<PAGI::App::File> and let it own the complete file response:
 
   my $files = PAGI::App::File->from_app_path('public')->to_app;
 
-For a raw handler that genuinely needs custom policy, validate the request
+For a native handler that genuinely needs custom policy, validate the request
 path before any filesystem check and emit only the returned lexical path:
 
   use Future;
   use Future::AsyncAwait;
   use PAGI::Pages;
-  use PAGI::Utils qw(path_from_root);
+  use PAGI::Utils qw(invoke_app path_from_root);
 
   my $files = async sub {
       my ($scope, $receive, $send) = @_;
@@ -622,13 +627,13 @@ path before any filesystem check and emit only the returned lexical path:
 
       my $path = path_from_root('/var/www/files', $untrusted_path);
       unless (defined $path) {
-          my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($scope, $receive, $send));
+          my $response = PAGI::Pages->forbidden;
+          return await Future->wrap(invoke_app($response, $scope, $receive, $send));
       }
 
       unless (-f $path && -r $path) {
-          my $response = PAGI::Pages->not_found($scope);
-          return await Future->wrap($response->respond($scope, $receive, $send));
+          my $response = PAGI::Pages->not_found;
+          return await Future->wrap(invoke_app($response, $scope, $receive, $send));
       }
 
       await Future->wrap($send->({
@@ -651,7 +656,7 @@ confinement enforced by the helper. See the
 L<rooted file-serving upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#rooted-file-serving-security-contract>
 for changed status and option behavior.
 
-=head2 Normal, Raw, WebSocket, and SSE Handler Lifecycles
+=head2 Handler, Application, WebSocket, and SSE Lifecycles
 
 A normal HTTP handler builds local response state and returns it. Routing owns
 the single emission:
@@ -661,9 +666,11 @@ the single emission:
       return PAGI::Response::text_response('Hello');
   });
 
-A raw endpoint owns every event and receives all channels:
+A native application endpoint owns every event and receives all channels:
 
-  route('/raw', raw => async sub {
+  use PAGI::Utils qw(as_app);
+
+  route('/native' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
       await $send->({
           type => 'http.response.start', status => 200, headers => [],
@@ -671,10 +678,19 @@ A raw endpoint owns every event and receives all channels:
       await $send->({
           type => 'http.response.body', body => 'Hello', more => 0,
       });
-  });
+  }));
 
-Do not call C<respond> inside a normal handler. Return the Response, or
-choose C<raw> for manual event ownership.
+Do not emit inside a normal handler. Return the Response, or choose an
+explicit application value for manual event ownership.
+
+A handler may return any native CODE or instantiated C<to_app> object. That is
+dynamic delegation, not a nested Mount: the returned app receives the current
+scope unchanged and only the remaining receive stream. Consumed body events
+are not replayed, no separate lifespan is run, and its routes, names,
+constraints, and schema metadata remain opaque to the outer Router. An
+object's C<to_app> runs once per handler invocation. Immediate synchronous
+handlers run inline, so blocking or CPU-heavy work blocks the event-loop
+thread.
 
 Normal WebSocket and SSE handlers are imperative and their completion is
 awaited:
@@ -693,8 +709,8 @@ awaited:
       await $sse->run;
   });
 
-Use C<< websocket('/raw', raw =E<gt> $app) >> or
-C<< sse('/raw', raw =E<gt> $app) >> when a native application must own those
+Use C<< websocket('/native' =E<gt> as_app($app)) >> or
+C<< sse('/native' =E<gt> as_app($app)) >> when a native application must own those
 protocol events. Their resolved return values are inert.
 
 =head2 Names, Reverse URLs, and Inspection
@@ -963,8 +979,9 @@ Normal protocol handlers receive the direct protocol object:
 When existing protocol code must receive C<($scope, $receive, $send)> and own
 events directly, mark the declaration explicitly:
 
-  $router->websocket('/native-ws', raw => $native_ws_app);
-  $router->sse('/native-events', raw => $native_sse_app);
+  use PAGI::Utils qw(as_app);
+  $router->websocket('/native-ws' => as_app($native_ws_app));
+  $router->sse('/native-events' => as_app($native_sse_app));
 
 =head2 Route-Level Middleware
 
@@ -1040,7 +1057,7 @@ An opaque application mount hides child routing:
 
 Opaque mounts own every protocol below their prefix and rewrite C<path> and
 C<root_path>. A native exact HTTP target instead uses
-C<< get('/download', raw => $native_app) >>. Package strings are not implicit
+C<< get('/download' =E<gt> as_app($native_app)) >>. Package strings are not implicit
 route or Mount targets: load the package, construct the child object, and
 choose an immutable discoverable Router or opaque native application
 explicitly.
@@ -1186,8 +1203,8 @@ SSE handler methods likewise receive C<($self, $sse)>:
 
   1;
 
-Use the Endpoint-aware C<raw> form only when a native protocol app must own
-C<($scope, $receive, $send)> itself.
+Wrap C<< $self->app_as('method') >> with C<as_app> when a native protocol app
+must own C<($scope, $receive, $send)> itself at an exact Route.
 
 =head3 Initializing Resources
 
@@ -1313,8 +1330,8 @@ class, configured object, and explicit description forms. The first entry is
 outermost, and this same contract works for HTTP, WebSocket, and SSE.
 
 Use C<< $self->app_as('native_method') >> when a local method should receive
-C<($self, $scope, $receive, $send)>. Supply it after C<raw> for an exact,
-method-aware leaf, through C<< app => >> for an opaque prefix mount, or to
+C<($self, $scope, $receive, $send)>. Wrap it with C<as_app> for an exact,
+method-aware leaf, pass it through C<< app => >> for an opaque prefix mount, or to
 C<http_default>. It is not an ordinary route handler adapter.
 
 =head3 Mounting Sub-Routers
@@ -1481,7 +1498,7 @@ state in Compose lifespan state, and every declaration inspectable:
       $r->websocket('/ws/{room}' => 'chat')->name('chat');
       $r->sse('/events' => 'events')->name('events');
 
-      # app_as exposes a local native method as one exact raw HTTP leaf.
+      # app_as exposes a local native method as one exact application leaf.
       $r->get('/download' => as_app($self->app_as('download')));
 
       # Prefix owners follow written order; the static catch-all stays last.
@@ -1677,8 +1694,7 @@ capabilities separate also lets a higher-level framework retain its own URL or
 controller API.
 
 Ordinary PAGI handlers receive the direct Request, WebSocket, or SSE object;
-C<raw>, Mount C<app>,
-Router C<http_default>, and Compose C<app> receive native three-channel PAGI
+C<as_app>, Mount C<app>, Router C<http_default>, and Compose C<app> receive native three-channel PAGI
 applications. Constraints validate without coercion. Logical names use slash
 addresses and relative L<PAGI::Routing::URL> lookup. SSE is a first-class scope, and
 middleware at Router, Mount, Route, and Compose boundaries is pure PAGI
@@ -1796,10 +1812,11 @@ that hashref with a convenient (and typo-catching) API.
   use PAGI::Middleware::Builder;
   use PAGI::Session;
   use PAGI::Response;
+  use PAGI::Utils qw(as_app invoke_app);
 
   my $router = PAGI::App::Router->new;
 
-  $router->get('/login', raw => async sub {
+  $router->get('/login' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
 
       # Set session data
@@ -1807,33 +1824,36 @@ that hashref with a convenient (and typo-catching) API.
       $session->set(user_id  => 123);
       $session->set(username => 'alice');
 
-      await PAGI::Response::text_response('Logged in!')->respond(
+      await invoke_app(
+          PAGI::Response::text_response('Logged in!'),
           $scope, $receive, $send,
       );
-  });
+  }));
 
-  $router->get('/profile', raw => async sub {
+  $router->get('/profile' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
 
       # Read session data (the second arg is a default for optional keys)
       my $session = PAGI::Session->new($scope);
       my $username = $session->get('username', 'Guest');
 
-      await PAGI::Response::text_response("Hello, $username!")->respond(
+      await invoke_app(
+          PAGI::Response::text_response("Hello, $username!"),
           $scope, $receive, $send,
       );
-  });
+  }));
 
-  $router->get('/logout', raw => async sub {
+  $router->get('/logout' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
 
       # Clear session data
       PAGI::Session->new($scope)->clear;
 
-      await PAGI::Response::text_response('Logged out!')->respond(
+      await invoke_app(
+          PAGI::Response::text_response('Logged out!'),
           $scope, $receive, $send,
       );
-  });
+  }));
 
   # Wrap the router with the session middleware
   my $app = builder {
@@ -1852,15 +1872,17 @@ that hashref with a convenient (and typo-catching) API.
   use PAGI::App::Router;
   use PAGI::Middleware::Builder;
   use PAGI::Response;
+  use PAGI::Utils qw(as_app invoke_app);
 
   my $router = PAGI::App::Router->new;
 
-  $router->get('/', raw => async sub {
+  $router->get('/' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
-      await PAGI::Response::text_response('Protected content')->respond(
+      await invoke_app(
+          PAGI::Response::text_response('Protected content'),
           $scope, $receive, $send,
       );
-  });
+  }));
 
   # Protect every route with Basic Auth
   my $app = builder {
@@ -1881,20 +1903,22 @@ that hashref with a convenient (and typo-catching) API.
   use PAGI::App::Router;
   use PAGI::Middleware::Builder;
   use PAGI::Response;
+  use PAGI::Utils qw(as_app invoke_app);
 
   my $router = PAGI::App::Router->new;
 
-  $router->get('/api/me', raw => async sub {
+  $router->get('/api/me' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
 
       # Claims from the validated token: the middleware stores
       # { type => 'bearer', token => ..., claims => ... } under 'pagi.auth'
       my $claims = $scope->{'pagi.auth'}{claims};
 
-      await PAGI::Response::json_response({ user => $claims })->respond(
+      await invoke_app(
+          PAGI::Response::json_response({ user => $claims }),
           $scope, $receive, $send,
       );
-  });
+  }));
 
   # Verify Bearer tokens with a custom validator (returns claims or undef).
   # When the validator returns undef the middleware sends 401 itself, so the
@@ -1937,9 +1961,8 @@ C<< $ws->close >> when the budget is blown:
   use PAGI::WebSocket;
   use Time::HiRes qw(time);
 
-  $router->websocket('/chat', raw => async sub {
-      my ($scope, $receive, $send) = @_;
-      my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+  $router->websocket('/chat' => async sub {
+      my ($ws) = @_;
       await $ws->accept;
 
       my $limit  = 10;               # messages per second
@@ -1989,10 +2012,8 @@ Server-Sent Events are ideal for real-time dashboards:
 
   my $router = PAGI::App::Router->new;
 
-  $router->sse('/events', raw => async sub {
-      my ($scope, $receive, $send) = @_;
-
-      my $sse = PAGI::SSE->new($scope, $receive, $send);
+  $router->sse('/events' => async sub {
+      my ($sse) = @_;
 
       # Start the stream explicitly before anything else touches it --
       # don't lean on a method's own implicit auto-start.
@@ -2042,9 +2063,8 @@ including deep in a helper -- which also wakes a parked C<< $sse->run >>. An
 optional C<reason> is recorded server-side (logs, metrics, tracing) and passed
 to C<on_close>; it is B<never> sent to the client, since SSE has no close frame:
 
-  $router->sse('/quotes', raw => async sub {
-      my ($scope, $receive, $send) = @_;
-      my $sse = PAGI::SSE->new($scope, $receive, $send);
+  $router->sse('/quotes' => async sub {
+      my ($sse) = @_;
 
       my $sub = subscribe_feed($sse->query_param('job'));
 
@@ -2089,7 +2109,7 @@ handler:
 Apply it at the mount or Router level (event middleware). See L<PAGI::SSE/close>
 for the method, L<PAGI::Spec::Www/"Close SSE - C<send> event"> for the protocol
 event, and L<PAGI::Cookbook/"Ending a stream: return vs C<sse.close>"> for the
-raw form.
+native form.
 
 =head2 Declining an SSE request (404 / 401 / 204 stop-reconnect)
 
@@ -2098,9 +2118,8 @@ you start the stream you can B<decline> it and return a normal HTTP response
 instead -- no event stream. Use C<< $sse->decline >>, which is how most
 application code should write this:
 
-  $router->sse('/feed', raw => async sub {
-      my ($scope, $receive, $send) = @_;
-      my $sse = PAGI::SSE->new($scope, $receive, $send);
+  $router->sse('/feed' => async sub {
+      my ($sse) = @_;
 
       # Auth check before we commit to a stream.
       unless (authorized($sse->query_param('token'))) {
@@ -2183,6 +2202,8 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
   use PAGI::App::Router;
   use PAGI::Compose qw(compose);
   use PAGI::Response;
+  use PAGI::Utils qw(as_app invoke_app);
+  use PAGI::Utils qw(as_app invoke_app);
 
   my $router = PAGI::App::Router->new;
 
@@ -2194,13 +2215,16 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
       warn "Email sent to $email\n";
   }
 
-  $router->post('/signup', raw => async sub {
+  $router->post('/signup' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
 
       # Respond immediately -- the client does not wait for the email
-      await PAGI::Response::json_response(
-          { status => 'created' }, status => 201,
-      )->respond($scope, $receive, $send);
+      await invoke_app(
+          PAGI::Response::json_response(
+              { status => 'created' }, status => 201,
+          ),
+          $scope, $receive, $send,
+      );
 
       # Fire-and-forget: scheduled now, runs on later event-loop ticks
       # (after this handler returns). Always add on_fail() before retain()
@@ -2208,7 +2232,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
       send_welcome_email('user@example.com')
           ->on_fail(sub { warn "Email send failed: @_" })
           ->retain();
-  });
+  }));
 
   compose(app => $router)->to_app;
 
@@ -2251,23 +2275,26 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
 
   my $router = PAGI::App::Router->new;
 
-  $router->post('/generate-pdf', raw => async sub {
+  $router->post('/generate-pdf' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
 
       # Option A: Wait for result (blocks this request only)
       my $result = await $pdf_worker->call(args => ['report']);
-      await PAGI::Response::json_response({ result => $result })->respond(
+      await invoke_app(
+          PAGI::Response::json_response({ result => $result }),
           $scope, $receive, $send,
       );
 
-      # Option B: respond immediately, generate in the background
-      # await PAGI::Response::json_response({ status => 'processing' })
-      #     ->respond($scope, $receive, $send);
+      # Option B: emit immediately, generate in the background
+      # await invoke_app(
+      #     PAGI::Response::json_response({ status => 'processing' }),
+      #     $scope, $receive, $send,
+      # );
       # my $f = $pdf_worker->call(args => ['report']);
       # $f->on_done(sub { warn "PDF ready: $_[0]\n" });
       # $f->on_fail(sub { warn "PDF failed: $_[0]\n" });
       # $f->retain();
-  });
+  }));
 
   compose(app => $router)->to_app;
 
@@ -2284,6 +2311,7 @@ See C<examples/background-tasks/> for complete working examples.
   use Future::AsyncAwait;
   use PAGI::Request;
   use PAGI::Response;
+  use PAGI::Utils qw(invoke_app);
 
   async sub app {
       my ($scope, $receive, $send) = @_;
@@ -2296,20 +2324,20 @@ See C<examples/background-tasks/> for complete working examples.
           my $password = $form->{password};
 
           # Validate and process...
-          await PAGI::Response::redirect_response('/dashboard')->respond(
+          await invoke_app(
+              PAGI::Response::redirect_response('/dashboard'),
               $scope, $receive, $send,
           );
       }
       else {
-          await PAGI::Response::html_response(<<'HTML')->respond(
-              $scope, $receive, $send,
-          );
+          my $response = PAGI::Response::html_response(<<'HTML');
   <form method="POST">
       <input name="username" placeholder="Username">
       <input name="password" type="password" placeholder="Password">
       <button type="submit">Login</button>
   </form>
   HTML
+          await invoke_app($response, $scope, $receive, $send);
       }
   }
 
@@ -2322,6 +2350,7 @@ See C<examples/background-tasks/> for complete working examples.
   use Future::AsyncAwait;
   use PAGI::Request;
   use PAGI::Response;
+  use PAGI::Utils qw(invoke_app);
 
   async sub app {
       my ($scope, $receive, $send) = @_;
@@ -2346,19 +2375,21 @@ See C<examples/background-tasks/> for complete working examples.
               # my $content = $upload->slurp;
           }
 
-          await PAGI::Response::json_response({
-              uploaded => scalar(@files),
-          })->respond($scope, $receive, $send);
-      }
-      else {
-          await PAGI::Response::html_response(<<'HTML')->respond(
+          await invoke_app(
+              PAGI::Response::json_response({
+                  uploaded => scalar(@files),
+              }),
               $scope, $receive, $send,
           );
+      }
+      else {
+          my $response = PAGI::Response::html_response(<<'HTML');
   <form method="POST" enctype="multipart/form-data">
       <input type="file" name="file" multiple>
       <button type="submit">Upload</button>
   </form>
   HTML
+          await invoke_app($response, $scope, $receive, $send);
       }
   }
 
@@ -2542,41 +2573,41 @@ For more control (authentication, logging, custom headers):
   use PAGI::App::Router;
   use PAGI::Pages;
   use PAGI::Request;
-  use PAGI::Utils qw(path_from_root);
+  use PAGI::Utils qw(as_app invoke_app path_from_root);
 
   my $router = PAGI::App::Router->new;
 
-  $router->get('/download/{filename}', raw => async sub {
+  $router->get('/download/{filename}' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
 
       my $filename = $req->path_param('filename');
       my $filepath = path_from_root('/var/www/files', $filename);
       unless (defined $filepath) {
-          my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($scope, $receive, $send));
+          my $response = PAGI::Pages->forbidden;
+          return await Future->wrap(invoke_app($response, $scope, $receive, $send));
       }
 
       # Authentication and authorization are separate from path validation.
       my $user = authenticate($scope);
       unless ($user && can_download($user, $filepath)) {
-          my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($scope, $receive, $send));
+          my $response = PAGI::Pages->forbidden;
+          return await Future->wrap(invoke_app($response, $scope, $receive, $send));
       }
 
       unless (-f $filepath && -r $filepath) {
-          my $response = PAGI::Pages->not_found($scope);
-          return await Future->wrap($response->respond($scope, $receive, $send));
+          my $response = PAGI::Pages->not_found;
+          return await Future->wrap(invoke_app($response, $scope, $receive, $send));
       }
 
       # Validate request-derived header data independently.
       my ($download_name) = $filename =~ /\A([A-Za-z0-9][A-Za-z0-9._-]*)\z/;
       unless (defined $download_name) {
-          my $response = PAGI::Pages->forbidden($scope);
-          return await Future->wrap($response->respond($scope, $receive, $send));
+          my $response = PAGI::Pages->forbidden;
+          return await Future->wrap(invoke_app($response, $scope, $receive, $send));
       }
 
-      # Send file response directly via raw protocol events (XSendfile middleware will intercept)
+      # Send file response directly via native protocol events (XSendfile middleware will intercept)
       await Future->wrap($send->({
           type    => 'http.response.start',
           status  => 200,
@@ -2588,7 +2619,7 @@ For more control (authentication, logging, custom headers):
       return await Future->wrap($send->({
           type => 'http.response.body', file => $filepath, more => 0,
       }));
-  });
+  }));
 
   my $app = builder {
       enable 'XSendfile',
@@ -2656,9 +2687,11 @@ Response metadata is inspectable before emission:
 
 Every constructed Response is already complete; there is no incomplete
 body-mode state to query. Connection facts belong to the active
-L<PAGI::Request> or raw C<pagi.connection>. An unchanged Response may be
-emitted concurrently because each C<respond> invocation takes its own snapshot.
-Do not mutate a Response concurrently with emission.
+L<PAGI::Request> or native C<pagi.connection>. C<to_app> retains the exact
+configured Response object, and each invocation derives its request-local
+delivery plan before the first send. Deliberate mutation after C<to_app>
+remains caller-owned, unwise for shared components, but valid. Concurrent
+mutation while an invocation derives its plan is unsupported.
 
 A normal handler returns the value:
 
@@ -2668,10 +2701,11 @@ A normal handler returns the value:
       return PAGI::Response::json_response($item, status => 201);
   }
 
-A raw application owns the full native triplet and one explicit emission:
+A native application owns the full triplet and one explicit delegation:
 
+  use PAGI::Utils qw(invoke_app);
   my $res = PAGI::Response::json_response($data, status => 200);
-  await $res->respond($scope, $receive, $send);
+  await invoke_app($res, $scope, $receive, $send);
 
 Do not emit inside a normal Request handler and then return the same value to
 Routing. Handler completion still requires one Response; application

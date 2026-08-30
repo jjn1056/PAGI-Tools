@@ -119,7 +119,8 @@ PAGI::Routing::Mount - Immutable declarative mount description
 Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions. A
 Mount accepts exactly one of C<app> or C<routes>. C<app> retains its original
-base application exactly; C<routes> is shorthand for constructing a real child
+base application exactly: a CODE is a native three-channel PAGI application,
+and an instantiated C<to_app> object is normalized as one. C<routes> is shorthand for constructing a real child
 L<PAGI::Routing::Router> and storing that Router as C<app>. Both named and
 unnamed mounts use this same representation:
 
@@ -135,6 +136,9 @@ The ownership comparison is:
 A terminal mounted Response therefore ignores the rewritten remaining child
 path. That can be useful, but a developer who wants only one complete path
 normally wants Route. Package-name strings are not application values.
+Unlike Route, Mount has no HTTP method filter and contributes no C<Allow>
+evidence. Route owns one complete method-aware leaf and keeps its path; Mount
+consumes a prefix, rewrites the child scope, and owns the selected subtree.
 
 Its normalized prefix pattern is compiled during construction. Constructor
 work validates/builds configuration only and emits no events.

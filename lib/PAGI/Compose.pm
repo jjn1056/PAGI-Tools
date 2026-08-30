@@ -154,14 +154,16 @@ The accepted top-level keys are C<routes>, C<app>, C<middleware>, and
 C<lifespan>. An odd option list, an unknown key, or providing neither or both
 of C<routes> and C<app> is an error.
 
-Bare coderefs have deliberately different meanings according to position:
+Callable meaning is positional and deliberate:
 
-  Position                         Called with                       Meaning
-  ------------------------------   -------------------------------   --------------------------
-  route('/x' => $code)             ($request)                        Request handler
-  compose(app => $code)            ($scope, $receive, $send)         native PAGI app
-  middleware => [$entry]           ($inner_app), at compile time     normalized middleware description
-  middleware($target, %config)     ($inner_app), at compile time     middleware description
+  Route CODE endpoint        -> one Request/WebSocket/SSE argument
+  Route to_app object        -> native PAGI application
+  Mount/Compose/default CODE -> native PAGI application
+  handler result             -> native CODE or instantiated to_app object
+
+Middleware coderefs are a separate construction-time contract: a bare entry
+in C<middleware> and the target of C<middleware(...)> receive the inner
+application while Compose builds the middleware stack.
 
 =head2 routes
 
@@ -182,15 +184,12 @@ inspection is needed. The compact direct form is
 C<< compose(app => router(%router_options)) >>; retaining the Router also keeps
 its inspection API available while Compose still owns the deployed boundary:
 
-    use PAGI::Routing qw(request_app router);
+    use PAGI::Routing qw(router);
 
     my $pages = MyApp::Pages->new;
     my $routing = router(
         routes       => \@nodes,
-        http_default => request_app(sub {
-            my ($request) = @_;
-            return $pages->not_found($request);
-        }),
+        http_default => $pages->not_found(detail => 'No matching route'),
     );
     my $app = compose(app => $routing)->to_app;
 
@@ -408,9 +407,7 @@ The completion guard never replaces an inner exception.
 Install ordinary author middleware for the application's official error
 policy:
 
-    use MyApp::Pages;
-
-    my $pages = MyApp::Pages->new;
+    use PAGI::Response qw(problem_response);
 
     middleware => [
         'RequestId',
@@ -419,7 +416,10 @@ policy:
         middleware('ErrorHandler',
             handler  => sub {
                 my ($request, $error) = @_;
-                return $pages->internal_server_error($request);
+                return problem_response({
+                    title  => 'Internal Server Error',
+                    status => 500,
+                });
             },
             on_error => \&report_error),
     ]

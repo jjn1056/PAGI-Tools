@@ -276,7 +276,6 @@ middleware stashed in scope:
     use PAGI::Pages;
 
     return PAGI::Pages->forbidden(
-        $request,
         detail => 'CSRF token validation failed',
     )
         unless $guard->verify($params->{_csrf_token});

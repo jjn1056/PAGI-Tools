@@ -12,7 +12,7 @@ use PAGI::Routing::URL qw(path_for);
 use PAGI::Test::Client;
 
 {
-    package Local::RawAppObject;
+    package Local::NativeAppObject;
 
     sub new {
         my ($class, $app) = @_;
@@ -26,7 +26,7 @@ use PAGI::Test::Client;
 }
 
 {
-    package Local::BrokenRawAppObject;
+    package Local::BrokenNativeAppObject;
     sub new { return bless {}, $_[0] }
     sub to_app { return bless {}, 'Local::NotACoderef' }
 }
@@ -43,7 +43,7 @@ sub raw_http_app {
         })->get;
         $send->({
             type => 'http.response.body',
-            body => 'raw ' . $scope->{path_params}{id},
+            body => 'native ' . $scope->{path_params}{id},
             more => 0,
         })->get;
         return Future->done;
@@ -80,34 +80,34 @@ subtest 'ordinary HTTP targets receive Request and emit immediate or Future Resp
     ], 'ordinary HTTP handlers receive only a Request');
 };
 
-subtest 'explicit raw HTTP targets retain all three native channels' => sub {
-    my @raw_argument_counts;
-    my $raw_object = Local::RawAppObject->new(
-        raw_http_app(\@raw_argument_counts),
+subtest 'application-valued HTTP targets retain all three native channels' => sub {
+    my @native_argument_counts;
+    my $native_object = Local::NativeAppObject->new(
+        raw_http_app(\@native_argument_counts),
     );
     my $router = PAGI::App::Router->new;
-    $router->get('/raw/{id}', raw => $raw_object);
+    $router->get('/native/{id}' => $native_object);
 
-    is($raw_object->{builds}, 0, 'raw object is not compiled at declaration');
+    is($native_object->{builds}, 0, 'application object is not compiled at declaration');
     my $app = $router->to_app;
-    is($raw_object->{builds}, 1, 'raw HTTP object compiles once per to_app');
+    is($native_object->{builds}, 1, 'HTTP application object compiles once per to_app');
     my $client = PAGI::Test::Client->new(app => $app);
-    my $raw = $client->get('/raw/7');
+    my $native = $client->get('/native/7');
 
-    is([$raw->status, $raw->content], [209, 'raw 7'],
-        'an explicit raw HTTP route owns native response events');
-    is(\@raw_argument_counts, [3], 'a raw HTTP route receives all three PAGI channels');
-    is($raw_object->{builds}, 1, 'requests never recompile the raw object');
+    is([$native->status, $native->content], [209, 'native 7'],
+        'an application-valued HTTP Route owns native response events');
+    is(\@native_argument_counts, [3], 'an HTTP application Route receives all three PAGI channels');
+    is($native_object->{builds}, 1, 'requests never recompile the application object');
     like(dies {
         PAGI::App::Router->new
-            ->get('/broken', raw => Local::BrokenRawAppObject->new)
+            ->get('/broken' => Local::BrokenNativeAppObject->new)
             ->to_app;
     }, qr/to_app must return a coderef/,
-        'a broken raw application object fails at compilation');
+        'a broken application object fails at compilation');
 };
 
-subtest 'ordinary and raw WebSocket targets receive their declared contracts' => sub {
-    my (@normal, @raw);
+subtest 'handler and application WebSocket targets receive their declared contracts' => sub {
+    my (@normal, @native);
     my $router = PAGI::App::Router->new;
     $router->websocket('/ws/{room}' => sub {
         my ($websocket) = @_;
@@ -116,36 +116,36 @@ subtest 'ordinary and raw WebSocket targets receive their declared contracts' =>
         $websocket->send_text('normal ' . $websocket->path_param('room'))->get;
         return $websocket->close(1000, 'done');
     });
-    my $raw_object = Local::RawAppObject->new(sub {
+    my $native_object = Local::NativeAppObject->new(sub {
         my ($scope, $receive, $send) = @_;
-        push @raw, [scalar @_, $scope->{path_params}{room}];
+        push @native, [scalar @_, $scope->{path_params}{room}];
         $receive->()->get;
         $send->({ type => 'websocket.accept' })->get;
-        $send->({ type => 'websocket.send', text => 'raw ' . $scope->{path_params}{room} })->get;
+        $send->({ type => 'websocket.send', text => 'native ' . $scope->{path_params}{room} })->get;
         $send->({ type => 'websocket.close', code => 1000, reason => 'done' })->get;
         return Future->done;
     });
-    $router->websocket('/raw-ws/{room}', raw => $raw_object);
+    $router->websocket('/native-ws/{room}' => $native_object);
 
     my $app = $router->to_app;
-    is($raw_object->{builds}, 1, 'raw WebSocket object compiles once');
+    is($native_object->{builds}, 1, 'WebSocket application object compiles once');
     my $client = PAGI::Test::Client->new(app => $app);
     $client->websocket('/ws/lobby', sub {
         my ($ws) = @_;
         is($ws->receive_text, 'normal lobby', 'normal WebSocket object emitted text');
     });
-    $client->websocket('/raw-ws/native', sub {
+    $client->websocket('/native-ws/native', sub {
         my ($ws) = @_;
-        is($ws->receive_text, 'raw native', 'raw WebSocket app emitted text');
+        is($ws->receive_text, 'native native', 'WebSocket application emitted text');
     });
 
     is(\@normal, [['PAGI::WebSocket', 1, 'lobby']],
         'ordinary WebSocket handler receives only its protocol object');
-    is(\@raw, [[3, 'native']], 'raw WebSocket target receives the three channels');
+    is(\@native, [[3, 'native']], 'WebSocket application target receives the three channels');
 };
 
-subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
-    my (@normal, @raw);
+subtest 'handler and application SSE targets receive their declared contracts' => sub {
+    my (@normal, @native);
     my $router = PAGI::App::Router->new;
     $router->sse('/events/{stream}' => sub {
         my ($sse) = @_;
@@ -154,22 +154,22 @@ subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
         $sse->send_event(event => 'normal', data => $sse->path_param('stream'))->get;
         return $sse->close;
     });
-    my $raw_object = Local::RawAppObject->new(sub {
+    my $native_object = Local::NativeAppObject->new(sub {
         my ($scope, $receive, $send) = @_;
-        push @raw, [scalar @_, $scope->{path_params}{stream}];
+        push @native, [scalar @_, $scope->{path_params}{stream}];
         $send->({ type => 'sse.start', status => 200, headers => [] })->get;
         $send->({
             type => 'sse.send',
-            event => 'raw',
+            event => 'native',
             data => $scope->{path_params}{stream},
         })->get;
         $send->({ type => 'sse.close' })->get;
         return Future->done;
     });
-    $router->sse('/raw-events/{stream}', raw => $raw_object);
+    $router->sse('/native-events/{stream}' => $native_object);
 
     my $app = $router->to_app;
-    is($raw_object->{builds}, 1, 'raw SSE object compiles once');
+    is($native_object->{builds}, 1, 'SSE application object compiles once');
     my $client = PAGI::Test::Client->new(app => $app);
     $client->sse('/events/news', sub {
         my ($sse) = @_;
@@ -177,16 +177,16 @@ subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
         is([$event->{event}, $event->{data}], ['normal', 'news'],
             'normal SSE object emitted an event');
     });
-    $client->sse('/raw-events/native', sub {
+    $client->sse('/native-events/native', sub {
         my ($sse) = @_;
         my $event = $sse->receive_event;
-        is([$event->{event}, $event->{data}], ['raw', 'native'],
-            'raw SSE app emitted an event');
+        is([$event->{event}, $event->{data}], ['native', 'native'],
+            'SSE application emitted an event');
     });
 
     is(\@normal, [['PAGI::SSE', 1, 'news']],
         'ordinary SSE handler receives only its protocol object');
-    is(\@raw, [[3, 'native']], 'raw SSE target receives the three channels');
+    is(\@native, [[3, 'native']], 'SSE application target receives the three channels');
 };
 
 subtest 'slash names, relative Request links, constraints, and metadata share one resolver' => sub {
@@ -270,7 +270,7 @@ subtest 'slash names, relative Request links, constraints, and metadata share on
 
 subtest 'custom HTTP default and explicit HEAD use the shared compiler' => sub {
     my @default_scopes;
-    my $default = Local::RawAppObject->new(sub {
+    my $default = Local::NativeAppObject->new(sub {
         my ($scope, $receive, $send) = @_;
         push @default_scopes, [$scope->{type}, scalar @_];
         $send->({

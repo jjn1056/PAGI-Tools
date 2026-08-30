@@ -7,9 +7,9 @@ use PAGI::Compose qw(compose);
 use PAGI::CSRF qw(csrf);
 use PAGI::Endpoint::Router;
 use PAGI::Middleware::ErrorHandler;
-use PAGI::Pages qw(not_found_page);
+use PAGI::Pages qw(not_found);
 use PAGI::Request;
-use PAGI::Response qw(json_response);
+use PAGI::Response qw(json_response problem_response);
 use PAGI::Routing qw(route);
 use PAGI::Routing::URL qw(path_for url_for);
 use PAGI::Session qw(session);
@@ -57,7 +57,7 @@ subtest 'normal HTTP handlers receive Request and return Response values' => sub
                 url  => url_for($request, 'show', { id => 42 }),
             });
         }, name => 'show'),
-        route('/missing' => \&not_found_page),
+        route('/missing' => not_found()),
     ])->to_app;
 
     my $client = PAGI::Test::Client->new(app => $app);
@@ -71,7 +71,7 @@ subtest 'normal HTTP handlers receive Request and return Response values' => sub
         url  => 'http://testserver/things/42',
     }, 'URL exports use the selected request-local routing frame');
     is($client->get('/missing')->status, 404,
-        'a Pages function accepts the normal Request handler position');
+        'a Pages application accepts the Route endpoint position');
 
     ok(!PAGI::Request->can('url_for'),
         'reverse routing is not intrinsic Request input');
@@ -138,26 +138,26 @@ subtest 'optional capabilities come from their owning helpers' => sub {
         'Transport is optional when the server supplies no handle');
 };
 
-subtest 'ErrorHandler adapts its callback before invoking Pages' => sub {
+subtest 'ErrorHandler custom renderers return concrete Responses' => sub {
     my $app = PAGI::Middleware::ErrorHandler->new(
         handler => sub {
             my ($request, $error) = @_;
-            return PAGI::Pages->internal_server_error(
-                $request,
-                as => 'json',
-            );
+            return problem_response({
+                title  => 'Internal Server Error',
+                status => 500,
+            });
         },
     )->wrap(sub { die "database failed\n" });
     my $client = PAGI::Test::Client->new(app => $app);
     my $response = eval { $client->get('/') };
 
-    ok($response, 'the documented ErrorHandler and Pages integration completes')
+    ok($response, 'the documented ErrorHandler renderer integration completes')
         or diag($@);
     is($response && $response->status, 500,
-        'the adapted Pages response keeps the error status');
+        'the custom Response keeps the error status');
     is($response && $response->header('content-type'),
         'application/problem+json',
-        'the adapted Pages response uses the configured representation');
+        'the custom Response uses the configured representation');
 };
 
 subtest 'Endpoint exposes explicit Request construction only' => sub {

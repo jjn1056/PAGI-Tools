@@ -1065,55 +1065,69 @@ PAGI::Pages - negotiated conventional HTTP response policy
 =head1 SYNOPSIS
 
     use PAGI::Pages qw(
-        welcome_page not_found_page gone_page redirect_page
+        welcome not_found gone redirect
     );
-    use PAGI::Routing qw(route mount request_app);
+    use PAGI::Routing qw(route mount router);
 
     my @routes = (
-        route('/welcome' => \&welcome_page),
-        route('/missing' => \&not_found_page),
+        route('/welcome' => welcome()),
+        route('/missing' => not_found()),
         route('/old' => sub {
             my ($request) = @_;
-            return redirect_page($request, '/new', status => 308);
+            return redirect('/new', status => 308);
         }),
-        mount('/gone', app => request_app(\&gone_page)),
+        mount('/gone', app => gone()),
     );
 
-Class and configured-instance methods take the same explicit metadata source:
+    my $routing = router(
+        routes       => \@routes,
+        http_default => not_found(detail => 'No matching route'),
+    );
 
-    my $response = PAGI::Pages->not_found(
-        $request,
+Class and configured-instance methods return the same deferred application
+shape:
+
+    my $missing = PAGI::Pages->not_found(
         detail => 'That record is not available.',
     );
 
     my $pages = MyApp::Pages->new(as => 'auto', default => 'text');
-    my $response = $pages->not_found($request);
+    my $configured_missing = $pages->not_found();
 
-A raw application constructs and emits in separate operations:
+A native application delegates through the common application protocol:
 
-    my $raw = async sub {
+    use PAGI::Utils qw(invoke_app);
+
+    my $native = async sub {
         my ($scope, $receive, $send) = @_;
-        my $response = PAGI::Pages->not_found($scope, as => 'text');
-        $response->header('X-Request-ID' => request_id());
-        await Future->wrap(
-            $response->respond($scope, $receive, $send),
+        await invoke_app(
+            PAGI::Pages->not_found(
+                as => 'text', headers => ['X-Request-ID' => request_id()],
+            ),
+            $scope, $receive, $send,
         );
     };
+
+As a small automatic-lifespan server root:
+
+    pagi-server -MPAGI::Pages -e 'PAGI::Pages->welcome'
 
 =head1 DESCRIPTION
 
 C<PAGI::Pages> owns bounded synchronous policy for conventional welcome,
 redirect, and HTTP error responses. It selects a representation, applies the
 checked-in status catalog and status-specific fields, calls presentation hooks,
-and immediately returns one unsent concrete L<PAGI::Response>.
+and constructs one concrete L<PAGI::Response> when its deferred application is
+invoked.
 
-Pages never sends events. It is neither a native PAGI application nor an
-arity-overloaded endpoint factory. A no-source call croaks. Native placement
-uses L<PAGI::Routing/request_app>; a real raw closure calls the Response
-C<respond($scope, $receive, $send)> method explicitly.
+Factories accept options only, perform no request I/O, and return a reusable
+HTTP-only L<PAGI::Pages::Application>. Negotiation uses the later invocation
+scope. A Request or scope is not a factory argument. The application constructs
+a fresh request-local descriptor and concrete Response, then invokes it through
+the common application path.
 
-C<ref($response)> identifies the concrete representation selected by policy;
-Pages does not hide it behind a generic mutable Response.
+C<ref($response)> during rendering identifies the concrete representation
+selected by policy; Pages does not hide it behind a generic mutable Response.
 
 The returned class identifies the selected representation:
 
@@ -1146,57 +1160,60 @@ automatic negotiation. Instances contain request-independent policy and can be
 reused concurrently. A class method call constructs a fresh default policy
 instance of the invoked class.
 
-=head1 METADATA SOURCES
+=head1 APPLICATION INVOCATION
 
-Every page method and exported function requires exactly one explicit leading
-metadata source. Accepted sources are a L<PAGI::Request>, L<PAGI::WebSocket>,
-L<PAGI::SSE>, or an unblessed C<http>, C<websocket>, or C<sse> scope hashref.
+Every page method and exported function returns a deferred application. On an
+HTTP invocation it derives negotiation metadata from the supplied scope,
+creates one descriptor and concrete Response, and invokes that Response.
 
-WebSocket and SSE sources provide pre-start HTTP handshake metadata only.
-Pages returns an HTTP Response and does not accept a WebSocket, start SSE, or
-emit a protocol event. Lifespan and unknown scope types are rejected.
+Pages rejects lifespan, WebSocket, SSE, and unknown scopes before receive,
+rendering, or send. Pages does not handle lifespan. At a bare server root,
+automatic lifespan mode treats the lifespan exception as a decline and
+continues without sending later lifespan events; strict mode rejects startup.
+Use L<PAGI::Compose> when the root needs lifecycle hooks, root safety, or final
+HEAD policy.
 
-=head1 EXPORTED REQUEST HANDLERS
+=head1 EXPORTED FACTORIES
 
-Nothing exports by default. Function names make their result explicit:
+Nothing exports by default. Import only the source-free factories needed by a
+package:
 
     use PAGI::Pages qw(
-        welcome_page status_page redirect_page not_found_page
+        welcome status redirect not_found
     );
 
-C<welcome_page>, C<status_page>, and C<redirect_page> are the generic
-functions. Every checked-in named status method has a corresponding
-C<*_page> function. Each function delegates to the matching base-class method
-with exactly the same source and options.
+C<welcome>, C<status>, and C<redirect> are the generic functions. Every
+checked-in named status method has a matching function. Each delegates to the
+same base-class factory with the same options.
 
 The C<:common> tag exports exactly:
 
-    welcome_page status_page redirect_page
-    not_found_page unauthorized_page forbidden_page
-    method_not_allowed_page conflict_page too_many_requests_page
-    internal_server_error_page bad_gateway_page service_unavailable_page
+    welcome
+    not_found unauthorized forbidden method_not_allowed conflict
+    too_many_requests internal_server_error bad_gateway service_unavailable
 
-The C<:all> tag exports the three generic functions and every catalog-derived
-C<*_page> function. Neither tag includes named redirect shortcuts.
+C<:common> deliberately excludes collision-prone C<status> and C<redirect>;
+import those individually when wanted. C<:all> includes every opt-in factory.
+An explicit import still can replace a same-named local function, so qualified
+class or configured-instance calls are the collision-free shared-package form.
 
-Exported functions are ordinary one-Request handlers and can be passed
-directly to C<route>. They are not native three-argument applications:
+Exported functions return application objects that can be placed directly:
 
-    route('/missing' => \&not_found_page);
-    mount('/missing', app => request_app(\&not_found_page));
+    route('/missing' => not_found());
+    mount('/missing', app => not_found());
 
 =head1 METHODS
 
 =head2 welcome
 
-    my $response = PAGI::Pages->welcome($source, %options);
+    my $application = PAGI::Pages->welcome(%options);
 
 Builds the stock Welcome page. It accepts C<as>, C<headers>, and
 C<cache_control>.
 
 =head2 status
 
-    my $response = PAGI::Pages->status($source, $code, %options);
+    my $application = PAGI::Pages->status($code, %options);
 
 Builds an error response for an integer status from 400 through 599.
 Registered codes use the checked-in catalog. An unregistered code requires
@@ -1213,8 +1230,7 @@ unused and 510 obsolete, so neither has a named method.
 
 =head2 redirect
 
-    my $response = PAGI::Pages->redirect(
-        $source,
+    my $application = PAGI::Pages->redirect(
         '/new',
         status         => 308,
         preserve_query => 1,
@@ -1283,7 +1299,7 @@ Subclasses may override:
     favicon_href($descriptor)    # URI-reference scalar or undef
 
 Hooks receive fresh request-local descriptors. Futures and invalid return
-shapes croak synchronously before a Response is returned. Pages reasserts
+shapes croak before response start. Pages reasserts
 authoritative problem members, redirect status and location, headers, cache
 policy, and representation metadata after hooks run.
 
@@ -1291,22 +1307,29 @@ Stock HTML escapes dynamic values and embeds an exact-status SVG favicon.
 C<favicon_href> may return a same-origin URI or C<undef>. A complete
 C<render_html> override owns the entire document and favicon inclusion.
 
-=head1 RESPONSE OWNERSHIP
+=head1 APPLICATION AND POLICY OWNERSHIP
 
-A Request handler returns the Response and lets Routing emit it:
+A Request handler may derive ordinary option values and return the application:
 
     sub missing {
         my ($request) = @_;
-        my $response = PAGI::Pages->not_found($request, as => 'text');
-        $response->header('X-Request-ID' => request_id());
-        return $response;
+        return PAGI::Pages->not_found(
+            as      => 'text',
+            detail  => 'Missing ' . $request->path,
+            headers => ['X-Request-ID' => request_id()],
+        );
     }
 
-Only code that already owns the native triplet emits directly:
+At a native triplet boundary use L<PAGI::Utils/invoke_app>:
 
-    await Future->wrap(
-        $response->respond($scope, $receive, $send),
-    );
+    await invoke_app($pages_application, $scope, $receive, $send);
+
+The factory result retains the exact Pages policy object. Pages does not clone,
+freeze, reconstruct, or inspect arbitrary subclass storage. Deliberate later
+policy mutation may affect later invocations, and renderer-maintained subclass
+state remains subclass-owned. Each HTTP invocation still creates its own fresh
+descriptor and concrete Response. Concurrent mutation while an invocation
+derives those values is unsupported.
 
 Pages performs no filesystem or network I/O, dynamic catalog lookup, template
 discovery, or transport adaptation. Fetch asynchronous application data before

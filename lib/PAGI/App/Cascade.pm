@@ -16,11 +16,14 @@ PAGI::App::Cascade - Try apps in sequence until success
     use PAGI::App::Cascade;
     use Future::AsyncAwait;
     use PAGI::Pages ();
+    use PAGI::Utils qw(invoke_app);
 
     my $not_found = async sub {
         my ($scope, $receive, $send) = @_;
-        my $response = PAGI::Pages->not_found($scope, as => 'text');
-        await $response->respond($scope, $receive, $send);
+        await invoke_app(
+            PAGI::Pages->not_found(as => 'text'),
+            $scope, $receive, $send,
+        );
     };
 
     my $app = PAGI::App::Cascade->new(

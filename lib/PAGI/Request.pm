@@ -1175,10 +1175,11 @@ L<PAGI::Response> value directly and return it from a normal handler:
         return json_response({ created => \1 }, status => 201);
     }
 
-Only a raw native application owns response emission. It passes the complete
-native triplet to C<respond>:
+Only a native application owns response emission. Invoke the application value
+against the complete native triplet:
 
-    await $response->respond($scope, $receive, $send);
+    use PAGI::Utils qw(invoke_app);
+    await invoke_app($response, $scope, $receive, $send);
 
 =head2 Per-Request Shared State
 

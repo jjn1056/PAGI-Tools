@@ -90,8 +90,17 @@ coderef receives exactly one L<PAGI::Request> and returns an immediate or
 Future-backed application value, such as L<PAGI::Response::Text>,
 L<PAGI::Response::JSON>, or L<PAGI::Pages::Application>. An object endpoint
 is compiled through its C<to_app> method.
-GET includes automatic HEAD qualification. An explicit HEAD is an ordinary
+Explicit C<methods> wins. Otherwise an application object's
+C<allowed_methods> is snapshotted once during immutable Route construction;
+otherwise the Route defaults to GET plus automatic HEAD. Only scalar
+C<< methods => '*' >> is unrestricted; C<any> declares that wildcard.
+An explicit HEAD is an ordinary
 declaration; place it before GET when it should win.
+
+A returned object's C<to_app> runs once per handler invocation. Advanced
+arbitrary results receive the unchanged scope and remaining body stream, with
+no body or lifespan replay, and remain opaque to the outer reverse/schema
+metadata. Synchronous handlers run inline; blocking work blocks the event loop.
 
 =head2 WebSocket and SSE routes
 
@@ -133,7 +142,9 @@ coderef.
     )->name('api');
 
     $r->mount('/public', routes => [
-        PAGI::Routing::Route->new(route => '/status', \&status),
+        PAGI::Routing::Route->new(
+            path => '/status', endpoint => \&status,
+        ),
     ]);
 
 C<mount> accepts exactly one named target: C<app> or C<routes>. C<app> uses
@@ -186,6 +197,10 @@ HTTP requests for which the complete direct Router scan found neither FULL nor
 PARTIAL. It never receives Router-generated 405 outcomes, WebSocket or SSE
 misses, or selected handler exceptions. When omitted, the immutable Router
 uses the stock negotiated Pages 404.
+
+A source-free Pages object is already a native application and needs no
+adapter. A custom one-Request default uses
+L<PAGI::Utils/request_response>.
 
 =head1 MIDDLEWARE
 

@@ -10,6 +10,7 @@ use Scalar::Util qw(refaddr);
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::URL qw(path_for);
+use PAGI::Utils qw(as_app);
 
 sub scope {
     my (%changes) = @_;
@@ -542,7 +543,7 @@ subtest 'mounted Routers share the one outer HEAD edge and root Mounts consume n
                 push @seen_scopes, snapshot_frame($request->scope);
                 return PAGI::Response::Text->new('representation');
             }),
-            route('/file', raw => async sub {
+            route('/file' => as_app(async sub {
                 my ($request_scope, $receive, $send) = @_;
                 await $send->({
                     type => 'http.response.start', status => 200,
@@ -552,7 +553,7 @@ subtest 'mounted Routers share the one outer HEAD edge and root Mounts consume n
                     type => 'http.response.body', file => 'must-not-open',
                     offset => 4, length => 37,
                 });
-            }),
+            })),
         ],
     );
     my $app = router(routes => [

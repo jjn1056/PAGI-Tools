@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Encode qw(encode);
+use File::Find qw(find);
 use Future;
 use IPC::Open3 qw(open3);
 use JSON::MaybeXS qw(decode_json);
@@ -19,7 +20,7 @@ use PAGI::Request;
 use PAGI::Response qw(:all);
 use PAGI::Routing qw(route);
 use PAGI::SSE;
-use PAGI::Utils qw(app_path);
+use PAGI::Utils qw(app_path invoke_app);
 use PAGI::WebSocket;
 
 sub http_scope {
@@ -170,12 +171,34 @@ subtest 'Response emission is application-only' => sub {
         [201, 'created'], 'to_app emits the complete response');
 
     my @invoked_events;
-    PAGI::Utils::invoke_app(
+    invoke_app(
         $response, http_scope(), \&receive_http,
         sub { push @invoked_events, $_[0]; Future->done },
     )->get;
     is([$invoked_events[0]{status}, body_from(\@invoked_events)],
         [201, 'created'], 'invoke_app emits the complete Response application');
+
+    ok(!PAGI::Utils->can('is_response'),
+        'removed nominal Response predicate has no compatibility alias');
+};
+
+subtest 'live library documentation has no public respond call surface' => sub {
+    my @files;
+    find(sub {
+        return unless -f $_ && /\.(?:pm|pod)\z/;
+        push @files, $File::Find::name;
+    }, 'lib');
+
+    my @stale;
+    for my $file (sort @files) {
+        open my $handle, '<', $file or die "Cannot read $file: $!";
+        while (my $line = <$handle>) {
+            push @stale, "$file:$.:$line" if $line =~ /->respond\(/;
+        }
+        close $handle or die "Cannot close $file: $!";
+    }
+    is(\@stale, [],
+        'live lib code and POD contain no Response->respond invocation');
 };
 
 subtest 'File application construction has one unambiguous spelling' => sub {

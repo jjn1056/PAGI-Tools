@@ -4,8 +4,9 @@
   - BREAKING: Replaced the mutable, request-bound PAGI::Response builder with
     complete concrete Response values and exported factories: Response::Text,
     ::HTML, ::JSON, ::Problem, ::Redirect, ::Empty, ::File, and ::Stream.
-    `respond` now takes the complete native ($scope, $receive, $send) triplet;
-    Request's response bridge and the generic text/html/json/send/send_raw/
+    Response is invoked only through `to_app` or the generic `invoke_app`
+    helper; the public `respond` method, Request's response bridge, and the
+    generic text/html/json/send/send_raw/
     redirect/empty/send_file/stream/writer finishers are removed. Buffered
     response bodies are byte strings; Text and HTML perform explicit charset
     encoding, while File and Stream retain non-buffered delivery ownership.
@@ -14,14 +15,26 @@
     counting discarded bytes. File validates the filesystem at request-time
     preflight, applies logical windows before Range policy, and opts out of
     `body-events-v1` so PAGI servers may preserve file events.
-  - BREAKING: PAGI::Pages functions are ordinary response-valued handlers that
-    require an explicit Request or HTTP-capable scope. Native application
-    positions now use `request_app`; Route and Mount retain their distinct leaf
-    versus prefix/path-rewrite ownership. App::File's application-root
+  - BREAKING: PAGI::Pages class methods, configured-instance methods, and
+    opt-in exports are source-free factories for deferred HTTP applications.
+    Negotiation uses the invocation scope. Route and Mount retain their
+    distinct exact-leaf/method/Allow versus prefix/path-rewrite/subtree
+    ownership. App::File's application-root
     constructor is `from_app_path`, while PAGI::Utils::app_path remains a path
     utility. WebSocket `deny` and SSE `decline` now accept a finite Response;
     accepted WebSocket/SSE sessions remain live protocol loops, not HTTP
     Response applications.
+  - BREAKING: Route CODE endpoints receive one Request, WebSocket, or SSE;
+    Route application objects own the native PAGI triplet. Mount, Compose, and
+    Router defaults retain the native CODE contract. HTTP handler results are
+    native CODE or instantiated `to_app` objects. Native Route CODE uses
+    `as_app`; GET plus automatic HEAD is the default, while scalar
+    `methods => '*'` is unrestricted. Object `allowed_methods` is snapshotted
+    once at Route construction, so routed Endpoint::HTTP objects contribute
+    verbs and OPTIONS while Router owns unsupported-method 405/Allow outcomes.
+    Response and Pages applications retain their exact configured objects;
+    Request headers and Lifespan request scopes likewise retain their exact
+    request-owned identities rather than promising defensive copies.
   - BREAKING: PAGI::Middleware::Lint no longer keeps its own copy of
     send-sequencing state; it delegates event-order legality (duplicate
     http.response.start, body before start, sends after completion,
@@ -250,7 +263,7 @@
     ordering, dotted names, package-string loading, Endpoint private state and
     context override, and response-valued middleware chain are removed without
     a compatibility mode. See UPGRADING.md for exercised before-and-after
-    migrations to direct protocol handlers, explicit raw routes, local names and slash
+    migrations to direct protocol handlers, explicit application Routes, local names and slash
     addresses, explicit constructed child objects, retained snapshots, and
     universal native middleware. `group`, positional Mount targets, and
     `router =>` are removed. Functional `mount(..., routes => [...])` takes a
@@ -289,15 +302,16 @@
     complete representation before suppression.
   - New PAGI::Routing provides the immutable, declaration-ordered route tree
     shared by all three public frontends. Normal HTTP handlers receive one
-    PAGI::Request and return a PAGI::Response; explicit raw routes retain native
-    channel ownership. The release includes inline and application mounts,
+    PAGI::Request and return application values; native CODE Routes use
+    `as_app` and retain native channel ownership. The release includes inline and application mounts,
     route/mount/router pure event middleware, direct PAGI::WebSocket and PAGI::SSE
     handlers, automatic HEAD wire suppression, Router-owned HTTP outcomes,
     first-seen method evidence, synchronous constraints, reverse URLs,
     request-local matched-route frames, inspection, and an executable example.
     PAGI::App::Router and PAGI::Endpoint::Router materialize the same model.
   - Application positions accept coderefs or instantiated `to_app` objects and
-    reject package strings. This includes `app`, `raw`, `http_default`, Test
+    reject package strings. This includes Route endpoints, `app`,
+    `http_default`, Test
     Client `app`, Lifespan `app`/`wrap`, Middleware Builder mount/fallback,
     URLMap, and Cascade targets. Middleware class strings remain accepted
     because middleware descriptors define their loading/construction/wrap
@@ -317,9 +331,9 @@
   - BREAKING: normal Router handlers now receive the selected protocol object
     directly: PAGI::Request for HTTP, PAGI::WebSocket for WebSocket, and
     PAGI::SSE for SSE. PAGI::Request construction is strict HTTP-only
-    `($scope, $receive)`. Raw applications and all middleware retain the native
-    `($scope, $receive, $send)` contract. HTTP handlers return complete
-    concrete Response values directly or through a Future.
+    `($scope, $receive)`. Native applications and all middleware retain the
+    `($scope, $receive, $send)` contract. HTTP handlers return application
+    values directly or through a Future.
   - New PAGI::Routing::URL, PAGI::State, PAGI::CSRF, and PAGI::Transport
     facades make Router-, lifespan-, middleware-, and server-owned capabilities
     explicit. PAGI::Stash and PAGI::Session now accept the same Request or raw
@@ -573,9 +587,9 @@
     callbacks run to completion.
   - PAGI::Endpoint::SSE: await keepalive() so the sse.keepalive event is actually
     emitted on a fully-async server.
-  - PAGI::Utils::is_response: one predicate for "did the handler return a
-    response?", shared by the endpoint and router dispatch paths so the
-    diagnostics stay consistent.
+  - The endpoint and router dispatch paths formerly shared one nominal
+    Response predicate so their diagnostics stayed consistent. The current
+    application-valued contract supersedes that older release behavior.
   - PAGI::SSE and its former facade gained is_connected, derived from the SSE
     wrapper's own state machine (true while started and not closed), mirroring
     PAGI::WebSocket. The facade overrode the base method, which

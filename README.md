@@ -6,6 +6,17 @@ Route matches a complete URL leaf. Mount composes an application under a
 prefix. Router selects and owns routing outcomes. Middleware wraps behavior.
 Compose owns the application root and lifespan.
 
+Callable values keep these four meanings:
+
+    Route CODE endpoint        -> one Request/WebSocket/SSE argument
+    Route to_app object        -> native PAGI application
+    Mount/Compose/default CODE -> native PAGI application
+    handler result             -> native CODE or instantiated to_app object
+
+A native CODE at a Route is wrapped explicitly with `PAGI::Utils::as_app`.
+Mount, Compose `app`, and Router `http_default` remain native application
+positions and take a three-channel CODE directly.
+
 # SYNOPSIS
 
 Raw PAGI is deliberately minimal — an application is just an `async` sub that
@@ -46,13 +57,17 @@ middleware suite — so the same application reads like this:
     my $routing = $router->to_router; # retain one immutable snapshot
     my $app = compose(app => $routing)->to_app; # complete deployed app
 
-For a small conventional landing page or HTTP error, [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) builds an
-ordinary negotiated concrete Response:
+For a small conventional landing page or HTTP error, [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) builds a
+deferred negotiated HTTP application:
 
-    use PAGI::Pages qw(welcome_page);
+    use PAGI::Pages qw(not_found welcome);
 
-    my $response = PAGI::Pages->not_found($request);
-    my $handler  = \&welcome_page;
+    my $landing = welcome();
+    my $missing = not_found(detail => 'No such page');
+
+Factories take options only; negotiation uses the later invocation scope. The
+returned object can be placed directly at an exact Route or as Router
+`http_default`.
 
 For a conventional static tree, use the rooted file component rather than
 constructing paths or reading files in a handler:
@@ -116,9 +131,12 @@ backpressure. Route and Mount retain separate ownership:
 The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
 route metadata, constraints, GET/HEAD behavior, Router-owned 404/405 outcomes,
 first-seen method unions, written declaration order, and reverse
-routing. Ordinary HTTP handlers receive `PAGI::Request` and return a Response;
-WebSocket and SSE handlers receive their direct protocol objects. Native
-channel ownership is always explicit with `raw`. A bare Router sends its own
+routing. Ordinary HTTP handlers receive `PAGI::Request` and return an
+application value, normally a Response or Pages object; WebSocket and SSE
+handlers receive their direct protocol objects. Native CODE ownership at a
+Route is always explicit with `as_app`. Without explicit `methods`, that Route
+uses GET plus automatic HEAD; unrestricted delegation uses scalar
+`methods => '*'`. A bare Router sends its own
 negotiated 404 and compliant 405 and installs its own HeadBoundary, but it
 deliberately has no root ErrorHandler, response-completion guard, or lifespan
 driver. Compose adds an outer idempotent application-root HEAD boundary and

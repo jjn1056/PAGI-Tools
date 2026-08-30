@@ -285,10 +285,11 @@ C<content_type>, and flat C<headers> use the common Response contract. Stream
 does not calculate Content-Length; an explicitly supplied value is retained as
 the application's delivery promise.
 
-=head2 respond, to_app
+=head2 to_app
 
-These methods implement the native HTTP triplet and reusable Response
-application contracts. Disconnect observation uses only the synchronous
+Returns the reusable native HTTP application over this exact Stream object.
+At an existing triplet boundary, invoke the Stream through
+L<PAGI::Utils/invoke_app>. Disconnect observation uses only the synchronous
 C<pagi.connection> capability. Stream never starts a competing receive loop.
 Cancelling the returned Future cancels only the caller's observer and signals
 the retained Stream lifecycle to stop producer-owned work. That lifecycle

@@ -137,6 +137,13 @@ authoritative custom-response seams. Automatic OPTIONS retains its existing
 empty response with C<Allow>. Endpoint::HTTP has no Pages configuration
 surface.
 
+An instantiated Endpoint object can be placed directly at a Route. With no
+explicit Route C<methods>, the Router snapshots C<allowed_methods> once at
+Route construction, including GET-derived HEAD and OPTIONS. The Router then
+owns unsupported-method 405 and the authoritative C<Allow> union; a matched
+OPTIONS reaches this Endpoint. Mounted, standalone, or deliberately broader
+Route placement retains the Endpoint's own method outcomes.
+
 =head2 Features
 
 =over 4
@@ -182,6 +189,10 @@ B<Handler contract:> Every HTTP handler MUST return an application value
 causes C<dispatch> to croak. C<dispatch> returns that exact application
 without sending it; C<to_app> delegates its invocation through the shared
 application contract.
+
+The selected handler runs inline. Immediate results are normalized with
+C<Future-E<gt>wrap>, but blocking synchronous work still blocks the event-loop
+thread. A returned object's C<to_app> is invoked once for that request.
 
 B<Singleton:> C<to_app> creates a single endpoint instance that serves the
 entire application lifetime. State stored in C<$self> persists across

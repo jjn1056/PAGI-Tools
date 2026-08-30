@@ -553,12 +553,61 @@ only. They never load package names. Anything else croaks. A middleware object
 (something with C<wrap> but no C<to_app>) gets a middleware-specific croak,
 since middleware belongs in middleware position, not app position.
 
-All composition points in this distribution (builder mounts, router
-targets, cascades, the test client) call this for you, so user code can pass
+Native composition points in this distribution (Mount, Compose, Router
+defaults, cascades, and the test client) call this for you, so user code can pass
 native apps and instantiated components directly:
 
-    mount '/static' => PAGI::App::File->new(root => $dir);
-    mount '/api'    => MyApp::API->new;
+    mount('/static', app => PAGI::App::File->new(root => $dir));
+    mount('/api',    app => MyApp::API->new);
+
+A Route is the exceptional adapter boundary: a bare CODE is a one-argument
+Request, WebSocket, or SSE handler, while an instantiated C<to_app> object is
+a native application endpoint.
+
+=head2 as_app
+
+    use PAGI::Utils qw(as_app);
+
+    route('/native' => as_app($native));
+    route('/relay' => as_app($native), methods => '*');
+
+Returns an opaque application object whose C<to_app> returns the exact supplied
+coderef. It does not inspect arity, alter Future behavior, capture a scope, or
+add protocol policy. At an HTTP Route, no explicit methods means GET plus
+automatic HEAD; scalar C<< methods => '*' >> is unrestricted.
+
+=head2 request_response
+
+    use PAGI::Utils qw(request_response);
+
+    router(
+        routes       => \@routes,
+        http_default => request_response(\&custom_not_found),
+    );
+
+Adapts one Request handler to a native HTTP application component. Route does
+this automatically for bare CODE endpoints; use the helper only when a
+one-Request handler must occupy a native application position. Each invocation
+constructs one Request, awaits the immediate or Future-backed result, and
+invokes the returned native CODE or instantiated C<to_app> object against the
+original triplet. Returned objects are normalized per handler invocation, not
+cached across requests.
+
+Advanced returned applications receive the unchanged scope and remaining body
+stream. Already consumed body events are not replayed; no lifespan is replayed;
+and the returned app's routes, reverse names, and schema metadata remain opaque
+to the outer Router.
+
+=head2 invoke_app
+
+    use PAGI::Utils qw(invoke_app);
+
+    await invoke_app($value, $scope, $receive, $send);
+
+Normalizes C<$value> through C<to_app>, invokes it with the exact supplied
+triplet, and awaits immediate or Future-backed completion. It installs no HEAD,
+scope-rewrite, response-completion, error, or lifespan policy. Use this at a
+native triplet boundary instead of a Response-specific emission method.
 
 Middleware positions have a separate explicit class-loading contract; pass a
 middleware class name there, not in an application position.

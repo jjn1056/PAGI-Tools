@@ -1099,6 +1099,8 @@ backpressure. Successful mapped-start settlement permanently owns the handshake
 response slot even while the body is pending or later fails. File returns no
 capability because PAGI Www permits only the body form and does not use
 C<file>/C<fh> for denial bodies; trailer and unknown events are also rejected.
+The concrete Response is invoked through its application contract; Response
+has no separate public emission method.
 When the extension is absent, the Response body is ignored and denial falls
 back to a C<websocket.close> with policy code 1008. See
 L<PAGI::Spec::Www/"WebSocket Denial Response (extension)">.

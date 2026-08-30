@@ -383,11 +383,11 @@ a range.
 
 =head1 METHODS
 
-C<respond> performs all file inspection before response start, then awaits
-response start and the plan's one terminal body event. C<to_app> retains the
-exact File object, so later deliberate changes affect later invocations while
-each request keeps its complete pre-start plan. C<is_buffered> returns false,
-C<body> croaks, and
+C<to_app> retains the exact File object. Each invocation performs all file
+inspection before response start, then awaits response start and the plan's one
+terminal body event. Later deliberate changes affect later invocations while
+each request keeps its complete pre-start plan. At an existing triplet boundary
+use L<PAGI::Utils/invoke_app>. C<is_buffered> returns false, C<body> croaks, and
 C<protocol_response_capability> returns C<undef>.
 
 The capability opt-out is independent of buffering: Stream remains eligible
