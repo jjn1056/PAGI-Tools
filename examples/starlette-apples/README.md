@@ -81,9 +81,9 @@ use List::Util qw(max);
 use Types::Standard qw(Int);
 
 use PAGI::Compose qw(compose);
-use PAGI::Pages qw(welcome_page not_found_page);
+use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(file_response json_response);
-use PAGI::Routing qw(route mount router request_app);
+use PAGI::Routing qw(route mount router);
 use PAGI::Routing::URL qw(url_for path_for);
 use PAGI::Utils qw(app_path);
 
@@ -180,13 +180,6 @@ async sub delete_apple($request) {
     });
 }
 
-sub root_not_found($request) {
-    return not_found_page(
-        $request,
-        detail => 'That page does not exist in the Apple demo.',
-    );
-}
-
 compose(
     app => router(
         routes => [
@@ -194,7 +187,7 @@ compose(
                 name => 'home',
                 desc => 'Apple manager SPA',
             ),
-            route('/welcome' => \&welcome_page,
+            route('/welcome' => welcome(),
                 name => 'welcome',
                 desc => 'PAGI welcome page',
             ),
@@ -212,20 +205,21 @@ compose(
                         methods => ['DELETE'], name => 'delete'),
                 ],
                 name => 'apples',
-                desc => 'Apples API namespace',
             ),
         ],
-        http_default => request_app(\&root_not_found),
+        http_default => not_found(
+            detail => 'That page does not exist in the Apple demo.',
+        ),
     ),
     lifespan => { startup => \&startup },
 );
 ```
 
-The handlers return concrete response values. The exact root file is a Route
-component, `/welcome` remains a normal Request handler, and `/apples` is a
-subtree-owning child Router. The custom root 404 is the Router's
-`http_default`, so it handles unknown paths without swallowing the 405 for a
-known path such as `PUT /welcome`.
+The static root file, `/welcome` Pages value, CRUD JSON values, and custom root
+404 are direct application values. The exact root file and `/welcome` remain
+Route endpoints, while `/apples` is a subtree-owning child Router. The custom
+root 404 is the Router's `http_default`, so it handles unknown paths without
+swallowing the 405 for a known path such as `PUT /welcome`.
 
 | Starlette | PAGI::Tools |
 | --- | --- |

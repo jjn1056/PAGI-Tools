@@ -67,6 +67,19 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
     like($manager->text, qr/href="\/welcome"/,
         'manager links to the PAGI welcome page');
 
+    my $manager_head = $client->head('/');
+    is($manager_head->status, 200,
+        'static manager application defaults HEAD alongside GET');
+    is($manager_head->text, '',
+        'HEAD suppresses the static manager response body');
+
+    my $manager_wrong_method = $client->put('/',
+        headers => { Accept => 'application/problem+json' });
+    is($manager_wrong_method->status, 405,
+        'static manager application rejects methods outside its GET default');
+    is($manager_wrong_method->header('Allow'), 'GET, HEAD',
+        'static manager application publishes its GET and HEAD method union');
+
     my $welcome = $client->get('/welcome',
         headers => { Accept => 'text/html' });
     is($welcome->status, 200, 'welcome route responds');
