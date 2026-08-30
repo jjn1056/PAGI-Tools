@@ -54,7 +54,7 @@ subtest 'Stream is a reusable Response value with one fresh Writer per invocatio
     my @invocations;
     for (1 .. 2) {
         my @events;
-        my $app = $stream->respond(
+        my $app = $stream->to_app->(
             http_scope(),
             receive(),
             sub { push @events, $_[0]; Future->done },
@@ -97,7 +97,7 @@ subtest 'start settles before producer invocation and producer Future completion
         return $producer_done;
     });
 
-    my $running = $stream->respond(
+    my $running = $stream->to_app->(
         http_scope(),
         receive(),
         sub {
@@ -222,7 +222,7 @@ subtest 'Stream validates construction and the native HTTP triplet before sendin
     for my $bad_scope (undef, {}, { type => 'websocket' }, bless({}, 'T::Scope')) {
         my @events;
         like(dies {
-            $stream->respond(
+            $stream->to_app->(
                 $bad_scope,
                 receive(),
                 sub { push @events, $_[0]; Future->done },
@@ -230,9 +230,9 @@ subtest 'Stream validates construction and the native HTTP triplet before sendin
         }, qr/(?:scope|HTTP)/i, 'non-HTTP scope is rejected');
         is(\@events, [], 'invalid protocol use sends no events');
     }
-    like(dies { $stream->respond(http_scope(), 'receive', sub { Future->done })->get },
+    like(dies { $stream->to_app->(http_scope(), 'receive', sub { Future->done })->get },
         qr/receive.*coderef/i, 'receive must be a coderef');
-    like(dies { $stream->respond(http_scope(), receive(), 'send')->get },
+    like(dies { $stream->to_app->(http_scope(), receive(), 'send')->get },
         qr/send.*coderef/i, 'send must be a coderef');
 };
 

@@ -132,7 +132,7 @@ subtest 'constructor and metadata setters validate and preserve ordered semantic
         'nested header pairs are rejected';
 };
 
-subtest 'respond validates the full triplet, awaits each send, and protects framing' => sub {
+subtest 'Response application validates the full triplet, awaits each send, and protects framing' => sub {
     my $res = PAGI::Response->new('abc', headers => [
         'Content-Length' => '999', 'Transfer-Encoding' => 'chunked',
     ]);
@@ -145,7 +145,7 @@ subtest 'respond validates the full triplet, awaits each send, and protects fram
         return ++$calls == 1 ? $start : $body;
     };
 
-    my $emission = $res->respond(http_scope(), receive(), $send);
+    my $emission = $res->to_app->(http_scope(), receive(), $send);
     is scalar @events, 1, 'start event is sent first';
     ok !$emission->is_ready, 'pending start Future is awaited';
     $start->done;
@@ -168,20 +168,20 @@ subtest 'respond validates the full triplet, awaits each send, and protects fram
         bless({}, 'T::BlessedScope'),
     ) {
         my @bad_events;
-        like dies { $res->respond($bad, receive(), sub { push @bad_events, $_[0]; Future->done })->get },
+        like dies { $res->to_app->($bad, receive(), sub { push @bad_events, $_[0]; Future->done })->get },
             qr/(?:scope|HTTP)/i, 'invalid scope is rejected';
         is \@bad_events, [], 'invalid scope sends no events';
     }
     my @bad_receive_events;
-    like dies { $res->respond(http_scope(), 'receive', sub { push @bad_receive_events, $_[0]; Future->done })->get }, qr/receive.*coderef/i,
+    like dies { $res->to_app->(http_scope(), 'receive', sub { push @bad_receive_events, $_[0]; Future->done })->get }, qr/receive.*coderef/i,
         'receive must be a coderef';
     is \@bad_receive_events, [], 'invalid receive sends no events';
     my $invalid_send = T::InvalidSend->new;
-    like dies { $res->respond(http_scope(), receive(), $invalid_send)->get }, qr/send.*coderef/i,
+    like dies { $res->to_app->(http_scope(), receive(), $invalid_send)->get }, qr/send.*coderef/i,
         'send must be a coderef';
     is $invalid_send->calls, 0, 'invalid send records no events';
-    like dies { $res->respond(sub { Future->done })->get }, qr/HTTP scope|scope hashref/i,
-        'legacy one-argument respond is rejected as an invalid scope';
+    like dies { $res->to_app->(sub { Future->done })->get }, qr/HTTP scope|scope hashref/i,
+        'one-argument application invocation is rejected as an invalid scope';
 };
 
 subtest 'to_app retains the exact Response and each invocation captures one delivery plan' => sub {

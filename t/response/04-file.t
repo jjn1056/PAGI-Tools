@@ -53,7 +53,7 @@ sub write_file {
 sub run_response {
     my ($response, $scope) = @_;
     my @events;
-    $response->respond(
+    $response->to_app->(
         $scope // http_scope(), receive(),
         sub { push @events, $_[0]; return Future->done },
     )->get;
@@ -90,7 +90,7 @@ subtest 'construction validates configuration but defers all file inspection' =>
     my $missing_response = file_response($missing);
     my @missing_events;
     like(dies {
-        $missing_response->respond(
+        $missing_response->to_app->(
             http_scope(), receive(),
             sub { push @missing_events, $_[0]; Future->done },
         )->get;
@@ -102,7 +102,7 @@ subtest 'construction validates configuration but defers all file inspection' =>
     my $directory_response = file_response($root);
     my @directory_events;
     like(dies {
-        $directory_response->respond(
+        $directory_response->to_app->(
             http_scope(), receive(),
             sub { push @directory_events, $_[0]; Future->done },
         )->get;
@@ -119,7 +119,7 @@ subtest 'construction validates configuration but defers all file inspection' =>
     } else {
         my @events;
         like(dies {
-            file_response($unreadable)->respond(
+            file_response($unreadable)->to_app->(
                 http_scope(), receive(),
                 sub { push @events, $_[0]; Future->done },
             )->get;
@@ -200,7 +200,7 @@ subtest 'full files and configured windows have authoritative logical metadata' 
         my ($label, $invalid) = @$case;
         my @events;
         like(dies {
-            $invalid->respond(
+            $invalid->to_app->(
                 http_scope(), receive(),
                 sub { push @events, $_[0]; Future->done },
             )->get;
@@ -235,7 +235,7 @@ subtest 'calculated fields and range status cannot acquire competing owners' => 
     $through_headers->headers->add('ETag', '"caller"');
     my @events;
     like(dies {
-        $through_headers->respond(
+        $through_headers->to_app->(
             http_scope(), receive(),
             sub { push @events, $_[0]; Future->done },
         )->get;
@@ -460,7 +460,7 @@ subtest 'trusted path ownership, retained configuration, and send settlement sta
     my $start_gate = Future->new;
     my $body_gate = Future->new;
     my @events;
-    my $running = file_response($selected)->respond(
+    my $running = file_response($selected)->to_app->(
         http_scope(), receive(),
         sub {
             push @events, $_[0];
@@ -480,7 +480,7 @@ subtest 'trusted path ownership, retained configuration, and send settlement sta
 
     my @failed_start_events;
     like(dies {
-        file_response($selected)->respond(
+        file_response($selected)->to_app->(
             http_scope(), receive(),
             sub {
                 push @failed_start_events, $_[0];
@@ -498,7 +498,7 @@ subtest 'trusted path ownership, retained configuration, and send settlement sta
             $pending->on_cancel(sub { ++$send_cancellations });
             my @cancel_events;
 
-            my $cancelled_response = file_response($selected)->respond(
+            my $cancelled_response = file_response($selected)->to_app->(
                 http_scope(), receive(),
                 sub {
                     push @cancel_events, $_[0];
@@ -546,7 +546,7 @@ subtest 'HEAD suppression remains an enclosing wire-boundary responsibility' => 
             return @wire_events == 2 ? $terminal : Future->done;
         },
     );
-    my $running = file_response($path)->respond(
+    my $running = file_response($path)->to_app->(
         $scope, receive(), $send,
     );
     is($wire_events[0]{status}, 200,

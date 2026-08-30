@@ -453,7 +453,7 @@ subtest 'serve keeps Result policy but delegates selected-file preflight and del
     ok(!exists $events[1]{fh}, 'application does not open a filehandle');
 
     my @direct_events;
-    PAGI::Response::File->new($file_path)->respond(
+    PAGI::Response::File->new($file_path)->to_app->(
         http_scope(path => '/unrelated-url'),
         sub { return Future->done({ type => 'http.disconnect' }) },
         sub { push @direct_events, $_[0]; return Future->done },

@@ -22,7 +22,7 @@ my @PATH_EXPORTS = qw(
 );
 
 our @EXPORT_OK = (
-    qw(handle_lifespan to_app as_app request_response invoke_app is_response),
+    qw(handle_lifespan to_app as_app request_response invoke_app),
     @ENV_EXPORTS,
     @PATH_EXPORTS,
 );
@@ -288,15 +288,6 @@ sub _app_path_from_origin {
 
     return $home unless @components;
     return File::Spec->canonpath(File::Spec->catfile($home, @components));
-}
-
-# True if $x is a nominal PAGI::Response value. Production Responses receive
-# ($scope, $receive, $send).
-# The single source of truth for the "did the handler return a response?" check
-# (used by the endpoint and router dispatch paths).
-sub is_response {
-    my ($x) = @_;
-    return blessed($x) && $x->isa('PAGI::Response') ? 1 : 0;
 }
 
 async sub handle_lifespan {
@@ -571,19 +562,5 @@ native apps and instantiated components directly:
 
 Middleware positions have a separate explicit class-loading contract; pass a
 middleware class name there, not in an application position.
-
-=cut
-
-=head2 is_response
-
-    croak "handler did not return a response" unless is_response($value);
-
-Returns 1 if C<$value> is a nominal L<PAGI::Response> value (including a
-subclass) and 0 otherwise. Objects that merely implement C<respond> or C<to_app>
-are application adapters, not Response values. This is the single source of
-truth for the "did the handler return a response?" check used across the
-endpoint and router dispatch paths, so those checks stay consistent (same
-predicate, same C<croak> diagnostics) instead of each re-deriving the nominal
-check.
 
 =cut

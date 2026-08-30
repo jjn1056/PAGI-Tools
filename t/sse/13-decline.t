@@ -186,10 +186,10 @@ subtest 'one Response value can be reused for independent declines' => sub {
     use Future::AsyncAwait;
     use parent -norequire, 'PAGI::Response';
     our $seen_scope;
-    async sub respond {
+    async sub _emit {
         my ($self, $scope, $receive, $send) = @_;
         $seen_scope = $scope;
-        await $self->SUPER::respond($scope, $receive, $send);
+        await $self->SUPER::_emit($scope, $receive, $send);
         return;
     }
 }
@@ -280,7 +280,7 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     use Future::AsyncAwait;
     use parent -norequire, 'PAGI::Response';
     sub new { return bless { events => $_[1] }, $_[0] }
-    async sub respond {
+    async sub _emit {
         my ($self, $scope, $receive, $send) = @_;
         for my $event (@{$self->{events}}) {
             await $send->($event);
@@ -293,17 +293,17 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     use parent -norequire, 'PAGI::Response';
     our $calls = 0;
     sub protocol_response_capability { return undef }
-    async sub respond {
+    async sub _emit {
         my ($self, @args) = @_;
         ++$calls;
-        await $self->SUPER::respond(@args);
+        await $self->SUPER::_emit(@args);
         return;
     }
 
     package T::SSEProducerFailureResponse;
     use Future::AsyncAwait;
     use parent -norequire, 'PAGI::Response';
-    async sub respond {
+    async sub _emit {
         my ($self, $scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 503, headers => [] });
         die "producer failed after response start\n";

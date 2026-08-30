@@ -6,7 +6,7 @@ use PAGI::Response;
 
 my $res = PAGI::Response->new("a\x00b");
 my @events;
-$res->respond(
+$res->to_app->(
     { type => 'http', method => 'GET' },
     sub { Future->done },
     sub { push @events, $_[0]; Future->done },

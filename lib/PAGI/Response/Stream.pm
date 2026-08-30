@@ -90,7 +90,7 @@ sub _stream_delivery_plan {
     };
 }
 
-sub respond {
+sub _emit {
     my ($self, $scope, $receive, $send) = @_;
     PAGI::Response::_validate_http_triplet($scope, $receive, $send);
     my $plan = $self->_stream_delivery_plan;
@@ -217,7 +217,7 @@ sub to_app {
     my ($self) = @_;
     return async sub {
         my ($scope, $receive, $send) = @_;
-        await $self->respond($scope, $receive, $send);
+        await $self->_emit($scope, $receive, $send);
         return;
     };
 }

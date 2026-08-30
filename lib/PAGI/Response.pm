@@ -416,7 +416,7 @@ sub _wire_headers {
     return $headers;
 }
 
-async sub respond {
+async sub _emit {
     my ($self, $scope, $receive, $send) = @_;
     _validate_http_triplet($scope, $receive, $send);
     my $plan = $self->_emission_plan;
@@ -435,7 +435,7 @@ sub to_app {
     my ($self) = @_;
     return async sub {
         my ($scope, $receive, $send) = @_;
-        await $self->respond($scope, $receive, $send);
+        await $self->_emit($scope, $receive, $send);
         return;
     };
 }
@@ -696,7 +696,7 @@ async sub _respond_for_protocol {
     };
 
     await Future->wrap(
-        $response->respond(\%http_scope, $receive, $mapped_send),
+        $response->_emit(\%http_scope, $receive, $mapped_send),
     );
 
     croak "$operation Response did not emit response start"

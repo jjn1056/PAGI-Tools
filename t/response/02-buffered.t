@@ -21,7 +21,7 @@ use PAGI::Response::Empty;
 sub emitted_events {
     my ($response) = @_;
     my @events;
-    $response->respond(
+    $response->to_app->(
         { type => 'http' },
         sub { Future->done },
         sub { push @events, $_[0]; Future->done },
@@ -198,7 +198,7 @@ subtest 'Problem validates its document status before each retained-object invoc
     PAGI::Response::status($bypassed, 409);
     my @events;
     like(dies {
-        $bypassed->respond(
+        $bypassed->to_app->(
             { type => 'http' },
             sub { Future->done },
             sub { push @events, $_[0]; Future->done },
@@ -302,11 +302,11 @@ subtest 'Redirect preserves response-owned status, Location, and body invariants
     while (@container_mutations) {
         my ($name, $mutate) = splice @container_mutations, 0, 2;
 
-        my $for_respond = redirect_response('/canonical');
-        $mutate->($for_respond);
+        my $for_emission = redirect_response('/canonical');
+        $mutate->($for_emission);
         my @events;
         like(dies {
-            $for_respond->respond(
+            $for_emission->to_app->(
                 { type => 'http' },
                 sub { Future->done },
                 sub { push @events, $_[0]; Future->done },
@@ -334,7 +334,7 @@ subtest 'Redirect preserves response-owned status, Location, and body invariants
     PAGI::Response::status($status_bypass, 301);
     my @status_events;
     like(dies {
-        $status_bypass->respond(
+        $status_bypass->to_app->(
             { type => 'http' },
             sub { Future->done },
             sub { push @status_events, $_[0]; Future->done },
@@ -406,7 +406,7 @@ subtest 'Empty owns zero bytes without a default content type' => sub {
         $mutated->headers->$method('Content-Type', 'text/plain');
         my @events;
         like(dies {
-            $mutated->respond(
+            $mutated->to_app->(
                 { type => 'http' },
                 sub { Future->done },
                 sub { push @events, $_[0]; Future->done },

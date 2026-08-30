@@ -114,7 +114,7 @@ sub run_selected_file {
         native_scope($method, '/unrelated-url-path', $headers),
         sub { push @events, $_[0]; return Future->done },
     );
-    PAGI::Response::File->new($path)->respond(
+    PAGI::Response::File->new($path)->to_app->(
         $scope,
         sub { return Future->done({ type => 'http.disconnect' }) },
         $send,

@@ -147,7 +147,7 @@ subtest 'write exposes send backpressure and forbids an overlapping write' => su
         $write_future = $writer->write('abc');
         return $write_future;
     });
-    my $running = $stream->respond(
+    my $running = $stream->to_app->(
         http_scope(),
         quiet_receive(),
         sub {
@@ -185,7 +185,7 @@ subtest 'Writer is invocation support, validates bytes/text, and closes locally 
         $writer->on_close(sub { ++$cleanup_calls });
         return $hold;
     });
-    my $running = $stream->respond(
+    my $running = $stream->to_app->(
         http_scope(), quiet_receive(),
         sub { push @events, $_[0]; Future->done },
     );
@@ -240,7 +240,7 @@ subtest 'Writer delegates transport flow control and has deliberate quiet defaul
     my $running = PAGI::Response::Stream->new(sub {
         ($writer) = @_;
         return $hold;
-    })->respond(
+    })->to_app->(
         http_scope('pagi.transport' => $transport_handle),
         quiet_receive(),
         sub { Future->done },
@@ -263,7 +263,7 @@ subtest 'Writer delegates transport flow control and has deliberate quiet defaul
     my $quiet_running = PAGI::Response::Stream->new(sub {
         ($quiet_writer) = @_;
         return $quiet_hold;
-    })->respond(http_scope(), quiet_receive(), sub { Future->done });
+    })->to_app->(http_scope(), quiet_receive(), sub { Future->done });
     is($quiet_writer->buffered_amount, 0, 'absent transport reports zero buffered bytes');
     is($quiet_writer->high_water_mark, undef, 'absent transport has no high watermark');
     is($quiet_writer->low_water_mark, undef, 'absent transport has no low watermark');
@@ -287,7 +287,7 @@ subtest 'a transport with only buffered_amount gets every optional fallback' => 
     my $running = PAGI::Response::Stream->new(sub {
         ($writer) = @_;
         return $hold;
-    })->respond(
+    })->to_app->(
         http_scope('pagi.transport' => $transport_handle),
         quiet_receive(),
         sub { Future->done },
@@ -318,7 +318,7 @@ subtest 'pipe_from pulls only after the prior source and send settle' => sub {
     my $body_index = 0;
     my $running = PAGI::Response::Stream->new(sub {
         return $_[0]->pipe_from($source);
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub {
             push @events, $_[0];
@@ -356,7 +356,7 @@ subtest 'pipe_from propagates source/send failures and keeps truncation observab
         my ($writer) = @_;
         $writer->on_close(sub { ++$source_cleanup });
         return $writer->pipe_from($bad_source);
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub { push @source_events, $_[0]; Future->done },
     );
@@ -371,7 +371,7 @@ subtest 'pipe_from propagates source/send failures and keeps truncation observab
         my ($writer) = @_;
         $writer->on_close(sub { ++$send_cleanup });
         return $writer->pipe_from(T::Source->new('data', undef));
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -397,7 +397,7 @@ subtest 'pipe_from propagates source/send failures and keeps truncation observab
         my ($writer) = @_;
         await $writer->pipe_from($body);
         die "upload was truncated\n" if $body->truncated;
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub { push @relay_events, $_[0]; Future->done },
     );
@@ -415,7 +415,7 @@ subtest 'pipe_from propagates a Future-backed next_chunk failure after waiting' 
         my ($writer) = @_;
         $writer->on_close(sub { ++$cleanup_calls });
         return $writer->pipe_from(T::Source->new($next));
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub { push @events, $_[0]; Future->done },
     );
@@ -436,7 +436,7 @@ subtest 'disconnect before producer start completes quietly without consuming re
     my @events;
     my $receive_calls = 0;
     my $producer_calls = 0;
-    my $running = PAGI::Response::Stream->new(sub { ++$producer_calls })->respond(
+    my $running = PAGI::Response::Stream->new(sub { ++$producer_calls })->to_app->(
         http_scope('pagi.connection' => $connection),
         quiet_receive(\$receive_calls),
         sub {
@@ -462,7 +462,7 @@ subtest 'caller cancellation before start settlement never cancels the start sen
     my $producer_calls = 0;
     my @events;
     $start->on_cancel(sub { ++$start_cancelled });
-    my $running = PAGI::Response::Stream->new(sub { ++$producer_calls })->respond(
+    my $running = PAGI::Response::Stream->new(sub { ++$producer_calls })->to_app->(
         http_scope(), quiet_receive(),
         sub {
             push @events, $_[0];
@@ -494,7 +494,7 @@ subtest 'caller cancellation stops unrelated producer work and retains cleanup' 
         ($writer) = @_;
         $writer->on_close(sub { ++$cleanup_calls; return $cleanup_wait });
         return $work;
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub { push @events, $_[0]; Future->done },
     );
@@ -523,7 +523,7 @@ subtest 'caller cancellation during write awaits the send before cleanup' => sub
         $write = $writer->write('pending');
         $write->on_cancel(sub { ++$write_cancelled });
         return $write;
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -552,7 +552,7 @@ subtest 'normal completion releases the private disconnect signal' => sub {
             $weak_signal = $writer->_disconnect_signal;
             weaken($weak_signal);
             return;
-        })->respond(
+        })->to_app->(
             http_scope(), quiet_receive(), sub { Future->done },
         );
         $running->get;
@@ -580,7 +580,7 @@ subtest 'disconnect cancels unrelated producer work and awaits exactly-once clea
         $writer->on_close(sub { die "cleanup exploded\n" });
         $writer->on_close(sub { push @cleanup, 'last'; return 'immediate' });
         return $work;
-    })->respond(
+    })->to_app->(
         http_scope('pagi.connection' => $connection), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -641,7 +641,7 @@ subtest 'PAGI 0.5 disconnect settles active sends without failing or cancelling 
                     : $writer->close;
                 $producer_future = $operation_future;
                 return $producer_future;
-            })->respond(
+            })->to_app->(
                 http_scope('pagi.connection' => $connection), quiet_receive(),
                 sub {
                     my ($event) = @_;
@@ -702,7 +702,7 @@ subtest 'pipe_from stops before another pull after a discarded send settles' => 
         ($writer) = @_;
         $pipe = $writer->pipe_from($source);
         return $pipe;
-    })->respond(
+    })->to_app->(
         http_scope('pagi.connection' => $connection), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -740,7 +740,7 @@ subtest 'disconnect after accepted write settlement cancels only later producer 
         $write = $writer->write('accepted');
         await $write;
         await $later_work;
-    })->respond(
+    })->to_app->(
         http_scope('pagi.connection' => $connection), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -774,7 +774,7 @@ subtest 'a controlled validation send failure stays an application failure' => s
         $writer->on_close(sub { ++$cleanup_calls });
         $write = $writer->write('invalid event resource');
         return $write;
-    })->respond(
+    })->to_app->(
         http_scope('pagi.connection' => $connection), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -804,7 +804,7 @@ subtest 'disconnect after normal completion is not retroactive' => sub {
         ($writer) = @_;
         $writer->on_close(sub { ++$cleanup_calls });
         return $writer->write('complete');
-    })->respond(
+    })->to_app->(
         http_scope('pagi.connection' => $connection), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -833,7 +833,7 @@ subtest 'repeated close joins pending terminal delivery and Stream awaits it' =>
         $first_close = $writer->close;
         $second_close = $writer->close;
         return $second_close;
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -870,7 +870,7 @@ subtest 'cancelling the first close view cannot bypass its pending terminal send
         $first_close = $writer->close;
         $first_close->cancel;
         return $first_close;
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -905,7 +905,7 @@ subtest 'repeated close joins pending cleanup and Stream awaits it' => sub {
         $first_close = $writer->close;
         $second_close = $writer->close;
         return $second_close;
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(), sub { Future->done },
     );
 
@@ -929,7 +929,7 @@ subtest 'a pending terminal send that later fails remains primary after cleanup'
     my $running = PAGI::Response::Stream->new(sub {
         $_[0]->on_close(sub { ++$cleanup_calls });
         return 'producer done';
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub {
             my ($event) = @_;
@@ -959,7 +959,7 @@ subtest 'Future-backed failing cleanup warns and continues later callbacks' => s
         });
         $writer->on_close(sub { push @cleanup, 'later'; return 'immediate' });
         return 'producer done';
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(), sub { Future->done },
     );
 
@@ -982,7 +982,7 @@ subtest 'genuine producer and terminal-send errors rethrow after cleanup' => sub
         $writer->on_close(sub { die "cleanup warning\n" });
         $writer->on_close(sub { push @cleanup, 'later'; return Future->done });
         die "producer exploded\n";
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub { push @producer_events, $_[0]; Future->done },
     );
@@ -997,7 +997,7 @@ subtest 'genuine producer and terminal-send errors rethrow after cleanup' => sub
     my $terminal_failure = PAGI::Response::Stream->new(sub {
         $_[0]->on_close(sub { ++$terminal_cleanup });
         return 'done';
-    })->respond(
+    })->to_app->(
         http_scope(), quiet_receive(),
         sub {
             my ($event) = @_;

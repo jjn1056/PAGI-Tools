@@ -222,7 +222,7 @@ async sub _respond_with_plan {
     return;
 }
 
-async sub respond {
+async sub _emit {
     my ($self, $scope, $receive, $send) = @_;
     PAGI::Response::_validate_http_triplet($scope, $receive, $send);
     my $plan = $self->_plan_for_scope($scope);
@@ -234,7 +234,7 @@ sub to_app {
     my ($self) = @_;
     return async sub {
         my ($scope, $receive, $send) = @_;
-        await $self->respond($scope, $receive, $send);
+        await $self->_emit($scope, $receive, $send);
         return;
     };
 }

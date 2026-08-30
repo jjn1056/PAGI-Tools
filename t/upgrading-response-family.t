@@ -14,10 +14,10 @@ use lib 'lib';
 
 use PAGI::App::File;
 use PAGI::Middleware::CORS;
-use PAGI::Pages qw(not_found_page);
+use PAGI::Pages qw(not_found);
 use PAGI::Request;
 use PAGI::Response qw(:all);
-use PAGI::Routing qw(request_app route);
+use PAGI::Routing qw(route);
 use PAGI::SSE;
 use PAGI::Utils qw(app_path);
 use PAGI::WebSocket;
@@ -160,20 +160,22 @@ subtest 'Stream owns Writer creation and each write is awaited' => sub {
     is(body_from($events), 'chunk', 'awaited Writer output reaches the wire');
 };
 
-subtest 'respond requires the complete native triplet' => sub {
+subtest 'Response emission is application-only' => sub {
     my $response = text_response('created', status => 201);
-    like(dies { $response->respond(sub { Future->done })->get },
-        qr/(?:HTTP scope|scope hashref)/i,
-        'removed one-argument respond fails with the HTTP-scope diagnostic');
+    ok(!$response->can('respond'),
+        'removed public respond method has no compatibility alias');
 
-    my @events;
-    $response->respond(
-        http_scope(),
-        \&receive_http,
-        sub { push @events, $_[0]; Future->done },
+    my $to_app_events = run_http($response->to_app);
+    is([$to_app_events->[0]{status}, body_from($to_app_events)],
+        [201, 'created'], 'to_app emits the complete response');
+
+    my @invoked_events;
+    PAGI::Utils::invoke_app(
+        $response, http_scope(), \&receive_http,
+        sub { push @invoked_events, $_[0]; Future->done },
     )->get;
-    is([$events[0]{status}, body_from(\@events)], [201, 'created'],
-        'full-triplet respond emits the complete response');
+    is([$invoked_events[0]{status}, body_from(\@invoked_events)],
+        [201, 'created'], 'invoke_app emits the complete Response application');
 };
 
 subtest 'File application construction has one unambiguous spelling' => sub {
@@ -185,19 +187,16 @@ subtest 'File application construction has one unambiguous spelling' => sub {
         'utility app_path still returns a path string');
 };
 
-subtest 'Pages functions are Request handlers and request_app is explicit' => sub {
-    like(dies { PAGI::Pages->not_found }, qr/metadata source/i,
-        'removed no-source endpoint factory fails directly');
-
-    my $route_app = route('/missing' => \&not_found_page)->to_app;
+subtest 'Pages functions are source-free applications' => sub {
+    my $route_app = route('/missing' => not_found())->to_app;
     my $route_events = run_http($route_app, http_scope(path => '/missing'));
     is($route_events->[0]{status}, 404,
-        'ordinary Pages function executes as a Route handler');
+        'source-free Pages application executes as a Route endpoint');
 
-    my $native = request_app(\&not_found_page);
+    my $native = not_found()->to_app;
     my $native_events = run_http($native);
     is($native_events->[0]{status}, 404,
-        'request_app explicitly converts a Request handler for native placement');
+        'Pages application explicitly converts with to_app for native placement');
 };
 
 subtest 'WebSocket denial and SSE decline take concrete Responses' => sub {
