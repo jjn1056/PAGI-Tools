@@ -2,10 +2,9 @@ package PAGI::Routing;
 
 use strict;
 use warnings;
-use Carp qw(croak);
 use Exporter 'import';
 
-our @EXPORT_OK = qw(router route websocket sse mount middleware request_app);
+our @EXPORT_OK = qw(router route websocket sse mount middleware);
 our %EXPORT_TAGS = (
     routes     => [qw(router route websocket sse mount)],
     middleware => [qw(middleware)],
@@ -44,14 +43,6 @@ sub mount {
 sub middleware {
     require PAGI::Routing::Middleware;
     return PAGI::Routing::Middleware->new(@_);
-}
-
-sub request_app {
-    my ($handler) = @_;
-    croak 'request_app handler must be a coderef'
-        unless ref($handler) eq 'CODE';
-    require PAGI::Routing::Compiler;
-    return PAGI::Routing::Compiler->_compile_http_handler($handler);
 }
 
 1;

@@ -10,72 +10,99 @@ use PAGI::Routing::Pattern ();
 sub new {
     my ($class, @args) = @_;
     my $declaration_package = caller;
-    return $class->_new_from($declaration_package, @args);
+    my $opts = _parse_options(
+        [qw(path endpoint name desc middleware methods constraints)],
+        @args,
+    );
+    croak 'route requires a path' unless exists $opts->{path};
+    croak 'route requires an endpoint' unless exists $opts->{endpoint};
+
+    my $path = delete $opts->{path};
+    my $endpoint = delete $opts->{endpoint};
+    return $class->_build(
+        $declaration_package, 'route', $path, $endpoint, $opts,
+    );
 }
 
 sub _new_from {
     my ($class, $declaration_package, $kind, @args) = @_;
     my $path = shift @args;
+    croak 'route requires an endpoint' unless @args;
+    my $endpoint = shift @args;
+    my $opts = _parse_options(
+        [qw(name desc middleware methods constraints)],
+        @args,
+    );
+    return $class->_build(
+        $declaration_package, $kind, $path, $endpoint, $opts,
+    );
+}
+
+sub _parse_options {
+    my ($allowed_names, @args) = @_;
+    croak 'route option list must be key/value pairs' if @args % 2;
+
+    my %allowed = map { $_ => 1 } @$allowed_names;
+    my %seen;
+    for (my $index = 0; $index < @args; $index += 2) {
+        my $key = $args[$index];
+        croak "unknown route option '$key'"
+            unless defined $key && !ref($key) && $allowed{$key};
+        croak "duplicate route option '$key'" if $seen{$key}++;
+    }
+
+    my %opts = @args;
+    return \%opts;
+}
+
+sub _build {
+    my ($class, $declaration_package, $kind, $path, $endpoint, $opts) = @_;
 
     croak 'route path must be a string' unless defined $path && !ref($path);
-
-    my ($target, $is_raw);
-    if (@args && defined $args[0] && !ref($args[0]) && $args[0] eq 'raw') {
-        shift @args;
-        $target = shift @args;
-        $is_raw = 1;
-    }
-    else {
-        $target = shift @args;
-        $is_raw = 0;
-    }
-
-    croak 'route option list must be key/value pairs' if @args % 2;
-    my %opts = @args;
-    croak 'route requires exactly one of handler or raw' if exists $opts{raw};
-
-    my %allowed = map { $_ => 1 } qw(name desc middleware methods constraints);
-    for my $key (keys %opts) {
-        croak "unknown route option '$key'" unless $allowed{$key};
-    }
-
-    croak 'route requires exactly one of handler or raw'
-        unless $is_raw || defined $target;
     PAGI::Utils::_validate_app_value(
-        $target, $is_raw ? 'raw application' : 'route target',
+        $endpoint, 'route endpoint',
     );
 
-    _validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
-    _validate_logical_segment('name', $opts{name}) if exists $opts{name};
-    _validate_constraints($opts{constraints}) if exists $opts{constraints};
+    _validate_text('desc', $opts->{desc}, 0) if exists $opts->{desc};
+    _validate_logical_segment('name', $opts->{name}) if exists $opts->{name};
+    _validate_constraints($opts->{constraints}) if exists $opts->{constraints};
     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
-        exists $opts{middleware} ? $opts{middleware} : [],
+        exists $opts->{middleware} ? $opts->{middleware} : [],
         'middleware',
     );
 
-    if ($kind ne 'route' && exists $opts{methods}) {
+    if ($kind ne 'route' && exists $opts->{methods}) {
         my %kind_name = (websocket => 'WebSocket', sse => 'SSE');
         croak $kind_name{$kind} . ' routes do not accept methods';
     }
 
-    my $methods = $kind eq 'route'
-        ? _normalize_methods(exists $opts{methods} ? $opts{methods} : 'GET')
-        : undef;
-    my $has_constraints = exists $opts{constraints};
+    my $methods;
+    if ($kind eq 'route') {
+        if (exists $opts->{methods}) {
+            $methods = _normalize_methods($opts->{methods});
+        }
+        elsif (ref($endpoint) ne 'CODE' && $endpoint->can('allowed_methods')) {
+            my @capability_methods = $endpoint->allowed_methods;
+            $methods = _normalize_methods(\@capability_methods);
+        }
+        else {
+            $methods = _normalize_methods('GET');
+        }
+    }
+    my $has_constraints = exists $opts->{constraints};
     my $pattern = PAGI::Routing::Pattern->new(
         path => $path,
         mode => 'route',
-        constraints => $has_constraints ? $opts{constraints} : {},
+        constraints => $has_constraints ? $opts->{constraints} : {},
         declaration_package => $declaration_package,
     );
 
     return bless {
         kind        => $kind,
         _pattern    => $pattern,
-        target      => $target,
-        is_raw      => $is_raw,
-        name        => $opts{name},
-        desc        => $opts{desc},
+        endpoint    => $endpoint,
+        name        => $opts->{name},
+        desc        => $opts->{desc},
         methods     => $methods,
         _has_constraints => $has_constraints,
         middleware  => $middleware,
@@ -140,8 +167,7 @@ sub path        { $_[0]->{_pattern}->path }
 sub parameters  { $_[0]->{_pattern}->parameters }
 sub name        { $_[0]->{name} }
 sub desc        { $_[0]->{desc} }
-sub target      { $_[0]->{target} }
-sub is_raw      { $_[0]->{is_raw} }
+sub endpoint    { $_[0]->{endpoint} }
 sub methods     { ref($_[0]->{methods}) eq 'ARRAY' ? [ @{$_[0]->{methods}} ] : $_[0]->{methods} }
 sub constraints { $_[0]->{_has_constraints} ? $_[0]->{_pattern}->constraints : undef }
 sub middleware  { [ @{$_[0]->{middleware}} ] }

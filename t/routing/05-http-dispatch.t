@@ -12,6 +12,7 @@ use PAGI::Response;
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route middleware);
 use PAGI::Routing::Compiler;
+use PAGI::Utils qw(as_app);
 
 sub HttpProvider { return qr/accepted/ }
 
@@ -288,59 +289,20 @@ subtest 'one unchanged component isolates overlapping native invocations' => sub
         'each overlapped invocation completes with its own response state');
 };
 
-subtest 'request_app explicitly adapts Request handlers without arity inference' => sub {
-    my @seen;
-    my $sync = PAGI::Routing::request_app(sub {
-        my ($request) = @_;
-        push @seen, ref($request);
-        return PAGI::Response::Text->new('sync');
-    });
-    my ($receive, $send, $events) = channels();
-    $sync->(scope(path => '/adapter'), $receive, $send)->get;
-    is(\@seen, ['PAGI::Request'], 'adapter supplies exactly a Request');
-    is(response_body($events), 'sync', 'adapter emits immediate Response returns');
-
-    my $future = PAGI::Routing::request_app(async sub {
-        my ($request) = @_;
-        return PAGI::Response::Text->new('future');
-    });
-    ($receive, $send, $events) = channels();
-    $future->(scope(path => '/adapter'), $receive, $send)->get;
-    is(response_body($events), 'future', 'adapter emits Future-backed Response returns');
-
-    my $bad = PAGI::Routing::request_app(sub { return undef });
-    ($receive, $send, $events) = channels();
-    like dies { $bad->(scope(path => '/adapter'), $receive, $send)->get },
-        qr/handler did not return a response/, 'adapter diagnoses invalid returns';
-    my $duck = PAGI::Routing::request_app(sub {
-        return Local::DuckResponse->new;
-    });
-    ($receive, $send, $events) = channels();
-    like dies { $duck->(scope(path => '/adapter'), $receive, $send)->get },
-        qr/handler did not return a response/,
-        'an object that merely implements respond is not a response value';
-    is($events, [], 'a duck response emits no events');
-    my $component_return = PAGI::Routing::request_app(sub {
-        return Local::ToAppOnly->new;
-    });
-    ($receive, $send, $events) = channels();
-    like dies { $component_return->(scope(path => '/adapter'), $receive, $send)->get },
-        qr/handler did not return a response/,
-        'an arbitrary to_app object is not a response value';
-    is($events, [], 'a returned component emits no events');
-    like dies { $sync->({ type => 'websocket' }, $receive, $send)->get },
-        qr/PAGI::Request requires HTTP scope/, 'adapter rejects non-HTTP scope';
-
+subtest 'CODE endpoints remain handlers while as_app marks native CODE' => sub {
     my $ordinary = route('/ordinary' => sub {
         return PAGI::Response::Text->new(ref($_[0]));
     })->to_app;
-    is(response_body(do { ($receive, $send, $events) = channels(); $ordinary->(scope(path => '/ordinary'), $receive, $send)->get; $events }),
-        'PAGI::Request', 'ordinary Route coderefs remain Request handlers');
+    my ($receive, $send, $events) = channels();
+    $ordinary->(scope(path => '/ordinary'), $receive, $send)->get;
+    is(response_body($events), 'PAGI::Request',
+        'ordinary Route coderefs receive one Request');
 
     my $native = async sub {
-        my ($scope, $native_receive, $native_send) = @_;
+        my ($request_scope, $native_receive, $native_send) = @_;
         die 'native app requires HTTP scope'
-            unless ref($scope) eq 'HASH' && ($scope->{type} // '') eq 'http';
+            unless ref($request_scope) eq 'HASH'
+                && ($request_scope->{type} // '') eq 'http';
         await $native_send->({
             type => 'http.response.start', status => 204, headers => [],
         });
@@ -348,17 +310,11 @@ subtest 'request_app explicitly adapts Request handlers without arity inference'
             type => 'http.response.body', body => '', more => 0,
         });
     };
-    my $unmarked = route('/native' => $native)->to_app;
+    my $native_app = route('/native' => as_app($native))->to_app;
     ($receive, $send, $events) = channels();
-    like dies { $unmarked->(scope(path => '/native'), $receive, $send)->get },
-        qr/native app requires HTTP scope/,
-        'an ordinary Route coderef is never inferred to be native';
-    is($events, [], 'the unmarked native coderef emits nothing');
-
-    my $raw = route('/native', raw => $native)->to_app;
-    ($receive, $send, $events) = channels();
-    $raw->(scope(path => '/native'), $receive, $send)->get;
-    is($events->[0]{status}, 204, 'raw remains the explicit native-coderef marker');
+    $native_app->(scope(path => '/native'), $receive, $send)->get;
+    is($events->[0]{status}, 204,
+        'as_app is the explicit native-coderef spelling');
 };
 
 subtest 'raw HTTP leaves are coerced once and retain ownership of all channels' => sub {
@@ -382,7 +338,7 @@ subtest 'raw HTTP leaves are coerced once and retain ownership of all channels' 
             return Future->done('raw result is inert');
         },
     );
-    my $raw = route '/raw', raw => $component;
+    my $raw = route '/raw' => $component;
     my $app = PAGI::Routing::Compiler->_compile_http_leaf($raw);
     is($coercions, 1, 'raw component is coerced at compile time');
 
@@ -417,7 +373,7 @@ subtest 'provider constraints select normal and raw HTTP leaves before invocatio
         route('/normal/rejected' => sub {
             return PAGI::Response::Text->new('continued');
         }),
-        route('/raw/{id:&HttpProvider}', raw => sub {
+        route('/raw/{id:&HttpProvider}' => as_app(sub {
             my ($request_scope, $receive, $send) = @_;
             push @raw, $request_scope->{path_params}{id};
             $send->({
@@ -427,7 +383,7 @@ subtest 'provider constraints select normal and raw HTTP leaves before invocatio
                 type => 'http.response.body', body => '', more => 0,
             })->get;
             return Future->done;
-        }),
+        })),
     ])->to_app;
 
     my $run = sub {
@@ -852,20 +808,6 @@ subtest 'route middleware is compiled once and executes only after full selectio
         push @{$self->{sends}}, [$scope, $receive, $send];
         return $self->{completion};
     }
-}
-
-{
-    package Local::DuckResponse;
-
-    sub new { return bless {}, $_[0] }
-    sub respond { return Future->done }
-}
-
-{
-    package Local::ToAppOnly;
-
-    sub new { return bless {}, $_[0] }
-    sub to_app { return async sub { return } }
 }
 
 {

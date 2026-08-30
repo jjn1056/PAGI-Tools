@@ -12,6 +12,7 @@ use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::SSE;
 use PAGI::WebSocket;
+use PAGI::Utils qw(as_app);
 
 sub ProtocolProvider { return qr/accepted/ }
 
@@ -487,15 +488,15 @@ subtest 'raw HTTP, WebSocket, and SSE leaves own their exact matched channels' =
         };
     };
     my $app = router(routes => [
-        route('/raw-http/{id}', raw => $raw->('http', {
+        route('/raw-http/{id}' => as_app($raw->('http', {
             type => 'http.response.start', status => 204, headers => [],
-        })),
-        websocket('/raw-ws/{id}', raw => $raw->('websocket', {
+        }))),
+        websocket('/raw-ws/{id}' => as_app($raw->('websocket', {
             type => 'websocket.close', code => 1001, reason => 'raw',
-        })),
-        sse('/raw-sse/{id}', raw => $raw->('sse', {
+        }))),
+        sse('/raw-sse/{id}' => as_app($raw->('sse', {
             type => 'sse.close',
-        })),
+        }))),
     ])->to_app;
 
     my @cases = (
@@ -546,26 +547,26 @@ subtest 'normal and raw protocols apply inline providers and explicit constraint
             push @normal_ws, $_[0]->path_param('id');
             await $_[0]->close(1000, 'normal provider');
         }),
-        websocket('/predicate-ws/{id}', raw => sub {
+        websocket('/predicate-ws/{id}' => as_app(sub {
             my ($request_scope, $receive, $send) = @_;
             push @raw_ws, $request_scope->{path_params}{id};
             $send->({
                 type => 'websocket.close', code => 1001, reason => 'raw predicate',
             })->get;
             return Future->done;
-        }, name => 'predicate-ws',
+        }), name => 'predicate-ws',
             constraints => { id => Local::ProtocolPathCheck->new('accepted') }),
         sse('/predicate-sse/{id}' => async sub {
             push @normal_sse, $_[0]->path_param('id');
             await $_[0]->close;
         }, name => 'predicate-sse',
             constraints => { id => sub { return $_[0] eq 'accepted' } }),
-        sse('/provider-sse/{id:&ProtocolProvider}', raw => sub {
+        sse('/provider-sse/{id:&ProtocolProvider}' => as_app(sub {
             my ($request_scope, $receive, $send) = @_;
             push @raw_sse, $request_scope->{path_params}{id};
             $send->({ type => 'sse.close' })->get;
             return Future->done;
-        }),
+        })),
     ])->to_app;
 
     is(run_scope($app, scope(type => 'websocket', path => '/provider-ws/accepted')),
@@ -626,9 +627,9 @@ subtest 'protocol adapters await pending completion and propagate failures' => s
     is(\@normal_events, [], 'normal resolved value is not interpreted as an event');
 
     my $raw_completion = Future->new;
-    my $raw_app = sse('/wait', raw => sub {
+    my $raw_app = sse('/wait' => as_app(sub {
         return $raw_completion;
-    })->to_app;
+    }))->to_app;
     my $raw_running = $raw_app->(
         scope(type => 'sse', path => '/wait'),
         sub { Future->done({ type => 'sse.disconnect' }) },

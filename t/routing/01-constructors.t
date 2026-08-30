@@ -2,12 +2,14 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future ();
 use Scalar::Util qw(refaddr);
 use overload ();
 
 use lib 'lib';
 use PAGI::Routing qw(:ALL);
 use PAGI::Response::Text ();
+use PAGI::Utils qw(as_app request_response);
 
 {
     package NoImports;
@@ -37,6 +39,29 @@ use PAGI::Response::Text ();
 }
 
 {
+    package Local::MethodEndpoint;
+    sub new {
+        my ($class, @methods) = @_;
+        return bless {
+            methods => \@methods,
+            calls => 0,
+            contexts => [],
+        }, $class;
+    }
+    sub to_app { return sub { } }
+    sub allowed_methods {
+        my ($self) = @_;
+        ++$self->{calls};
+        push @{$self->{contexts}},
+            !defined wantarray ? 'void' : wantarray ? 'list' : 'scalar';
+        return @{$self->{methods}};
+    }
+    sub calls { return $_[0]{calls} }
+    sub contexts { return [@{$_[0]{contexts}}] }
+    sub replace_methods { $_[0]{methods} = [@_[1 .. $#_]]; return }
+}
+
+{
     package BareListConfiguredObject;
     sub wrap { return $_[1] }
 }
@@ -58,7 +83,9 @@ use PAGI::Response::Text ();
     sub Owned { $CALLS++; return qr/factory/ }
 
     sub http { return route('/http/{id:&Owned}' => sub { }) }
-    sub raw_http { return route('/raw/{id:&Owned}', raw => sub { }) }
+    sub native_http {
+        return route('/native/{id:&Owned}' => PAGI::Utils::as_app(sub { }));
+    }
     sub socket { return websocket('/socket/{id:&Owned}' => sub { }) }
     sub events { return sse('/events/{id:&Owned}' => sub { }) }
     sub inline_mount {
@@ -73,7 +100,7 @@ use PAGI::Response::Text ();
     }
     sub direct_route {
         return PAGI::Routing::Route->new(
-            'route', '/direct/{id:&Owned}' => sub { },
+            path => '/direct/{id:&Owned}', endpoint => sub { },
         );
     }
     sub direct_mount {
@@ -138,7 +165,7 @@ use PAGI::Response::Text ();
 }
 
 subtest 'exports are opt-in and tag-specific' => sub {
-    for my $name (qw(router route websocket sse mount middleware request_app)) {
+    for my $name (qw(router route websocket sse mount middleware)) {
         ok(!NoImports->can($name), "no default $name export");
         ok(AllImports->can($name), "ALL exports $name");
     }
@@ -148,8 +175,10 @@ subtest 'exports are opt-in and tag-specific' => sub {
     ok(!RouteImports->can('middleware'), 'routes tag excludes middleware');
     ok(MiddlewareImports->can('middleware'), 'middleware tag exports middleware');
     ok(!MiddlewareImports->can('route'), 'middleware tag excludes route');
-    ok(!RouteImports->can('request_app'), 'routes tag excludes the explicit adapter');
-    ok(AllImports->can('request_app'), 'ALL exports the explicit adapter');
+    ok(!PAGI::Routing->can('request_app'),
+        'Routing no longer contains the Request-to-Response adapter');
+    ok(defined &request_response,
+        'request_response is imported from PAGI::Utils instead');
     my ($error, $stderr);
     {
         local *STDERR;
@@ -166,7 +195,7 @@ subtest 'public constructors retain their direct declaration package' => sub {
     $Local::FactoryDeclaration::CALLS = 0;
     my @leaves = (
         [Local::FactoryDeclaration::http(), '/http/factory'],
-        [Local::FactoryDeclaration::raw_http(), '/raw/factory'],
+        [Local::FactoryDeclaration::native_http(), '/native/factory'],
         [Local::FactoryDeclaration::socket(), '/socket/factory'],
         [Local::FactoryDeclaration::events(), '/events/factory'],
         [Local::FactoryDeclaration::direct_route(), '/direct/factory'],
@@ -234,7 +263,7 @@ subtest 'public constructors retain their direct declaration package' => sub {
         { id => 'factory' }, 'the placed descriptor retains its source predicate');
 };
 
-subtest 'route descriptions preserve target identity and normalize HTTP methods' => sub {
+subtest 'route descriptions preserve endpoint identity and normalize HTTP methods' => sub {
     my $handler = sub { return 'context handler' };
     my $config = { enabled => 1 };
     my $mw = middleware('Example::Trace', level => 2, config => $config);
@@ -250,11 +279,12 @@ subtest 'route descriptions preserve target identity and normalize HTTP methods'
     is($node->path, '/things/{host}', 'route path');
     is($node->name, 'things', 'route name');
     is($node->desc, '', 'empty description is retained');
-    is(refaddr($node->target), refaddr($handler), 'handler identity is retained');
+    is(refaddr($node->endpoint), refaddr($handler), 'endpoint identity is retained');
     is($node->methods, ['POST', 'GET', 'HEAD', 'RPC'], 'methods normalize, deduplicate, and add HEAD');
     is(refaddr($node->constraints->{host}), refaddr($host_constraint), 'route constraints retain declared checker');
     is($node->middleware, [$mw], 'route middleware descriptors');
-    ok(!$node->is_raw, 'normal route is not raw');
+    ok(!$node->can('target') && !$node->can('is_raw'),
+        'retired target modes have no compatibility accessors');
     ok(!$node->can('namespace'), 'public namespace accessor is removed from Route');
     is($node->routes, undef, 'routes are inapplicable to route');
 
@@ -275,19 +305,23 @@ subtest 'route descriptions preserve target identity and normalize HTTP methods'
     is(route('/default' => $handler)->methods, ['GET', 'HEAD'], 'HTTP routes default to GET and HEAD');
 };
 
-subtest 'raw and protocol-specific route descriptions' => sub {
-    my $app = sub { return 'raw app' };
-    my $raw = route '/raw', raw => $app, desc => 'raw app';
-    is($raw->kind, 'route', 'raw HTTP route kind');
-    ok($raw->is_raw, 'raw route is marked raw');
-    is(refaddr($raw->target), refaddr($app), 'raw app target identity is retained');
-    is($raw->methods, ['GET', 'HEAD'], 'raw HTTP routes retain default methods');
+subtest 'application-valued and protocol-specific route descriptions' => sub {
+    my $app = sub { return 'native app' };
+    my $native = as_app($app);
+    my $native_route = route '/native' => $native, desc => 'native app';
+    is($native_route->kind, 'route', 'native HTTP route kind');
+    is(refaddr($native_route->endpoint), refaddr($native),
+        'wrapped native app endpoint identity is retained');
+    is($native_route->methods, ['GET', 'HEAD'],
+        'native HTTP routes retain safe default methods');
 
     my $component = TestRoutingApp->new($app);
     $TestRoutingApp::CALLS = 0;
-    my $raw_component = route '/component', raw => $component;
-    is(refaddr($raw_component->target), refaddr($component), 'raw component identity is retained for compiler coercion');
-    is($TestRoutingApp::CALLS, 0, 'raw component is not compiled at description construction');
+    my $component_route = route '/component' => $component;
+    is(refaddr($component_route->endpoint), refaddr($component),
+        'component endpoint identity is retained for compiler coercion');
+    is($TestRoutingApp::CALLS, 0,
+        'component is not compiled at description construction');
 
     my $ws_regex = qr/ws/;
     my $ws_code = sub { return $_[0] eq 'code' };
@@ -299,7 +333,8 @@ subtest 'raw and protocol-specific route descriptions' => sub {
     };
     my $websocket = websocket '/socket/{regex}/{code}/{object}' => sub { },
         constraints => $ws_constraints;
-    my $raw_websocket = websocket '/raw-socket', raw => $app;
+    my $native_websocket_endpoint = as_app($app);
+    my $native_websocket = websocket '/native-socket' => $native_websocket_endpoint;
     my $sse_regex = qr/sse/;
     my $sse_code = sub { return $_[0] eq 'stream' };
     my $sse_object = Local::ProtocolConstraint->new('event');
@@ -310,13 +345,14 @@ subtest 'raw and protocol-specific route descriptions' => sub {
     };
     my $sse = sse '/events/{regex}/{code}/{object}' => sub { },
         constraints => $sse_constraints;
-    my $raw_sse = sse '/raw-events', raw => $app;
+    my $native_sse_endpoint = as_app($app);
+    my $native_sse = sse '/native-events' => $native_sse_endpoint;
     is($websocket->kind, 'websocket', 'WebSocket kind');
     is($sse->kind, 'sse', 'SSE kind');
-    ok(!$websocket->is_raw, 'normal WebSocket route is not raw');
-    ok($raw_websocket->is_raw, 'raw WebSocket route is raw');
-    ok(!$sse->is_raw, 'normal SSE route is not raw');
-    ok($raw_sse->is_raw, 'raw SSE route is raw');
+    is(refaddr($native_websocket->endpoint), refaddr($native_websocket_endpoint),
+        'WebSocket accepts an application-valued endpoint');
+    is(refaddr($native_sse->endpoint), refaddr($native_sse_endpoint),
+        'SSE accepts an application-valued endpoint');
     is($websocket->methods, undef, 'WebSocket has no methods');
     is(refaddr($websocket->constraints->{regex}), refaddr($ws_regex),
         'WebSocket retains a declared regex constraint');
@@ -356,6 +392,71 @@ subtest 'raw and protocol-specific route descriptions' => sub {
         'SSE copies the input constraint hash');
     is(refaddr($sse->constraints->{code}), refaddr($sse_code),
         'SSE returns a defensive constraint hash');
+};
+
+subtest 'object and functional Route constructors share the canonical endpoint model' => sub {
+    my $endpoint = sub { return 'handler' };
+    my $functional = route('/same' => $endpoint,
+        name => 'same', desc => 'Same route', methods => ['post']);
+    my $object = PAGI::Routing::Route->new(
+        path => '/same', endpoint => $endpoint,
+        name => 'same', desc => 'Same route', methods => ['post'],
+    );
+
+    for my $accessor (qw(kind path name desc methods)) {
+        is($object->$accessor, $functional->$accessor,
+            "object and functional constructors agree on $accessor");
+    }
+    is(refaddr($object->endpoint), refaddr($endpoint),
+        'object constructor retains the exact endpoint');
+    is($object->kind, 'route', 'object constructor always creates HTTP');
+};
+
+subtest 'HTTP methods use explicit, capability, then safe-default precedence' => sub {
+    my $capable = Local::MethodEndpoint->new(
+        qw(get GET post options POST),
+    );
+    my $from_capability = route('/capability' => $capable);
+    is($from_capability->methods, [qw(GET HEAD POST OPTIONS)],
+        'capability methods normalize in first-seen order');
+    is($capable->calls, 1, 'capability is consulted exactly once');
+    is($capable->contexts, ['list'], 'capability is called in list context');
+
+    $capable->replace_methods(qw(DELETE));
+    is($from_capability->methods, [qw(GET HEAD POST OPTIONS)],
+        'capability methods are an immutable construction-time snapshot');
+    is($capable->calls, 1, 'snapshot access does not consult capability again');
+
+    my $explicit = Local::MethodEndpoint->new(qw(GET POST));
+    is(route('/explicit' => $explicit, methods => ['patch'])->methods,
+        ['PATCH'], 'explicit methods win over endpoint capability');
+    is($explicit->calls, 0,
+        'explicit methods avoid the capability call entirely');
+
+    my $response = PAGI::Response::Text->new('file');
+    is(route('/file' => $response)->methods, [qw(GET HEAD)],
+        'ordinary application objects use the safe default');
+    my $native = as_app(sub { });
+    is(route('/relay' => $native, methods => '*')->methods, '*',
+        'only explicit scalar wildcard enables unrestricted dispatch');
+
+    my $protocol_capable = Local::MethodEndpoint->new(qw(POST));
+    is(websocket('/socket' => $protocol_capable)->methods, undef,
+        'WebSocket routes have no method set');
+    is(sse('/events' => $protocol_capable)->methods, undef,
+        'SSE routes have no method set');
+    is($protocol_capable->calls, 0,
+        'protocol routes never consult allowed_methods');
+    like dies {
+        websocket('/socket-methods' => $protocol_capable, methods => 'GET')
+    }, qr/WebSocket routes do not accept methods/,
+        'WebSocket rejects methods before capability resolution';
+    like dies {
+        sse('/event-methods' => $protocol_capable, methods => 'GET')
+    }, qr/SSE routes do not accept methods/,
+        'SSE rejects methods before capability resolution';
+    is($protocol_capable->calls, 0,
+        'rejected protocol method declarations do not leak capability calls');
 };
 
 subtest 'Mount retains one base app and Router retains declared HTTP defaults' => sub {
@@ -532,35 +633,78 @@ subtest 'every routing middleware position normalizes bare factories' => sub {
 subtest 'constructors reject invalid declarations' => sub {
     my $handler = sub { };
     my $child_router = router(routes => []);
-    like dies { route '/missing' }, qr/route requires exactly one of handler or raw/, 'route requires a target';
-    like dies { route '/both' => $handler, raw => $handler }, qr/route requires exactly one of handler or raw/, 'route rejects handler plus raw';
+    like dies { route '/missing' }, qr/route requires an endpoint/,
+        'functional route requires an endpoint';
+    like dies { PAGI::Routing::Route->new(path => '/missing') },
+        qr/route requires an endpoint/,
+        'object Route constructor requires an endpoint';
+    like dies { PAGI::Routing::Route->new(endpoint => $handler) },
+        qr/route requires a path/,
+        'object Route constructor requires a path';
+    like dies { route '/odd' => $handler, 'desc' },
+        qr/route option list must be key\/value pairs/,
+        'functional route rejects an odd option tail';
+    like dies {
+        PAGI::Routing::Route->new(path => '/odd', endpoint => $handler, 'desc')
+    }, qr/route option list must be key\/value pairs/,
+        'object Route constructor rejects an odd option list';
+    like dies { route '/duplicate' => $handler, name => 'a', name => 'b' },
+        qr/duplicate route option 'name'/,
+        'functional route rejects duplicate options before hash construction';
+    like dies {
+        PAGI::Routing::Route->new(
+            path => '/first', endpoint => $handler, path => '/second',
+        )
+    }, qr/duplicate route option 'path'/,
+        'object Route constructor rejects duplicate structural options';
+    like dies {
+        PAGI::Routing::Route->new(
+            path => '/duplicate-endpoint',
+            endpoint => $handler, endpoint => $handler,
+        )
+    }, qr/duplicate route option 'endpoint'/,
+        'object Route constructor rejects duplicate endpoints';
+    like dies { route '/legacy' => $handler, raw => $handler },
+        qr/unknown route option 'raw'/,
+        'raw is not parsed as a legacy endpoint mode';
     like dies { route '/unknown' => $handler, nope => 1 }, qr/unknown route option/, 'route rejects unknown option';
+    like dies {
+        PAGI::Routing::Route->new(
+            path => '/unknown', endpoint => $handler, kind => 'sse',
+        )
+    }, qr/unknown route option 'kind'/,
+        'object Route constructor cannot select another protocol kind';
     like dies { route '/bad-methods' => $handler, methods => {} }, qr/methods must be a method string, arrayref, or '\*'/, 'methods require supported shape';
     like dies { route '/empty-methods' => $handler, methods => [] }, qr/methods must be a method string, arrayref, or '\*'/, 'methods may not be empty';
+    like dies { route '/array-wildcard' => $handler, methods => ['*'] },
+        qr/methods must be a method string, arrayref, or '\*'/,
+        'array wildcard is rejected';
+    like dies { route '/mixed-wildcard' => $handler, methods => ['GET', '*'] },
+        qr/methods must be a method string, arrayref, or '\*'/,
+        'mixed wildcard list is rejected';
     like dies { route '/separator' => $handler, methods => 'GET POST' }, qr/methods must be a method string, arrayref, or '\*'/, 'methods reject separators';
     like dies { websocket '/socket' => $handler, methods => 'GET' }, qr/WebSocket routes do not accept methods/, 'WebSocket rejects methods';
     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
-    like dies { route '/not-code' => 'not a handler' }, qr/route target must be a coderef or instantiated object with to_app/, 'normal route rejects package strings';
-    like dies { route '/not-component' => [] }, qr/route target must be a coderef or instantiated object with to_app/, 'normal route rejects unblessed component lookalikes';
+    like dies { route '/not-code' => 'not a handler' }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects package strings';
+    like dies { route '/not-component' => [] }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects unblessed component lookalikes';
     ok(lives { route '/component' => PAGI::Response::Text->new('component') },
         'normal route accepts an instantiated to_app component');
     my $broken_component = bless {}, 'BrokenRouteComponent';
     like dies { route '/broken-component' => $broken_component },
-        qr/route target must be a coderef or instantiated object with to_app/,
-        'normal route rejects an instantiated object without to_app';
-    my $bad_result = bless {}, 'BadRouteToAppResult';
-    like dies { route('/bad-result' => $bad_result)->to_app },
-        qr/BadRouteToAppResult->to_app must return a coderef/,
-        'component to_app result is validated at compilation';
-    for my $invalid (
-        [undef, qr/raw application must be a coderef or instantiated object with to_app/],
-        ['Local::App', qr/raw application must be a coderef or instantiated object with to_app/],
-        [[], qr/raw application must be a coderef or instantiated object with to_app/],
-        [bless({}, 'RouteObjectWithoutToApp'), qr/raw application must be a coderef or instantiated object with to_app/],
+        qr/route endpoint must be a coderef or instantiated object with to_app/,
+        'route rejects an instantiated object without to_app';
+    for my $methods (
+        [],
+        ['GET POST'],
+        [{}],
+        [Future->done('GET')],
+        ['*'],
+        ['GET', '*'],
     ) {
-        my ($value, $pattern) = @$invalid;
-        like dies { route '/invalid-raw', raw => $value }, $pattern,
-            'raw route rejects a non-native application value synchronously';
+        my $endpoint = Local::MethodEndpoint->new(@$methods);
+        like dies { route '/invalid-capability' => $endpoint },
+            qr/methods must be a method string, arrayref, or '\*'/,
+            'invalid capability result is rejected synchronously';
     }
     like dies { mount '/missing' }, qr/mount requires exactly one of app or routes/, 'mount requires one target form';
     like dies { mount '/both', app => $handler, routes => [] }, qr/mount requires exactly one of app or routes/, 'mount rejects app plus routes';
@@ -623,13 +767,9 @@ subtest 'constructors reject invalid declarations' => sub {
     }
     is(route('/desc-slash' => $handler, desc => '/')->desc, '/', 'route descriptions retain ordinary text validation');
     is(mount('/desc-dot', routes => [], desc => 'person/show')->desc, 'person/show', 'mount descriptions retain ordinary text validation');
-    like dies { request_app('not a handler') }, qr/request_app handler must be a coderef/,
-        'request_app validates its handler at construction';
+    like dies { request_response('not a handler') },
+        qr/request_response handler must be a coderef/,
+        'Utils request_response validates its handler at construction';
 };
-
-{
-    package BadRouteToAppResult;
-    sub to_app { return 'not a coderef' }
-}
 
 done_testing;
