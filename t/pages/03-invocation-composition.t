@@ -9,40 +9,32 @@ use Scalar::Util qw(refaddr);
 use PAGI::Pages;
 use PAGI::Pages::_Catalog;
 use PAGI::Request;
-use PAGI::Routing qw(route mount request_app);
-use PAGI::SSE;
-use PAGI::WebSocket;
+use PAGI::Routing qw(route mount);
+use PAGI::Utils qw(invoke_app);
 
-my @CATALOG_FUNCTIONS = map { $_ . '_page' }
-    @{PAGI::Pages::_Catalog->_named_methods};
+my @CATALOG_FUNCTIONS = @{PAGI::Pages::_Catalog->_named_methods};
 my @COMMON_FUNCTIONS = qw(
-    welcome_page status_page redirect_page not_found_page unauthorized_page
-    forbidden_page method_not_allowed_page conflict_page too_many_requests_page
-    internal_server_error_page bad_gateway_page service_unavailable_page
+    welcome not_found unauthorized forbidden method_not_allowed conflict
+    too_many_requests internal_server_error bad_gateway service_unavailable
 );
 my @ALL_FUNCTIONS = (
-    qw(welcome_page status_page redirect_page), @CATALOG_FUNCTIONS,
+    qw(welcome status redirect), @CATALOG_FUNCTIONS,
 );
 
 sub http_scope {
     my (%args) = @_;
+    my @headers = @{$args{headers} || []};
+    push @headers, ['Accept' => $args{accept}] if defined $args{accept};
     return {
         type         => 'http',
         method       => $args{method} || 'GET',
         path         => defined $args{path} ? $args{path} : '/',
-        headers      => $args{headers} || [],
+        headers      => \@headers,
         http_version => exists($args{http_version})
             ? $args{http_version} : '1.1',
         query_string => exists($args{query_string})
             ? $args{query_string} : '',
     };
-}
-
-sub protocol_scope {
-    my ($type, %args) = @_;
-    my $scope = http_scope(%args);
-    $scope->{type} = $type;
-    return $scope;
 }
 
 sub http_request {
@@ -53,14 +45,16 @@ sub http_request {
 }
 
 sub run_app {
-    my ($app, $scope, $receive) = @_;
+    my ($application, $scope, $receive) = @_;
     my @events;
     $receive ||= sub { return Future->done };
     my $send = sub {
         push @events, $_[0];
         return Future->done;
     };
-    Future->wrap($app->($scope, $receive, $send))->get;
+    Future->wrap(invoke_app(
+        $application, $scope, $receive, $send,
+    ))->get;
     return \@events;
 }
 
@@ -73,10 +67,10 @@ sub response_header {
     return;
 }
 
-{
-    package Local::ScopeBearer;
-    sub new { bless { scope => $_[1] }, $_[0] }
-    sub scope { shift->{scope} }
+sub response_body {
+    my ($events) = @_;
+    return join '', map { $_->{body} // '' }
+        grep { ($_->{type} // '') eq 'http.response.body' } @$events;
 }
 
 {
@@ -99,6 +93,16 @@ sub response_header {
 }
 
 {
+    package Local::HookPages;
+    our @ISA = ('PAGI::Pages');
+
+    sub render_text {
+        my ($self, $page) = @_;
+        return "hook:$page->{status}:$page->{title}\n";
+    }
+}
+
+{
     package Local::ConcurrentPages;
     our @ISA = ('PAGI::Pages');
     our @PAGE_IDS;
@@ -116,7 +120,7 @@ sub response_header {
     }
 }
 
-subtest 'constructor policy is strict and request-independent' => sub {
+subtest 'constructor policy and deferred factories are immutable and request-independent' => sub {
     isa_ok(PAGI::Pages->new, ['PAGI::Pages']);
     isa_ok(PAGI::Pages->new(as => 'auto', default => 'html'), ['PAGI::Pages']);
 
@@ -131,23 +135,42 @@ subtest 'constructor policy is strict and request-independent' => sub {
     }
 
     my $pages = PAGI::Pages->new(as => 'text', default => 'json');
-    my $one = $pages->not_found(http_scope());
-    my $two = $pages->not_found(http_scope());
-    isnt(refaddr($one), refaddr($two), 'instance calls create fresh Responses');
-    is(ref($one), 'PAGI::Response::Text',
-        'configured instance returns the exact concrete class');
-    is(ref($two), 'PAGI::Response::Text',
-        'configured policy is reusable without request state');
+    my $one = $pages->not_found;
+    my $two = $pages->not_found;
+    isa_ok($one, ['PAGI::Pages::Application']);
+    isa_ok($two, ['PAGI::Pages::Application']);
+    isnt(refaddr($one), refaddr($two), 'factory calls create distinct applications');
+
+    $pages->{as} = 'json';
+    my $snapshotted = run_app(
+        $one, http_scope(accept => 'application/problem+json'),
+    );
+    is(response_header($snapshotted, 'Content-Type'),
+        'text/plain; charset=utf-8',
+        'later factory mutation cannot change captured policy');
+
+    my $headers = ['X-Captured' => 'before'];
+    my $extensions = { metadata => { token => 'original' } };
+    my $captured = PAGI::Pages->not_found(
+        as => 'json', headers => $headers, extensions => $extensions,
+    );
+    $headers->[1] = 'after';
+    $extensions->{metadata}{token} = 'after';
+    my $events = run_app($captured, http_scope());
+    is(response_header($events, 'X-Captured'), 'before',
+        'caller header mutation cannot change the application');
+    is(decode_json(response_body($events))->{metadata}{token}, 'original',
+        'caller extension mutation cannot change the application');
 };
 
 subtest 'exports are opt-in and the common and all bundles are exact' => sub {
     is(\@PAGI::Pages::EXPORT, [], 'Pages exports nothing by default');
     is(\@PAGI::Pages::EXPORT_OK, \@ALL_FUNCTIONS,
-        'the optional export list contains every and only page function');
+        'optional exports contain every and only deferred factory');
     is($PAGI::Pages::EXPORT_TAGS{common}, \@COMMON_FUNCTIONS,
-        ':common contains exactly the approved twelve functions');
+        ':common excludes the collision-prone status and redirect names');
     is($PAGI::Pages::EXPORT_TAGS{all}, \@ALL_FUNCTIONS,
-        ':all contains exactly the generic and catalog-derived functions');
+        ':all contains every deferred factory');
 
     my $common_ok = eval q{
         package Local::CommonPageImports;
@@ -161,6 +184,12 @@ subtest 'exports are opt-in and the common and all bundles are exact' => sub {
         1;
     };
     is($all_ok, 1, ':all imports successfully');
+    my $explicit_ok = eval q{
+        package Local::ExplicitPageImports;
+        PAGI::Pages->import(qw(status redirect));
+        1;
+    };
+    is($explicit_ok, 1, 'status and redirect remain explicitly importable');
 
     for my $name (@ALL_FUNCTIONS) {
         is(Local::CommonPageImports->can($name) ? 1 : 0,
@@ -168,222 +197,128 @@ subtest 'exports are opt-in and the common and all bundles are exact' => sub {
             ":common membership for $name is exact");
         ok(Local::AllPageImports->can($name), ":all exports $name");
     }
-    ok(!main->can('welcome_page'), 'plain use PAGI::Pages imports no handler');
+    ok(!Local::CommonPageImports->can('status'), ':common does not import status');
+    ok(!Local::CommonPageImports->can('redirect'), ':common does not import redirect');
+    ok(Local::ExplicitPageImports->can('status'), 'status supports explicit import');
+    ok(Local::ExplicitPageImports->can('redirect'), 'redirect supports explicit import');
+    ok(!main->can('welcome'), 'plain use PAGI::Pages imports no factory');
+
+    my $old_ok = eval q{
+        package Local::RemovedPageImports;
+        PAGI::Pages->import(qw(welcome_page not_found_page));
+        1;
+    };
+    ok(!$old_ok, 'removed _page functions cannot be imported');
+    like($@, qr/not exported|export/i, 'removed import reports an export error');
+    ok(!PAGI::Pages->can('welcome_page'), 'welcome_page is absent from Pages');
+    ok(!PAGI::Pages->can('not_found_page'), 'named _page methods are absent');
 };
 
-subtest 'class and export forms return the same concrete values' => sub {
-    my $request = http_request(headers => [['Accept' => 'text/plain']]);
-    my @cases = (
-        [welcome_page => sub { PAGI::Pages->welcome($request, as => 'text') },
-            'PAGI::Response::Text', 200],
-        [not_found_page => sub { PAGI::Pages->not_found($request, as => 'json') },
-            'PAGI::Response::Problem', 404],
-        [status_page => sub { PAGI::Pages->status($request, 410, as => 'text') },
-            'PAGI::Response::Text', 410],
-        [redirect_page => sub {
-            PAGI::Pages->redirect($request, '/next', status => 308, as => 'json')
-        }, 'PAGI::Response::JSON', 308],
-    );
-
-    for my $case (@cases) {
-        my ($name, $method_call, $class, $status) = @$case;
-        my $function = Local::AllPageImports->can($name);
-        my $from_function = $name eq 'status_page'
-            ? $function->($request, 410, as => 'text')
-            : $name eq 'redirect_page'
-                ? $function->($request, '/next', status => 308, as => 'json')
-                : $name eq 'not_found_page'
-                    ? $function->($request, as => 'json')
-                    : $function->($request, as => 'text');
-        my $from_method = $method_call->();
-        is(ref($from_function), $class, "$name returns exact $class identity");
-        is($from_function->status, $status, "$name returns status $status");
-        if ($class eq 'PAGI::Response::Text') {
-            is($from_function->body, $from_method->body,
-                "$name bytes agree with its class method");
-        }
-        else {
-            is(decode_json($from_function->body), decode_json($from_method->body),
-                "$name JSON value agrees with its class method");
-        }
-    }
-};
-
-subtest 'every page call requires an explicit metadata source' => sub {
-    my @methods = (
-        qw(welcome status redirect moved_permanently found see_other
-           temporary_redirect permanent_redirect),
-        @{PAGI::Pages::_Catalog->_named_methods},
-    );
-    for my $method (@methods) {
-        like(dies { PAGI::Pages->$method() },
-            qr/explicit.*(?:Request|metadata).*source/i,
-            "$method rejects a no-source factory call");
-    }
-    for my $name (@ALL_FUNCTIONS) {
-        my $function = Local::AllPageImports->can($name);
-        like(dies { $function->() },
-            qr/explicit.*(?:Request|metadata).*source/i,
-            "$name requires an explicit source");
-    }
-
+subtest 'class, configured-instance, subclass, and imported factories retain policy' => sub {
+    my $class_app = PAGI::Pages->not_found(as => 'text');
     my $pages = PAGI::Pages->new(as => 'text');
-    like(dies { $pages->not_found },
-        qr/explicit.*(?:Request|metadata).*source/i,
-        'configured instances also reject no-source calls');
-};
+    my $instance_app = $pages->not_found;
+    my $not_found = Local::AllPageImports->can('not_found');
+    my $imported_app = $not_found->(as => 'text');
 
-subtest 'Request and protocol metadata sources do not change protocol state' => sub {
-    my $request = http_request(headers => [['Accept' => 'text/plain']]);
-    is(ref(PAGI::Pages->welcome($request)), 'PAGI::Response::Text',
-        'Request metadata negotiates a concrete text response');
-
-    my (@websocket_events, @sse_events);
-    my $websocket_scope = protocol_scope(
-        'websocket', headers => [['Accept' => 'application/problem+json']],
-    );
-    my $websocket = PAGI::WebSocket->new(
-        $websocket_scope,
-        sub { Future->done },
-        sub { push @websocket_events, $_[0]; Future->done },
-    );
-    my $websocket_response = PAGI::Pages->not_found($websocket);
-    is(ref($websocket_response), 'PAGI::Response::Problem',
-        'WebSocket handshake metadata negotiates a Problem response');
-    is(\@websocket_events, [], 'Pages emits no WebSocket events');
-    ok(!$websocket->is_connected, 'Pages does not accept the WebSocket');
-
-    my $sse_scope = protocol_scope(
-        'sse', headers => [['Accept' => 'text/html']],
-    );
-    my $sse = PAGI::SSE->new(
-        $sse_scope,
-        sub { Future->done },
-        sub { push @sse_events, $_[0]; Future->done },
-    );
-    my $sse_response = PAGI::Pages->welcome($sse);
-    is(ref($sse_response), 'PAGI::Response::HTML',
-        'SSE handshake metadata negotiates an HTML response');
-    is(\@sse_events, [], 'Pages emits no SSE events');
-    ok(!$sse->is_started, 'Pages does not start SSE');
-
-    is(ref(PAGI::Pages->not_found(
-        protocol_scope('websocket'), as => 'text')),
-        'PAGI::Response::Text', 'an unblessed WebSocket scope is accepted');
-    is(ref(PAGI::Pages->not_found(
-        protocol_scope('sse'), as => 'text')),
-        'PAGI::Response::Text', 'an unblessed SSE scope is accepted');
-
-    like(dies { PAGI::Pages->not_found(Local::ScopeBearer->new(http_scope())) },
-        qr/Request|WebSocket|SSE|scope/i,
-        'an arbitrary scope-bearing object is not a supported source');
-    like(dies { PAGI::Pages->not_found({ type => 'lifespan' }) },
-        qr/http-capable|HTTP.*metadata|lifespan/i,
-        'lifespan metadata is rejected');
-    like(dies { PAGI::Pages->not_found({ type => 'unknown' }) },
-        qr/http-capable|HTTP.*metadata|unknown/i,
-        'unknown metadata is rejected');
-};
-
-subtest 'source, option, and status validation is explicit' => sub {
-    like(dies { PAGI::Pages->not_found({}) }, qr/scope type is required/,
-        'missing scope type is rejected');
-    like(dies { PAGI::Pages->not_found({ type => [] }) },
-        qr/scope type is required/, 'reference scope type is rejected');
-    like(dies { PAGI::Pages->not_found([]) },
-        qr/explicit.*(?:Request|metadata).*source/i,
-        'non-source references are rejected');
-
-    like(dies { PAGI::Pages->not_found(http_scope(), unknown => 1) },
-        qr/unknown PAGI::Pages error option/,
-        'unknown error options are rejected after the source');
-    like(dies { PAGI::Pages->welcome(
-        http_scope(), detail => 'not configurable') },
-        qr/unknown PAGI::Pages welcome option/,
-        'welcome accepts only its documented options');
-    like(dies { PAGI::Pages->not_found(http_scope(), 'as') },
-        qr/key\/value pairs/, 'odd option lists are rejected');
-
-    for my $bad (399, 600, 'five hundred', []) {
-        like(dies { PAGI::Pages->status(http_scope(), $bad) },
-            qr/status must be an integer from 400 to 599/,
-            'invalid status is rejected after the source');
+    for my $case (
+        [class => $class_app],
+        [instance => $instance_app],
+        [imported => $imported_app],
+    ) {
+        my ($label, $app) = @$case;
+        isa_ok($app, ['PAGI::Pages::Application'], "$label form returns an application");
+        my $events = run_app($app, http_scope(accept => 'application/problem+json'));
+        is($events->[0]{status}, 404, "$label form retains status");
+        is(response_header($events, 'Content-Type'), 'text/plain; charset=utf-8',
+            "$label form retains fixed representation");
+        is(response_body($events),
+            "404 Not Found\n\nThe requested resource was not found.\n",
+            "$label form renders the same stock body");
     }
-    like(dies { PAGI::Pages->status(
-        http_scope(), 599, detail => 'missing semantics') },
-        qr/custom status 599 requires type, title, and detail/,
-        'unknown status requires explicit problem semantics');
 
-    my $custom = PAGI::Pages->status(
-        http_scope(), 599,
-        type => 'https://example.test/problems/upstream-timeout',
-        title => 'Upstream Timeout',
-        detail => 'The upstream did not answer.',
-        as => 'text',
-    );
-    is($custom->status, 599, 'strict valid custom status returns a Response');
+    my $subclass = Local::HookPages->not_found(as => 'text');
+    is(response_body(run_app($subclass, http_scope())),
+        "hook:404:Not Found\n",
+        'subclass factory retains its overridable renderer');
 
-    for my $method (@{PAGI::Pages::_Catalog->_named_methods}) {
-        ok(PAGI::Pages->can($method), "$method is an installed class method");
-    }
-    ok(!PAGI::Pages->can('not_foud'), 'a typo is not dynamically recovered');
+    my $status = Local::ExplicitPageImports->can('status');
+    is(run_app($status->(410, as => 'text'), http_scope())->[0]{status}, 410,
+        'explicit status export is a general deferred factory');
+    my $redirect = Local::ExplicitPageImports->can('redirect');
+    is(run_app($redirect->('/next', status => 308, as => 'text'),
+        http_scope())->[0]{status}, 308,
+        'explicit redirect export is a general deferred factory');
 };
 
-subtest 'page functions are Request handlers, not native applications' => sub {
-    my $welcome_handler = Local::CommonPageImports->can('welcome_page');
-    my $not_found_handler = Local::CommonPageImports->can('not_found_page');
+subtest 'source-first factory forms are rejected without emitting' => sub {
+    my $request = http_request();
+    my $welcome = Local::AllPageImports->can('welcome');
 
-    my $route_app = route('/welcome' => $welcome_handler)->to_app;
-    my $welcome = run_app($route_app, http_scope(path => '/welcome'));
-    is($welcome->[0]{status}, 200,
-        'an exported page function works directly as a Route handler');
-    like($welcome->[1]{body}, qr/<!doctype html>/i,
-        'Route emits the handler-returned concrete Response');
+    like(dies { PAGI::Pages->welcome($request) },
+        qr/options|option names|key\/value|source|Request/i,
+        'qualified welcome rejects a Request argument');
+    like(dies { $welcome->($request) },
+        qr/options|option names|key\/value|source|Request/i,
+        'imported welcome rejects a Request argument');
+    like(dies { PAGI::Pages->not_found(http_scope()) },
+        qr/options|option names|key\/value|source|scope/i,
+        'qualified named factory rejects a scope argument');
+    like(dies { PAGI::Pages->status($request, 410) },
+        qr/status|options|option names|key\/value|source|Request/i,
+        'status rejects an old source-first call');
+    like(dies { PAGI::Pages->redirect($request, '/next') },
+        qr/target|options|option names|key\/value|source|Request/i,
+        'redirect rejects an old source-first call');
 
-    my @native_events;
+    my @events;
     like(dies {
-        $not_found_handler->(
+        PAGI::Pages->welcome(
             http_scope(), sub { Future->done },
-            sub { push @native_events, $_[0]; Future->done },
+            sub { push @events, $_[0]; Future->done },
         );
     }, qr/PAGI::Pages|option|key\/value/i,
-        'native three-argument function invocation is rejected');
-    is(\@native_events, [], 'rejected native placement emits no event');
-
-    my $native = request_app($not_found_handler);
-    my $mounted = mount('/missing', app => $native)->to_app;
-    is(run_app($mounted, http_scope(path => '/missing/child'))->[0]{status},
-        404, 'request_app explicitly adapts a function for Mount');
-
-    my $raw = sub {
-        my ($scope, $receive, $send) = @_;
-        my $response = PAGI::Pages->not_found($scope, as => 'text');
-        return $response->respond($scope, $receive, $send);
-    };
-    my $raw_events = run_app($raw, http_scope(path => '/raw'));
-    is($raw_events->[0]{status}, 404,
-        'a real raw closure constructs then explicitly emits a Response');
-    is(response_header($raw_events, 'Content-Type'),
-        'text/plain; charset=utf-8', 'raw emission preserves representation');
+        'native triplet cannot be mistaken for factory arguments');
+    is(\@events, [], 'rejected source/native calls emit no event');
 };
 
-subtest 'configured subclasses are safe across concurrent response sends' => sub {
+subtest 'deferred Pages applications occupy Route, Mount, and root positions directly' => sub {
+    my $route_app = route(
+        '/welcome' => PAGI::Pages->welcome(as => 'text'),
+    )->to_app;
+    my $welcome = run_app($route_app, http_scope(path => '/welcome'));
+    is($welcome->[0]{status}, 200, 'a Pages application works directly in Route');
+    is(response_header($welcome, 'Content-Type'), 'text/plain; charset=utf-8',
+        'Route preserves the Pages representation');
+
+    my $mounted = mount(
+        '/missing', app => PAGI::Pages->not_found(as => 'text'),
+    )->to_app;
+    my $missing = run_app($mounted, http_scope(path => '/missing/child'));
+    is($missing->[0]{status}, 404, 'a Pages application works directly in Mount');
+
+    my $root = run_app(PAGI::Pages->welcome(as => 'text'), http_scope());
+    is($root->[0]{status}, 200, 'a bare Pages application serves HTTP as a root');
+};
+
+subtest 'each invocation negotiates and emits independently without hidden state' => sub {
     local $Local::CountingPages::NEW_COUNT = 0;
     local @Local::CountingPages::RENDERED_BY;
-    my $first = Local::CountingPages->not_found(http_scope(), as => 'text');
-    my $second = Local::CountingPages->not_found(http_scope(), as => 'text');
+    my $first = Local::CountingPages->not_found(as => 'text');
+    my $second = Local::CountingPages->not_found(as => 'text');
     is($Local::CountingPages::NEW_COUNT, 2,
-        'each subclass class call constructs a fresh policy instance');
+        'each subclass class factory constructs one fresh policy');
+    run_app($first, http_scope());
+    run_app($second, http_scope());
     isnt(refaddr($Local::CountingPages::RENDERED_BY[0]),
         refaddr($Local::CountingPages::RENDERED_BY[1]),
-        'class hooks render through distinct subclass instances');
+        'distinct factory applications retain distinct policy snapshots');
 
     local @Local::ConcurrentPages::PAGE_IDS;
-    my $pages = Local::ConcurrentPages->new(as => 'auto');
-    my $html_scope = http_scope(headers => [['Accept' => 'text/html']]);
-    my $text_scope = http_scope(headers => [['Accept' => 'text/plain']]);
-    my $html_response = $pages->not_found($html_scope);
-    my $text_response = $pages->not_found($text_scope);
+    my $component = Local::ConcurrentPages->new(as => 'auto')->not_found;
+    my $app = $component->to_app;
+    my $html_scope = http_scope(accept => 'text/html');
+    my $text_scope = http_scope(accept => 'text/plain');
     my (@html_events, @text_events);
     my $html_gate = Future->new;
     my $text_gate = Future->new;
@@ -398,14 +333,14 @@ subtest 'configured subclasses are safe across concurrent response sends' => sub
         return ++$text_calls == 1 ? $text_gate : Future->done;
     };
 
-    my $html_future = Future->wrap($html_response->respond(
+    my $html_future = Future->wrap($app->(
         $html_scope, sub { Future->done }, $html_send,
     ));
-    my $text_future = Future->wrap($text_response->respond(
+    my $text_future = Future->wrap($app->(
         $text_scope, sub { Future->done }, $text_send,
     ));
     ok(!$html_future->is_ready && !$text_future->is_ready,
-        'both concrete Responses remain independently in flight');
+        'both request-local Responses can remain independently in flight');
 
     $text_gate->done;
     $text_future->get;
@@ -414,9 +349,9 @@ subtest 'configured subclasses are safe across concurrent response sends' => sub
     $html_future->get;
 
     is(response_header(\@html_events, 'Content-Type'),
-        'text/html; charset=utf-8', 'HTML response retains its representation');
+        'text/html; charset=utf-8', 'HTML invocation retains its representation');
     is(response_header(\@text_events, 'Content-Type'),
-        'text/plain; charset=utf-8', 'text response retains its representation');
+        'text/plain; charset=utf-8', 'text invocation retains its representation');
     isnt(refaddr($Local::ConcurrentPages::PAGE_IDS[0]),
         refaddr($Local::ConcurrentPages::PAGE_IDS[1]),
         'concurrent hooks receive distinct request-local descriptors');

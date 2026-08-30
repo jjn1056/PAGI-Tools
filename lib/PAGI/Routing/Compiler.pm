@@ -122,10 +122,7 @@ sub _compile_router_body {
 
     my $http_default = defined $router->http_default
         ? PAGI::Utils::to_app($router->http_default)
-        : PAGI::Utils::request_response(sub {
-            my ($request) = @_;
-            return PAGI::Pages->not_found($request);
-        })->to_app;
+        : PAGI::Utils::to_app(PAGI::Pages->not_found);
 
     my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
@@ -156,16 +153,19 @@ sub _compile_dispatcher {
 
     $location_prefix ||= [];
 
-    my $method_not_allowed = PAGI::Utils::request_response(sub {
-        my ($request) = @_;
-        my $state = $class->_allow_state($request->scope);
+    my $method_not_allowed = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $state = $class->_allow_state($scope);
         croak 'Router authoritative Allow state is missing'
             unless $state;
-        return PAGI::Pages->method_not_allowed(
-            $request,
-            allow => $state->{allowed_methods},
+        await PAGI::Utils::invoke_app(
+            PAGI::Pages->method_not_allowed(
+                allow => $state->{allowed_methods},
+            ),
+            $scope, $receive, $send,
         );
-    })->to_app;
+        return;
+    };
 
     my @compiled_entries;
     for my $index (0 .. $#$nodes) {

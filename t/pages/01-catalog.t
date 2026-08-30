@@ -84,19 +84,6 @@ is(
     'named methods are a fresh copy',
 );
 
-my $page_functions = PAGI::Pages::_Catalog->_named_page_functions;
-is_deeply(
-    $page_functions,
-    [map { $_->[1] . '_page' } @named],
-    'catalog page function names are in numeric status order',
-);
-$page_functions->[0] = 'changed_by_a_caller_page';
-is(
-    PAGI::Pages::_Catalog->_named_page_functions->[0],
-    'bad_request_page',
-    'catalog page function names are a fresh copy',
-);
-
 ok(!PAGI::Pages::_Catalog->_entry(418), 'unused 418 is absent');
 ok(!PAGI::Pages::_Catalog->_entry(510), 'obsolete 510 is absent');
 ok(!defined PAGI::Pages::_Catalog->_entry(499), 'unlisted status is absent');

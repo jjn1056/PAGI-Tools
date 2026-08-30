@@ -11,6 +11,7 @@ use JSON::MaybeXS ();
 use Scalar::Util qw(blessed);
 
 use PAGI::Pages::_Catalog;
+use PAGI::Pages::Application ();
 use PAGI::Request;
 use PAGI::Request::Negotiate;
 use PAGI::Response ();
@@ -19,18 +20,16 @@ use PAGI::Response::HTML ();
 use PAGI::Response::JSON ();
 use PAGI::Response::Problem ();
 use PAGI::Response::Text ();
-use PAGI::Utils::Scope ();
 
 our @EXPORT;
 our @EXPORT_OK = (
-    qw(welcome_page status_page redirect_page),
-    @{PAGI::Pages::_Catalog->_named_page_functions},
+    qw(welcome status redirect),
+    @{PAGI::Pages::_Catalog->_named_methods},
 );
 our %EXPORT_TAGS = (
     common => [qw(
-        welcome_page status_page redirect_page not_found_page unauthorized_page
-        forbidden_page method_not_allowed_page conflict_page too_many_requests_page
-        internal_server_error_page bad_gateway_page service_unavailable_page
+        welcome not_found unauthorized forbidden method_not_allowed conflict
+        too_many_requests internal_server_error bad_gateway service_unavailable
     )],
     all => [@EXPORT_OK],
 );
@@ -108,63 +107,71 @@ sub new {
 }
 
 sub welcome {
-    my ($proto, @args) = @_;
+    my ($proto, @args) = _factory_invocation(@_);
     my $self = _policy_for($proto);
-    my $source = _take_request_source(\@args);
     my $opts = _normalize_options('welcome', \%WELCOME_OPTION, @args);
     my $factory = sub { return _welcome_descriptor($opts) };
 
-    return $self->_response_for(_scope_from_source($source), $factory->());
+    return _application_for($self, $factory);
 }
 
 sub status {
-    my ($proto, @args) = @_;
+    my ($proto, @args) = _factory_invocation(@_);
     my $self = _policy_for($proto);
-    my $source = _take_request_source(\@args);
     my $status = shift @args;
     $status = _validated_status($status);
     my $opts = _normalize_options('error', \%ERROR_OPTION, @args);
     my $factory = _error_factory($status, $opts);
 
-    return $self->_response_for(_scope_from_source($source), $factory->());
+    return _application_for($self, $factory);
 }
 
 sub redirect {
-    my ($proto, @args) = @_;
+    my ($proto, @args) = _factory_invocation(@_);
     my $self = _policy_for($proto);
-    my $source = _take_request_source(\@args);
     my $target = shift @args;
     my $opts = _normalize_options('redirect', \%REDIRECT_OPTION, @args);
     my $status = exists($opts->{status})
         ? _validated_redirect_status($opts->{status}) : 302;
     my $factory = _redirect_factory($target, $status, $opts);
 
-    my $scope = _scope_from_source($source);
-    return $self->_response_for($scope, $factory->($scope));
+    return _application_for($self, $factory);
 }
 
 sub _invoke_named {
-    my ($proto, $status, @args) = @_;
+    my ($status, @call) = @_;
+    my ($proto, @args) = _factory_invocation(@call);
     my $self = _policy_for($proto);
-    my $source = _take_request_source(\@args);
     my $opts = _normalize_options('error', \%ERROR_OPTION, @args);
     my $factory = _error_factory($status, $opts);
 
-    return $self->_response_for(_scope_from_source($source), $factory->());
+    return _application_for($self, $factory);
 }
 
 sub _invoke_named_redirect {
     my ($proto, $status, @args) = @_;
     my $self = _policy_for($proto);
-    my $source = _take_request_source(\@args);
     my $target = shift @args;
     my $opts = _normalize_options('redirect', \%REDIRECT_OPTION, @args);
     croak 'PAGI::Pages named redirect methods do not accept a status option'
         if exists $opts->{status};
     my $factory = _redirect_factory($target, $status, $opts);
 
-    my $scope = _scope_from_source($source);
-    return $self->_response_for($scope, $factory->($scope));
+    return _application_for($self, $factory);
+}
+
+sub _factory_invocation {
+    return ('PAGI::Pages', @_)
+        unless @_ && _is_pages_invocant($_[0]);
+    return @_;
+}
+
+sub _is_pages_invocant {
+    my ($value) = @_;
+    return $value->isa('PAGI::Pages')
+        if blessed($value);
+    return defined($value) && !ref($value)
+        && $value->isa('PAGI::Pages');
 }
 
 sub _policy_for {
@@ -177,31 +184,13 @@ sub _policy_for {
     return $proto->new;
 }
 
-sub _take_request_source {
-    my ($args) = @_;
-    croak 'PAGI::Pages requires one explicit Request or HTTP-capable metadata source'
-        unless @$args && PAGI::Utils::Scope::is_scope_source($args->[0]);
-    my $source = shift @$args;
-    if (blessed($source)) {
-        croak 'PAGI::Pages source must be a Request, WebSocket, SSE, or unblessed scope'
-            unless $source->isa('PAGI::Request')
-                || $source->isa('PAGI::WebSocket')
-                || $source->isa('PAGI::SSE');
-    }
-    _scope_from_source($source);
-    return $source;
-}
-
-sub _scope_from_source {
-    my ($source) = @_;
-    my $scope = PAGI::Utils::Scope::scope_from_source('PAGI::Pages', $source);
-
-    my $type = $scope->{type};
-    croak 'PAGI::Pages scope type is required'
-        unless defined($type) && !ref($type) && length($type);
-    croak "PAGI::Pages requires HTTP-capable metadata; received '$type'"
-        unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
-    return $scope;
+sub _application_for {
+    my ($policy, $descriptor_factory) = @_;
+    my $snapshot = bless { %$policy }, ref($policy);
+    return PAGI::Pages::Application->new(
+        policy             => $snapshot,
+        descriptor_factory => $descriptor_factory,
+    );
 }
 
 sub _http_metadata_scope {
@@ -215,10 +204,6 @@ sub _http_metadata_scope {
         unless defined($metadata{path}) && !ref($metadata{path});
     return \%metadata;
 }
-
-sub welcome_page { return PAGI::Pages->welcome(@_) }
-sub status_page { return PAGI::Pages->status(@_) }
-sub redirect_page { return PAGI::Pages->redirect(@_) }
 
 sub _flat_options {
     my ($label, @args) = @_;
@@ -1063,14 +1048,9 @@ sub _html_escape {
 
 for my $method (@{PAGI::Pages::_Catalog->_named_methods}) {
     my $status = PAGI::Pages::_Catalog->_code_for_method($method);
-    my $function = $method . '_page';
     no strict 'refs';
     *{__PACKAGE__ . '::' . $method} = sub {
-        my $proto = shift;
-        return _invoke_named($proto, $status, @_);
-    };
-    *{__PACKAGE__ . '::' . $function} = sub {
-        return PAGI::Pages->$method(@_);
+        return _invoke_named($status, @_);
     };
 }
 
