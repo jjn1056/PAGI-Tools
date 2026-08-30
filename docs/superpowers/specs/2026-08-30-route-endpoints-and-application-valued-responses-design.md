@@ -772,8 +772,11 @@ route('/welcome' => PAGI::Pages->welcome());
 
 Exports call the documented first-party class factory. A configured instance
 or subclass method retains its explicit configuration and overridable
-presentation hooks. The factory result snapshots that policy so later
-mutation of the factory does not race an invocation.
+presentation hooks. The factory result retains that exact policy object.
+Later intentional mutation may affect subsequent invocations; shared subclass
+state is entirely subclass-owned. Pages does not clone, freeze, reconstruct,
+or inspect policy storage. Request descriptors and concrete Responses remain
+invocation-local.
 
 The current `welcome_page`, `not_found_page`, and related source-first handler
 exports are removed rather than retained as a second model. The canonical

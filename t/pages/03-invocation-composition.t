@@ -106,6 +106,14 @@ sub response_body {
     package Local::ConcurrentPages;
     our @ISA = ('PAGI::Pages');
     our @PAGE_IDS;
+    our @RESPONSES;
+
+    sub _response_for {
+        my $self = shift;
+        my $response = $self->SUPER::_response_for(@_);
+        push @RESPONSES, $response;
+        return $response;
+    }
 
     sub render_html {
         my ($self, $page) = @_;
@@ -120,7 +128,49 @@ sub response_body {
     }
 }
 
-subtest 'constructor policy and deferred factories are immutable and request-independent' => sub {
+{
+    package Local::ConfiguredPages;
+    our @ISA = ('PAGI::Pages');
+    our @RENDERED_BY;
+
+    sub new {
+        my ($class, @args) = @_;
+        my %args = @args;
+        my $presentation = delete $args{presentation} // {
+            prefix => 'configured',
+            calls  => 0,
+        };
+        my $self = $class->SUPER::new(%args);
+        $self->{presentation} = $presentation;
+        return $self;
+    }
+
+    sub render_text {
+        my ($self, $page) = @_;
+        push @RENDERED_BY, $self;
+        my $calls = ++$self->{presentation}{calls};
+        return "$self->{presentation}{prefix}:$calls:$page->{status}\n";
+    }
+}
+
+{
+    package Local::ArrayPages;
+    our @ISA = ('PAGI::Pages');
+
+    sub new {
+        my ($class, $prefix) = @_;
+        return bless [$prefix // 'array'], $class;
+    }
+
+    sub _effective_as { return 'text' }
+
+    sub render_text {
+        my ($self, $page) = @_;
+        return "$self->[0]:$page->{status}\n";
+    }
+}
+
+subtest 'deferred factories retain policy while isolating ordinary inputs' => sub {
     isa_ok(PAGI::Pages->new, ['PAGI::Pages']);
     isa_ok(PAGI::Pages->new(as => 'auto', default => 'html'), ['PAGI::Pages']);
 
@@ -142,12 +192,12 @@ subtest 'constructor policy and deferred factories are immutable and request-ind
     isnt(refaddr($one), refaddr($two), 'factory calls create distinct applications');
 
     $pages->{as} = 'json';
-    my $snapshotted = run_app(
+    my $mutated_policy_events = run_app(
         $one, http_scope(accept => 'application/problem+json'),
     );
-    is(response_header($snapshotted, 'Content-Type'),
-        'text/plain; charset=utf-8',
-        'later factory mutation cannot change captured policy');
+    is(response_header($mutated_policy_events, 'Content-Type'),
+        'application/problem+json',
+        'later intentional policy mutation is visible to the application');
 
     my $headers = ['X-Captured' => 'before'];
     my $extensions = { metadata => { token => 'original' } };
@@ -161,6 +211,24 @@ subtest 'constructor policy and deferred factories are immutable and request-ind
         'caller header mutation cannot change the application');
     is(decode_json(response_body($events))->{metadata}{token}, 'original',
         'caller extension mutation cannot change the application');
+
+    my $configured = Local::ConfiguredPages->new(
+        as           => 'text',
+        presentation => {prefix => 'before', calls => 0},
+    );
+    local @Local::ConfiguredPages::RENDERED_BY;
+    my $configured_app = $configured->not_found;
+    is(response_body(run_app($configured_app, http_scope())),
+        "before:1:404\n",
+        'configured application dispatches through subclass policy state');
+    $configured->{presentation}{prefix} = 'after';
+    is(response_body(run_app($configured_app, http_scope())),
+        "after:2:404\n",
+        'later subclass policy mutation and deliberate renderer state are shared');
+    is(refaddr($Local::ConfiguredPages::RENDERED_BY[0]), refaddr($configured),
+        'first invocation dispatches through the exact configured policy object');
+    is(refaddr($Local::ConfiguredPages::RENDERED_BY[1]), refaddr($configured),
+        'repeated invocation dispatches through the same configured policy object');
 };
 
 subtest 'exports are opt-in and the common and all bundles are exact' => sub {
@@ -249,6 +317,16 @@ subtest 'class, configured-instance, subclass, and imported factories retain pol
     is(run_app($redirect->('/next', status => 308, as => 'text'),
         http_scope())->[0]{status}, 308,
         'explicit redirect export is a general deferred factory');
+
+    my $array_component;
+    ok(lives {
+        $array_component = Local::ArrayPages->new('alternate')->not_found;
+    }, 'Pages does not inspect alternate subclass policy storage');
+    if (defined $array_component) {
+        is(response_body(run_app($array_component, http_scope())),
+            "alternate:404\n",
+            'alternate-storage subclass hooks retain their configured policy');
+    }
 };
 
 subtest 'source-first factory forms are rejected without emitting' => sub {
@@ -301,7 +379,7 @@ subtest 'deferred Pages applications occupy Route, Mount, and root positions dir
     is($root->[0]{status}, 200, 'a bare Pages application serves HTTP as a root');
 };
 
-subtest 'each invocation negotiates and emits independently without hidden state' => sub {
+subtest 'shared policy creates request-local descriptors and Responses' => sub {
     local $Local::CountingPages::NEW_COUNT = 0;
     local @Local::CountingPages::RENDERED_BY;
     my $first = Local::CountingPages->not_found(as => 'text');
@@ -312,9 +390,10 @@ subtest 'each invocation negotiates and emits independently without hidden state
     run_app($second, http_scope());
     isnt(refaddr($Local::CountingPages::RENDERED_BY[0]),
         refaddr($Local::CountingPages::RENDERED_BY[1]),
-        'distinct factory applications retain distinct policy snapshots');
+        'distinct class factory applications retain distinct policy objects');
 
     local @Local::ConcurrentPages::PAGE_IDS;
+    local @Local::ConcurrentPages::RESPONSES;
     my $component = Local::ConcurrentPages->new(as => 'auto')->not_found;
     my $app = $component->to_app;
     my $html_scope = http_scope(accept => 'text/html');
@@ -355,6 +434,9 @@ subtest 'each invocation negotiates and emits independently without hidden state
     isnt(refaddr($Local::ConcurrentPages::PAGE_IDS[0]),
         refaddr($Local::ConcurrentPages::PAGE_IDS[1]),
         'concurrent hooks receive distinct request-local descriptors');
+    isnt(refaddr($Local::ConcurrentPages::RESPONSES[0]),
+        refaddr($Local::ConcurrentPages::RESPONSES[1]),
+        'concurrent invocations construct distinct concrete Responses');
 };
 
 done_testing;

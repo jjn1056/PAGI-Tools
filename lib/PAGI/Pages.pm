@@ -186,9 +186,8 @@ sub _policy_for {
 
 sub _application_for {
     my ($policy, $descriptor_factory) = @_;
-    my $snapshot = bless { %$policy }, ref($policy);
     return PAGI::Pages::Application->new(
-        policy             => $snapshot,
+        policy             => $policy,
         descriptor_factory => $descriptor_factory,
     );
 }
