@@ -2,11 +2,13 @@
 
 ## Verdict
 
-Implementation and audit are complete at runtime candidate
-`d06e521aa2aa3e416452dc5d2dca164c4d9d2ea7`. The focused canaries,
-settlement tests, one repository-wide suite, syntax checks, diff check, and
-distribution build all pass. No deploy, merge, push, tag, or release was
-performed. The controller still owns the plan's two final independent reviews.
+Implementation, final-review correction, and audit are complete at runtime
+candidate `b19c815b23800c9bcd40f13e30cd6bf4aeb4938f`. Original candidate
+`d06e521aa2aa3e416452dc5d2dca164c4d9d2ea7` passed its verification; final
+reviews then found one Important and two Minor issues, all corrected in
+`b19c815`. Both candidate suites, focused gates, syntax checks, diff checks,
+and distribution builds pass. No deploy, merge, push, tag, or release was
+performed.
 
 ## Work map
 
@@ -72,6 +74,9 @@ surface as `retained`, `replaced by approved design`, or
 - Route owns `endpoint`; retired `target`, `is_raw`, `raw`, and `request_app`
   are absent.
 - Router remains collection-only and has no `endpoint`, `target`, or `is_raw`.
+- App Router generic CODE, Endpoint method-name, and Endpoint CODE declarations
+  preserve omitted methods into immutable Route, which supplies GET+HEAD and
+  owns 405/Allow exactly like the functional frontend.
 - `to_app`, `as_app`, `request_response`, and `invoke_app` have one documented
   ownership model and exact export placement.
 - Pages factories return deferred HTTP applications and the export bundles are
@@ -86,7 +91,9 @@ surface as `retained`, `replaced by approved design`, or
 All 20 example directories were inspected. Each has `app.pl`, a README, and an
 executable/load-test mapping from Task 10. None contains an unclassified
 retired form. The final integration gates cover the apples, large-application,
-and Endpoint Router canaries explicitly.
+and Endpoint Router canaries explicitly. The final review also simplified the
+large application's Root and Blogs defaults to direct source-free Pages
+applications without changing their boundary-specific response details.
 
 ## Final forbidden-form search
 
@@ -107,7 +114,9 @@ It returned 87 lines, all manually classified:
 | Private/local `_respond_page`, `$hook_page`, `admin_page` identifiers | 14 | not removed public Pages factories |
 | Negative-removal tests | 24 | required absence assertions |
 
-Zero match implements or endorses a retired current surface.
+Zero match implements or endorses a retired current surface. The exact command
+was repeated at corrected candidate `b19c815` and remained at the same 87
+classified lines.
 
 ## Focused verification
 
@@ -136,7 +145,7 @@ Files=6, Tests=73, Result: PASS, exit 0
 3 wallclock seconds; real 2.70s, user 1.26s, sys 0.20s
 ```
 
-## Single full-suite run
+## Original full-suite run
 
 The repository-wide suite was run exactly once at runtime candidate `d06e521`,
 under Perl 5.42.2 with host access for loopback integrations:
@@ -154,6 +163,60 @@ Exactly one file was skipped:
 full-stack PAGI::Server e2e. The execution wrapper yielded while the original
 process continued; that same process produced the final summary. The suite was
 not restarted.
+
+## Final-review correction
+
+The final reviews found one Important contract defect and two Minor cleanups:
+
+1. App Router rejected generic CODE declarations without explicit methods,
+   contrary to the functional/immutable Route GET+HEAD default and frontend
+   parity required by design §13.2. Endpoint Router method-name and CODE
+   declarations inherited the same defect.
+2. `t/response/02-buffered.t` retained a dead SKIP/comment for the abandoned
+   Response object-copy implementation.
+3. The large application wrapped request-independent Root and Blogs Pages
+   defaults in unnecessary one-Request handlers and `request_response`.
+
+TDD RED for the Important correction was exact: Files=2, Tests=19, with only
+the two new parity subtests failing at `route requires methods option`. The
+narrow fix removes only the CODE-specific rejection and preserves omission for
+immutable Route resolution. Explicit method arrays, scalar `'*'`, explicit
+undef validation, object `allowed_methods`, verb helpers, WS/SSE method
+rejection, written order, and endpoint identity remain covered and unchanged.
+
+Focused GREEN at `b19c815`:
+
+```text
+App Router + Endpoint Router + buffered Response + large application
+Files=4, Tests=34, Result: PASS, exit 0
+1 wallclock second; real 1.27, user 0.98, sys 0.15
+
+Broader affected frontend/routing/docs gate
+Files=14, Tests=122, Result: PASS, exit 0
+3 wallclock seconds; real 3.20, user 2.81, sys 0.37
+```
+
+Builder, App Router, and Endpoint Router POD checks pass. Builder and both
+changed large-example modules report syntax OK. The stale-source audit has no
+production/example `route requires methods option`, abandoned object-copy
+comment, `request_response`, `root_not_found`, or `blogs_not_found` residual.
+
+## Corrected-candidate full suite
+
+The worker attempted to start the required host suite after committing
+`b19c815`, but the execution wrapper never launched the prove process. The
+controller confirmed there was no process or completed log, then ran the sole
+corrected-candidate full suite. It was not rerun:
+
+```text
+prove -lr t
+All tests successful.
+Files=218, Tests=2373, 40 wallclock secs
+Result: PASS, exit 0
+```
+
+The same one file-level skip remains:
+`t/request/multipart-stream-e2e.t` requires `RELEASE_TESTING=1`.
 
 ## Syntax, diff, and build
 
@@ -174,6 +237,17 @@ Dist::Zilla regenerated the tracked root README as a build side effect. That
 formatting-only rewrite was restored immediately with an explicit patch; no
 generated README change is included in the candidate/evidence commit.
 
+The corrected candidate repeated the required checks:
+
+- `git diff --check`: exit 0.
+- The four required modules plus `PAGI::App::Router::Builder` report
+  `syntax OK`, all exit 0; only the same pre-existing Utils circular-load
+  warnings remain.
+- `dzil build`: exit 0; real 10.59s, user 9.43s, sys 0.63s.
+- Corrected artifact at the same path: 956814 bytes.
+- `dzil test` was not run. The build's README formatting side effect was again
+  restored with an explicit patch.
+
 ## Concerns and deferred review
 
 - No open Task 13 product failure.
@@ -185,5 +259,6 @@ generated README change is included in the candidate/evidence commit.
 - REVIEW-01 (synthetic denial/decline HTTP scope) and REVIEW-02 (Compose
   lifespan provenance scope) remain explicitly deferred for post-campaign
   discussion; Task 13 did not alter them.
-- The controller must perform the plan's independent specification-compliance
-  and code-quality reviews after the evidence commit.
+- The final independent reviews' one Important and two Minor findings are all
+  corrected in `b19c815`; no open Task 13 review finding remains in this
+  report.

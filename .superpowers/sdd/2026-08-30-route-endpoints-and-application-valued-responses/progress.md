@@ -26,7 +26,7 @@ Baseline: `prove -lv t/utils-to-app.t t/routing/01-constructors.t t/integration-
 | 10 | complete | `ffc8ec3`; implementer `/root/task10_all_examples` | independent task review approved with one deferred Minor | Perl 5.42.2 all-example gate PASS Files=13 Tests=125; Cookbook PASS Files=1 Tests=4; reviewer focused rerun Files=3 Tests=20; stale gate clean | deferred to Task 13 | approved |
 | 11 | complete | `8d14410`; base `3fbc0a0`; implementer `/root/task11_response_seam` | independent settlement-focused review clean | strict RED recorded; public surface PASS Files=3 Tests=35; critical PASS Files=9 Tests=88; recursive broad PASS Files=32 Tests=231; extra changed-file PASS Files=3 Tests=37; runtime/is_response removal and syntax/diff audits clean; exact 33 Task-12 POD residual retained | deferred to Task 13 | approved |
 | 12 | complete | base `8d14410`; implementer `/root/task12_live_docs`; implementation `53c5443892fe5ff5592e4752406292e990c6c85d` | independent correction `474b01f`; prose correction `1f3e686`; independent re-review APPROVE | final docs gate PASS Files=4 Tests=47; mutable-router regression PASS Files=8 Tests=52; exact and expanded podchecker PASS | callable map, Route/Mount ownership, method/lifecycle sharp edges, Pages/Response/invoke_app/identity guidance reconciled; exact Task-11 33 POD calls reduced to zero live `lib` matches | approved after independent fix/re-review; `task-12-report.md` |
-| 13 | complete | final runtime candidate `d06e521aa2aa3e416452dc5d2dca164c4d9d2ea7`; cleanup `fa615f5`; collection-only correction `d06e521` | final independent specification/code-quality reviews remain controller-owned after the evidence commit | focused canary PASS Files=6 Tests=47; settlement PASS on host Files=6 Tests=73; correction gate PASS Files=2 Tests=17 plus Router POD OK | full suite PASS Files=218 Tests=2371, one release-only file skip, 40 wallclock/40.02 real seconds; four syntax checks exit 0; `git diff --check` exit 0; `dzil build` exit 0, `PAGI-Tools-0.002002.tar.gz` (934K), real 9.23s | implementation/audit complete; `task-13-report.md` |
+| 13 | complete | original runtime candidate `d06e521`; final-review correction/final runtime candidate `b19c815b23800c9bcd40f13e30cd6bf4aeb4938f`; earlier cleanup `fa615f5..d06e521` | final reviews found 1 Important and 2 Minor; all corrected in `b19c815` | original canary PASS Files=6 Tests=47; settlement PASS Files=6 Tests=73; final correction PASS Files=4 Tests=34; broad affected gate PASS Files=14 Tests=122 | original suite PASS Files=218 Tests=2371; corrected suite PASS Files=218 Tests=2373; each has one release-only file skip and 40 wallclock seconds; corrected syntax/diff/build exit 0; artifact 956814 bytes | corrected implementation/audit complete; `task-13-report.md` |
 
 ## Preflight interface scan
 
@@ -330,9 +330,11 @@ paths are fixtures/inventory inputs and are not prove targets.
   `target`/`is_raw` accessors and the unused private Pages
   `_named_page_functions`; correction `d06e521` enforced the user ruling that
   Router remains collection-only and must not gain an `endpoint` accessor.
-- Task 13: implementation/audit complete at runtime candidate `d06e521`; final
-  independent specification and code-quality reviews remain controller-owned
-  after the evidence-only commit.
+- Task 13: original implementation/audit complete at runtime candidate
+  `d06e521`. Final reviews found one Important frontend-parity defect and two
+  Minor cleanup/example findings; `b19c815` corrects all three without a
+  compatibility shim or dispatch special case and is the final runtime
+  candidate.
 
 ## Task 13 final verification evidence
 
@@ -411,6 +413,49 @@ paths are fixtures/inventory inputs and are not prove targets.
   956363 bytes. `dzil test` was not run. The build's root README regeneration
   was restored immediately through an explicit patch; final `git diff --check`
   and tracked status are clean apart from this evidence update.
+
+### Final-review correction and corrected candidate `b19c815`
+
+- Important: mutable App Router generic CODE declarations incorrectly required
+  explicit methods even though functional/immutable Route defaults omission to
+  GET plus automatic HEAD. This also blocked Endpoint Router's generic
+  method-name and CODE declarations. Focused RED was exact: Files=2, Tests=19,
+  with only the two new parity subtests failing at `route requires methods
+  option`.
+- Fix: remove only the CODE-specific rejection and preserve omitted methods
+  into immutable Route. Explicit arrays/scalar `'*'`, explicit undef
+  validation, object `allowed_methods`, verb helpers, WS/SSE rejection,
+  declaration order, and endpoint identity remain unchanged. Tests prove GET,
+  HEAD, and Router-owned POST 405 with `Allow: GET, HEAD` for App Router CODE
+  and Endpoint method-name/CODE declarations.
+- Minor: remove the dead object-copy SKIP wrapper in
+  `t/response/02-buffered.t`; its exact retained-object assertions now run
+  directly.
+- Minor: simplify the large application's Root and Blogs `http_default` values
+  to direct source-free `not_found(...)` applications, removing two
+  request-independent handlers and their `request_response` imports. Runtime
+  boundary-specific details remain unchanged.
+- Focused GREEN under Perl 5.42.2: Files=4, Tests=34, exit 0, 1 wallclock
+  second; real 1.27s (user 0.98s, sys 0.15s). Broader affected GREEN:
+  Files=14, Tests=122, exit 0, 3 wallclock seconds; real 3.20s (user 2.81s,
+  sys 0.37s). Builder/App Router/Endpoint Router POD checks and corrected
+  Builder/large-example syntax checks pass.
+- Corrected full suite: the worker's attempted host command never started; the
+  controller verified that fact and ran the sole corrected-candidate suite.
+  At `b19c815`, `prove -lr t` passed Files=218, Tests=2373, 40 wallclock
+  seconds, exit 0. The same one file-level skip remains:
+  `t/request/multipart-stream-e2e.t` requires `RELEASE_TESTING=1`.
+- Corrected syntax/diff: the four required Task 13 modules plus
+  `PAGI::App::Router::Builder` report `syntax OK`, all exit 0;
+  `git diff --check` exits 0. The same pre-existing Utils circular-load warnings
+  remain.
+- Corrected `dzil build`: exit 0, real 10.59s (user 9.43s, sys 0.63s).
+  Artifact `PAGI-Tools-0.002002.tar.gz` is 956814 bytes. `dzil test` was not
+  run. Dist::Zilla's root README formatting rewrite was again restored through
+  an explicit patch.
+- The exact forbidden-form search remains 87 manually classified lines at the
+  corrected candidate. The affected large-application source contains no
+  `request_response`, `root_not_found`, or `blogs_not_found` residual.
 
 ## Deviations
 

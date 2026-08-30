@@ -6,7 +6,9 @@
 - Ticket: none; approved WIP design campaign
 - Branch: `feature/application-valued-route-endpoints`
 - Base and starting HEAD: `main@8ffe0af3a4f59bc9ae0ef233375a7a0bd966484c`
-- Final verification candidate before the evidence-only commit: `d06e521`
+- Original verification candidate: `d06e521`
+- Corrected verification candidate before the final evidence-only commit:
+  `b19c815`
 - Deployment boundary: unreleased PAGI-Tools only; no deployment, merge, push,
   tag, or release
 - Push target: `origin/main` only after explicit user authorization
@@ -37,8 +39,8 @@ final classification and evidence.
 | Router description | Ordered Route/Mount collection with optional native `http_default`; it is not a leaf and has no `endpoint`, `target`, or `is_raw` accessor. | retained | `lib/PAGI/Routing/Router.pm`; final correction `fa615f5..d06e521`; `t/routing/01-constructors.t`. |
 | Mount description | One prefix-owning `app` or `routes` child, with scope rewrite and subtree ownership; no positional target, `router`, `target`, or `is_raw` mode. | retained | `lib/PAGI/Routing/Mount.pm`; `t/routing/01-constructors.t`; `t/routing/07-mounts.t`. |
 | Router `http_default` | Native three-argument CODE or instantiated `to_app`; Pages applications work directly and Request handlers use `request_response`. | retained | `lib/PAGI/Routing/Router.pm`; `t/routing/16-http-outcomes.t`; apples/large-app integrations. |
-| `PAGI::App::Router` declarations | Mutable declarations preserve written order and endpoint identity, then materialize the same immutable Route contract. Generic CODE requires methods; object omission is left for immutable capability/default resolution. | replaced by approved design | `lib/PAGI/App/Router/Builder.pm`; `t/app-router/01-builder-core.t`; `t/app-router/03-composition-order.t`. |
-| `PAGI::Endpoint::Router` declarations | Local method names and CODE become one-argument handlers; native local methods use `as_app($self->app_as(...))`; mounts/defaults remain native app positions. | replaced by approved design | `lib/PAGI/Endpoint/Router.pm`, Builder POD/tests; `t/endpoint/13-router-frontends.t`; endpoint-router example integration. |
+| `PAGI::App::Router` declarations | Mutable declarations preserve written order, endpoint identity, and omitted method policy, then materialize the same immutable Route contract. Generic CODE and object omission both reach immutable capability/default resolution; explicit methods, including scalar `'*'`, retain precedence. | replaced by approved design | `lib/PAGI/App/Router/Builder.pm`; `t/app-router/01-builder-core.t`; `t/app-router/03-composition-order.t`; final-review correction `b19c815`. |
+| `PAGI::Endpoint::Router` declarations | Local method names and CODE become one-argument handlers with the same omitted-method GET+HEAD fallback and Router-owned 405/Allow as other Route endpoints; native local methods use `as_app($self->app_as(...))`; mounts/defaults remain native app positions. | replaced by approved design | `lib/PAGI/Endpoint/Router.pm`, Builder POD/tests; `t/endpoint/13-router-frontends.t`; endpoint-router example integration; final-review correction `b19c815`. |
 | `PAGI::Endpoint::HTTP` | Verb methods return immediate/Future application values. `dispatch` validates and returns the app; instance `to_app` retains that instance and delegates through `invoke_app`. `allowed_methods` supplies routed method metadata including HEAD/OPTIONS. | replaced by approved design | `lib/PAGI/Endpoint/HTTP.pm`; `t/endpoint/11-return-contract.t`; `t/endpoint/04-http-options.t`. |
 | Pages factory methods | Class, configured-instance, subclass, and opt-in function forms return deferred HTTP applications. Factories are source-free and negotiate at invocation. | replaced by approved design | `lib/PAGI/Pages.pm`, `lib/PAGI/Pages/Application.pm`; `t/pages/01-catalog.t` through `06-lifespan-decline.t`. |
 | Pages exports | Nothing by default; `:common` is the exact ten-name low-collision set; `:all` contains every factory; `status` and `redirect` are explicit/`:all` only. | replaced by approved design | Final export introspection; `t/pages/03-invocation-composition.t`. |
@@ -55,7 +57,7 @@ final classification and evidence.
 
 ## Final forbidden-form search classification
 
-Command at candidate `d06e521`:
+Command repeated at corrected candidate `b19c815`:
 
 ```text
 rg -n "request_app|raw =>|is_raw|->target\b|_page\b|->respond\(|is_response" README.md UPGRADING.md Changes lib t examples
@@ -79,10 +81,16 @@ The search initially exposed two real residuals: Router's public `target` and
 Router absence test. Follow-up `d06e521` enforces the user's collection-only
 Router ruling by removing an accidentally proposed `endpoint` accessor and
 correcting the Router POD. Focused verification passes at `d06e521`.
+The final review correction `b19c815` does not reintroduce either residual;
+the exact corrected-candidate search remains 87 fully classified lines.
 
 ## Maintained examples
 
-All 20 directories under `examples/` were inspected at candidate `d06e521`.
+All 20 directories under `examples/` were inspected at original candidate
+`d06e521` and the affected large-application example was re-inspected at
+corrected candidate `b19c815`. Root and Blogs now place their
+request-independent source-free Pages defaults directly rather than wrapping
+one-Request handlers.
 Each contains an `app.pl` and README; Task 10's matrix maps each to an existing
 integration/load assertion. A per-directory forbidden-form scan reports
 `stale=no` for every directory:
