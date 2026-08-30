@@ -31,7 +31,8 @@ sub to_app {
             unless $type eq 'http';
 
         my $request = PAGI::Request->new($scope, $receive);
-        my $returned = await Future->wrap($handler->($request));
+        my $handler_result = $handler->($request);
+        my $returned = await Future->wrap($handler_result);
         PAGI::Utils::_validate_app_value(
             $returned,
             'request endpoint must return a PAGI application:',

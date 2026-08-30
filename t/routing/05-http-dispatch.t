@@ -124,13 +124,14 @@ subtest 'normal HTTP leaves receive one exact Request and await one response emi
     is(response_body($events), 'future response', 'Future-resolved Response is emitted');
     is($body_reads, 1, 'Request body reads from the exact receive channel');
 
-    my $count = 0;
-    my @respond_sends;
-    my $respond_completion = Future->new;
-    my $counted = Local::CountedResponse->new(
-        \$count,
-        \@respond_sends,
-        $respond_completion,
+    my ($compilations, $invocations) = (0, 0);
+    my @app_sends;
+    my $app_completion = Future->new;
+    my $counted = Local::CountedApplication->new(
+        \$compilations,
+        \$invocations,
+        \@app_sends,
+        $app_completion,
     );
     my $counted_app = PAGI::Routing::Compiler->_compile_http_leaf(
         route('/counted' => sub { return $counted }),
@@ -138,12 +139,49 @@ subtest 'normal HTTP leaves receive one exact Request and await one response emi
     ($receive, $send, $events) = channels();
     my $counted_scope = scope(path => '/counted');
     my $running = $counted_app->($counted_scope, $receive, $send);
-    ok(!$running->is_ready, 'adapter awaits the response emission Future');
-    is($count, 1, 'adapter asks the response value to emit exactly once');
-    is(\@respond_sends, [[$counted_scope, $receive, $send]],
-        'adapter passes the exact native triplet to respond');
-    $respond_completion->done;
-    is($running->get, undef, 'adapter completes only after response emission');
+    ok(!$running->is_ready, 'adapter awaits the returned application Future');
+    is($compilations, 1, 'returned application is compiled exactly once');
+    is($invocations, 1, 'returned application is invoked exactly once');
+    is(\@app_sends, [[$counted_scope, $receive, $send]],
+        'adapter passes the exact native triplet to the returned application');
+    $app_completion->done;
+    is($running->get, undef, 'adapter completes only after application completion');
+};
+
+subtest 'CODE endpoints compile once through RequestResponse for each Router compilation' => sub {
+    my $handler = sub { return PAGI::Response::Text->new('compiled handler') };
+    my ($components, $component_apps) = (0, 0);
+    my $original = \&PAGI::Utils::request_response;
+    my $router = router(routes => [route('/compiled' => $handler)]);
+    my ($first, $second);
+
+    {
+        no warnings 'redefine';
+        local *PAGI::Utils::request_response = sub {
+            my ($candidate) = @_;
+            my $component = $original->($candidate);
+            return $component unless refaddr($candidate) == refaddr($handler);
+            ++$components;
+            return Local::CountingRequestResponse->new(
+                $component,
+                \$component_apps,
+            );
+        };
+
+        $first = $router->to_app;
+        $second = $router->to_app;
+    }
+
+    is([$components, $component_apps], [2, 2],
+        'each Router compilation creates and compiles one handler component');
+    for my $app ($first, $first, $second) {
+        my ($receive, $send, $events) = channels();
+        $app->(scope(path => '/compiled'), $receive, $send)->get;
+        is(response_body($events), 'compiled handler',
+            'each compiled graph invokes the Request handler application');
+    }
+    is([$components, $component_apps], [2, 2],
+        'requests never recompile the static CODE endpoint');
 };
 
 subtest 'instantiated Response route targets compile once and retain normal routing boundaries' => sub {
@@ -259,6 +297,49 @@ subtest 'component routes retain ordinary Route matching, methods, and compilati
     is($component->compilations, 2, 'component to_app is never called per request');
 };
 
+subtest 'HTTP-style object capabilities drive selection and ordered Allow ownership' => sub {
+    my $endpoint = Local::HTTPStyleEndpoint->new;
+    my $declared = route('/capability/{id}' => $endpoint);
+    is($endpoint->capability_calls, 1,
+        'Route snapshots the endpoint method capability exactly once');
+    is($declared->methods, [qw(POST GET HEAD OPTIONS)],
+        'capability methods retain first-seen normalization order');
+
+    my $app = router(routes => [
+        $declared,
+        route('/capability/{id}' => sub {
+            return PAGI::Response::Text->new('patch');
+        }, methods => 'PATCH'),
+    ])->to_app;
+    is([$endpoint->capability_calls, $endpoint->compilations], [1, 1],
+        'Router compilation uses the method snapshot and compiles the endpoint once');
+
+    for my $method (qw(GET HEAD OPTIONS)) {
+        my ($receive, $send, $events) = channels();
+        $app->(
+            scope(method => $method, path => '/capability/item'),
+            $receive,
+            $send,
+        )->get;
+        is($events->[0]{status}, 200, "$method selects the object endpoint");
+        is(response_body($events), $method eq 'HEAD' ? '' : "$method item",
+            "$method retains its selected application behavior");
+    }
+
+    my ($receive, $send, $events) = channels();
+    $app->(
+        scope(method => 'TRACE', path => '/capability/item'),
+        $receive,
+        $send,
+    )->get;
+    is($events->[0]{status}, 405,
+        'an unsupported method becomes a Router PARTIAL outcome');
+    is(allow_header($events), 'POST, GET, HEAD, OPTIONS, PATCH',
+        'siblings contribute one deterministic first-seen Allow union');
+    is([$endpoint->capability_calls, $endpoint->compilations], [1, 1],
+        'selection and requests never repeat static endpoint discovery or compilation');
+};
+
 subtest 'one unchanged component isolates overlapping native invocations' => sub {
     my $component = Local::BarrierComponent->new;
     my $app = router(routes => [route('/overlap' => $component)])->to_app;
@@ -317,10 +398,10 @@ subtest 'CODE endpoints remain handlers while as_app marks native CODE' => sub {
         'as_app is the explicit native-coderef spelling');
 };
 
-subtest 'raw HTTP leaves are coerced once and retain ownership of all channels' => sub {
+subtest 'native object HTTP leaves compile once and retain ownership of all channels' => sub {
     my $coercions = 0;
     my @received;
-    my $component = Local::RawComponent->new(
+    my $component = Local::NativeComponent->new(
         \$coercions,
         sub {
             push @received, [@_];
@@ -335,33 +416,33 @@ subtest 'raw HTTP leaves are coerced once and retain ownership of all channels' 
                 body => '',
                 more => 0,
             })->get;
-            return Future->done('raw result is inert');
+            return Future->done('native result is inert');
         },
     );
-    my $raw = route '/raw' => $component;
-    my $app = PAGI::Routing::Compiler->_compile_http_leaf($raw);
-    is($coercions, 1, 'raw component is coerced at compile time');
+    my $native_route = route '/native' => $component;
+    my $app = PAGI::Routing::Compiler->_compile_http_leaf($native_route);
+    is($coercions, 1, 'native component is compiled at Router compile time');
 
     my ($receive, $send, $events) = channels();
-    my $request_scope = scope(path => '/raw', marker => 'original');
+    my $request_scope = scope(path => '/native', marker => 'original');
     my $resolved = $app->($request_scope, $receive, $send)->get;
 
-    is($coercions, 1, 'raw component is not recoerced per request');
-    is(scalar @received, 1, 'raw app is invoked once');
-    is(scalar @{$received[0]}, 3, 'raw app receives all three PAGI channels');
-    is(refaddr($received[0][0]), refaddr($request_scope), 'raw app receives the supplied scope by identity');
-    is(refaddr($received[0][1]), refaddr($receive), 'raw app owns receive by identity');
-    is(refaddr($received[0][2]), refaddr($send), 'raw app owns send by identity');
-    is($resolved, undef, 'raw app resolved value is ignored');
+    is($coercions, 1, 'native component is not recompiled per request');
+    is(scalar @received, 1, 'native app is invoked once');
+    is(scalar @{$received[0]}, 3, 'native app receives all three PAGI channels');
+    is(refaddr($received[0][0]), refaddr($request_scope), 'native app receives the supplied scope by identity');
+    is(refaddr($received[0][1]), refaddr($receive), 'native app owns receive by identity');
+    is(refaddr($received[0][2]), refaddr($send), 'native app owns send by identity');
+    is($resolved, undef, 'native app resolved value is ignored');
     is(
         [map { $_->{type} } @$events],
         [qw(http.response.start http.response.body)],
-        'raw app emits its own response events',
+        'native app emits its own response events',
     );
 };
 
-subtest 'provider constraints select normal and raw HTTP leaves before invocation' => sub {
-    my (@normal, @raw);
+subtest 'provider constraints select handler and native HTTP leaves before invocation' => sub {
+    my (@normal, @native);
     my $app = router(routes => [
         route('/normal/{id:&HttpProvider}' => sub {
             my ($request) = @_;
@@ -373,9 +454,9 @@ subtest 'provider constraints select normal and raw HTTP leaves before invocatio
         route('/normal/rejected' => sub {
             return PAGI::Response::Text->new('continued');
         }),
-        route('/raw/{id:&HttpProvider}' => as_app(sub {
+        route('/native/{id:&HttpProvider}' => as_app(sub {
             my ($request_scope, $receive, $send) = @_;
-            push @raw, $request_scope->{path_params}{id};
+            push @native, $request_scope->{path_params}{id};
             $send->({
                 type => 'http.response.start', status => 204, headers => [],
             })->get;
@@ -397,14 +478,14 @@ subtest 'provider constraints select normal and raw HTTP leaves before invocatio
         'an accepted provider capture reaches a normal HTTP handler unchanged');
     is(response_body($run->('/normal/rejected')), 'continued',
         'a rejected provider route lets declaration-order scanning continue');
-    is($run->('/raw/accepted')->[0]{status}, 204,
-        'an accepted provider capture selects the raw HTTP application');
-    is($run->('/raw/rejected')->[0]{status}, 404,
-        'a rejected raw provider route reaches the Router HTTP default');
+    is($run->('/native/accepted')->[0]{status}, 204,
+        'an accepted provider capture selects the native HTTP application');
+    is($run->('/native/rejected')->[0]{status}, 404,
+        'a rejected native provider route reaches the Router HTTP default');
     is(\@normal, ['accepted'],
         'the constrained normal handler runs only for its accepted capture');
-    is(\@raw, ['accepted'],
-        'the raw application is never invoked for a rejected capture');
+    is(\@native, ['accepted'],
+        'the native application is never invoked for a rejected capture');
 };
 
 subtest 'invalid normal returns retain the shared diagnostic' => sub {
@@ -422,7 +503,7 @@ subtest 'invalid normal returns retain the shared diagnostic' => sub {
         my ($receive, $send, $events) = channels();
         like(
             dies { $app->(scope(path => '/bad'), $receive, $send)->get },
-            qr/handler did not return a response/,
+            qr/request endpoint must return a PAGI application: a coderef or instantiated object with to_app/,
             "$label return is rejected",
         );
         is($events, [], "$label return emits no response events");
@@ -789,24 +870,78 @@ subtest 'route middleware is compiled once and executes only after full selectio
 };
 
 {
-    package Local::CountedResponse;
-
-    use parent 'PAGI::Response';
+    package Local::CountedApplication;
 
     sub new {
-        my ($class, $count, $sends, $completion) = @_;
+        my ($class, $compilations, $invocations, $sends, $completion) = @_;
         return bless {
-            count      => $count,
-            sends      => $sends,
-            completion => $completion,
+            compilations => $compilations,
+            invocations  => $invocations,
+            sends        => $sends,
+            completion   => $completion,
         }, $class;
     }
 
-    sub respond {
-        my ($self, $scope, $receive, $send) = @_;
-        ++${$self->{count}};
-        push @{$self->{sends}}, [$scope, $receive, $send];
-        return $self->{completion};
+    sub to_app {
+        my ($self) = @_;
+        ++${$self->{compilations}};
+        return sub {
+            my ($scope, $receive, $send) = @_;
+            ++${$self->{invocations}};
+            push @{$self->{sends}}, [$scope, $receive, $send];
+            return $self->{completion};
+        };
+    }
+}
+
+{
+    package Local::CountingRequestResponse;
+
+    sub new {
+        my ($class, $component, $compilations) = @_;
+        return bless {
+            component    => $component,
+            compilations => $compilations,
+        }, $class;
+    }
+
+    sub to_app {
+        my ($self) = @_;
+        ++${$self->{compilations}};
+        return $self->{component}->to_app;
+    }
+}
+
+{
+    package Local::HTTPStyleEndpoint;
+
+    sub new {
+        return bless {
+            capability_calls => 0,
+            compilations     => 0,
+        }, $_[0];
+    }
+
+    sub capability_calls { return $_[0]{capability_calls} }
+    sub compilations { return $_[0]{compilations} }
+
+    sub allowed_methods {
+        my ($self) = @_;
+        ++$self->{capability_calls};
+        return qw(POST GET OPTIONS);
+    }
+
+    sub to_app {
+        my ($self) = @_;
+        ++$self->{compilations};
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            my $body = join ' ', $scope->{method}, $scope->{path_params}{id};
+            my $response = PAGI::Response::Text->new($body);
+            my $app = $response->to_app;
+            await Future->wrap($app->($scope, $receive, $send));
+            return;
+        };
     }
 }
 
@@ -855,7 +990,7 @@ subtest 'route middleware is compiled once and executes only after full selectio
 }
 
 {
-    package Local::RawComponent;
+    package Local::NativeComponent;
 
     sub new {
         my ($class, $coercions, $app) = @_;

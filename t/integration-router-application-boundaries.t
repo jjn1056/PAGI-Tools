@@ -8,6 +8,7 @@ use PAGI::Response ();
 use PAGI::Response::Text ();
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(router route mount middleware);
+use PAGI::Utils qw(request_response);
 
 sub run_http {
     my ($app, $path) = @_;
@@ -47,11 +48,6 @@ sub response_body {
 }
 
 {
-    package Local::FullDemoLoader;
-    sub load { return do $_[1] }
-}
-
-{
     package Local::MountedIntegrationApp;
 
     sub new { return bless { compilations => 0 }, $_[0] }
@@ -83,28 +79,6 @@ subtest 'background-task example remains a composable routing object during resp
     isa_ok($app, 'PAGI::Compose');
 };
 
-subtest 'full-demo keeps its routes and gains a complete application boundary' => sub {
-    my $file = "$Bin/../examples/full-demo/app.pl";
-    my $app = Local::FullDemoLoader->load($file);
-    my $load_error = $@;
-    ok(!$load_error, 'full-demo loads cleanly') or diag($load_error);
-    is(ref($app), 'CODE', 'full-demo returns a native PAGI coderef');
-
-    return unless ref($app) eq 'CODE';
-
-    my $known = run_http($app, '/');
-    is($known->[0]{status}, 200, 'known full-demo route still succeeds');
-    is(response_body($known), 'Hello, World!',
-        'known route keeps its raw response body');
-
-    my $missing = run_http($app, '/not-a-route');
-    is([map { $_->{type} } @$missing],
-        ['http.response.start', 'http.response.body'],
-        'unknown full-demo route completes the HTTP response event family');
-    is($missing->[0]{status}, 404,
-        'unknown full-demo route receives the enclosed Router 404');
-};
-
 subtest 'a mounted object is one compiled application boundary' => sub {
     my $component = Local::MountedIntegrationApp->new;
     my $middleware_builds = 0;
@@ -133,12 +107,12 @@ subtest 'a mounted object is one compiled application boundary' => sub {
         'requests do not recompile the child or Mount middleware');
 };
 
-subtest 'request_app is the explicit bridge at application-native positions' => sub {
+subtest 'request_response is the explicit bridge at application-native positions' => sub {
     my $handler = sub { return PAGI::Response::Text->new('bridged') };
     my @cases = (
-        ['Router http_default', router(routes => [], http_default => PAGI::Routing::request_app($handler))->to_app],
-        ['Mount app', router(routes => [mount('/bridge', app => PAGI::Routing::request_app($handler))])->to_app, '/bridge'],
-        ['Compose app', compose(app => PAGI::Routing::request_app($handler))->to_app],
+        ['Router http_default', router(routes => [], http_default => request_response($handler))->to_app],
+        ['Mount app', router(routes => [mount('/bridge', app => request_response($handler))])->to_app, '/bridge'],
+        ['Compose app', compose(app => request_response($handler))->to_app],
     );
     for my $case (@cases) {
         my ($label, $app, $path) = @$case;

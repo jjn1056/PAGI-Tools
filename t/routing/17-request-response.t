@@ -75,9 +75,11 @@ subtest 'non-HTTP scope is rejected before the handler runs' => sub {
 };
 
 subtest 'immediate handler result receives one Request and preserves the triplet' => sub {
-    my ($request, $arguments, $app_arguments);
+    my ($request, $arguments, $call_context, $app_arguments);
     my $handler = sub {
         $arguments = [@_];
+        $call_context = defined wantarray
+            ? (wantarray ? 'list' : 'scalar') : 'void';
         ($request) = @_;
         return sub {
             $app_arguments = [@_];
@@ -92,6 +94,7 @@ subtest 'immediate handler result receives one Request and preserves the triplet
     is($app->($scope, $receive, $send)->get, 'complete',
         'immediate native application completion is returned');
     is(scalar @$arguments, 1, 'handler receives exactly one argument');
+    is($call_context, 'scalar', 'handler is invoked in scalar context');
     isa_ok($request, ['PAGI::Request'], 'handler receives a Request');
     is(refaddr($request->raw), refaddr($scope), 'Request retains original scope');
     is($app_arguments, [$scope, $receive, $send],

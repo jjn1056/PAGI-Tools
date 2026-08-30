@@ -11,6 +11,7 @@ use PAGI::Response;
 use PAGI::Response::Text ();
 use PAGI::Response::Stream ();
 use PAGI::Routing qw(router route mount middleware);
+use PAGI::Utils qw(as_app);
 
 sub scope {
     my (%changes) = @_;
@@ -248,7 +249,7 @@ subtest 'the outer HEAD boundary lets router middleware observe the full represe
         });
     };
     my $app = router(
-        routes => [route('/buffered', raw => $raw)],
+        routes => [route('/buffered' => as_app($raw))],
         middleware => [middleware('ContentLength')],
     )->to_app;
 
@@ -258,7 +259,7 @@ subtest 'the outer HEAD boundary lets router middleware observe the full represe
     is(response_header($get, 'Content-Length'), 18, 'router middleware calculates the GET representation length');
     is(response_header($head, 'Content-Length'), 18, 'router middleware calculates the same HEAD representation length');
     is(response_bodies($get), [{ type => 'http.response.body', body => 'middleware-visible' }],
-        'GET retains the raw representation');
+        'GET retains the native representation');
     is(response_bodies($head), [{ type => 'http.response.body', body => '', more => 0 }],
         'suppression happens only after router middleware finishes');
 };
@@ -290,11 +291,11 @@ subtest 'one outer HEAD owner covers separately compiled child routers' => sub {
             '/item',
         ],
         [
-            'raw route middleware',
+            'Route middleware',
             sub {
                 my ($child) = @_;
                 return router(routes => [
-                    route('/item', raw => $child,
+                    route('/item' => $child,
                         middleware => [middleware('ContentLength')]),
                 ])->to_app;
             },
@@ -306,7 +307,7 @@ subtest 'one outer HEAD owner covers separately compiled child routers' => sub {
     for my $case (@cases) {
         my ($label, $build_parent, $request_path, $child_path) = @$case;
         my $child = router(routes => [
-            route($child_path, raw => async sub {
+            route($child_path => as_app(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type    => 'http.response.start',
@@ -318,7 +319,7 @@ subtest 'one outer HEAD owner covers separately compiled child routers' => sub {
                     body => 'child representation',
                     more => 0,
                 });
-            }),
+            })),
         ]);
         my $app = $build_parent->($child);
 
@@ -342,7 +343,7 @@ subtest 'HEAD streaming suppression waits for an explicit terminal body' => sub 
         headers => [['x-stream' => 'explicit']],
     };
     my $app = router(routes => [
-        route('/stream', raw => async sub {
+        route('/stream' => as_app(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->($start);
             await $send->({ type => 'http.response.body', body => 'one', more => 1 });
@@ -350,7 +351,7 @@ subtest 'HEAD streaming suppression waits for an explicit terminal body' => sub 
             await $send->({ type => 'http.response.body', body => 'three', more => 0 });
             await $send->({ type => 'http.response.trailers', headers => [['x-sum' => 'six']] });
             await $send->({ type => 'http.response.body', body => 'late', more => 0 });
-        }),
+        })),
     ])->to_app;
 
     my $events = run_app($app, method => 'HEAD', path => '/stream');
@@ -369,13 +370,13 @@ subtest 'HEAD streaming suppression treats absent more as terminal' => sub {
         headers => [['x-stream' => 'implicit']],
     };
     my $app = router(routes => [
-        route('/stream', raw => async sub {
+        route('/stream' => as_app(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->($start);
             await $send->({ type => 'http.response.body', body => 'one', more => 1 });
             await $send->({ type => 'http.response.body', body => 'terminal' });
             await $send->({ type => 'http.response.trailers', headers => [['x-sum' => 'done']] });
-        }),
+        })),
     ])->to_app;
 
     my $events = run_app($app, method => 'HEAD', path => '/stream');
@@ -391,7 +392,7 @@ subtest 'HEAD suppression consumes terminal sendfile descriptors before transpor
     my $file_open_attempts = 0;
     my @events;
     my $app = router(routes => [
-        route('/file', raw => async sub {
+        route('/file' => as_app(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({
                 type    => 'http.response.start',
@@ -404,7 +405,7 @@ subtest 'HEAD suppression consumes terminal sendfile descriptors before transpor
                 offset => 4,
                 length => 37,
             });
-        }),
+        })),
     ])->to_app;
     my $transport = sub {
         my ($event) = @_;
@@ -503,7 +504,7 @@ subtest 'Router-generated HEAD outcomes preserve GET-equivalent metadata and sup
 
 subtest 'GET events remain byte-for-byte unchanged' => sub {
     my $app = router(routes => [
-        route('/unchanged', raw => async sub {
+        route('/unchanged' => as_app(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({
                 type    => 'http.response.start',
@@ -513,7 +514,7 @@ subtest 'GET events remain byte-for-byte unchanged' => sub {
             await $send->({ type => 'http.response.body', body => 'unchanged', more => 1 });
             await $send->({ type => 'http.response.body', body => '!', more => 0 });
             await $send->({ type => 'http.response.trailers', headers => [['x-end' => 'kept']] });
-        }),
+        })),
     ])->to_app;
 
     my $events = run_app($app, method => 'GET', path => '/unchanged');
@@ -533,12 +534,12 @@ subtest 'GET events remain byte-for-byte unchanged' => sub {
 subtest 'HEAD forwards unrelated response events unchanged' => sub {
     my $diagnostic = { type => 'http.response.diagnostic', detail => 'malformed app evidence' };
     my $app = router(routes => [
-        route('/diagnostic', raw => async sub {
+        route('/diagnostic' => as_app(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({ type => 'http.response.start', status => 200, headers => [] });
             await $send->($diagnostic);
             await $send->({ type => 'http.response.body', body => 'hidden' });
-        }),
+        })),
     ])->to_app;
 
     my $events = run_app($app, method => 'HEAD', path => '/diagnostic');
@@ -580,7 +581,7 @@ subtest 'the outer HEAD boundary covers application and inline mounts' => sub {
 
     my $streamed = router(routes => [
         mount('/stream', routes => [
-            route('/events', raw => async sub {
+            route('/events' => as_app(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type    => 'http.response.start',
@@ -590,7 +591,7 @@ subtest 'the outer HEAD boundary covers application and inline mounts' => sub {
                 await $send->({ type => 'http.response.body', body => 'one', more => 1 });
                 await $send->({ type => 'http.response.body', body => 'two', more => 0 });
                 await $send->({ type => 'http.response.trailers', headers => [] });
-            }),
+            })),
         ]),
     ])->to_app;
     my $streamed_events = run_app(

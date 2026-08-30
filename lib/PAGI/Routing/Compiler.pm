@@ -7,7 +7,6 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(blessed refaddr);
 use PAGI::Pages ();
-use PAGI::Request;
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
@@ -123,10 +122,10 @@ sub _compile_router_body {
 
     my $http_default = defined $router->http_default
         ? PAGI::Utils::to_app($router->http_default)
-        : $class->_compile_http_handler(sub {
+        : PAGI::Utils::request_response(sub {
             my ($request) = @_;
             return PAGI::Pages->not_found($request);
-        });
+        })->to_app;
 
     my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
@@ -156,6 +155,17 @@ sub _compile_dispatcher {
     my ($class, $nodes, $resolver, $location_prefix, $http_default) = @_;
 
     $location_prefix ||= [];
+
+    my $method_not_allowed = PAGI::Utils::request_response(sub {
+        my ($request) = @_;
+        my $state = $class->_allow_state($request->scope);
+        croak 'Router authoritative Allow state is missing'
+            unless $state;
+        return PAGI::Pages->method_not_allowed(
+            $request,
+            allow => $state->{allowed_methods},
+        );
+    })->to_app;
 
     my @compiled_entries;
     for my $index (0 .. $#$nodes) {
@@ -239,11 +249,9 @@ sub _compile_dispatcher {
             $state->{router_generated} = 1;
             $state->{allowed_methods} = [@{$decision->{allowed_methods}}];
 
-            my $response = PAGI::Pages->method_not_allowed(
-                $scope,
-                allow => $decision->{allowed_methods},
+            await Future->wrap(
+                $method_not_allowed->($scope, $receive, $send),
             );
-            await Future->wrap($response->respond($scope, $receive, $send));
             return;
         }
 
@@ -347,41 +355,21 @@ sub _compile_protocol_leaf {
 sub _compile_http_leaf {
     my ($class, $route) = @_;
 
-    my $app;
-    if ($route->is_raw || ref($route->target) ne 'CODE') {
-        my $raw_app = PAGI::Utils::to_app($route->target);
-        $app = async sub {
-            my ($scope, $receive, $send) = @_;
-            my $returned = $raw_app->($scope, $receive, $send);
-            await Future->wrap($returned);
-            return;
-        };
-    }
-    else {
-        $app = $class->_compile_http_handler($route->target);
-    }
+    my $endpoint = $route->endpoint;
+    my $compiled = ref($endpoint) eq 'CODE'
+        ? PAGI::Utils::request_response($endpoint)->to_app
+        : PAGI::Utils::to_app($endpoint);
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $returned = $compiled->($scope, $receive, $send);
+        await Future->wrap($returned);
+        return;
+    };
 
     return PAGI::Routing::Middleware->_wrap_descriptors(
         $route->middleware,
         $app,
     );
-}
-
-sub _compile_http_handler {
-    my ($class, $handler) = @_;
-
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-        my $request = PAGI::Request->new($scope, $receive);
-        my $returned = $handler->($request);
-        my $result = await Future->wrap($returned);
-
-        croak 'handler did not return a response'
-            unless PAGI::Utils::is_response($result);
-
-        await Future->wrap($result->respond($scope, $receive, $send));
-        return;
-    };
 }
 
 sub _select_http {
