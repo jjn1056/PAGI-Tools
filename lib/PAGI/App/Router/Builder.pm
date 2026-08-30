@@ -184,9 +184,6 @@ sub _add_route_from {
             $methods = $opts->{methods};
             $has_methods = 1;
         }
-        elsif (ref($endpoint) eq 'CODE') {
-            croak 'route requires methods option';
-        }
         for my $key (keys %$opts) {
             croak "unknown route option '$key'" unless $key eq 'methods';
         }
@@ -441,10 +438,10 @@ opaque application values; callers explicitly use C<to_router> when parent
 reverse inspection must discover their names.
 
 For a generic HTTP declaration, explicit C<methods> is retained as supplied.
-When methods are omitted from an application-object declaration, the mutable
-record preserves that omission: each immutable Route construction then takes
-one C<allowed_methods> snapshot or applies the GET-plus-HEAD fallback. Generic
-handler coderefs still require an explicit method declaration.
+When methods are omitted, whether the endpoint is a handler coderef or an
+application object, the mutable record preserves that omission. Each immutable
+Route construction then takes one C<allowed_methods> snapshot from a capable
+object or applies the GET-plus-HEAD fallback.
 
 Each C<to_router> call creates an independent immutable root snapshot.
 C<to_app> compiles exactly one retained snapshot. The public

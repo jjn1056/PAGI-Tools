@@ -6,7 +6,6 @@ use PAGI::Pages qw(not_found);
 use PAGI::Response qw(html_response);
 use PAGI::Routing qw(router route);
 use PAGI::Routing::URL qw(path_for url_for);
-use PAGI::Utils qw(request_response);
 use MyApp::View ();
 
 sub data($request) {
@@ -88,11 +87,6 @@ sub show_blog($request) {
     ));
 }
 
-sub blogs_not_found($request) {
-    return not_found(
-        detail => 'No Blogs route matched this path.');
-}
-
 sub routing($class) {
     return router(
         routes => [
@@ -106,7 +100,8 @@ sub routing($class) {
             ),
         ],
         desc => 'Blog routes',
-        http_default => request_response(\&blogs_not_found),
+        http_default => not_found(
+            detail => 'No Blogs route matched this path.'),
     );
 }
 

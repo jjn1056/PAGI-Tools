@@ -88,6 +88,11 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
         'static mount uses the concise App File component constructor');
     unlike($root_app, qr/PAGI::App::File->new\s*\(|File::Basename|File::Spec|__FILE__|\$STATIC_ROOT/,
         'Root contains no manual or expanded static-root construction');
+    unlike($root_app, qr/request_response|sub root_not_found/,
+        'Root places its request-independent Pages default directly');
+    like($root_app,
+        qr/http_default\s*=>\s*not_found\(\s*detail\s*=>\s*'No root route matched this path[.]'\s*\)/s,
+        'Root declares its source-free not-found application inline');
 
     like($data, qr/sub new\(\$class\)/, 'Data constructor uses a signature');
     like($root_app, qr/sub routing\(\$class\)/, 'Root routing uses a signature');
@@ -106,6 +111,17 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
         'Blogs imports the Type::Tiny Int provider');
     is(() = $blogs =~ /\{blog_id:&Int\}/g, 1,
         'Blogs uses &Int on its detail parameter');
+    unlike($blogs, qr/request_response|sub blogs_not_found/,
+        'Blogs places its request-independent Pages default directly');
+    like($blogs,
+        qr/http_default\s*=>\s*not_found\(\s*detail\s*=>\s*'No Blogs route matched this path[.]'\s*\)/s,
+        'Blogs declares its source-free not-found application inline');
+
+    my $readme = _source_text("$root/README.md");
+    unlike($readme, qr/request_response/,
+        'the README no longer teaches an unnecessary Request adapter');
+    like($readme, qr/direct source-free `not_found\(\.\.\.\)` applications/,
+        'the README explains direct Pages defaults');
 };
 
 subtest 'fixture repository exposes defensive people and blog records' => sub {

@@ -61,11 +61,10 @@ lib/MyApp/
 - `MyApp::Data` is created during startup and shared through
   `$request->state->get('data')`. `MyApp::View` renders the shared HTML
   document shell without introducing a template engine.
-- Root and Blogs adapt named Request handlers with `request_response(...)` for
-  their Router `http_default` values. Each handler returns a source-free
-  `not_found(...)` application. The details
-  identify which selected Router owns an unmatched path without turning a
-  wildcard into a normal route.
+- Root and Blogs place direct source-free `not_found(...)` applications in
+  their Router `http_default` values. The details identify which selected
+  Router owns an unmatched path without turning a wildcard into a normal
+  route or introducing a Request-handler adapter.
 - Root's named `/pagi` route returns `welcome()`. The home
   page reaches it through a generated `path_for('/pagi')` link, demonstrating an
   ordinary Pages application returned from a selected Request handler without

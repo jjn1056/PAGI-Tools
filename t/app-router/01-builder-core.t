@@ -7,7 +7,9 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router ();
 use PAGI::App::Router::Builder ();
+use PAGI::Response::Text ();
 use PAGI::Routing::Middleware ();
+use PAGI::Test::Client ();
 use PAGI::Utils qw(as_app);
 
 {
@@ -193,9 +195,6 @@ subtest 'leaf grammar accepts application values and requires explicit native wr
     like dies { $builder->sse('/events' => $handler, methods => ['GET']) },
         qr/SSE routes do not accept methods/,
         'SSE declarations reject methods';
-    like dies { $builder->route('/missing-methods' => $handler) },
-        qr/route requires methods option/,
-        'generic handler declarations still require methods';
     like dies { $builder->get('/normal' => 'native') },
         qr/route endpoint must be a coderef or instantiated object with to_app/,
         'package strings are not application values';
@@ -312,6 +311,32 @@ subtest 'generic application objects default through immutable Route constructio
         'the immutable Route supplies GET plus automatic HEAD');
     is($endpoint->{builds}, 0,
         'method fallback does not compile the endpoint application');
+};
+
+subtest 'generic CODE handlers default through immutable Route construction' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+    my $handler = sub {
+        return PAGI::Response::Text->new('generic handler default');
+    };
+    my $error = dies { $builder->route('/default' => $handler) };
+
+    is($error, undef,
+        'a generic CODE handler does not require explicit methods');
+    return if defined $error;
+
+    my $route = $builder->to_router->routes->[0];
+    is($route->endpoint, $handler,
+        'the immutable Route retains the exact handler CODE');
+    is($route->methods, ['GET', 'HEAD'],
+        'the immutable Route supplies GET plus automatic HEAD');
+
+    my $client = PAGI::Test::Client->new(app => $builder->to_app);
+    is($client->get('/default')->text, 'generic handler default',
+        'GET dispatches through the generic handler');
+    my $partial = $client->post('/default');
+    is($partial->status, 405, 'Router owns the unsupported-method outcome');
+    is($partial->header('allow'), 'GET, HEAD',
+        'Router publishes the fallback method set in Allow');
 };
 
 subtest 'application capability is snapshotted once per immutable Route construction' => sub {

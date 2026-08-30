@@ -209,20 +209,16 @@ subtest 'Problem validates its document status before each retained-object invoc
     my $bypassed_app;
     is(dies { $bypassed_app = $bypassed->to_app }, undef,
         'to_app retains an inconsistent Problem without starting a response');
-    SKIP: {
-        skip 'current object-copy implementation rejects before invocation', 2
-            unless $bypassed_app;
-        my @bypassed_app_events;
-        like(dies {
-            $bypassed_app->(
-                { type => 'http' },
-                sub { Future->done },
-                sub { push @bypassed_app_events, $_[0]; Future->done },
-            )->get;
-        }, qr/Problem document and HTTP statuses must agree/,
-            'a retained inconsistent Problem is rejected at invocation');
-        is(\@bypassed_app_events, [], 'retained invalid Problem emits no event');
-    }
+    my @bypassed_app_events;
+    like(dies {
+        $bypassed_app->(
+            { type => 'http' },
+            sub { Future->done },
+            sub { push @bypassed_app_events, $_[0]; Future->done },
+        )->get;
+    }, qr/Problem document and HTTP statuses must agree/,
+        'a retained inconsistent Problem is rejected at invocation');
+    is(\@bypassed_app_events, [], 'retained invalid Problem emits no event');
 
     my $stable = problem_response({ title => 'Stable', status => 422 });
     my $app = $stable->to_app;

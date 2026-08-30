@@ -71,6 +71,59 @@ subtest 'Endpoint generic application object defaults to GET plus HEAD' => sub {
 };
 
 {
+    package Local::DefaultHandlerEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+
+    sub new {
+        my ($class) = @_;
+        return bless {
+            closure => sub {
+                return PAGI::Response::Text->new('closure default');
+            },
+        }, $class;
+    }
+
+    sub routes {
+        my ($self, $r) = @_;
+        $r->route('/method-default' => 'method_default');
+        $r->route('/closure-default' => $self->{closure});
+    }
+
+    sub method_default {
+        return PAGI::Response::Text->new('method default');
+    }
+}
+
+subtest 'Endpoint method-name and CODE routes share GET plus HEAD fallback' => sub {
+    my $endpoint = Local::DefaultHandlerEndpoint->new;
+    my $routing;
+    my $error = dies { $routing = $endpoint->to_router };
+
+    is($error, undef,
+        'Endpoint generic handler declarations need no explicit methods');
+    return if defined $error;
+
+    is([map { $_->methods } @{$routing->routes}], [
+        ['GET', 'HEAD'],
+        ['GET', 'HEAD'],
+    ], 'method-name and CODE handlers share immutable Route defaults');
+
+    my $client = PAGI::Test::Client->new(app => $routing->to_app);
+    is($client->get('/method-default')->text, 'method default',
+        'the bound method handler dispatches through GET');
+    is($client->get('/closure-default')->text, 'closure default',
+        'the CODE handler dispatches through GET');
+
+    for my $path (qw(/method-default /closure-default)) {
+        my $partial = $client->post($path);
+        is($partial->status, 405,
+            "$path method mismatch is owned by Router");
+        is($partial->header('allow'), 'GET, HEAD',
+            "$path publishes the fallback method set in Allow");
+    }
+};
+
+{
     package Local::RawEndpoint;
     use parent 'PAGI::Endpoint::Router';
 
