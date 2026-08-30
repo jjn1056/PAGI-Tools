@@ -51,7 +51,6 @@ sub http_default { $_[0]->{http_default} }
 sub routes     { [ @{$_[0]->{routes}} ] }
 sub middleware { [ @{$_[0]->{middleware}} ] }
 sub path       { undef }
-sub endpoint   { undef }
 sub methods    { undef }
 sub constraints { undef }
 sub _resolver     { $_[0]->{_resolver} }
@@ -113,9 +112,10 @@ C<middleware> returns a fresh arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
 identity. C<desc> returns the declaration value. C<http_default> returns the
 declared HTTP application unchanged, or undef when it was omitted. It is
-validated at construction but not compiled there. Leaf/mount-only accessors
-such as C<name>, C<path>, C<endpoint>, C<methods>, and C<constraints> return
-undef.
+validated at construction but not compiled there. Inapplicable node metadata
+accessors C<name>, C<path>, C<methods>, and C<constraints> return undef. Router
+is a collection and has no leaf C<endpoint> accessor or retired target/mode
+accessors.
 
 =head1 METHODS
 

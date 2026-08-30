@@ -552,7 +552,6 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
     is($router->routes, [$leaf], 'router route arrays are copied');
     is($router->middleware, [$router_middleware], 'router middleware arrays are copied');
     is($router->path, undef, 'path is inapplicable to router');
-    is($router->endpoint, undef, 'endpoint is inapplicable to router');
     is($router->methods, undef, 'methods are inapplicable to router');
     is($router->constraints, undef, 'constraints are inapplicable to router');
     ok(!$router->can('target') && !$router->can('is_raw'),
