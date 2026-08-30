@@ -270,6 +270,7 @@ subtest 'materialization defers immutable HTTP normalization to Route' => sub {
 
     $builder->get('/get' => $handler);
     $builder->route('/rpc' => $handler, methods => ['RPC']);
+    $builder->route('/generic-any' => $handler, methods => '*');
     $builder->any('/any' => $handler);
     $builder->websocket('/socket' => $handler);
     $builder->sse('/events' => $handler);
@@ -278,10 +279,21 @@ subtest 'materialization defers immutable HTTP normalization to Route' => sub {
     is([map { [$_->kind, $_->methods, $_->path] } @$nodes], [
         ['route', ['GET', 'HEAD'], '/get'],
         ['route', ['RPC'], '/rpc'],
+        ['route', '*', '/generic-any'],
         ['route', '*', '/any'],
         ['websocket', undef, '/socket'],
         ['sse', undef, '/events'],
     ], 'immutable Route owns method normalization, including automatic HEAD');
+};
+
+subtest 'materialization preserves explicit generic methods presence' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+
+    $builder->route('/undefined' => sub { }, methods => undef);
+
+    like dies { $builder->_materialize_nodes(undef) },
+        qr/methods must be a method string, arrayref, or '\*'/,
+        'explicit undef reaches immutable Route validation';
 };
 
 subtest 'application endpoints snapshot inferred methods once before Route construction' => sub {

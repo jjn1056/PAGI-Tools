@@ -41,6 +41,26 @@ package ExplicitHeadEndpoint {
     sub head { PAGI::Response::Empty->new(status => 202) }
 }
 
+package HelperBase {
+    sub report {
+        my ($self) = @_;
+        ++$self->{report_calls};
+        return PAGI::Response::Text->new('report helper');
+    }
+}
+
+package HelperEndpoint {
+    use parent -norequire, qw(PAGI::Endpoint::HTTP HelperBase);
+
+    sub get { PAGI::Response::Text->new('GET response') }
+
+    sub inspect {
+        my ($self) = @_;
+        ++$self->{inspect_calls};
+        return PAGI::Response::Text->new('inspect helper');
+    }
+}
+
 my $make_request = sub {
     my ($method, $headers) = @_;
     my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
@@ -87,6 +107,24 @@ subtest 'returns 405 for unimplemented method' => sub {
     is($response->status, 405, '405 status for unimplemented');
     is $response->header_all('Allow'), ['GET, HEAD, OPTIONS, POST'],
         '405 retains one sorted complete Allow field';
+};
+
+subtest 'dispatches only advertised HTTP verb handlers' => sub {
+    my $endpoint = HelperEndpoint->new;
+    my $client = PAGI::Test::Client->new(app => $endpoint->to_app);
+
+    for my $method (qw(REPORT INSPECT)) {
+        my $response = $client->_request($method, '/test');
+
+        is($response->status, 405, "$method cannot select a helper method");
+        is $response->header_all('Allow'), ['GET, HEAD, OPTIONS'],
+            "$method retains the endpoint-owned Allow response";
+    }
+
+    is($endpoint->{report_calls} // 0, 0,
+        'an inherited helper is never invoked as an HTTP verb');
+    is($endpoint->{inspect_calls} // 0, 0,
+        'a local non-verb helper is never invoked as an HTTP verb');
 };
 
 subtest 'HEAD dispatches to GET only without an explicit head method' => sub {

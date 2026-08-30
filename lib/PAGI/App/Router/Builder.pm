@@ -331,7 +331,8 @@ sub _materialize_nodes {
             $record->{endpoint},
             (defined $record->{name} ? (name => $record->{name}) : ()),
             (defined $record->{desc} ? (desc => $record->{desc}) : ()),
-            (defined $record->{methods} ? (methods => $record->{methods}) : ()),
+            ($record->{node_kind} eq 'route'
+                ? (methods => $record->{methods}) : ()),
             (defined $record->{constraints}
                 ? (constraints => $record->{constraints}) : ()),
             middleware => $record->{middleware},

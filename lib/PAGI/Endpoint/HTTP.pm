@@ -36,28 +36,31 @@ sub allowed_methods {
 async sub dispatch {
     my ($self, $request) = @_;
     my $http_method = lc($request->method // 'GET');
+    my @allowed_methods = $self->allowed_methods;
+    my %allowed = map { lc($_) => 1 } @allowed_methods;
 
     my $application;
 
     # OPTIONS - return allowed methods (auto-respond unless overridden)
-    if ($http_method eq 'options' && !$self->can('options')) {
-        my $allow = join(', ', $self->allowed_methods);
+    if ($http_method eq 'options' && $allowed{options} && !$self->can('options')) {
+        my $allow = join(', ', @allowed_methods);
         $application = PAGI::Response::Empty->new(
             headers => ['Allow' => $allow],
         );
     }
     # HEAD falls back to GET if not explicitly defined
-    elsif ($http_method eq 'head' && !$self->can('head') && $self->can('get')) {
+    elsif ($http_method eq 'head' && $allowed{head}
+        && !$self->can('head') && $self->can('get')) {
         $application = await Future->wrap($self->get($request));
     }
     # Dispatch to the appropriate method handler
-    elsif ($self->can($http_method)) {
+    elsif ($allowed{$http_method} && $self->can($http_method)) {
         $application = await Future->wrap($self->$http_method($request));
     }
     # 405 Method Not Allowed
     else {
         $application = PAGI::Pages->method_not_allowed(
-            allow => [$self->allowed_methods],
+            allow => \@allowed_methods,
         );
     }
 
