@@ -30,7 +30,7 @@ use PAGI::Utils qw(as_app);
     package Local::MethodEndpoint;
 
     sub new { return bless { allowed_calls => 0, builds => 0 }, $_[0] }
-    sub allowed_methods { ++$_[0]{allowed_calls}; return qw(GET POST) }
+    sub allowed_methods { ++$_[0]{allowed_calls}; return qw(GET POST OPTIONS) }
     sub to_app {
         ++$_[0]{builds};
         return sub { return };
@@ -195,7 +195,7 @@ subtest 'leaf grammar accepts application values and requires explicit native wr
         'SSE declarations reject methods';
     like dies { $builder->route('/missing-methods' => $handler) },
         qr/route requires methods option/,
-        'generic route declarations require methods';
+        'generic handler declarations still require methods';
     like dies { $builder->get('/normal' => 'native') },
         qr/route endpoint must be a coderef or instantiated object with to_app/,
         'package strings are not application values';
@@ -296,20 +296,58 @@ subtest 'materialization preserves explicit generic methods presence' => sub {
         'explicit undef reaches immutable Route validation';
 };
 
-subtest 'application endpoints snapshot inferred methods once before Route construction' => sub {
+subtest 'generic application objects default through immutable Route construction' => sub {
     my $builder = PAGI::App::Router::Builder->new;
-    my $endpoint = Local::MethodEndpoint->new;
-    $builder->route('/inferred' => $endpoint);
+    my $endpoint = Local::BuilderApp->new;
+    my $error = dies { $builder->route('/default' => $endpoint) };
+
+    is($error, undef,
+        'a generic application object does not require explicit methods');
+    return if defined $error;
 
     my $route = $builder->to_router->routes->[0];
     is($route->endpoint, $endpoint,
         'the immutable Route retains the exact endpoint object');
-    is($route->methods, ['GET', 'HEAD', 'POST'],
-        'the immutable Route receives the endpoint method snapshot');
+    is($route->methods, ['GET', 'HEAD'],
+        'the immutable Route supplies GET plus automatic HEAD');
+    is($endpoint->{builds}, 0,
+        'method fallback does not compile the endpoint application');
+};
+
+subtest 'application capability is snapshotted once per immutable Route construction' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+    my $endpoint = Local::MethodEndpoint->new;
+    $builder->route('/inferred' => $endpoint);
+
+    is($endpoint->{allowed_calls}, 0,
+        'mutable declaration does not query endpoint capabilities');
+
+    my $first = $builder->to_router->routes->[0];
+    is($first->endpoint, $endpoint,
+        'the immutable Route retains the exact endpoint object');
+    is($first->methods, ['GET', 'HEAD', 'POST', 'OPTIONS'],
+        'the first immutable Route receives one normalized capability snapshot');
     is($endpoint->{allowed_calls}, 1,
-        'materialization does not re-query endpoint capabilities after Route construction');
+        'the first immutable Route construction queries the capability once');
+
+    my $second = $builder->to_router->routes->[0];
+    is($second->methods, ['GET', 'HEAD', 'POST', 'OPTIONS'],
+        'a later immutable snapshot retains the same normalized capability');
+    is($endpoint->{allowed_calls}, 2,
+        'each fresh immutable Route construction takes one fresh snapshot');
     is($endpoint->{builds}, 0,
         'method inference does not compile the endpoint application');
+};
+
+subtest 'explicit generic methods bypass endpoint capability inference' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+    my $endpoint = Local::MethodEndpoint->new;
+    $builder->route('/explicit' => $endpoint, methods => ['PATCH']);
+
+    my $route = $builder->to_router->routes->[0];
+    is($route->methods, ['PATCH'], 'explicit methods reach the immutable Route');
+    is($endpoint->{allowed_calls}, 0,
+        'explicit methods do not query the endpoint capability');
 };
 
 done_testing;

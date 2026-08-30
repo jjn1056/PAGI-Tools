@@ -63,6 +63,11 @@ HTTP method resolution is ordered:
    context snapshot taken once when the immutable Route is constructed.
 3. Otherwise, the Route uses GET plus automatic HEAD.
 
+Mutable App Router and Endpoint declarations retain the application object
+without consulting `allowed_methods`. Each fresh `to_router` call constructs
+fresh immutable Routes and therefore takes one fresh capability snapshot;
+retaining that immutable Router retains the resulting method policy.
+
 The capability must return a nonempty synchronous list of valid method
 tokens. Normalization removes duplicates, canonicalizes case, adds HEAD for
 GET, and preserves OPTIONS when the endpoint advertises it. A routed
@@ -486,7 +491,6 @@ Mount('/x')       selected owner of /x and its complete subtree
 ### Deny WebSocket/SSE handshakes with Responses
 
 ```perl
-use PAGI::Pages qw(not_found);
 use PAGI::Response qw(problem_response);
 
 await $websocket->deny(
@@ -494,7 +498,7 @@ await $websocket->deny(
 );
 
 await $sse->decline(
-    not_found(),
+    problem_response({ title => 'Not Found', status => 404 }),
 );
 ```
 

@@ -137,16 +137,16 @@
   - BREAKING: Removed the entire `PAGI` Context class family, without a
     compatibility alias or replacement hook. Normal HTTP, WebSocket, and SSE
     callbacks receive `PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE`
-    directly; HTTP callbacks return complete concrete Response values. Response
-    construction uses the concrete class/factory family. URL generation, stash,
-    session, state, CSRF, and transport access use their explicitly imported
-    owning helpers. ErrorHandler custom renderers receive `($request, $error)`
-    and must return a Response; an explicit renderer status wins over the
-    derived exception/configured status. Removed
+    directly; HTTP callbacks return immediate or Future-backed application
+    values, commonly concrete Responses from the class/factory family. URL
+    generation, stash, session, state, CSRF, and transport access use their
+    explicitly imported owning helpers. ErrorHandler custom renderers receive
+    `($request, $error)` and must return a Response; an explicit renderer
+    status wins over the derived exception/configured status. Removed
     along with the class family are Endpoint factory overrides, protocol
     assertions and type maps, raw channel accessors, the generic event
     dispatcher, and the cached HTTP Response accumulator plus guarded send.
-    ErrorHandler's fallback-status mechanism remains. Native raw applications
+    ErrorHandler's fallback-status mechanism remains. Native PAGI applications
     and all middleware retain
     `($scope, $receive, $send)`.
     Extension protocols provide their own object. Endpoint disconnect hooks are
@@ -154,7 +154,7 @@
   - PAGI::Endpoint::SSE no longer sends `sse.start` after
     `on_connect` has already declined the request -- previously `handle()`
     unconditionally awaited `run()` regardless of what `on_connect` did, so
-    a Cookbook-style raw decline left a stray `sse.start` on the wire after
+    a concrete-Response decline left a stray `sse.start` on the wire after
     the response was already complete, a first-send-wins violation the
     server must raise on. `PAGI::SSE::decline($response)` gives apps a finite
     HTTP denial API (parity with `PAGI::WebSocket::deny($response)`): it sends
@@ -491,12 +491,13 @@
     callback array is cleared) whether the send succeeds or fails, and the
     C<Future> C<close> returns fails with the original send error instead of
     swallowing it. A second C<close()> call remains a safe no-op either way.
-  - C<respond()>'s streaming path no longer leaves the writer open
+  - PAGI::Response::Stream's private application-delivery path no longer leaves
+    the writer open
     and its C<on_close> callbacks unrun when the stream callback throws.
     Per L<PAGI::Spec::Www/Application Left a Response Incomplete>, sending
     the terminal event on that path would falsely certify a truncated
-    response as complete, so C<respond> still sends B<no> terminal event and
-    still re-raises the exception (the wire abort is deliberate, and the
+    response as complete, so private Stream delivery still sends B<no> terminal
+    event and still re-raises the exception (the wire abort is deliberate, and the
     server observes it as C<on_disconnect> with reason C<server_error>) --
     but the writer is now marked closed and its C<on_close> callbacks run
     for local cleanup before the exception propagates.

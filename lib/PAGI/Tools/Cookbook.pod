@@ -2203,7 +2203,6 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
   use PAGI::Compose qw(compose);
   use PAGI::Response;
   use PAGI::Utils qw(as_app invoke_app);
-  use PAGI::Utils qw(as_app invoke_app);
 
   my $router = PAGI::App::Router->new;
 

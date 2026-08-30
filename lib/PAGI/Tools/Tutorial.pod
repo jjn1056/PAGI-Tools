@@ -76,7 +76,8 @@ applications (PART 7).
 =head2 2.1 PAGI::Routing - Immutable Declarative Routing
 
 L<PAGI::Routing> is the compact route-tree API. HTTP handlers receive one
-L<PAGI::Request> and return L<PAGI::Response> values; WebSocket and SSE
+L<PAGI::Request> and return immediate or Future-backed application values,
+commonly L<PAGI::Response> or L<PAGI::Pages::Application>. WebSocket and SSE
 handlers receive their direct protocol objects:
 
   Route CODE endpoint        -> one Request/WebSocket/SSE argument
@@ -766,8 +767,10 @@ L<PAGI::SSE> simplifies Server-Sent Events:
 
 Before C<start>, decline with the same Response vocabulary:
 
+  use PAGI::Response qw(problem_response);
+
   await $sse->decline(
-      PAGI::Pages->not_found,
+      problem_response({ title => 'Not Found', status => 404 }),
   );
 
 Denial/decline start-send settlement commits the protocol response slot; it is

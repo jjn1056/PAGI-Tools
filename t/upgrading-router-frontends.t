@@ -11,6 +11,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Endpoint::Router ();
 use PAGI::Response::Text ();
 use PAGI::Routing qw(middleware mount route router sse websocket);
+use PAGI::Routing::Route ();
 use PAGI::Utils qw(as_app);
 
 sub scope {
@@ -73,6 +74,24 @@ sub response_header {
     }
     return;
 }
+
+subtest 'Route synopsis uses its executable named constructor' => sub {
+    open my $handle, '<', 'lib/PAGI/Routing/Route.pm'
+        or die "Cannot read Route POD: $!";
+    my $pod = do { local $/; <$handle> };
+    close $handle or die "Cannot close Route POD: $!";
+
+    my ($synopsis) = $pod =~ /
+        =head1\ SYNOPSIS\n\n
+        ((?:[ ]{4}[^\n]*\n)+)
+    /x;
+    ok(defined $synopsis, 'Route synopsis contains one indented example');
+    return unless defined $synopsis;
+
+    $synopsis =~ s/^[ ]{4}//mg;
+    my $executed = eval "$synopsis\n1;";
+    ok($executed, 'Route synopsis constructs successfully') or diag($@);
+};
 
 sub routing_match_projection {
     my ($protocol) = @_;

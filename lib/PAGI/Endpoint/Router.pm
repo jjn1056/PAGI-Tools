@@ -255,8 +255,11 @@ belong to the shared compiler.
 
 For HTTP application objects, explicit Route methods win; otherwise
 C<allowed_methods> is snapshotted once when the immutable Route is built;
-otherwise GET plus automatic HEAD is used. Only scalar C<< methods => '*' >>
-is unrestricted. WebSocket and SSE leaves never consult that HTTP capability.
+otherwise GET plus automatic HEAD is used. The mutable Endpoint declaration
+does not query that capability. Each fresh C<to_router> call constructs fresh
+Routes and therefore takes one fresh snapshot; a retained immutable Router
+retains its method policy. Only scalar C<< methods => '*' >> is unrestricted.
+WebSocket and SSE leaves never consult that HTTP capability.
 
 =head1 APPLICATION LEAVES
 

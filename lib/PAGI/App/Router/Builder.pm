@@ -178,19 +178,18 @@ sub _add_route_from {
     PAGI::Utils::_validate_app_value($endpoint, 'route endpoint');
 
     my $opts = _option_hash('route', @args);
+    my $has_methods = defined $methods ? 1 : 0;
     if ($kind eq 'route' && !defined $methods) {
-        if (!exists $opts->{methods}) {
-            if (ref($endpoint) ne 'CODE' && $endpoint->can('allowed_methods')) {
-                $methods = [$endpoint->allowed_methods];
-            }
-            else {
-                croak 'route requires methods option';
-            }
+        if (exists $opts->{methods}) {
+            $methods = $opts->{methods};
+            $has_methods = 1;
+        }
+        elsif (ref($endpoint) eq 'CODE') {
+            croak 'route requires methods option';
         }
         for my $key (keys %$opts) {
             croak "unknown route option '$key'" unless $key eq 'methods';
         }
-        $methods = $opts->{methods} if exists $opts->{methods};
     }
     else {
         for my $key (keys %$opts) {
@@ -213,6 +212,7 @@ sub _add_route_from {
         declaration_package => $package,
         path                => $path,
         endpoint            => $endpoint,
+        has_methods         => $has_methods,
         methods             => $stored_methods,
         middleware          => $descriptions,
         name                => undef,
@@ -331,7 +331,7 @@ sub _materialize_nodes {
             $record->{endpoint},
             (defined $record->{name} ? (name => $record->{name}) : ()),
             (defined $record->{desc} ? (desc => $record->{desc}) : ()),
-            ($record->{node_kind} eq 'route'
+            ($record->{node_kind} eq 'route' && $record->{has_methods}
                 ? (methods => $record->{methods}) : ()),
             (defined $record->{constraints}
                 ? (constraints => $record->{constraints}) : ()),
@@ -439,6 +439,12 @@ L<PAGI::WebSocket>, and SSE receives L<PAGI::SSE>. Use C<as_app> to place a
 native three-channel coderef at a leaf. Mutable frontend objects are valid
 opaque application values; callers explicitly use C<to_router> when parent
 reverse inspection must discover their names.
+
+For a generic HTTP declaration, explicit C<methods> is retained as supplied.
+When methods are omitted from an application-object declaration, the mutable
+record preserves that omission: each immutable Route construction then takes
+one C<allowed_methods> snapshot or applies the GET-plus-HEAD fallback. Generic
+handler coderefs still require an explicit method declaration.
 
 Each C<to_router> call creates an independent immutable root snapshot.
 C<to_app> compiles exactly one retained snapshot. The public

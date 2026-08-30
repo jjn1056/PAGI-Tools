@@ -33,6 +33,44 @@ sub run_scope {
 }
 
 {
+    package Local::DefaultApplicationEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+
+    sub new {
+        my ($class) = @_;
+        return bless {
+            response => PAGI::Response::Text->new('application default'),
+        }, $class;
+    }
+
+    sub routes {
+        my ($self, $r) = @_;
+        $r->route('/application' => $self->{response});
+    }
+}
+
+subtest 'Endpoint generic application object defaults to GET plus HEAD' => sub {
+    my $endpoint = Local::DefaultApplicationEndpoint->new;
+    my $routing;
+    my $error = dies { $routing = $endpoint->to_router };
+
+    is($error, undef,
+        'Endpoint accepts a generic application object without explicit methods');
+    return if defined $error;
+
+    is($routing->routes->[0]->methods, ['GET', 'HEAD'],
+        'Endpoint shares the immutable Route method fallback');
+
+    my $client = PAGI::Test::Client->new(app => $routing->to_app);
+    is($client->get('/application')->text, 'application default',
+        'GET dispatches through the application endpoint');
+    my $partial = $client->post('/application');
+    is($partial->status, 405, 'Router owns the unsupported-method outcome');
+    is($partial->header('allow'), 'GET, HEAD',
+        'Router publishes the fallback method set in Allow');
+};
+
+{
     package Local::RawEndpoint;
     use parent 'PAGI::Endpoint::Router';
 

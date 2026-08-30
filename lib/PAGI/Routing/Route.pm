@@ -191,7 +191,9 @@ PAGI::Routing::Route - Immutable declarative route description
 =head1 SYNOPSIS
 
     my $route = PAGI::Routing::Route->new(
-        route => '/items', sub { ... }, methods => [qw(GET POST)],
+        path     => '/items',
+        endpoint => sub { ... },
+        methods  => [qw(GET POST)],
     );
 
 =head1 DESCRIPTION

@@ -92,7 +92,10 @@ L<PAGI::Response::JSON>, or L<PAGI::Pages::Application>. An object endpoint
 is compiled through its C<to_app> method.
 Explicit C<methods> wins. Otherwise an application object's
 C<allowed_methods> is snapshotted once during immutable Route construction;
-otherwise the Route defaults to GET plus automatic HEAD. Only scalar
+otherwise the Route defaults to GET plus automatic HEAD. Mutable declaration
+retains the endpoint without consulting that capability. Each fresh
+C<to_router> call constructs fresh Routes and therefore takes one fresh
+snapshot; a retained immutable Router retains its method policy. Only scalar
 C<< methods => '*' >> is unrestricted; C<any> declares that wildcard.
 An explicit HEAD is an ordinary
 declaration; place it before GET when it should win.

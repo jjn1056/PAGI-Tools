@@ -249,10 +249,36 @@ subtest 'WebSocket denial and SSE decline take concrete Responses' => sub {
     like(dies { $sse->decline(status => 404, body => 'missing')->get },
         qr/exactly one concrete PAGI::Response/i,
         'removed SSE decline option list fails directly');
-    $sse->decline(text_response('missing', status => 404))->get;
+    $sse->decline(problem_response({
+        title  => 'Not Found',
+        status => 404,
+    }))->get;
     is([map { $_->{type} } @sse_events], [
         'sse.http.response.start', 'sse.http.response.body',
     ], 'Response-valued SSE decline executes');
+    is($sse_events[0]{status}, 404,
+        'the documented decline preserves the concrete Response status');
+    ok(grep({ lc($_->[0]) eq 'content-type'
+            && $_->[1] =~ m{\Aapplication/problem\+json\b} }
+            @{$sse_events[0]{headers}}),
+        'the documented decline preserves the concrete Response media type');
+};
+
+subtest 'live decline examples construct concrete Responses' => sub {
+    my @documents = (
+        ['UPGRADING.md', qr/await \$sse->decline\(\s*problem_response\(/s],
+        ['lib/PAGI/Tools/Tutorial.pod',
+            qr/await \$sse->decline\(\s*problem_response\(/s],
+    );
+
+    for my $document (@documents) {
+        open my $handle, '<', $document->[0]
+            or die "Cannot read $document->[0]: $!";
+        my $source = do { local $/; <$handle> };
+        close $handle or die "Cannot close $document->[0]: $!";
+        like($source, $document->[1],
+            "$document->[0] passes a concrete Response to SSE decline");
+    }
 };
 
 subtest 'JSON migration asserts values, never object member order' => sub {
