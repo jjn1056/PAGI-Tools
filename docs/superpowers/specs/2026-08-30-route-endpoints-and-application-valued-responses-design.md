@@ -23,7 +23,7 @@ An HTTP Route endpoint accepts exactly one of:
 
 ```perl
 route('/apples' => \&list_apples);
-route('/manual' => file_response($manual), methods => ['GET']);
+route('/manual' => file_response($manual));
 route('/items'  => MyApp::ItemsEndpoint->new);
 ```
 
@@ -180,9 +180,10 @@ method, creates a second dispatch model after routing has already normalized
 everything else to PAGI applications.
 
 The nominal check also excludes useful response-like application components
-such as deferred Pages policy. Pages then has to impersonate both a handler
-and an application through argument-count behavior. That complexity is a
-symptom of the wrong boundary.
+such as deferred Pages policy. The current source-first Pages functions happen
+to satisfy Route's one-Request handler signature, so policy construction and
+endpoint adaptation collapse into the same function. That role conflation is
+a symptom of the wrong boundary.
 
 The useful invariant is not “the return value inherits from Response.” It is
 “the return value can be normalized to a PAGI application and, for ordinary
@@ -213,9 +214,12 @@ for every application value, without enlarging the Response interface.
 ### 4.4 Pages is currently policy, value, handler, and app adapter
 
 Pages should answer one question: which conventional negotiated terminal
-response should this request receive? It should not also arity-sniff calls,
-pretend a factory is a Request handler, and expose a special native placement
-story.
+response should this request receive? Today it requires an explicit Request or
+scope source and immediately returns a Response. Its exported source-first
+functions therefore also happen to be valid one-Request Route handlers. Pages
+does not inspect arity; the problem is that one function is serving as both
+policy factory and endpoint adapter, with a separate native-placement story
+on top.
 
 After this change:
 
@@ -250,19 +254,21 @@ The implementation must:
 1. give every leaf endpoint one deterministic CODE-versus-object rule;
 2. remove the Route `raw` grammar and all arity inference;
 3. normalize Route endpoints once per Router compilation;
-4. let Request handlers return immediate or Future-backed PAGI app values;
-5. guarantee that every Response subclass remains a safe terminal result;
-6. document arbitrary returned apps as a deliberate advanced sharp edge;
-7. remove nominal Response gating and the public `respond` method;
-8. centralize app normalization and invocation in `PAGI::Utils`;
-9. make Pages class methods and exported functions equivalent deferred app
+4. resolve HTTP methods from explicit declarations, endpoint capability, or a
+   safe GET+HEAD default while keeping 405 ownership in Router;
+5. let Request handlers return immediate or Future-backed PAGI app values;
+6. guarantee that every Response subclass remains a safe terminal result;
+7. document arbitrary returned apps as a deliberate advanced sharp edge;
+8. remove nominal Response gating and the public `respond` method;
+9. centralize app normalization and invocation in `PAGI::Utils`;
+10. make Pages class methods and exported functions equivalent deferred app
    factories;
-10. preserve Response snapshot, File, Stream, HEAD, WebSocket-denial, SSE-
+11. preserve Response snapshot, File, Stream, HEAD, WebSocket-denial, SSE-
     decline, backpressure, and settlement behavior;
-11. align `PAGI::Endpoint::HTTP` and the shared Router frontends;
-12. make existing middleware work through the common app invocation path
+12. align `PAGI::Endpoint::HTTP` and the shared Router frontends;
+13. make existing middleware work through the common app invocation path
     without redesigning middleware; and
-13. migrate every first-party test, example, and current user document.
+14. migrate every first-party test, example, and current user document.
 
 ## 6. Non-goals and stop conditions
 
@@ -459,30 +465,65 @@ coderef's signature.
 
 ### 8.3 Method defaults
 
-HTTP method defaults follow Starlette's function-versus-application split:
+HTTP methods follow an explicit-option, endpoint-capability, safe-default
+order:
 
-- a CODE endpoint without `methods` defaults to GET with automatic HEAD;
-- an application-object endpoint without `methods` is unrestricted; and
-- an explicit `methods` option always wins for either endpoint kind.
+1. An explicit `methods` option always wins. The endpoint capability is not
+   consulted.
+2. Otherwise, an application-object endpoint with `allowed_methods` supplies
+   its declared methods.
+3. Otherwise, every endpoint defaults to GET with automatic HEAD.
+
+Unrestricted matching is always explicit through the scalar
+`methods => '*'`. The wildcard is a declaration mode, not an HTTP method
+token: `['*']` and `['GET', '*']` croak.
 
 ```perl
 # GET + automatic HEAD
 route('/apples' => \&list_apples);
 
-# unrestricted; the endpoint owns dispatch
+# Uses $endpoint->allowed_methods, including its OPTIONS policy
 route('/items' => MyApp::ItemsEndpoint->new);
 
-# explicitly GET + automatic HEAD
-route('/manual' => file_response($manual), methods => ['GET']);
+# GET + automatic HEAD because Response has no allowed_methods capability
+route('/manual' => file_response($manual));
+
+# Deliberately unrestricted native application
+route('/relay' => as_app($native), methods => '*');
 ```
 
-An unrestricted endpoint participates in path matching but cannot contribute
-a PARTIAL method mismatch. Explicit methods participate in the Router's
-first-seen Allow union exactly as they do today. An earlier explicit HEAD Route
-may still win before a GET-supplied automatic HEAD candidate.
+`allowed_methods` is an HTTP Route metadata capability. Route calls it once in
+list context during immutable Route construction, before any request or
+`to_app` compilation. The returned list must be nonempty, synchronous, and
+contain valid HTTP method tokens. It is normalized through the same path as an
+explicit method list: case is canonicalized, duplicates are removed, and GET
+supplies HEAD. A Future, reference, wildcard token, empty list, or malformed
+method croaks at construction. The result is a snapshot of that endpoint
+instance; later endpoint mutation cannot change an already declared Route.
 
-The different defaults are not an arity guess. They follow the already known
-endpoint category: function handler or application component.
+WebSocket and SSE leaves ignore `allowed_methods`. Those protocols do not
+accept Route `methods`, and an application object used there is not queried
+for an HTTP-only capability.
+
+Resolved methods participate in normal FULL/PARTIAL selection. In particular,
+`PAGI::Endpoint::HTTP->allowed_methods` exposes every implemented verb, GET's
+HEAD fallback, and OPTIONS. A method outside that set is a Router-level
+PARTIAL, so the Router owns the 405 response and first-seen Allow union. The
+Endpoint's internal 405 remains useful when the Endpoint is standalone,
+mounted as an opaque application, or explicitly placed behind broader Route
+methods. OPTIONS matches the Route and reaches the Endpoint's automatic or
+overridden OPTIONS handling.
+
+This deliberately improves on Starlette's unrestricted default for every
+non-function ASGI endpoint. That default is appropriate for a self-dispatching
+class but unsafe for a terminal Response such as File. PAGI uses an optional
+capability where the endpoint has method knowledge, a safe GET+HEAD default
+where it does not, and `'*'` when the author intentionally delegates all
+methods.
+
+An earlier explicit HEAD Route may still win before a GET-supplied automatic
+HEAD candidate. An unrestricted Route cannot contribute a PARTIAL method
+mismatch.
 
 ### 8.4 Route and Mount remain different
 
@@ -497,7 +538,7 @@ Mount('/manual')       owns /manual and the complete subtree below it
 Thus:
 
 ```perl
-route('/manual' => file_response($file), methods => ['GET']);
+route('/manual' => file_response($file));
 ```
 
 selects the File application only for that complete path, while:
@@ -518,6 +559,8 @@ kind for introspection.
   once per enclosing Router `to_app` call.
 - A static `to_app` endpoint is compiled once per enclosing Router `to_app`
   call.
+- An implicit `allowed_methods` capability has already been called and
+  snapshotted once at Route construction; compilation does not call it again.
 - Route middleware wraps the compiled application once in the existing order.
 - A value returned later by a Request handler is normalized and invoked for
   that request only.
@@ -663,6 +706,31 @@ change:
 Removing public `respond` must not change those state transitions or weaken
 the PAGI 0.5 settlement rules.
 
+### 10.4 Staged removal
+
+Public `respond` removal is the final implementation phase, not a prerequisite
+for Route endpoint normalization or deferred Pages applications. The earlier
+phases may use the existing method internally while the application-valued
+contract is established.
+
+The final phase is mechanically constrained:
+
+1. preserve the existing emission algorithms and move or rename only their
+   invocation seam;
+2. do not restructure File planning, Stream production, Writer cancellation,
+   protocol mapping, or disconnect cleanup while removing the method;
+3. migrate external first-party callers through `invoke_app`;
+4. immediately run the existing Response, File, Stream, WebSocket-denial,
+   SSE-decline, cancellation, and settlement tests; and
+5. stop for design review if removal requires behavioral special cases or
+   repeated workarounds.
+
+`invoke_app` is longer than a direct `respond` call in a raw application. That
+is an acknowledged ergonomics cost of retaining only one public application
+interface. The common Request-handler and declarative Route cases become
+shorter; raw callers receive one generic invocation helper that works for
+every PAGI application value.
+
 ## 11. Pages application factories
 
 ### 11.1 One factory contract
@@ -682,13 +750,24 @@ welcome()
 not_found(detail => 'No such page')
 ```
 
+A Request or scope is not a factory argument:
+
+```perl
+welcome($request);              # error
+PAGI::Pages->welcome($request); # error
+```
+
+Negotiation uses the scope supplied later when the returned application is
+invoked. Request-derived option values may be calculated by a handler and
+passed as ordinary options, but the Request itself is never passed to Pages.
+
 The imported and qualified styles are semantically identical:
 
 ```perl
-route('/welcome' => welcome(), methods => ['GET']);
+route('/welcome' => welcome());
 
 # Same component behavior:
-route('/welcome' => PAGI::Pages->welcome(), methods => ['GET']);
+route('/welcome' => PAGI::Pages->welcome());
 ```
 
 Exports call the documented first-party class factory. A configured instance
@@ -699,6 +778,14 @@ mutation of the factory does not race an invocation.
 The current `welcome_page`, `not_found_page`, and related source-first handler
 exports are removed rather than retained as a second model. The canonical
 export names are the same concise names as the class methods.
+
+Pages exports nothing by default. Qualified class or configured-instance
+calls are the canonical collision-free form for shared packages. Individual
+bare functions remain opt-in Perl conveniences. The existing `:common` bundle
+contains the frequently used, less generic page names but excludes collision-
+prone names such as `status` and `redirect`; those remain individually
+importable and are included in the deliberately broad `:all` bundle. POD must
+call out that an explicit import can still replace a same-named local function.
 
 ### 11.2 Request-time behavior
 
@@ -718,7 +805,7 @@ pass a Request into the factory.
 As a Route endpoint:
 
 ```perl
-route('/welcome' => welcome(), methods => ['GET']);
+route('/welcome' => welcome());
 ```
 
 As a Router default:
@@ -739,22 +826,22 @@ mount('/demo', app => welcome());
 As the whole server application:
 
 ```text
-pagi-server --module PAGI::Pages -e 'PAGI::Pages->welcome'
+pagi-server -MPAGI::Pages -e 'PAGI::Pages->welcome'
 ```
 
-The exact command-line module-loading spelling follows PAGI::Server's existing
-runner interface; Pages' requirement is that the instantiated returned object
-implements `to_app`.
+PAGI::Server's `-M` loads the module before `-e`; `-e` accepts either a native
+coderef or an instantiated object with `to_app`. The separate module-name app
+form calls the named package's `new` method and is not the form shown here.
 
-For direct root deployment, the Pages app is complete enough to:
-
-- render HTTP;
-- complete lifespan startup and shutdown with no registered work; and
-- reject unsupported WebSocket, SSE, or unknown scopes through the existing
-  safe protocol/application error policy rather than hanging.
-
-A bare Response remains HTTP-only. Complete root lifespan behavior belongs to
-Pages or Compose, not every Response subclass.
+Pages and Response have identical protocol breadth: both are HTTP-only
+applications and throw on lifespan, WebSocket, SSE, or unknown scope types.
+Under PAGI's default automatic lifespan mode, throwing on the lifespan scope
+is a conforming decline: the server continues startup and does not send later
+lifespan events. Under an operator-selected strict lifespan mode, that same
+decline is a fatal startup failure. The bare command is therefore appropriate
+for a small demo in automatic mode; an application requiring startup,
+shutdown, final HEAD handling, error policy, or response-completion guarding
+uses Compose.
 
 ## 12. Application positions outside Route
 
@@ -906,9 +993,11 @@ compose(
 );
 ```
 
-`welcome_page` is pretending to be a handler while `request_app` converts
-another handler back into an application. Response values are simultaneously
-treated as a special nominal return type and as `to_app` objects.
+`welcome_page` is a source-first immediate-response factory whose signature
+also happens to satisfy Route's one-Request handler contract, while
+`request_app` converts another such handler back into an application. Response
+values are simultaneously treated as a special nominal return type and as
+`to_app` objects.
 
 ### 16.2 Proposed shape
 
@@ -1008,14 +1097,12 @@ compose(
     app => router(
         routes => [
             route('/' => file_response($manager_file, inline => 1),
-                methods => ['GET'],
-                name    => 'home',
-                desc    => 'Apple manager SPA',
+                name => 'home',
+                desc => 'Apple manager SPA',
             ),
             route('/welcome' => welcome(),
-                methods => ['GET'],
-                name    => 'welcome',
-                desc    => 'PAGI welcome page',
+                name => 'welcome',
+                desc => 'PAGI welcome page',
             ),
             mount('/apples',
                 routes => [
@@ -1045,7 +1132,7 @@ compose(
 The shorter imported style is merely Perl style. This is equivalent:
 
 ```perl
-route('/welcome' => PAGI::Pages->welcome(), methods => ['GET']);
+route('/welcome' => PAGI::Pages->welcome());
 ```
 
 The improvement is structural, not merely fewer lines:
@@ -1054,7 +1141,7 @@ The improvement is structural, not merely fewer lines:
 - Pages produces an application directly;
 - `http_default` receives the application it already requires;
 - Response factories remain plain handler returns and direct components;
-- no source argument or arity-overloaded Pages function exists; and
+- no source-first Pages function exists; and
 - no nominal Response-only dispatch path remains.
 
 The example's lifespan-backed hash store is intentionally unchanged. Its data
@@ -1099,6 +1186,13 @@ route('/native', raw => $native_app);
 
 # After
 route('/native' => as_app($native_app));
+```
+
+Both forms default to GET+HEAD. A native application intended to receive every
+HTTP method declares that explicitly:
+
+```perl
+route('/native' => as_app($native_app), methods => '*');
 ```
 
 ### 18.2 Handler return and emission
@@ -1161,9 +1255,12 @@ route('/items', raw => MyApp::ItemsEndpoint->to_app)
 route('/items' => MyApp::ItemsEndpoint->new)
 ```
 
-The guide must call out method-default differences: a CODE endpoint defaults
-to GET+HEAD, while a `to_app` endpoint is unrestricted unless methods are
-declared.
+The guide must explain method resolution: explicit methods win; otherwise an
+HTTP object may supply a snapshotted `allowed_methods`; otherwise the safe
+default is GET+HEAD; and unrestricted matching requires scalar
+`methods => '*'`. It must also explain that a routed `PAGI::Endpoint::HTTP`
+now contributes its verbs and OPTIONS to Router selection and Allow unions,
+so Router owns unsupported-method 405s at that boundary.
 
 POD updates include at least:
 
@@ -1211,107 +1308,43 @@ an updated focused comparison explaining the callable-to-Perl mapping.
 
 ## 20. Required tests
 
-### 20.1 Utility contract
+The implementation plan owns the granular test matrix. At the design level,
+verification must establish these outcomes:
 
-- `to_app` accepts native CODE and instantiated `to_app` objects;
-- package names and unblessed references fail;
-- invalid `to_app` results fail clearly;
-- `as_app` returns an object and preserves exact coderef identity;
-- `invoke_app` forwards the exact triplet and awaits immediate/Future results;
-- application failures propagate unchanged;
-- `request_response` rejects non-CODE handlers; and
-- no helper performs arity inference.
-
-### 20.2 Route construction and introspection
-
-- canonical `path`/`endpoint` object construction;
-- functional `route($path => $endpoint, ...)` parity;
-- original endpoint retained for inspection;
-- `target`, `is_raw`, and `raw` removed;
-- named and anonymous CODE classified identically;
-- `to_app` object accepted;
-- package name and invalid reference rejected;
-- object Route matches an exact path, never Mount-prefix semantics;
-- construction order remains declaration order; and
-- two Router compilations are independent.
-
-### 20.3 Method behavior
-
-- CODE without methods accepts GET and automatic HEAD;
-- CODE without methods contributes GET, HEAD to PARTIAL Allow;
-- object without methods is unrestricted;
-- explicit methods constrain an object endpoint;
-- GET explicitly adds HEAD;
-- earlier explicit HEAD can suppress the GET-derived candidate;
-- component-target options and constraints behave exactly like CODE-target
-  options and constraints; and
-- HEAD boundary preserves headers and suppresses all ordinary, file, and
-  stream body delivery according to the existing design.
-
-### 20.4 RequestResponse results
-
-- immediate Response app;
-- Future-backed Response app;
-- native app coderef result;
-- `to_app` object result;
-- one `to_app` call per returned object per invocation;
-- no cross-request result caching;
-- invalid undef/scalar/unblessed/object result diagnostics;
-- handler exception preservation;
-- `to_app` exception/result diagnostics;
-- application failure before and after response start;
-- handler body consumption leaves only the remaining receive stream;
-- returned Router receives unchanged path/root_path;
-- concurrent requests do not share Request or result state; and
-- a direct static component is compiled once per Router compilation.
-
-### 20.5 Response family
-
-- every Response subclass works through `to_app` and `invoke_app`;
-- public `respond` is absent;
-- snapshots remain stable and concurrent-safe;
-- File and Stream keep request-time preflight and delivery behavior;
-- Stream awaits send Futures and preserves transport/disconnect semantics;
-- File remains ineligible for protocol denial;
-- supported Response apps adapt through WebSocket deny and SSE decline;
-- denial/decline start-settlement state transitions remain pinned; and
-- no regression in Content-Length, HEAD, range, conditional, cleanup, or
-  cancellation tests.
-
-### 20.6 Pages
-
-- class, configured-instance, subclass, and imported factory forms;
-- `welcome()` and `PAGI::Pages->welcome()` equivalent behavior;
-- factories perform no request I/O;
-- invocation-time HTML/text/JSON/problem negotiation;
-- Route endpoint, Router default, Mount app, handler return, raw invocation,
-  and direct root deployment;
-- lifespan startup/shutdown completion for the direct Pages root;
-- safe non-HTTP behavior without a hang;
-- source-first/arity-overloaded old calls fail; and
-- old `_page` exports are absent.
-
-### 20.7 Endpoint and frontend integration
-
-- Endpoint::HTTP verb methods return Response and arbitrary app values;
-- Endpoint instance state survives Route compilation;
-- automatic OPTIONS/405 use the common app path;
-- functional, App::Router, and Endpoint::Router frontends classify endpoint
-  values identically;
-- route middleware wraps both endpoint categories in the same order;
-- Compose response/error/HEAD boundaries remain outermost as designed; and
-- native application positions continue treating CODE as three-argument.
-
-### 20.8 Documentation and examples
-
-- every maintained example compiles and its focused integration test passes;
-- apples SPA CRUD, welcome, custom default, reverse links, method outcomes,
-  and constraint behavior remain covered;
-- Tutorial/Cookbook snippets compile where the repository already tests them;
-- repository searches over `lib/`, `t/`, `examples/`, current POD, Changes,
-  and upgrading docs find no unintended `request_app`, public `respond`,
-  `is_response`, old Pages handler export, or Route `raw` usage; and
-- historical design records are exempt from that search.
+- every application utility enforces its declared CODE/object boundary,
+  preserves the exact triplet, and correctly awaits immediate and
+  Future-backed completion without arity inference;
+- functional and object Route construction preserve the original endpoint,
+  declaration order, exact-leaf ownership, middleware order, constraints, and
+  independent compilation;
+- explicit methods, snapshotted `allowed_methods`, GET+HEAD fallback, and
+  scalar `'*'` follow the precedence and validation rules in section 8.3;
+- a routed Endpoint contributes HEAD and OPTIONS, unsupported methods produce
+  Router-owned PARTIAL/405 outcomes, and Allow unions retain deterministic
+  first-seen ordering;
+- WebSocket and SSE endpoints never consult the HTTP method capability;
+- Request handlers return immediate or Future-backed Response and general app
+  values with the documented per-invocation compilation, failure, remaining-
+  body, unchanged-scope, and concurrency behavior;
+- every Response subclass preserves snapshot, HEAD, File, range, Stream,
+  backpressure, disconnect, cancellation, denial, decline, and settlement
+  behavior through `to_app` and `invoke_app`;
+- the final mechanical `respond` removal passes the existing lifecycle and
+  cancellation suites before any later cleanup proceeds;
+- Pages class, configured-instance, subclass, and opt-in export forms produce
+  equivalent deferred behavior, negotiate at invocation, reject old
+  source-first forms, and decline non-HTTP scopes—including lifespan—without
+  emitting protocol events;
+- direct Pages deployment starts under automatic lifespan mode and is rejected
+  under strict lifespan mode;
+- Endpoint::HTTP and all Router frontends share endpoint classification,
+  method capability, app-valued results, and instance-lifetime behavior;
+- every maintained example and tested Tutorial/Cookbook snippet migrates and
+  the apples integration continues covering CRUD, reverse links, welcome,
+  custom default, method outcomes, and constraints; and
+- final searches over current code, examples, POD, Changes, and upgrading docs
+  find no unintended `request_app`, public `respond`, `is_response`, old Pages
+  export, or Route `raw` usage. Historical design records are exempt.
 
 Task-focused tests run after each implementation unit. The repository's full
 suite runs once at the final integration boundary; there is no project-specific
@@ -1377,7 +1410,7 @@ designed separately.
 Aliases would preserve two mental models: source-first immediate response
 construction and source-free deferred application construction. The API is
 unreleased and the examples are migrating together. Removing the old form is
-clearer than carrying an arity-sensitive alias indefinitely.
+clearer than carrying a source-first alias indefinitely.
 
 ## 22. Source references
 
@@ -1389,10 +1422,10 @@ contracts rather than only surface resemblance:
 - [Starlette Endpoints](https://www.starlette.io/endpoints/) documents
   `HTTPEndpoint` and `WebSocketEndpoint` as ASGI applications with method or
   encoding dispatch;
-- [Starlette route source](https://github.com/Kludex/starlette/blob/master/starlette/routing.py)
+- [Starlette route source](https://github.com/Kludex/starlette/blob/main/starlette/routing.py)
   shows the runtime distinction between function/method endpoints and native
   ASGI application callables; and
-- [Starlette response source](https://github.com/Kludex/starlette/blob/master/starlette/responses.py)
+- [Starlette response source](https://github.com/Kludex/starlette/blob/main/starlette/responses.py)
   shows Response, FileResponse, and StreamingResponse as independently
   callable ASGI applications.
 
@@ -1413,9 +1446,12 @@ The design is complete when:
   safe ordinary result;
 - invalid results fail before invocation with a useful diagnostic;
 - direct and dynamic application compilation lifetimes are pinned by tests;
+- Route method resolution follows explicit declaration, snapshotted
+  `allowed_methods`, then GET+HEAD, with Router-owned PARTIAL/405 outcomes;
 - public `Response->respond` and nominal `is_response` dispatch are gone;
 - Pages factories return deferred applications with equivalent class/import
-  styles and preserve negotiation;
+  styles, preserve negotiation, export nothing by default, and decline every
+  non-HTTP scope;
 - Route-versus-Mount path ownership and method defaults are explicit;
 - Endpoint::HTTP and all Router frontends share the contract;
 - middleware uses common application invocation without a redesign;
