@@ -3,9 +3,9 @@
 Patterns for running work after sending a response.
 
 This example deliberately sends responses before starting follow-up work, so
-its App Router declarations use explicit `raw` handlers. Ordinary App handlers
-instead receive `PAGI::Request`, return a Response, and leave emission to the
-shared routing compiler.
+its App Router declarations wrap native three-channel applications with
+`as_app`. Ordinary App handlers instead receive `PAGI::Request`, return an
+application value, and leave invocation to the shared routing compiler.
 
 The final Router is deployed through `compose(app => $router)`. Direct
 `$router->to_app` remains useful as a low-level routing component, and the
@@ -50,7 +50,7 @@ For very fast operations (<10ms) after response - just call directly after `awai
 
 ```perl
 my $response = json_response({ status => 'ok' });
-await $response->respond($scope, $receive, $send);
+await invoke_app($response, $scope, $receive, $send);
 quick_sync_task("log");  # runs after response is sent
 ```
 

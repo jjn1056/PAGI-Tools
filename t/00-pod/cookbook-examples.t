@@ -12,10 +12,12 @@ use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Response qw(text_response);
 use PAGI::Routing qw(mount route router);
+use PAGI::Utils qw(as_app);
 
 {
     package Local::CookbookEndpoint;
     use parent 'PAGI::Endpoint::Router';
+    use PAGI::Utils qw(as_app);
 
     sub routes {
         my ($self, $r) = @_;
@@ -25,7 +27,7 @@ use PAGI::Routing qw(mount route router);
                 return main::text_response('endpoint child');
             });
         })->name('child');
-        $r->get('/native', raw => $self->app_as('native'));
+        $r->get('/native' => as_app($self->app_as('native')));
     }
 
     sub native {
@@ -164,11 +166,11 @@ subtest 'Cookbook publishes the representative final forms' => sub {
         qr/\$main_router->mount\('\/reports', routes => sub \{/,
         'mutable App Router shows the routes callback Mount shorthand');
     like($cookbook,
-        qr/route\('\/files\/\*path', raw => \$file_endpoint/,
-        'raw remains an exact native Route position');
+        qr/route\('\/files\/\*path' => as_app\(\$file_endpoint\)/,
+        'as_app remains the exact native Route marker');
     like($cookbook,
-        qr/\$r->get\('\/download', raw => \$self->app_as\('download'\)\)/,
-        'Endpoint app_as remains explicit');
+        qr/\$r->get\('\/download' => as_app\(\$self->app_as\('download'\)\)\)/,
+        'Endpoint app_as remains explicit beneath as_app');
     like($cookbook,
         qr/outer Router middleware.*Router-mount middleware.*child Router middleware.*inline-mount middleware.*route middleware/s,
         'middleware placement order is published');
@@ -194,7 +196,7 @@ subtest 'representative Cookbook forms construct and dispatch' => sub {
     my $declarative = router(routes => [
         route('/leaf' => sub { return text_response('leaf') },
             middleware => [$factory]),
-        route('/raw', raw => response_app(200, 'raw')),
+        route('/raw' => as_app(response_app(200, 'raw'))),
         mount('/app', app => response_app(200, sub {
             my ($scope) = @_;
             return 'app:' . $scope->{path} . ':' . $scope->{root_path};
@@ -253,7 +255,7 @@ subtest 'representative Cookbook forms construct and dispatch' => sub {
 subtest 'direct Router stays low-level while Compose supplies root safety' => sub {
     my $silent = async sub { return };
     my $router = router(routes => [
-        route('/silent', raw => $silent),
+        route('/silent' => as_app($silent)),
     ]);
 
     my ($direct_events, $direct_error, $direct_warnings) = run_http(

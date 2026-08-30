@@ -24,8 +24,9 @@ symlink is trusted application layout, not request input.
 
 The direct API dispatcher keeps its successful domain payloads as ordinary
 JSON. Missing rooms and unmatched API paths are generic HTTP failures, so those
-branches use `PAGI::Pages->not_found($scope, as => 'json', ...)` and explicitly
-emit the returned Response with `respond($scope, $receive, $send)`. This keeps the raw dispatcher
+branches use `PAGI::Pages->not_found(as => 'json', ...)` and explicitly
+delegate that source-free application with
+`invoke_app($response, $scope, $receive, $send)`. This keeps the native dispatcher
 small while giving its errors the same RFC 9457 shape as the rest of PAGI.
 
 See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)

@@ -33,6 +33,7 @@ use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Response qw(html_response json_response);
 use PAGI::Request;
+use PAGI::Utils qw(as_app invoke_app);
 
 #---------------------------------------------------------
 # PATTERN 1: Async I/O (Non-Blocking)
@@ -142,7 +143,7 @@ sub quick_sync_task {
 #---------------------------------------------------------
 # HTTP Endpoints
 #
-# These are intentionally native raw PAGI applications because they send the
+# These are intentionally native PAGI applications because they send the
 # response before starting follow-up work. Ordinary App Router handlers receive
 # one PAGI::Request and return an unsent PAGI::Response instead.
 #---------------------------------------------------------
@@ -150,7 +151,7 @@ sub quick_sync_task {
 my $router = PAGI::App::Router->new;
 
 # Index page
-$router->get('/', raw => async sub {
+$router->get('/' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
 
     my $response = html_response(<<'HTML');
@@ -189,11 +190,11 @@ document.getElementById('signup').onsubmit = async (e) => {
 </body>
 </html>
 HTML
-    await $response->respond($scope, $receive, $send);
-});
+    await invoke_app($response, $scope, $receive, $send);
+}));
 
 # GOOD: Fire-and-forget async I/O
-$router->get('/async', raw => async sub {
+$router->get('/async' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
 
     # Response goes out immediately
@@ -201,7 +202,7 @@ $router->get('/async', raw => async sub {
         status => 'ok',
         message => 'Response sent! Async tasks running in background.',
     });
-    await $response->respond($scope, $receive, $send);
+    await invoke_app($response, $scope, $receive, $send);
 
     # Fire-and-forget with error logging (on_fail + retain pattern)
     fire_and_forget(send_welcome_email('user@example.com'));
@@ -209,10 +210,10 @@ $router->get('/async', raw => async sub {
 
     # Quick sync work - runs after response is sent (we already awaited above)
     quick_sync_task("Logging request");
-});
+}));
 
 # GOOD: CPU-bound work in subprocess
-$router->get('/blocking', raw => async sub {
+$router->get('/blocking' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
 
     # Response goes out immediately
@@ -220,15 +221,15 @@ $router->get('/blocking', raw => async sub {
         status => 'ok',
         message => 'Response sent! Heavy computation running in subprocess.',
     });
-    await $response->respond($scope, $receive, $send);
+    await invoke_app($response, $scope, $receive, $send);
 
     # Fire-and-forget: runs in child process, doesn't block event loop
     run_blocking_task("heavy_computation", 3);
     run_blocking_task("image_processing", 2);
-});
+}));
 
 # Real-world example: User signup with background tasks
-$router->post('/signup', raw => async sub {
+$router->post('/signup' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
     my $req = PAGI::Request->new($scope, $receive);
 
@@ -240,7 +241,7 @@ $router->post('/signup', raw => async sub {
         status => 'created',
         message => "Account created! Check $email for welcome email.",
     }, status => 201);
-    await $response->respond($scope, $receive, $send);
+    await invoke_app($response, $scope, $receive, $send);
 
     # Fire-and-forget async tasks (non-blocking)
     fire_and_forget(send_welcome_email($email));
@@ -251,7 +252,7 @@ $router->post('/signup', raw => async sub {
 
     # For CPU-intensive work (e.g., generating PDF):
     # run_blocking_task("generate_welcome_pdf", 5);
-});
+}));
 
 # WebSocket with background processing
 $router->mount('/ws', app => async sub {

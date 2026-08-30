@@ -2,34 +2,46 @@
 use strict;
 use warnings;
 
-use Future;
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
-use PAGI::Pages qw(
-    welcome_page redirect_page not_found_page gone_page
+use PAGI::Pages qw(welcome redirect not_found gone);
+use PAGI::Routing qw(router route mount);
+use PAGI::Utils qw(as_app invoke_app);
+
+my $configured_pages = PAGI::Pages->new(
+    as      => 'auto',
+    default => 'text',
 );
-use PAGI::Routing qw(router route mount request_app);
 
 my $routing = router(routes => [
-    route('/' => \&welcome_page, name => 'welcome'),
-    route('/old' => sub {
-        my ($request) = @_;
-        return redirect_page($request, '/new', status => 308);
-    }),
-    route('/missing' => \&not_found_page),
-    mount('/terminal', app => request_app(\&gone_page)),
+    route('/' => welcome(), name => 'welcome'),
+    route('/old' => redirect('/new', status => 308)),
+    route('/missing' => PAGI::Pages->not_found),
+    route('/configured' => $configured_pages->not_found(
+        detail => 'Missing under configured Pages policy',
+    )),
+    mount('/terminal', app => gone(
+        detail => 'This mounted subtree is gone',
+    )),
     route('/request' => sub {
         my ($request) = @_;
-        my $response = not_found_page($request, as => 'text');
-        $response->header('X-Demo' => 'Request response value');
-        return $response;
+        return not_found(
+            as      => 'text',
+            detail  => 'No page at ' . $request->path,
+            headers => ['X-Demo' => 'Request application value'],
+        );
     }),
-    route('/raw', raw => async sub {
+    route('/raw' => as_app(async sub {
         my ($scope, $receive, $send) = @_;
-        my $response = not_found_page($scope, as => 'text');
-        $response->header('X-Demo' => 'raw response value');
-        await Future->wrap($response->respond($scope, $receive, $send));
-    }),
+        await invoke_app(
+            not_found(
+                as      => 'text',
+                detail  => 'Native Route delegated this application',
+                headers => ['X-Demo' => 'Raw application value'],
+            ),
+            $scope, $receive, $send,
+        );
+    })),
 ]);
 
 compose(

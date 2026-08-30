@@ -4,19 +4,20 @@ use File::Basename qw(dirname);
 use lib dirname(__FILE__) . '/lib';
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
-use PAGI::Pages qw(not_found_page);
-use PAGI::Routing qw(:routes request_app);
+use PAGI::Pages qw(not_found);
+use PAGI::Routing qw(:routes);
+use PAGI::Utils qw(request_response);
 use PAGI::Middleware::Helpers qw(wrap_send);
 use MyApp::Routes::Home ();
 
 sub api_not_found {
     my ($request) = @_;
-    return not_found_page($request, detail => 'No API route matched');
+    return not_found(detail => 'No API route matched');
 }
 
 sub root_not_found {
     my ($request) = @_;
-    return not_found_page($request, detail => 'No root route matched');
+    return not_found(detail => 'No root route matched');
 }
 
 my $home_header = sub {
@@ -52,7 +53,7 @@ my $api_routing = router(
         ),
     ],
     desc => 'Example JSON API',
-    http_default => request_app(\&api_not_found),
+    http_default => request_response(\&api_not_found),
 );
 
 my $routing = router(
@@ -69,7 +70,7 @@ my $routing = router(
             desc => 'Example JSON API',
         ),
     ],
-    http_default => request_app(\&root_not_found),
+    http_default => request_response(\&root_not_found),
 );
 
 compose(app => $routing);

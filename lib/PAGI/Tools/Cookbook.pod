@@ -143,9 +143,10 @@ An immutable Router in C<app> is inspectable. Other C<to_app> objects and
 native coderefs are opaque. Either kind may be named or unnamed; the name
 controls reverse-routing hierarchy, not dispatch mode.
 
-A raw route is different again:
+A native Route leaf is different again:
 
-  route('/files/*path', raw => $file_endpoint, methods => ['GET'])
+  use PAGI::Utils qw(as_app);
+  route('/files/*path' => as_app($file_endpoint), methods => ['GET'])
 
 That is one exact/wildcard HTTP leaf. It participates in methods, automatic
 HEAD, partial matching, and names, and receives the original routed path. A
@@ -190,9 +191,9 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   use Types::Standard qw(Int);
 
   use PAGI::Compose qw(compose);
-  use PAGI::Pages qw(welcome_page not_found_page);
+  use PAGI::Pages qw(welcome not_found);
   use PAGI::Response qw(file_response json_response);
-  use PAGI::Routing qw(route mount router request_app);
+  use PAGI::Routing qw(route mount router);
   use PAGI::Routing::URL qw(url_for path_for);
   use PAGI::Utils qw(app_path);
 
@@ -289,13 +290,6 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
       });
   }
 
-  sub root_not_found($request) {
-      return not_found_page(
-          $request,
-          detail => 'That page does not exist in the Apple demo.',
-      );
-  }
-
   compose(
       app => router(
           routes => [
@@ -303,7 +297,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
                   name => 'home',
                   desc => 'Apple manager SPA',
               ),
-              route('/welcome' => \&welcome_page,
+              route('/welcome' => welcome(),
                   name => 'welcome',
                   desc => 'PAGI welcome page',
               ),
@@ -321,10 +315,11 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
                           methods => ['DELETE'], name => 'delete'),
                   ],
                   name => 'apples',
-                  desc => 'Apples API namespace',
               ),
           ],
-          http_default => request_app(\&root_not_found),
+          http_default => not_found(
+              detail => 'That page does not exist in the Apple demo.',
+          ),
       ),
       lifespan => { startup => \&startup },
   );
@@ -339,11 +334,11 @@ not fall through to root siblings. Inside that logical namespace, local
 reverse address C<read> means C</apples/read>; there is no namespace
 deduplication rule.
 
-The root C<http_default> is converted explicitly with C<request_app>. It runs
-only for Router NONE, so an unknown path stays 404 while a known path with the
-wrong method retains the Router's authoritative 405 and Allow field. A
-catch-all Route would be a real FULL/PARTIAL candidate and would change those
-method outcomes.
+The source-free Pages application is placed directly at root
+C<http_default>. It runs only for Router NONE, so an unknown path stays 404
+while a known path with the wrong method retains the Router's authoritative
+405 and Allow field. A catch-all Route would be a real FULL/PARTIAL candidate
+and would change those method outcomes.
 
 =head2 Declarative Middleware Placement and Helpers
 
@@ -1487,7 +1482,7 @@ state in Compose lifespan state, and every declaration inspectable:
       $r->sse('/events' => 'events')->name('events');
 
       # app_as exposes a local native method as one exact raw HTTP leaf.
-      $r->get('/download', raw => $self->app_as('download'));
+      $r->get('/download' => as_app($self->app_as('download')));
 
       # Prefix owners follow written order; the static catch-all stays last.
       $r->mount('/',

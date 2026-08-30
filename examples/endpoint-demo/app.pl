@@ -16,6 +16,7 @@ use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::AccessLog;
 use PAGI::Pages;
+use PAGI::Utils qw(invoke_app);
 
 
 #---------------------------------------------------------
@@ -173,10 +174,12 @@ my $require_json = sub {
             }
 
             unless ($content_type =~ m{application/json}i) {
-                my $response = PAGI::Pages->unsupported_media_type($scope,
+                my $response = PAGI::Pages->unsupported_media_type(
                     as     => 'json',
                     detail => 'Content-Type must be application/json');
-                return await $response->respond($scope, $receive, $send);
+                return await invoke_app(
+                    $response, $scope, $receive, $send,
+                );
             }
         }
 

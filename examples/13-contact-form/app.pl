@@ -9,6 +9,7 @@ use File::Spec;
 use PAGI::Request;
 use PAGI::Response qw(json_response);
 use PAGI::App::File;
+use PAGI::Utils qw(invoke_app);
 
 my $UPLOAD_DIR = File::Spec->catdir(dirname(__FILE__), 'uploads');
 
@@ -39,7 +40,7 @@ my $app = async sub {
     # Route: POST /submit - handle form
     if ($method eq 'POST' && $path eq '/submit') {
         my $response = await _handle_submit($req);
-        return await $response->respond($scope, $receive, $send);
+        return await invoke_app($response, $scope, $receive, $send);
     }
 
     # All other requests: serve static files from public/

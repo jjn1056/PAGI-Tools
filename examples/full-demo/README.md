@@ -101,10 +101,10 @@ ws.onopen = () => ws.send('Hello from browser!');
 ```perl
 # Routing with PAGI::App::Router
 my $router = PAGI::App::Router->new;
-$router->get('/', raw => async sub { ... })->name('hello');
-$router->post('/echo', raw => async sub { ... })->name('echo');
-$router->websocket('/ws/echo', raw => async sub { ... });
-$router->sse('/events', raw => async sub { ... });
+$router->get('/' => as_app(async sub { ... }))->name('hello');
+$router->post('/echo' => as_app(async sub { ... }))->name('echo');
+$router->websocket('/ws/echo' => as_app(async sub { ... }));
+$router->sse('/events' => as_app(async sub { ... }));
 
 # Complete application boundary and lifespan callbacks
 compose(
@@ -117,7 +117,7 @@ compose(
 ```
 
 These handlers intentionally demonstrate the protocol channels directly, so
-each route says `raw`. An ordinary App Router handler would receive
+each native coderef is explicitly marked with `as_app`. An ordinary App Router handler would receive
 `PAGI::Request` and return a Response. The declarations run in exactly the
 order shown. Compose
 keeps the same callbacks and state identity while providing lifecycle,

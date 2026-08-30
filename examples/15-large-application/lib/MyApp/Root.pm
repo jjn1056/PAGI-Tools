@@ -3,10 +3,11 @@ package MyApp::Root;
 use v5.40;
 use PAGI::App::File;
 use PAGI::Compose qw(compose);
-use PAGI::Pages qw(welcome_page not_found_page);
+use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(html_response);
-use PAGI::Routing qw(router route mount request_app);
+use PAGI::Routing qw(router route mount);
 use PAGI::Routing::URL qw(path_for);
+use PAGI::Utils qw(request_response);
 use MyApp::Data;
 use MyApp::Person ();
 use MyApp::View ();
@@ -38,11 +39,11 @@ sub home($request) {
 }
 
 sub pagi($request) {
-    return welcome_page($request);
+    return welcome();
 }
 
 sub root_not_found($request) {
-    return not_found_page($request,
+    return not_found(
         detail => 'No root route matched this path.');
 }
 
@@ -66,7 +67,7 @@ sub routing($class) {
             ),
         ],
         desc => 'MyApp root routes',
-        http_default => request_app(\&root_not_found),
+        http_default => request_response(\&root_not_found),
     );
 }
 

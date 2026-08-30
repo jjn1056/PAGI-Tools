@@ -3,10 +3,11 @@ use parent 'PAGI::Endpoint::Router';
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use PAGI::Pages qw(not_found_page unauthorized_page);
+use PAGI::Pages qw(not_found unauthorized);
 use PAGI::Response qw(html_response json_response);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::State qw(app_state);
+use PAGI::Utils qw(invoke_app);
 
 use MyApp::API::Events;
 
@@ -40,9 +41,9 @@ sub routes {
 
 async sub api_not_found {
     my ($self, $scope, $receive, $send) = @_;
-    my $response = not_found_page($scope,
+    my $response = not_found(
         detail => 'No API Endpoint route matched');
-    await $response->respond($scope, $receive, $send);
+    await invoke_app($response, $scope, $receive, $send);
 }
 
 sub require_demo_token {
@@ -54,10 +55,10 @@ sub require_demo_token {
         return await $inner->($scope, $receive, $send)
             if ($request->header('x-demo-token') // '') eq 'demo-token';
 
-        my $response = unauthorized_page($scope,
+        my $response = unauthorized(
             challenge => 'DemoToken realm="endpoint-router-demo"',
             detail    => 'demo token required');
-        return await $response->respond($scope, $receive, $send);
+        return await invoke_app($response, $scope, $receive, $send);
     };
 }
 
@@ -87,7 +88,7 @@ async sub show {
     my $user_id = $request->path_param('user_id');
     my ($user) = grep { $_->{id} == $user_id } @USERS;
     return html_response("<h1>$user->{name}</h1>") if $user;
-    return not_found_page($request,
+    return not_found(
         detail => 'User not found');
 }
 

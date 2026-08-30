@@ -77,15 +77,15 @@ connection-local subscriber state with the stream that owns it.
 - `PAGI::Middleware::AccessLog` - Request logging
 - Coderef middleware - Request timing, JSON validation
 
-The JSON-validation middleware is a raw PAGI application, so its terminal
-branch constructs a stock response from the request scope and sends it
-explicitly:
+The JSON-validation middleware is a native PAGI application, so its terminal
+branch constructs a source-free stock application and delegates the exact
+channels explicitly:
 
 ```perl
-my $response = PAGI::Pages->unsupported_media_type($scope,
+my $response = PAGI::Pages->unsupported_media_type(
     as     => 'json',
     detail => 'Content-Type must be application/json');
-return await $response->respond($scope, $receive, $send);
+return await invoke_app($response, $scope, $receive, $send);
 ```
 
 Successful endpoint payloads remain application-owned JSON. `PAGI::Pages`

@@ -26,9 +26,9 @@ curl http://localhost:5000/
 Stop the server with Ctrl+C to see the shutdown hook log message.
 
 `handle_lifespan` owns lifecycle scopes. Once the application reaches an HTTP
-scope, it constructs `welcome_page($scope, as => 'text')` and explicitly emits
-that Response with the raw application's full `($scope, $receive, $send)`
-triplet.
+scope, it constructs the source-free `welcome(as => 'text')` application and
+delegates it with `invoke_app` and the native application's exact
+`($scope, $receive, $send)` triplet.
 
 ## Spec References
 

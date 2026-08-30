@@ -2,7 +2,8 @@
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use PAGI::Pages qw(not_found_page);
+use PAGI::Pages qw(not_found);
+use PAGI::Utils qw(invoke_app);
 
 print STDERR "Parent PID: $$\n";
 
@@ -28,8 +29,9 @@ my $app = async sub {
     }
 
     # Default handler for HTTP
-    my $response = not_found_page($scope, as => 'text');
-    return await $response->respond($scope, $receive, $send);
+    return await invoke_app(
+        not_found(as => 'text'), $scope, $receive, $send,
+    );
 };
 
 no warnings 'void';

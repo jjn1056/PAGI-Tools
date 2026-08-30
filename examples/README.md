@@ -55,13 +55,14 @@ raw PAGI protocol details that belong alongside the server implementation.
 10. `endpoint-demo` - high-level HTTP endpoint with `PAGI::Endpoint::HTTP`
 11. `endpoint-router-demo` - composing Endpoint routes with callback children, explicit discoverable child Routers, `app_as`, and `http_default`
 12. `full-demo` - kitchen-sink demo combining multiple toolkit features
-13. `pages` - Compose-rooted `PAGI::Pages` demo covering Welcome, redirects, negotiated HTML/problem JSON/text errors, Route versus Mount, Request-returned Responses, raw full-triplet `respond`, and lifespan
-14. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
-15. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
-16. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
-17. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
+13. `pages` - Compose-rooted `PAGI::Pages` demo covering class/configured/export factories, direct application Routes and Mount, a request-derived application return, native `as_app` plus `invoke_app`, negotiation, and lifespan
+14. `sse-close` - direct `PAGI::SSE` application with an explicit close and client-facing sentinel event
+15. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
+16. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Router-owned routing outcomes
+17. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
 18. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::WebSocket`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
-19. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Router-owned routing outcomes
+19. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
+20. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
 
 **Note on `websocket-chat-v2/public`:** this directory is a symlink to
 `10-chat-showcase/public`. It works in git checkouts but is omitted from the
