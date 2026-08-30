@@ -552,8 +552,12 @@ child scope. Documentation for both constructors must show this contrast.
 
 ### 8.5 Compilation lifetime
 
-Router compilation preserves the declared endpoint and records its normalized
-kind for introspection.
+Router compilation preserves the exact declared endpoint. Route exposes the
+protocol kind (`route`, `websocket`, or `sse`) through `kind`; it does not
+publish a second handler/application classification accessor. Top-level CODE
+versus instantiated-object shape is the canonical endpoint classification,
+and compilation normalizes that value without replacing the declared
+`endpoint` accessor.
 
 - A CODE endpoint is wrapped in one `RequestResponse` component and compiled
   once per enclosing Router `to_app` call.
@@ -1432,6 +1436,13 @@ Aliases would preserve two mental models: source-first immediate response
 construction and source-free deferred application construction. The API is
 unreleased and the examples are migrating together. Removing the old form is
 clearer than carrying a source-first alias indefinitely.
+
+### 21.8 “Endpoint classification needs another accessor”
+
+Declined. The public endpoint value already carries the complete structural
+classification: CODE means a one-argument protocol handler, while an
+instantiated `to_app` object means a native PAGI application. A duplicate
+`endpoint_kind` value could drift and has no current consumer.
 
 ## 22. Source references
 

@@ -284,6 +284,16 @@ normal WebSocket/SSE dispatch awaits the direct protocol handler's completion,
 and application endpoints retain native event ownership. Every middleware
 wrapper remains a native C<($scope, $receive, $send)> application.
 
+The compiled application is a complete routing boundary. A path miss invokes
+the stock negotiated Pages 404. A path match with a method mismatch invokes
+the stock Pages 405 and reasserts the Router-authoritative Allow header. Its
+HEAD boundary preserves calculated headers while suppressing body and file
+delivery. Lifespan completes inertly without reading or sending events.
+
+This direct routing boundary does not install Compose's lifespan orchestration,
+ErrorHandler, or response-completion guard. Deploy through Compose when those
+outer application guarantees are required.
+
 A dynamically returned object's C<to_app> runs once per handler invocation.
 It receives the unchanged scope and remaining body stream, with no body or
 lifespan replay, and remains opaque to the outer Router's reverse and schema
