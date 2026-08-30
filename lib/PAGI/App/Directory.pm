@@ -211,7 +211,9 @@ async sub _send_listing {
     my $accept = $self->_get_header($scope, 'accept') // '';
     if ($accept =~ m{application/json}) {
         my $response = PAGI::Response::JSON->new(\@entries);
-        return await $response->respond($scope, $receive, $send);
+        return await PAGI::Utils::invoke_app(
+            $response, $scope, $receive, $send,
+        );
     }
 
     # HTML listing
@@ -252,7 +254,9 @@ async sub _send_listing {
     $html .= '</table></body></html>';
 
     my $response = PAGI::Response::HTML->new($html);
-    return await $response->respond($scope, $receive, $send);
+    return await PAGI::Utils::invoke_app(
+        $response, $scope, $receive, $send,
+    );
 }
 
 sub _format_size {

@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use Carp qw(croak);
 use JSON::MaybeXS ();
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -171,18 +172,17 @@ async sub _send_error {
     my ($self, $scope, $receive, $send, $status) = @_;
     my $response;
     if ($status == 413) {
-        $response = PAGI::Pages->content_too_large($scope);
+        $response = PAGI::Pages->content_too_large;
     }
     elsif ($status == 400) {
         $response = PAGI::Pages->bad_request(
-            $scope,
             detail => 'The request body is not valid JSON.',
         );
     }
     else {
         die "PAGI::Middleware::JSONBody does not own status $status";
     }
-    await Future->wrap($response->respond($scope, $receive, $send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;

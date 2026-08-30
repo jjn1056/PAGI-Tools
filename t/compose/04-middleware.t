@@ -10,7 +10,7 @@ use ComposeTest qw(scope run_scope);
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
 use PAGI::Response::Text ();
-use PAGI::Routing qw(route middleware request_app router);
+use PAGI::Routing qw(route middleware router);
 
 {
     package ComposeDirectMiddleware;
@@ -301,10 +301,7 @@ subtest 'a retained Router owns its configured HTTP default inside Compose safet
     my $pages = ComposeOwnedPages->new(as => 'text');
     my $routing = router(
         routes => [],
-        http_default => request_app(sub {
-            my ($request) = @_;
-            return $pages->not_found($request);
-        }),
+        http_default => $pages->not_found,
     );
     my $events = run_scope(compose(app => $routing)->to_app,
         scope(path => '/missing'));

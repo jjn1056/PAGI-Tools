@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use PAGI::Response::JSON ();
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -72,7 +73,9 @@ sub to_app {
             status  => $status,
             headers => ['Cache-Control' => 'no-cache'],
         );
-        return await $result->respond($scope, $receive, $send);
+        return await PAGI::Utils::invoke_app(
+            $result, $scope, $receive, $send,
+        );
     };
 }
 

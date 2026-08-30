@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -238,8 +239,8 @@ async sub _send_error {
     my ($self, $scope, $receive, $send, $status) = @_;
     die "PAGI::Middleware::ReverseProxy does not own status $status"
         unless $status == 400;
-    my $response = PAGI::Pages->bad_request($scope);
-    await Future->wrap($response->respond($scope, $receive, $send));
+    my $response = PAGI::Pages->bad_request;
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;

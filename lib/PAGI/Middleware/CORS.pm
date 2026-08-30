@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Response::Empty ();
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -143,7 +144,7 @@ async sub _handle_preflight {
         status  => 204,
         headers => [map { @$_ } @headers],
     );
-    await $response->respond($scope, $receive, $send);
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _add_cors_headers {

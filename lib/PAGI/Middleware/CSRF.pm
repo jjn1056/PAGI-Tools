@@ -9,6 +9,7 @@ use Digest::SHA qw(sha256_hex);
 use PAGI::Utils::Random qw(secure_random_bytes);
 use PAGI::Utils::SecureCompare qw(secure_compare);
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -214,8 +215,8 @@ async sub _send_error {
     my ($self, $scope, $receive, $send, $status) = @_;
     die "PAGI::Middleware::CSRF does not own status $status"
         unless $status == 403;
-    my $response = PAGI::Pages->forbidden($scope);
-    await Future->wrap($response->respond($scope, $receive, $send));
+    my $response = PAGI::Pages->forbidden;
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;

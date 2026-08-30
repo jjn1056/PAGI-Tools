@@ -186,12 +186,11 @@ subtest 'configured built-in statuses must be complete registered Pages errors' 
     }
 };
 
-subtest 'Pages integration adapts the two-argument ErrorHandler seam' => sub {
+subtest 'Pages applications stay distinct from concrete renderer responses' => sub {
     my $middleware = PAGI::Middleware::ErrorHandler->new(
         handler => sub {
             my ($request, $error) = @_;
             return PAGI::Pages->internal_server_error(
-                $request,
                 as => 'json',
             );
         },
@@ -202,14 +201,10 @@ subtest 'Pages integration adapts the two-argument ErrorHandler seam' => sub {
     );
     settle($future);
 
-    ok $future->is_done, 'wrapped Pages renderer completes successfully';
-    is scalar(@$events), 2, 'wrapped Pages renderer completes the response';
-    is $events->[0]{status}, 500, 'Pages renderer emits the error status';
-    is header_value($events->[0], 'content-type'),
-        'application/problem+json', 'configured Pages representation is used';
-    is $events->[1]{type}, 'http.response.body',
-        'Pages renderer emits the response body';
-    is $events->[1]{more}, 0, 'Pages renderer emits a terminal body event';
+    ok $future->is_failed, 'Pages application is not a concrete renderer response';
+    like $future->failure, qr/handler did not return a PAGI::Response/,
+        'renderer keeps its nominal concrete Response contract';
+    is $events, [], 'rejected Pages application emits no response';
 };
 
 subtest 'immediate custom renderer receives and preserves exception status' => sub {

@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -171,8 +172,8 @@ async sub _send_error {
     my ($self, $scope, $receive, $send, $status) = @_;
     die "PAGI::Middleware::FormBody does not own status $status"
         unless $status == 413;
-    my $response = PAGI::Pages->content_too_large($scope);
-    await Future->wrap($response->respond($scope, $receive, $send));
+    my $response = PAGI::Pages->content_too_large;
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;

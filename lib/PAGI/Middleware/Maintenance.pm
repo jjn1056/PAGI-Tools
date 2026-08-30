@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Pages;
 use PAGI::Response;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -185,8 +186,10 @@ async sub _send_maintenance {
         my @options;
         push @options, retry_after => $self->{retry_after}
             if defined $self->{retry_after};
-        my $response = PAGI::Pages->service_unavailable($scope, @options);
-        await Future->wrap($response->respond($scope, $receive, $send));
+        my $response = PAGI::Pages->service_unavailable(@options);
+        await PAGI::Utils::invoke_app(
+            $response, $scope, $receive, $send,
+        );
         return;
     }
 
@@ -200,7 +203,7 @@ async sub _send_maintenance {
         content_type => $self->{content_type},
         headers      => \@headers,
     );
-    await Future->wrap($response->respond($scope, $receive, $send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _default_body {

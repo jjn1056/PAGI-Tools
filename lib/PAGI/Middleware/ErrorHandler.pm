@@ -10,6 +10,7 @@ use Future::AsyncAwait;
 use Scalar::Util 'blessed';
 use PAGI::Request;
 use PAGI::Pages ();
+use PAGI::Utils ();
 
 my %PUBLIC_OPTION = map { $_ => 1 } qw(development on_error status handler);
 
@@ -188,7 +189,7 @@ sub wrap {
 
                 my $rendered = eval {
                     $response = PAGI::Pages->status(
-                        $request, $status, @detail,
+                        $status, @detail,
                     );
                     1;
                 };
@@ -198,12 +199,11 @@ sub wrap {
                 }
             }
 
-            await Future->wrap(
-                $response->respond(
-                    $request_scope,
-                    $receive,
-                    $wrapped_send,
-                ),
+            await PAGI::Utils::invoke_app(
+                $response,
+                $request_scope,
+                $receive,
+                $wrapped_send,
             );
         }
     };
@@ -239,15 +239,7 @@ async sub _development_for_request {
 sub _pages_accepts_status {
     my ($self, $status) = @_;
     return eval {
-        PAGI::Pages->status({
-            type         => 'http',
-            method       => 'GET',
-            path         => '/',
-            root_path    => '',
-            query_string => '',
-            headers      => [],
-            http_version => '1.1',
-        }, $status);
+        PAGI::Pages->status($status);
         1;
     } ? 1 : 0;
 }

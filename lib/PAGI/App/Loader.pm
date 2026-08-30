@@ -6,6 +6,7 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -54,8 +55,8 @@ sub to_app {
 async sub _send_load_failure {
     my ($self, $scope, $receive, $send) = @_;
 
-    my $response = PAGI::Pages->internal_server_error($scope);
-    await Future->wrap($response->respond($scope, $receive, $send));
+    my $response = PAGI::Pages->internal_server_error;
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _get_app {

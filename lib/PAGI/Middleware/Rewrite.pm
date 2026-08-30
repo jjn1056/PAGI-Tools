@@ -7,6 +7,7 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Response::Redirect ();
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -155,7 +156,7 @@ async sub _send_redirect {
         ),
         status => $self->{redirect_code},
     );
-    await Future->wrap($response->respond($scope, $receive, $send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;

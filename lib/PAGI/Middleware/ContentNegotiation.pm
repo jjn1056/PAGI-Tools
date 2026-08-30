@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Pages;
 use PAGI::Request::Negotiate;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -133,10 +134,9 @@ async sub _send_not_acceptable {
 
     my $supported = join(', ', @{$self->{supported_types}});
     my $response = PAGI::Pages->not_acceptable(
-        $scope,
         detail => "Not Acceptable. Supported types: $supported",
     );
-    await Future->wrap($response->respond($scope, $receive, $send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;

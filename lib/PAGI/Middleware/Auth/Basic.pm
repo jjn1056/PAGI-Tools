@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use MIME::Base64 qw(decode_base64);
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -166,9 +167,9 @@ async sub _send_unauthorized {
     my $realm = $self->_quote_realm;
     my $challenge = qq{Basic realm="$realm", charset="UTF-8"};
     my $response = PAGI::Pages->unauthorized(
-        $scope, challenge => $challenge,
+        challenge => $challenge,
     );
-    await Future->wrap($response->respond($scope, $receive, $send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _get_header {

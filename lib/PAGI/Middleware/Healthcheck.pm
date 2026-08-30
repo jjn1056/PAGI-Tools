@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Response::JSON ();
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -113,7 +114,7 @@ async sub _send_live {
         status  => 200,
         headers => ['Cache-Control' => 'no-cache, no-store'],
     );
-    await $response->respond($scope, $receive, $send);
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 async sub _send_ready {
@@ -132,7 +133,7 @@ async sub _send_ready {
         status  => $status,
         headers => ['Cache-Control' => 'no-cache, no-store'],
     );
-    await $result->respond($scope, $receive, $send);
+    await PAGI::Utils::invoke_app($result, $scope, $receive, $send);
 }
 
 async sub _send_health {
@@ -152,7 +153,7 @@ async sub _send_health {
         status  => $status,
         headers => ['Cache-Control' => 'no-cache, no-store'],
     );
-    await $result->respond($scope, $receive, $send);
+    await PAGI::Utils::invoke_app($result, $scope, $receive, $send);
 }
 
 sub _run_checks {

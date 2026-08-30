@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use IO::Socket::INET;
 use PAGI::Headers;
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -149,8 +150,8 @@ sub _connect_backend {
 async sub _send_bad_gateway {
     my ($self, $scope, $receive, $send) = @_;
 
-    my $response = PAGI::Pages->bad_gateway($scope);
-    await Future->wrap($response->respond($scope, $receive, $send));
+    my $response = PAGI::Pages->bad_gateway;
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;

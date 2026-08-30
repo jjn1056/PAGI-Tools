@@ -9,6 +9,7 @@ use JSON::MaybeXS ();
 use MIME::Base64 qw(decode_base64url);
 use Digest::SHA qw(hmac_sha256);
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -262,11 +263,10 @@ async sub _send_unauthorized {
     my $realm = $self->_quote_realm;
     my $challenge = qq{Bearer realm="$realm"};
     my $response = PAGI::Pages->unauthorized(
-        $scope,
         challenge => $challenge,
         detail    => $error,
     );
-    await Future->wrap($response->respond($scope, $receive, $send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _get_header {

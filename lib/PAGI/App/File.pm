@@ -442,11 +442,13 @@ sub _get_header {
 
 async sub _respond_page {
     my ($scope, $send, $method, @options) = @_;
-    my $response = PAGI::Pages->$method($scope, @options);
+    my $response = PAGI::Pages->$method(@options);
     my $receive = sub {
         return Future->done({ type => 'http.disconnect' });
     };
-    return await Future->wrap($response->respond($scope, $receive, $send));
+    return await PAGI::Utils::invoke_app(
+        $response, $scope, $receive, $send,
+    );
 }
 
 1;

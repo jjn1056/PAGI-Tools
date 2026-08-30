@@ -13,6 +13,7 @@ use PAGI::Exception::IncompleteResponse;
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route mount);
 use PAGI::Test::Client;
+use PAGI::Utils qw(as_app);
 
 sub run_request {
     my ($app, $request_scope) = @_;
@@ -186,7 +187,9 @@ subtest 'selected silent targets become production-safe 500 through Test Client'
         ['native app', compose(app => sub { return })->to_app, scope()],
         [
             'selected raw route',
-            compose(routes => [route('/raw', raw => sub { return })])->to_app,
+            compose(routes => [
+                route('/raw' => as_app(sub { return })),
+            ])->to_app,
             scope(path => '/raw'),
         ],
         [

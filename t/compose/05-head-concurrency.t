@@ -12,6 +12,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Response::Empty ();
 use PAGI::Response::Text ();
 use PAGI::Routing qw(route middleware router);
+use PAGI::Utils qw(as_app);
 
 sub response_header {
     my ($events, $name) = @_;
@@ -106,7 +107,7 @@ subtest 'application middleware derives HEAD headers from the full body' => sub 
 subtest 'Router middleware derives identical GET and HEAD representation metadata' => sub {
     my $routing = router(
         routes => [
-            route('/representation', raw => async sub {
+            route('/representation' => as_app(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type => 'http.response.start', status => 200, headers => [],
@@ -114,7 +115,7 @@ subtest 'Router middleware derives identical GET and HEAD representation metadat
                 await $send->({
                     type => 'http.response.body', body => 'representation', more => 0,
                 });
-            }),
+            })),
         ],
         middleware => [deriving_body_length()],
     );
@@ -183,7 +184,7 @@ subtest 'Router outcomes and root errors retain derived headers under HEAD' => s
 subtest 'sendfile length is available before HEAD wire suppression' => sub {
     my $routing = router(
         routes => [
-            route('/file', raw => async sub {
+            route('/file' => as_app(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type => 'http.response.start', status => 200, headers => [],
@@ -192,7 +193,7 @@ subtest 'sendfile length is available before HEAD wire suppression' => sub {
                     type => 'http.response.body', file => '/tmp/example',
                     offset => 4, length => 37,
                 });
-            }),
+            })),
         ],
         middleware => [deriving_body_length()],
     );
@@ -237,13 +238,13 @@ subtest 'an explicit HEAD route can avoid its expensive GET sibling' => sub {
 subtest 'Compose HEAD boundary is idempotent with a Router direct boundary' => sub {
     my $child = router(
         routes => [
-            route('/item', raw => async sub {
+            route('/item' => as_app(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({ type => 'http.response.start', status => 200, headers => [] });
                 await $send->({
                     type => 'http.response.body', body => 'child representation', more => 0,
                 });
-            }),
+            })),
         ],
         middleware => [middleware('ContentLength')],
     );
