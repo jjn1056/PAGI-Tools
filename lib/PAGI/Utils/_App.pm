@@ -5,11 +5,13 @@ use warnings;
 
 sub new {
     my ($class, $app) = @_;
-    return bless { app => $app }, $class;
+    my $self = bless \$app, $class;
+    Internals::SvREADONLY($$self, 1);
+    return $self;
 }
 
 sub to_app {
-    return $_[0]->{app};
+    return ${$_[0]};
 }
 
 1;

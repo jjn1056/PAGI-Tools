@@ -325,9 +325,9 @@ sub to_app {
 }
 
 sub as_app {
+    croak 'as_app() requires exactly one native coderef'
+        unless @_ == 1 && ref($_[0]) eq 'CODE';
     my ($code) = @_;
-    croak 'as_app() requires a native coderef'
-        unless ref($code) eq 'CODE';
     return PAGI::Utils::_App->new($code);
 }
 

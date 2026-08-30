@@ -31,6 +31,41 @@ subtest 'as_app puts a native CODE in an object application position' => sub {
     is(to_app($component), $native, 'as_app exposes the exact native app');
 };
 
+subtest 'as_app requires exactly one native CODE' => sub {
+    my $native = sub { return };
+
+    like(dies { as_app() }, qr/as_app\(\) requires exactly one native coderef/,
+        'as_app rejects no argument');
+    like(dies { as_app($native, 'extra') },
+        qr/as_app\(\) requires exactly one native coderef/,
+        'as_app rejects extra arguments');
+
+    for my $case (
+        [undef, 'undefined'],
+        ['not a coderef', 'a scalar'],
+        [{}, 'a hash reference'],
+    ) {
+        like(dies { as_app($case->[0]) },
+            qr/as_app\(\) requires exactly one native coderef/,
+            "as_app rejects $case->[1]");
+    }
+};
+
+subtest 'as_app keeps its wrapped CODE opaque to caller mutation' => sub {
+    my $native = sub { return 'native' };
+    my $replacement = sub { return 'replacement' };
+    my $component = as_app($native);
+
+    my $mutation_succeeded = eval {
+        $component->{app} = $replacement;
+        1;
+    };
+
+    ok(!$mutation_succeeded, 'callers cannot replace the wrapped CODE');
+    is(to_app($component), $native,
+        'to_app retains the exact originally wrapped CODE');
+};
+
 subtest 'invoke_app preserves the exact application triplet' => sub {
     my $seen;
     my $native = async sub {
