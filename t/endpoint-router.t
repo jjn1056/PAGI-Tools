@@ -14,6 +14,7 @@ use PAGI::Response ();
 use PAGI::Response::Text ();
 use PAGI::Test::Client ();
 use PAGI::Compose qw(compose);
+use PAGI::Utils qw(as_app);
 use TestApps::AppPath::Endpoint ();
 
 sub scope {
@@ -178,6 +179,9 @@ sub run_scope {
         my $legacy = $self->app_as('legacy_app');
         $self->{legacy_app} = $legacy;
         $r->mount('/legacy', app => $legacy);
+        my $native_route = PAGI::Utils::as_app($legacy);
+        $self->{native_route} = $native_route;
+        $r->get('/native-route' => $native_route);
         my $array_routes = [
             route('/leaf' => sub {
                 $self->{array_coderef_arity} = scalar @_;
@@ -247,8 +251,8 @@ sub run_scope {
             if $self->{mode} eq 'mount-string';
         return $r->http_default('native')
             if $self->{mode} eq 'default-string';
-        return $r->get('/bad', raw => 'native')
-            if $self->{mode} eq 'raw-string';
+        return $r->get('/bad', 'not_a_method')
+            if $self->{mode} eq 'route-string';
     }
 }
 
@@ -367,6 +371,9 @@ subtest 'the Endpoint facade follows the App Router composition grammar' => sub 
     my ($legacy_mount) = grep { $_->path eq '/legacy' } @{$routing->routes};
     is(refaddr($legacy_mount->app), refaddr($endpoint->{legacy_app}),
         'an app Mount value passes through unchanged');
+    my ($native_route) = grep { $_->path eq '/native-route' } @{$routing->routes};
+    is(refaddr($native_route->endpoint), refaddr($endpoint->{native_route}),
+        'app_as native code is explicitly wrapped at a Route position');
 
     my $client = PAGI::Test::Client->new(app => $routing->to_app);
     is($client->get('/')->text, 'index', 'root method handler dispatches');
@@ -381,6 +388,8 @@ subtest 'the Endpoint facade follows the App Router composition grammar' => sub 
     isa_ok($endpoint->{coderef_context}, 'PAGI::Request');
     is($client->get('/legacy/anything')->text, 'legacy app',
         'app_as supplies an opaque Mount application');
+    is($client->get('/native-route')->text, 'legacy app',
+        'an explicitly wrapped app_as native application owns its Route');
     is($client->get('/missing')->text, 'endpoint default',
         'app_as supplies the Router HTTP default application');
     is($client->get('/array/leaf')->text, 'array leaf',
@@ -388,6 +397,7 @@ subtest 'the Endpoint facade follows the App Router composition grammar' => sub 
     is($endpoint->{array_coderef_arity}, 1,
         'an arrayref route coderef remains an ordinary Request handler');
     is([map { [$_->[0], $_->[1], $_->[2]] } @{$endpoint->{native_calls}}], [
+        ['legacy app', $identity, 4],
         ['legacy app', $identity, 4],
         ['endpoint default', $identity, 4],
     ], 'native methods receive the same self plus exactly three PAGI channels');
@@ -400,7 +410,7 @@ subtest 'Endpoint native positions do not bind handler strings or old Mount form
         [router => qr/unknown mount option 'router'/],
         ['mount-string' => qr/mount app must be a coderef or instantiated object with to_app/],
         ['default-string' => qr/router http_default must be a coderef or instantiated object with to_app/],
-        ['raw-string' => qr/raw application must be a coderef or instantiated object with to_app/],
+        ['route-string' => qr/has no handler method "not_a_method"/],
     );
     for my $case (@cases) {
         my ($mode, $pattern) = @$case;
@@ -538,8 +548,8 @@ subtest 'handler validation is early and HTTP response validation stays shared' 
     my $bad = Local::BadResponse->to_app;
     like(dies {
         run_scope($bad, scope(path => '/bad', raw_path => '/bad'));
-    }, qr/handler did not return a response/,
-        'shared HTTP adapter retains its response diagnostic');
+    }, qr/request endpoint must return a PAGI application/,
+        'shared HTTP adapter retains its application diagnostic');
 };
 
 {
@@ -660,27 +670,6 @@ subtest 'Endpoint preserves absent and caller-supplied state' => sub {
         'Request retains caller state identity');
     is(refaddr($stateful_scope->{state}), refaddr($state),
         'Endpoint does not replace caller-owned scope state');
-};
-
-subtest 'Compose exposes server-owned lifespan state' => sub {
-    my $endpoint = bless {}, 'Local::HelperEndpoint';
-
-    my $state = {};
-    my $composed = compose(
-        app => $endpoint->to_app,
-        lifespan => { startup => sub { $_[0]{server_value} = 'ready' } },
-    )->to_app;
-    my @messages = ({ type => 'lifespan.startup' }, { type => 'lifespan.shutdown' });
-    $composed->(
-        scope(type => 'lifespan', state => $state),
-        sub { return Future->done(shift @messages) },
-        sub { return Future->done },
-    )->get;
-    run_scope($composed, scope(path => '/state', raw_path => '/state', state => $state));
-    is($endpoint->{request_state}->get('server_value'), 'ready',
-        'Request sees the server state populated through Compose lifespan');
-    is(refaddr($endpoint->{request_state}->data), refaddr($state),
-        'server-owned state identity is retained');
 };
 
 done_testing;

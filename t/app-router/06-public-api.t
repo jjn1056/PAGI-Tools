@@ -52,20 +52,20 @@ subtest 'the public class is only the mutable Builder facade' => sub {
     );
 };
 
-subtest 'raw package names are rejected before declaration or loading' => sub {
+subtest 'application package names are rejected before declaration or loading' => sub {
     for my $leaf (qw(get websocket sse)) {
         my $router = PAGI::App::Router->new;
         delete $INC{'TestRoutes/Admin.pm'};
 
         like(
-            dies { $router->$leaf('/blocked', raw => 'TestRoutes::Admin') },
-            qr/raw application must be a coderef or instantiated object with to_app/,
-            "$leaf rejects a raw package name at declaration time",
+            dies { $router->$leaf('/blocked', 'TestRoutes::Admin') },
+            qr/route endpoint must be a coderef or instantiated object with to_app/,
+            "$leaf rejects an application package name at declaration time",
         );
         ok(!exists $INC{'TestRoutes/Admin.pm'},
             "$leaf does not load the rejected package");
         is($router->_declarations, [],
-            "$leaf does not retain a rejected raw declaration");
+            "$leaf does not retain a rejected application declaration");
     }
 };
 

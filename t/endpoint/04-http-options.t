@@ -10,6 +10,7 @@ use PAGI::Endpoint::HTTP;
 use PAGI::Request;
 use PAGI::Response;
 use PAGI::Response::Empty ();
+use PAGI::Test::Client ();
 
 package CRUDEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
@@ -53,10 +54,8 @@ subtest 'OPTIONS returns allowed methods' => sub {
 };
 
 subtest '405 response includes Allow header' => sub {
-    my $request = $make_request->('PATCH');
     my $endpoint = CRUDEndpoint->new;
-
-    my $response = $endpoint->dispatch($request)->get;
+    my $response = PAGI::Test::Client->new(app => $endpoint->to_app)->patch('/test');
 
     is($response->status, 405, '405 status for unimplemented method');
     my $allow = $response->header('Allow');

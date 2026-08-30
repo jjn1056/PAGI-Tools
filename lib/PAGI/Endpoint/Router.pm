@@ -108,6 +108,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
     use PAGI::Response::JSON ();
     use PAGI::Response::Text ();
     use PAGI::Routing qw(middleware);
+    use PAGI::Utils qw(as_app);
 
     sub new {
         my ($class, %args) = @_;
@@ -124,7 +125,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
             $self->{configured_middleware},
             middleware('Session', cookie_name => 'sid'),
         ] => 'show')->name('show');
-        $r->get('/download', raw => $self->app_as('download'));
+        $r->get('/download', as_app($self->app_as('download')));
         $r->websocket('/chat/{room}' => 'chat')->name('chat');
         $r->sse('/events' => 'events')->name('events');
         $r->mount('/admin', routes => sub {
@@ -246,30 +247,25 @@ errors; handler strings never load packages.
 
 A handler coderef passes to the shared App Router unmodified. It receives only
 the ordinary protocol-specific object and is never rebound to the Endpoint.
-HTTP handlers return an immediate Response or a Future resolving to one.
+HTTP handlers return an immediate application value or a Future resolving to
+one.
 WebSocket and SSE handlers use their protocol-object operations and may complete
 immediately or through a Future. All response validation and protocol events
 belong to the shared compiler.
 
-=head1 RAW LEAVES
+=head1 APPLICATION LEAVES
 
-Endpoint accepts the same explicit native leaf grammar as App Router, after
-the optional positional middleware array:
+Endpoint accepts application objects at leaf positions after the optional
+positional middleware array. Wrap a native closure from C<app_as> explicitly:
 
-    $r->get('/raw-http' => [
+    $r->get('/native-http' => [
         $self->middleware_as('audit'),
-    ], raw => $native_http_app);
-    $r->websocket('/raw-ws', raw => $native_ws_app);
-    $r->sse('/raw-events', raw => $native_sse_app);
+    ], as_app($self->app_as('native_http')));
 
-The C<raw> marker and native application coderef pass unchanged to the shared
-App builder. The target receives exactly C<($scope, $receive, $send)> and owns
-its protocol events; route middleware still wraps that native application.
-Malformed raw declarations fail synchronously with raw-target diagnostics.
-
-An ordinary method-name target binds C<($endpoint, $protocol)>. An ordinary
-handler coderef passes through unchanged and receives one protocol object.
-Neither form becomes raw without the explicit marker.
+The application owns the native C<($scope, $receive, $send)> channels and
+route middleware still wraps it. An ordinary method-name target binds
+C<($endpoint, $protocol)>. An ordinary handler coderef passes through
+unchanged and receives one protocol object.
 
 =head1 MIDDLEWARE
 
@@ -308,16 +304,17 @@ immediately. Constructing the helper performs no protocol I/O.
 =head2 app_as
 
     my $app = $endpoint->app_as('native_app');
-    $r->get('/download', raw => $endpoint->app_as('native_app'));
+    $r->get('/download', as_app($endpoint->app_as('native_app')));
     $r->mount('/legacy', app => $endpoint->app_as('native_app'));
     $r->http_default($endpoint->app_as('not_found_app'));
 
 Validates the method and returns a native application closure. When invoked,
 the method receives C<($endpoint, $scope, $receive, $send)>. The helper is
-useful as the target of an exact raw leaf, an opaque mount, or another native
-composition boundary, including C<http_default>, and does no work merely by
-being constructed. A raw leaf remains method-aware and keeps its matched path;
-an opaque mount owns and rewrites a matched prefix.
+useful as the source for an explicitly wrapped application leaf, an opaque
+mount, or another native composition boundary, including C<http_default>, and
+does no work merely by being constructed. An application leaf remains
+method-aware and keeps its matched path; an opaque mount owns and rewrites a
+matched prefix.
 
 =head1 REQUEST AND STATE
 

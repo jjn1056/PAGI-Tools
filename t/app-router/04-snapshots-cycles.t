@@ -110,7 +110,7 @@ subtest 'snapshots are immutable, root-local, and fresh' => sub {
     is([map { $_->path } @{$second->routes}], ['/one', '/two'],
         'a later snapshot sees the later declaration in written order');
     is(PAGI::Test::Client->new(
-        app => compose(app => $first)->to_app,
+        app => $first->to_app,
     )->get('/two')->status, 404,
         'the retained first snapshot cannot dispatch a later mutation');
     is(PAGI::Test::Client->new(app => $second->to_app)->get('/two')->text, 'two',
@@ -126,19 +126,19 @@ subtest 'mutable frontends are valid opaque app values without name discovery' =
     $opaque_child->get('/before' => handler('opaque before'));
     $parent->mount('/opaque', app => $opaque_child)->name('opaque');
 
-    my $raw_child = PAGI::App::Router::Builder->new;
-    $raw_child->get('/before' => handler('raw before'));
-    $parent->get('/raw', raw => $raw_child)->name('raw');
+    my $endpoint_child = PAGI::App::Router::Builder->new;
+    $endpoint_child->get('/before' => handler('endpoint before'));
+    $parent->get('/endpoint', $endpoint_child)->name('endpoint');
 
     my $snapshot = $parent->to_router;
     is(refaddr($snapshot->routes->[1]->app), refaddr($opaque_child),
         'opaque Mount retains the mutable application by identity');
-    is(refaddr($snapshot->routes->[2]->target), refaddr($raw_child),
-        'raw Route retains the mutable application by identity');
+    is(refaddr($snapshot->routes->[2]->endpoint), refaddr($endpoint_child),
+        'Route retains the mutable application by identity');
     is($snapshot->route_named('/opaque/before'), undef,
         'opaque mutable Mount internals are not discovered');
-    is($snapshot->route_named('/raw'), $snapshot->routes->[2],
-        'the raw leaf itself remains discoverable');
+    is($snapshot->route_named('/endpoint'), $snapshot->routes->[2],
+        'the application-valued leaf itself remains discoverable');
 };
 
 subtest 'one immutable child Router is reusable at named sibling placements' => sub {
@@ -261,7 +261,7 @@ subtest 'to_app materializes once and compiles the retained snapshot' => sub {
     return unless router_methods_exist($builder);
     $builder->get('/item' => handler('item'));
     my $root_app = $builder->to_app;
-    my $app = compose(app => $root_app)->to_app;
+    my $app = $root_app;
     is($builder->{to_router_calls}, 1, 'to_app calls to_router exactly once');
     $builder->get('/late' => handler('late'));
     my $client = PAGI::Test::Client->new(app => $app);

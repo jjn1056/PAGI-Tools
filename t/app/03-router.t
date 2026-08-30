@@ -34,7 +34,7 @@ sub body {
 subtest 'basic App routing returns Responses through the shared compiler' => sub {
     my $router = PAGI::App::Router->new;
     $router->get('/users' => sub { return PAGI::Response::Text->new('Users list') });
-    my $app = compose(app => $router)->to_app;
+    my $app = $router->to_app;
 
     my $matched = invoke($app, path => '/users');
     is([$matched->[0]{status}, body($matched)], [200, 'Users list'],

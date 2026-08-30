@@ -39,14 +39,9 @@ PAGI::App::Router - Mutable declarations for the immutable PAGI router
     my $people = PAGI::App::Router->new;
     $people->get('/{id}' => \&show)->name('show');
 
-    my $not_found = async sub {
-        my ($scope, $receive, $send) = @_;
-        my $response = PAGI::Pages->not_found(
-            $scope,
-            detail => 'No public route matched.',
-        );
-        await $response->respond($scope, $receive, $send);
-    };
+    my $not_found = PAGI::Pages->not_found(
+        detail => 'No public route matched.',
+    );
 
     my $r = PAGI::App::Router->new(
         desc         => 'Public routes',
@@ -90,10 +85,11 @@ application or protocol channel.
     $r->any('/health' => \&health);
     $r->route('/rpc' => \&rpc, methods => ['RPC']);
 
-An ordinary HTTP target must be a coderef. It receives exactly one
-L<PAGI::Request> and returns an immediate or Future-backed concrete
-L<PAGI::Response> value such as L<PAGI::Response::Text> or
-L<PAGI::Response::JSON>.
+An HTTP endpoint may be a coderef or an instantiated application object. A
+coderef receives exactly one L<PAGI::Request> and returns an immediate or
+Future-backed application value, such as L<PAGI::Response::Text>,
+L<PAGI::Response::JSON>, or L<PAGI::Pages::Application>. An object endpoint
+is compiled through its C<to_app> method.
 GET includes automatic HEAD qualification. An explicit HEAD is an ordinary
 declaration; place it before GET when it should win.
 
@@ -106,20 +102,20 @@ Ordinary protocol handlers likewise receive exactly one
 L<PAGI::WebSocket> or L<PAGI::SSE>. Their completion value is awaited but is
 not interpreted as a wire event.
 
-=head2 Raw routes
+=head2 Native applications at routes
 
-    $r->get('/raw', raw => $native_http_app);
-    $r->websocket('/raw-ws', raw => $websocket_component);
-    $r->sse('/raw-events', raw => $sse_component);
+    use PAGI::Utils qw(as_app);
 
-A raw target receives the native C<($scope, $receive, $send)> channels. It must
-be a coderef or an instantiated object with C<to_app>. Package-name strings
-are never loaded as applications. An object is compiled once per enclosing
-C<to_app> call and its C<to_app> method must return a coderef.
+    $r->get('/native', as_app($native_http_app));
+    $r->websocket('/native-ws', as_app($websocket_app));
+    $r->sse('/native-events', as_app($sse_app));
 
-Raw changes only the selected exact leaf's invocation contract. It does not
-make ordinary handlers application objects, and it does not consume a path
-prefix.
+An application object at a leaf owns the native
+C<($scope, $receive, $send)> channels. Native coderefs must be explicitly
+wrapped with C<as_app>; unwrapped coderefs remain direct protocol handlers.
+Package-name strings are never loaded as applications. An object is compiled
+once per enclosing C<to_app> call and its C<to_app> method must return a
+coderef.
 
 =head2 Mounts
 

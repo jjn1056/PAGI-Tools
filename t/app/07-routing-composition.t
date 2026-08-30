@@ -409,16 +409,6 @@ subtest 'URLMap keeps Router applications opaque but complete' => sub {
     is(response_start($default_missing)->{status}, 404,
         'the default child owns its negotiated 404');
 
-    local $ENV{PAGI_ENV} = 'production';
-    my ($composed, $composed_error, $warnings) = run_app(
-        compose(app => $map)->to_app,
-        scope(path => '/api/missing'),
-    );
-    is($composed_error, undef, 'outer Compose passes the child Router outcome');
-    is($warnings, [], 'a complete child 404 emits no lifecycle warning');
-    is(response_start($composed)->{status}, 404,
-        'Compose does not replace the selected child outcome');
-
     my $unrelated = {};
     my $selected_metadata = {
         version => 1,

@@ -173,28 +173,24 @@ sub _add_route_from {
 
     croak 'route requires a target' unless @args;
 
-    my ($target, $is_raw);
-    if (defined $args[0] && !ref($args[0]) && $args[0] eq 'raw') {
-        shift @args;
-        croak 'raw target must be defined' unless @args && defined $args[0];
-        $target = shift @args;
-        PAGI::Utils::_validate_app_value($target, 'raw application');
-        $is_raw = 1;
-    }
-    else {
-        $target = shift @args;
-        croak 'route requires a target' unless defined $target;
-        croak 'handler must be a coderef' unless ref($target) eq 'CODE';
-        $is_raw = 0;
-    }
+    my $endpoint = shift @args;
+    croak 'route requires a target' unless defined $endpoint;
+    PAGI::Utils::_validate_app_value($endpoint, 'route endpoint');
 
     my $opts = _option_hash('route', @args);
     if ($kind eq 'route' && !defined $methods) {
-        croak 'route requires methods option' unless exists $opts->{methods};
+        if (!exists $opts->{methods}) {
+            if (ref($endpoint) ne 'CODE' && $endpoint->can('allowed_methods')) {
+                $methods = [$endpoint->allowed_methods];
+            }
+            else {
+                croak 'route requires methods option';
+            }
+        }
         for my $key (keys %$opts) {
             croak "unknown route option '$key'" unless $key eq 'methods';
         }
-        $methods = $opts->{methods};
+        $methods = $opts->{methods} if exists $opts->{methods};
     }
     else {
         for my $key (keys %$opts) {
@@ -216,8 +212,7 @@ sub _add_route_from {
         node_kind           => $kind,
         declaration_package => $package,
         path                => $path,
-        target              => $target,
-        is_raw              => $is_raw,
+        endpoint            => $endpoint,
         methods             => $stored_methods,
         middleware          => $descriptions,
         name                => undef,
@@ -333,9 +328,7 @@ sub _materialize_nodes {
             $record->{declaration_package},
             $record->{node_kind},
             $record->{path},
-            ($record->{is_raw}
-                ? ('raw', $record->{target})
-                : ($record->{target})),
+            $record->{endpoint},
             (defined $record->{name} ? (name => $record->{name}) : ()),
             (defined $record->{desc} ? (desc => $record->{desc}) : ()),
             (defined $record->{methods} ? (methods => $record->{methods}) : ()),
@@ -437,13 +430,14 @@ target, or Mount mode flag. Callback children materialize through the same
 root-local Materializer; arrays are passed to declarative Mount C<routes> so
 that Mount constructs their real child Router.
 
-Middleware and native application shapes normalize when declarations are
-recorded. Normal targets are direct-protocol handler coderefs: HTTP receives
-L<PAGI::Request>, WebSocket receives L<PAGI::WebSocket>, and SSE receives
-L<PAGI::SSE>. Explicit C<raw>, Mount C<app>, and C<http_default> positions use
-the shared coderef-or-instantiated-C<to_app> contract. Mutable frontend objects
-are valid opaque application values; callers explicitly use C<to_router> when
-parent reverse inspection must discover their names.
+Middleware and application shapes normalize when declarations are recorded.
+Leaf endpoints, Mount C<app>, and C<http_default> positions use the shared
+coderef-or-instantiated-C<to_app> contract. A coderef leaf is an ordinary
+protocol handler: HTTP receives L<PAGI::Request>, WebSocket receives
+L<PAGI::WebSocket>, and SSE receives L<PAGI::SSE>. Use C<as_app> to place a
+native three-channel coderef at a leaf. Mutable frontend objects are valid
+opaque application values; callers explicitly use C<to_router> when parent
+reverse inspection must discover their names.
 
 Each C<to_router> call creates an independent immutable root snapshot.
 C<to_app> compiles exactly one retained snapshot. The public

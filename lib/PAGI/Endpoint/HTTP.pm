@@ -6,11 +6,11 @@ use warnings;
 use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
+use Scalar::Util qw(blessed);
 use PAGI::Pages;
 use PAGI::Request;
-use PAGI::Response;
 use PAGI::Response::Empty ();
-use PAGI::Utils qw(is_response);
+use PAGI::Utils qw(invoke_app);
 
 sub new {
     my ($class, %args) = @_;
@@ -37,45 +37,46 @@ async sub dispatch {
     my ($self, $request) = @_;
     my $http_method = lc($request->method // 'GET');
 
-    my $response;
+    my $application;
 
     # OPTIONS - return allowed methods (auto-respond unless overridden)
     if ($http_method eq 'options' && !$self->can('options')) {
         my $allow = join(', ', $self->allowed_methods);
-        $response = PAGI::Response::Empty->new(
+        $application = PAGI::Response::Empty->new(
             headers => ['Allow' => $allow],
         );
     }
     # HEAD falls back to GET if not explicitly defined
     elsif ($http_method eq 'head' && !$self->can('head') && $self->can('get')) {
-        $response = await Future->wrap($self->get($request));
+        $application = await Future->wrap($self->get($request));
     }
     # Dispatch to the appropriate method handler
     elsif ($self->can($http_method)) {
-        $response = await Future->wrap($self->$http_method($request));
+        $application = await Future->wrap($self->$http_method($request));
     }
     # 405 Method Not Allowed
     else {
-        $response = PAGI::Pages->method_not_allowed(
-            $request,
+        $application = PAGI::Pages->method_not_allowed(
             allow => [$self->allowed_methods],
         );
     }
 
-    croak ref($self) . "->$http_method did not return a response"
-        unless is_response($response);
-    return $response;
+    PAGI::Utils::_validate_app_value(
+        $application,
+        ref($self) . "->$http_method must return a PAGI application:",
+    );
+    return $application;
 }
 
 sub to_app {
-    my ($class) = @_;
-    my $endpoint = $class->new;    # ONE instance for the app lifetime (singleton)
+    my ($invocant) = @_;
+    my $endpoint = blessed($invocant) ? $invocant : $invocant->new;
 
     return async sub {
         my ($scope, $receive, $send) = @_;
         my $request = PAGI::Request->new($scope, $receive);
-        my $response = await $endpoint->dispatch($request);
-        await Future->wrap($response->respond($scope, $receive, $send));
+        my $application = await $endpoint->dispatch($request);
+        await invoke_app($application, $scope, $receive, $send);
     };
 }
 
@@ -169,16 +170,15 @@ Each receives:
 
 =back
 
-Use C<$request> for request data and L<PAGI::Response> for building response
-values.
+Use C<$request> for request data and return an application value, such as a
+L<PAGI::Response>, a Pages application, C<as_app>-wrapped native coderef, or
+another instantiated object with C<to_app>.
 
-B<Handler contract:> Every HTTP handler MUST return a nominal
-L<PAGI::Response> value or subclass (immediately or through a Future). An
-object that merely implements C<respond> or C<to_app> is not a Response value.
-Returning nothing (or another non-response value) causes dispatch to croak.
-C<dispatch> returns the response without sending it;
-C<to_app> is responsible for emitting it with
-C<< $response->respond($scope, $receive, $send) >>.
+B<Handler contract:> Every HTTP handler MUST return an application value
+(immediately or through a Future). Returning nothing or a scalar/hash value
+causes C<dispatch> to croak. C<dispatch> returns that exact application
+without sending it; C<to_app> delegates its invocation through the shared
+application contract.
 
 B<Singleton:> C<to_app> creates a single endpoint instance that serves the
 entire application lifetime. State stored in C<$self> persists across
@@ -200,14 +200,17 @@ with PAGI::Server or composed with middleware. Creates a single endpoint
 instance at construction time; that instance is reused for every request
 (singleton).
 
+Calling C<to_app> on an already configured endpoint instance retains that
+exact instance and reuses it for the returned application's lifetime.
+
 =head1 INSTANCE METHODS
 
 =head2 dispatch
 
-    my $response = await $endpoint->dispatch($request);
+    my $application = await $endpoint->dispatch($request);
 
 Dispatches the request to the appropriate HTTP method handler and returns the
-resulting response without emitting it. Called automatically by C<to_app>.
+resulting application without emitting it. Called automatically by C<to_app>.
 
 =head2 allowed_methods
 

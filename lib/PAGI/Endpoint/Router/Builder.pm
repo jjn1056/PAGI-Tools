@@ -88,35 +88,28 @@ sub _add_route_from {
     $middleware = shift @args if ref($args[0]) eq 'ARRAY';
     croak 'route requires a target' unless @args;
 
-    if (defined $args[0] && !ref($args[0]) && $args[0] eq 'raw') {
-        $self->{builder}->_add_route_from(
-            $caller, $kind, $methods, $path, $middleware, @args,
-        );
-        return $self;
-    }
-
     my $handler = shift @args;
 
-    my $target;
+    my $endpoint;
     if (ref($handler) eq 'CODE') {
-        $target = $handler;
+        $endpoint = $handler;
     }
     elsif (!ref($handler) && defined $handler) {
         my $method = $self->{endpoint}->_required_local_method(
             $handler, 'handler',
         );
-        my $endpoint = $self->{endpoint};
-        $target = sub {
+        my $receiver = $self->{endpoint};
+        $endpoint = sub {
             my ($protocol) = @_;
-            return $method->($endpoint, $protocol);
+            return $method->($receiver, $protocol);
         };
     }
     else {
-        croak 'handler must be a coderef or unqualified method name';
+        $endpoint = $handler;
     }
 
     $self->{builder}->_add_route_from(
-        $caller, $kind, $methods, $path, $middleware, $target, @args,
+        $caller, $kind, $methods, $path, $middleware, $endpoint, @args,
     );
     return $self;
 }

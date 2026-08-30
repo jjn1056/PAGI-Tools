@@ -11,6 +11,7 @@ use PAGI::Response ();
 use PAGI::Response::Text ();
 use PAGI::Routing::URL ();
 use PAGI::Test::Client ();
+use PAGI::Utils qw(as_app);
 
 sub scope {
     my (%changes) = @_;
@@ -39,9 +40,9 @@ sub run_scope {
         my ($class) = @_;
         my $self = bless { seen => [] }, $class;
         $self->{targets} = {
-            http => sub { return $self->_raw('http', @_) },
-            websocket => sub { return $self->_raw('websocket', @_) },
-            sse => sub { return $self->_raw('sse', @_) },
+            http => PAGI::Utils::as_app(sub { return $self->_raw('http', @_) }),
+            websocket => PAGI::Utils::as_app(sub { return $self->_raw('websocket', @_) }),
+            sse => PAGI::Utils::as_app(sub { return $self->_raw('sse', @_) }),
         };
         $self->{closure} = sub {
             my ($request) = @_;
@@ -54,9 +55,9 @@ sub run_scope {
         my ($self, $r) = @_;
         for my $kind (qw(http websocket sse)) {
             my $method = $kind eq 'http' ? 'get' : $kind;
-            $r->$method("/raw-$kind/{id}" => [
+            $r->$method("/native-$kind/{id}" => [
                 $self->middleware_as('mark_raw'),
-            ], raw => $self->{targets}{$kind});
+            ], $self->{targets}{$kind});
         }
         $r->get('/method' => 'method_handler');
         $r->get('/closure' => $self->{closure});
@@ -104,46 +105,44 @@ sub run_scope {
     sub new { return bless { mode => $_[1] }, $_[0] }
     sub routes {
         my ($self, $r) = @_;
-        return $r->get('/bad', raw => undef) if $self->{mode} eq 'undefined';
-        return $r->websocket('/bad', raw => 'native')
+        return $r->get('/bad', undef) if $self->{mode} eq 'undefined';
+        return $r->websocket('/bad', 'native')
             if $self->{mode} eq 'noncoderef';
-        return $r->sse('/bad', 'raw') if $self->{mode} eq 'missing';
+        return $r->sse('/bad', 'native') if $self->{mode} eq 'missing';
     }
 }
 
-subtest 'Endpoint raw leaves preserve targets and middleware for every protocol' => sub {
+subtest 'Endpoint application leaves preserve targets and middleware for every protocol' => sub {
     my $endpoint = Local::RawEndpoint->new;
     my $routing = $endpoint->to_router;
     my $nodes = $routing->routes;
 
-    is([map { $_->is_raw ? 1 : 0 } @$nodes], [1, 1, 1, 0, 0],
-        'only explicitly tagged declarations are raw leaves');
-    is([map { refaddr($nodes->[$_]->target) } 0 .. 2],
+    is([map { refaddr($nodes->[$_]->endpoint) } 0 .. 2],
         [map { refaddr($endpoint->{targets}{$_}) } qw(http websocket sse)],
-        'Endpoint forwards every native raw coderef unchanged');
-    is(refaddr($nodes->[4]->target), refaddr($endpoint->{closure}),
+        'Endpoint forwards every explicitly wrapped native app unchanged');
+    is(refaddr($nodes->[4]->endpoint), refaddr($endpoint->{closure}),
         'an ordinary handler coderef remains unchanged');
 
     my $app = $routing->to_app;
-    is(run_scope($app, scope(path => '/raw-http/11', raw_path => '/raw-http/11')), [
+    is(run_scope($app, scope(path => '/native-http/11', raw_path => '/native-http/11')), [
         { type => 'http.response.start', status => 200, headers => [] },
         { type => 'http.response.body', body => 'raw http', more => 0 },
-    ], 'raw HTTP receives native channels through Endpoint middleware');
+    ], 'native HTTP application receives channels through Endpoint middleware');
     is(run_scope($app, scope(
-        type => 'websocket', path => '/raw-websocket/22',
-        raw_path => '/raw-websocket/22',
+        type => 'websocket', path => '/native-websocket/22',
+        raw_path => '/native-websocket/22',
     )), [{
         type => 'websocket.close', code => 1000, reason => 'raw websocket',
-    }], 'raw WebSocket receives native channels through Endpoint middleware');
+    }], 'native WebSocket application receives channels through Endpoint middleware');
     is(run_scope($app, scope(
-        type => 'sse', path => '/raw-sse/33', raw_path => '/raw-sse/33',
+        type => 'sse', path => '/native-sse/33', raw_path => '/native-sse/33',
     )), [{ type => 'sse.close' }],
-        'raw SSE receives native channels through Endpoint middleware');
+        'native SSE application receives channels through Endpoint middleware');
     is($endpoint->{seen}, [
         { kind => 'http', type => 'http', id => 11, middleware => 1 },
         { kind => 'websocket', type => 'websocket', id => 22, middleware => 1 },
         { kind => 'sse', type => 'sse', id => 33, middleware => 1 },
-    ], 'each raw leaf sees captures and the middleware-cloned scope');
+    ], 'each native application leaf sees captures and the middleware-cloned scope');
 
     my $client = PAGI::Test::Client->new(app => $app);
     is($client->get('/method')->text, 'method',
@@ -152,16 +151,16 @@ subtest 'Endpoint raw leaves preserve targets and middleware for every protocol'
         'an ordinary handler coderef keeps Request binding semantics');
 };
 
-subtest 'Endpoint rejects malformed raw leaf declarations through the App builder' => sub {
+subtest 'Endpoint rejects malformed application leaf declarations through the App builder' => sub {
     like(dies { Local::MalformedRawEndpoint->new('undefined')->to_router },
-        qr/raw target must be defined/,
-        'an explicit raw marker requires a defined target');
+        qr/route requires a target/,
+        'an application leaf requires a defined target');
     like(dies { Local::MalformedRawEndpoint->new('noncoderef')->to_router },
-        qr/raw application must be a coderef or instantiated object with to_app/,
-        'a raw package string is not rebound as an Endpoint method');
+        qr/has no handler method "native"/,
+        'a package string is not rebound as an Endpoint method');
     like(dies { Local::MalformedRawEndpoint->new('missing')->to_router },
-        qr/raw target must be defined/,
-        'a raw marker without a target is rejected');
+        qr/has no handler method "native"/,
+        'a non-method string is rejected');
 };
 
 {

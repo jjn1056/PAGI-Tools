@@ -8,6 +8,7 @@ use lib 'lib';
 use PAGI::App::Router ();
 use PAGI::App::Router::Builder ();
 use PAGI::Routing::Middleware ();
+use PAGI::Utils qw(as_app);
 
 {
     package Local::StringifiedOption;
@@ -21,6 +22,17 @@ use PAGI::Routing::Middleware ();
     sub to_app {
         my ($self) = @_;
         ++$self->{builds};
+        return sub { return };
+    }
+}
+
+{
+    package Local::MethodEndpoint;
+
+    sub new { return bless { allowed_calls => 0, builds => 0 }, $_[0] }
+    sub allowed_methods { ++$_[0]{allowed_calls}; return qw(GET POST) }
+    sub to_app {
+        ++$_[0]{builds};
         return sub { return };
     }
 }
@@ -102,7 +114,7 @@ subtest 'constructor copies and normalizes router configuration' => sub {
 subtest 'all leaf declarations retain one exact ordered record sequence' => sub {
     my $builder = PAGI::App::Router::Builder->new;
     my $handler = sub { return 'context result' };
-    my $raw = sub { return 'native result' };
+    my $native = as_app(sub { return 'native result' });
     my $factory = sub { return $_[0] };
     my $methods = ['RPC'];
 
@@ -117,7 +129,7 @@ subtest 'all leaf declarations retain one exact ordered record sequence' => sub 
     $builder->route('/rpc' => $handler, methods => $methods);
     $builder->websocket('/socket' => $handler);
     $builder->sse('/events' => $handler);
-    $builder->get('/raw', raw => $raw);
+    $builder->get('/native' => $native);
     $builder->get('/wrapped' => [$factory] => $handler);
 
     my $records = $builder->_declarations;
@@ -135,13 +147,13 @@ subtest 'all leaf declarations retain one exact ordered record sequence' => sub 
             ['route',     ['RPC'],     '/rpc'],
             ['websocket', undef, '/socket'],
             ['sse', undef, '/events'],
-            ['route',     ['GET'], '/raw'],
+            ['route',     ['GET'], '/native'],
             ['route',     ['GET'], '/wrapped'],
         ],
         'all declarations preserve one exact insertion order across protocols',
     );
-    ok($records->[11]{is_raw}, 'explicit raw tag is retained on raw target');
-    is(refaddr($records->[11]{target}), refaddr($raw), 'raw target identity is retained');
+    is(refaddr($records->[11]{endpoint}), refaddr($native),
+        'explicitly wrapped native application identity is retained');
     ok($records->[12]{middleware}[0]->isa('PAGI::Routing::Middleware'),
         'positional middleware is normalized at declaration time');
 
@@ -153,18 +165,18 @@ subtest 'all leaf declarations retain one exact ordered record sequence' => sub 
         'record middleware lists are defensive');
 };
 
-subtest 'leaf grammar distinguishes normal targets from explicit raw targets' => sub {
+subtest 'leaf grammar accepts application values and requires explicit native wrapping' => sub {
     my $builder = PAGI::App::Router::Builder->new;
     my $handler = sub { };
-    my $raw = sub { };
+    my $native = as_app(sub { });
     my $factory = sub { return $_[0] };
     my $raw_object = Local::BuilderApp->new;
 
     $builder->get('/normal' => $handler);
     $builder->get('/wrapped' => [$factory] => $handler);
-    $builder->get('/raw', raw => $raw);
-    $builder->get('/raw-wrapped' => [$factory], raw => $raw);
-    $builder->get('/raw-object', raw => $raw_object);
+    $builder->get('/native' => $native);
+    $builder->get('/native-wrapped' => [$factory], $native);
+    $builder->get('/object', $raw_object);
     $builder->route('/rpc' => $handler, methods => ['RPC']);
 
     like dies { $builder->get('/missing') }, qr/requires a target/,
@@ -184,18 +196,14 @@ subtest 'leaf grammar distinguishes normal targets from explicit raw targets' =>
     like dies { $builder->route('/missing-methods' => $handler) },
         qr/route requires methods option/,
         'generic route declarations require methods';
-    like dies { $builder->get('/raw', raw => undef) }, qr/raw target must be defined/,
-        'raw tags require their target';
-    like dies { $builder->get('/normal' => 'native') }, qr/handler must be a coderef/,
-        'ordinary targets must be handler coderefs';
-    like(dies { $builder->get('/normal-object' => $raw_object) },
-        qr/handler must be a coderef/,
-        'application objects do not widen ordinary handler arity');
-    like(dies { $builder->get('/raw-package', raw => 'Local::BuilderApp') },
-        qr/raw application must be a coderef or instantiated object with to_app/,
-        'raw package strings are rejected through the shared app validator');
+    like dies { $builder->get('/normal' => 'native') },
+        qr/route endpoint must be a coderef or instantiated object with to_app/,
+        'package strings are not application values';
+    like(dies { $builder->get('/package', 'Local::BuilderApp') },
+        qr/route endpoint must be a coderef or instantiated object with to_app/,
+        'application package strings are rejected through the shared app validator');
     is($raw_object->{builds}, 0,
-        'raw application objects are retained without compilation at declaration');
+        'application objects are retained without compilation at declaration');
     like dies { $builder->get('/bad-middleware' => [undef] => $handler) },
         qr/middleware entry 0 must be/,
         'invalid positional middleware entries are rejected';
@@ -274,6 +282,22 @@ subtest 'materialization defers immutable HTTP normalization to Route' => sub {
         ['websocket', undef, '/socket'],
         ['sse', undef, '/events'],
     ], 'immutable Route owns method normalization, including automatic HEAD');
+};
+
+subtest 'application endpoints snapshot inferred methods once before Route construction' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+    my $endpoint = Local::MethodEndpoint->new;
+    $builder->route('/inferred' => $endpoint);
+
+    my $route = $builder->to_router->routes->[0];
+    is($route->endpoint, $endpoint,
+        'the immutable Route retains the exact endpoint object');
+    is($route->methods, ['GET', 'HEAD', 'POST'],
+        'the immutable Route receives the endpoint method snapshot');
+    is($endpoint->{allowed_calls}, 1,
+        'materialization does not re-query endpoint capabilities after Route construction');
+    is($endpoint->{builds}, 0,
+        'method inference does not compile the endpoint application');
 };
 
 done_testing;
