@@ -79,11 +79,10 @@ sub to_app {
             return await $self->handle($scope, $receive, $send);
         }
 
-        my $inner_scope = { %$scope };
-        $inner_scope->{state} //= ($self->{_state} // {});
-        $self->{_state} = $inner_scope->{state};
+        $scope->{state} //= ($self->{_state} // {});
+        $self->{_state} = $scope->{state};
 
-        await $app->($inner_scope, $receive, $send);
+        await $app->($scope, $receive, $send);
     };
 
     return $wrapper;
@@ -217,7 +216,10 @@ lifespan context manager yields state to C<request.state>.
     },
 
 For every request, this state is injected into the scope as
-C<$scope-E<gt>{state}>. This makes it accessible via:
+C<$scope-E<gt>{state}>. The exact incoming scope hashref is updated and passed
+to the wrapped application. An existing C<state> value remains authoritative;
+otherwise the injected state is visible to the caller that supplied the scope.
+This makes it accessible via:
 
     $req->state->{db}    # In HTTP handlers
     $ws->state->{db}     # In WebSocket handlers
