@@ -193,9 +193,4 @@ sub _named_methods {
     return [ map { $ERRORS{$_}{method} } sort { $a <=> $b } keys %ERRORS ];
 }
 
-sub _named_page_functions {
-    return [ map { $ERRORS{$_}{method} . '_page' }
-        sort { $a <=> $b } keys %ERRORS ];
-}
-
 1;

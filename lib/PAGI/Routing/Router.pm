@@ -51,8 +51,7 @@ sub http_default { $_[0]->{http_default} }
 sub routes     { [ @{$_[0]->{routes}} ] }
 sub middleware { [ @{$_[0]->{middleware}} ] }
 sub path       { undef }
-sub target     { undef }
-sub is_raw     { undef }
+sub endpoint   { undef }
 sub methods    { undef }
 sub constraints { undef }
 sub _resolver     { $_[0]->{_resolver} }
