@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::Request;
@@ -419,10 +420,40 @@ subtest 'request headers are a PAGI::Headers' => sub {
     is [$req->header_all('x-multi')], ['a','b'], 'multi-value via header_all';
 };
 
-subtest 'mutating the returned headers does not affect the request' => sub {
-    my $req = PAGI::Request->new({ type => 'http', method => 'GET', headers => [['Host','x.com']] }, $receive);
-    $req->headers->clear;                 # mutate the returned object (a clone)
-    is $req->header('host'), 'x.com', 'request lookups unaffected -- headers() is a clone';
+subtest 'headers returns the exact cached object used by Request lookups' => sub {
+    my $scope = {
+        type    => 'http',
+        method  => 'GET',
+        headers => [
+            ['Host', 'x.com'],
+            ['Content-Type', 'text/plain'],
+            ['Content-Length', '12'],
+            ['X-Multi', 'a'],
+            ['X-Multi', 'b'],
+        ],
+    };
+    my $req = PAGI::Request->new($scope, $receive);
+
+    is $req->header('host'), 'x.com', 'ordinary lookup initializes the header cache';
+    my $headers = $req->headers;
+    is refaddr($headers), refaddr($scope->{'pagi.request.headers'}),
+        'headers returns the cached PAGI::Headers object';
+    is refaddr($req->headers), refaddr($headers),
+        'later headers calls return the same object';
+
+    $headers->set('Host', 'mutated.example');
+    $headers->set('Content-Type', 'application/json; charset=utf-8');
+    $headers->set('Content-Length', '42');
+    $headers->set('X-Multi', 'c', 'd');
+
+    is $req->header('host'), 'mutated.example', 'header sees shared mutation';
+    is [$req->header_all('x-multi')], ['c', 'd'], 'header_all sees shared mutation';
+    is $req->content_type, 'application/json', 'content_type sees shared mutation';
+    is $req->content_length, '42', 'content_length sees shared mutation';
+
+    my $isolated = $req->headers->clone;
+    $isolated->set('Host', 'isolated.example');
+    is $req->header('host'), 'mutated.example', 'explicit clone remains isolated';
 };
 
 done_testing;

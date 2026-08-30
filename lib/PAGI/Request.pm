@@ -88,9 +88,8 @@ sub _header_snapshot {
         //= PAGI::Headers->new($self->{scope}{headers} // []);
 }
 
-# Public: a PAGI::Headers snapshot of the inbound headers. Returns an independent
-# CLONE so mutating it cannot poison later header()/content_type()/cookie lookups.
-sub headers { return $_[0]->_header_snapshot->clone }
+# Public: the cached PAGI::Headers object used by all Request header lookups.
+sub headers { return $_[0]->_header_snapshot }
 
 # Single header lookup (case-insensitive, last value)
 sub header     { return $_[0]->_header_snapshot->get($_[1]) }
@@ -734,10 +733,10 @@ Get all values for a header.
 
     my $headers = $req->headers;  # PAGI::Headers
 
-Returns a L<PAGI::Headers> clone of the inbound headers snapshot. The returned
-object is independent: mutating it (C<clear>, C<set>, etc.) does not affect
-subsequent calls to C<header>, C<header_all>, C<content_type>, or C<cookie>
--- those always read the private snapshot, not the clone.
+Returns the exact cached L<PAGI::Headers> object used by C<header>,
+C<header_all>, and header-derived accessors. Deliberate mutation through this
+object therefore affects later Request header reads. Call C<< $req->headers->clone >>
+when an isolated copy is required.
 
 =head1 QUERY PARAMETERS
 
