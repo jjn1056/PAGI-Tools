@@ -283,6 +283,23 @@ subtest 'route descriptions preserve endpoint identity and normalize HTTP method
     is($node->methods, ['POST', 'GET', 'HEAD', 'RPC'], 'methods normalize, deduplicate, and add HEAD');
     is(refaddr($node->constraints->{host}), refaddr($host_constraint), 'route constraints retain declared checker');
     is($node->middleware, [$mw], 'route middleware descriptors');
+
+    my $plain_route = route('/plain' => sub { });
+    is($plain_route->constraints, {},
+        'Route exposes omitted explicit constraints as an empty hash');
+    my $plain_route_constraints = $plain_route->constraints;
+    $plain_route_constraints->{probe} = qr/mutated/;
+    is($plain_route->constraints, {},
+        'Route omitted constraints accessor remains a fresh empty hash');
+
+    my $empty_route = route('/empty' => sub { }, constraints => {});
+    is($empty_route->constraints, {},
+        'Route exposes explicit empty constraints with the same shape');
+    my $empty_route_constraints = $empty_route->constraints;
+    $empty_route_constraints->{probe} = qr/mutated/;
+    is($empty_route->constraints, {},
+        'Route explicit empty constraints accessor remains a fresh hash');
+
     ok(!$node->can('target') && !$node->can('is_raw'),
         'retired target modes have no compatibility accessors');
     ok(!$node->can('namespace'), 'public namespace accessor is removed from Route');
@@ -479,6 +496,15 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
     isa_ok($inline->app, ['PAGI::Routing::Router'],
         'routes shorthand constructs a child Router application');
     is(refaddr($inline->constraints->{tenant}), refaddr($tenant_constraint), 'mount constraints retain declared checker');
+
+    my $plain_mount = mount('/plain-mount', routes => []);
+    is($plain_mount->constraints, {},
+        'Mount exposes omitted explicit constraints as an empty hash');
+    my $plain_mount_constraints = $plain_mount->constraints;
+    $plain_mount_constraints->{probe} = qr/mutated/;
+    is($plain_mount->constraints, {},
+        'Mount omitted constraints accessor remains a fresh empty hash');
+
     ok(!$inline->can('target') && !$inline->can('router')
         && !$inline->can('is_raw') && !$inline->can('routes'),
         'removed Mount modes have no compatibility accessors');

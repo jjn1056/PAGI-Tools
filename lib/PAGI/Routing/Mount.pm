@@ -35,6 +35,9 @@ sub _new_from {
     PAGI::Routing::Route::_validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     PAGI::Routing::Route::_validate_logical_segment('name', $opts{name}) if exists $opts{name};
     PAGI::Routing::Route::_validate_constraints($opts{constraints}) if exists $opts{constraints};
+    my $constraints = exists $opts{constraints}
+        ? $opts{constraints}
+        : {};
     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
         exists $opts{middleware} ? $opts{middleware} : [],
         'middleware',
@@ -47,11 +50,10 @@ sub _new_from {
             PAGI::Routing::Router->new(routes => $opts{routes});
         };
 
-    my $has_constraints = exists $opts{constraints};
     my $pattern = PAGI::Routing::Pattern->new(
         path => $path,
         mode => 'mount',
-        constraints => $has_constraints ? $opts{constraints} : {},
+        constraints => $constraints,
         declaration_package => $declaration_package,
     );
 
@@ -61,7 +63,6 @@ sub _new_from {
         app         => $app,
         name        => $opts{name},
         desc        => $opts{desc},
-        _has_constraints => $has_constraints,
         middleware  => $middleware,
     }, $class;
 }
@@ -86,7 +87,7 @@ sub parameters  { $_[0]->{_pattern}->parameters }
 sub name        { $_[0]->{name} }
 sub desc        { $_[0]->{desc} }
 sub app         { $_[0]->{app} }
-sub constraints { $_[0]->{_has_constraints} ? $_[0]->{_pattern}->constraints : undef }
+sub constraints { $_[0]->{_pattern}->constraints }
 sub middleware  { [ @{$_[0]->{middleware}} ] }
 sub methods     { undef }
 
@@ -156,8 +157,12 @@ normalized prefix predicates during reverse routing.
 =head1 ACCESSORS
 
 C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<app>, and
-C<constraints> return declaration values. C<app> always returns the one base
-application. C<middleware> returns a fresh arrayref of normalized
+C<constraints> return declaration values. C<constraints> returns a fresh
+hashref containing the explicitly declared constraint map, or an empty hashref
+when none was declared. Inline path constraints remain represented by the path
+pattern and are not reconstructed as entries in this explicit map. C<app>
+always returns the one base application. C<middleware> returns a fresh
+arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
 identity. C<methods> returns undef for a mount.
 

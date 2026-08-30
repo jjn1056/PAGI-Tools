@@ -3,6 +3,8 @@
 0.002003 - UNRELEASED
   - Fixed invalid allowed_methods diagnostics to identify the route endpoint
     capability rather than a nonexistent methods option.
+  - Route and Mount constraint accessors now always return fresh hashrefs,
+    using an empty hashref when no explicit constraint map was declared.
   - BREAKING: Replaced the mutable, request-bound PAGI::Response builder with
     complete concrete Response values and exported factories: Response::Text,
     ::HTML, ::JSON, ::Problem, ::Redirect, ::Empty, ::File, and ::Stream.

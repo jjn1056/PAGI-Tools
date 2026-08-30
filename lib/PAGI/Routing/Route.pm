@@ -66,6 +66,9 @@ sub _build {
     _validate_text('desc', $opts->{desc}, 0) if exists $opts->{desc};
     _validate_logical_segment('name', $opts->{name}) if exists $opts->{name};
     _validate_constraints($opts->{constraints}) if exists $opts->{constraints};
+    my $constraints = exists $opts->{constraints}
+        ? $opts->{constraints}
+        : {};
     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
         exists $opts->{middleware} ? $opts->{middleware} : [],
         'middleware',
@@ -92,11 +95,10 @@ sub _build {
             $methods = _normalize_methods('GET');
         }
     }
-    my $has_constraints = exists $opts->{constraints};
     my $pattern = PAGI::Routing::Pattern->new(
         path => $path,
         mode => 'route',
-        constraints => $has_constraints ? $opts->{constraints} : {},
+        constraints => $constraints,
         declaration_package => $declaration_package,
     );
 
@@ -107,7 +109,6 @@ sub _build {
         name        => $opts->{name},
         desc        => $opts->{desc},
         methods     => $methods,
-        _has_constraints => $has_constraints,
         middleware  => $middleware,
     }, $class;
 }
@@ -183,7 +184,7 @@ sub name        { $_[0]->{name} }
 sub desc        { $_[0]->{desc} }
 sub endpoint    { $_[0]->{endpoint} }
 sub methods     { ref($_[0]->{methods}) eq 'ARRAY' ? [ @{$_[0]->{methods}} ] : $_[0]->{methods} }
-sub constraints { $_[0]->{_has_constraints} ? $_[0]->{_pattern}->constraints : undef }
+sub constraints { $_[0]->{_pattern}->constraints }
 sub middleware  { [ @{$_[0]->{middleware}} ] }
 sub routes      { undef }
 sub _pattern    { $_[0]->{_pattern} }
@@ -256,6 +257,10 @@ called from a role method likewise resolves providers in the role package.
 
 C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<endpoint>, C<methods>,
 and C<constraints> return the corresponding declaration values.
+C<constraints> returns a fresh hashref containing the explicitly declared
+constraint map, or an empty hashref when none was declared. Inline path
+constraints remain represented by the path pattern and are not reconstructed
+as entries in this explicit map.
 C<middleware> returns a fresh arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
 identity. C<routes> returns undef for a leaf route.
