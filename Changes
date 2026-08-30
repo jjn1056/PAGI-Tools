@@ -1,6 +1,8 @@
 # Revision history for PAGI-Tools
 
 0.002003 - UNRELEASED
+  - Fixed invalid allowed_methods diagnostics to identify the route endpoint
+    capability rather than a nonexistent methods option.
   - BREAKING: Replaced the mutable, request-bound PAGI::Response builder with
     complete concrete Response values and exported factories: Response::Text,
     ::HTML, ::JSON, ::Problem, ::Redirect, ::Empty, ::File, and ::Stream.

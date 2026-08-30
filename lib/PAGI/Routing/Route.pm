@@ -79,11 +79,14 @@ sub _build {
     my $methods;
     if ($kind eq 'route') {
         if (exists $opts->{methods}) {
-            $methods = _normalize_methods($opts->{methods});
+            $methods = _normalize_methods($opts->{methods}, 'methods');
         }
         elsif (ref($endpoint) ne 'CODE' && $endpoint->can('allowed_methods')) {
             my @capability_methods = $endpoint->allowed_methods;
-            $methods = _normalize_methods(\@capability_methods);
+            $methods = _normalize_methods(
+                \@capability_methods,
+                'route endpoint allowed_methods',
+            );
         }
         else {
             $methods = _normalize_methods('GET');
@@ -129,26 +132,37 @@ sub _validate_constraints {
 }
 
 sub _normalize_methods {
-    my ($methods) = @_;
-    return '*' if defined $methods && !ref($methods) && $methods eq '*';
+    my ($methods, $origin) = @_;
+    $origin ||= 'methods';
+
+    my $from_capability = $origin eq 'route endpoint allowed_methods';
+    my $shape_error = $from_capability
+        ? 'route endpoint allowed_methods must return valid HTTP method strings'
+        : "methods must be a method string, arrayref, or '*'";
+
+    return '*'
+        if !$from_capability
+            && defined($methods) && !ref($methods) && $methods eq '*';
 
     my @methods;
-    if (defined $methods && !ref($methods)) {
+    if (!$from_capability && defined($methods) && !ref($methods)) {
         @methods = ($methods);
     }
     elsif (ref($methods) eq 'ARRAY') {
         @methods = @$methods;
     }
     else {
-        croak "methods must be a method string, arrayref, or '*'";
+        croak $shape_error;
     }
 
-    croak "methods must be a method string, arrayref, or '*'" unless @methods;
+    croak 'route endpoint allowed_methods returned no methods'
+        if $from_capability && !@methods;
+    croak $shape_error unless @methods;
 
     my %seen;
     my @normalized;
     for my $method (@methods) {
-        croak "methods must be a method string, arrayref, or '*'"
+        croak $shape_error
             unless defined $method && !ref($method)
                 && $method ne '*' && $method =~ /\A[!#\$%&'\+\-.\^_`|~0-9A-Za-z]+\z/;
         $method = uc $method;

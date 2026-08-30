@@ -695,18 +695,19 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/broken-component' => $broken_component },
         qr/route endpoint must be a coderef or instantiated object with to_app/,
         'route rejects an instantiated object without to_app';
-    for my $methods (
-        [],
-        ['GET POST'],
-        [{}],
-        [Future->done('GET')],
-        ['*'],
-        ['GET', '*'],
+    for my $case (
+        [empty     => [],                 qr/route endpoint allowed_methods returned no methods/],
+        [separator => ['GET POST'],       qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [reference => [{}],               qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [future    => [Future->done('GET')], qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [wildcard  => ['*'],              qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [mixed     => ['GET', '*'],        qr/route endpoint allowed_methods must return valid HTTP method strings/],
     ) {
-        my $endpoint = Local::MethodEndpoint->new(@$methods);
-        like dies { route '/invalid-capability' => $endpoint },
-            qr/methods must be a method string, arrayref, or '\*'/,
-            'invalid capability result is rejected synchronously';
+        my ($label, $returned, $error) = @$case;
+        my $endpoint = Local::MethodEndpoint->new(@$returned);
+        like dies { route "/invalid-capability-$label" => $endpoint },
+            $error,
+            "$label allowed_methods failure names the endpoint capability";
     }
     like dies { mount '/missing' }, qr/mount requires exactly one of app or routes/, 'mount requires one target form';
     like dies { mount '/both', app => $handler, routes => [] }, qr/mount requires exactly one of app or routes/, 'mount rejects app plus routes';
