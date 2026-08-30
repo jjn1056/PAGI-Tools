@@ -17,6 +17,7 @@ use PAGI::Middleware::TrustedHosts;
 use PAGI::Middleware::CSRF;
 use PAGI::Headers;
 use PAGI::Response::Text;
+use PAGI::Utils qw(invoke_app);
 
 my $loop = IO::Async::Loop->new;
 
@@ -1229,7 +1230,7 @@ subtest "CSRF enforce => 'app' preserves an application-owned Response" => sub {
             'application-owned CSRF rejection',
             status => 403,
         );
-        await $response->respond($scope, $receive, $downstream_send);
+        await invoke_app($response, $scope, $receive, $downstream_send);
     });
 
     run_async(async sub {
