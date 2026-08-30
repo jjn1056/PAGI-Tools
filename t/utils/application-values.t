@@ -4,7 +4,7 @@ use warnings;
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
-use PAGI::Utils qw(as_app invoke_app to_app);
+use PAGI::Utils qw(as_app invoke_app request_response to_app);
 
 {
     package Local::CountedApp;
@@ -49,6 +49,20 @@ subtest 'as_app requires exactly one native CODE' => sub {
             qr/as_app\(\) requires exactly one native coderef/,
             "as_app rejects $case->[1]");
     }
+};
+
+subtest 'request_response is opt-in and included in the all export bundle' => sub {
+    my $utility = 'PAGI::Utils';
+    ok($utility->can('request_response'),
+        'request_response is available as an explicit utility');
+
+    {
+        package Local::AllRequestResponseImport;
+        use PAGI::Utils qw(:all);
+    }
+
+    ok(Local::AllRequestResponseImport->can('request_response'),
+        'request_response is included in :all');
 };
 
 subtest 'as_app keeps its wrapped CODE opaque to caller mutation' => sub {

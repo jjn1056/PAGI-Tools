@@ -22,7 +22,7 @@ my @PATH_EXPORTS = qw(
 );
 
 our @EXPORT_OK = (
-    qw(handle_lifespan to_app as_app invoke_app is_response),
+    qw(handle_lifespan to_app as_app request_response invoke_app is_response),
     @ENV_EXPORTS,
     @PATH_EXPORTS,
 );
@@ -331,6 +331,13 @@ sub as_app {
     return PAGI::Utils::_App->new($code);
 }
 
+sub request_response {
+    croak 'request_response handler must be a coderef'
+        unless @_ == 1 && ref($_[0]) eq 'CODE';
+    require PAGI::Routing::RequestResponse;
+    return PAGI::Routing::RequestResponse->new(handler => $_[0]);
+}
+
 async sub invoke_app {
     my ($value, $scope, $receive, $send) = @_;
     my $app = to_app($value);
@@ -346,7 +353,8 @@ sub _validate_app_value {
         croak "$label middleware object is not an app";
     }
 
-    croak "$label must be a coderef or instantiated object with to_app"
+    my $separator = $label =~ /:\z/ ? ' ' : ' must be ';
+    croak "$label${separator}a coderef or instantiated object with to_app"
         unless defined $value
             && (ref($value) eq 'CODE'
                 || (blessed($value) && $value->can('to_app')));
