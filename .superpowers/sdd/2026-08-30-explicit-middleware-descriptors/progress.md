@@ -13,8 +13,8 @@ Baseline: Perl 5.42.2; `prove -lr t` passed 218 files / 2373 tests at `b2bfb00`.
 | Task | Status | Implementation commit | Tests | Evidence |
 |---|---|---|---|---|
 | 1. Explicit descriptor | complete | `24098f5757a06bf37c3b54bb0f1bb695a2ad9e09` | 3 files / 29 tests | RED captured; focused GREEN; task review approved with one deferred POD minor |
-| 2. Strict core lists | in progress | — | — | — |
-| 3. Router frontend sugar | pending | — | — | — |
+| 2. Strict core lists | complete | `982dfd41e7fbe46fa9cf65e6db7d120b968816cf` | 10 files / 148 tests | RED captured; focused GREEN; task review clean |
+| 3. Router frontend sugar | in progress | — | — | — |
 | 4. Builder naming | pending | — | — | — |
 | 5. Examples and docs | pending | — | — | — |
 | 6. Upgrade and verification | pending | — | — | — |
@@ -56,3 +56,7 @@ for class configuration, but configured factories now require it too.
 
 Task 1: complete (commits df22b8f..24098f5, spec compliant and quality
 approved; one documentation minor deferred).
+
+Task 2: complete (commits 72b3f06..982dfd4, review clean). The reviewer
+confirmed the App Router Builder call-site rename was the minimal dependency
+adjustment required by the private helper split, not premature Task 3 work.
