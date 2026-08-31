@@ -90,7 +90,7 @@ subtest 'application middleware derives HEAD headers from the full body' => sub 
     };
     my $app = compose(
         app => $raw,
-        middleware => [$observer, middleware('ContentLength')],
+        middleware => [middleware($observer), middleware('ContentLength')],
     )->to_app;
     my $get = run_scope($app, scope(method => 'GET'));
     @observed_bodies = ();
@@ -117,7 +117,7 @@ subtest 'Router middleware derives identical GET and HEAD representation metadat
                 });
             })),
         ],
-        middleware => [deriving_body_length()],
+        middleware => [middleware(deriving_body_length())],
     );
     my $app = compose(app => $routing)->to_app;
     my $get = run_scope($app, scope(method => 'GET', path => '/representation'));
@@ -195,7 +195,7 @@ subtest 'sendfile length is available before HEAD wire suppression' => sub {
                 });
             })),
         ],
-        middleware => [deriving_body_length()],
+        middleware => [middleware(deriving_body_length())],
     );
     my $app = compose(app => $routing)->to_app;
     my $get = run_scope($app, scope(method => 'GET', path => '/file'));

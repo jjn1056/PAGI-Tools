@@ -66,7 +66,25 @@ sub _wrap {
     return _compile_wrapped_app($wrapped, 'middleware wrap');
 }
 
-sub _normalize_descriptors {
+sub _require_descriptors {
+    my ($class, $entries, $error_prefix) = @_;
+    $error_prefix //= 'middleware';
+
+    croak "$error_prefix must be an arrayref"
+        unless ref($entries) eq 'ARRAY';
+
+    my @descriptions;
+    for my $index (0 .. $#$entries) {
+        my $entry = $entries->[$index];
+        croak "$error_prefix entry $index must be a "
+            . 'PAGI::Routing::Middleware description returned by middleware(...)'
+            unless blessed($entry) && $entry->isa($class);
+        push @descriptions, $entry;
+    }
+    return \@descriptions;
+}
+
+sub _normalize_frontend_entries {
     my ($class, $entries, $error_prefix) = @_;
     $error_prefix = 'middleware' unless defined $error_prefix;
 
@@ -159,17 +177,16 @@ PAGI::Routing::Middleware - Normalized immutable declarative middleware descript
 
 =head1 DESCRIPTION
 
-This class is the normalized immutable description stored by declarative
-routers, routes, mounts, and Compose. Each middleware-list occurrence may be
-a class name, a bare factory coderef, a configured object with C<wrap>, or an
-explicit description made with C<middleware(...)> or C<new>. Enclosing
-constructors normalize every occurrence to this class without loading a
-class, constructing an object, calling C<wrap>, or performing protocol I/O.
+This class is the immutable description stored by declarative routers, routes,
+mounts, and Compose. Core middleware lists accept only an explicit description
+made with C<middleware(...)> or C<new>. Core constructors validate and copy
+those descriptions without loading a class, constructing an object, calling
+C<wrap>, or performing protocol I/O.
 
-C<middleware($target, %config)> is required only when a class needs
-constructor configuration. It also remains useful for deliberate descriptor
-reuse and inspection before attachment. Accessors return these normalized
-descriptions, not bare entries.
+C<middleware($target, %config)> captures every middleware target, including a
+class name, factory coderef, or configured C<wrap> object. It supports
+deliberate descriptor reuse and inspection before attachment. Accessors return
+these descriptions, not bare entries.
 
 =head1 METHODS
 

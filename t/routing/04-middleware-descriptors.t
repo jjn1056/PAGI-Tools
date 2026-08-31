@@ -58,13 +58,13 @@ CLASS_SOURCE
     };
 }
 
-subtest 'declarative lists normalize bare factories to descriptions' => sub {
+subtest 'frontend lists normalize bare factories to descriptions' => sub {
     my $factory = sub { return $_[0] };
     my $explicit = middleware('Configured', enabled => 1);
     my $subclass = DescriptorMiddlewareSubclass->new(sub { return $_[0] });
     my $input = [$factory, $explicit, $factory, $subclass];
 
-    my $normalized = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $normalized = PAGI::Routing::Middleware->_normalize_frontend_entries(
         $input,
         'middleware',
     );
@@ -87,15 +87,15 @@ subtest 'declarative lists normalize bare factories to descriptions' => sub {
     is(scalar @$normalized, 4, 'later input mutation is invisible');
 };
 
-subtest 'normalization accepts all four entry forms and rejects invalid entries' => sub {
+subtest 'frontend normalization accepts all four entry forms and rejects invalid entries' => sub {
     is(
-        PAGI::Routing::Middleware->_normalize_descriptors([], 'middleware'),
+        PAGI::Routing::Middleware->_normalize_frontend_entries([], 'middleware'),
         [],
         'empty list normalizes to a fresh empty list',
     );
     like(
         dies {
-            PAGI::Routing::Middleware->_normalize_descriptors({}, 'compose middleware')
+            PAGI::Routing::Middleware->_normalize_frontend_entries({}, 'compose middleware')
         },
         qr/compose middleware must be an arrayref/,
         'caller prefix is retained for a non-array value',
@@ -104,7 +104,7 @@ subtest 'normalization accepts all four entry forms and rejects invalid entries'
     my $factory = sub { return $_[0] };
     my $configured = bless {}, 'DescriptorConfiguredObject';
     my $explicit = middleware('Configured');
-    my $normalized = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $normalized = PAGI::Routing::Middleware->_normalize_frontend_entries(
         ['GZip', $factory, $configured, $explicit],
         'middleware',
     );
@@ -122,7 +122,7 @@ subtest 'normalization accepts all four entry forms and rejects invalid entries'
             { header => 'X-Request-ID' }) {
         like(
             dies {
-                PAGI::Routing::Middleware->_normalize_descriptors(
+                PAGI::Routing::Middleware->_normalize_frontend_entries(
                     [$invalid],
                     'middleware',
                 )

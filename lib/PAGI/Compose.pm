@@ -39,7 +39,7 @@ sub new {
         PAGI::Utils::_validate_app_value($opts{app}, 'compose app');
     }
 
-    my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $middleware = PAGI::Routing::Middleware->_require_descriptors(
         exists $opts{middleware} ? $opts{middleware} : [],
         'compose middleware',
     );

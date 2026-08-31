@@ -38,7 +38,7 @@ sub _new_from {
     my $constraints = exists $opts{constraints}
         ? $opts{constraints}
         : {};
-    my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $middleware = PAGI::Routing::Middleware->_require_descriptors(
         exists $opts{middleware} ? $opts{middleware} : [],
         'middleware',
     );

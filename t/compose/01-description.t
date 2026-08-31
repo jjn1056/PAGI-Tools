@@ -49,7 +49,12 @@ my $bare_configured = ComposeConfiguredMiddleware->new;
 my $mw = middleware('RequestId', header => 'X-Request-ID');
 my $startup = sub { return };
 my $routes = [$leaf];
-my $middleware = ['RequestId', $factory, $bare_configured, $mw];
+my $middleware = [
+    middleware('RequestId'),
+    middleware($factory),
+    middleware($bare_configured),
+    $mw,
+];
 my $lifespan = { startup => $startup };
 my $composition = compose(
     routes => $routes,
@@ -61,12 +66,12 @@ isa_ok($composition, 'PAGI::Compose');
 is($composition->routes, [$leaf], 'routes accessor returns declared nodes');
 is($composition->app, undef, 'app is absent in routes mode');
 my $stored = $composition->middleware;
-isa_ok($stored->[0], 'PAGI::Routing::Middleware');
-is($stored->[0]->factory, 'RequestId', 'bare class target is retained');
-is(refaddr($stored->[1]->factory), refaddr($factory),
-    'bare factory identity is retained');
-is(refaddr($stored->[2]->factory), refaddr($bare_configured),
-    'bare configured object identity is retained');
+is(refaddr($stored->[0]), refaddr($middleware->[0]),
+    'explicit class description identity is retained');
+is(refaddr($stored->[1]), refaddr($middleware->[1]),
+    'explicit factory description identity is retained');
+is(refaddr($stored->[2]), refaddr($middleware->[2]),
+    'explicit configured object description identity is retained');
 is(refaddr($stored->[3]), refaddr($mw),
     'explicit description identity is retained');
 is(refaddr($composition->lifespan->{startup}), refaddr($startup), 'callback identity is retained');
@@ -128,27 +133,16 @@ my @invalid = (
     ['routes not array', [routes => {}], qr/routes must contain PAGI::Routing nodes/],
     ['invalid route member', [routes => [{}]], qr/routes must contain PAGI::Routing nodes/],
     ['middleware not array', [routes => [], middleware => {}], qr/middleware must be an arrayref/],
-    ['invalid middleware scalar',
-        [routes => [], middleware => [42]],
-        qr/compose middleware entry 0 must be a middleware class name/],
-    ['invalid middleware array',
-        [routes => [], middleware => [[]]],
-        qr/compose middleware entry 0 must be a middleware class name/],
-    ['invalid middleware hash',
-        [routes => [], middleware => [{}]],
-        qr/compose middleware entry 0 must be a middleware class name/],
-    ['empty middleware class name',
-        [routes => [], middleware => ['']],
-        qr/compose middleware entry 0 must be a middleware class name/],
-    ['malformed middleware class name',
-        [routes => [], middleware => ['not-a-package']],
-        qr/compose middleware entry 0 must be a middleware class name/],
-    ['middleware object without wrap',
-        [routes => [], middleware => [$object_without_wrap]],
-        qr/compose middleware entry 0 must be a middleware class name/],
-    ['class configuration supplied bare in a list',
-        [routes => [], middleware => ['RequestId', { header => 'X-Request-ID' }]],
-        qr/compose middleware entry 1 must be a middleware class name/],
+    ['bare middleware class', [routes => [], middleware => ['RequestId']],
+        qr/compose middleware entry 0 must be a PAGI::Routing::Middleware description returned by middleware\(\.\.\.\)/],
+    ['bare middleware factory', [routes => [], middleware => [$factory]],
+        qr/compose middleware entry 0 must be a PAGI::Routing::Middleware description returned by middleware\(\.\.\.\)/],
+    ['bare configured middleware', [routes => [], middleware => [$bare_configured]],
+        qr/compose middleware entry 0 must be a PAGI::Routing::Middleware description returned by middleware\(\.\.\.\)/],
+    ['invalid middleware hash', [routes => [], middleware => [{}]],
+        qr/compose middleware entry 0 must be a PAGI::Routing::Middleware description returned by middleware\(\.\.\.\)/],
+    ['middleware object without wrap', [routes => [], middleware => [$object_without_wrap]],
+        qr/compose middleware entry 0 must be a PAGI::Routing::Middleware description returned by middleware\(\.\.\.\)/],
     ['lifespan not hash', [routes => [], lifespan => []], qr/lifespan must be a hashref/],
     ['empty lifespan', [routes => [], lifespan => {}], qr/startup or shutdown/],
     ['unknown lifespan key', [routes => [], lifespan => { start => sub { } }], qr/unknown lifespan option 'start'/],

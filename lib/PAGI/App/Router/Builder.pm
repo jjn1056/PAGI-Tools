@@ -20,7 +20,7 @@ sub new {
 
     PAGI::Routing::Route::_validate_text('desc', $opts->{desc}, 0)
         if exists $opts->{desc};
-    my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $middleware = PAGI::Routing::Middleware->_normalize_frontend_entries(
         exists $opts->{middleware} ? $opts->{middleware} : [],
         'middleware',
     );
@@ -126,7 +126,7 @@ sub _mount_from {
     croak 'mount requires exactly one of app or routes'
         unless $has_app != $has_routes;
 
-    my $descriptions = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $descriptions = PAGI::Routing::Middleware->_normalize_frontend_entries(
         exists $opts->{middleware} ? $opts->{middleware} : [],
         'middleware',
     );
@@ -198,7 +198,7 @@ sub _add_route_from {
         }
     }
 
-    my $descriptions = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $descriptions = PAGI::Routing::Middleware->_normalize_frontend_entries(
         $middleware,
         'middleware',
     );

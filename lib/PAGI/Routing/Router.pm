@@ -21,7 +21,7 @@ sub new {
 
     my $routes = exists $opts{routes} ? $opts{routes} : [];
     PAGI::Routing::Mount::_validate_routes($routes);
-    my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $middleware = PAGI::Routing::Middleware->_require_descriptors(
         exists $opts{middleware} ? $opts{middleware} : [],
         'middleware',
     );

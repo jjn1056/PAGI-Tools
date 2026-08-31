@@ -67,6 +67,12 @@ use PAGI::Utils qw(as_app request_response);
 }
 
 {
+    package Local::ConfiguredMiddleware;
+    sub new { return bless {}, $_[0] }
+    sub wrap { return $_[1] }
+}
+
+{
     package Local::ProtocolConstraint;
     sub new { return bless { expected => $_[1] }, $_[0] }
     sub check { return $_[1] eq $_[0]{expected} }
@@ -620,44 +626,56 @@ subtest 'descriptions have no coderef overload and defer compilation' => sub {
     }
 };
 
-subtest 'every routing middleware position normalizes bare factories' => sub {
+subtest 'every routing middleware position requires explicit descriptions' => sub {
     my $handler = sub { };
-    my $factory = sub { return $_[0] };
-    my $explicit = middleware('Configured', enabled => 1);
-    my $input = [$factory, $explicit, $factory];
-
-    my @nodes = (
-        route('/http' => $handler, middleware => $input),
-        websocket('/socket' => $handler, middleware => [$factory]),
-        sse('/events' => $handler, middleware => [$factory]),
-        mount('/opaque', app => sub { }, middleware => [$factory]),
-        mount('/inline', routes => [], middleware => [$factory]),
-        router(routes => [], middleware => [$factory]),
+    my @constructors = (
+        ['HTTP route', sub { route('/http' => $handler, middleware => $_[0]) }],
+        ['WebSocket route', sub { websocket('/socket' => $handler, middleware => $_[0]) }],
+        ['SSE route', sub { sse('/events' => $handler, middleware => $_[0]) }],
+        ['app Mount', sub { mount('/opaque', app => sub { }, middleware => $_[0]) }],
+        ['routes Mount', sub { mount('/inline', routes => [], middleware => $_[0]) }],
+        ['Router', sub { router(routes => [], middleware => $_[0]) }],
+    );
+    my @bare = (
+        ['class name', 'RequestId'],
+        ['factory', sub { return $_[0] }],
+        ['configured object', Local::ConfiguredMiddleware->new],
+        ['hashref', {}],
     );
 
-    for my $node (@nodes) {
-        isa_ok($node->middleware->[0], 'PAGI::Routing::Middleware');
-        is(refaddr($node->middleware->[0]->factory), refaddr($factory),
-            ref($node) . ' retains bare factory identity');
+    for my $constructor (@constructors) {
+        my ($constructor_label, $construct) = @$constructor;
+        for my $bare (@bare) {
+            my ($entry_label, $entry) = @$bare;
+            like dies { $construct->([$entry]) }, qr/middleware entry 0 must be a PAGI::Routing::Middleware description returned by middleware\(\.\.\.\)/,
+                "$constructor_label rejects bare $entry_label middleware";
+        }
     }
+};
 
-    my $route_middleware = $nodes[0]->middleware;
-    is(refaddr($route_middleware->[1]), refaddr($explicit),
-        'mixed explicit description is preserved by identity');
-    isnt(refaddr($route_middleware->[0]), refaddr($route_middleware->[2]),
-        'repeated bare route entries receive distinct descriptions');
-    is(
-        [map {
-            ref($_->factory) eq 'CODE' ? 'bare' : $_->factory
-        } @$route_middleware],
-        ['bare', 'Configured', 'bare'],
-        'mixed list preserves declaration order',
+subtest 'every routing middleware position preserves explicit descriptor identity and copies' => sub {
+    my $handler = sub { };
+    my $first = middleware('RequestId');
+    my $second = middleware(sub { return $_[0] });
+    my $input = [$first, $second];
+    my @nodes = (
+        route('/http' => $handler, middleware => $input),
+        websocket('/socket' => $handler, middleware => $input),
+        sse('/events' => $handler, middleware => $input),
+        mount('/opaque', app => sub { }, middleware => $input),
+        mount('/inline', routes => [], middleware => $input),
+        router(routes => [], middleware => $input),
     );
 
     push @$input, middleware('InputMutation');
-    is(scalar @{$nodes[0]->middleware}, 3, 'constructor copied mixed input');
-    push @{$nodes[0]->middleware}, middleware('AccessorMutation');
-    is(scalar @{$nodes[0]->middleware}, 3, 'accessor returns a fresh array');
+    for my $node (@nodes) {
+        my $stored = $node->middleware;
+        is([map { refaddr $_ } @$stored], [refaddr($first), refaddr($second)],
+            ref($node) . ' retains explicit descriptor identity and order');
+        push @$stored, middleware('AccessorMutation');
+        is([map { refaddr $_ } @{$node->middleware}], [refaddr($first), refaddr($second)],
+            ref($node) . ' accessor returns an independent array');
+    }
 };
 
 subtest 'constructors reject invalid declarations' => sub {
@@ -781,8 +799,8 @@ subtest 'constructors reject invalid declarations' => sub {
         like dies {
             route '/invalid-middleware' => $handler,
                 middleware => [$invalid]
-        }, qr/middleware class name, coderef factory, object with wrap, or middleware description/,
-            'direct middleware entries reject values outside the four supported forms';
+        }, qr/middleware entry 0 must be a PAGI::Routing::Middleware description returned by middleware\(\.\.\.\)/,
+            'direct middleware entries require an explicit description';
     }
     like dies { middleware([]) }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an unblessed arrayref';
     like dies { middleware({}) }, qr/middleware requires a coderef, blessed object, or nonempty class name/, 'middleware rejects an unblessed hashref';
