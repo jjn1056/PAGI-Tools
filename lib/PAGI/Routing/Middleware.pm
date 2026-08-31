@@ -3,13 +3,14 @@ package PAGI::Routing::Middleware;
 use strict;
 use warnings;
 use Carp qw(croak);
-use Scalar::Util qw(blessed);
+use Scalar::Util qw(blessed reftype);
 use PAGI::Utils ();
 
 sub new {
     my ($class, $factory, @args) = @_;
+    my $is_factory = (reftype($factory) // '') eq 'CODE';
 
-    if (ref($factory) ne 'CODE' && !blessed($factory)) {
+    if (!$is_factory && !blessed($factory)) {
         croak 'middleware requires a coderef, blessed object, or nonempty class name'
             if ref($factory) || !defined($factory) || !length($factory);
         croak "invalid middleware class name; use leading '+' for an exact package"
@@ -19,7 +20,7 @@ sub new {
         if @args % 2;
 
     my %config = @args;
-    if (blessed($factory)) {
+    if (!$is_factory && blessed($factory)) {
         croak 'middleware object must provide a wrap method'
             unless $factory->can('wrap');
         croak 'middleware object takes no config'
@@ -42,7 +43,7 @@ sub _wrap {
     croak 'middleware inner app must be a coderef'
         unless ref($inner_app) eq 'CODE';
 
-    if (ref($target) eq 'CODE') {
+    if ((reftype($target) // '') eq 'CODE') {
         my $wrapped = $target->($inner_app, %{$self->{config}});
         return _compile_wrapped_app($wrapped, 'middleware factory');
     }

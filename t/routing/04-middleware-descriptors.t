@@ -184,6 +184,43 @@ subtest 'a factory resolves once for each compiled wrapper' => sub {
     is($builds, 2, 'second wrapper also avoids request-time resolution');
 };
 
+subtest 'a blessed coderef remains a middleware factory' => sub {
+    my @factory_calls;
+    my $factory = bless sub {
+        my ($inner, %config) = @_;
+        push @factory_calls, [refaddr($inner), { %config }];
+        return sub {
+            my ($scope) = @_;
+            push @{$scope->{trace}}, $config{label};
+            return $inner->(@_);
+        };
+    }, 'Local::BlessedFactory';
+    my $inner = sub {
+        my ($scope) = @_;
+        push @{$scope->{trace}}, 'inner';
+        return Future->done('complete');
+    };
+
+    my $descriptor;
+    ok(
+        lives { $descriptor = middleware($factory, label => 'blessed') },
+        'a blessed coderef is accepted with factory configuration',
+    );
+    return unless $descriptor;
+
+    my $app = $descriptor->_wrap($inner);
+    is(
+        \@factory_calls,
+        [[refaddr($inner), { label => 'blessed' }]],
+        'the blessed coderef is invoked once as the configured factory',
+    );
+    my $scope = { trace => [] };
+    is($app->($scope, sub { }, sub { })->get, 'complete',
+        'the blessed factory wrapper preserves inner completion');
+    is($scope->{trace}, ['blessed', 'inner'],
+        'the blessed factory wrapper invokes the inner app');
+};
+
 subtest 'a configured object is used by identity' => sub {
     my @wrapped_by;
     my $object = bless { wrapped_by => \@wrapped_by }, 'DescriptorConfiguredObject';
