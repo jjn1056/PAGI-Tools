@@ -39,7 +39,7 @@ sub new {
         PAGI::Utils::_validate_app_value($opts{app}, 'compose app');
     }
 
-    my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $middleware = PAGI::Routing::Middleware->_require_descriptors(
         exists $opts{middleware} ? $opts{middleware} : [],
         'compose middleware',
     );
@@ -116,7 +116,7 @@ Compose owns the application root and lifespan.
 
     my $app = compose(
         routes => [route('/' => \&home)],
-        middleware => [$logging, middleware('RequestId', header => 'X-Request-ID')],
+        middleware => [middleware($logging), middleware('RequestId', header => 'X-Request-ID')],
         lifespan => {
             startup => sub { my ($state, $scope) = @_; $state->{ready} = 1 },
             shutdown => sub { my ($state, $scope) = @_; delete $state->{ready} },
@@ -161,9 +161,10 @@ Callable meaning is positional and deliberate:
   Mount/Compose/default CODE -> native PAGI application
   handler result             -> native CODE or instantiated to_app object
 
-Middleware coderefs are a separate construction-time contract: a bare entry
-in C<middleware> and the target of C<middleware(...)> receive the inner
-application while Compose builds the middleware stack.
+Middleware descriptions are a separate construction-time contract: Compose
+constructs configured class targets, invokes factory targets with the inner
+application, or calls C<wrap> on configured object targets while building the
+middleware stack.
 
 =head2 routes
 
@@ -214,21 +215,20 @@ It never receives the lifespan scope owned by Compose.
     };
 
     middleware => [
-        'RequestId',
-        $logging,
-        $configured_object,
+        middleware('RequestId'),
+        middleware($logging),
+        middleware($configured_object),
         middleware('RequestId', header => 'X-Request-ID'),
     ]
 
-C<middleware> is optional and defaults to an empty arrayref. Each entry is
-a class name such as C<'RequestId'>, a bare factory coderef such as
-C<$logging>, a configured object with C<wrap>, or a
-L<PAGI::Routing::Middleware> description returned by C<middleware(...)>.
-The list is shallow-copied and all four forms are normalized to descriptions
-at construction; this phase does not load classes, construct objects, call
-C<wrap>, or perform protocol I/O. C<middleware($class, %config)> is required
-only for configured classes and remains useful for explicit reuse or
-inspection. This is application middleware, not router middleware. It
+C<middleware> is optional and defaults to an empty arrayref. Core Compose lists
+contain only L<PAGI::Routing::Middleware> descriptions returned by
+C<middleware(...)>. The list is shallow-copied; this phase does not load
+classes, construct objects, call C<wrap>, or perform protocol I/O.
+C<middleware($class, %config)> and C<middleware($factory, %config)> capture
+configuration for deferred construction or synchronous factory execution;
+C<middleware($object)> accepts an already configured object with C<wrap>.
+This is application middleware, not router middleware. It
 sees HTTP, WebSocket, SSE, lifespan, and application-defined extension scopes.
 Router-owned 404 and 405 responses travel outward through this complete stack.
 An author error renderer is inside earlier listed author middleware, so those
@@ -256,8 +256,8 @@ callback is an error. The hash is shallow-copied.
 C<routes> returns a shallow arrayref copy in routes mode and C<undef> in app
 mode. C<app> returns the original component by identity in app mode and
 C<undef> in routes mode. C<middleware> returns a shallow arrayref copy whose
-entries are homogeneous L<PAGI::Routing::Middleware> descriptions: bare
-factories were normalized and explicit descriptions retain their identity.
+entries are the original homogeneous L<PAGI::Routing::Middleware>
+descriptions, retaining their identity.
 C<lifespan> returns a shallow hashref copy or C<undef>.
 
 The source object stores configuration only. It never stores compiled
@@ -267,12 +267,12 @@ middleware, lifecycle phase, request scope, server state, or response events.
 
 C<to_app> is the second phase: it synchronously compiles the target, fresh
 author middleware wrappers, and fresh root safety wrappers after
-constructor-time normalization, then returns one native PAGI coderef. It
-performs no request or lifecycle I/O. Target loading, middleware construction,
-and wrapping failures therefore occur at C<to_app>. Calling C<to_app> again
-builds an independent graph and recompiles component objects, although lexical
-state deliberately captured by user coderefs remains ordinary shared Perl
-state.
+constructor-time description validation, then returns one native PAGI
+coderef. It performs no request or lifecycle I/O. Target loading, middleware
+construction, and wrapping failures therefore occur at C<to_app>. Calling
+C<to_app> again builds an independent graph and recompiles component objects,
+although lexical state deliberately captured by user coderefs remains ordinary
+shared Perl state.
 
 For HTTP, the exact outer-to-inner order is:
 
@@ -410,9 +410,9 @@ policy:
     use PAGI::Response qw(problem_response);
 
     middleware => [
-        'RequestId',
-        'AccessLog',
-        'SecurityHeaders',
+        middleware('RequestId'),
+        middleware('AccessLog'),
+        middleware('SecurityHeaders'),
         middleware('ErrorHandler',
             handler  => sub {
                 my ($request, $error) = @_;

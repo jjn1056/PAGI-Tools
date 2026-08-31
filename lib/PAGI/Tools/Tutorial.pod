@@ -200,11 +200,11 @@ Absolute request-bound references and Router-object calls inherit nothing. URL
 generation is not authorization. Reverse helpers return strings or croak; they
 send no protocol events or redirects.
 
-Pure route/mount/router middleware is described by a bare factory in its
-C<middleware> list, such as
-C<< middleware =E<gt> [$factory] >>; constructors normalize it to an inspectable
-description. C<middleware(...)> remains the explicit form for configured
-classes, configured objects, reuse, or inspection before attachment. Native
+Pure route/mount/router middleware lists contain explicit descriptions, such
+as C<< middleware =E<gt> [middleware($factory)] >>. Use
+C<middleware($class, %config)> for deferred class construction,
+C<middleware($factory, %config)> for a configured synchronous factory, and
+C<middleware($object)> for an already configured C<wrap> object. Native
 three-channel CODE endpoints remain explicit with C<as_app>. See L<PAGI::Routing> for
 the complete lifecycle and
 L<PAGI::Tools::Cookbook> for mounted, application, protocol, reverse-routing, and
@@ -323,12 +323,14 @@ handlers use the same direct protocol contract as C<PAGI::Routing>:
   my $snapshot = $router->to_router;
   my $app = compose(app => $snapshot)->to_app;
 
-The middleware entries above show all four universal forms: class name,
-synchronous factory coderef, configured object with C<wrap>, and explicit
-C<middleware(...)> description. Factories and C<wrap> run while C<to_app>
-compiles; the native app they return runs per request. Each C<to_router> call
-creates a fresh immutable snapshot, so retain one when inspection, reverse
-routing, and compilation must refer to the same route identities.
+The middleware entries above are intentional App Router sugar: the frontend
+immediately materializes class names, synchronous factory coderefs, configured
+objects with C<wrap>, and explicit C<middleware(...)> descriptions into the
+explicit descriptions required by the immutable core. Factories and C<wrap>
+run while C<to_app> compiles; the native app they return runs per request.
+Each C<to_router> call creates a fresh immutable snapshot, so retain one when
+inspection, reverse routing, and compilation must refer to the same route
+identities.
 
 For handlers bound to a configured object, subclass
 L<PAGI::Endpoint::Router>. Its C<routes($builder)> method uses the same verb
@@ -870,7 +872,7 @@ the order it runs:
   use PAGI::Middleware::Builder;
 
   my $app = builder {
-      enable '^MyApp::Middleware::PoweredBy';
+      enable '+MyApp::Middleware::PoweredBy';
       enable 'AccessLog';
       enable 'Runtime';
       $router;
@@ -1189,12 +1191,14 @@ Create reusable middleware by extending L<PAGI::Middleware>:
 Use it with the builder:
 
   my $app = builder {
-      enable '^MyApp::Middleware::Auth', secret => 'secret-key';
+      enable '+MyApp::Middleware::Auth', secret => 'secret-key';
       $router;
   };
 
-The C<^> prefix tells the builder to use the class name as-is instead of
-prepending C<PAGI::Middleware::>. Or skip name resolution entirely by
+The leading C<+> tells the builder to use the class name as-is instead of
+prepending C<PAGI::Middleware::>. This is the Plack-familiar exact-package
+escape shared by Builder and explicit routing middleware descriptions. Or skip
+name resolution entirely by
 passing a configured instance (parentheses required):
 
   my $app = builder {
@@ -1490,11 +1494,14 @@ C<as_app> or opaque mount boundaries.
 
 Middleware position is the same idea with a different duck type:
 C<enable> accepts a middleware name (resolved under
-C<PAGI::Middleware::>, with C<^> to escape) or a configured instance
-with a C<wrap> method, and every routing middleware array accepts the same
-four forms: class name, coderef factory, configured C<wrap> object, or
-L<PAGI::Routing::Middleware> description. Factories have the form
-C<sub { my ($app) = @_; async sub { ... } }>.
+C<PAGI::Middleware::>, with leading C<+> to select an exact package) or a configured instance
+with a C<wrap> method. Builder, App Router, and Endpoint Router retain their
+concise frontend forms. App Router and Endpoint Router immediately materialize
+explicit descriptions for the immutable core. Middleware Builder is a separate
+concise composition API: it retains its own middleware records and constructs
+or wraps them during C<to_app>. Core routing middleware arrays contain only
+L<PAGI::Routing::Middleware> descriptions. Factories have the form C<sub { my
+($app) = @_; async sub { ... } }>.
 
 Passing middleware where an app belongs (or vice versa) croaks at
 composition time with a message pointing at the right position.

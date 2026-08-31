@@ -207,11 +207,13 @@ L<PAGI::Utils/request_response>.
 
 =head1 MIDDLEWARE
 
-Router, Route, and Mount middleware lists accept the shared
-L<PAGI::Routing::Middleware> descriptor forms: class-name strings, coderef
-factories, configured objects with C<wrap>, and existing descriptions.
-Entries normalize at declaration time and build once per C<to_app>
-compilation. The first listed entry is outermost at runtime.
+This mutable frontend intentionally accepts concise middleware arrays with
+class-name strings, coderef factories, configured objects with C<wrap>, or
+existing descriptions. It immediately materializes every entry as an explicit
+L<PAGI::Routing::Middleware> description for the immutable Router snapshot;
+the core Router, Route, and Mount lists themselves contain descriptions only.
+Entries build once per C<to_app> compilation. The first listed entry is
+outermost at runtime.
 
 Router middleware surrounds every Router outcome. Mount middleware surrounds
 the selected child application. Route middleware surrounds only its selected

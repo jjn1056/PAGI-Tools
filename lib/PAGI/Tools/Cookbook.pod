@@ -194,52 +194,50 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   use v5.40;
 
   use Future::AsyncAwait;
-  use List::Util qw(max);
   use Types::Standard qw(Int);
 
+  use AppleApp::Middleware qw(with_apples_api_header);
+  use AppleApp::Model qw(apple_model);
   use PAGI::Compose qw(compose);
   use PAGI::Pages qw(welcome not_found);
   use PAGI::Response qw(file_response json_response);
-  use PAGI::Routing qw(route mount router);
+  use PAGI::Routing qw(route mount router middleware);
   use PAGI::Routing::URL qw(url_for path_for);
   use PAGI::Utils qw(app_path);
 
   my $manager_file = app_path('public', 'index.html');
 
   sub startup($state, $scope) {
-      $state->{apples_db} = {
-          1 => { id => 1, name => 'Gala',       color => 'Red/Yellow' },
-          2 => { id => 2, name => 'Honeycrisp', color => 'Rosy Red' },
-      };
+      $state->{apples} = apple_model();
       return;
   }
 
-  sub apples_db($request) {
+  sub apples($request) {
       my $state = $request->state
           or die 'starlette-apples requires Compose lifespan state';
-      return $state->get('apples_db');
+      return $state->get('apples');
   }
 
   async sub list_apples($request) {
-      my $db = apples_db($request);
+      my $apples = apples($request);
 
       return json_response([
           map {
               +{
-                  %{$db->{$_}},
+                  %$_,
                   url => url_for(
                       $request,
                       'read',
-                      { apple_id => $_ },
+                      { apple_id => $_->{id} },
                   ),
               }
-          } sort { $a <=> $b } keys %$db
+          } @{$apples->all}
       ]);
   }
 
   async sub read_apple($request) {
       my $id = $request->path_param('apple_id');
-      my $apple = apples_db($request)->{$id};
+      my $apple = apples($request)->find($id);
 
       return json_response($apple) if $apple;
       return json_response(
@@ -249,11 +247,8 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   }
 
   async sub create_apple($request) {
-      my $db = apples_db($request);
       my $data = await $request->json;
-      my $id = max(0, keys %$db) + 1;
-      my $apple = { id => $id, %$data };
-      $db->{$id} = $apple;
+      my $apple = apples($request)->create($data);
 
       return json_response(
           $apple,
@@ -262,38 +257,44 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
               Location => path_for(
                   $request,
                   'read',
-                  { apple_id => $id },
+                  { apple_id => $apple->{id} },
               ),
           ],
       );
   }
 
   async sub update_apple($request) {
-      my $db = apples_db($request);
       my $id = $request->path_param('apple_id');
+      my $apples = apples($request);
 
       return json_response(
           { error => 'Apple not found' },
           status => 404,
-      ) unless exists $db->{$id};
+      ) unless $apples->find($id);
 
       my $data = await $request->json;
-      $db->{$id} = { %{$db->{$id}}, %$data };
-      return json_response($db->{$id});
+      my $apple = $apples->update($id, $data);
+
+      return json_response(
+          { error => 'Apple not found' },
+          status => 404,
+      ) unless $apple;
+
+      return json_response($apple);
   }
 
   async sub delete_apple($request) {
-      my $db = apples_db($request);
       my $id = $request->path_param('apple_id');
+      my $apple = apples($request)->delete($id);
 
       return json_response(
           { error => 'Apple not found' },
           status => 404,
-      ) unless exists $db->{$id};
+      ) unless $apple;
 
       return json_response({
           success => \1,
-          deleted => delete $db->{$id},
+          deleted => $apple,
       });
   }
 
@@ -321,13 +322,15 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
                       route('/{apple_id:&Int}' => \&delete_apple,
                           methods => ['DELETE'], name => 'delete'),
                   ],
-                  name => 'apples',
+                  name       => 'apples',
+                  middleware => [middleware(\&with_apples_api_header)],
               ),
           ],
           http_default => not_found(
               detail => 'That page does not exist in the Apple demo.',
           ),
       ),
+      middleware => [middleware('RequestId')],
       lifespan => { startup => \&startup },
   );
 C</apples> and C</apples/> reach the child C</> leaves. The selected child owns
@@ -402,9 +405,9 @@ Use L<PAGI::Middleware::Helpers> to keep channel ownership visible:
 
   my $routing = router(
       routes => [
-          route('/' => \&home, middleware => [$factory]),
+          route('/' => \&home, middleware => [middleware($factory)]),
       ],
-      # Explicit configured-class description remains useful beside the bare factory.
+      # Both core entries are explicit middleware descriptions.
       middleware => [middleware('RequestId', header => 'X-Request-ID')],
   );
 
@@ -412,9 +415,8 @@ C<wrap_send> and C<wrap_receive> never delegate automatically. An interceptor
 may short-circuit, replace, expand, filter, or synthesize events. Return or
 await the downstream Future when completion, failure, and backpressure must
 remain attached. Factory execution happens once during C<to_app>; returned
-wrappers run per request. Use the bare factory for the low-boilerplate inline
-form; keep C<middleware(...)> when an explicit configured-class description is
-useful.
+wrappers run per request. Core Router, Route, Mount, and Compose lists contain
+only C<middleware(...)> descriptions.
 
 =head2 Negotiated 404 and 405 Responses
 
@@ -472,9 +474,9 @@ converts pre-start silence into its production-safe 500.
   my $app = compose(
       app => $routing,
       middleware => [
-          'RequestId',
-          'AccessLog',
-          'SecurityHeaders',
+          middleware('RequestId'),
+          middleware('AccessLog'),
+          middleware('SecurityHeaders'),
           middleware('ErrorHandler',
               handler  => \&server_error,
               on_error => \&report_error),
@@ -985,9 +987,9 @@ events directly, mark the declaration explicitly:
 
 =head2 Route-Level Middleware
 
-Every Router, route, WebSocket, SSE, Mount, and Compose boundary accepts the same four
-forms: class name, synchronous factory coderef, configured object with
-C<wrap>, or L<PAGI::Routing::Middleware> description:
+This C<PAGI::App::Router> example intentionally uses its concise middleware
+array forms; the frontend immediately materializes explicit
+L<PAGI::Routing::Middleware> descriptions for the immutable core:
 
   use PAGI::Routing qw(middleware);
 
@@ -1011,10 +1013,10 @@ C<wrap>, or L<PAGI::Routing::Middleware> description:
       return PAGI::Response::text_response('Admin panel');
   });
 
-Declaration normalizes these entries. During C<to_app>, each factory is called
-with the inner native app and each configured object's C<wrap> method is
-called. The returned native wrappers run per request and control downstream
-calls plus C<$scope>, C<$receive>, and C<$send>. The first listed entry is
+During C<to_app>, each factory is called with the inner native app and each
+configured object's C<wrap> method is called. Factories and C<wrap> may return
+native CODE or an object with C<to_app>; the resulting native wrappers run per
+request and return the protocol completion. The first listed entry is
 outermost. Middleware never receives a response-valued C<$next> callback.
 
 =head2 Nested Routers and Mounting
@@ -1238,12 +1240,13 @@ server-provided state:
 
   use PAGI::Compose qw(compose);
   use MyApp;
+  use PAGI::Routing qw(middleware);
 
   my $endpoint = MyApp->new(repository => $repository);
 
   my $app = compose(
       app => $endpoint,
-      middleware => [$application_logging],
+      middleware => [middleware($application_logging)],
       lifespan => {
           startup  => async sub ($state, $scope) {
               $state->{db} = DBI->connect('dbi:SQLite:dbname=app.db');
@@ -1474,6 +1477,7 @@ state in Compose lifespan state, and every declaration inspectable:
   use Future::AsyncAwait;
   use MyApp::People;
   use PAGI::Response;
+  use PAGI::Routing qw(middleware);
   use PAGI::Routing::URL qw(path_for);
   use PAGI::State qw(app_state);
 
@@ -1652,7 +1656,7 @@ state in Compose lifespan state, and every declaration inspectable:
   my $snapshot = $endpoint->to_router;
   compose(
       app => $snapshot,
-      middleware => [$application_logging],
+      middleware => [middleware($application_logging)],
       lifespan => {
           startup => async sub {
               my ($state, $scope) = @_;

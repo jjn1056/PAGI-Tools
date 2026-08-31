@@ -34,6 +34,7 @@ recommends 'Crypt::URandom', '0.36';
 # Testing
 on 'test' => sub {
     requires 'Test2::V0', '0.000159';
+    requires 'Moose', '2.2200';
     requires 'Type::Tiny';
     # In-process tests drive apps under a real event loop
     requires 'IO::Async', '0.802';

@@ -32,8 +32,11 @@ sub install_class_loader {
 package $package;
 use strict;
 use warnings;
+no warnings 'redefine';
+our \$NEW_CALLS = 0;
 sub new {
     my (\$class, \%config) = \@_;
+    ++\$NEW_CALLS;
     return bless { config => { \%config } }, \$class;
 }
 sub wrap {
@@ -55,13 +58,13 @@ CLASS_SOURCE
     };
 }
 
-subtest 'declarative lists normalize bare factories to descriptions' => sub {
+subtest 'frontend lists normalize bare factories to descriptions' => sub {
     my $factory = sub { return $_[0] };
     my $explicit = middleware('Configured', enabled => 1);
     my $subclass = DescriptorMiddlewareSubclass->new(sub { return $_[0] });
     my $input = [$factory, $explicit, $factory, $subclass];
 
-    my $normalized = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $normalized = PAGI::Routing::Middleware->_normalize_frontend_entries(
         $input,
         'middleware',
     );
@@ -84,15 +87,15 @@ subtest 'declarative lists normalize bare factories to descriptions' => sub {
     is(scalar @$normalized, 4, 'later input mutation is invisible');
 };
 
-subtest 'normalization accepts all four entry forms and rejects invalid entries' => sub {
+subtest 'frontend normalization accepts all four entry forms and rejects invalid entries' => sub {
     is(
-        PAGI::Routing::Middleware->_normalize_descriptors([], 'middleware'),
+        PAGI::Routing::Middleware->_normalize_frontend_entries([], 'middleware'),
         [],
         'empty list normalizes to a fresh empty list',
     );
     like(
         dies {
-            PAGI::Routing::Middleware->_normalize_descriptors({}, 'compose middleware')
+            PAGI::Routing::Middleware->_normalize_frontend_entries({}, 'compose middleware')
         },
         qr/compose middleware must be an arrayref/,
         'caller prefix is retained for a non-array value',
@@ -101,7 +104,7 @@ subtest 'normalization accepts all four entry forms and rejects invalid entries'
     my $factory = sub { return $_[0] };
     my $configured = bless {}, 'DescriptorConfiguredObject';
     my $explicit = middleware('Configured');
-    my $normalized = PAGI::Routing::Middleware->_normalize_descriptors(
+    my $normalized = PAGI::Routing::Middleware->_normalize_frontend_entries(
         ['GZip', $factory, $configured, $explicit],
         'middleware',
     );
@@ -119,7 +122,7 @@ subtest 'normalization accepts all four entry forms and rejects invalid entries'
             { header => 'X-Request-ID' }) {
         like(
             dies {
-                PAGI::Routing::Middleware->_normalize_descriptors(
+                PAGI::Routing::Middleware->_normalize_frontend_entries(
                     [$invalid],
                     'middleware',
                 )
@@ -181,6 +184,43 @@ subtest 'a factory resolves once for each compiled wrapper' => sub {
     is($builds, 2, 'second wrapper also avoids request-time resolution');
 };
 
+subtest 'a blessed coderef remains a middleware factory' => sub {
+    my @factory_calls;
+    my $factory = bless sub {
+        my ($inner, %config) = @_;
+        push @factory_calls, [refaddr($inner), { %config }];
+        return sub {
+            my ($scope) = @_;
+            push @{$scope->{trace}}, $config{label};
+            return $inner->(@_);
+        };
+    }, 'Local::BlessedFactory';
+    my $inner = sub {
+        my ($scope) = @_;
+        push @{$scope->{trace}}, 'inner';
+        return Future->done('complete');
+    };
+
+    my $descriptor;
+    ok(
+        lives { $descriptor = middleware($factory, label => 'blessed') },
+        'a blessed coderef is accepted with factory configuration',
+    );
+    return unless $descriptor;
+
+    my $app = $descriptor->_wrap($inner);
+    is(
+        \@factory_calls,
+        [[refaddr($inner), { label => 'blessed' }]],
+        'the blessed coderef is invoked once as the configured factory',
+    );
+    my $scope = { trace => [] };
+    is($app->($scope, sub { }, sub { })->get, 'complete',
+        'the blessed factory wrapper preserves inner completion');
+    is($scope->{trace}, ['blessed', 'inner'],
+        'the blessed factory wrapper invokes the inner app');
+};
+
 subtest 'a configured object is used by identity' => sub {
     my @wrapped_by;
     my $object = bless { wrapped_by => \@wrapped_by }, 'DescriptorConfiguredObject';
@@ -194,34 +234,16 @@ subtest 'a configured object is used by identity' => sub {
 
 subtest 'class names auto-load, receive config, and follow naming rules' => sub {
     my @cases = (
-        [
-            'DescriptorShort',
-            'PAGI/Middleware/DescriptorShort.pm',
-            'PAGI::Middleware::DescriptorShort',
-            'short',
-        ],
-        [
-            'Descriptor::Nested',
-            'PAGI/Middleware/Descriptor/Nested.pm',
-            'PAGI::Middleware::Descriptor::Nested',
-            'nested',
-        ],
-        [
-            'PAGI::Middleware::DescriptorQualified',
-            'PAGI/Middleware/DescriptorQualified.pm',
-            'PAGI::Middleware::DescriptorQualified',
-            'qualified',
-        ],
-        [
-            '^Caller::DescriptorExact',
-            'Caller/DescriptorExact.pm',
-            'Caller::DescriptorExact',
-            'exact',
-        ],
+        ['RequestId', 'PAGI::Middleware::RequestId'],
+        ['Auth::Basic', 'PAGI::Middleware::Auth::Basic'],
+        ['PAGI::Middleware::RequestId', 'PAGI::Middleware::RequestId'],
+        ['+Local::ExactMiddleware', 'Local::ExactMiddleware'],
     );
 
     for my $case (@cases) {
-        my ($declared, $file, $package, $label) = @$case;
+        my ($declared, $package) = @$case;
+        (my $file = $package) =~ s{::}{/}g;
+        $file .= '.pm';
         my $loader = install_class_loader($file, $package);
         local @INC = ($loader, @INC);
         delete local $INC{$file};
@@ -232,27 +254,82 @@ subtest 'class names auto-load, receive config, and follow naming rules' => sub 
             return Future->done;
         };
 
-        my $app = middleware($declared, label => $label)->_wrap($inner);
+        my $descriptor = middleware($declared, label => $declared);
+        ok(!$INC{$file}, "$declared remains unloaded during description construction");
+        my $app = $descriptor->_wrap($inner);
         $app->($scope, sub { }, sub { })->get;
 
         ok($INC{$file}, "$declared auto-loaded $package");
-        is($scope->{trace}, [$label, 'inner'], "$declared passed config through new and wrapped app");
+        no strict 'refs';
+        is(${"${package}::NEW_CALLS"}, 1,
+            "$declared constructs its middleware once during _wrap");
+        is($scope->{trace}, [$declared, 'inner'], "$declared passed config through new and wrapped app");
     }
+
+    like dies { middleware('^Local::OldEscape') },
+        qr/invalid middleware class name|leading '\+'|exact package/i,
+        'the retired caret exact-package spelling is rejected';
+};
+
+subtest 'a configured factory compiles application-valued results' => sub {
+    local $Local::WrappedApplication::TO_APP_CALLS = 0;
+    my @factory_calls;
+    my $descriptor = middleware(sub {
+        my ($inner, %config) = @_;
+        push @factory_calls, [$inner, {%config}];
+        return Local::WrappedApplication->new(inner => $inner);
+    }, label => 'items', enabled => 1);
+    my $inner = sub { return Future->done('inner') };
+
+    is(\@factory_calls, [], 'description construction does not invoke the factory');
+    my $first_app = $descriptor->_wrap($inner);
+    is(scalar @factory_calls, 1, 'first _wrap invokes the factory once');
+    is(refaddr($factory_calls[0][0]), refaddr($inner), 'factory receives the exact inner app');
+    is($factory_calls[0][1], { label => 'items', enabled => 1 },
+        'factory receives flat descriptor configuration');
+    is($Local::WrappedApplication::TO_APP_CALLS, 1,
+        'factory result is compiled through to_app once');
+    is(ref($first_app), 'CODE', 'factory compilation returns a native app coderef');
+    is($first_app->({}, sub { }, sub { })->get, 'inner',
+        'factory application-valued result delegates to its inner app');
+
+    my $second_app = $descriptor->_wrap($inner);
+    isnt(refaddr($second_app), refaddr($first_app),
+        'each _wrap creates a distinct compiled wrapper');
+    is(scalar @factory_calls, 2, 'second _wrap invokes the factory once more');
+    is($Local::WrappedApplication::TO_APP_CALLS, 2,
+        'second factory result is also compiled once');
+};
+
+subtest 'configured objects compile application-valued wrap results' => sub {
+    local $Local::WrappedApplication::TO_APP_CALLS = 0;
+    my $object = DescriptorApplicationWrapObject->new;
+    my $inner = sub { return Future->done('inner') };
+
+    my $app = middleware($object)->_wrap($inner);
+
+    is($object->{wrap_calls}, 1, 'configured object wraps once during _wrap');
+    is($Local::WrappedApplication::TO_APP_CALLS, 1,
+        'configured object wrap result is compiled through to_app once');
+    is(ref($app), 'CODE', 'configured object compilation returns a native app coderef');
+    is($app->({}, sub { }, sub { })->get, 'inner',
+        'configured object application-valued result delegates to its inner app');
 };
 
 subtest 'invalid descriptor resolutions fail loudly' => sub {
     my $inner = sub { Future->done };
 
-    like(
-        dies { middleware(sub { return 'not an app' })->_wrap($inner) },
-        qr/middleware factory must return PAGI app coderef/i,
-        'factory must return a coderef',
-    );
-    like(
-        dies { middleware(sub { return Future->done(sub { }) })->_wrap($inner) },
-        qr/middleware factory must return PAGI app coderef.*Future/i,
-        'an accidental async factory is rejected as a Future',
-    );
+    for my $case (
+        [sub { return undef }, qr/non-reference/i, 'undef factory result is rejected during _wrap'],
+        [sub { return [] }, qr/ARRAY/i, 'arrayref factory result is rejected during _wrap'],
+        [sub { return Future->done(sub { }) }, qr/Future/i,
+            'async factory result is rejected during _wrap'],
+    ) {
+        my ($factory, $shape, $name) = @$case;
+        like dies { middleware($factory)->_wrap($inner) },
+            qr/middleware factory must return a PAGI application value:.*$shape/i,
+            $name;
+    }
     like(
         dies { middleware(bless {}, 'DescriptorNoWrap') },
         qr/middleware object.*wrap/i,
@@ -265,11 +342,6 @@ subtest 'invalid descriptor resolutions fail loudly' => sub {
         'configured object plus constructor config is rejected',
     );
     like(
-        dies { middleware(sub { return $_[0] }, label => 'audit') },
-        qr/middleware factory.*takes no config/i,
-        'coderef factory plus unused constructor config is rejected',
-    );
-    like(
         dies { middleware(sub { die "factory exploded\n" })->_wrap($inner) },
         qr/factory exploded/,
         'factory exceptions propagate',
@@ -277,12 +349,12 @@ subtest 'invalid descriptor resolutions fail loudly' => sub {
 };
 
 subtest 'every intermediate wrapper result must be an app coderef' => sub {
-    my $object = bless {}, 'DescriptorBadWrapResult';
+    my $object = Local::BadWrapObject->new;
     my $inner = sub { Future->done };
 
     like(
         dies { middleware($object)->_wrap($inner) },
-        qr/middleware wrap must return PAGI app coderef/i,
+        qr/middleware wrap must return a PAGI application value:.*non-reference/i,
         'configured object wrap result is validated',
     );
 };
@@ -299,9 +371,37 @@ subtest 'every intermediate wrapper result must be an app coderef' => sub {
 }
 
 {
-    package DescriptorBadWrapResult;
+    package Local::WrappedApplication;
 
-    sub wrap { return 'not an app' }
+    our $TO_APP_CALLS = 0;
+
+    sub new {
+        my ($class, %args) = @_;
+        return bless \%args, $class;
+    }
+    sub to_app {
+        my ($self) = @_;
+        ++$TO_APP_CALLS;
+        return sub { return $self->{inner}->(@_) };
+    }
+}
+
+{
+    package DescriptorApplicationWrapObject;
+
+    sub new { return bless { wrap_calls => 0 }, shift }
+    sub wrap {
+        my ($self, $inner) = @_;
+        ++$self->{wrap_calls};
+        return Local::WrappedApplication->new(inner => $inner);
+    }
+}
+
+{
+    package Local::BadWrapObject;
+
+    sub new { return bless {}, shift }
+    sub wrap { return undef }
 }
 
 done_testing;

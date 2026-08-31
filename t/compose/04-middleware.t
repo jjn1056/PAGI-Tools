@@ -107,8 +107,8 @@ subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
             });
         },
         middleware => [
-            $author_entry->('author outer'),
-            $author_entry->('author inner'),
+            middleware($author_entry->('author outer')),
+            middleware($author_entry->('author inner')),
         ],
     )->to_app;
     is(\%wraps, {
@@ -144,7 +144,7 @@ subtest 'first listed middleware is outermost for requests and lifespan' => sub 
     my $app = compose(
         app => $target,
         middleware => [
-            tracing_factory('outer', \@trace),
+            middleware(tracing_factory('outer', \@trace)),
             middleware(tracing_factory('inner', \@trace)),
         ],
     )->to_app;
@@ -192,7 +192,7 @@ subtest 'application middleware sees delegated protocols and Router outcomes' =>
                 type => 'http.response.body', body => '', more => 0,
             });
         },
-        middleware => [$observer],
+        middleware => [middleware($observer)],
     )->to_app;
     run_scope($app, scope(type => $_)) for qw(http websocket sse example.extension);
     is(\@scope_types, [qw(http websocket sse example.extension)],
@@ -217,7 +217,7 @@ subtest 'application middleware sees delegated protocols and Router outcomes' =>
         routes => [route('/present' => sub {
             return PAGI::Response::Text->new('present');
         })],
-        middleware => [$outcome_observer],
+        middleware => [middleware($outcome_observer)],
     )->to_app;
     my $events = run_scope($routing_app, scope(type => 'http', path => '/missing'));
     is(\@statuses, [404],
@@ -234,8 +234,8 @@ subtest 'Router-owned 404 and 405 cross the complete author stack' => sub {
             }, methods => 'GET'),
         ],
         middleware => [
-            tracing_factory('author outer', \@trace),
-            tracing_factory('author inner', \@trace),
+            middleware(tracing_factory('author outer', \@trace)),
+            middleware(tracing_factory('author inner', \@trace)),
         ],
     )->to_app;
 
@@ -269,7 +269,7 @@ subtest 'author ErrorHandler response crosses only earlier middleware' => sub {
             die "author target failed\n";
         })],
         middleware => [
-            tracing_factory('author outer', \@trace),
+            middleware(tracing_factory('author outer', \@trace)),
             middleware('ErrorHandler',
                 on_error => sub {
                     push @trace, 'author ErrorHandler report';
@@ -326,7 +326,7 @@ subtest 'ordinary shallow cloning preserves state proof and changes visible scop
             push @seen, ['target', $scope->{worker}];
             return;
         },
-        middleware => [$clone],
+        middleware => [middleware($clone)],
         lifespan => {
             startup => sub {
                 my ($callback_state, $callback_scope) = @_;
@@ -439,7 +439,7 @@ subtest 'middleware exception is not converted into startup.failed' => sub {
     is(\@events, [], 'Compose emits no callback failure event');
 };
 
-subtest 'each to_app builds fresh bare middleware instances' => sub {
+subtest 'each to_app builds fresh explicit middleware instances' => sub {
     my $factory_calls = 0;
     my $factory = sub {
         my ($inner) = @_;
@@ -447,8 +447,10 @@ subtest 'each to_app builds fresh bare middleware instances' => sub {
         return $inner;
     };
     my $object = ComposeDirectMiddleware->new;
-    my $composition = compose(app => sub { return }, middleware => [$factory, $object]);
-    is($object->wraps, 0, 'direct object is not wrapped during normalization');
+    my $composition = compose(app => sub { return }, middleware => [
+        middleware($factory), middleware($object),
+    ]);
+    is($object->wraps, 0, 'described object is not wrapped during construction');
     my $one = $composition->to_app;
     my $two = $composition->to_app;
     is($factory_calls, 2, 'factory runs once for each compiled graph');
@@ -459,24 +461,24 @@ subtest 'each to_app builds fresh bare middleware instances' => sub {
 
     my $throwing = compose(
         app => sub { return },
-        middleware => [sub { die "factory exploded\n" }],
+        middleware => [middleware(sub { die "factory exploded\n" })],
     );
     like(dies { $throwing->to_app }, qr/factory exploded/,
-        'bare factory failure aborts to_app synchronously');
+        'described factory failure aborts to_app synchronously');
 
     my $invalid = compose(
         app => sub { return },
-        middleware => [sub { return 'not an app' }],
+        middleware => [middleware(sub { return 'not an app' })],
     );
-    like(dies { $invalid->to_app }, qr/must return PAGI app coderef/,
-        'invalid bare wrapper result aborts compilation');
+    like(dies { $invalid->to_app }, qr/must return a PAGI application value/,
+        'invalid described wrapper result aborts compilation');
 
     my $async = compose(
         app => sub { return },
-        middleware => [sub { return Future->done(sub { }) }],
+        middleware => [middleware(sub { return Future->done(sub { }) })],
     );
-    like(dies { $async->to_app }, qr/must return PAGI app coderef.*Future/,
-        'an accidentally async bare factory remains invalid');
+    like(dies { $async->to_app }, qr/must return a PAGI application value.*Future/,
+        'an accidentally async described factory remains invalid');
 };
 
 done_testing;

@@ -12,6 +12,74 @@ Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Breaking: use explicit middleware descriptions at core boundaries
+
+The immutable core middleware lists in Route, Mount, Router, and Compose now
+contain only descriptions made with `middleware(...)`. A description records
+how middleware is constructed and later wrapped around the inner application;
+it does not construct or run middleware at declaration time.
+
+**Before (removed):** declarative core lists accepted concise strings,
+coderefs, and configured wrapper objects directly.
+
+```perl
+middleware => ['RequestId', \&audit, $object]
+```
+
+**After (shipped):** make each core entry an explicit description.
+
+```perl
+middleware => [
+    middleware('RequestId'),
+    middleware(\&audit),
+    middleware($object),
+]
+```
+
+Short package names still resolve beneath `PAGI::Middleware::`. For a package
+outside that namespace, use Plack's leading-`+` exact-package convention.
+
+```perl
+# Before: exact package
+middleware('^MyApp::Middleware::Auth')
+
+# After: Plack-familiar exact package
+middleware('+MyApp::Middleware::Auth')
+```
+
+A coderef description can receive named configuration along with the inner
+application. Its synchronous result, like an object's `wrap` result, must be
+a PAGI application value: a native application coderef or an instantiated
+object with `to_app`.
+
+```perl
+middleware(\&audit_factory, label => 'items')
+
+sub audit_factory {
+    my ($inner, %config) = @_;
+    return MyApp::AuditBoundary->new(
+        inner => $inner,
+        label => $config{label},
+    );
+}
+```
+
+`PAGI::App::Router` and `PAGI::Endpoint::Router` remain higher-level
+frontends and may retain their concise middleware forms; they materialize
+explicit descriptions for the immutable core. `PAGI::Middleware::Builder` is
+a separate concise composition API: it retains its own middleware records and
+constructs or wraps them during `to_app`. The router frontend syntaxes and all
+three frontends' runtime behavior are unchanged. Builder's exact-package
+declaration changes from `^` to the same leading-`+` convention:
+
+```perl
+# Before: exact package through Middleware Builder
+enable '^MyApp::Middleware::Auth';
+
+# After: leading-+ exact package through Middleware Builder
+enable '+MyApp::Middleware::Auth';
+```
+
 ## Breaking: Route endpoints and application-valued responses
 
 There are now four callable boundaries. The distinction is structural, not
@@ -1489,9 +1557,9 @@ and security-header middleware so those wrappers observe its 500 response:
 
 ```perl
 middleware => [
-    'RequestId',
-    'AccessLog',
-    'SecurityHeaders',
+    middleware('RequestId'),
+    middleware('AccessLog'),
+    middleware('SecurityHeaders'),
     middleware('ErrorHandler',
         handler  => \&site_server_error,
         on_error => \&report_error),
@@ -1533,7 +1601,7 @@ mount(
     app        => $legacy_router,
     name       => 'legacy',
     middleware => [
-        $legacy_headers,
+        middleware($legacy_headers),
     ],
 )
 ```
@@ -2087,7 +2155,7 @@ $r->mount('/api/v2', app => $v2_app);  # unreachable below /api while broad is f
 Why: one declaration order makes route-versus-mount ownership and overlapping
 prefix behavior inspectable without kind-specific precedence rules.
 
-## Middleware has four universal forms
+## Middleware has one native contract and frontend sugar
 
 **Before (removed):** App routing lists accepted a factory coderef or an object
 with `wrap`, while other routing surfaces had different accepted forms.
@@ -2099,9 +2167,12 @@ $r->get('/admin' => [
 ] => $admin_app);
 ```
 
-**After (shipped):** every Router, Mount, route, and protocol route accepts a
+**After (shipped):** App Router and Endpoint Router middleware lists accept a
 class name, factory coderef, configured wrapping object, or explicit
-description.
+description as frontend sugar. They immediately materialize every entry into
+the explicit descriptions required by immutable Router, Mount, Route, and
+protocol-route middleware lists. The `$r` example below is that intentional
+higher-level syntax:
 
 ```perl
 use PAGI::Response;
@@ -2115,8 +2186,12 @@ $r->get('/admin' => [
 ] => sub { return PAGI::Response::text_response('admin') });
 ```
 
-Why: one native app-to-app middleware contract can wrap HTTP, WebSocket, SSE,
-Mount, Route, Router, and Compose boundaries consistently.
+At an immutable core boundary, spell the equivalent entries as
+`middleware('RequestId')`, `middleware($logging_factory)`,
+`middleware($configured_auth_object)`, and the configured `middleware(...)`
+description already shown. Why: one native app-to-app middleware contract can
+wrap HTTP, WebSocket, SSE, Mount, Route, Router, and Compose boundaries
+consistently, while the core remains explicit and inspectable.
 
 ## Endpoint middleware is native PAGI middleware
 

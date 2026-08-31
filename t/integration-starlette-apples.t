@@ -5,6 +5,7 @@ use Test2::V0;
 use FindBin qw($Bin);
 use Digest::SHA qw(sha256_hex);
 use JSON::PP ();
+use Scalar::Util qw(refaddr);
 use lib "$Bin/../lib";
 use PAGI::Test::Client;
 
@@ -15,6 +16,8 @@ if ($] < 5.040) {
 
 my $app_file = "$Bin/../examples/starlette-apples/app.pl";
 my $readme_file = "$Bin/../examples/starlette-apples/README.md";
+my $example_lib = "$Bin/../examples/starlette-apples/lib";
+unshift @INC, $example_lib;
 
 sub _slurp {
     my ($path) = @_;
@@ -39,6 +42,49 @@ subtest 'README preserves the comparison and current executable source' => sub {
         'the copied Perl application stays identical to the executable example');
 };
 
+subtest 'Moose model owns fixture and CRUD behavior' => sub {
+    my $loaded = eval { require AppleApp::Model; 1 };
+    ok($loaded, 'AppleApp::Model loads from the runner-supplied library path')
+        or diag($@);
+    return unless $loaded;
+
+    my $imported = eval { AppleApp::Model->import('apple_model'); 1 };
+    ok($imported, 'AppleApp::Model exports its model factory on request')
+        or diag($@);
+    return unless $imported;
+
+    my $factory = __PACKAGE__->can('apple_model');
+    ok($factory, 'apple_model is installed in the requesting package');
+    return unless $factory;
+
+    my $model = $factory->();
+    my $other_model = $factory->();
+    isa_ok($model, 'AppleApp::Model');
+    isnt(refaddr($model), refaddr($other_model),
+        'apple_model returns a fresh model instance');
+    is($model->all, [
+        { id => 1, name => 'Gala',       color => 'Red/Yellow' },
+        { id => 2, name => 'Honeycrisp', color => 'Rosy Red' },
+    ], 'model owns the ordered fixture collection');
+    is($model->find(1),
+        { id => 1, name => 'Gala', color => 'Red/Yellow' },
+        'model finds one apple');
+
+    my $created = $model->create({ name => 'Fuji', color => 'Red' });
+    is($created, { id => 3, name => 'Fuji', color => 'Red' },
+        'model assigns the next numeric ID');
+    is($model->update(3, { color => 'Crimson' }),
+        { id => 3, name => 'Fuji', color => 'Crimson' },
+        'model updates an existing apple');
+    is($model->update(999, { color => 'Green' }), undef,
+        'model declines an update for a missing apple');
+    is($model->delete(3),
+        { id => 3, name => 'Fuji', color => 'Crimson' },
+        'model returns the deleted apple');
+    is($model->find(3), undef,
+        'deleted apple is no longer present');
+};
+
 my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'Starlette comparison example loads cleanly')
@@ -51,8 +97,7 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
 
     PAGI::Test::Client->run($app, sub {
         my ($client) = @_;
-        ok(ref($client->state->{apples_db}) eq 'HASH',
-            'Compose lifespan startup installs the apple fixture');
+        isa_ok($client->state->{apples}, 'AppleApp::Model');
 
     my $manager = $client->get('/', headers => { Accept => 'text/html' });
     is($manager->status, 200, 'apple manager route responds');
@@ -66,6 +111,11 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         'manager provides a live apple list');
     like($manager->text, qr/href="\/welcome"/,
         'manager links to the PAGI welcome page');
+    ok(defined($manager->header('X-Request-ID'))
+            && length($manager->header('X-Request-ID')),
+        'global RequestId middleware identifies the manager response');
+    is($manager->header('X-Apples-API'), undef,
+        'apples middleware does not leak onto the manager response');
 
     my $manager_head = $client->head('/');
     is($manager_head->status, 200,
@@ -98,6 +148,11 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
             url => 'http://testserver/apples/2',
         },
     ], 'collection preserves numeric ID order');
+    ok(defined($list->header('X-Request-ID'))
+            && length($list->header('X-Request-ID')),
+        'global RequestId middleware identifies the apples response');
+    is($list->header('X-Apples-API'), '1',
+        'apples middleware marks the mounted API response');
 
     my $slash_list = $client->get('/apples/');
     is($slash_list->status, 200,
@@ -118,6 +173,12 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         'resource miss retains the application JSON representation');
     is($missing_apple->json, { error => 'Apple not found' },
         'resource miss retains the application error shape');
+
+    my $missing_update = $client->put('/apples/999');
+    is($missing_update->status, 404,
+        'missing update is rejected before reading a request body');
+    is($missing_update->json, { error => 'Apple not found' },
+        'missing update retains the application error shape');
 
     my $invalid_id = $client->get('/apples/not-an-int',
         headers => { Accept => 'application/problem+json' });

@@ -50,9 +50,9 @@ PAGI::Compose
 Configured startup and shutdown callbacks require server lifespan state
 support. Application middleware receives the lifespan scope and events as well
 as request protocols, so the logging middleware records both lifecycle and
-request dispatch. The bare `middleware => [\&with_logging]` factory shorthand
-is normalized into an inspectable immutable middleware description when the
-Compose root is constructed.
+request dispatch. The Compose root explicitly describes that factory as
+`middleware => [middleware(\&with_logging)]`; core middleware lists contain
+only inspectable immutable descriptions.
 
 The selected Router supplies negotiated HTTP 404 and 405 outcomes. Root
 Compose supplies the response-completion and 500 failsafes; neither layer
