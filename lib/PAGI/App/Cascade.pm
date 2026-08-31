@@ -5,7 +5,7 @@ use warnings;
 use Future;
 use Future::AsyncAwait;
 use PAGI::Exception::IncompleteResponse ();
-use PAGI::Utils ();
+use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -143,7 +143,7 @@ sub to_app {
             die $body_before_start if $body_before_start;
 
             if ($start_seen) {
-                unless ($terminal_seen) {
+                unless ($terminal_seen || request_ended_abnormally($scope)) {
                     die PAGI::Exception::IncompleteResponse->new(
                         stage   => 'after_start',
                         message => 'HTTP application completed after response start without a terminal body',
