@@ -247,12 +247,21 @@ is_connected alone is also cleared by a clean completion."
 - Consumes: `PAGI::Utils::request_ended_abnormally($scope)` from Task 1.
 - Produces: nothing consumed by later tasks.
 
-**Why:** on an abnormal end the middleware currently joins whatever partial
-body accumulated, computes a validator over it, and emits it with
+**Why:** on an abnormal end the middleware synthesizes a complete response
+from whatever it buffered, computing a validator over it and emitting
 `more => 0`. A probe produced `etag="d41d8cd98f00b204e9800998ecf8427e"` —
 the MD5 of the empty string — for an abandoned response. Paired with
 `ConditionalGet`, a later request carrying that validator receives a 304 for
 an empty representation.
+
+> **Correction (applied during execution, ruled by the controller).** The
+> test app shape below originally sent `http.response.start` plus one
+> `more => 1` chunk. That does **not** reach the defect: ETag sets a
+> streaming-passthrough flag on the first non-terminal chunk (`ETag.pm:89`)
+> and returns before the synthesis block (`:138`), so the test passed against
+> unmodified source. The defect requires an app that starts a response and
+> sends **no body event at all** — the shape Task 4 already used. The code
+> below is the corrected version. The same correction applies to Task 3.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -277,15 +286,14 @@ subtest 'a disconnected client gets no fabricated validator' => sub {
     my $scope = { type => 'http', method => 'GET', path => '/x', headers => [],
                   'pagi.connection' => AbortedConn->new };
 
-    # An application that starts a response, sends one non-terminal chunk,
-    # and stops because the client vanished.
+    # An application that starts a response and stops before sending any
+    # body, because the client vanished. A non-terminal chunk here would
+    # trip ETag's streaming passthrough and never reach the defect.
     my $app = sub {
         my ($app_scope, $receive, $inner_send) = @_;
         return (async sub {
             await $inner_send->({ type => 'http.response.start',
                                   status => 200, headers => [] });
-            await $inner_send->({ type => 'http.response.body',
-                                  body => 'partial', more => 1 });
             return;
         })->();
     };
@@ -361,8 +369,10 @@ representation."
 - [ ] **Step 1: Write the failing test**
 
 Add a subtest to `t/middleware/gzip.t`, structurally identical to Task 2's
-(same `AbortedConn` package — redeclare it locally in this file; do not
-create a shared test library in this task), asserting:
+**as corrected** — an app that starts a response and sends no body event,
+since a non-terminal chunk trips GZip's streaming passthrough the same way it
+trips ETag's. Redeclare the `AbortedConn` package locally in this file; do not
+create a shared test library in this task. Assert:
 
 ```perl
     is(scalar(grep { $_->{type} eq 'http.response.start' } @sent), 0,
@@ -371,8 +381,7 @@ create a shared test library in this task), asserting:
         'no terminal body event is fabricated');
 ```
 
-Use an app that starts a response and sends one `more => 1` chunk, as in
-Task 2.
+Use the corrected Task 2 app shape: start only, no body event.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
