@@ -1,14 +1,17 @@
 #!/usr/bin/env perl
 use v5.40;
 
+use File::Basename qw(dirname);
 use Future::AsyncAwait;
 use List::Util qw(max);
 use Types::Standard qw(Int);
+use lib dirname(__FILE__) . '/lib';
 
+use AppleApp::Middleware qw(with_apples_api_header);
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(file_response json_response);
-use PAGI::Routing qw(route mount router);
+use PAGI::Routing qw(route mount router middleware);
 use PAGI::Routing::URL qw(url_for path_for);
 use PAGI::Utils qw(app_path);
 
@@ -129,12 +132,14 @@ compose(
                     route('/{apple_id:&Int}' => \&delete_apple,
                         methods => ['DELETE'], name => 'delete'),
                 ],
-                name => 'apples',
+                name       => 'apples',
+                middleware => [middleware(\&with_apples_api_header)],
             ),
         ],
         http_default => not_found(
             detail => 'That page does not exist in the Apple demo.',
         ),
     ),
+    middleware => [middleware('RequestId')],
     lifespan => { startup => \&startup },
 );

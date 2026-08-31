@@ -66,6 +66,11 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         'manager provides a live apple list');
     like($manager->text, qr/href="\/welcome"/,
         'manager links to the PAGI welcome page');
+    ok(defined($manager->header('X-Request-ID'))
+            && length($manager->header('X-Request-ID')),
+        'global RequestId middleware identifies the manager response');
+    is($manager->header('X-Apples-API'), undef,
+        'apples middleware does not leak onto the manager response');
 
     my $manager_head = $client->head('/');
     is($manager_head->status, 200,
@@ -98,6 +103,11 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
             url => 'http://testserver/apples/2',
         },
     ], 'collection preserves numeric ID order');
+    ok(defined($list->header('X-Request-ID'))
+            && length($list->header('X-Request-ID')),
+        'global RequestId middleware identifies the apples response');
+    is($list->header('X-Apples-API'), '1',
+        'apples middleware marks the mounted API response');
 
     my $slash_list = $client->get('/apples/');
     is($slash_list->status, 200,
