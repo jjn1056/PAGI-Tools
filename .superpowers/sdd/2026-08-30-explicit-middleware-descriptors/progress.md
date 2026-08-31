@@ -15,8 +15,8 @@ Baseline: Perl 5.42.2; `prove -lr t` passed 218 files / 2373 tests at `b2bfb00`.
 | 1. Explicit descriptor | complete | `24098f5757a06bf37c3b54bb0f1bb695a2ad9e09` | 3 files / 29 tests | RED captured; focused GREEN; task review approved with one deferred POD minor |
 | 2. Strict core lists | complete | `982dfd41e7fbe46fa9cf65e6db7d120b968816cf` | 10 files / 148 tests | RED captured; focused GREEN; task review clean |
 | 3. Router frontend sugar | complete | `108bf48c53745d1dfdb4335266f482b2f5345725` | 5 files / 52 tests | Characterization and stale-expectation migration GREEN; task review clean |
-| 4. Builder naming | in progress | — | — | — |
-| 5. Examples and docs | pending | — | — | — |
+| 4. Builder naming | verification deferred | `020336f8c64a3e7a427a9f59f7ee35ab413c20a7` | Builder gate: 2 files / 13 tests PASS; combined gate pending Task 5 | Code review approved; Cookbook dependency recorded |
+| 5. Examples and docs | in progress | — | — | — |
 | 6. Upgrade and verification | pending | — | — | — |
 
 ## Preflight consistency scan
@@ -73,3 +73,17 @@ Task 3: complete (commits b1b8d95..108bf48, review clean). The reviewer noted
 that the implementer did not edit the ledger; the controller's standing
 ledger-ownership ruling resolves that operational item in this tracking
 commit.
+
+Ruling: Task 4's Builder implementation is approved, but its required combined
+POD command cannot pass until Task 5 migrates the Cookbook's bare core Route
+factory. Task 5 explicitly owns that file and migration, so expanding Task 4
+would duplicate scope. Keep Task 4 open, execute Task 5, rerun Task 4's exact
+combined command, then close both gates. Cost if wrong: task completion order
+temporarily differs from the plan, but no downstream production behavior is
+built on an unreviewed Builder change.
+
+Task 4: important (sequencing): `t/00-pod/cookbook-examples.t` fails at its
+representative bare Route factory until Task 5 migrates the Cookbook.
+
+Task 4: minor (deferred to Task 5): `PAGI::Routing` still advertises retired
+`^` and bare core entries.
