@@ -48,3 +48,5 @@ None.
 
 - Task 1: complete (commits `fad7d06..28d1566`, review clean).
 - Task 2: complete (commits `b81539f..b2fde61`, review clean).
+- Task 3: fix round 1/5 (1 addressed, 0 open — corrected non-resolving implementation SHA; commit `7ff1911`).
+- Task 3: complete (commits `e095bad..7ff1911`, review clean).
