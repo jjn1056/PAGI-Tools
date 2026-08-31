@@ -772,7 +772,10 @@ subtest 'an aborted HTML response still reaches the wire' => sub {
         })->();
     };
 
-    my $wrapped = PAGI::Middleware::Debug->new->wrap($app);
+    # enabled => 1 is REQUIRED: Debug defaults to enabled => 0 (Debug.pm:57)
+    # and is a pure pass-through when disabled (:68-69), so a test that omits
+    # it passes against unmodified source. Controller-verified by probe.
+    my $wrapped = PAGI::Middleware::Debug->new(enabled => 1)->wrap($app);
     Future->wrap($wrapped->($scope, sub { Future->done }, $send))->get;
 
     is(scalar(grep { $_->{type} eq 'http.response.start' } @sent), 1,
@@ -842,8 +845,9 @@ before_start to every outer observer."
 ### Task 8: AccessLog records aborts with their reason
 
 **Files:**
-- Modify: `lib/PAGI/Middleware/AccessLog.pm:69-95` and `_log_request`
-- Test: `t/middleware/access-log.t` (add a subtest)
+- Modify: `lib/PAGI/Middleware/AccessLog.pm` — `_log_request` (`:95-101`) only
+- Test: `t/middleware/05-logging.t` (add a subtest; this is the real
+  AccessLog coverage file — there is no `access-log.t`)
 
 **Interfaces:**
 - Consumes: `request_ended_abnormally($scope)`.
@@ -857,6 +861,11 @@ PAGI can express neither today.
 
 - [ ] **Step 1: Write the failing test**
 
+Add this subtest to `t/middleware/05-logging.t`, after the existing
+`AccessLog skips non-HTTP requests` subtest. It follows that file's house
+style: the `run_async` helper defined at the top, and an explicit
+`format => 'combined'` like its three sibling format subtests.
+
 ```perl
 subtest 'an aborted transfer is distinguishable in the log' => sub {
     {
@@ -867,30 +876,49 @@ subtest 'an aborted transfer is distinguishable in the log' => sub {
         sub on_disconnect     { return }
     }
 
-    my @lines;
-    my $scope = { type => 'http', method => 'GET', path => '/stream',
-                  headers => [], 'pagi.connection' => AbortedConn8->new };
+    my @log_lines;
+    my $mw = PAGI::Middleware::AccessLog->new(
+        logger => sub { push @log_lines, @_ },
+        format => 'combined',
+    );
 
-    my $app = sub {
-        my ($app_scope, $receive, $inner_send) = @_;
-        return (async sub {
-            await $inner_send->({ type => 'http.response.start',
-                                  status => 200, headers => [] });
-            await $inner_send->({ type => 'http.response.body',
-                                  body => 'partial', more => 1 });
-            return;
-        })->();
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+        await $send->({
+            type => 'http.response.body',
+            body => 'partial',
+            more => 1,
+        });
     };
 
-    my $wrapped = PAGI::Middleware::AccessLog->new(
-        logger => sub { push @lines, $_[0] },
-    )->wrap($app);
-    Future->wrap($wrapped->($scope, sub { Future->done },
-        sub { Future->done }))->get;
+    my $wrapped = $mw->wrap($app);
 
-    is(scalar @lines, 1, 'one line was logged');
-    like($lines[0], qr/client_closed/,
-        'the line records that the client disconnected, with its reason');
+    run_async(async sub {
+        await $wrapped->(
+            {
+                type              => 'http',
+                path              => '/stream',
+                method            => 'GET',
+                http_version      => '1.1',
+                client            => ['192.168.1.1', 12345],
+                headers           => [],
+                'pagi.connection' => AbortedConn8->new,
+            },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; },
+        );
+    });
+
+    is scalar(@log_lines), 1, 'one log line written';
+    like $log_lines[0], qr/aborted=client_closed/,
+        'the line records that the client disconnected, with its reason';
+    like $log_lines[0], qr/\n\z/,
+        'the line still ends with its newline, with the field before it';
 };
 ```
 
@@ -899,39 +927,57 @@ warns), and the formatted line is emitted at `AccessLog.pm:100`.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -l t/middleware/access-log.t'`
+Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -l t/middleware/05-logging.t'`
 
-Expected: FAIL — the line contains no reason.
+Expected: FAIL — the line contains no reason. (The newline assertion passes
+already; it is a regression guard for Step 3, not a RED assertion.)
 
 - [ ] **Step 3: Implement the abort field**
 
-Add `use PAGI::Utils qw(request_ended_abnormally);`, then pass the reason
-into `_log_request` and append it to the formatted line:
+Add `use PAGI::Utils qw(request_ended_abnormally);`, then derive the reason
+inside `_log_request` — **not** at the call sites. `wrap` calls
+`_log_request` from two places (the `eval` failure path at `:87` and the
+normal path at `:93`), and `_log_request` already receives `$scope`, so
+deriving it here covers both with one code path and leaves the signature
+alone.
+
+Every branch of `_format_log` ends its `sprintf` with `\n` (`:137`, `:144`,
+`:151`), so the field must go *before* that newline — a bare `.=` would
+strand it on a line of its own and leave the record unterminated:
 
 ```perl
-        my $abort_reason;
-        if (request_ended_abnormally($scope)) {
-            my $conn = $scope->{'pagi.connection'};
-            $abort_reason = $conn->disconnect_reason;
-        }
-        $self->_log_request($scope, $status, $response_size, $start_time,
-            $abort_reason);
+sub _log_request {
+    my ($self, $scope, $status, $size, $start_time) = @_;
+
+    my $duration = time() - $start_time;
+    my $line = $self->_format_log($scope, $status, $size, $duration);
+
+    if (request_ended_abnormally($scope)) {
+        chomp $line;
+        $line .= ' aborted=' . $scope->{'pagi.connection'}->disconnect_reason
+               . "\n";
+    }
+
+    $self->{logger}->($line);
+}
 ```
 
-In `_log_request`, accept the extra argument and append
-` aborted=$abort_reason` to the line when it is defined, leaving the format
-byte-identical when it is not. Document the field in the AccessLog POD,
+This appends the field uniformly across all three formats without touching
+`_format_log`'s branches, and leaves every line byte-identical when the
+request ended normally — which the three existing format subtests enforce.
+
+Document the field in the AccessLog POD (the format section at `:163-180`),
 noting it is the nginx `499` / `$request_completion` analogue.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run the same command. Expected: PASS, and existing AccessLog format tests
-still pass unchanged.
+Run the same command. Expected: PASS, including the three existing
+AccessLog format subtests, whose lines must be unchanged.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lib/PAGI/Middleware/AccessLog.pm t/middleware/access-log.t
+git add lib/PAGI/Middleware/AccessLog.pm t/middleware/05-logging.t
 git commit -m "feat: AccessLog records aborted transfers with their reason
 
 An aborted 2MB stream previously logged identically to a small successful
@@ -944,9 +990,12 @@ An aborted 2MB stream previously logged identically to a small successful
 
 **Files:**
 - Modify: `lib/PAGI/Response.pm:699-709`
-- Modify: `lib/PAGI/Test/Response.pm:10-26` and add an accessor
-- Test: `t/response/` (add to the existing emission test) and
-  `t/test-response.t` (locate with `ls t | grep -i response`)
+- Modify: `lib/PAGI/Test/Response.pm` — add an accessor beside the others
+  (`:128-228`); `_body_complete` is initialised at `:21` and set at `:47`
+- Test: `t/test-client/01-response.t` — the real `PAGI::Test::Response`
+  coverage file (there is **no** `t/test-response.t`). It already constructs
+  `PAGI::Test::Response->new(events => [...])` directly and has a
+  `captured_response` helper at `:11`.
 
 **Interfaces:**
 - Consumes: `request_ended_abnormally($scope)`.
@@ -964,56 +1013,20 @@ never exposed, so a test cannot assert whether a captured response completed.
 
 - [ ] **Step 1: Write the failing tests**
 
-For `Response.pm`, a test that a *cleanly completed* connection object does
-not suppress the incomplete-response croak:
+**There is no new test for the `Response.pm` half — this is a deliberate
+ruling, not an omission.** An earlier draft of this task specified a subtest
+injecting a connection object into a WebSocket scope. Verification showed the
+branch at `Response.pm:699-709` is **unreachable**: its only callers are
+WebSocket `deny` and SSE `decline`, and per `PAGI::Spec::Www` ("Connection
+State" → Applicability) WebSocket and SSE scopes carry no `pagi.connection`
+(`Test/Client.pm:299` attaches one to the **http** scope only). Such a test
+would pin behavior for a scope shape the spec says cannot exist. The fix
+below is a correctness-and-consistency refactor of dead-but-wrong logic;
+the existing denial and decline tests are its no-regression net, and Task 1's
+predicate tests already cover the discriminator itself.
 
-The croak lives in the protocol-emission path (`Response.pm:685-712`), which
-is reached through WebSocket denial and SSE decline — `$response->_emit(...)`
-followed by the completeness checks. Add the case to the existing denial
-test, `t/websocket/denial-response.t`, whose harness already builds a
-WebSocket scope and drives `deny`:
-
-```perl
-subtest 'a cleanly completed connection still reports an incomplete denial' => sub {
-    {
-        package CompletedConn9;
-        sub new                { return bless {}, shift }
-        sub is_connected       { return 0 }       # cleared by clean completion
-        sub disconnect_reason  { return undef }   # ... but no abnormal reason
-        sub response_complete  { return undef }   # what the reference server returns
-        sub on_disconnect      { return }
-    }
-
-    # A Response subclass that starts but never emits a terminal body.
-    {
-        package IncompleteResponseFixture;
-        our @ISA = ('PAGI::Response');
-        sub _emit {
-            my ($self, $scope, $receive, $send) = @_;
-            return (async sub {
-                await $send->({ type => 'http.response.start',
-                                status => 401, headers => [] });
-                return;   # no terminal body
-            })->();
-        }
-    }
-
-    # Reuse this file's existing scope/send builders, substituting
-    # CompletedConn9 for its pagi.connection, then assert the denial croaks
-    # rather than being silently accepted as an abnormal end.
-    my $error;
-    eval { run_denial(IncompleteResponseFixture->new(''), CompletedConn9->new); 1 }
-        or $error = $@;
-    like($error, qr/did not emit a terminal response body/,
-        'a clean completion does not excuse an incomplete denial response');
-};
-```
-
-Name the helper `run_denial` after whatever this file already uses to drive a
-denial; if it has no such helper, extract one from an existing subtest rather
-than duplicating the setup.
-
-For `Test::Response`:
+The `Test::Response` half is a normal TDD cycle. Add to
+`t/test-client/01-response.t`:
 
 ```perl
 is(PAGI::Test::Response->new(events => [
@@ -1027,26 +1040,29 @@ is(PAGI::Test::Response->new(events => [
 ])->body_complete, 0, 'a response with no terminal body is incomplete');
 ```
 
-- [ ] **Step 2: Run both to verify they fail**
+- [ ] **Step 2: Run it to verify it fails**
 
-Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -l t/test-response.t t/response/'`
+Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -l t/test-client/01-response.t'`
 
-Expected: FAIL — `body_complete` is not a method; the Response.pm case does
-not croak.
+Expected: FAIL — `body_complete` is not a method.
 
 - [ ] **Step 3: Implement both**
 
 In `Response.pm`, replace the four-condition `blessed`/`can`/`response_complete`
-block with the shared predicate:
+block with the shared predicate, and record why the branch survives:
 
 ```perl
+        # Unreachable today: this path serves only WebSocket deny and SSE
+        # decline, whose scopes carry no pagi.connection. It becomes live if
+        # connection state is ever extended to those scope types, so it is
+        # kept correct rather than deleted.
         croak "$operation Response did not emit a terminal response body"
             unless $start_committed && request_ended_abnormally(\%http_scope);
 ```
 
-adding `use PAGI::Utils qw(request_ended_abnormally);` — check for a circular
-dependency first with `grep -n 'use PAGI::Response' lib/PAGI/Utils.pm`; if
-one exists, require the module lazily inside the sub instead.
+Add `use PAGI::Utils qw(request_ended_abnormally);` at the top. There is no
+circular dependency — `PAGI::Utils` does not load `PAGI::Response` (verified);
+import it normally rather than lazily.
 
 In `Test/Response.pm`, add beside the other accessors:
 
@@ -1058,14 +1074,17 @@ and document it in the POD as "true when the captured events reached a
 terminal body; false for a response that stopped short, including one whose
 client disconnected."
 
-- [ ] **Step 4: Run both to verify they pass**
+- [ ] **Step 4: Run to verify it passes, plus the no-regression net**
 
-Run the same command. Expected: PASS.
+Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lr t/test-client/01-response.t t/websocket/ t/endpoint/10-sse-decline.t'`
+
+Expected: PASS throughout. The denial and decline suites are what prove the
+`Response.pm` refactor changed no reachable behavior.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lib/PAGI/Response.pm lib/PAGI/Test/Response.pm t/test-response.t t/response/
+git add lib/PAGI/Response.pm lib/PAGI/Test/Response.pm t/test-client/01-response.t
 git commit -m "fix: one abnormal-end discriminator across Response and Test::Response
 
 Response.pm keyed on !is_connected plus response_complete, which the
@@ -1080,6 +1099,7 @@ completeness it already tracked."
 
 **Files:**
 - Create: `t/middleware/disconnect-laundering.t`
+- Modify: `t/app/cascade.t` (add the boundary subtest deferred from Task 5)
 - Modify: `lib/PAGI/Middleware/Debug.pm` (POD only)
 
 **Interfaces:**
@@ -1118,19 +1138,25 @@ use PAGI::Compose::ResponseGuard;
     sub on_disconnect     { return }
 }
 
+# Accept-Encoding is REQUIRED: GZip passes through untouched without it
+# (GZip.pm:67-70), so a fixture with empty headers would exercise nothing.
 sub aborted_scope {
-    return { type => 'http', method => 'GET', path => '/x', headers => [],
+    return { type    => 'http', method => 'GET', path => '/x',
+             scheme  => 'http', http_version => '1.1',
+             headers => [['accept-encoding', 'gzip']],
              'pagi.connection' => AbortedConn10->new };
 }
 
+# Start only, NO body event. A `more => 1` chunk trips the streaming
+# passthrough in both ETag (:89/:138) and GZip (:136-159), which skips the
+# synthesis block entirely -- so that shape would make this test pass
+# whether or not the fixes are present. Controller-verified.
 sub aborted_app {
     return sub {
         my ($scope, $receive, $send) = @_;
         return (async sub {
             await $send->({ type => 'http.response.start', status => 200,
                 headers => [['content-type', 'text/plain']] });
-            await $send->({ type => 'http.response.body',
-                body => 'partial', more => 1 });
             return;
         })->();
     };
@@ -1157,6 +1183,13 @@ for my $case (
 
         is(scalar(grep { $_->{type} eq 'http.response.body' && !$_->{more} } @sent), 0,
             "$label: no terminal event is emitted, so completeness is not laundered");
+
+        # The cure must not be worse than the disease: suppressing the
+        # fabricated terminal must not also suppress what the application
+        # really did send. That regression is not hypothetical -- it is
+        # exactly the bug Task 7 fixed in Debug.
+        is(scalar(grep { $_->{type} eq 'http.response.start' } @sent), 1,
+            "$label: the application's own response start still reaches the wire");
     };
 }
 
@@ -1184,6 +1217,8 @@ subtest 'detection does not depend on middleware order' => sub {
         }, "$label: no application error") or note($@);
         is(scalar(grep { $_->{type} eq 'http.response.body' && !$_->{more} } @sent), 0,
             "$label: no fabricated terminal event");
+        is(scalar(grep { $_->{type} eq 'http.response.start' } @sent), 1,
+            "$label: the response start still reaches the wire exactly once");
     }
 };
 
@@ -1198,7 +1233,69 @@ Expected: PASS, because Tasks 2, 3, and 5 already landed. If it fails, the
 earlier fix is incomplete — fix that task's component rather than weakening
 this test.
 
-- [ ] **Step 3: Document Debug's HTML buffering**
+- [ ] **Step 3: Add Cascade's missing boundary subtest**
+
+Task 5 taught Cascade to stay quiet when the client disconnected, but its
+test only covers the disconnected case. Nothing asserts the carve-out is
+*limited* to abnormal ends — that a still-connected client with a genuinely
+incomplete response still raises. Without it, deleting the guard's condition
+entirely would leave the suite green.
+
+Add to `t/app/cascade.t`, mirroring the existing subtest at `:13` (same
+child, same shape, opposite connection):
+
+```perl
+subtest 'the carve-out is limited to abnormal ends' => sub {
+    {
+        package LiveConn5;
+        sub new               { return bless {}, shift }
+        sub is_connected      { return 1 }
+        sub disconnect_reason { return undef }
+        sub on_disconnect     { return }
+    }
+
+    my $child = sub {
+        my ($app_scope, $receive, $inner_send) = @_;
+        return (async sub {
+            await $inner_send->({ type => 'http.response.start',
+                                  status => 200, headers => [] });
+            await $inner_send->({ type => 'http.response.body',
+                                  body => 'partial', more => 1 });
+            return;
+        })->();
+    };
+    my $send = sub { return Future->done };
+
+    # A connected client, and a scope with no connection at all -- the
+    # commonest shape -- must both still be reported.
+    for my $case (['a connected client', LiveConn5->new],
+                  ['no connection object', undef]) {
+        my ($label, $conn) = @$case;
+        my $scope = { type => 'http', method => 'GET', path => '/x',
+                      headers => [] };
+        $scope->{'pagi.connection'} = $conn if defined $conn;
+
+        my $cascade = PAGI::App::Cascade->new(apps => [$child]);
+        my $error;
+        eval {
+            Future->wrap($cascade->to_app->($scope, sub { Future->done },
+                $send))->get;
+            1;
+        } or $error = $@;
+
+        ok($error, "$label: an incomplete response is still reported");
+        like("$error", qr/without a terminal body/,
+            "$label: and it is the incomplete-response error");
+    }
+};
+```
+
+Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -l t/app/cascade.t'`
+
+Expected: PASS, both subtests. If the new subtest fails, Task 5's guard is
+too broad — fix the guard, not the test.
+
+- [ ] **Step 4: Document Debug's HTML buffering**
 
 Add to the `PAGI::Middleware::Debug` POD, under a `=head2 Streaming HTML`
 heading:
@@ -1222,16 +1319,23 @@ manufacture a terminal event, so the response stays observably incomplete
 (see L<PAGI::Spec::Www/"Application Left a Response Incomplete">).
 ```
 
-- [ ] **Step 4: Verify the POD**
+- [ ] **Step 5: Verify the POD**
 
-Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -l t/00-pod/'`
-
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+Do **not** use `prove -l t/00-pod/` for this. Despite its name that directory
+holds one file, `cookbook-examples.t`, which checks cookbook example code —
+it does not validate POD syntax, so it would pass without looking at your new
+section at all. No repo test covers POD syntax; check it directly:
 
 ```bash
-git add t/middleware/disconnect-laundering.t lib/PAGI/Middleware/Debug.pm
+bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && perl -MPod::Checker -e "my \$c = Pod::Checker->new(); \$c->parse_from_file(q{lib/PAGI/Middleware/Debug.pm}, \\*STDERR); printf qq{errors=%d warnings=%d\n}, \$c->num_errors, \$c->num_warnings;"'
+```
+
+Expected: `errors=0 warnings=0`, with nothing on stderr.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add t/middleware/disconnect-laundering.t t/app/cascade.t lib/PAGI/Middleware/Debug.pm
 git commit -m "test: pin that middleware cannot launder an aborted response
 
 Before the ETag and GZip fixes, an inner middleware emitting a terminal
@@ -1242,11 +1346,60 @@ Debug buffers HTML to inject its panel."
 
 ---
 
+### Task 12: ResponseGuard consumes the shared predicate
+
+> Numbered after Task 11 but **executed before it**, so Task 11's Changes
+> entry and ledger closeout cover it.
+
+**Files:**
+- Modify: `lib/PAGI/Compose/ResponseGuard.pm` — delete `_ended_abnormally`
+  (`:100-109`), call the shared predicate at `:76`
+- Test: `t/compose/07-response-guard.t` (existing coverage; no new test)
+
+**Why:** F0 of `.pagi-open-issues.md` exists to stop each component growing
+its own reading of one rule. Eight components now consume
+`request_ended_abnormally`; ResponseGuard still carries a private copy,
+written before Task 1 created the shared one. The two are not identical —
+`_ended_abnormally` uses `eval { $connection->can(...) }` where the shared
+predicate uses `blessed($connection) && $connection->can(...)`, so a
+`pagi.connection` holding a **class-name string** satisfies the first and not
+the second. That is a ninth reading of the rule inside the branch that
+unifies the other eight.
+
+- [ ] **Step 1: Replace the private helper**
+
+Add `use PAGI::Utils qw(request_ended_abnormally);` and change `:76` to:
+
+```perl
+        return if request_ended_abnormally($scope);
+```
+
+Delete `sub _ended_abnormally` entirely. Keep the explanatory comment above
+it only if it says something `PAGI::Utils`' own documentation does not.
+
+- [ ] **Step 2: Confirm no behaviour change**
+
+Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lr t/compose/ t/integration/'`
+
+Expected: PASS, unchanged. The existing guard tests use blessed connection
+objects, where both implementations agree — that is the point: the swap is
+behaviour-preserving on every shape the suite exercises and stricter on the
+one it does not.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git commit lib/PAGI/Compose/ResponseGuard.pm -m "refactor: ResponseGuard consumes the shared abnormal-end predicate"
+```
+
+---
+
 ### Task 11: Full suite, Changes, and ledger closeout
 
 **Files:**
-- Modify: `Changes`
-- Modify: `.pagi-open-issues.md` (mark items closed)
+- Modify: `Changes` (the only file committed by this task)
+- Modify: `.pagi-open-issues.md` (mark items closed) — **this file is
+  deliberately untracked and is NOT in `.gitignore`. Never `git add` it.**
 
 **Interfaces:**
 - Consumes: Tasks 1-10.
@@ -1254,12 +1407,29 @@ Debug buffers HTML to inject its panel."
 
 - [ ] **Step 1: Run the full suite once**
 
-Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lr -j4 t/' > /tmp/full-suite.txt 2>&1; echo "exit=$?"; tail -20 /tmp/full-suite.txt`
+Note `-lr`: the suite has subdirectories, and a bare `prove -l t/` silently
+runs only the top-level files.
 
-Expected: PASS. Baseline was 219 files / 2380 tests; this plan adds roughly
-9 files' worth of subtests plus one new file. Read the captured output in
-full — do not judge from a truncated tail. Output must be pristine: no
-stray warnings.
+Run: `bash -c 'source ~/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lr -j4 t/' > "$SCRATCH/full-suite.txt" 2>&1; echo "prove exit=$?"`
+
+(`$SCRATCH` is your scratchpad directory; do not write to `/tmp`.) Then
+**open `full-suite.txt` with the Read tool and read it in full.** Do not pipe
+it through `tail`/`head` and judge from that — a truncated verification
+pipeline manufactures false facts.
+
+Expected: PASS, with pristine output — no stray warnings. Report the actual
+file and test counts you observe rather than matching them to a target; the
+gate is "zero failures, no warnings", not a specific number.
+
+For orientation only: this command was run at `d400263` (end of Task 8) giving
+**221 files / 2405 tests**, and again at `bbca308` (end of Task 9) giving
+**2406 tests, plus one pre-existing skip unrelated to this branch**. Task 10
+adds one file plus subtests, so expect slightly more of both.
+
+Two things not to chase: that pre-existing skip (identify it and report what
+it is, but it predates this work), and a *higher* count than expected. A
+*lower* count is the signal that matters — it means files stopped being
+collected, not that anything got faster.
 
 - [ ] **Step 2: Verify the cross-repo integration test still passes**
 
@@ -1289,19 +1459,54 @@ Add under `0.002003 - UNRELEASED`, above the existing entries:
 
 - [ ] **Step 4: Close the ledger items**
 
-In `.pagi-open-issues.md`, mark F0-F9 closed with their commit SHAs, leaving
-the panel verdict and prior-art sections intact as the rationale record.
+In `.pagi-open-issues.md`, mark **F0–F9** closed with their commit SHAs. F0
+is the shared predicate itself (`.pagi-open-issues.md:209`, "the root cause,
+do this first") delivered by Task 1 as
+`PAGI::Utils::request_ended_abnormally`; F1–F9 are its consumers. Separately,
+item 1 (the ResponseGuard carve-out) was already marked FIXED with `eb4b2c6`.
+Leave the panel verdict and prior-art sections intact as the
+rationale record, and leave items 2–9 alone — they are separate issues
+outside this plan's scope.
+
+**Item 7's packaging gates are already fixed on this branch — by a different
+campaign, not by this plan.** That ledger entry records two `dzil build`
+failures on `main`: the README absent from the built tarball, and the chat
+assets pruned because symlinks cannot ship in a CPAN tarball. Both were
+repaired by the separate "post-merge middleware packaging follow-up" campaign
+whose commits share this branch (`38bd88a` ships the generated README,
+`ee58ea1` replaces the chat `public` symlink with real files). Do not re-fix
+them, do not re-close them in the ledger — that campaign owns those entries —
+and do not be surprised that the branch's diff against `main` contains a
+large body of example assets and a second plan document that have nothing to
+do with disconnect handling.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Changes .pagi-open-issues.md
+git status                      # confirm .pagi-open-issues.md is NOT staged
+git add Changes
 git commit -m "docs: record the disconnect-aware observer fixes"
 ```
+
+`Changes` is the only file in this commit. `.pagi-open-issues.md` is a
+working notes file that stays untracked, like the `.pagi-0.4-*` and
+`.pagi-0.5-*` files beside it — it is edited in Step 4 but never committed.
 
 ---
 
 ## Notes for the executor
+
+- **Prove every regression guard by mutation.** This plan has now shipped two
+  assertions that could not fail — including one written *as the fix* for the
+  first. If you add an assertion to guard against a specific bug, and that bug
+  is not the one your RED step already demonstrates, then break the code
+  deliberately in a scratch copy, run the assertion, and confirm it fails.
+  Restore before committing, and report the transcript. Reasoning about what
+  an assertion *would* catch is not evidence. A guard you have never seen
+  fail is decoration.
+  - The concrete trap here, seen twice: asserting a *property that survives
+    the bug*. `qr/\n\z/` does not catch a stray newline, because the broken
+    output still ends in a newline. Count, or match the exact shape.
 
 - **Do not modify `PAGI::Response::Stream`.** It already omits the terminal
   event on disconnect, which is exactly what the spec requires. Every defect
