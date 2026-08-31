@@ -6,7 +6,6 @@ use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Time::HiRes qw(time);
 use JSON::MaybeXS ();
-use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -153,6 +152,16 @@ sub wrap {
         # start and body were never flushed. Forward what the application
         # actually produced -- without inventing a terminal event, which
         # would assert a completeness it never claimed.
+        #
+        # Unlike ETag/GZip/ContentLength, this flush never synthesizes a
+        # completed response from a partial buffer -- it only relays what
+        # the application already sent, always tagged more => 1. That is
+        # why it does not consult the request's disconnect state: relaying
+        # is correct whether the response stopped because the client
+        # disconnected or because the application itself returned early
+        # without finishing. Gating this flush on disconnect state would
+        # swallow the app-bug case again -- the exact failure this fix
+        # exists to close.
         if (!$headers_sent && $response_status) {
             await $send->({
                 type    => 'http.response.start',
