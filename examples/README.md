@@ -64,9 +64,8 @@ raw PAGI protocol details that belong alongside the server implementation.
 19. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
 20. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
 
-**Note on `websocket-chat-v2/public`:** this directory is a symlink to
-`10-chat-showcase/public`. It works in git checkouts but is omitted from the
-distribution tarball; copy the `public/` directory manually if you need it
-outside a checkout.
+**Note on `websocket-chat-v2/public`:** the v2 example carries ordinary copies
+of the shared chat frontend assets so it remains runnable from CPAN tarballs,
+which cannot preserve the source checkout's former directory symlink.
 
 Each example has its own `README.md` explaining how to run it.

@@ -18,6 +18,7 @@ sub source_text {
 
 my $app_file = "$Bin/../examples/websocket-chat-v2/app.pl";
 my $http_file = "$Bin/../examples/websocket-chat-v2/lib/ChatApp/HTTP.pm";
+my $public_dir = "$Bin/../examples/websocket-chat-v2/public";
 my $http_source = source_text($http_file);
 
 like($http_source,
@@ -26,6 +27,12 @@ like($http_source,
 unlike($http_source,
     qr/_serve_static|_send_(?:404|500)|%MIME_TYPES|File::Basename|File::Spec|\$path\s*=~\s*s|\bopen\b/,
     'v2 chat HTTP contains no manual static server');
+
+ok(!-l $public_dir,
+    'v2 chat public assets are ordinary files that can ship to CPAN');
+for my $asset ('index.html', 'css/style.css', 'js/app.js') {
+    ok(-f "$public_dir/$asset", "v2 chat ships $asset");
+}
 
 my $app = do $app_file;
 my $load_error = $@ || $!;
