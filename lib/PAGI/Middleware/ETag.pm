@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Digest::MD5 qw(md5_hex);
+use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -140,6 +141,12 @@ sub wrap {
         # response it never gave us; let the server's no-response backstop
         # fire with its accurate diagnostic.
         return unless defined $status;
+
+        # A client that vanished mid-response leaves a partial body. Computing
+        # a validator over it and emitting more => 0 would assert that those
+        # bytes are the whole representation -- forbidden for any producer by
+        # PAGI::Spec::Www, "Application Left a Response Incomplete".
+        return if request_ended_abnormally($scope);
 
         # Generate ETag from body
         my $body = join('', @body_parts);
