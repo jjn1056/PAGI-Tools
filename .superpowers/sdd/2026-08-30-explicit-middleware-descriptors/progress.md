@@ -17,7 +17,7 @@ Baseline: Perl 5.42.2; `prove -lr t` passed 218 files / 2373 tests at `b2bfb00`.
 | 3. Router frontend sugar | complete | `108bf48c53745d1dfdb4335266f482b2f5345725` | 5 files / 52 tests | Characterization and stale-expectation migration GREEN; task review clean |
 | 4. Builder naming | complete | `020336f8c64a3e7a427a9f59f7ee35ab413c20a7` | 3-file combined gate / 17 tests PASS after Task 5 | Code review approved; sequencing dependency resolved |
 | 5. Examples and docs | complete | `f1566eefd9e6152bee3873693d7103b3dc78c81b`, fix `374b9769d1df1824b27b536d8b3bd2c6a339f473` | Integration/POD: 3 files / 52 tests; compiles and POD syntax clean | Fix round 1 resolved both important findings |
-| 6. Upgrade and verification | in progress | — | — | — |
+| 6. Upgrade and verification | complete | `56a4b396f56f1258f6ab818cdf60eda1c23a8418`, fix `7ca500abb6acbad3c3901b4e81993d165adc5707` | Focused: 48 files / 440 tests; source suite: 218 files / 2372 tests; fix gate: 3 files / 35 tests | Task review approved after one focused wording fix; built-distribution failures reproduced on clean baseline |
 
 ## Preflight consistency scan
 
@@ -100,3 +100,18 @@ Task 4: complete (implementation commit 020336f; code review approved; the
 Task 5 migration made its exact combined gate pass 3 files / 17 tests).
 
 Task 5: complete (commits fe8bad8..374b976, review clean after fix round 1).
+
+Task 6: fix round 1/5 (1 addressed, 0 open — UPGRADING now distinguishes
+App/Endpoint Router core-description materialization from Middleware Builder's
+separate records and `to_app` construction/wrapping; commits 56a4b39..7ca500a).
+
+Ruling: Task 6's source and focused gates are green, but `dzil test` remains
+red because the built distribution omits shared chat assets and `README.md`.
+Both failures reproduce on clean `main@045eae3`, and this campaign changes
+neither the packaging configuration nor those inputs, so they are recorded as
+pre-existing release concerns rather than campaign regressions. Cost if wrong:
+the feature branch could still inherit unrelated release blockers and must not
+be described as distribution-clean until those packaging issues are resolved
+or explicitly accepted.
+
+Task 6: complete (commits 56a4b39..7ca500a, review approved after fix round 1).
