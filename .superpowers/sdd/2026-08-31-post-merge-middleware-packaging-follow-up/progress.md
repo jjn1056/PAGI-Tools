@@ -43,3 +43,7 @@ None.
 ## Baseline
 
 - Base `1a5a657c8efa224404034d976b312222bf6e7153` verified under Perl 5.42.2: `prove -lr t` passed 218 files / 2,374 tests; the documented `RELEASE_TESTING=1` multipart end-to-end test remained skipped.
+
+## Review record
+
+- Task 1: complete (commits `fad7d06..28d1566`, review clean).
