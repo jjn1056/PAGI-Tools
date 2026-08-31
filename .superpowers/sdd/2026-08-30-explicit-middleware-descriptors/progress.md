@@ -12,8 +12,8 @@ Baseline: Perl 5.42.2; `prove -lr t` passed 218 files / 2373 tests at `b2bfb00`.
 
 | Task | Status | Implementation commit | Tests | Evidence |
 |---|---|---|---|---|
-| 1. Explicit descriptor | in progress | — | — | — |
-| 2. Strict core lists | pending | — | — | — |
+| 1. Explicit descriptor | complete | `24098f5757a06bf37c3b54bb0f1bb695a2ad9e09` | 3 files / 29 tests | RED captured; focused GREEN; task review approved with one deferred POD minor |
+| 2. Strict core lists | in progress | — | — | — |
 | 3. Router frontend sugar | pending | — | — | — |
 | 4. Builder naming | pending | — | — | — |
 | 5. Examples and docs | pending | — | — | — |
@@ -49,3 +49,10 @@ and ledger-commit substeps. This preserves one authoritative recovery record
 and keeps implementer diffs task-scoped. Cost if wrong: git history uses one
 controller tracking commit per review gate rather than the plan's suggested
 implementer-local evidence commit, while retaining the same SHAs and evidence.
+
+Task 1: minor (deferred to Task 5 documentation pass):
+`PAGI::Routing::Middleware` POD says an explicit descriptor is required only
+for class configuration, but configured factories now require it too.
+
+Task 1: complete (commits df22b8f..24098f5, spec compliant and quality
+approved; one documentation minor deferred).
