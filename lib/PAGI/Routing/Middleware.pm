@@ -4,24 +4,22 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Scalar::Util qw(blessed);
+use PAGI::Utils ();
 
 sub new {
     my ($class, $factory, @args) = @_;
 
-    croak 'middleware requires a coderef, blessed object, or nonempty class name'
-        unless ref($factory) eq 'CODE'
-            || blessed($factory)
-            || (!ref($factory) && defined $factory
-                && $factory =~ /\A\^?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/);
+    if (ref($factory) ne 'CODE' && !blessed($factory)) {
+        croak 'middleware requires a coderef, blessed object, or nonempty class name'
+            if ref($factory) || !defined($factory) || !length($factory);
+        croak "invalid middleware class name; use leading '+' for an exact package"
+            unless $factory =~ /\A\+?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/;
+    }
     croak 'middleware configuration must be key/value pairs'
         if @args % 2;
 
     my %config = @args;
-    if (ref($factory) eq 'CODE') {
-        croak 'middleware factory takes no config'
-            if %config;
-    }
-    elsif (blessed($factory)) {
+    if (blessed($factory)) {
         croak 'middleware object must provide a wrap method'
             unless $factory->can('wrap');
         croak 'middleware object takes no config'
@@ -45,9 +43,8 @@ sub _wrap {
         unless ref($inner_app) eq 'CODE';
 
     if (ref($target) eq 'CODE') {
-        my $wrapped = $target->($inner_app);
-        _validate_wrapped_app($wrapped, 'middleware factory');
-        return $wrapped;
+        my $wrapped = $target->($inner_app, %{$self->{config}});
+        return _compile_wrapped_app($wrapped, 'middleware factory');
     }
 
     my $object;
@@ -66,8 +63,7 @@ sub _wrap {
     }
 
     my $wrapped = $object->wrap($inner_app);
-    _validate_wrapped_app($wrapped, 'middleware wrap');
-    return $wrapped;
+    return _compile_wrapped_app($wrapped, 'middleware wrap');
 }
 
 sub _normalize_descriptors {
@@ -122,7 +118,6 @@ sub _wrap_descriptors {
             unless blessed($descriptor)
                 && $descriptor->isa('PAGI::Routing::Middleware');
         $app = $descriptor->_wrap($app);
-        _validate_wrapped_app($app, 'middleware wrap');
     }
 
     return $app;
@@ -131,17 +126,21 @@ sub _wrap_descriptors {
 sub _resolve_class {
     my ($name) = @_;
 
-    return substr($name, 1) if substr($name, 0, 1) eq '^';
+    return substr($name, 1) if substr($name, 0, 1) eq '+';
     return $name if $name =~ /\APAGI::Middleware::/;
     return "PAGI::Middleware::$name";
 }
 
-sub _validate_wrapped_app {
-    my ($app, $source) = @_;
+sub _compile_wrapped_app {
+    my ($value, $source) = @_;
 
-    return if ref($app) eq 'CODE';
-    my $got = blessed($app) || ref($app) || 'non-reference';
-    croak "$source must return PAGI app coderef; got $got";
+    my $app = eval { PAGI::Utils::to_app($value) };
+    if (my $error = $@) {
+        chomp $error;
+        my $shape = blessed($value) || ref($value) || 'non-reference';
+        croak "$source must return a PAGI application value: $shape: $error";
+    }
+    return $app;
 }
 
 1;
@@ -181,9 +180,9 @@ descriptions, not bare entries.
     PAGI::Routing::Middleware->new($class, %config)
 
 Stores the middleware factory and a shallow copy of its configuration.
-Configuration is constructor input only for class targets. Coderef factories
-capture their own options in a closure, and configured objects take no
-additional descriptor configuration. Objects must provide C<wrap>. This
+Configuration is constructor input for class and coderef factory targets.
+Configured objects take no additional descriptor configuration. Objects must
+provide C<wrap>. This
 validates/builds an immutable compile-time descriptor; it does not call the
 factory, construct the class, start a request, or emit an event.
 
@@ -200,13 +199,16 @@ Returns a shallow copy of the configuration hash.
 Middleware descriptions are resolved synchronously while a routing application
 is compiled. Normalization is the first phase and stores only descriptions;
 compilation is the second phase. A factory coderef receives the inner
-application and must return an application coderef immediately. A configured
-object is reused by identity and receives C<< ->wrap($inner_app) >>. A class
-name is loaded, instantiated with the stored configuration, and then wrapped.
+application followed by its stored configuration and must return an application
+value immediately. A configured object is reused by identity and receives
+C<< ->wrap($inner_app) >>. A class name is loaded, instantiated with the
+stored configuration, and then wrapped. Factory and C<wrap> results may be a
+native coderef or an instantiated object with C<to_app>; compilation always
+returns native code.
 
 Names beginning with C<PAGI::Middleware::> are already fully qualified. Simple
-and nested short names receive that prefix, while a leading C<^> selects a
-caller-owned fully qualified class. Resolution happens once for each compiled
+and nested short names receive that prefix, while a leading C<+> selects an
+exact fully qualified class. Resolution happens once for each compiled
 wrapper, never once per request.
 
 When a descriptor list is folded, the first entry listed is the outermost

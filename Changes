@@ -1,6 +1,9 @@
 # Revision history for PAGI-Tools
 
 0.002003 - UNRELEASED
+  - Middleware descriptions now pass explicit configuration to factory
+    coderefs, use a leading `+` for exact class packages, and compile
+    application-valued factory and `wrap` results through `to_app`.
   - Fixed invalid allowed_methods diagnostics to identify the route endpoint
     capability rather than a nonexistent methods option.
   - Route and Mount constraint accessors now always return fresh hashrefs,

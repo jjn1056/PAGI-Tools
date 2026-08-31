@@ -588,12 +588,14 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
         'Router has no method-not-allowed callback accessor');
 };
 
-subtest 'middleware descriptions preserve targets and copy class config' => sub {
+subtest 'middleware descriptions preserve targets and copy descriptor config' => sub {
     my $factory = sub { };
-    my $factory_node = middleware($factory);
+    my $factory_options = { retry => 1 };
+    my $factory_node = middleware($factory, options => $factory_options);
     isa_ok($factory_node, 'PAGI::Routing::Middleware');
     is(refaddr($factory_node->factory), refaddr($factory), 'factory identity is retained');
-    is($factory_node->config, {}, 'a closure-configured factory has no descriptor config');
+    is($factory_node->config, { options => $factory_options },
+        'factory descriptor config is retained');
 
     my $options = { retry => 1 };
     my $node = middleware('Configured', options => $options);
