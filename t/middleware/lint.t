@@ -381,8 +381,40 @@ subtest 'strict mode does not fail a disconnected request' => sub {
         Future->wrap($wrapped->($scope, sub { Future->done },
             sub { Future->done }))->get;
     }, 'strict mode does not die for a client that disconnected') or note($@);
-    is(scalar(grep { /Lint Error/ } @warnings), 0,
-        'no fatal Lint error was raised');
+    is(scalar(grep { /disconnect/i } @warnings), 1,
+        'strict mode still reports the disconnect -- reclassified, not silenced');
+    like(join('', @warnings), qr/client_closed/,
+        'strict mode\'s report names the disconnect reason');
+};
+
+subtest 'an app that throws after a disconnect keeps its real error, with the disconnect noted' => sub {
+    my $scope = { type => 'http', method => 'GET', path => '/x', scheme => 'http',
+                  headers => [], 'pagi.connection' => AbortedConn6->new };
+
+    my $app = sub {
+        my ($app_scope, $receive, $inner_send) = @_;
+        return (async sub {
+            await $inner_send->({ type => 'http.response.start',
+                                  status => 200, headers => [] });
+            await $inner_send->({ type => 'http.response.body',
+                                  body => 'partial', more => 1 });
+            die "boom\n";
+        })->();
+    };
+
+    my $send = sub { return Future->done };
+
+    my $wrapped = PAGI::Middleware::Lint->new->wrap($app);
+    my $err_msg = '';
+    eval {
+        Future->wrap($wrapped->($scope, sub { Future->done }, $send))->get;
+    };
+    $err_msg = $@;
+
+    ok(length($err_msg), 'the app exception still propagates, not silently swallowed');
+    like($err_msg, qr/boom/, 'the original error text survives unaltered, not replaced');
+    like($err_msg, qr/disconnect/i, 'the disconnect is noted alongside the real error');
+    like($err_msg, qr/client_closed/, 'the note names the disconnect reason');
 };
 
 done_testing;
