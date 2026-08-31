@@ -144,6 +144,12 @@ consumes a prefix, rewrites the child scope, and owns the selected subtree.
 Its normalized prefix pattern is compiled during construction. Constructor
 work validates/builds configuration only and emits no events.
 
+Its C<middleware> list contains only explicit
+L<PAGI::Routing::Middleware> descriptions, normally created with
+C<middleware(...)>. A factory or C<wrap> result may be native CODE or an object
+with C<to_app>; the resulting native app runs at request time and returns the
+protocol completion.
+
 An inline provider such as C<{id:&Int}> is resolved in the package that
 directly called C<mount> or C<new>. Re-exporting C<mount> preserves the
 consuming package as that caller; wrapping it in another sub makes the wrapper

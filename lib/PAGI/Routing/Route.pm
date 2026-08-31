@@ -226,6 +226,12 @@ constructor validation performs no request I/O. The description never stores
 a request match, protocol object, or handler result. Collection and hash
 accessors return shallow copies.
 
+Its C<middleware> list contains only explicit
+L<PAGI::Routing::Middleware> descriptions, normally created with
+C<middleware(...)>. A factory or C<wrap> result may be native CODE or an object
+with C<to_app>; the resulting native app runs at request time and returns the
+protocol completion.
+
 Route and Mount have deliberately different path ownership:
 
     Route('/x')       exact complete path leaf

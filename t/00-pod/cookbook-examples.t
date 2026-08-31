@@ -11,7 +11,7 @@ use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Response qw(text_response);
-use PAGI::Routing qw(mount route router);
+use PAGI::Routing qw(middleware mount route router);
 use PAGI::Utils qw(as_app);
 
 {
@@ -195,7 +195,7 @@ subtest 'representative Cookbook forms construct and dispatch' => sub {
 
     my $declarative = router(routes => [
         route('/leaf' => sub { return text_response('leaf') },
-            middleware => [$factory]),
+            middleware => [middleware($factory)]),
         route('/raw' => as_app(response_app(200, 'raw'))),
         mount('/app', app => response_app(200, sub {
             my ($scope) = @_;

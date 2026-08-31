@@ -90,6 +90,12 @@ description remains placement-free: mounting it never writes a parent path or
 local name onto the child. This is compile-time configuration only; the object
 stores no request scope, match, or response state.
 
+Its C<middleware> list contains only explicit
+L<PAGI::Routing::Middleware> descriptions, normally created with
+C<middleware(...)>. A factory or C<wrap> result may be native CODE or an object
+with C<to_app>; the resulting native app runs at request time and returns the
+protocol completion.
+
 =head1 ACCESSORS
 
 C<routes> returns a shallow arrayref copy of direct children in declaration

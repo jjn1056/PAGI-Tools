@@ -5,7 +5,7 @@ use lib dirname(__FILE__) . '/lib';
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(not_found);
-use PAGI::Routing qw(:routes);
+use PAGI::Routing qw(:routes :middleware);
 use PAGI::Utils qw(request_response);
 use PAGI::Middleware::Helpers qw(wrap_send);
 use MyApp::Routes::Home ();
@@ -62,7 +62,7 @@ my $routing = router(
         route('/' => \&MyApp::Routes::Home::home,
             name       => 'home',
             desc       => 'HTML home page',
-            middleware => [$home_header],
+            middleware => [middleware($home_header)],
         ),
         mount('/api',
             app  => $api_routing,

@@ -188,6 +188,19 @@ class name, factory coderef, or configured C<wrap> object. It supports
 deliberate descriptor reuse and inspection before attachment. Accessors return
 these descriptions, not bare entries.
 
+    Form                              Meaning
+    --------------------------------  ---------------------------------
+    middleware($class, %config)       deferred class construction
+    middleware($factory, %config)     synchronous app-to-app factory
+    middleware($object)               configured object with wrap
+
+Class names may be short, nested short, already PAGI-qualified, or exact:
+
+    middleware('RequestId')
+    middleware('Auth::Basic')
+    middleware('PAGI::Middleware::RequestId')
+    middleware('+MyApp::Middleware::Audit')
+
 =head1 METHODS
 
 =head2 new
@@ -230,7 +243,8 @@ wrapper, never once per request.
 
 When a descriptor list is folded, the first entry listed is the outermost
 wrapper. Compilation itself performs no protocol I/O. Only the app coderef
-returned by the wrapper runs at request time; that app owns whether it calls
-downstream and which receive/send events it awaits or emits.
+returned by the factory or C<wrap> runs at request time and returns the
+protocol completion; that app owns whether it calls downstream and which
+receive/send events it awaits or emits.
 
 =cut

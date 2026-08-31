@@ -282,8 +282,8 @@ metadata. Synchronous method handlers run inline and may block the event loop.
 
 =head1 MIDDLEWARE
 
-Every router, mount, and route middleware array uses the universal four
-forms:
+This Endpoint frontend intentionally accepts concise middleware arrays using
+the four convenient forms:
 
 =over 4
 
@@ -298,16 +298,21 @@ C<middleware($class, %configuration)>.
 
 =back
 
-Descriptions normalize during declaration and resolve at app compilation.
-Factories and C<wrap> methods must return a native app coderef synchronously.
-The first item listed is outermost. The resulting native middleware controls
-whether it calls downstream, which scope it passes, and how it wraps
-C<receive> and C<send>. This contract is identical for HTTP, WebSocket, and
-SSE; there is no response-valued C<($protocol, $next)> Endpoint middleware.
+The frontend immediately materializes each entry as an explicit
+L<PAGI::Routing::Middleware> description for the immutable Router snapshot.
+Descriptions resolve at app compilation. Factories and C<wrap> methods may
+return native CODE or an object with C<to_app>; the resulting native app runs
+at request time and returns the protocol completion. The first item listed is
+outermost. This contract is identical for HTTP, WebSocket, and SSE; there is
+no response-valued C<($protocol, $next)> Endpoint middleware.
 
 =head2 middleware_as
 
     my $factory = $endpoint->middleware_as('authenticate');
+
+    $r->get('/private' => [
+        $self->middleware_as('authenticate'),
+    ] => 'show');
 
 Validates an unqualified local, inherited, or role-installed method and
 returns a normal middleware factory closure. At compilation the method

@@ -95,7 +95,7 @@ Compose owns the application root and lifespan.
             ),
         ],
         middleware => [
-            $logging,
+            middleware($logging),
             middleware('RequestId', header => 'X-Request-ID'),
         ],
     );
@@ -161,8 +161,8 @@ inspect signatures or evaluate package-method strings.
     sse('/x' => $code)           ($sse)                         inert; completion awaited
     route('/x' => as_app($code)) ($scope, $receive, $send)      native completion
     mount('/x', app => $code)    ($scope, $receive, $send)      native completion
-    middleware => [$entry]       ($inner_app), at to_app        PAGI app coderef
-    middleware($entry, %config)  ($inner_app), at compile time  PAGI app coderef
+    middleware => [middleware(...)] ($inner_app), at to_app     PAGI app coderef
+    middleware($entry, %config)     ($inner_app), at compile time PAGI app coderef
 
 =over 4
 
@@ -194,17 +194,16 @@ component accepted by L<PAGI::Utils/to_app>. It receives a rewritten child
 scope after its prefix matches.
 
 
-=item * A C<middleware> list accepts four forms per occurrence: a class name,
-a bare synchronous factory coderef, a configured object with C<wrap>, or an
-explicit C<middleware(...)> description. Construction normalizes them to
+=item * A core C<middleware> list contains only explicit
+C<middleware(...)> descriptions. Construction validates and copies those
 descriptions without loading classes, constructing objects, calling C<wrap>,
 or performing protocol I/O.
 
-=item * Compilation at C<to_app> resolves those descriptions. A factory or
-object receives C<($inner_app)> directly or through C<wrap>; a class is loaded
-and constructed, then wrapped. Each must return another native app coderef
-immediately. C<middleware($class, %config)> is required only for configured
-classes and is also useful for explicit reuse or inspection.
+=item * Compilation at C<to_app> resolves each description. A factory receives
+C<($inner_app, %config)> and an object receives C<< ->wrap($inner_app) >>; a
+class is loaded, constructed, and wrapped. Factories and C<wrap> may return a
+native CODE or an object with C<to_app>. The resulting native app runs at
+request time and returns the protocol completion.
 
 =back
 
@@ -303,22 +302,31 @@ Positional targets and C<router> are not accepted.
     middleware($class, %config)
 
 Creates an explicit middleware description for use in a routing object's
-C<middleware> array. A target may be a synchronous factory coderef, an object
-with C<wrap>, or a class name plus constructor configuration. Simple class
-names resolve under C<PAGI::Middleware::>; C<^MyApp::Middleware> selects a
-fully qualified caller-owned class.
+C<middleware> array. Core lists contain descriptions only:
 
-Configuration is accepted only for class targets. Coderef factories capture
-options in their closure, and objects are already configured.
+    Form                              Meaning
+    --------------------------------  ---------------------------------
+    middleware($class, %config)       deferred class construction
+    middleware($factory, %config)     synchronous app-to-app factory
+    middleware($object)               configured object with wrap
 
-A middleware list accepts four entry shapes: a class name, a bare factory
-coderef, a configured object with C<wrap>, or an explicit
-C<middleware(...)> description. Constructors normalize all four at description
-construction, without performing protocol I/O. The C<middleware> accessors on
-routers, routes, and mounts expose descriptions only; explicit descriptions
-keep their identity while each bare occurrence receives a fresh description.
-C<middleware($class, %config)> is required only for configured classes and is
-otherwise useful for explicit reuse or inspection.
+Class names may be short, nested short, already PAGI-qualified, or exact:
+
+    middleware('RequestId')
+    middleware('Auth::Basic')
+    middleware('PAGI::Middleware::RequestId')
+    middleware('+MyApp::Middleware::Audit')
+
+Short and nested short names resolve under C<PAGI::Middleware::>; a leading
+C<+> selects an exact fully qualified class. Configuration is captured for
+deferred class construction or passed to the synchronous factory; a configured
+object accepts no additional description configuration. The C<middleware>
+accessors on routers, routes, and mounts expose descriptions only.
+
+At C<to_app>, a factory receives C<($inner_app, %config)> and C<wrap> receives
+C<($inner_app)>. Each may return a native CODE or an object with C<to_app>.
+The resulting native app runs at request time and returns the protocol
+completion.
 
 The distribution deliberately provides no C<get>, C<post>, C<delete>, or
 C<any> constructors. Common handler names would collide with C<get>/C<post>,

@@ -23,6 +23,7 @@ use lib dirname(__FILE__) . '/lib';
 
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
+use PAGI::Routing qw(middleware);
 use PAGI::Utils qw(as_app);
 
 use ChatApp::State qw(get_stats);
@@ -81,7 +82,7 @@ $router->mount('/', app => $http_handler);
 
 compose(
     app => $router,
-    middleware => [\&with_logging],
+    middleware => [middleware(\&with_logging)],
     lifespan => {
         startup => async sub {
             say STDERR "[lifespan] Application starting up...";
