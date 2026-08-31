@@ -9,6 +9,7 @@ use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Headers ();
+use PAGI::Utils qw(request_ended_abnormally);
 use Scalar::Util qw(blessed);
 use Socket ();
 
@@ -697,16 +698,12 @@ async sub _respond_for_protocol {
     croak "$operation Response did not emit response start"
         if $emission_state eq 'initial';
     unless ($emission_state eq 'complete') {
-        my $connection = $http_scope{'pagi.connection'};
-        my $disconnected = blessed($connection)
-            && $connection->can('is_connected')
-            && !$connection->is_connected;
-        if ($disconnected && $connection->can('response_complete')) {
-            my $complete = $connection->response_complete;
-            $disconnected = 0 if defined($complete) && $complete;
-        }
+        # Unreachable today: this path serves only WebSocket deny and SSE
+        # decline, whose scopes carry no pagi.connection. It becomes live if
+        # connection state is ever extended to those scope types, so it is
+        # kept correct rather than deleted.
         croak "$operation Response did not emit a terminal response body"
-            unless $start_committed && $disconnected;
+            unless $start_committed && request_ended_abnormally(\%http_scope);
     }
     return;
 }

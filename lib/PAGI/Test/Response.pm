@@ -124,6 +124,9 @@ sub _slurp_fh_bytes {
     return $content;
 }
 
+# True when the captured events reached a terminal body
+sub body_complete { return $_[0]->{_body_complete} ? 1 : 0 }
+
 # Status code
 sub status { shift->{status} }
 
@@ -349,6 +352,13 @@ Returns all headers as a hashref. Header names are lowercased.
 If a header appears multiple times, the last value wins.
 
 =head1 BODY METHODS
+
+=head2 body_complete
+
+    if ($res->body_complete) { ... }
+
+True when the captured events reached a terminal body; false for a response
+that stopped short, including one whose client disconnected.
 
 =head2 content
 

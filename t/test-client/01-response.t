@@ -129,6 +129,18 @@ subtest 'basic response accessors' => sub {
     ok $res->is_success, 'is_success for 2xx';
 };
 
+subtest 'body_complete accessor' => sub {
+    is(PAGI::Test::Response->new(events => [
+        { type => 'http.response.start', status => 200, headers => [] },
+        { type => 'http.response.body', body => 'x', more => 0 },
+    ])->body_complete, 1, 'a terminal body marks the response complete');
+
+    is(PAGI::Test::Response->new(events => [
+        { type => 'http.response.start', status => 200, headers => [] },
+        { type => 'http.response.body', body => 'x', more => 1 },
+    ])->body_complete, 0, 'a response with no terminal body is incomplete');
+};
+
 subtest 'status helpers' => sub {
     ok( captured_response(status => 200)->is_success, '200 is success' );
     ok( captured_response(status => 201)->is_success, '201 is success' );
