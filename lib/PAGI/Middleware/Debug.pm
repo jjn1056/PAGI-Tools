@@ -27,6 +27,23 @@ PAGI::Middleware::Debug injects a debug panel into HTML responses
 showing request/response details, timing breakdown, and headers.
 Only enabled in development mode.
 
+=head2 Streaming HTML
+
+The debug panel is injected before the closing C<< </body> >> tag, which
+requires the complete document, so Debug B<buffers HTML responses> and
+forwards them as a single response once the application finishes. An HTML
+response that streams in chunks through this middleware therefore reaches
+the client all at once, not progressively.
+
+Non-HTML responses are forwarded chunk by chunk and are unaffected. If you
+need progressive HTML delivery, place Debug outside the streaming route, or
+omit it in that environment.
+
+If the response never completes -- the client disconnected mid-stream --
+Debug forwards the events the application did produce and does not
+manufacture a terminal event, so the response stays observably incomplete
+(see L<PAGI::Spec::Www/"Application Left a Response Incomplete">).
+
 =head1 CONFIGURATION
 
 =over 4
