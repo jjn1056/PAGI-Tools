@@ -4,8 +4,8 @@
 
 | Task | Status | Commit | Tests | Evidence |
 |---|---|---|---|---|
-| 1. Correct middleware design record | in progress | — | — | — |
-| 2. Ship generated Markdown README | pending | — | — | — |
+| 1. Correct middleware design record | complete | f8a6fd9192d1421bfd6628eeb7ec8906030907f5 | `prove -l t/routing/04-middleware-descriptors.t t/routing/11-explicit-middleware.t`: 2 files, 16 tests, PASS; `git diff --check`: PASS | Replaced overstated safety rationale with deterministic type-dispatch wording; documented the two-layer grammar, ergonomic cost, and retained `middleware(...)` name. No production module or public API changed. |
+| 2. Ship generated Markdown README | in progress | — | — | — |
 | 3. Ship real chat example assets | pending | — | — | — |
 | 4. Release notes and distribution verification | pending | — | — | — |
 
