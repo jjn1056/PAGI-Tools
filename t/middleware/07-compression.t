@@ -171,6 +171,48 @@ subtest 'GZip middleware - skips small responses' => sub {
     is $events[1]{body}, 'Small', 'body unchanged';
 };
 
+subtest 'GZip middleware - a disconnected client gets no fabricated response' => sub {
+    my $gzip = PAGI::Middleware::GZip->new(min_size => 10);
+
+    {
+        package AbortedConn;
+        sub new               { return bless {}, shift }
+        sub is_connected      { return 0 }
+        sub disconnect_reason { return 'client_closed' }
+        sub on_disconnect     { return }
+    }
+
+    # An application that starts a response and stops -- without sending any
+    # body chunk -- because the client vanished before it could send one.
+    # (A single more=>1 chunk instead would take GZip's pre-existing
+    # streaming-passthrough branch, which never reaches the buggy
+    # post-completion synthesis this guard protects.)
+    my $app = async sub  {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['Content-Type', 'text/html']],
+        });
+    };
+
+    my $wrapped = $gzip->wrap($app);
+    my $scope = make_scope(headers => [['Accept-Encoding', 'gzip']]);
+    $scope->{'pagi.connection'} = AbortedConn->new;
+
+    my @events;
+    my $send = async sub  {
+        my ($event) = @_; push @events, $event };
+    my $receive = async sub { { type => 'http.request', body => '', more => 0 } };
+
+    run_async { $wrapped->($scope, $receive, $send) };
+
+    is(scalar(grep { $_->{type} eq 'http.response.start' } @events), 0,
+        'no start event is fabricated for an aborted response');
+    is(scalar(grep { $_->{type} eq 'http.response.body' && !$_->{more} } @events), 0,
+        'no terminal body event is fabricated');
+};
+
 # ===================
 # ETag Middleware Tests
 # ===================

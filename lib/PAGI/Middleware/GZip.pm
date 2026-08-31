@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use IO::Compress::Gzip qw(gzip $GzipError);
+use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -161,6 +162,10 @@ sub wrap {
         # response it never gave us; let the server's no-response backstop
         # fire with its accurate diagnostic.
         return unless defined $status;
+
+        # Same rule as ETag: a Content-Length computed from a partial buffer
+        # asserts a completeness the application never claimed.
+        return if request_ended_abnormally($scope);
 
         # Combine body
         my $body = join('', @body_parts);
