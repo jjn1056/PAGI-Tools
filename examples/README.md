@@ -9,7 +9,7 @@ Routing examples use three frontends over one immutable engine:
 verb-method builder, and `PAGI::Endpoint::Router` for local methods on a
 configured object. They share path Patterns, written declaration order,
 metadata, Router-owned HTTP outcomes, and reverse routing. Native
-three-channel route handlers are always marked `raw`. Deployed Router examples
+three-channel route endpoints are always wrapped with `as_app`. Deployed Router examples
 let the selected Router own complete negotiated 404/405 outcomes and use
 Compose for lifespan, application-error, and response-completion safeguards;
 direct `to_app` remains the lower-level routing-component spelling. Runnable
@@ -56,13 +56,14 @@ raw PAGI protocol details that belong alongside the server implementation.
 11. `endpoint-router-demo` - composing Endpoint routes with callback children, explicit discoverable child Routers, `app_as`, and `http_default`
 12. `full-demo` - kitchen-sink demo combining multiple toolkit features
 13. `pages` - Compose-rooted `PAGI::Pages` demo covering class/configured/export factories, direct application Routes and Mount, a request-derived application return, native `as_app` plus `invoke_app`, negotiation, and lifespan
-14. `sse-close` - direct `PAGI::SSE` application with an explicit close and client-facing sentinel event
-15. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
-16. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Router-owned routing outcomes
-17. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
-18. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::WebSocket`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
-19. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
-20. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
+14. `process-streaming` - streams an external command's output through `stream_response`/`pipe_from` with a four-line loop-agnostic `Future::IO` source, real pipe backpressure, and `on_close` cleanup that stops the child when the client disconnects
+15. `sse-close` - direct `PAGI::SSE` application with an explicit close and client-facing sentinel event
+16. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
+17. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Router-owned routing outcomes
+18. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
+19. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::WebSocket`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
+20. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
+21. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
 
 **Note on `websocket-chat-v2/public`:** the v2 example carries ordinary copies
 of the shared chat frontend assets so it remains runnable from CPAN tarballs,
