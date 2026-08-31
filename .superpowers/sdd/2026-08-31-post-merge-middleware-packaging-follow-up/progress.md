@@ -5,8 +5,8 @@
 | Task | Status | Commit | Tests | Evidence |
 |---|---|---|---|---|
 | 1. Correct middleware design record | complete | f8a6fd9192d1421bfd6628eeb7ec8906030907f5 | `prove -l t/routing/04-middleware-descriptors.t t/routing/11-explicit-middleware.t`: 2 files, 16 tests, PASS; `git diff --check`: PASS | Replaced overstated safety rationale with deterministic type-dispatch wording; documented the two-layer grammar, ergonomic cost, and retained `middleware(...)` name. No production module or public API changed. |
-| 2. Ship generated Markdown README | in progress | — | — | — |
-| 3. Ship real chat example assets | pending | — | — | — |
+| 2. Ship generated Markdown README | complete | 38bd88aa4753de36a8ae1d0c52e904f6614b7abe | built: `prove -lv t/upgrading-routing-composition.t`: 1 file, 10 top-level subtests, PASS; source: `prove -l t/00-pod/cookbook-examples.t t/upgrading-routing-composition.t`: 2 files, 14 tests, PASS; `git diff --check`: PASS | Fresh `/tmp/pagi-tools-readme-green.QY6pUp` build contains `README.md`; `cmp README.md /tmp/pagi-tools-readme-green.QY6pUp/README.md` exited 0. |
+| 3. Ship real chat example assets | in progress | — | — | — |
 | 4. Release notes and distribution verification | pending | — | — | — |
 
 ## Work map
