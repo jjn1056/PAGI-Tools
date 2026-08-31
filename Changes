@@ -10,6 +10,13 @@
     factory and `wrap` results through `to_app`. The higher-level App Router,
     Endpoint Router, and Middleware Builder retain their concise frontend
     forms and their existing runtime behavior.
+  - Clarified that concise middleware normalization is deterministic dispatch
+    across disjoint Perl value shapes; the strict core descriptor requirement
+    provides one inspectable representation rather than resolving callable
+    ambiguity. The public API and middleware(...) spelling are unchanged.
+  - Distribution builds now include the generated Markdown README and real
+    websocket-chat-v2 frontend assets, so built-tree documentation and chat
+    integration tests exercise the same files as source checkouts.
   - Fixed invalid allowed_methods diagnostics to identify the route endpoint
     capability rather than a nonexistent methods option.
   - Route and Mount constraint accessors now always return fresh hashrefs,
