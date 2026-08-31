@@ -5,7 +5,7 @@ use Future::AsyncAwait;
 use Types::Standard qw(Int);
 
 use AppleApp::Middleware qw(with_apples_api_header);
-use AppleApp::Model;
+use AppleApp::Model qw(apple_model);
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(file_response json_response);
@@ -16,7 +16,7 @@ use PAGI::Utils qw(app_path);
 my $manager_file = app_path('public', 'index.html');
 
 sub startup($state, $scope) {
-    $state->{apples} = AppleApp::Model->new;
+    $state->{apples} = apple_model();
     return;
 }
 

@@ -80,7 +80,7 @@ use Future::AsyncAwait;
 use Types::Standard qw(Int);
 
 use AppleApp::Middleware qw(with_apples_api_header);
-use AppleApp::Model;
+use AppleApp::Model qw(apple_model);
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(file_response json_response);
@@ -91,7 +91,7 @@ use PAGI::Utils qw(app_path);
 my $manager_file = app_path('public', 'index.html');
 
 sub startup($state, $scope) {
-    $state->{apples} = AppleApp::Model->new;
+    $state->{apples} = apple_model();
     return;
 }
 
@@ -220,8 +220,9 @@ compose(
 
 The static root file, `/welcome` Pages value, CRUD JSON values, and custom root
 404 are direct application values. `AppleApp::Model` owns the fixture and CRUD
-state through a Moose native `Hash` attribute, while lifespan owns the model's
-application lifetime. The exact root file and `/welcome` remain Route
+state through a Moose native `Hash` attribute and exports the opt-in
+`apple_model()` factory, while lifespan owns the model's application lifetime.
+The exact root file and `/welcome` remain Route
 endpoints, while `/apples` is a subtree-owning child Router. The custom root
 404 is the Router's `http_default`, so it handles unknown paths without
 swallowing the 405 for a known path such as `PUT /welcome`.

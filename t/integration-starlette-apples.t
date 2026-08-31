@@ -5,6 +5,7 @@ use Test2::V0;
 use FindBin qw($Bin);
 use Digest::SHA qw(sha256_hex);
 use JSON::PP ();
+use Scalar::Util qw(refaddr);
 use lib "$Bin/../lib";
 use PAGI::Test::Client;
 
@@ -47,7 +48,20 @@ subtest 'Moose model owns fixture and CRUD behavior' => sub {
         or diag($@);
     return unless $loaded;
 
-    my $model = AppleApp::Model->new;
+    my $imported = eval { AppleApp::Model->import('apple_model'); 1 };
+    ok($imported, 'AppleApp::Model exports its model factory on request')
+        or diag($@);
+    return unless $imported;
+
+    my $factory = __PACKAGE__->can('apple_model');
+    ok($factory, 'apple_model is installed in the requesting package');
+    return unless $factory;
+
+    my $model = $factory->();
+    my $other_model = $factory->();
+    isa_ok($model, 'AppleApp::Model');
+    isnt(refaddr($model), refaddr($other_model),
+        'apple_model returns a fresh model instance');
     is($model->all, [
         { id => 1, name => 'Gala',       color => 'Red/Yellow' },
         { id => 2, name => 'Honeycrisp', color => 'Rosy Red' },

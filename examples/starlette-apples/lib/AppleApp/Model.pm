@@ -2,9 +2,12 @@ package AppleApp::Model;
 
 use v5.40;
 
+use Exporter qw(import);
 use List::Util qw(max);
 use Moose;
 use Types::Standard qw(HashRef);
+
+our @EXPORT_OK = qw(apple_model);
 
 has _apples => (
     traits  => ['Hash'],
@@ -51,6 +54,10 @@ sub update($self, $id, $data) {
 
 sub delete($self, $id) {
     return $self->_delete_apple($id);
+}
+
+sub apple_model() {
+    return __PACKAGE__->new;
 }
 
 no Moose;
