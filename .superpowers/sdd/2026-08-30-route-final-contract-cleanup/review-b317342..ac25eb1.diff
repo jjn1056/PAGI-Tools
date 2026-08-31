@@ -1,0 +1,174 @@
+# Review package: b317342b3fc021261c7123ac7d99af973ad02acd..HEAD
+
+## Commits
+ac25eb1 fix: identify invalid route method capabilities
+
+## Files changed
+ Changes                     |  2 ++
+ lib/PAGI/Routing/Route.pm   | 30 ++++++++++++++++++++++--------
+ t/routing/01-constructors.t | 23 ++++++++++++-----------
+ 3 files changed, 36 insertions(+), 19 deletions(-)
+
+## Diff
+diff --git a/Changes b/Changes
+index 837ac34..5cc9f0e 100644
+--- a/Changes
++++ b/Changes
+@@ -1,13 +1,15 @@
+ # Revision history for PAGI-Tools
+ 
+ 0.002003 - UNRELEASED
++  - Fixed invalid allowed_methods diagnostics to identify the route endpoint
++    capability rather than a nonexistent methods option.
+   - BREAKING: Replaced the mutable, request-bound PAGI::Response builder with
+     complete concrete Response values and exported factories: Response::Text,
+     ::HTML, ::JSON, ::Problem, ::Redirect, ::Empty, ::File, and ::Stream.
+     Response is invoked only through `to_app` or the generic `invoke_app`
+     helper; the public `respond` method, Request's response bridge, and the
+     generic text/html/json/send/send_raw/
+     redirect/empty/send_file/stream/writer finishers are removed. Buffered
+     response bodies are byte strings; Text and HTML perform explicit charset
+     encoding, while File and Stream retain non-buffered delivery ownership.
+     Stream Writer writes are awaitable backpressure points under PAGI's send-
+diff --git a/lib/PAGI/Routing/Route.pm b/lib/PAGI/Routing/Route.pm
+index 7ff9434..d58bafc 100644
+--- a/lib/PAGI/Routing/Route.pm
++++ b/lib/PAGI/Routing/Route.pm
+@@ -72,25 +72,28 @@ sub _build {
+     );
+ 
+     if ($kind ne 'route' && exists $opts->{methods}) {
+         my %kind_name = (websocket => 'WebSocket', sse => 'SSE');
+         croak $kind_name{$kind} . ' routes do not accept methods';
+     }
+ 
+     my $methods;
+     if ($kind eq 'route') {
+         if (exists $opts->{methods}) {
+-            $methods = _normalize_methods($opts->{methods});
++            $methods = _normalize_methods($opts->{methods}, 'methods');
+         }
+         elsif (ref($endpoint) ne 'CODE' && $endpoint->can('allowed_methods')) {
+             my @capability_methods = $endpoint->allowed_methods;
+-            $methods = _normalize_methods(\@capability_methods);
++            $methods = _normalize_methods(
++                \@capability_methods,
++                'route endpoint allowed_methods',
++            );
+         }
+         else {
+             $methods = _normalize_methods('GET');
+         }
+     }
+     my $has_constraints = exists $opts->{constraints};
+     my $pattern = PAGI::Routing::Pattern->new(
+         path => $path,
+         mode => 'route',
+         constraints => $has_constraints ? $opts->{constraints} : {},
+@@ -122,40 +125,51 @@ sub _validate_logical_segment {
+             && index($value, '/') < 0 && $value ne '.' && $value ne '..';
+ }
+ 
+ sub _validate_constraints {
+     my ($constraints) = @_;
+     croak 'constraints must be a hashref'
+         unless ref($constraints) eq 'HASH';
+ }
+ 
+ sub _normalize_methods {
+-    my ($methods) = @_;
+-    return '*' if defined $methods && !ref($methods) && $methods eq '*';
++    my ($methods, $origin) = @_;
++    $origin ||= 'methods';
++
++    my $from_capability = $origin eq 'route endpoint allowed_methods';
++    my $shape_error = $from_capability
++        ? 'route endpoint allowed_methods must return valid HTTP method strings'
++        : "methods must be a method string, arrayref, or '*'";
++
++    return '*'
++        if !$from_capability
++            && defined($methods) && !ref($methods) && $methods eq '*';
+ 
+     my @methods;
+-    if (defined $methods && !ref($methods)) {
++    if (!$from_capability && defined($methods) && !ref($methods)) {
+         @methods = ($methods);
+     }
+     elsif (ref($methods) eq 'ARRAY') {
+         @methods = @$methods;
+     }
+     else {
+-        croak "methods must be a method string, arrayref, or '*'";
++        croak $shape_error;
+     }
+ 
+-    croak "methods must be a method string, arrayref, or '*'" unless @methods;
++    croak 'route endpoint allowed_methods returned no methods'
++        if $from_capability && !@methods;
++    croak $shape_error unless @methods;
+ 
+     my %seen;
+     my @normalized;
+     for my $method (@methods) {
+-        croak "methods must be a method string, arrayref, or '*'"
++        croak $shape_error
+             unless defined $method && !ref($method)
+                 && $method ne '*' && $method =~ /\A[!#\$%&'\+\-.\^_`|~0-9A-Za-z]+\z/;
+         $method = uc $method;
+         next if $seen{$method}++;
+         push @normalized, $method;
+         if ($method eq 'GET' && !$seen{HEAD}) {
+             $seen{HEAD} = 1;
+             push @normalized, 'HEAD';
+         }
+     }
+diff --git a/t/routing/01-constructors.t b/t/routing/01-constructors.t
+index cb09556..d318783 100644
+--- a/t/routing/01-constructors.t
++++ b/t/routing/01-constructors.t
+@@ -688,32 +688,33 @@ subtest 'constructors reject invalid declarations' => sub {
+     like dies { websocket '/socket' => $handler, methods => 'GET' }, qr/WebSocket routes do not accept methods/, 'WebSocket rejects methods';
+     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
+     like dies { route '/not-code' => 'not a handler' }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects package strings';
+     like dies { route '/not-component' => [] }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects unblessed component lookalikes';
+     ok(lives { route '/component' => PAGI::Response::Text->new('component') },
+         'normal route accepts an instantiated to_app component');
+     my $broken_component = bless {}, 'BrokenRouteComponent';
+     like dies { route '/broken-component' => $broken_component },
+         qr/route endpoint must be a coderef or instantiated object with to_app/,
+         'route rejects an instantiated object without to_app';
+-    for my $methods (
+-        [],
+-        ['GET POST'],
+-        [{}],
+-        [Future->done('GET')],
+-        ['*'],
+-        ['GET', '*'],
++    for my $case (
++        [empty     => [],                 qr/route endpoint allowed_methods returned no methods/],
++        [separator => ['GET POST'],       qr/route endpoint allowed_methods must return valid HTTP method strings/],
++        [reference => [{}],               qr/route endpoint allowed_methods must return valid HTTP method strings/],
++        [future    => [Future->done('GET')], qr/route endpoint allowed_methods must return valid HTTP method strings/],
++        [wildcard  => ['*'],              qr/route endpoint allowed_methods must return valid HTTP method strings/],
++        [mixed     => ['GET', '*'],        qr/route endpoint allowed_methods must return valid HTTP method strings/],
+     ) {
+-        my $endpoint = Local::MethodEndpoint->new(@$methods);
+-        like dies { route '/invalid-capability' => $endpoint },
+-            qr/methods must be a method string, arrayref, or '\*'/,
+-            'invalid capability result is rejected synchronously';
++        my ($label, $returned, $error) = @$case;
++        my $endpoint = Local::MethodEndpoint->new(@$returned);
++        like dies { route "/invalid-capability-$label" => $endpoint },
++            $error,
++            "$label allowed_methods failure names the endpoint capability";
+     }
+     like dies { mount '/missing' }, qr/mount requires exactly one of app or routes/, 'mount requires one target form';
+     like dies { mount '/both', app => $handler, routes => [] }, qr/mount requires exactly one of app or routes/, 'mount rejects app plus routes';
+     like dies { mount '/positional' => $handler }, qr/mount option list must be key\/value pairs/, 'mount rejects positional targets';
+     like dies { mount '/router', router => $child_router }, qr/unknown mount option 'router'/, 'mount rejects legacy router option';
+     for my $key (qw(methods schema lifespan fallback)) {
+         like dies { mount '/removed-option', routes => [], $key => sub { } },
+             qr/unknown mount option '\Q$key\E'/,
+             "mount rejects removed '$key' option";
+     }
