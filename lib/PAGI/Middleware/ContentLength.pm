@@ -132,12 +132,15 @@ sub wrap {
 
         # No terminal event means there is no length to claim. Emit what we
         # withheld, verbatim, so the response the application started is not
-        # destroyed -- but attach nothing. Forwarding the events unchanged also
-        # preserves each one's `more`: it defaults to 0, so reconstructing them
-        # and dropping it would assert a completeness the application never
-        # claimed. Keyed on what we received rather than on why the application
-        # stopped, so this also covers an early return with the client still
-        # connected -- a case the disconnect signal cannot see.
+        # destroyed -- but attach nothing. In practice only the start event can
+        # be here: every body event either diverts to the streaming/opaque
+        # branch above or sets $terminal_seen when it is buffered. The loop is
+        # written over the whole buffer anyway, so it stays correct if that
+        # invariant ever changes.
+        #
+        # Keyed on what we received rather than on why the application stopped,
+        # so this also covers an early return with the client still connected --
+        # a case the disconnect signal cannot see.
         if (!$terminal_seen) {
             for my $buffered (@buffered_events) {
                 await $send->($buffered);

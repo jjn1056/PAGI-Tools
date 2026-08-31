@@ -25,9 +25,9 @@ sub aborted_scope {
 }
 
 # Start only, NO body event. A `more => 1` chunk trips the streaming
-# passthrough in both ETag (:89/:138) and GZip (:136-159), which skips the
-# synthesis block entirely -- so that shape would make this test pass
-# whether or not the fixes are present. Controller-verified.
+# passthrough -- the flip at ETag.pm:113 / GZip.pm:139, and the early return
+# at ETag.pm:141 / GZip.pm:162 -- which skips the synthesis block entirely, so
+# that shape would make this test pass whether or not the fixes are present.
 sub aborted_app {
     return sub {
         my ($scope, $receive, $send) = @_;
@@ -47,16 +47,21 @@ for my $case (
 ) {
     my ($label, $wrap) = @$case;
 
-    subtest "$label does not launder an aborted response past an outer guard" => sub {
+    subtest "$label forwards the head and fabricates no terminal event" => sub {
         my @sent;
         my $send = sub { push @sent, $_[0]; return Future->done };
 
         my $inner   = $wrap->(aborted_app());
         my $guarded = PAGI::Compose::ResponseGuard->wrap($inner);
 
+        # ResponseGuard is present to prove the stack composes, but note it is
+        # inert for this fixture: ResponseGuard.pm:77 returns on
+        # request_ended_abnormally before it inspects started/terminal state.
+        # The assertions below therefore measure the inner middleware, not the
+        # guard -- this `lives` check is a smoke test, not a discriminator.
         ok(lives {
             Future->wrap($guarded->(aborted_scope(), sub { Future->done }, $send))->get;
-        }, "$label: the guard does not raise for a disconnected client") or note($@);
+        }, "$label: the stack completes without raising") or note($@);
 
         is(scalar(grep { $_->{type} eq 'http.response.body' && !$_->{more} } @sent), 0,
             "$label: no terminal event is emitted, so completeness is not laundered");
