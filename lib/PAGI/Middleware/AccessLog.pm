@@ -186,7 +186,7 @@ Minimal format:
 
     GET /path 200 0.005s
 
-=head2 aborted transfers
+=head1 ABORTED TRANSFERS
 
 When the client disconnects before the response finishes, every format gets
 an C<aborted=E<lt>reasonE<gt>> field appended before the trailing newline:

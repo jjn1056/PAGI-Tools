@@ -242,8 +242,8 @@ subtest 'an aborted transfer is distinguishable in the log' => sub {
     is scalar(@log_lines), 1, 'one log line written';
     like $log_lines[0], qr/aborted=client_closed/,
         'the line records that the client disconnected, with its reason';
-    like $log_lines[0], qr/\n\z/,
-        'the line still ends with its newline, with the field before it';
+    my $newline_count = () = $log_lines[0] =~ /\n/g;
+    is $newline_count, 1, 'exactly one newline, so the field lands before it';
 };
 
 # =============================================================================
