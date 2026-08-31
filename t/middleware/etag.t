@@ -137,4 +137,46 @@ subtest 'a disconnected client gets no fabricated validator' => sub {
         'no terminal body event is fabricated');
 };
 
+subtest 'no validator is attached when no terminal event was received' => sub {
+    {
+        package LiveConnE1;
+        sub new               { return bless {}, shift }
+        sub is_connected      { return 1 }
+        sub disconnect_reason { return undef }
+        sub on_disconnect     { return }
+    }
+
+    # The client is still connected: the application simply stopped after
+    # committing its status -- a failed backend, a dead cursor, an early
+    # return. The disconnect signal cannot see this, which is why the guard
+    # must key on what the middleware received instead.
+    my @sent;
+    my $send = sub { push @sent, $_[0]; return Future->done };
+
+    my $scope = { type => 'http', method => 'GET', path => '/x', headers => [],
+                  'pagi.connection' => LiveConnE1->new };
+
+    my $app = sub {
+        my ($app_scope, $receive, $inner_send) = @_;
+        return (async sub {
+            await $inner_send->({ type => 'http.response.start',
+                                  status => 200,
+                                  headers => [['content-type', 'text/plain']] });
+            return;
+        })->();
+    };
+
+    my $wrapped = PAGI::Middleware::ETag->new->wrap($app);
+    Future->wrap($wrapped->($scope, sub { Future->done }, $send))->get;
+
+    my @etags = map { @{ $_->{headers} || [] } }
+                grep { $_->{type} eq 'http.response.start' } @sent;
+    is(scalar(grep { lc($_->[0]) eq 'etag' } @etags), 0,
+        'no ETag over a body that never terminated');
+    is(scalar(grep { $_->{type} eq 'http.response.body' && !$_->{more} } @sent), 0,
+        'no terminal body event is fabricated');
+    is(scalar(grep { $_->{type} eq 'http.response.start' } @sent), 1,
+        "the application's own response start still reaches the wire");
+};
+
 done_testing;

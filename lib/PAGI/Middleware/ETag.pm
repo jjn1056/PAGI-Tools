@@ -5,7 +5,6 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Digest::MD5 qw(md5_hex);
-use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -57,6 +56,7 @@ sub wrap {
         my $original_headers;
         my $status;
         my $is_streaming = 0;
+        my $terminal_seen = 0;
 
         my $wrapped_send = async sub  {
         my ($event) = @_;
@@ -106,6 +106,9 @@ sub wrap {
 
                 push @body_parts, $event->{body} // '';
 
+                # `more` defaults to 0, so an omitted `more` is terminal.
+                $terminal_seen = 1 unless $event->{more};
+
                 # If streaming, can't generate ETag
                 if ($event->{more}) {
                     # No start was ever observed (a malformed inner app sent
@@ -142,11 +145,28 @@ sub wrap {
         # fire with its accurate diagnostic.
         return unless defined $status;
 
-        # A client that vanished mid-response leaves a partial body. Computing
-        # a validator over it and emitting more => 0 would assert that those
-        # bytes are the whole representation -- forbidden for any producer by
-        # PAGI::Spec::Www, "Application Left a Response Incomplete".
-        return if request_ended_abnormally($scope);
+        # We withheld the application's start event; emit it whatever else
+        # happened. Swallowing it tells every outer observer that no response
+        # was ever started -- a different state, which servers report
+        # differently and which can license a client to retry an idempotent
+        # request (RFC 9110 S9.2.2).
+        #
+        # Only a terminal event we actually received licenses the validator:
+        # an ETag over a partial body asserts those bytes are the whole
+        # representation, forbidden for any producer by PAGI::Spec::Www,
+        # "Application Left a Response Incomplete". This asks what we
+        # received, not why the application stopped, so it is equally correct
+        # for a client that vanished and for an application that returned
+        # early with its client still connected -- a case the disconnect
+        # signal cannot see at all.
+        unless ($terminal_seen) {
+            await $send->({
+                type    => 'http.response.start',
+                status  => $status,
+                headers => $original_headers // [],
+            });
+            return;
+        }
 
         # Generate ETag from body
         my $body = join('', @body_parts);
