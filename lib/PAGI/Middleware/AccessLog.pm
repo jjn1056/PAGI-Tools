@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Time::HiRes qw(time);
 use POSIX qw(strftime);
+use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -97,6 +98,13 @@ sub _log_request {
 
     my $duration = time() - $start_time;
     my $line = $self->_format_log($scope, $status, $size, $duration);
+
+    if (request_ended_abnormally($scope)) {
+        chomp $line;
+        $line .= ' aborted=' . $scope->{'pagi.connection'}->disconnect_reason
+               . "\n";
+    }
+
     $self->{logger}->($line);
 }
 
@@ -177,6 +185,19 @@ Apache common log format:
 Minimal format:
 
     GET /path 200 0.005s
+
+=head2 aborted transfers
+
+When the client disconnects before the response finishes, every format gets
+an C<aborted=E<lt>reasonE<gt>> field appended before the trailing newline:
+
+    127.0.0.1 - - [01/Jan/2024:12:00:00 +0000] "GET /path HTTP/1.1" 200 524288 "-" "Mozilla/5.0" 0.005s aborted=client_closed
+
+This is PAGI's analogue of nginx's C<499> status plus C<$request_completion>,
+or Kestrel's distinct aborted-connection log event: it lets an operator tell
+an aborted transfer apart from a small successful response, which otherwise
+log identically. A request that completed normally gets no such field, and
+its line is unchanged.
 
 =head1 SEE ALSO
 

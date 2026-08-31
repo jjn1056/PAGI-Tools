@@ -192,6 +192,60 @@ subtest 'AccessLog skips non-HTTP requests' => sub {
     is scalar(@log_lines), 0, 'no log for websocket';
 };
 
+subtest 'an aborted transfer is distinguishable in the log' => sub {
+    {
+        package AbortedConn8;
+        sub new               { return bless {}, shift }
+        sub is_connected      { return 0 }
+        sub disconnect_reason { return 'client_closed' }
+        sub on_disconnect     { return }
+    }
+
+    my @log_lines;
+    my $mw = PAGI::Middleware::AccessLog->new(
+        logger => sub { push @log_lines, @_ },
+        format => 'combined',
+    );
+
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [['content-type', 'text/plain']],
+        });
+        await $send->({
+            type => 'http.response.body',
+            body => 'partial',
+            more => 1,
+        });
+    };
+
+    my $wrapped = $mw->wrap($app);
+
+    run_async(async sub {
+        await $wrapped->(
+            {
+                type              => 'http',
+                path              => '/stream',
+                method            => 'GET',
+                http_version      => '1.1',
+                client            => ['192.168.1.1', 12345],
+                headers           => [],
+                'pagi.connection' => AbortedConn8->new,
+            },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; },
+        );
+    });
+
+    is scalar(@log_lines), 1, 'one log line written';
+    like $log_lines[0], qr/aborted=client_closed/,
+        'the line records that the client disconnected, with its reason';
+    like $log_lines[0], qr/\n\z/,
+        'the line still ends with its newline, with the field before it';
+};
+
 # =============================================================================
 # Test: RequestId middleware generates unique request IDs
 # =============================================================================
