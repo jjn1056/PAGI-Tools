@@ -14,8 +14,8 @@ Baseline: Perl 5.42.2; `prove -lr t` passed 218 files / 2373 tests at `b2bfb00`.
 |---|---|---|---|---|
 | 1. Explicit descriptor | complete | `24098f5757a06bf37c3b54bb0f1bb695a2ad9e09` | 3 files / 29 tests | RED captured; focused GREEN; task review approved with one deferred POD minor |
 | 2. Strict core lists | complete | `982dfd41e7fbe46fa9cf65e6db7d120b968816cf` | 10 files / 148 tests | RED captured; focused GREEN; task review clean |
-| 3. Router frontend sugar | in progress | — | — | — |
-| 4. Builder naming | pending | — | — | — |
+| 3. Router frontend sugar | complete | `108bf48c53745d1dfdb4335266f482b2f5345725` | 5 files / 52 tests | Characterization and stale-expectation migration GREEN; task review clean |
+| 4. Builder naming | in progress | — | — | — |
 | 5. Examples and docs | pending | — | — | — |
 | 6. Upgrade and verification | pending | — | — | — |
 
@@ -68,3 +68,8 @@ materialization evidence; it must not manufacture a failure or make unrelated
 production edits if the approved behavior already passes. Cost if wrong: Task
 3 may be a tests-only commit, but the behavior remains guarded and the Task 2
 review already verified the production seam.
+
+Task 3: complete (commits b1b8d95..108bf48, review clean). The reviewer noted
+that the implementer did not edit the ledger; the controller's standing
+ledger-ownership ruling resolves that operational item in this tracking
+commit.
