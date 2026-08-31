@@ -343,4 +343,43 @@ subtest 'ContentLength ignores an app-declared Transfer-Encoding: chunked' => su
         'Content-Length is synthesized despite the app-set Transfer-Encoding header';
 };
 
+subtest 'a disconnected client gets no fabricated content-length' => sub {
+    my $mw = PAGI::Middleware::ContentLength->new;
+
+    {
+        package AbortedConn4;
+        sub new               { return bless {}, shift }
+        sub is_connected      { return 0 }
+        sub disconnect_reason { return 'client_closed' }
+        sub on_disconnect     { return }
+    }
+
+    # Starts a response, then the client vanishes before any body chunk.
+    my $app = async sub  {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type    => 'http.response.start',
+            status  => 200,
+            headers => [],
+        });
+    };
+
+    my $wrapped = $mw->wrap($app);
+
+    my @sent;
+    run_async(async sub {
+        await $wrapped->(
+            { type => 'http', path => '/x', 'pagi.connection' => AbortedConn4->new },
+            async sub { { type => 'http.disconnect' } },
+            async sub  {
+        my ($event) = @_; push @sent, $event },
+        );
+    });
+
+    my @headers = map { @{ $_->{headers} || [] } }
+                  grep { $_->{type} eq 'http.response.start' } @sent;
+    is(scalar(grep { lc($_->[0]) eq 'content-length' } @headers), 0,
+        'no content-length is fabricated for an aborted response');
+};
+
 done_testing;

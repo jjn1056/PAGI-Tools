@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -125,7 +126,8 @@ sub wrap {
         await $app->($scope, $receive, $wrapped_send);
 
         # If we have buffered events, calculate Content-Length and send
-        if (@buffered_events && !$has_content_length && !$is_streaming) {
+        if (@buffered_events && !$has_content_length && !$is_streaming
+            && !request_ended_abnormally($scope)) {
             # Calculate total body length
             my $body_length = 0;
             for my $event (@buffered_events) {
