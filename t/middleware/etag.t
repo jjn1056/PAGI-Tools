@@ -131,6 +131,8 @@ subtest 'a disconnected client gets no fabricated validator' => sub {
 
     my @etags = map { @{ $_->{headers} || [] } }
                 grep { $_->{type} eq 'http.response.start' } @sent;
+    is(scalar(grep { $_->{type} eq 'http.response.start' } @sent), 1,
+        'a start event was actually forwarded, so the ETag check below is not vacuous');
     is(scalar(grep { lc($_->[0]) eq 'etag' } @etags), 0,
         'no ETag is attached to an aborted response');
     is(scalar(grep { $_->{type} eq 'http.response.body' && !$_->{more} } @sent), 0,
