@@ -153,16 +153,16 @@ or load Builder without functions:
 Coderef meaning comes only from its argument position. The router does not
 inspect signatures or evaluate package-method strings.
 
-    Form                         Called with                    Required result
-    ---------------------------  -----------------------------  -------------------------
-    route('/x' => $code)         ($request)                     PAGI application value
-    route('/x' => $component)    ($scope, $receive, $send)      native completion
-    websocket('/x' => $code)     ($websocket)                   inert; completion awaited
-    sse('/x' => $code)           ($sse)                         inert; completion awaited
-    route('/x' => as_app($code)) ($scope, $receive, $send)      native completion
-    mount('/x', app => $code)    ($scope, $receive, $send)      native completion
-    middleware => [middleware(...)] ($inner_app), at to_app     PAGI app coderef
-    middleware($entry, %config)     ($inner_app), at compile time PAGI app coderef
+    Form                              Evaluation                  Result
+    --------------------------------  --------------------------  -------------------------
+    route('/x' => $code)              request time: ($request)    PAGI application value
+    route('/x' => $component)         request time: native app     native completion
+    websocket('/x' => $code)          request time: ($websocket)  inert; completion awaited
+    sse('/x' => $code)                request time: ($sse)        inert; completion awaited
+    route('/x' => as_app($code))      request time: native app     native completion
+    mount('/x', app => $code)         request time: native app     native completion
+    middleware => [middleware(...)]   declaration time             description list only
+    middleware($entry, %config)       declaration time             middleware description
 
 =over 4
 
