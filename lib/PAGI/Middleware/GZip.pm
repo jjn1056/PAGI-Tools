@@ -5,7 +5,6 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use IO::Compress::Gzip qw(gzip $GzipError);
-use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -82,6 +81,7 @@ sub wrap {
         my $original_headers;
         my $status;
         my $headers_sent = 0;  # Request-local state (NOT on $self!)
+        my $terminal_seen = 0;
 
         my $wrapped_send = async sub  {
         my ($event) = @_;
@@ -132,6 +132,9 @@ sub wrap {
 
                 push @body_parts, $event->{body} // '';
 
+                # `more` defaults to 0, so an omitted `more` is terminal.
+                $terminal_seen = 1 unless $event->{more};
+
                 # If streaming (more => 1), switch to pass-through mode
                 if ($event->{more}) {
                     if (!$headers_sent) {
@@ -163,9 +166,21 @@ sub wrap {
         # fire with its accurate diagnostic.
         return unless defined $status;
 
-        # Same rule as ETag: a Content-Length computed from a partial buffer
-        # asserts a completeness the application never claimed.
-        return if request_ended_abnormally($scope);
+        # Same rule as ETag: emit the head we withheld, but compress nothing
+        # and claim nothing. Only a terminal event we actually received
+        # licenses Content-Encoding and Content-Length -- computing either
+        # from a partial buffer asserts a completeness the application never
+        # claimed. Keyed on what we received rather than on why the
+        # application stopped, so it also covers an application that returned
+        # early with its client still connected.
+        unless ($terminal_seen) {
+            await $send->({
+                type    => 'http.response.start',
+                status  => $status,
+                headers => $original_headers // [],
+            });
+            return;
+        }
 
         # Combine body
         my $body = join('', @body_parts);

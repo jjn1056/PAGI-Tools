@@ -207,10 +207,51 @@ subtest 'GZip middleware - a disconnected client gets no fabricated response' =>
 
     run_async { $wrapped->($scope, $receive, $send) };
 
-    is(scalar(grep { $_->{type} eq 'http.response.start' } @events), 0,
-        'no start event is fabricated for an aborted response');
+    # The application genuinely sent this start; forwarding it fabricates
+    # nothing. Swallowing it would tell every outer observer that no response
+    # was ever started -- a different state entirely.
+    is(scalar(grep { $_->{type} eq 'http.response.start' } @events), 1,
+        "the application's own response start is forwarded, not swallowed");
+    my @enc = map { @{ $_->{headers} || [] } }
+              grep { $_->{type} eq 'http.response.start' } @events;
+    is(scalar(grep { lc($_->[0]) eq 'content-encoding' } @enc), 0,
+        'but no Content-Encoding is claimed for a body that never terminated');
     is(scalar(grep { $_->{type} eq 'http.response.body' && !$_->{more} } @events), 0,
         'no terminal body event is fabricated');
+};
+
+subtest 'GZip fabricates nothing when no terminal event was received' => sub {
+    {
+        package LiveConnG1;
+        sub new               { return bless {}, shift }
+        sub is_connected      { return 1 }
+        sub disconnect_reason { return undef }
+        sub on_disconnect     { return }
+    }
+
+    # Client still connected -- the application simply stopped after committing
+    # its status. The disconnect signal is blind to this case.
+    my @events;
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200,
+                        headers => [['content-type', 'text/plain']] });
+        return;
+    };
+
+    my $scope = make_scope(headers => [['Accept-Encoding', 'gzip']]);
+    $scope->{'pagi.connection'} = LiveConnG1->new;
+
+    my $wrapped = PAGI::Middleware::GZip->new->wrap($app);
+    my $send = async sub { my ($event) = @_; push @events, $event };
+    my $receive = async sub { { type => 'http.request', body => '', more => 0 } };
+
+    run_async { $wrapped->($scope, $receive, $send) };
+
+    is(scalar(grep { $_->{type} eq 'http.response.body' && !$_->{more} } @events), 0,
+        'no terminal body event is fabricated');
+    is(scalar(grep { $_->{type} eq 'http.response.start' } @events), 1,
+        "the application's own response start still reaches the wire");
 };
 
 # ===================
