@@ -15,9 +15,9 @@ Baseline: Perl 5.42.2; `prove -lr t` passed 218 files / 2373 tests at `b2bfb00`.
 | 1. Explicit descriptor | complete | `24098f5757a06bf37c3b54bb0f1bb695a2ad9e09` | 3 files / 29 tests | RED captured; focused GREEN; task review approved with one deferred POD minor |
 | 2. Strict core lists | complete | `982dfd41e7fbe46fa9cf65e6db7d120b968816cf` | 10 files / 148 tests | RED captured; focused GREEN; task review clean |
 | 3. Router frontend sugar | complete | `108bf48c53745d1dfdb4335266f482b2f5345725` | 5 files / 52 tests | Characterization and stale-expectation migration GREEN; task review clean |
-| 4. Builder naming | verification deferred | `020336f8c64a3e7a427a9f59f7ee35ab413c20a7` | Builder gate: 2 files / 13 tests PASS; combined gate pending Task 5 | Code review approved; Cookbook dependency recorded |
-| 5. Examples and docs | in progress | — | — | — |
-| 6. Upgrade and verification | pending | — | — | — |
+| 4. Builder naming | complete | `020336f8c64a3e7a427a9f59f7ee35ab413c20a7` | 3-file combined gate / 17 tests PASS after Task 5 | Code review approved; sequencing dependency resolved |
+| 5. Examples and docs | complete | `f1566eefd9e6152bee3873693d7103b3dc78c81b`, fix `374b9769d1df1824b27b536d8b3bd2c6a339f473` | Integration/POD: 3 files / 52 tests; compiles and POD syntax clean | Fix round 1 resolved both important findings |
+| 6. Upgrade and verification | in progress | — | — | — |
 
 ## Preflight consistency scan
 
@@ -87,3 +87,16 @@ representative bare Route factory until Task 5 migrates the Cookbook.
 
 Task 4: minor (deferred to Task 5): `PAGI::Routing` still advertises retired
 `^` and bare core entries.
+
+Task 5: fix round 1/5 (2 addressed, 0 open — callable-shape table and Builder
+frontend distinction; commits f1566ee..374b976).
+
+Task 5: minor (deferred to final whole-branch review): Compose's short summary
+says the target of `middleware(...)` receives the inner app, while the detailed
+text correctly distinguishes class construction, factory invocation, and
+object `wrap`.
+
+Task 4: complete (implementation commit 020336f; code review approved; the
+Task 5 migration made its exact combined gate pass 3 files / 17 tests).
+
+Task 5: complete (commits fe8bad8..374b976, review clean after fix round 1).
