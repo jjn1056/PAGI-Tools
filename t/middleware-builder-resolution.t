@@ -3,8 +3,8 @@
 # =============================================================================
 # Test: Middleware Builder class name resolution
 #
-# Tests the ^ prefix for fully-qualified class names and ensures nested
-# namespace middleware (like Auth::Basic) works correctly.
+# Tests the Plack-familiar leading + convention for exact class names and
+# ensures nested namespace middleware (like Auth::Basic) works correctly.
 # =============================================================================
 
 use strict;
@@ -49,18 +49,37 @@ subtest 'middleware class resolution' => sub {
         'PAGI::Middleware::SSE::Retry',
         'SSE::Retry gets PAGI::Middleware:: prefix';
 
-    # Caret prefix prevents automatic prefixing
-    is $builder->_resolve_middleware('^My::Custom::Middleware'),
+    # Leading + prevents automatic prefixing
+    is $builder->_resolve_middleware('+My::Custom::Middleware'),
         'My::Custom::Middleware',
-        '^My::Custom::Middleware uses exact class name';
+        '+My::Custom::Middleware uses exact class name';
 
-    is $builder->_resolve_middleware('^TopLevel'),
+    is $builder->_resolve_middleware('+TopLevel'),
         'TopLevel',
-        '^TopLevel uses exact class name (top-level)';
+        '+TopLevel uses exact class name (top-level)';
 
-    is $builder->_resolve_middleware('^Some::Deep::Nested::Class'),
+    is $builder->_resolve_middleware('+Some::Deep::Nested::Class'),
         'Some::Deep::Nested::Class',
-        'deeply nested class with ^ works';
+        'deeply nested class with + works';
+
+    is $builder->_resolve_middleware('PAGI::Middleware::RequestId'),
+        'PAGI::Middleware::RequestId',
+        'already-qualified middleware name is preserved';
+
+    my $load_attempts = 0;
+    my $loader = sub {
+        ++$load_attempts;
+        return;
+    };
+    my @warnings;
+    local @INC = ($loader, @INC);
+    local $ENV{PAGI_DEBUG} = 1;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    like dies { $builder->_resolve_middleware('^My::Custom::Middleware') },
+        qr/invalid middleware class name|leading '\+'|exact package/i,
+        'retired caret exact-package spelling is rejected';
+    is $load_attempts, 0, 'retired caret spelling is rejected before module load';
+    is \@warnings, [], 'retired caret spelling is rejected before warning';
 };
 
 # =============================================================================

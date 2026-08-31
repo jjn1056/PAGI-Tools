@@ -870,7 +870,7 @@ the order it runs:
   use PAGI::Middleware::Builder;
 
   my $app = builder {
-      enable '^MyApp::Middleware::PoweredBy';
+      enable '+MyApp::Middleware::PoweredBy';
       enable 'AccessLog';
       enable 'Runtime';
       $router;
@@ -1189,12 +1189,14 @@ Create reusable middleware by extending L<PAGI::Middleware>:
 Use it with the builder:
 
   my $app = builder {
-      enable '^MyApp::Middleware::Auth', secret => 'secret-key';
+      enable '+MyApp::Middleware::Auth', secret => 'secret-key';
       $router;
   };
 
-The C<^> prefix tells the builder to use the class name as-is instead of
-prepending C<PAGI::Middleware::>. Or skip name resolution entirely by
+The leading C<+> tells the builder to use the class name as-is instead of
+prepending C<PAGI::Middleware::>. This is the Plack-familiar exact-package
+escape shared by Builder and explicit routing middleware descriptions. Or skip
+name resolution entirely by
 passing a configured instance (parentheses required):
 
   my $app = builder {
@@ -1490,7 +1492,7 @@ C<as_app> or opaque mount boundaries.
 
 Middleware position is the same idea with a different duck type:
 C<enable> accepts a middleware name (resolved under
-C<PAGI::Middleware::>, with C<^> to escape) or a configured instance
+C<PAGI::Middleware::>, with leading C<+> to select an exact package) or a configured instance
 with a C<wrap> method, and every routing middleware array accepts the same
 four forms: class name, coderef factory, configured C<wrap> object, or
 L<PAGI::Routing::Middleware> description. Factories have the form

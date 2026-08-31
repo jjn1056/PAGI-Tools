@@ -92,12 +92,13 @@ sub builder (&) {
 
     enable 'MiddlewareName', %config;
     enable 'Auth::Basic', %config;        # PAGI::Middleware::Auth::Basic
-    enable '^My::Custom::Middleware';     # My::Custom::Middleware (no prefix)
+    enable '+My::Custom::Middleware';     # My::Custom::Middleware (no prefix)
     enable(PAGI::Middleware::GZip->new(level => 9));  # pre-configured instance
 
-Enable a middleware. The name is automatically prefixed with
-'PAGI::Middleware::' unless it starts with '^', which indicates
-a fully qualified class name (the '^' is stripped).
+Enable a middleware. Short names are prefixed with
+'PAGI::Middleware::'. A leading '+' selects the exact package name and is
+stripped before loading. Already-qualified PAGI::Middleware::* names are
+preserved.
 
 When passed an already-configured middleware instance (an object with a
 C<wrap> method), it is used directly. Passing config args alongside an
@@ -297,13 +298,25 @@ sub to_app {
 sub _resolve_middleware {
     my ($self, $name) = @_;
 
-    # Always prepend PAGI::Middleware::, then strip everything up to ^ if present
+    croak 'enable() middleware name must be a nonempty scalar'
+        if ref($name) || !defined($name) || !length($name);
+    croak "invalid middleware class name; use leading '+' for an exact package"
+        unless $name =~ /\A\+?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/;
+
+    # Prefix short names, preserve PAGI::Middleware::* names, and strip one
+    # leading + for exact package names.
     # Examples:
     #   'GZIP'           -> 'PAGI::Middleware::GZIP'
     #   'Auth::Basic'    -> 'PAGI::Middleware::Auth::Basic'
-    #   '^My::Custom'    -> 'My::Custom' (prefix removed)
-    #   '^TopLevel'      -> 'TopLevel' (prefix removed)
-    my $class = "PAGI::Middleware::$name" =~ s{^.+\^}{}r;
+    #   '+My::Custom'    -> 'My::Custom' (prefix removed)
+    #   'PAGI::Middleware::GZIP' -> 'PAGI::Middleware::GZIP'
+    my $class = $name;
+    if (substr($class, 0, 1) eq '+') {
+        substr($class, 0, 1, '');
+    }
+    elsif ($class !~ /\APAGI::Middleware::/) {
+        $class = "PAGI::Middleware::$class";
+    }
 
     # Load the module
     my $file = $class;
