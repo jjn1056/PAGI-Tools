@@ -8,7 +8,7 @@ ordinary shape without turning the example into a framework:
 - a separately configured `/api` Router mounted with `app =>`, whose local
   `api` name segment composes the absolute logical address `/api/item`;
 - a numeric path constraint;
-- one bare pure route middleware factory, normalized to an inspectable description;
+- one pure route middleware factory captured in an explicit inspectable description;
 - distinct root and API Router `http_default` endpoints rendered through
   `PAGI::Pages`, plus the child Router's authoritative stock 405 and `Allow`;
 - absolute slash-addressed `path_for($request, ...)` and request-aware

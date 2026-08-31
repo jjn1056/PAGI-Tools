@@ -161,8 +161,9 @@ Callable meaning is positional and deliberate:
   Mount/Compose/default CODE -> native PAGI application
   handler result             -> native CODE or instantiated to_app object
 
-Middleware descriptions are a separate construction-time contract: the target
-of C<middleware(...)> receives the inner application while Compose builds the
+Middleware descriptions are a separate construction-time contract: Compose
+constructs configured class targets, invokes factory targets with the inner
+application, or calls C<wrap> on configured object targets while building the
 middleware stack.
 
 =head2 routes
@@ -255,8 +256,8 @@ callback is an error. The hash is shallow-copied.
 C<routes> returns a shallow arrayref copy in routes mode and C<undef> in app
 mode. C<app> returns the original component by identity in app mode and
 C<undef> in routes mode. C<middleware> returns a shallow arrayref copy whose
-entries are homogeneous L<PAGI::Routing::Middleware> descriptions: bare
-factories were normalized and explicit descriptions retain their identity.
+entries are the original homogeneous L<PAGI::Routing::Middleware>
+descriptions, retaining their identity.
 C<lifespan> returns a shallow hashref copy or C<undef>.
 
 The source object stores configuration only. It never stores compiled
@@ -266,12 +267,12 @@ middleware, lifecycle phase, request scope, server state, or response events.
 
 C<to_app> is the second phase: it synchronously compiles the target, fresh
 author middleware wrappers, and fresh root safety wrappers after
-constructor-time normalization, then returns one native PAGI coderef. It
-performs no request or lifecycle I/O. Target loading, middleware construction,
-and wrapping failures therefore occur at C<to_app>. Calling C<to_app> again
-builds an independent graph and recompiles component objects, although lexical
-state deliberately captured by user coderefs remains ordinary shared Perl
-state.
+constructor-time description validation, then returns one native PAGI
+coderef. It performs no request or lifecycle I/O. Target loading, middleware
+construction, and wrapping failures therefore occur at C<to_app>. Calling
+C<to_app> again builds an independent graph and recompiles component objects,
+although lexical state deliberately captured by user coderefs remains ordinary
+shared Perl state.
 
 For HTTP, the exact outer-to-inner order is:
 
