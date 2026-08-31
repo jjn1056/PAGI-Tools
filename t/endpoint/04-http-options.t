@@ -7,30 +7,31 @@ use Future;
 
 use lib 'lib';
 use PAGI::Endpoint::HTTP;
-use PAGI::Context;
+use PAGI::Request;
+use PAGI::Response;
+use PAGI::Response::Empty ();
+use PAGI::Test::Client ();
 
 package CRUDEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
 
-    async sub get {
-        my ($self, $ctx) = @_;
-        return $ctx->response->empty;
+    sub get {
+        my ($self, $request) = @_;
+        return PAGI::Response::Empty->new;
     }
-    async sub post {
-        my ($self, $ctx) = @_;
-        return $ctx->response->empty;
+    sub post {
+        my ($self, $request) = @_;
+        return PAGI::Response::Empty->new;
     }
-    async sub delete {
-        my ($self, $ctx) = @_;
-        return $ctx->response->empty;
+    sub delete {
+        my ($self, $request) = @_;
+        return PAGI::Response::Empty->new;
     }
 }
 
-my $make_ctx = sub {
+my $make_request = sub {
     my ($method) = @_;
-    my @sent;
-    my $send = sub { push @sent, $_[0]; Future->done };
     my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
     my $scope = {
         type    => 'http',
@@ -38,49 +39,26 @@ my $make_ctx = sub {
         path    => '/test',
         headers => [],
     };
-    my $ctx = PAGI::Context->new($scope, $receive, $send);
-    return ($ctx, \@sent);
+    return PAGI::Request->new($scope, $receive);
 };
 
 subtest 'OPTIONS returns allowed methods' => sub {
-    my ($ctx, $sent) = $make_ctx->('OPTIONS');
+    my $request = $make_request->('OPTIONS');
     my $endpoint = CRUDEndpoint->new;
 
-    $endpoint->dispatch($ctx)->get;
+    my $response = $endpoint->dispatch($request)->get;
 
-    # The response.start event should have Allow header
-    my $start = $sent->[0];
-    is($start->{type}, 'http.response.start', 'got response start');
-    my $allow;
-    for my $pair (@{$start->{headers} // []}) {
-        if (lc($pair->[0]) eq 'allow') {
-            $allow = $pair->[1];
-            last;
-        }
-    }
-    ok(defined $allow, 'Allow header set');
-    like($allow, qr/GET/, 'includes GET');
-    like($allow, qr/POST/, 'includes POST');
-    like($allow, qr/DELETE/, 'includes DELETE');
-    like($allow, qr/HEAD/, 'includes HEAD (implicit from GET)');
-    like($allow, qr/OPTIONS/, 'includes OPTIONS');
+    my $allow = $response->header('Allow');
+    is($allow, 'DELETE, GET, HEAD, OPTIONS, POST',
+        'Allow is complete and sorted, including implicit HEAD');
 };
 
 subtest '405 response includes Allow header' => sub {
-    my ($ctx, $sent) = $make_ctx->('PATCH');
     my $endpoint = CRUDEndpoint->new;
+    my $response = PAGI::Test::Client->new(app => $endpoint->to_app)->patch('/test');
 
-    $endpoint->dispatch($ctx)->get;
-
-    my $start = $sent->[0];
-    is($start->{status}, 405, '405 status for unimplemented method');
-    my $allow;
-    for my $pair (@{$start->{headers} // []}) {
-        if (lc($pair->[0]) eq 'allow') {
-            $allow = $pair->[1];
-            last;
-        }
-    }
+    is($response->status, 405, '405 status for unimplemented method');
+    my $allow = $response->header('Allow');
     ok(defined $allow, 'Allow header set on 405');
 };
 

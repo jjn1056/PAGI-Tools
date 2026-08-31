@@ -75,9 +75,6 @@ sub to_app {
                     path      => $new_path,
                     root_path => ($scope->{root_path} // '') . $prefix,
                 };
-                delete $new_scope->{'pagi.routing.trace'}
-                    if (($scope->{type} // 'http') eq 'http');
-
                 my $returned = $app->($new_scope, $receive, $send);
                 await Future->wrap($returned);
                 return;
@@ -86,19 +83,16 @@ sub to_app {
 
         # No match - use default or 404
         if ($default) {
-            my $default_scope = $scope;
-            if (($scope->{type} // 'http') eq 'http') {
-                $default_scope = { %$scope };
-                delete $default_scope->{'pagi.routing.trace'};
-            }
-            my $returned = $default->($default_scope, $receive, $send);
+            my $returned = $default->($scope, $receive, $send);
             await Future->wrap($returned);
         } else {
             my $type = $scope->{type} // '<missing>';
             croak "URLMap has no default for scope type '$type'"
                 unless $type eq 'http';
-            my $response = PAGI::Pages->not_found($scope);
-            await Future->wrap($response->respond($send));
+            my $response = PAGI::Pages->not_found;
+            await PAGI::Utils::invoke_app(
+                $response, $scope, $receive, $send,
+            );
         }
     };
 }
@@ -114,32 +108,25 @@ Longest prefix match wins. The mounted app sees an adjusted path
 with the prefix removed.
 
 Mount targets and C<default> accept anything L<PAGI::Utils/to_app> accepts:
-a coderef, a component object with a C<to_app> method, or a class name.
+a coderef or an instantiated component object with a C<to_app> method.
+Package-name strings are rejected.
 Mounted apps receive a scope with C<path> stripped of the prefix and
 C<root_path> extended with it, per the PAGI specification.
 
-Every selected HTTP mount target and C<default> is an opaque application
-boundary. URLMap shallow-clones the delegated scope and removes the enclosing
-C<pagi.routing.trace> value while preserving path rewriting and unrelated
-scope values. Routing evidence created by a selected child is therefore local
-to that child and is never published into an enclosing Router or Compose
-fallback boundary.
+Every selected mount target is an opaque application boundary. URLMap
+shallow-clones the scope only to rewrite C<path> and C<root_path>; all other
+scope values, including selected C<pagi.routing> metadata, are retained. An
+explicit C<default> receives the original scope unchanged. URLMap neither
+interprets nor removes routing metadata.
 
-A naked child Router that declines remains unanswered at the opaque boundary;
-an enclosing L<PAGI::Compose> treats that as incomplete application output.
-Wrap the child Router in its own L<PAGI::Compose> when the mounted application
-should render its own 404 or 405. For non-HTTP scopes URLMap does not remove or
-reinterpret a same-named scope value.
+Routers render their own HTTP 404 and 405 outcomes, so a mounted or default
+Router application is complete without an additional wrapper. URLMap does not
+recognize Router classes or offer a routing-aware mount form.
 
-    # Incomplete opaque child: outer Compose sees silent application output.
-    $map->mount('/api' => $api_router->to_app);
-
-    # Complete opaque child: the child Compose owns its fallback response.
-    $map->mount('/api' => compose(app => $api_router)->to_app);
-
-The same rule applies to C<default>. URLMap does not recognize Router classes
-or offer a routing-aware mount form; use L<PAGI::Routing> C<< router => >>
-Mounts when trusted child evidence must remain visible to an outer fallback.
+This C<mount($prefix, $app)> method is URLMap's own two-argument API. It is not
+the declarative L<PAGI::Routing::Mount> constructor, whose current spelling is
+C<< mount('/prefix', app => $app) >> and whose immutable Router applications
+remain visible to reverse inspection.
 
 When no mount matches and no C<default> is configured, an HTTP request receives
 a 404 response negotiated by L<PAGI::Pages> from the original request scope.
@@ -152,8 +139,8 @@ URLMap has no Pages configuration surface.
 
 =over 4
 
-=item * C<default> - App (coderef, component object, or class name) to use
-when no prefix matches
+=item * C<default> - Coderef or instantiated component object with a C<to_app>
+method to use when no prefix matches. Package-name strings are rejected.
 
 =back
 
@@ -169,6 +156,6 @@ Mount multiple apps from a hashref of prefix => app pairs.
 
 =head1 SEE ALSO
 
-L<PAGI::Compose>, L<PAGI::Routing::Trace>, L<PAGI::App::Cascade>
+L<PAGI::Compose>, L<PAGI::Routing::Mount>, L<PAGI::App::Cascade>
 
 =cut

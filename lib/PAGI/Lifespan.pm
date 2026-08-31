@@ -79,11 +79,10 @@ sub to_app {
             return await $self->handle($scope, $receive, $send);
         }
 
-        my $inner_scope = { %$scope };
-        $inner_scope->{state} //= ($self->{_state} // {});
-        $self->{_state} = $inner_scope->{state};
+        $scope->{state} //= ($self->{_state} // {});
+        $self->{_state} = $scope->{state};
 
-        await $app->($inner_scope, $receive, $send);
+        await $app->($scope, $receive, $send);
     };
 
     return $wrapper;
@@ -217,7 +216,10 @@ lifespan context manager yields state to C<request.state>.
     },
 
 For every request, this state is injected into the scope as
-C<$scope-E<gt>{state}>. This makes it accessible via:
+C<$scope-E<gt>{state}>. The exact incoming scope hashref is updated and passed
+to the wrapped application. An existing C<state> value remains authoritative;
+otherwise the injected state is visible to the caller that supplied the scope.
+This makes it accessible via:
 
     $req->state->{db}    # In HTTP handlers
     $ws->state->{db}     # In WebSocket handlers
@@ -254,17 +256,18 @@ error(s) in C<message> -- instead of C<lifespan.shutdown.complete>.
 Both C<startup> and C<shutdown> callbacks receive the shared state
 hashref as their first argument.
 
-The C<app> argument accepts anything L<PAGI::Utils/to_app> accepts: a
-coderef, a component object with a C<to_app> method, or a class name
-string.  The coercion happens once at construction time.
+The C<app> argument accepts the two native application forms supported by
+L<PAGI::Utils/to_app>: a coderef or an instantiated component object with a
+C<to_app> method. Package-name strings are rejected; load and construct the
+component explicitly. The coercion happens once at construction time.
 
 =head2 wrap
 
     my $app = PAGI::Lifespan->wrap($inner_app, startup => ..., shutdown => ...);
 
-Class method shortcut that creates a wrapper and returns the app coderef.  The
-first argument accepts anything L<PAGI::Utils/to_app> accepts (coderef,
-component object, or class name).
+Class method shortcut that creates a wrapper and returns the app coderef. The
+first argument accepts a coderef or instantiated C<to_app> object and rejects
+package-name strings, just like C<new(app =E<gt> ...)>.
 
 =head2 to_app
 

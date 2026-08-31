@@ -44,5 +44,5 @@ await $sse->run;
 Static files are served through a compiled application:
 
 ```perl
-my $static_app = PAGI::App::File->app_path('public')->to_app;
+my $static_app = PAGI::App::File->from_app_path('public')->to_app;
 ```

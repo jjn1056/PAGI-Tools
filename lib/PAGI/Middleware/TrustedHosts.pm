@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -92,7 +93,7 @@ sub wrap {
         }
         if ($authority_error) {
             my $pages_scope = $self->_pages_scope_for_authority_error($scope);
-            await $self->_send_error($pages_scope, $send, 400);
+            await $self->_send_error($pages_scope, $receive, $send, 400);
             return;
         }
 
@@ -102,7 +103,7 @@ sub wrap {
                 await $app->($scope, $receive, $send);
                 return;
             }
-            await $self->_send_error($scope, $send, 400);
+            await $self->_send_error($scope, $receive, $send, 400);
             return;
         }
 
@@ -121,7 +122,7 @@ sub wrap {
         if ($allowed) {
             await $app->($scope, $receive, $send);
         } else {
-            await $self->_send_error($scope, $send, 400);
+            await $self->_send_error($scope, $receive, $send, 400);
         }
     };
 }
@@ -164,11 +165,11 @@ sub _pages_scope_for_authority_error {
 }
 
 async sub _send_error {
-    my ($self, $scope, $send, $status) = @_;
+    my ($self, $scope, $receive, $send, $status) = @_;
     die "PAGI::Middleware::TrustedHosts does not own status $status"
         unless $status == 400;
-    my $response = PAGI::Pages->bad_request($scope);
-    await Future->wrap($response->respond($send));
+    my $response = PAGI::Pages->bad_request;
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;

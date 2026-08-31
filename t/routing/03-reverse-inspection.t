@@ -7,6 +7,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::Routing qw(router route websocket sse mount);
+use PAGI::Routing::Resolver;
 
 {
     package Local::ReverseType;
@@ -51,7 +52,7 @@ use PAGI::Routing qw(router route websocket sse mount);
 
 {
     package Local::ReverseMountProvider;
-    use PAGI::Routing qw(mount);
+    use PAGI::Routing qw(mount router);
 
     our $CALLS = 0;
 
@@ -62,13 +63,41 @@ use PAGI::Routing qw(router route websocket sse mount);
 
     sub inline {
         return mount('/inline/{tenant:&Tenant}',
-            routes => [$_[0]], name      => 'inline');
+            app => router(routes => [$_[0]]), name => 'inline');
     }
 
     sub known {
         my ($prefix, $router, $namespace) = @_;
         return mount($prefix . '/{tenant:&Tenant}',
-            router => $router, name      => $namespace);
+            app => $router, name      => $namespace);
+    }
+}
+
+{
+    package Local::OpaqueRoutes;
+
+    our $ROUTES_CALLS = 0;
+    our $PATH_FOR_CALLS = 0;
+    our $TO_APP_CALLS = 0;
+
+    sub new {
+        my ($class) = @_;
+        return bless {}, $class;
+    }
+
+    sub routes {
+        ++$ROUTES_CALLS;
+        die "opaque routes must not be inspected\n";
+    }
+
+    sub path_for {
+        ++$PATH_FOR_CALLS;
+        die "opaque path_for must not be called\n";
+    }
+
+    sub to_app {
+        ++$TO_APP_CALLS;
+        die "opaque to_app must not be called during inspection\n";
     }
 }
 
@@ -79,10 +108,30 @@ use PAGI::Routing qw(router route websocket sse mount);
     sub routes {
         my ($self) = @_;
         return [PAGI::Routing::Mount->new(
-            '/again', router => $self, name      => 'loop',
+            '/again', app => $self, name      => 'loop',
         )];
     }
 }
+
+subtest 'Resolver exposes only the neutral scope-bound reverse seam' => sub {
+    ok(PAGI::Routing::Resolver->can('reverse_for_scope'),
+        'Resolver exposes reverse_for_scope');
+    ok(!PAGI::Routing::Resolver->can('reverse_for_context'),
+        'the Context-named reverse seam is removed');
+
+    my $resolver = PAGI::Routing::Resolver->new(routes => [
+        route('/page' => sub { }, name => 'page'),
+    ]);
+    like(
+        dies {
+            $resolver->reverse_for_scope(
+                'redirect', {}, '/page', '', '/', {},
+            );
+        },
+        qr/\Ascope-bound reverse operation must be path_for or url_for/,
+        'operation diagnostics describe the neutral scope-bound seam',
+    );
+};
 
 subtest 'direct slash addresses render application paths and route kinds' => sub {
     my $routing = router(routes => [
@@ -105,6 +154,249 @@ subtest 'direct slash addresses render application paths and route kinds' => sub
         [sort keys %{$routing->named_routes}],
         [qw(/events /health /socket /v1.1)],
         'a dotted local name remains one literal address segment',
+    );
+};
+
+subtest 'mounted Router applications publish placement-specific reverse paths' => sub {
+    my $show = route('/{id}' => sub { }, name => 'show');
+    my $child = router(routes => [$show]);
+    my $root = router(routes => [
+        mount('/left', app => $child, name => 'left'),
+        mount('/right', app => $child, name => 'right'),
+    ]);
+    my $unnamed = router(routes => [
+        mount('/people', app => $child),
+    ]);
+
+    is($root->path_for('/left/show', { id => 7 }), '/left/7',
+        'the first named placement contributes its path and namespace');
+    is($root->path_for('/right/show', { id => 8 }), '/right/8',
+        'the reused child receives an independent second placement');
+    is($unnamed->path_for('/show', { id => 9 }), '/people/9',
+        'an unnamed placement retains the current namespace');
+    is(
+        $root->path_for('/left/show', { id => 7 },
+            { q => 'two words' }, 'details'),
+        '/left/7?q=two%20words#details',
+        'a mounted descendant retains query and fragment rendering',
+    );
+    is(refaddr($root->route_named('/left/show')), refaddr($show),
+        'the first placement retains the original leaf identity');
+    is(refaddr($root->route_named('/right/show')), refaddr($show),
+        'the reused placement retains that same original leaf identity');
+
+    $Local::OpaqueRoutes::ROUTES_CALLS = 0;
+    $Local::OpaqueRoutes::PATH_FOR_CALLS = 0;
+    $Local::OpaqueRoutes::TO_APP_CALLS = 0;
+    my $opaque_named;
+    is(
+        lives {
+            $opaque_named = router(routes => [
+                mount('/legacy', app => Local::OpaqueRoutes->new,
+                    name => 'legacy'),
+            ]);
+        },
+        T(),
+        'Router construction never speculatively calls an opaque routes method',
+    );
+    is(
+        [
+            $Local::OpaqueRoutes::ROUTES_CALLS,
+            $Local::OpaqueRoutes::PATH_FOR_CALLS,
+            $Local::OpaqueRoutes::TO_APP_CALLS,
+        ],
+        [0, 0, 0],
+        'an arbitrary application is completely opaque to reverse inspection',
+    );
+    like(
+        dies { $opaque_named->path_for('/legacy') },
+        qr/logical namespace|unknown route/,
+        'a Mount name is not an opaque target',
+    );
+};
+
+subtest 'Resolver metadata indexes every inspectable Router placement' => sub {
+    my $show = route('/show/{item}' => sub { },
+        name => 'show',
+        desc => 'show leaf',
+        constraints => { item => Local::ReverseType->new('leaf') },
+    );
+    my $grandchild = router(routes => [$show]);
+    my $team_mount = mount('/teams/{team}',
+        app => $grandchild,
+        name => 'team',
+        desc => 'team placement',
+        constraints => { team => qr/\A\d+\z/ },
+    );
+    my $child = router(routes => [$team_mount]);
+    my $health = route('/health' => sub { },
+        name => 'health', desc => 'root leaf');
+    my $left_mount = mount('/left/{account}',
+        app => $child,
+        name => 'left',
+        desc => 'left placement',
+        constraints => { account => qr/\A[a-z]+\z/ },
+    );
+    my $right_mount = mount('/right/{account}',
+        app => $child,
+        name => 'right',
+        desc => 'right placement',
+        constraints => { account => qr/\A[a-z]+\z/ },
+    );
+    my $opaque_mount = mount('/legacy/{legacy}',
+        app => Local::OpaqueRoutes->new,
+        name => 'legacy',
+        desc => 'legacy placement',
+        constraints => { legacy => qr/\A[a-z]+\z/ },
+    );
+    my $root = router(routes => [
+        $health, $left_mount, $right_mount, $opaque_mount,
+    ]);
+    my $resolver = $root->_resolver;
+
+    my @metadata_cases = (
+        ['root leaf', [0], {
+            match => {
+                kind => 'route', route => '/health', name => '/health',
+                logical_namespace => '/', desc => 'root leaf',
+            },
+            mount => undef,
+            logical_namespace => '/',
+        }],
+        ['left root placement', [1], {
+            match => {
+                kind => 'mount', route => '/left/{account}', name => undef,
+                logical_namespace => '/', desc => 'left placement',
+            },
+            mount => {
+                path => '/left/{account}', name => 'left',
+                desc => 'left placement',
+            },
+            logical_namespace => '/left',
+        }],
+        ['left nested placement', [1, 0], {
+            match => {
+                kind => 'mount', route => '/left/{account}/teams/{team}',
+                name => undef, logical_namespace => '/left',
+                desc => 'team placement',
+            },
+            mount => {
+                path => '/teams/{team}', name => 'team',
+                desc => 'team placement',
+            },
+            logical_namespace => '/left/team',
+        }],
+        ['left grandchild leaf', [1, 0, 0], {
+            match => {
+                kind => 'route',
+                route => '/left/{account}/teams/{team}/show/{item}',
+                name => '/left/team/show',
+                logical_namespace => '/left/team', desc => 'show leaf',
+            },
+            mount => undef,
+            logical_namespace => '/left/team',
+        }],
+        ['right root placement', [2], {
+            match => {
+                kind => 'mount', route => '/right/{account}', name => undef,
+                logical_namespace => '/', desc => 'right placement',
+            },
+            mount => {
+                path => '/right/{account}', name => 'right',
+                desc => 'right placement',
+            },
+            logical_namespace => '/right',
+        }],
+        ['right nested placement', [2, 0], {
+            match => {
+                kind => 'mount', route => '/right/{account}/teams/{team}',
+                name => undef, logical_namespace => '/right',
+                desc => 'team placement',
+            },
+            mount => {
+                path => '/teams/{team}', name => 'team',
+                desc => 'team placement',
+            },
+            logical_namespace => '/right/team',
+        }],
+        ['right grandchild leaf', [2, 0, 0], {
+            match => {
+                kind => 'route',
+                route => '/right/{account}/teams/{team}/show/{item}',
+                name => '/right/team/show',
+                logical_namespace => '/right/team', desc => 'show leaf',
+            },
+            mount => undef,
+            logical_namespace => '/right/team',
+        }],
+        ['opaque placement', [3], {
+            match => {
+                kind => 'mount', route => '/legacy/{legacy}', name => undef,
+                logical_namespace => '/', desc => 'legacy placement',
+            },
+            mount => {
+                path => '/legacy/{legacy}', name => 'legacy',
+                desc => 'legacy placement',
+            },
+            logical_namespace => '/legacy',
+        }],
+    );
+
+    for my $case (@metadata_cases) {
+        my ($label, $location, $expected) = @$case;
+        my $metadata = $resolver->_metadata_for_location($location);
+        is($metadata, $expected, "$label has exact effective metadata");
+        ok(!exists $metadata->{is_raw}, "$label publishes no retired is_raw flag");
+    }
+
+    my @record_cases = (
+        ['0', [0], [], $health],
+        ['1', [1], [qw(account)], $left_mount],
+        ['1.0', [1, 0], [qw(account team)], $team_mount],
+        ['1.0.0', [1, 0, 0], [qw(account item team)], $show],
+        ['2', [2], [qw(account)], $right_mount],
+        ['2.0', [2, 0], [qw(account team)], $team_mount],
+        ['2.0.0', [2, 0, 0], [qw(account item team)], $show],
+        ['3', [3], [qw(legacy)], $opaque_mount],
+    );
+    for my $case (@record_cases) {
+        my ($key, $location, $parameters, $source) = @$case;
+        my $record = $resolver->{metadata_by_location}{$key};
+        is($record->{location}, $location,
+            "$key retains its defensive location path");
+        is([sort keys %{$record->{predicate_records}}], $parameters,
+            "$key retains the exact effective predicate ancestry");
+        is(refaddr($record->{source}), refaddr($source),
+            "$key retains the original source node identity");
+        ok(!exists $record->{is_raw},
+            "$key stores no retired is_raw metadata");
+    }
+
+    my $source_predicates = $show->_pattern->_predicate_records;
+    is(
+        refaddr($resolver->{metadata_by_location}{'1.0.0'}
+            {predicate_records}{item}[0]{check}),
+        refaddr($source_predicates->{item}[0]{check}),
+        'effective metadata preserves the leaf predicate check identity',
+    );
+    is(
+        $root->path_for('/left/team/show', {
+            account => 'acme', team => 7, item => 'leaf',
+        }),
+        '/left/acme/teams/7/show/leaf',
+        'left metadata ancestry renders every placement capture',
+    );
+    is(
+        $root->path_for('/right/team/show', {
+            account => 'globex', team => 8, item => 'leaf',
+        }),
+        '/right/globex/teams/8/show/leaf',
+        'reused metadata ancestry renders every second-placement capture',
+    );
+    like(
+        dies { $resolver->_metadata_for_location([3, 0]) },
+        qr/metadata location is unknown/,
+        'an opaque Mount has placement metadata but no descendant locations',
     );
 };
 
@@ -595,7 +887,7 @@ subtest 'reverse constraints cover protocol leaves, inline regexes, and signed v
         'protocol reverse rendering does not reinvoke its provider');
 };
 
-subtest 'composed Router graph exposes placements and respects opacity' => sub {
+subtest 'composed Router graph exposes every Router application placement' => sub {
     my $hidden = route('/secret' => sub { }, name => 'hidden');
     my $hidden_router = router(routes => [$hidden]);
 
@@ -605,7 +897,7 @@ subtest 'composed Router graph exposes placements and respects opacity' => sub {
     my $blogs = router(routes => [
         $blog_index,
         $blog_show,
-        mount('/legacy' => $hidden_router),
+        mount('/legacy', app => $hidden_router),
         $blog_archive,
     ]);
 
@@ -613,22 +905,24 @@ subtest 'composed Router graph exposes placements and respects opacity' => sub {
     my $notifications = route('/notifications' => sub { }, name => 'notifications');
     my $person = router(routes => [
         $person_show,
-        mount('/blogs', router => $blogs, name      => 'blog'),
+        mount('/blogs', app => $blogs, name      => 'blog'),
         mount('/settings', routes => [$notifications], name      => 'settings'),
     ]);
 
     my $health = route('/health' => sub { }, name => 'health');
     my $root = router(routes => [
         $health,
-        mount('/people/{person_id}', router => $person, name      => 'person'),
-        mount('/opaque' => $hidden_router),
+        mount('/people/{person_id}', app => $person, name      => 'person'),
+        mount('/opaque', app => $hidden_router),
     ]);
 
     is(
         [sort keys %{$root->named_routes}],
         [qw(
             /health
+            /hidden
             /person/blog/archive
+            /person/blog/hidden
             /person/blog/index
             /person/blog/show
             /person/settings/notifications
@@ -670,10 +964,10 @@ subtest 'composed Router graph exposes placements and respects opacity' => sub {
         refaddr($blog_show),
         'route_named preserves source leaf identity',
     );
-    is($root->route_named('/person/blog/hidden'), undef,
-        'an opaque Router application inside a known Router is terminal only at that mount');
-    is($root->route_named('/hidden'), undef,
-        'a positional Router application mount remains entirely undiscoverable');
+    is(refaddr($root->route_named('/person/blog/hidden')), refaddr($hidden),
+        'a Router base application is inspectable within a known Router');
+    is(refaddr($root->route_named('/hidden')), refaddr($hidden),
+        'an unnamed Router application mount contributes its child route');
     is(refaddr($root->route_named('/person/blog/archive')), refaddr($blog_archive),
         'discovery resumes with siblings after an opaque terminal');
 
@@ -697,7 +991,7 @@ subtest 'canonical collisions report both placement paths' => sub {
                 mount('/inline', routes => [
                     route('/one' => sub { }, name => 'show'),
                 ], name      => 'person'),
-                mount('/router', router => $child, name      => 'person'),
+                mount('/router', app => $child, name      => 'person'),
             ]);
         },
         qr/duplicate canonical route address '\/person\/show'.*'\/inline\/one'.*'\/router\/two'/,
@@ -713,7 +1007,7 @@ subtest 'parameter validation follows one ancestry and precedes opacity' => sub 
         dies {
             router(routes => [
                 mount('/people/{id}',
-                    router => $repeated_child,
+                    app => $repeated_child,
                     name      => 'person',
                 ),
             ]);
@@ -726,7 +1020,7 @@ subtest 'parameter validation follows one ancestry and precedes opacity' => sub 
         dies {
             router(routes => [
                 mount('/people/{id}', routes => [
-                    mount('/opaque/{id}' => sub { }),
+                    mount('/opaque/{id}', app => sub { }),
                 ]),
             ]);
         },
@@ -739,8 +1033,8 @@ subtest 'parameter validation follows one ancestry and precedes opacity' => sub 
     ]);
     my $reused = lives {
         router(routes => [
-            mount('/authors', router => $shared, name      => 'authors'),
-            mount('/editors', router => $shared, name      => 'editors'),
+            mount('/authors', app => $shared, name      => 'authors'),
+            mount('/editors', app => $shared, name      => 'editors'),
             mount('/groups/{id}', routes => [
                 route('/first' => sub { }, name => 'first'),
             ], name      => 'groups'),

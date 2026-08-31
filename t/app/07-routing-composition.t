@@ -13,9 +13,8 @@ use PAGI::App::Cascade;
 use PAGI::App::URLMap;
 use PAGI::Compose qw(compose);
 use PAGI::Exception::IncompleteResponse;
-use PAGI::Middleware::Routing::NotFound;
-use PAGI::Routing qw(router route middleware);
-use PAGI::Routing::Trace;
+use PAGI::Response::Text ();
+use PAGI::Routing qw(router route);
 
 sub scope {
     my (%changes) = @_;
@@ -104,292 +103,86 @@ sub response_header {
     return;
 }
 
-sub attempt_descriptions {
-    my ($snapshot) = @_;
-    return [map { $_->{desc} }
-        grep { defined $_->{desc} } @{$snapshot->attempts}];
-}
-
-subtest 'Cascade distinguishes trusted declines, caught responses, and failures' => sub {
-    my $declining = router(routes => [
-        route('/only' => sub { return $_[0]->text('only') }),
+subtest 'Cascade catches Router-owned HTTP outcomes and propagates failures' => sub {
+    my $get_router = router(routes => [
+        route('/only' => sub { return PAGI::Response::Text->new('only') },
+            methods => 'GET'),
     ])->to_app;
-    my $advancing = PAGI::App::Cascade->new(apps => [
-        $declining,
-        response_app(200, 'second'),
+    my $post_router = router(routes => [
+        route('/only' => sub { return PAGI::Response::Text->new('post') },
+            methods => 'POST'),
     ])->to_app;
-    my ($advanced, $advance_error) = run_app(
-        $advancing,
-        scope(path => '/missing'),
-    );
-    is($advance_error, undef, 'a non-final trusted decline completes normally');
-    my $advanced_start = response_start($advanced);
-    is($advanced_start ? $advanced_start->{status} : undef, 200,
-        'a non-final naked Router decline advances');
-    is(response_body($advanced), 'second', 'the next child owns the response');
 
-    my $final_decline = PAGI::App::Cascade->new(apps => [$declining])->to_app;
-    my ($traced_scope, $trace) = PAGI::Routing::Trace->_ensure_http_scope(
-        scope(path => '/missing'),
+    my $after_none = PAGI::App::Cascade->new(apps => [
+        $get_router,
+        response_app(200, 'after none'),
+    ])->to_app;
+    my ($none_events, $none_error) = run_app(
+        $after_none, scope(path => '/missing'),
     );
-    my $checkpoint = $trace->checkpoint;
-    my ($unanswered, $decline_error) = run_app($final_decline, $traced_scope);
-    my $decline_snapshot = $trace->snapshot($checkpoint);
-    is($decline_error, undef, 'a final trusted decline completes normally');
-    is($unanswered, [], 'a final Router decline remains unanswered');
-    ok($decline_snapshot->routing_declined,
-        'the final decline evidence remains visible');
+    is($none_error, undef, 'a non-final Router 404 is a normal caught response');
+    is([response_start($none_events)->{status}, response_body($none_events)],
+        [200, 'after none'], 'Cascade advances after a caught Router 404');
 
-    local $ENV{PAGI_ENV} = 'production';
-    my ($rendered, $render_error, $render_warnings) = run_app(
-        compose(app => PAGI::App::Cascade->new(
-            apps => [$declining],
-        ))->to_app,
-        scope(path => '/missing'),
+    my $after_partial = PAGI::App::Cascade->new(apps => [
+        $get_router,
+        response_app(200, 'after partial'),
+    ])->to_app;
+    my ($partial_events, $partial_error) = run_app(
+        $after_partial, scope(method => 'PUT', path => '/only'),
     );
-    is($render_error, undef, 'outer Compose handles the final trusted decline');
-    is($render_warnings, [], 'a trusted decline does not enter error handling');
-    is(response_start($rendered)->{status}, 404,
-        'outer Routing::NotFound renders the final decline');
+    is($partial_error, undef, 'a non-final Router 405 is a normal caught response');
+    is([response_start($partial_events)->{status}, response_body($partial_events)],
+        [200, 'after partial'], 'Cascade advances after a caught Router 405');
 
     for my $case (
-        ['non-final silent child', [async sub { return }, response_app(200, 'unused')]],
-        ['final silent child', [async sub { return }]],
-        ['empty app list', []],
+        ['NONE', $get_router, scope(path => '/missing'), 404, undef],
+        ['PARTIAL', $post_router, scope(method => 'PUT', path => '/only'),
+            405, 'POST'],
     ) {
-        my ($label, $apps) = @$case;
-        my $later_runs = 0;
-        if ($label eq 'non-final silent child') {
-            $apps->[1] = async sub { ++$later_runs; return };
-        }
-        my (undef, $error) = run_app(
-            PAGI::App::Cascade->new(apps => $apps)->to_app,
-            scope(path => '/silent'),
+        my ($label, $app, $request_scope, $status, $allow) = @$case;
+        my ($events, $error) = run_app(
+            PAGI::App::Cascade->new(apps => [$app])->to_app,
+            $request_scope,
         );
-        isa_ok($error, ['PAGI::Exception::IncompleteResponse'],
-            "$label is a typed lifecycle failure");
-        is($error && ref($error) ? $error->stage : undef, 'before_start',
-            "$label fails before start");
-        is($later_runs, 0, "$label does not invent a decline")
-            if $label eq 'non-final silent child';
-    }
-
-    for my $status (404, 405) {
-        my $app = PAGI::App::Cascade->new(apps => [
-            response_app(
-                $status,
-                "explicit $status",
-                headers => [['x-origin', 'final']],
-            ),
-        ])->to_app;
-        my ($events, $error) = run_app($app, scope(path => '/explicit'));
-        is($error, undef, "final explicit $status completes");
+        is($error, undef, "final Router $label completes");
         is(response_start($events)->{status}, $status,
-            "final caught-status $status passes unchanged");
-        is(response_header($events, 'X-Origin'), 'final',
-            "final explicit $status retains headers");
-        is(response_body($events), "explicit $status",
-            "final explicit $status retains its body");
+            "final Router owns its $status");
+        is(response_header($events, 'Allow'), $allow,
+            "final Router $label retains its Allow outcome");
     }
 
     my $next_runs = 0;
-    my $throwing_router = router(routes => [
+    my $throwing = router(routes => [
         route('/boom' => sub { die "router child exploded\n" }),
     ])->to_app;
-    my $exceptional = PAGI::App::Cascade->new(apps => [
-        $throwing_router,
-        async sub { ++$next_runs; return },
-    ])->to_app;
-    my ($exception_scope, $exception_trace)
-        = PAGI::Routing::Trace->_ensure_http_scope(scope(path => '/boom'));
-    my $exception_checkpoint = $exception_trace->checkpoint;
-    my ($exception_events, $exception_error)
-        = run_app($exceptional, $exception_scope);
+    my ($exception_events, $exception_error) = run_app(
+        PAGI::App::Cascade->new(apps => [
+            $throwing,
+            async sub { ++$next_runs; return },
+        ])->to_app,
+        scope(path => '/boom'),
+    );
     like($exception_error, qr/router child exploded/,
-        'a child exception propagates unchanged');
+        'a selected Router exception propagates unchanged');
     is($exception_events, [], 'the exception emits no synthetic response');
     is($next_runs, 0, 'an exception never advances to the next child');
-    ok(!$exception_trace->snapshot($exception_checkpoint)->routing_declined,
-        'an exception never becomes a routing decline');
+
+    my ($silent_events, $silent_error) = run_app(
+        PAGI::App::Cascade->new(apps => [
+            async sub { return },
+            response_app(200, 'unused'),
+        ])->to_app,
+        scope(path => '/silent'),
+    );
+    isa_ok($silent_error, ['PAGI::Exception::IncompleteResponse'],
+        'silence is an application lifecycle failure rather than decline');
+    is($silent_error->stage, 'before_start',
+        'silent completion fails before response start');
+    is($silent_events, [], 'silent completion emits nothing');
 };
 
-subtest 'sibling Router declines union through a real Cascade' => sub {
-    local $ENV{PAGI_ENV} = 'production';
-    my $get = router(routes => [
-        route('/items' => sub { return $_[0]->text('get') },
-            methods => 'GET', desc => 'get sibling'),
-    ])->to_app;
-    my $post = router(routes => [
-        route('/items' => sub { return $_[0]->text('post') },
-            methods => 'POST', desc => 'post sibling'),
-    ])->to_app;
-    my $final = router(routes => [
-        route('/elsewhere' => sub { return $_[0]->text('elsewhere') },
-            desc => 'final sibling'),
-    ])->to_app;
-
-    my $app = compose(app => PAGI::App::Cascade->new(apps => [
-        $get, $post, $final,
-    ]))->to_app;
-    my ($events, $error, $warnings) = run_app(
-        $app,
-        scope(method => 'PUT', path => '/items'),
-    );
-    is($error, undef, 'the sibling union is rendered normally');
-    is($warnings, [], 'sibling declines do not enter error handling');
-    is(response_start($events)->{status}, 405,
-        'outer MethodNotAllowed sees the sibling partials');
-    is(response_header($events, 'Allow'), 'GET, HEAD, POST',
-        'allowed methods are unioned in first-execution order');
-
-    local $ENV{PAGI_ENV} = 'development';
-    my $outer_snapshot;
-    my $caught_explicit = router(routes => [
-        route('/items' => sub {
-            return $_[0]->text('caught explicit', status => 404);
-        }, methods => '*', desc => 'caught explicit'),
-    ])->to_app;
-    my $with_caught = compose(
-        app => PAGI::App::Cascade->new(apps => [
-            $get, $caught_explicit, $post, $final,
-        ]),
-        middleware => [
-            middleware('Routing::MethodNotAllowed', handler => sub {
-                my ($context, $snapshot) = @_;
-                $outer_snapshot = $snapshot;
-                return $context->text('outer method policy');
-            }),
-        ],
-    )->to_app;
-    my ($caught_events, $caught_error) = run_app(
-        $with_caught,
-        scope(method => 'PUT', path => '/items'),
-    );
-    is($caught_error, undef, 'a caught explicit child advances normally');
-    is(response_start($caught_events)->{status}, 405,
-        'the later sibling declines still render 405');
-    is(response_header($caught_events, 'Allow'), 'GET, HEAD, POST',
-        'the caught explicit child contributes no method evidence');
-    is(attempt_descriptions($outer_snapshot), [
-        'get sibling', 'post sibling', 'final sibling',
-    ], 'the caught explicit child contributes no routing trace window');
-
-    my ($child_snapshot, $application_snapshot);
-    my $child_router = router(routes => [
-        route('/child-only' => sub { return $_[0]->text('child') },
-            desc => 'child local decline'),
-    ])->to_app;
-    my $child_policy = PAGI::Middleware::Routing::NotFound->new(
-        handler => sub {
-            my ($context, $snapshot) = @_;
-            $child_snapshot = $snapshot;
-            return $context->text('child not found', status => 404);
-        },
-    )->wrap($child_router);
-    my $outer_final = router(routes => [
-        route('/outer-only' => sub { return $_[0]->text('outer') },
-            desc => 'outer final decline'),
-    ])->to_app;
-    my $discarded_child = compose(
-        app => PAGI::App::Cascade->new(apps => [
-            $child_policy,
-            $outer_final,
-        ]),
-        middleware => [
-            middleware('Routing::NotFound', handler => sub {
-                my ($context, $snapshot) = @_;
-                $application_snapshot = $snapshot;
-                return $context->text('application not found', status => 404);
-            }),
-        ],
-    )->to_app;
-    my ($discarded_events, $discarded_error) = run_app(
-        $discarded_child,
-        scope(path => '/missing'),
-    );
-    is($discarded_error, undef, 'child and application fallbacks complete');
-    is(response_body($discarded_events), 'application not found',
-        'Cascade catches the child fallback and reaches the outer policy');
-    ok($child_snapshot->routing_declined,
-        'the earlier child-local snapshot retains its decline');
-    is(attempt_descriptions($child_snapshot), ['child local decline'],
-        'the child-local snapshot retains its own attempt');
-    ok($application_snapshot->routing_declined,
-        'the final child decline remains available to the outer policy');
-    is(attempt_descriptions($application_snapshot), ['outer final decline'],
-        'the later outer snapshot excludes only the caught child window');
-};
-
-subtest 'child checkpoints survive a later Cascade discard disposition' => sub {
-    local $ENV{PAGI_ENV} = 'development';
-
-    for my $case (
-        ['equal-sequence checkpoint', 0],
-        ['checkpoint after earlier records', 1],
-    ) {
-        my ($label, $record_before_checkpoint) = @$case;
-        my $warmup = router(routes => [
-            route('/warm' => sub { return $_[0]->text('warm') },
-                desc => 'warmup decline'),
-        ])->to_app;
-        my $local_router = router(routes => [
-            route('/local' => sub { return $_[0]->text('local') },
-                desc => 'child local decline'),
-        ])->to_app;
-        my $child_policy = PAGI::Middleware::Routing::NotFound->new
-            ->wrap($local_router);
-
-        my ($saved_trace, $saved_checkpoint);
-        my $child = async sub {
-            my ($request_scope, $request_receive, $send) = @_;
-            if ($record_before_checkpoint) {
-                my $warmup_result = $warmup->(
-                    $request_scope,
-                    $request_receive,
-                    $send,
-                );
-                await Future->wrap($warmup_result);
-            }
-            $saved_trace = $request_scope->{'pagi.routing.trace'};
-            $saved_checkpoint = $saved_trace->checkpoint;
-            my $child_result = $child_policy->(
-                $request_scope,
-                $request_receive,
-                $send,
-            );
-            await Future->wrap($child_result);
-            return;
-        };
-
-        my $cascade = PAGI::App::Cascade->new(apps => [
-            $child,
-            response_app(200, 'accepted'),
-        ])->to_app;
-        my ($request_scope, $trace) = PAGI::Routing::Trace->_ensure_http_scope(
-            scope(path => '/missing'),
-        );
-        my $outer_checkpoint = $trace->checkpoint;
-        my ($events, $error) = run_app($cascade, $request_scope);
-
-        is($error, undef, "$label completes through the second child");
-        is(response_start($events)->{status}, 200,
-            "$label caught child response stays discarded");
-
-        my $child_snapshot = $saved_trace->snapshot($saved_checkpoint);
-        ok($child_snapshot->routing_declined,
-            "$label retains its child-local decline when materialized later");
-        is(attempt_descriptions($child_snapshot), ['child local decline'],
-            "$label retains only evidence after its local checkpoint");
-
-        my $outer_snapshot = $trace->snapshot($outer_checkpoint);
-        ok(!$outer_snapshot->routing_declined,
-            "$label remains excluded from the enclosing checkpoint");
-        is(attempt_descriptions($outer_snapshot), [],
-            "$label contributes no discarded attempts to the enclosing view");
-    }
-};
-
-subtest 'HTTP Cascade streams accepted children and suppresses caught children' => sub {
+subtest 'HTTP Cascade streams accepted apps and suppresses caught apps' => sub {
     my $accepted_gate = Future->new;
     my $accepted_next_runs = 0;
     my $accepted = async sub {
@@ -418,47 +211,13 @@ subtest 'HTTP Cascade streams accepted children and suppresses caught children' 
     );
     is([map { $_->{type} } @accepted_events], [
         'http.response.start', 'http.response.body',
-    ], 'accepted start and first chunk are forwarded before completion');
-    is($accepted_events[1]{body}, 'first',
-        'the first streaming chunk is forwarded immediately');
-    ok(!$accepted_running->is_ready, 'Cascade awaits the accepted child');
+    ], 'accepted response events stream before application completion');
+    ok(!$accepted_running->is_ready, 'Cascade awaits the accepted app');
     $accepted_gate->done;
     Future->wrap($accepted_running)->get;
     is(response_body(\@accepted_events), 'firstlast',
-        'the accepted terminal chunk is forwarded');
+        'the accepted terminal chunk reaches the wire');
     is($accepted_next_runs, 0, 'an accepted stream owns the response');
-
-    my $duplicate_next_runs = 0;
-    my $duplicate_start = PAGI::App::Cascade->new(apps => [
-        async sub {
-            my ($request_scope, $request_receive, $send) = @_;
-            await Future->wrap($send->({
-                type => 'http.response.start', status => 200, headers => [],
-            }));
-            await Future->wrap($send->({
-                type => 'http.response.start', status => 404, headers => [],
-            }));
-            await Future->wrap($send->({
-                type => 'http.response.body', body => 'owner', more => 0,
-            }));
-            return;
-        },
-        async sub { ++$duplicate_next_runs; return },
-    ])->to_app;
-    my ($duplicate_events, $duplicate_error) = run_app(
-        $duplicate_start,
-        scope(path => '/duplicate-start'),
-    );
-    is($duplicate_error, undef,
-        'an accepted child remains the response owner after a second start');
-    is([map { $_->{status} }
-        grep { ($_->{type} // '') eq 'http.response.start' }
-        @$duplicate_events], [200, 404],
-        'later starts are forwarded without changing the first disposition');
-    is(response_body($duplicate_events), 'owner',
-        'the accepted child terminal body remains forwarded');
-    is($duplicate_next_runs, 0,
-        'a later catch-status start cannot advance after wire output escaped');
 
     my $caught_gate = Future->new;
     my $caught_next_runs = 0;
@@ -496,16 +255,13 @@ subtest 'HTTP Cascade streams accepted children and suppresses caught children' 
         \&receive,
         sub { push @caught_events, $_[0]; return Future->done },
     );
-    is(\@caught_events, [], 'caught start and chunks are suppressed');
-    is($caught_next_runs, 0, 'the next child waits for caught completion');
-    ok(!$caught_running->is_ready, 'Cascade awaits the caught child');
+    is(\@caught_events, [], 'caught response events remain suppressed');
+    is($caught_next_runs, 0, 'the next app waits for caught completion');
     $caught_gate->done;
     Future->wrap($caught_running)->get;
-    is($caught_next_runs, 1, 'the next child begins after caught completion');
-    is(response_start(\@caught_events)->{status}, 200,
-        'only the next child start reaches the wire');
-    is(response_body(\@caught_events), 'visible',
-        'no caught body reaches the wire');
+    is($caught_next_runs, 1, 'the next app begins after caught completion');
+    is([response_start(\@caught_events)->{status}, response_body(\@caught_events)],
+        [200, 'visible'], 'only the accepted next response reaches the wire');
 
     my (undef, $body_error) = run_app(
         PAGI::App::Cascade->new(apps => [async sub {
@@ -519,79 +275,61 @@ subtest 'HTTP Cascade streams accepted children and suppresses caught children' 
     );
     isa_ok($body_error, ['PAGI::Exception::IncompleteResponse'],
         'body before start is a typed failure');
-    is($body_error && ref($body_error) ? $body_error->stage : undef,
-        'body_before_start',
-        'body before start reports the exact lifecycle stage');
+    is($body_error->stage, 'body_before_start',
+        'body before start reports its exact lifecycle stage');
 
-    local $ENV{PAGI_ENV} = 'development';
     my $incomplete_next_runs = 0;
-    my $incomplete_router = router(routes => [
-        route('/incomplete', raw => async sub {
-            my ($request_scope, $request_receive, $send) = @_;
-            await Future->wrap($send->({
-                type => 'http.response.start', status => 404, headers => [],
-            }));
-            return;
-        }, desc => 'caught incomplete child'),
-    ])->to_app;
-    my $incomplete_cascade = PAGI::App::Cascade->new(apps => [
-        $incomplete_router,
-        async sub { ++$incomplete_next_runs; return },
-    ])->to_app;
-    my ($incomplete_scope, $incomplete_trace)
-        = PAGI::Routing::Trace->_ensure_http_scope(
-            scope(path => '/incomplete'),
-        );
-    my $incomplete_checkpoint = $incomplete_trace->checkpoint;
-    my ($incomplete_events, $incomplete_error)
-        = run_app($incomplete_cascade, $incomplete_scope);
+    my ($incomplete_events, $incomplete_error) = run_app(
+        PAGI::App::Cascade->new(apps => [
+            async sub {
+                my ($request_scope, $request_receive, $send) = @_;
+                await Future->wrap($send->({
+                    type => 'http.response.start', status => 404, headers => [],
+                }));
+                return;
+            },
+            async sub { ++$incomplete_next_runs; return },
+        ])->to_app,
+        scope(path => '/caught-incomplete'),
+    );
     isa_ok($incomplete_error, ['PAGI::Exception::IncompleteResponse'],
-        'a caught incomplete response is a typed failure');
+        'a caught response without a terminal body is a typed failure');
     is($incomplete_error->stage, 'after_start',
         'caught incompletion reports the post-start stage');
-    is($incomplete_events, [], 'the incomplete caught start stays suppressed');
+    is($incomplete_events, [],
+        'the incomplete caught start remains suppressed');
     is($incomplete_next_runs, 0,
-        'caught incompletion does not advance to the next child');
-    is(
-        attempt_descriptions(
-            $incomplete_trace->snapshot($incomplete_checkpoint),
-        ),
-        ['caught incomplete child'],
-        'an incomplete caught child trace window is not discarded',
-    );
+        'caught incompletion never advances to the next application');
 
-    my $post_start = PAGI::App::Cascade->new(apps => [
-        async sub {
-            my ($request_scope, $request_receive, $send) = @_;
-            await Future->wrap($send->({
-                type => 'http.response.start', status => 200, headers => [],
-            }));
-            die "stream failed after start\n";
-        },
-        response_app(200, 'unused'),
-    ])->to_app;
-    my ($post_events, $post_error) = run_app(
-        $post_start,
+    my ($post_start_events, $post_start_error) = run_app(
+        PAGI::App::Cascade->new(apps => [
+            async sub {
+                my ($request_scope, $request_receive, $send) = @_;
+                await Future->wrap($send->({
+                    type => 'http.response.start', status => 200, headers => [],
+                }));
+                die "stream failed after start\n";
+            },
+            response_app(200, 'unused'),
+        ])->to_app,
         scope(path => '/post-start'),
     );
-    like($post_error, qr/stream failed after start/,
-        'an exception after a forwarded start propagates');
-    is([map { $_->{type} } @$post_events], ['http.response.start'],
-        'the already-forwarded start is not withdrawn or replaced');
+    like($post_start_error, qr/stream failed after start/,
+        'an exception after a forwarded response start propagates');
+    is([map { $_->{type} } @$post_start_events], ['http.response.start'],
+        'the already-forwarded start is preserved');
 };
 
-subtest 'non-HTTP Cascade behavior remains the legacy buffered snapshot' => sub {
-    my @cases = (
+subtest 'non-HTTP Cascade buffers only its first application' => sub {
+    for my $case (
         ['websocket', { type => 'websocket.accept' }],
         ['sse', { type => 'sse.start', status => 200 }],
         ['lifespan', { type => 'lifespan.startup.complete' }],
         ['example.extension', { type => 'example.event', value => 'one' }],
-    );
-
-    for my $case (@cases) {
+    ) {
         my ($type, $event) = @$case;
         my $gate = Future->new;
-        my $same_named = bless {}, 'Local::NonHTTPTraceValue';
+        my $same_named = bless {}, 'Local::NonHTTPRoutingValue';
         my $seen_scope;
         my $later_runs = 0;
         my $first = async sub {
@@ -604,12 +342,11 @@ subtest 'non-HTTP Cascade behavior remains the legacy buffered snapshot' => sub 
         my $cascade = PAGI::App::Cascade->new(apps => [
             $first,
             async sub { ++$later_runs; return },
-            async sub { ++$later_runs; return },
         ])->to_app;
         my $request_scope = {
-            type                 => $type,
-            path                 => '/',
-            'pagi.routing.trace' => $same_named,
+            type           => $type,
+            path           => '/',
+            'pagi.routing' => $same_named,
         };
         my @events;
         my $running = $cascade->(
@@ -617,17 +354,17 @@ subtest 'non-HTTP Cascade behavior remains the legacy buffered snapshot' => sub 
             sub { Future->done },
             sub { push @events, $_[0]; return Future->done },
         );
-        is(\@events, [], "$type first-child events remain buffered");
-        ok(!$running->is_ready, "$type waits for first-child completion");
-        is($later_runs, 0, "$type does not invoke a later child while pending");
+        is(\@events, [], "$type events remain buffered while pending");
+        ok(!$running->is_ready, "$type waits for first-app completion");
+        is($later_runs, 0, "$type never runs a later app while pending");
         is(refaddr($seen_scope), refaddr($request_scope),
             "$type receives the original scope object");
-        is(refaddr($seen_scope->{'pagi.routing.trace'}), refaddr($same_named),
-            "$type preserves same-named scope data by identity");
+        is(refaddr($seen_scope->{'pagi.routing'}), refaddr($same_named),
+            "$type preserves same-named data by identity");
         $gate->done;
         Future->wrap($running)->get;
         is(\@events, [$event], "$type replays buffered events after completion");
-        is($later_runs, 0, "$type returns without invoking later children");
+        is($later_runs, 0, "$type returns without running later apps");
 
         my ($empty_events, $empty_error) = run_app(
             PAGI::App::Cascade->new(apps => [])->to_app,
@@ -638,150 +375,85 @@ subtest 'non-HTTP Cascade behavior remains the legacy buffered snapshot' => sub 
     }
 };
 
-subtest 'URLMap targets are opaque HTTP application boundaries' => sub {
-    my ($parent_scope, $parent_trace) = PAGI::Routing::Trace->_ensure_http_scope(
-        scope(
-            path      => '/api/missing',
-            root_path => '/outer',
-            state     => { request_id => 7 },
-        ),
-    );
-    my $parent_checkpoint = $parent_trace->checkpoint;
-    my $naked_router = router(routes => [
-        route('/exists' => sub { return $_[0]->text('exists') }),
-    ])->to_app;
-    my $direct_mount = PAGI::App::URLMap->new;
-    $direct_mount->mount('/api' => $naked_router);
-    my ($direct_events, $direct_error) = run_app(
-        $direct_mount->to_app,
-        $parent_scope,
-    );
-    is($direct_error, undef, 'a naked child Router decline completes opaquely');
-    is($direct_events, [], 'the naked child Router remains unanswered directly');
-    is(refaddr($parent_scope->{'pagi.routing.trace'}), refaddr($parent_trace),
-        'URLMap does not replace the incoming parent trace');
-    ok(!$parent_trace->snapshot($parent_checkpoint)->routing_declined,
-        'the naked child publishes no records into the parent trace');
+subtest 'URLMap keeps Router applications opaque but complete' => sub {
+    my @selected_scopes;
+    my $child = router(routes => [
+        route('/exists' => sub {
+            push @selected_scopes, $_[0]->scope;
+            return PAGI::Response::Text->new('exists');
+        }),
+    ]);
+    my $map = PAGI::App::URLMap->new(default => $child);
+    $map->mount('/api' => $child);
 
-    my @mounted_scopes;
+    my ($matched, $matched_error) = run_app(
+        $map->to_app,
+        scope(path => '/api/exists', root_path => '/outer'),
+    );
+    is($matched_error, undef, 'a selected Router application completes');
+    is(response_body($matched), 'exists', 'the child route responds');
+    is([$selected_scopes[0]{path}, $selected_scopes[0]{root_path}],
+        ['/exists', '/outer/api'], 'URLMap rewrites path and root_path');
+
+    my ($mounted_missing, $mounted_error) = run_app(
+        $map->to_app, scope(path => '/api/missing'),
+    );
+    is($mounted_error, undef, 'a mounted Router NONE is a complete outcome');
+    is(response_start($mounted_missing)->{status}, 404,
+        'the mounted child owns its negotiated 404');
+
+    my ($default_missing, $default_error) = run_app(
+        $map->to_app, scope(path => '/missing'),
+    );
+    is($default_error, undef, 'a default Router NONE is a complete outcome');
+    is(response_start($default_missing)->{status}, 404,
+        'the default child owns its negotiated 404');
+
     my $unrelated = {};
-    my $scope_map = PAGI::App::URLMap->new(
+    my $selected_metadata = {
+        version => 1,
+        frames  => [{ logical_namespace => '/outer' }],
+    };
+    my @opaque_seen;
+    my $opaque = PAGI::App::URLMap->new(
         default => async sub {
-            push @mounted_scopes, ['default', $_[0]];
+            push @opaque_seen, $_[0];
             return;
         },
     );
-    $scope_map->mount('/api' => async sub {
-        push @mounted_scopes, ['mount', $_[0]];
+    $opaque->mount('/api' => async sub {
+        push @opaque_seen, $_[0];
         return;
     });
-    run_app($scope_map->to_app, {
-        %$parent_scope,
-        path      => '/api/users',
-        root_path => '/outer',
-        unrelated => $unrelated,
+    run_app($opaque->to_app, {
+        type => 'http', method => 'GET', path => '/api/x',
+        root_path => '/outer', unrelated => $unrelated,
+        'pagi.routing' => $selected_metadata,
     });
-    run_app($scope_map->to_app, {
-        %$parent_scope,
-        path      => '/elsewhere',
-        root_path => '/outer',
-        unrelated => $unrelated,
+    run_app($opaque->to_app, {
+        type => 'http', method => 'GET', path => '/elsewhere',
+        root_path => '/outer', unrelated => $unrelated,
+        'pagi.routing' => $selected_metadata,
     });
-    is($mounted_scopes[0][1]{path}, '/users', 'mount path rewriting is retained');
-    is($mounted_scopes[0][1]{root_path}, '/outer/api',
-        'mount root_path rewriting is retained');
-    is(refaddr($mounted_scopes[0][1]{unrelated}), refaddr($unrelated),
-        'mount shallow cloning preserves unrelated values');
-    ok(!exists $mounted_scopes[0][1]{'pagi.routing.trace'},
-        'selected HTTP mount removes the parent trace');
-    is($mounted_scopes[1][1]{path}, '/elsewhere',
-        'default preserves the selected path');
-    is(refaddr($mounted_scopes[1][1]{unrelated}), refaddr($unrelated),
-        'default shallow cloning preserves unrelated values');
-    ok(!exists $mounted_scopes[1][1]{'pagi.routing.trace'},
-        'selected HTTP default removes the parent trace');
-
-    for my $location (qw(mount default)) {
-        my $map = PAGI::App::URLMap->new(
-            default => $location eq 'default' ? $naked_router : response_app(200, 'unused'),
-        );
-        $map->mount('/api' => $location eq 'mount'
-            ? $naked_router
-            : response_app(200, 'unused'));
-        my $path = $location eq 'mount' ? '/api/missing' : '/missing';
-        local $ENV{PAGI_ENV} = 'production';
-        my ($opaque_events, $opaque_error, $opaque_warnings) = run_app(
-            compose(app => $map)->to_app,
-            scope(path => $path),
-        );
-        is($opaque_error, undef, "outer Compose contains naked $location incompletion");
-        is(response_start($opaque_events)->{status}, 500,
-            "naked Router in selected $location is opaque, not outer 404");
-        like($opaque_warnings->[0], qr/completed without starting a response/,
-            "naked $location is diagnosed as incomplete application output");
-
-        my $child_compose = compose(app => router(routes => [
-            route('/exists' => sub { return $_[0]->text('exists') }),
-        ]))->to_app;
-        my $composed_map = PAGI::App::URLMap->new(
-            default => $location eq 'default'
-                ? $child_compose
-                : response_app(200, 'unused'),
-        );
-        $composed_map->mount('/api' => $location eq 'mount'
-            ? $child_compose
-            : response_app(200, 'unused'));
-        my ($child_events, $child_error, $child_warnings) = run_app(
-            compose(app => $composed_map)->to_app,
-            scope(path => $path),
-        );
-        is($child_error, undef, "child Compose in $location completes");
-        is($child_warnings, [], "child Compose in $location does not warn");
-        is(response_start($child_events)->{status}, 404,
-            "child Compose owns the $location Router 404");
-    }
-
-    my $same_named = bless {}, 'Local::URLMapNonHTTPValue';
-    my @non_http_seen;
-    my $non_http_map = PAGI::App::URLMap->new(
-        default => async sub {
-            push @non_http_seen, $_[0]{'pagi.routing.trace'};
-            return;
-        },
-    );
-    $non_http_map->mount('/api' => async sub {
-        push @non_http_seen, $_[0]{'pagi.routing.trace'};
-        return;
-    });
-    run_app($non_http_map->to_app, {
-        type => 'websocket', path => '/api/socket',
-        'pagi.routing.trace' => $same_named,
-    });
-    run_app($non_http_map->to_app, {
-        type => 'sse', path => '/other',
-        'pagi.routing.trace' => $same_named,
-    });
-    is([map { refaddr($_) } @non_http_seen],
-        [refaddr($same_named), refaddr($same_named)],
-        'non-HTTP mount and default preserve same-named values by identity');
+    is([$opaque_seen[0]{path}, $opaque_seen[0]{root_path}],
+        ['/x', '/outer/api'], 'opaque mount scope rewriting remains exact');
+    is($opaque_seen[1]{path}, '/elsewhere',
+        'opaque default preserves the request path');
+    is([map { refaddr($_->{unrelated}) } @opaque_seen],
+        [refaddr($unrelated), refaddr($unrelated)],
+        'shallow delegated scopes preserve unrelated values');
+    is([map { refaddr($_->{'pagi.routing'}) } @opaque_seen],
+        [refaddr($selected_metadata), refaddr($selected_metadata)],
+        'mount and default preserve selected routing metadata by identity');
 
     for my $type (qw(websocket sse)) {
-        my $unmapped_scope = {
-            type                 => $type,
-            path                 => '/unmapped',
-            'pagi.routing.trace' => $same_named,
-        };
         my ($events, $error) = run_app(
             PAGI::App::URLMap->new->to_app,
-            $unmapped_scope,
+            { type => $type, path => '/unmapped' },
         );
         like($error, qr/\AURLMap has no default for scope type '\Q$type\E'/,
             "$type exhaustion without a default croaks clearly");
-        is($events, [],
-            "$type exhaustion emits no incompatible HTTP response events");
-        is(refaddr($unmapped_scope->{'pagi.routing.trace'}),
-            refaddr($same_named),
-            "$type exhaustion leaves same-named scope data untouched");
+        is($events, [], "$type exhaustion emits no HTTP events");
     }
 };
 

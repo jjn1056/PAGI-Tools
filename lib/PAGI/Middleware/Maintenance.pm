@@ -6,6 +6,8 @@ use parent 'PAGI::Middleware';
 use Future;
 use Future::AsyncAwait;
 use PAGI::Pages;
+use PAGI::Response;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -112,7 +114,7 @@ sub wrap {
         }
 
         # Serve maintenance page
-        await $self->_send_maintenance($scope, $send);
+        await $self->_send_maintenance($scope, $receive, $send);
     };
 }
 
@@ -178,38 +180,30 @@ sub _all_valid_octets {
 }
 
 async sub _send_maintenance {
-    my ($self, $scope, $send) = @_;
+    my ($self, $scope, $receive, $send) = @_;
 
     unless ($self->{_custom_response}) {
         my @options;
         push @options, retry_after => $self->{retry_after}
             if defined $self->{retry_after};
-        my $response = PAGI::Pages->service_unavailable($scope, @options);
-        await Future->wrap($response->respond($send));
+        my $response = PAGI::Pages->service_unavailable(@options);
+        await PAGI::Utils::invoke_app(
+            $response, $scope, $receive, $send,
+        );
         return;
     }
 
     my $body = $self->{body};
-
-    my @headers = (
-        ['Content-Type', $self->{content_type}],
-        ['Content-Length', length($body)],
+    my @headers;
+    push @headers, 'Retry-After' => $self->{retry_after}
+        if defined $self->{retry_after};
+    my $response = PAGI::Response->new(
+        $body,
+        status       => 503,
+        content_type => $self->{content_type},
+        headers      => \@headers,
     );
-
-    if (defined $self->{retry_after}) {
-        push @headers, ['Retry-After', $self->{retry_after}];
-    }
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => 503,
-        headers => \@headers,
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _default_body {

@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use Carp qw(croak);
 use JSON::MaybeXS ();
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -110,7 +111,7 @@ sub wrap {
         }
 
         if ($too_large) {
-            await $self->_send_error($scope, $send, 413);
+            await $self->_send_error($scope, $receive, $send, 413);
             return;
         }
 
@@ -120,7 +121,7 @@ sub wrap {
             $parsed = JSON::MaybeXS::decode_json($body);
         };
         if ($@) {
-            await $self->_send_error($scope, $send, 400);
+            await $self->_send_error($scope, $receive, $send, 400);
             return;
         }
 
@@ -168,21 +169,20 @@ sub _get_header {
 }
 
 async sub _send_error {
-    my ($self, $scope, $send, $status) = @_;
+    my ($self, $scope, $receive, $send, $status) = @_;
     my $response;
     if ($status == 413) {
-        $response = PAGI::Pages->content_too_large($scope);
+        $response = PAGI::Pages->content_too_large;
     }
     elsif ($status == 400) {
         $response = PAGI::Pages->bad_request(
-            $scope,
             detail => 'The request body is not valid JSON.',
         );
     }
     else {
         die "PAGI::Middleware::JSONBody does not own status $status";
     }
-    await Future->wrap($response->respond($send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;

@@ -88,61 +88,57 @@ sub _add_route_from {
     $middleware = shift @args if ref($args[0]) eq 'ARRAY';
     croak 'route requires a target' unless @args;
 
-    if (defined $args[0] && !ref($args[0]) && $args[0] eq 'raw') {
-        $self->{builder}->_add_route_from(
-            $caller, $kind, $methods, $path, $middleware, @args,
-        );
-        return $self;
-    }
-
     my $handler = shift @args;
 
-    my $target;
+    my $endpoint;
     if (ref($handler) eq 'CODE') {
-        $target = $handler;
+        $endpoint = $handler;
     }
     elsif (!ref($handler) && defined $handler) {
         my $method = $self->{endpoint}->_required_local_method(
             $handler, 'handler',
         );
-        my $endpoint = $self->{endpoint};
-        $target = sub {
-            my ($context) = @_;
-            return $method->($endpoint, $context);
+        my $receiver = $self->{endpoint};
+        $endpoint = sub {
+            my ($protocol) = @_;
+            return $method->($receiver, $protocol);
         };
     }
     else {
-        croak 'handler must be a coderef or unqualified method name';
+        $endpoint = $handler;
     }
 
     $self->{builder}->_add_route_from(
-        $caller, $kind, $methods, $path, $middleware, $target, @args,
+        $caller, $kind, $methods, $path, $middleware, $endpoint, @args,
     );
     return $self;
 }
 
-sub group {
+sub mount {
     my ($self, $path, @args) = @_;
     my $caller = caller;
-    my $middleware = [];
-    $middleware = shift @args if @args && ref($args[0]) eq 'ARRAY';
-    croak 'group requires a callback'
-        unless @args == 1 && ref($args[0]) eq 'CODE';
-    my $callback = $args[0];
-    my $endpoint = $self->{endpoint};
-
-    $self->{builder}->_group_from($caller, $path, $middleware, sub {
-        my ($child) = @_;
-        my $facade = ref($self)->new($endpoint, $child);
-        $callback->($facade);
-    });
+    if (@args % 2 == 0) {
+        for (my $index = 0; $index < @args; $index += 2) {
+            next unless defined $args[$index] && !ref($args[$index])
+                && $args[$index] eq 'routes'
+                && ref($args[$index + 1]) eq 'CODE';
+            my $callback = $args[$index + 1];
+            my $endpoint = $self->{endpoint};
+            my $facade_class = ref($self);
+            $args[$index + 1] = sub {
+                my ($child) = @_;
+                my $facade = $facade_class->new($endpoint, $child);
+                return $callback->($facade);
+            };
+        }
+    }
+    $self->{builder}->_mount_from($caller, $path, @args);
     return $self;
 }
 
-sub mount {
+sub http_default {
     my ($self, @args) = @_;
-    my $caller = caller;
-    $self->{builder}->_mount_from($caller, @args);
+    $self->{builder}->http_default(@args);
     return $self;
 }
 
@@ -177,7 +173,9 @@ PAGI::Endpoint::Router::Builder - Private method-binding App Router facade
 This private facade presents the App Router declaration methods to one
 constructed L<PAGI::Endpoint::Router>. Unqualified handler names are validated
 and captured as exact method CODE values during materialization. Handler
-coderefs pass through unchanged. All declarations, middleware normalization,
+coderefs pass through unchanged. Bound methods receive the Endpoint followed
+by the one direct Request, WebSocket, or SSE object supplied by the shared
+compiler. All declarations, middleware normalization,
 ordering, immutable snapshots, matching, and protocol adaptation remain owned
 by the shared App Router and routing compiler.
 

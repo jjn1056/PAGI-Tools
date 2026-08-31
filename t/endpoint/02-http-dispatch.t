@@ -8,27 +8,61 @@ use JSON::MaybeXS ();
 
 use lib 'lib';
 use PAGI::Endpoint::HTTP;
-use PAGI::Context;
+use PAGI::Request;
+use PAGI::Response;
+use PAGI::Response::Empty ();
+use PAGI::Response::Text ();
+use PAGI::Routing::Mount ();
+use PAGI::Routing::Route ();
+use PAGI::Routing::Router ();
+use PAGI::Test::Client ();
 
 package TestEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
 
-    async sub get {
-        my ($self, $ctx) = @_;
-        return $ctx->response->text("GET response");
+    sub get {
+        my ($self, $request) = @_;
+        $self->{get_request} = $request;
+        return PAGI::Response::Text->new("GET response");
     }
 
-    async sub post {
-        my ($self, $ctx) = @_;
-        return $ctx->response->text("POST response");
+    sub post {
+        my ($self, $request) = @_;
+        $self->{post_request} = $request;
+        return Future->done(PAGI::Response::Text->new("POST response", status => 201));
     }
 }
 
-my $make_ctx = sub {
+package ExplicitHeadEndpoint {
+    use parent 'PAGI::Endpoint::HTTP';
+
+    sub get  { PAGI::Response::Text->new('GET response') }
+    sub head { PAGI::Response::Empty->new(status => 202) }
+}
+
+package HelperBase {
+    sub report {
+        my ($self) = @_;
+        ++$self->{report_calls};
+        return PAGI::Response::Text->new('report helper');
+    }
+}
+
+package HelperEndpoint {
+    use parent -norequire, qw(PAGI::Endpoint::HTTP HelperBase);
+
+    sub get { PAGI::Response::Text->new('GET response') }
+
+    sub inspect {
+        my ($self) = @_;
+        ++$self->{inspect_calls};
+        return PAGI::Response::Text->new('inspect helper');
+    }
+}
+
+my $make_request = sub {
     my ($method, $headers) = @_;
-    my @sent;
-    my $send = sub { push @sent, $_[0]; Future->done };
     my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
     my $scope = {
         type    => 'http',
@@ -36,59 +70,103 @@ my $make_ctx = sub {
         path    => '/test',
         headers => $headers // [],
     };
-    my $ctx = PAGI::Context->new($scope, $receive, $send);
-    return ($ctx, \@sent);
+    return PAGI::Request->new($scope, $receive);
 };
 
-subtest 'dispatches GET to get method' => sub {
-    my ($ctx, $sent) = $make_ctx->('GET');
+subtest 'dispatches synchronous GET with a Request and does not emit' => sub {
+    my $request = $make_request->('GET');
+    my @events;
     my $endpoint = TestEndpoint->new;
 
-    $endpoint->dispatch($ctx)->get;
+    my $response = $endpoint->dispatch($request)->get;
 
-    is($sent->[1]{body}, 'GET response', 'GET dispatched correctly');
+    isa_ok($endpoint->{get_request}, ['PAGI::Request'],
+        'GET receives the direct Request');
+    isa_ok($response, ['PAGI::Response'], 'dispatch returns a Response');
+    is(\@events, [], 'dispatch returns without sending');
 };
 
-subtest 'dispatches POST to post method' => sub {
-    my ($ctx, $sent) = $make_ctx->('POST');
+subtest 'dispatches Future-backed POST with a Request' => sub {
+    my $request = $make_request->('POST');
     my $endpoint = TestEndpoint->new;
 
-    $endpoint->dispatch($ctx)->get;
+    my $response = $endpoint->dispatch($request)->get;
 
-    is($sent->[1]{body}, 'POST response', 'POST dispatched correctly');
+    isa_ok($endpoint->{post_request}, ['PAGI::Request'],
+        'POST receives the direct Request');
+    isa_ok($response, ['PAGI::Response'], 'Future resolves to a Response');
+    is($response->status, 201, 'Future-backed handler response is retained');
 };
 
 subtest 'returns 405 for unimplemented method' => sub {
-    my ($ctx, $sent) = $make_ctx->(
-        'PUT',
-        [['Accept', 'application/json']],
-    );
     my $endpoint = TestEndpoint->new;
+    my $response = PAGI::Test::Client->new(app => $endpoint->to_app)->put(
+        '/test', headers => { Accept => 'application/json' },
+    );
 
-    $endpoint->dispatch($ctx)->get;
-
-    is($sent->[0]{status}, 405, '405 status for unimplemented');
-    my @allow = map { $_->[1] }
-        grep { lc($_->[0]) eq 'allow' } @{$sent->[0]{headers}};
-    is \@allow, ['GET, HEAD, OPTIONS, POST'],
+    is($response->status, 405, '405 status for unimplemented');
+    is $response->header_all('Allow'), ['GET, HEAD, OPTIONS, POST'],
         '405 retains one sorted complete Allow field';
-
-    my %headers = map { lc($_->[0]) => $_->[1] } @{$sent->[0]{headers}};
-    is $headers{'content-type'}, 'application/problem+json',
-        'automatic 405 negotiates problem JSON';
-    is $headers{'cache-control'}, 'no-store', 'automatic 405 is not stored';
-    my $problem = JSON::MaybeXS::decode_json($sent->[1]{body});
-    is $problem->{status}, 405, 'problem status matches the wire status';
-    is $problem->{title}, 'Method Not Allowed', 'problem uses the stock title';
 };
 
-subtest 'HEAD dispatches to get if no head method' => sub {
-    my ($ctx, $sent) = $make_ctx->('HEAD');
+subtest 'dispatches only advertised HTTP verb handlers' => sub {
+    my $endpoint = HelperEndpoint->new;
+    my $client = PAGI::Test::Client->new(app => $endpoint->to_app);
+
+    for my $method (qw(REPORT INSPECT)) {
+        my $response = $client->_request($method, '/test');
+
+        is($response->status, 405, "$method cannot select a helper method");
+        is $response->header_all('Allow'), ['GET, HEAD, OPTIONS'],
+            "$method retains the endpoint-owned Allow response";
+    }
+
+    is($endpoint->{report_calls} // 0, 0,
+        'an inherited helper is never invoked as an HTTP verb');
+    is($endpoint->{inspect_calls} // 0, 0,
+        'a local non-verb helper is never invoked as an HTTP verb');
+};
+
+subtest 'HEAD dispatches to GET only without an explicit head method' => sub {
+    my $request = $make_request->('HEAD');
     my $endpoint = TestEndpoint->new;
 
-    $endpoint->dispatch($ctx)->get;
+    my $implicit = $endpoint->dispatch($request)->get;
+    is($implicit->status, 200, 'HEAD falls back to GET');
 
-    is($sent->[1]{body}, 'GET response', 'HEAD falls back to GET');
+    my $explicit = ExplicitHeadEndpoint->new->dispatch($request)->get;
+    is($explicit->status, 202, 'explicit HEAD handler wins');
+};
+
+subtest 'Route owns 405 only for its snapshotted method set' => sub {
+    my $endpoint = TestEndpoint->new;
+    my $route = PAGI::Routing::Route->new(
+        path => '/direct', endpoint => $endpoint,
+    );
+    is($route->methods, ['GET', 'HEAD', 'OPTIONS', 'POST'],
+        'Route snapshots the endpoint capability, including HEAD and OPTIONS');
+
+    my $routed = PAGI::Test::Client->new(app => $route->to_app);
+    my $router_405 = $routed->put('/direct');
+    is($router_405->status, 405, 'unsupported method receives a Router-owned 405');
+    is($router_405->header('Allow'), 'GET, HEAD, OPTIONS, POST',
+        'Router-owned 405 exposes the immutable Route snapshot');
+
+    my $broader = PAGI::Routing::Route->new(
+        path => '/broad', endpoint => $endpoint, methods => '*',
+    );
+    my $endpoint_405 = PAGI::Test::Client->new(app => $broader->to_app)->put('/broad');
+    is($endpoint_405->status, 405,
+        'a broader Route delegates unsupported methods to the endpoint');
+    is($endpoint_405->header('Allow'), 'GET, HEAD, OPTIONS, POST',
+        'the standalone endpoint retains its own 405 Allow response');
+
+    my $mounted = PAGI::Routing::Router->new(routes => [
+        PAGI::Routing::Mount->new('/mounted', app => $endpoint),
+    ]);
+    my $mounted_405 = PAGI::Test::Client->new(app => $mounted->to_app)->put('/mounted');
+    is($mounted_405->status, 405,
+        'an opaque mounted endpoint retains its own method handling');
 };
 
 done_testing;

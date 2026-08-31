@@ -1,0 +1,329 @@
+# Review package: ac25eb107900cca107b68da3513caf480498b1ff..HEAD
+
+## Commits
+fbcdcfc refactor: simplify route constraint inspection
+
+## Files changed
+ Changes                     |  2 ++
+ lib/PAGI/Routing/Mount.pm   | 17 +++++++++++------
+ lib/PAGI/Routing/Route.pm   | 13 +++++++++----
+ t/routing/01-constructors.t | 26 ++++++++++++++++++++++++++
+ 4 files changed, 48 insertions(+), 10 deletions(-)
+
+## Diff
+diff --git a/Changes b/Changes
+index 5cc9f0e..335adb4 100644
+--- a/Changes
++++ b/Changes
+@@ -1,15 +1,17 @@
+ # Revision history for PAGI-Tools
+
+ 0.002003 - UNRELEASED
+   - Fixed invalid allowed_methods diagnostics to identify the route endpoint
+     capability rather than a nonexistent methods option.
++  - Route and Mount constraint accessors now always return fresh hashrefs,
++    using an empty hashref when no explicit constraint map was declared.
+   - BREAKING: Replaced the mutable, request-bound PAGI::Response builder with
+     complete concrete Response values and exported factories: Response::Text,
+     ::HTML, ::JSON, ::Problem, ::Redirect, ::Empty, ::File, and ::Stream.
+     Response is invoked only through `to_app` or the generic `invoke_app`
+     helper; the public `respond` method, Request's response bridge, and the
+     generic text/html/json/send/send_raw/
+     redirect/empty/send_file/stream/writer finishers are removed. Buffered
+     response bodies are byte strings; Text and HTML perform explicit charset
+     encoding, while File and Stream retain non-buffered delivery ownership.
+     Stream Writer writes are awaitable backpressure points under PAGI's send-
+diff --git a/lib/PAGI/Routing/Mount.pm b/lib/PAGI/Routing/Mount.pm
+index 411e527..d3fdf9d 100644
+--- a/lib/PAGI/Routing/Mount.pm
++++ b/lib/PAGI/Routing/Mount.pm
+@@ -28,47 +28,48 @@ sub _new_from {
+     }
+
+     my $has_app = exists $opts{app};
+     my $has_routes = exists $opts{routes};
+     croak 'mount requires exactly one of app or routes'
+         unless $has_app != $has_routes;
+
+     PAGI::Routing::Route::_validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
+     PAGI::Routing::Route::_validate_logical_segment('name', $opts{name}) if exists $opts{name};
+     PAGI::Routing::Route::_validate_constraints($opts{constraints}) if exists $opts{constraints};
++    my $constraints = exists $opts{constraints}
++        ? $opts{constraints}
++        : {};
+     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+         exists $opts{middleware} ? $opts{middleware} : [],
+         'middleware',
+     );
+
+     my $app = $has_app
+         ? PAGI::Utils::_validate_app_value($opts{app}, 'mount app')
+         : do {
+             require PAGI::Routing::Router;
+             PAGI::Routing::Router->new(routes => $opts{routes});
+         };
+
+-    my $has_constraints = exists $opts{constraints};
+     my $pattern = PAGI::Routing::Pattern->new(
+         path => $path,
+         mode => 'mount',
+-        constraints => $has_constraints ? $opts{constraints} : {},
++        constraints => $constraints,
+         declaration_package => $declaration_package,
+     );
+
+     return bless {
+         kind        => 'mount',
+         _pattern    => $pattern,
+         app         => $app,
+         name        => $opts{name},
+         desc        => $opts{desc},
+-        _has_constraints => $has_constraints,
+         middleware  => $middleware,
+     }, $class;
+ }
+
+ sub _validate_routes {
+     my ($routes) = @_;
+     croak 'routes must contain PAGI::Routing nodes' unless ref($routes) eq 'ARRAY';
+     for my $node (@$routes) {
+         croak 'PAGI::Routing::Router objects cannot appear in structural routes; '
+             . "mount('/prefix', app => \$router)"
+@@ -79,21 +80,21 @@ sub _validate_routes {
+                     || $node->isa('PAGI::Routing::Mount'));
+     }
+ }
+
+ sub kind        { $_[0]->{kind} }
+ sub path        { $_[0]->{_pattern}->path }
+ sub parameters  { $_[0]->{_pattern}->parameters }
+ sub name        { $_[0]->{name} }
+ sub desc        { $_[0]->{desc} }
+ sub app         { $_[0]->{app} }
+-sub constraints { $_[0]->{_has_constraints} ? $_[0]->{_pattern}->constraints : undef }
++sub constraints { $_[0]->{_pattern}->constraints }
+ sub middleware  { [ @{$_[0]->{middleware}} ] }
+ sub methods     { undef }
+
+ sub _pattern    { $_[0]->{_pattern} }
+
+ sub to_app {
+     my ($self) = @_;
+     require PAGI::Routing::Compiler;
+     return PAGI::Routing::Compiler->compile($self);
+ }
+@@ -149,22 +150,26 @@ consuming package as that caller; wrapping it in another sub makes the wrapper
+ package the declaration package. A constructor called from a role method
+ likewise resolves providers in the role package.
+
+ Provider-backed and explicit prefix constraints run before mount middleware
+ and the base application are selected. Named descendants reuse the same
+ normalized prefix predicates during reverse routing.
+
+ =head1 ACCESSORS
+
+ C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<app>, and
+-C<constraints> return declaration values. C<app> always returns the one base
+-application. C<middleware> returns a fresh arrayref of normalized
++C<constraints> return declaration values. C<constraints> returns a fresh
++hashref containing the explicitly declared constraint map, or an empty hashref
++when none was declared. Inline path constraints remain represented by the path
++pattern and are not reconstructed as entries in this explicit map. C<app>
++always returns the one base application. C<middleware> returns a fresh
++arrayref of normalized
+ C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
+ identity. C<methods> returns undef for a mount.
+
+ =head1 METHODS
+
+ =head2 to_app
+
+ Synchronously compiles this mount through a fresh complete one-node router on
+ every call. It emits no events. When the returned app is later invoked and the
+ prefix matches, dispatch creates a request-local shallow child scope, merges
+diff --git a/lib/PAGI/Routing/Route.pm b/lib/PAGI/Routing/Route.pm
+index d58bafc..f78ee6c 100644
+--- a/lib/PAGI/Routing/Route.pm
++++ b/lib/PAGI/Routing/Route.pm
+@@ -59,20 +59,23 @@ sub _build {
+     my ($class, $declaration_package, $kind, $path, $endpoint, $opts) = @_;
+
+     croak 'route path must be a string' unless defined $path && !ref($path);
+     PAGI::Utils::_validate_app_value(
+         $endpoint, 'route endpoint',
+     );
+
+     _validate_text('desc', $opts->{desc}, 0) if exists $opts->{desc};
+     _validate_logical_segment('name', $opts->{name}) if exists $opts->{name};
+     _validate_constraints($opts->{constraints}) if exists $opts->{constraints};
++    my $constraints = exists $opts->{constraints}
++        ? $opts->{constraints}
++        : {};
+     my $middleware = PAGI::Routing::Middleware->_normalize_descriptors(
+         exists $opts->{middleware} ? $opts->{middleware} : [],
+         'middleware',
+     );
+
+     if ($kind ne 'route' && exists $opts->{methods}) {
+         my %kind_name = (websocket => 'WebSocket', sse => 'SSE');
+         croak $kind_name{$kind} . ' routes do not accept methods';
+     }
+
+@@ -85,36 +88,34 @@ sub _build {
+             my @capability_methods = $endpoint->allowed_methods;
+             $methods = _normalize_methods(
+                 \@capability_methods,
+                 'route endpoint allowed_methods',
+             );
+         }
+         else {
+             $methods = _normalize_methods('GET');
+         }
+     }
+-    my $has_constraints = exists $opts->{constraints};
+     my $pattern = PAGI::Routing::Pattern->new(
+         path => $path,
+         mode => 'route',
+-        constraints => $has_constraints ? $opts->{constraints} : {},
++        constraints => $constraints,
+         declaration_package => $declaration_package,
+     );
+
+     return bless {
+         kind        => $kind,
+         _pattern    => $pattern,
+         endpoint    => $endpoint,
+         name        => $opts->{name},
+         desc        => $opts->{desc},
+         methods     => $methods,
+-        _has_constraints => $has_constraints,
+         middleware  => $middleware,
+     }, $class;
+ }
+
+ sub _validate_text {
+     my ($label, $value, $required) = @_;
+     my $message = $required ? "$label must be a nonempty string" : "$label must be a string";
+     croak $message unless defined $value && !ref($value) && (!$required || length $value);
+ }
+
+@@ -176,21 +177,21 @@ sub _normalize_methods {
+     return \@normalized;
+ }
+
+ sub kind        { $_[0]->{kind} }
+ sub path        { $_[0]->{_pattern}->path }
+ sub parameters  { $_[0]->{_pattern}->parameters }
+ sub name        { $_[0]->{name} }
+ sub desc        { $_[0]->{desc} }
+ sub endpoint    { $_[0]->{endpoint} }
+ sub methods     { ref($_[0]->{methods}) eq 'ARRAY' ? [ @{$_[0]->{methods}} ] : $_[0]->{methods} }
+-sub constraints { $_[0]->{_has_constraints} ? $_[0]->{_pattern}->constraints : undef }
++sub constraints { $_[0]->{_pattern}->constraints }
+ sub middleware  { [ @{$_[0]->{middleware}} ] }
+ sub routes      { undef }
+ sub _pattern    { $_[0]->{_pattern} }
+
+ sub to_app {
+     my ($self) = @_;
+     require PAGI::Routing::Compiler;
+     return PAGI::Routing::Compiler->compile($self);
+ }
+
+@@ -249,20 +250,24 @@ the Router owns unsupported-method 405 and C<Allow> outcomes.
+ An inline provider such as C<{id:&Int}> is resolved in the package that
+ directly called C<route>, C<websocket>, C<sse>, or C<new>. Re-exporting a
+ constructor preserves the consuming package as that caller; wrapping it in
+ another sub makes the wrapper package the declaration package. A constructor
+ called from a role method likewise resolves providers in the role package.
+
+ =head1 ACCESSORS
+
+ C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<endpoint>, C<methods>,
+ and C<constraints> return the corresponding declaration values.
++C<constraints> returns a fresh hashref containing the explicitly declared
++constraint map, or an empty hashref when none was declared. Inline path
++constraints remain represented by the path pattern and are not reconstructed
++as entries in this explicit map.
+ C<middleware> returns a fresh arrayref of normalized
+ C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
+ identity. C<routes> returns undef for a leaf route.
+ HTTP C<methods> are normalized at construction; GET includes HEAD. Constraint
+ values are accepted by HTTP, WebSocket, and SSE leaves, returned as declared,
+ and validate decoded captures only during a request match or reverse render.
+ Only HTTP routes accept C<methods>. An inline provider and explicit constraint
+ may target the same parameter; the inline predicate runs first and both must
+ pass before the endpoint is selected.
+
+diff --git a/t/routing/01-constructors.t b/t/routing/01-constructors.t
+index d318783..71b634d 100644
+--- a/t/routing/01-constructors.t
++++ b/t/routing/01-constructors.t
+@@ -276,20 +276,37 @@ subtest 'route descriptions preserve endpoint identity and normalize HTTP method
+
+     isa_ok($node, 'PAGI::Routing::Route');
+     is($node->kind, 'route', 'HTTP route kind');
+     is($node->path, '/things/{host}', 'route path');
+     is($node->name, 'things', 'route name');
+     is($node->desc, '', 'empty description is retained');
+     is(refaddr($node->endpoint), refaddr($handler), 'endpoint identity is retained');
+     is($node->methods, ['POST', 'GET', 'HEAD', 'RPC'], 'methods normalize, deduplicate, and add HEAD');
+     is(refaddr($node->constraints->{host}), refaddr($host_constraint), 'route constraints retain declared checker');
+     is($node->middleware, [$mw], 'route middleware descriptors');
++
++    my $plain_route = route('/plain' => sub { });
++    is($plain_route->constraints, {},
++        'Route exposes omitted explicit constraints as an empty hash');
++    my $plain_route_constraints = $plain_route->constraints;
++    $plain_route_constraints->{probe} = qr/mutated/;
++    is($plain_route->constraints, {},
++        'Route omitted constraints accessor remains a fresh empty hash');
++
++    my $empty_route = route('/empty' => sub { }, constraints => {});
++    is($empty_route->constraints, {},
++        'Route exposes explicit empty constraints with the same shape');
++    my $empty_route_constraints = $empty_route->constraints;
++    $empty_route_constraints->{probe} = qr/mutated/;
++    is($empty_route->constraints, {},
++        'Route explicit empty constraints accessor remains a fresh hash');
++
+     ok(!$node->can('target') && !$node->can('is_raw'),
+         'retired target modes have no compatibility accessors');
+     ok(!$node->can('namespace'), 'public namespace accessor is removed from Route');
+     is($node->routes, undef, 'routes are inapplicable to route');
+
+     $methods->[0] = 'DELETE';
+     $constraints->{host} = qr/changed[.]test/;
+     my $returned_methods = $node->methods;
+     my $returned_constraints = $node->constraints;
+     my $returned_middleware = $node->middleware;
+@@ -472,20 +489,29 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
+         middleware => $mount_middleware_input;
+     isa_ok($inline, 'PAGI::Routing::Mount');
+     is($inline->kind, 'mount', 'mount kind');
+     is($inline->path, '/api/{tenant}', 'mount path');
+     is($inline->name, 'API', 'inline mount exposes its local name');
+     ok(!$inline->can('namespace'), 'public namespace accessor is removed from Mount');
+     is($inline->desc, '', 'mount empty description');
+     isa_ok($inline->app, ['PAGI::Routing::Router'],
+         'routes shorthand constructs a child Router application');
+     is(refaddr($inline->constraints->{tenant}), refaddr($tenant_constraint), 'mount constraints retain declared checker');
++
++    my $plain_mount = mount('/plain-mount', routes => []);
++    is($plain_mount->constraints, {},
++        'Mount exposes omitted explicit constraints as an empty hash');
++    my $plain_mount_constraints = $plain_mount->constraints;
++    $plain_mount_constraints->{probe} = qr/mutated/;
++    is($plain_mount->constraints, {},
++        'Mount omitted constraints accessor remains a fresh empty hash');
++
+     ok(!$inline->can('target') && !$inline->can('router')
+         && !$inline->can('is_raw') && !$inline->can('routes'),
+         'removed Mount modes have no compatibility accessors');
+     is($inline->methods, undef, 'methods are inapplicable to mount');
+     is($inline->middleware, [$mount_middleware], 'mount middleware preserves descriptor');
+
+     push @$children, route '/other' => $handler;
+     $constraints->{tenant} = qr/b/;
+     push @$mount_middleware_input, middleware('MountInputMutation');
+     my $returned_constraints = $inline->constraints;

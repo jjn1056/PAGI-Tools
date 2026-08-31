@@ -2,10 +2,10 @@ use strict;
 use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
+use Scalar::Util qw(blessed);
 use lib "$Bin/../examples/endpoint-router-demo/lib";
 use lib "$Bin/../lib";
 
-use PAGI::Compose qw(compose);
 use PAGI::Test::Client;
 
 use MyApp::Main;
@@ -25,7 +25,7 @@ subtest 'Main mounts its application-relative public component' => sub {
     my $path = "$Bin/../examples/endpoint-router-demo/lib/MyApp/Main.pm";
     my $source = source_text($path);
     like($source,
-        qr{mount\('/'\s*,\s*PAGI::App::File->app_path\('public'\)\)},
+        qr{mount\('/'\s*,\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
         'module-layout Router mounts the returned component');
     unlike($source, qr/PAGI::App::File->app_path\('public'\)->to_app/,
         'module passes the component to the Router without compiling it');
@@ -42,6 +42,29 @@ subtest 'the example exposes explicit Endpoint objects without Endpoint state' =
     }
 };
 
+subtest 'Endpoint methods receive direct protocol objects' => sub {
+    my $main = source_text(
+        "$Bin/../examples/endpoint-router-demo/lib/MyApp/Main.pm",
+    );
+    my $api = source_text(
+        "$Bin/../examples/endpoint-router-demo/lib/MyApp/API.pm",
+    );
+    my $events = source_text(
+        "$Bin/../examples/endpoint-router-demo/lib/MyApp/API/Events.pm",
+    );
+
+    like($main, qr/sub home\s*\{.*?my \(\$self, \$request\) = \@_/s,
+        'HTTP Endpoint method receives Request');
+    like($main, qr/sub status_socket\s*\{.*?my \(\$self, \$websocket\) = \@_/s,
+        'WebSocket Endpoint method receives WebSocket');
+    like($events, qr/sub stream\s*\{.*?my \(\$self, \$sse\) = \@_/s,
+        'SSE Endpoint method receives SSE');
+    like($api, qr/\$self->new_request\(\$scope, \$receive\)/,
+        'native middleware explicitly constructs Request');
+    unlike($api . $main . $events, qr/new_context|\$c\b/,
+        'demo no longer relies on Context');
+};
+
 subtest 'the nested demo exercises the complete Endpoint design' => sub {
     local $ENV{PAGI_HOME};
     delete $ENV{PAGI_HOME};
@@ -53,28 +76,23 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
 
     isa_ok($router, 'PAGI::Routing::Router');
     is([sort keys %{$router->named_routes}], [qw(
-        /api/events/stream /api/index /api/show /home /status_socket
+        /api/events/stream /api/index /api/show /api/tools/status
+        /home /status_socket
     )], 'nested local names form canonical absolute addresses');
 
-    my $resource;
-    my $app = compose(
-        app => $router,
-        lifespan => {
-            startup => sub {
-                my ($state) = @_;
-                $resource = $state->{resource} = { name => 'demo-resource', open => 1 };
-                $state->{metrics} = { requests => 0, websocket_messages => 0 };
-            },
-            shutdown => sub {
-                my ($state) = @_;
-                $state->{resource}{open} = 0;
-                $state->{resource}{closed} = 1;
-            },
-        },
-    )->to_app;
+    my $app_file = "$Bin/../examples/endpoint-router-demo/app.pl";
+    my $app = do $app_file;
+    my $load_error = $@ || $!;
+    ok(!$load_error, 'the real Endpoint demo app file loads cleanly')
+        or diag($load_error);
+    isa_ok($app, 'PAGI::Compose');
+    ok(blessed($app) && $app->can('to_app'),
+        'the real app file returns a to_app-capable object');
 
+    my $resource;
     PAGI::Test::Client->run($app, sub {
         my ($client) = @_;
+        $resource = $client->state->{resource};
 
         my $home = $client->get('/');
         is($home->status, 200, 'home responds through Main');
@@ -107,6 +125,15 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
         is($show->status, 200, 'generated API item link resolves');
         like($show->text, qr/Alice/, 'item handler sees its typed path capture');
 
+        my $tools_path = $router->path_for('/api/tools/status');
+        is($tools_path, '/api/tools/status',
+            'callback child publishes its composed reverse address');
+        my $tools = $client->get($tools_path);
+        is($tools->status, 200,
+            'Endpoint routes callback binds methods to the API object');
+        is($tools->json, { status => 'ready', resource => 'demo-resource' },
+            'callback-bound handler reads shared lifespan state');
+
         my $missing_user = $client->get('/api/show/999', headers => {
             'X-Demo-Token' => 'demo-token',
             Accept         => 'application/problem+json',
@@ -121,6 +148,18 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
             status => 404,
             detail => 'User not found',
         }, 'missing API user uses the shared Pages representation');
+
+        my $api_missing = $client->get('/api/not-a-route', headers => {
+            Accept => 'application/problem+json',
+        });
+        is($api_missing->status, 404,
+            'API Router owns its unmatched path');
+        is($api_missing->json, {
+            type   => 'about:blank',
+            title  => 'Not Found',
+            status => 404,
+            detail => 'No API Endpoint route matched',
+        }, 'app_as custom default renders the API boundary policy');
 
         $client->websocket('/status', sub {
             my ($ws) = @_;

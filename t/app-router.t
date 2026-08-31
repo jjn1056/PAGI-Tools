@@ -7,6 +7,7 @@ use Future;
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
+use PAGI::Response::Text ();
 
 sub channels {
     my @events;
@@ -52,17 +53,17 @@ sub response_header {
 sub handler {
     my ($label, $calls) = @_;
     return sub {
-        my ($c) = @_;
+        my ($request) = @_;
         push @$calls, {
             label => $label,
-            scope => $c->scope,
-            params => $c->path_params,
+            scope => $request->scope,
+            params => $request->path_params,
         } if $calls;
-        return $c->text($label);
+        return PAGI::Response::Text->new($label);
     };
 }
 
-subtest 'ordinary HTTP routing uses Context handlers and shared path grammar' => sub {
+subtest 'ordinary HTTP routing uses Request handlers and shared path grammar' => sub {
     my @calls;
     my $router = PAGI::App::Router->new;
     $router->get('/users' => handler('list', \@calls));
@@ -76,7 +77,7 @@ subtest 'ordinary HTTP routing uses Context handlers and shared path grammar' =>
     @calls = ();
     is(response_body(run_scope($app, path => '/users/42')), 'show',
         'a brace parameter route dispatches');
-    is($calls[0]{params}, { id => 42 }, 'the Context exposes captured parameters');
+    is($calls[0]{params}, { id => 42 }, 'the Request exposes captured parameters');
     is(response_body(run_scope($app, method => 'POST', path => '/users')), 'create',
         'method siblings share a path');
     @calls = ();
@@ -85,7 +86,8 @@ subtest 'ordinary HTTP routing uses Context handlers and shared path grammar' =>
     is($calls[0]{params}, { path => 'docs/readme.txt' },
         'the wildcard preserves its remaining path');
 
-    my $missing = run_scope($app, path => '/missing');
+    my $missing = run_scope($app, path => '/missing',
+        headers => [['Accept', 'text/html']]);
     is($missing->[0]{status}, 404,
         'an unknown path receives the Compose automatic 404');
     is(response_header($missing, 'Content-Type'), 'text/html; charset=utf-8',
@@ -154,7 +156,7 @@ subtest 'any and generic route declarations replace the old method option' => su
     }, qr/unknown route option 'method'/, 'the old any method option is not retained');
 };
 
-subtest 'opaque and routing-aware mounts remain distinct' => sub {
+subtest 'opaque and discoverable Router applications remain distinct' => sub {
     my @calls;
     my $child = PAGI::App::Router->new;
     $child->get('/users/{id}' => handler('child', \@calls))->name('show');
@@ -168,16 +170,16 @@ subtest 'opaque and routing-aware mounts remain distinct' => sub {
     };
 
     my $router = PAGI::App::Router->new;
-    $router->mount('/people', router => $child)->name('people');
-    $router->mount('/assets' => $opaque);
+    $router->mount('/people', app => $child->to_router)->name('people');
+    $router->mount('/assets', app => $opaque);
     my $app = $router->to_app;
 
     is(response_body(run_scope($app, path => '/people/users/7')), 'child',
-        'a routing-aware mount dispatches its immutable child');
+        'an immutable Router application dispatches through the Mount');
     is($calls[0]{scope}{path}, '/users/7', 'the mount rewrites the child path');
     is($calls[0]{scope}{root_path}, '/people', 'the mount extends root_path');
     is($router->path_for('/people/show', { id => 7 }), '/people/users/7',
-        'a routing-aware mount exposes child names');
+        'an explicit immutable snapshot exposes child names');
 
     @calls = ();
     is(response_body(run_scope($app, path => '/assets/css/site.css')), 'opaque',
@@ -186,11 +188,17 @@ subtest 'opaque and routing-aware mounts remain distinct' => sub {
     is($router->route_named('/assets/hidden'), undef,
         'opaque internals are not inspectable');
 
-    like(dies { PAGI::App::Router->new->mount('/bad' => $child) },
-        qr/mutable router frontend cannot be used as a opaque mount target/,
-        'mutable frontends require router => at known boundaries');
-    like(dies { PAGI::App::Router->new->mount('/bad' => 'TestRoutes::Admin') },
-        qr/opaque mount target must be a coderef or object with to_app/,
+    my $mutable_parent = PAGI::App::Router->new;
+    $mutable_parent->mount('/hidden', app => $child)->name('hidden');
+    is(response_body(run_scope($mutable_parent->to_app,
+        path => '/hidden/users/8')), 'child',
+        'a mutable frontend remains a valid opaque application object');
+    is($mutable_parent->route_named('/hidden/show'), undef,
+        'an opaque mutable frontend is not inspected for child names');
+    like(dies {
+        PAGI::App::Router->new->mount('/bad', app => 'TestRoutes::Admin')
+    },
+        qr/mount app must be a coderef or instantiated object with to_app/,
         'mounts do not load package-name strings');
 };
 
@@ -206,29 +214,29 @@ subtest 'written mount order replaces longest-prefix sorting' => sub {
     };
 
     my $broad_first = PAGI::App::Router->new;
-    $broad_first->mount('/api' => $native->('broad'));
-    $broad_first->mount('/api/v2' => $native->('specific'));
+    $broad_first->mount('/api', app => $native->('broad'));
+    $broad_first->mount('/api/v2', app => $native->('specific'));
     is(response_body(run_scope($broad_first->to_app, path => '/api/v2/info')),
         'broad', 'an earlier broad mount owns before a longer prefix');
 
     my $specific_first = PAGI::App::Router->new;
-    $specific_first->mount('/api/v2' => $native->('specific'));
-    $specific_first->mount('/api' => $native->('broad'));
+    $specific_first->mount('/api/v2', app => $native->('specific'));
+    $specific_first->mount('/api', app => $native->('broad'));
     is(response_body(run_scope($specific_first->to_app, path => '/api/v2/info')),
         'specific', 'putting the specific mount first changes ownership');
 };
 
-subtest 'normal WebSocket and SSE declarations receive protocol Contexts' => sub {
+subtest 'normal WebSocket and SSE declarations receive protocol objects' => sub {
     my @seen;
     my $router = PAGI::App::Router->new;
     $router->websocket('/ws/{room}' => sub {
-        my ($c) = @_;
-        push @seen, [ref($c), $c->path_param('room')];
+        my ($websocket) = @_;
+        push @seen, [ref($websocket), $websocket->path_param('room')];
         return Future->done;
     });
     $router->sse('/events/{channel}' => sub {
-        my ($c) = @_;
-        push @seen, [ref($c), $c->path_param('channel')];
+        my ($sse) = @_;
+        push @seen, [ref($sse), $sse->path_param('channel')];
         return Future->done;
     });
     my $app = $router->to_app;
@@ -236,9 +244,9 @@ subtest 'normal WebSocket and SSE declarations receive protocol Contexts' => sub
     run_scope($app, type => 'websocket', method => undef, path => '/ws/lobby');
     run_scope($app, type => 'sse', method => undef, path => '/events/news');
     is(\@seen, [
-        ['PAGI::Context::WebSocket', 'lobby'],
-        ['PAGI::Context::SSE', 'news'],
-    ], 'protocol-specific Contexts receive shared captures');
+        ['PAGI::WebSocket', 'lobby'],
+        ['PAGI::SSE', 'news'],
+    ], 'protocol-specific objects receive shared captures');
 
     my $miss = run_scope(
         $app,

@@ -6,6 +6,9 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use PAGI::Request;
+use PAGI::Response;
+use PAGI::Response::Text ();
 
 subtest 'can create endpoint subclass' => sub {
     require PAGI::Endpoint::HTTP;
@@ -15,8 +18,8 @@ subtest 'can create endpoint subclass' => sub {
         use Future::AsyncAwait;
 
         async sub get {
-            my ($self, $ctx) = @_;
-            return $ctx->response->text("Hello");
+            my ($self, $request) = @_;
+            return PAGI::Response::Text->new("Hello");
         }
     }
 
@@ -25,20 +28,28 @@ subtest 'can create endpoint subclass' => sub {
     isa_ok($endpoint, 'MyEndpoint');
 };
 
-subtest 'context_class has default' => sub {
+subtest 'HTTP handlers are Request-first' => sub {
     require PAGI::Endpoint::HTTP;
 
-    is(PAGI::Endpoint::HTTP->context_class, 'PAGI::Context', 'default context_class');
+    my $request = PAGI::Request->new({
+        type => 'http', method => 'GET', path => '/', headers => [],
+    }, sub { Future->done({ type => 'http.request' }) });
+    my $response = MyEndpoint->new->dispatch($request)->get;
+
+    isa_ok($request, ['PAGI::Request']);
+    isa_ok($response, ['PAGI::Response']);
 };
 
-subtest 'subclass can override context_class' => sub {
+subtest 'context_class is not an extension hook' => sub {
+    ok(!PAGI::Endpoint::HTTP->can('context_class'),
+        'base endpoint has no context_class');
+
     package CustomEndpoint {
         use parent 'PAGI::Endpoint::HTTP';
-
-        sub context_class { 'My::Context' }
     }
 
-    is(CustomEndpoint->context_class, 'My::Context', 'custom context_class');
+    ok(!CustomEndpoint->can('context_class'),
+        'subclass inherits no context_class');
 };
 
 done_testing;

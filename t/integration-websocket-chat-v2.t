@@ -21,7 +21,7 @@ my $http_file = "$Bin/../examples/websocket-chat-v2/lib/ChatApp/HTTP.pm";
 my $http_source = source_text($http_file);
 
 like($http_source,
-    qr/PAGI::App::File->app_path\('public'\)->to_app/,
+    qr/PAGI::App::File->from_app_path\('public'\)->to_app/,
     'v2 chat HTTP uses the application-relative file app');
 unlike($http_source,
     qr/_serve_static|_send_(?:404|500)|%MIME_TYPES|File::Basename|File::Spec|\$path\s*=~\s*s|\bopen\b/,

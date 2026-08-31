@@ -5,6 +5,7 @@ use Test2::V0;
 use Scalar::Util qw(refaddr);
 use overload ();
 use PAGI::Compose qw(compose);
+use PAGI::Response::Text ();
 use PAGI::Routing qw(route middleware);
 
 {
@@ -17,7 +18,9 @@ use PAGI::Routing qw(route middleware);
 }
 {
     package DeferredComponentCheck;
+    our $CALLS = 0;
     sub new { return bless {}, $_[0] }
+    sub to_app { $CALLS++; return sub { return } }
 }
 {
     package ComposeConfiguredMiddleware;
@@ -40,7 +43,7 @@ my ($lowercase_error, $lowercase_stderr);
 like($lowercase_error, qr/Can't continue after import errors/, 'lowercase tag is rejected');
 like($lowercase_stderr, qr/"all" is not defined/, 'diagnostic names the invalid tag');
 
-my $leaf = route('/' => sub { return $_[0]->text('home') });
+my $leaf = route('/' => sub { return PAGI::Response::Text->new('home') });
 my $factory = sub { my ($inner) = @_; return $inner };
 my $bare_configured = ComposeConfiguredMiddleware->new;
 my $mw = middleware('RequestId', header => 'X-Request-ID');
@@ -69,7 +72,9 @@ is(refaddr($stored->[3]), refaddr($mw),
 is(refaddr($composition->lifespan->{startup}), refaddr($startup), 'callback identity is retained');
 ok(!overload::Method($composition, '&{}'), 'composition has no coderef overload');
 
-push @$routes, route('/mutated' => sub { return $_[0]->text('bad') });
+push @$routes, route('/mutated' => sub {
+    return PAGI::Response::Text->new('bad');
+});
 push @$middleware, middleware(sub { return $_[0] });
 $lifespan->{shutdown} = sub { return };
 push @{$composition->routes}, $leaf;
@@ -88,6 +93,14 @@ is(refaddr($function_form->app), refaddr($app), 'functional form retains app ide
 is($object_form->routes, undef, 'routes are absent in app mode');
 is($object_form->middleware, [], 'middleware defaults empty');
 is($object_form->lifespan, undef, 'lifespan defaults absent');
+
+my $component_app = DeferredComponentCheck->new;
+$DeferredComponentCheck::CALLS = 0;
+my $component_form = compose(app => $component_app);
+is(refaddr($component_form->app), refaddr($component_app),
+    'instantiated app object identity is retained');
+is($DeferredComponentCheck::CALLS, 0,
+    'instantiated app object is not compiled at construction');
 
 my $object_without_wrap = bless {}, 'ComposeObjectWithoutWrap';
 
@@ -108,9 +121,10 @@ my @invalid = (
         qr/unknown compose option 'server_error'/],
     ['missing target', [], qr/exactly one of routes or app/],
     ['both targets', [routes => [], app => $app], qr/exactly one of routes or app/],
-    ['undefined app', [app => undef], qr/compose app must be defined/],
-    ['unblessed app reference', [app => []], qr/coderef, object, or class name/],
-    ['invalid class name', [app => 'not-a-package'], qr/coderef, object, or class name/],
+    ['undefined app', [app => undef], qr/compose app must be a coderef or instantiated object with to_app/],
+    ['unblessed app reference', [app => []], qr/compose app must be a coderef or instantiated object with to_app/],
+    ['app package string', [app => 'Local::App'], qr/compose app must be a coderef or instantiated object with to_app/],
+    ['object without to_app', [app => bless({}, 'ComposeObjectWithoutToApp')], qr/compose app must be a coderef or instantiated object with to_app/],
     ['routes not array', [routes => {}], qr/routes must contain PAGI::Routing nodes/],
     ['invalid route member', [routes => [{}]], qr/routes must contain PAGI::Routing nodes/],
     ['middleware not array', [routes => [], middleware => {}], qr/middleware must be an arrayref/],
@@ -146,8 +160,7 @@ for my $case (@invalid) {
     like(dies { PAGI::Compose->new(@$args) }, $pattern, $label);
 }
 
-my $deferred = compose(app => DeferredComponentCheck->new);
-isa_ok($deferred, ['PAGI::Compose'], 'object capability is deferred to compilation');
-ok($deferred->can('to_app'), 'description exposes the explicit compile boundary');
+isa_ok($component_form, ['PAGI::Compose'], 'object capability is deferred to compilation');
+ok($component_form->can('to_app'), 'description exposes the explicit compile boundary');
 
 done_testing;

@@ -10,8 +10,10 @@ use lib "$Bin/lib";
 use ComposeTest qw(scope capture_send);
 use PAGI::Compose qw(compose);
 use PAGI::Exception::IncompleteResponse;
-use PAGI::Routing qw(router route mount middleware);
-use PAGI::Routing::Trace;
+use PAGI::Response::Text ();
+use PAGI::Routing qw(router route mount);
+use PAGI::Test::Client;
+use PAGI::Utils qw(as_app);
 
 sub run_request {
     my ($app, $request_scope) = @_;
@@ -81,24 +83,41 @@ sub assert_pages_error {
     }
 }
 
+sub assert_client_pages_error {
+    my ($label, $response, $status, $title, $content_type) = @_;
+    is($response->status, $status, "$label status is $status");
+    is($response->content_type, $content_type,
+        "$label uses its negotiated Pages representation");
+    if ($content_type eq 'application/problem+json') {
+        is($response->json->{status}, $status,
+            "$label problem status matches the wire");
+        is($response->json->{title}, $title,
+            "$label problem title is semantic");
+    }
+    else {
+        like($response->text, qr/\Q$status\E\s+\Q$title\E/,
+            "$label body contains semantic status and title");
+    }
+}
+
 sub route_set {
     return [
-        route('/items' => sub { return $_[0]->text('get') }, methods => 'GET'),
-        route('/items' => sub { return $_[0]->text('post') }, methods => 'POST'),
+        route('/items' => sub { return PAGI::Response::Text->new('get') }, methods => 'GET'),
+        route('/items' => sub { return PAGI::Response::Text->new('post') }, methods => 'POST'),
         route('/explicit/404' => sub {
-            return $_[0]->text('application 404', status => 404);
+            return PAGI::Response::Text->new('application 404', status => 404);
         }),
         route('/explicit/405' => sub {
-            return $_[0]->text('application 405', status => 405);
+            return PAGI::Response::Text->new('application 405', status => 405);
         }),
         route('/explicit/406' => sub {
-            return $_[0]->text('application 406', status => 406);
+            return PAGI::Response::Text->new('application 406', status => 406);
         }),
         route('/explicit/415' => sub {
-            return $_[0]->text('application 415', status => 415);
+            return PAGI::Response::Text->new('application 415', status => 415);
         }),
         route('/explicit/500' => sub {
-            return $_[0]->text('application 500', status => 500);
+            return PAGI::Response::Text->new('application 500', status => 500);
         }),
     ];
 }
@@ -111,45 +130,35 @@ sub composition_modes {
     );
 }
 
-subtest 'automatic route outcomes cover both Compose target modes' => sub {
+subtest 'Compose routes receive ordinary Router HTTP outcomes' => sub {
     local $ENV{PAGI_ENV} = 'production';
-    for my $mode (composition_modes(route_set())) {
-        my ($label, $app) = @$mode;
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
 
-        my ($full, $full_warnings, $full_error) = run_request(
-            $app, scope(path => '/items', method => 'GET'),
-        );
-        is($full_error, undef, "$label FULL response completes");
-        is($full_warnings, [], "$label FULL response does not warn");
-        assert_rendered("$label FULL", $full, 200, 'get');
+    my $empty = PAGI::Test::Client->new(
+        app => compose(routes => [])->to_app,
+    )->get('/missing', headers => { Accept => 'application/problem+json' });
+    assert_client_pages_error(
+        'empty routes Router default', $empty, 404, 'Not Found',
+        'application/problem+json',
+    );
 
-        my ($none, $none_warnings, $none_error) = run_request(
-            $app, scope(
-                path => '/missing',
-                headers => [['Accept' => 'application/problem+json']],
-            ),
-        );
-        is($none_error, undef, "$label none outcome completes");
-        is($none_warnings, [], "$label none outcome does not warn");
-        assert_pages_error(
-            "$label none", $none, 404, 'Not Found', 'application/problem+json',
-        );
+    my $client = PAGI::Test::Client->new(
+        app => compose(routes => route_set())->to_app,
+    );
+    my $full = $client->get('/items');
+    is($full->status, 200, 'selected route status is retained');
+    is($full->text, 'get', 'selected route body is retained');
 
-        my ($partial, $partial_warnings, $partial_error) = run_request(
-            $app, scope(
-                path => '/items', method => 'DELETE',
-                headers => [['Accept' => 'text/plain']],
-            ),
-        );
-        is($partial_error, undef, "$label partial outcome completes");
-        is($partial_warnings, [], "$label partial outcome does not warn");
-        assert_pages_error(
-            "$label partial", $partial, 405, 'Method Not Allowed',
-            'text/plain; charset=utf-8',
-        );
-        is(header_values(starts($partial)->[0], 'Allow'), ['GET, HEAD, POST'],
-            "$label partial outcome carries the deterministic union Allow");
-    }
+    my $partial = $client->delete('/items',
+        headers => { Accept => 'text/plain' });
+    assert_client_pages_error(
+        'Router method mismatch', $partial, 405, 'Method Not Allowed',
+        'text/plain; charset=utf-8',
+    );
+    is($partial->header('Allow'), 'GET, HEAD, POST',
+        'Router 405 carries the deterministic union Allow');
+    is(\@warnings, [], 'ordinary Router outcomes do not warn');
 };
 
 subtest 'explicit matched application responses pass unchanged in both target modes' => sub {
@@ -167,42 +176,50 @@ subtest 'explicit matched application responses pass unchanged in both target mo
                 "application $status",
             );
             is(header_values(starts($events)->[0], 'Allow'), [],
-                "$label explicit $status is not fallback-normalized");
+                "$label explicit $status is not routing-normalized");
         }
     }
 };
 
-subtest 'silent native raw and opaque targets become production-safe 500' => sub {
+subtest 'selected silent targets become production-safe 500 through Test Client' => sub {
     local $ENV{PAGI_ENV} = 'production';
     my @cases = (
         ['native app', compose(app => sub { return })->to_app, scope()],
         [
             'selected raw route',
-            compose(routes => [route('/raw', raw => sub { return })])->to_app,
+            compose(routes => [
+                route('/raw' => as_app(sub { return })),
+            ])->to_app,
             scope(path => '/raw'),
         ],
         [
             'selected opaque Mount',
-            compose(routes => [mount('/opaque' => sub { return })])->to_app,
+            compose(routes => [mount('/opaque', app => sub { return })])->to_app,
             scope(path => '/opaque/child'),
         ],
     );
 
     for my $case (@cases) {
         my ($label, $app, $request_scope) = @$case;
-        my ($events, $warnings, $error) = run_request($app, $request_scope);
-        is($error, undef, "$label incompletion is contained");
-        assert_pages_error(
-            $label, $events, 500, 'Internal Server Error',
+        my @warnings;
+        my $response;
+        {
+            local $SIG{__WARN__} = sub { push @warnings, @_ };
+            $response = PAGI::Test::Client->new(app => $app)->get(
+                $request_scope->{path} // '/',
+            );
+        }
+        assert_client_pages_error(
+            $label, $response, 500, 'Internal Server Error',
             'text/html; charset=utf-8',
         );
-        is(scalar @$warnings, 1, "$label is reported once");
-        like($warnings->[0], qr/^PAGI application error: HTTP application completed /,
+        is(scalar @warnings, 1, "$label is reported once");
+        like($warnings[0], qr/^PAGI application error: HTTP application completed /,
             "$label reports the guard failure");
     }
 };
 
-subtest 'application throws failed Futures and renderer failures become one 500' => sub {
+subtest 'thrown and failed-Future targets become one Test Client 500' => sub {
     local $ENV{PAGI_ENV} = 'production';
     my @cases = (
         ['database-like throw', compose(app => sub {
@@ -211,93 +228,65 @@ subtest 'application throws failed Futures and renderer failures become one 500'
         ['database-like failed Future', compose(app => sub {
             return Future->fail("DB transaction failed\n");
         })->to_app, scope(), qr/DB transaction failed/],
-        [
-            'author fallback renderer throw',
-            compose(
-                routes => [],
-                middleware => [middleware('Routing::NotFound', handler => sub {
-                    die "fallback renderer failed\n";
-                })],
-            )->to_app,
-            scope(path => '/missing'),
-            qr/fallback renderer failed/,
-        ],
     );
 
     for my $case (@cases) {
         my ($label, $app, $request_scope, $warning_pattern) = @$case;
-        my ($events, $warnings, $error) = run_request($app, $request_scope);
-        is($error, undef, "$label is contained");
-        assert_pages_error(
-            $label, $events, 500, 'Internal Server Error',
+        my (@warnings, $response);
+        {
+            local $SIG{__WARN__} = sub { push @warnings, @_ };
+            $response = PAGI::Test::Client->new(app => $app)->get('/');
+        }
+        assert_client_pages_error(
+            $label, $response, 500, 'Internal Server Error',
             'text/html; charset=utf-8',
         );
-        unlike(body_text($events), $warning_pattern,
+        unlike($response->text, $warning_pattern,
             "$label production response does not expose the original failure");
-        is(scalar @$warnings, 1, "$label is reported once");
-        like($warnings->[0], $warning_pattern, "$label reports the original failure");
+        is(scalar @warnings, 1, "$label is reported once");
+        like($warnings[0], $warning_pattern, "$label reports the original failure");
     }
 };
 
-subtest 'a fresh shallow routing trace is installed inside the HEAD boundary' => sub {
-    local $ENV{PAGI_ENV} = 'production';
-    my ($incoming_scope, $incoming_trace) =
-        PAGI::Routing::Trace->_fresh_http_scope(scope(path => '/complete'));
-    my $state = { request => 1 };
-    $incoming_scope->{state} = $state;
-    my ($seen_scope, $seen_trace, $seen_state);
-    my $observer = sub {
-        my ($inner) = @_;
-        return sub {
-            my ($request_scope, $receive, $send) = @_;
-            $seen_scope = $request_scope;
-            $seen_trace = $request_scope->{'pagi.routing.trace'};
-            $seen_state = $request_scope->{state};
-            return $inner->(@_);
-        };
-    };
+subtest 'Compose does not reinterpret or replace routing metadata' => sub {
+    my $routing_metadata = { selected => '/complete', captures => { id => 7 } };
+    my $incoming_scope = scope(path => '/complete');
+    $incoming_scope->{'pagi.routing'} = $routing_metadata;
+    my ($seen_scope, $seen_metadata);
     my $app = compose(
         app => sub {
             my ($request_scope, $receive, $send) = @_;
+            $seen_scope = $request_scope;
+            $seen_metadata = $request_scope->{'pagi.routing'};
             $send->({ type => 'http.response.start', status => 204, headers => [] })->get;
             return $send->({ type => 'http.response.body', body => '', more => 0 });
         },
-        middleware => [$observer],
     )->to_app;
     my ($events, $warnings, $error) = run_request($app, $incoming_scope);
-    is($error, undef, 'request completes through the fresh trace scope');
-    is($warnings, [], 'trace preparation does not warn');
-    isnt(refaddr($seen_scope), refaddr($incoming_scope),
-        'automatic boundary installs a shallow request scope');
-    isnt(refaddr($seen_trace), refaddr($incoming_trace),
-        'incoming compatible first-party Trace is replaced');
-    is(refaddr($seen_state), refaddr($state),
-        'shallow scope preparation preserves nested request state identity');
-    is(refaddr($incoming_scope->{'pagi.routing.trace'}), refaddr($incoming_trace),
-        'the caller-owned scope is not mutated');
-    assert_rendered('fresh trace complete response', $events, 204, '');
+    is($error, undef, 'request with routing metadata completes');
+    is($warnings, [], 'routing metadata does not trigger diagnostics');
+    is(refaddr($seen_scope), refaddr($incoming_scope),
+        'non-HEAD scope reaches the direct app by identity');
+    is(refaddr($seen_metadata), refaddr($routing_metadata),
+        'routing metadata reaches the app by identity');
+    assert_rendered('metadata-preserving complete response', $events, 204, '');
 };
 
 subtest 'invalid PAGI_ENV is contained only when an error path consults it' => sub {
     local $ENV{PAGI_ENV} = 'invalid-compose-environment';
 
     my $routing = compose(routes => [
-        route('/known' => sub { return $_[0]->text('known') }),
+        route('/known' => sub { return PAGI::Response::Text->new('known') }),
     ])->to_app;
     my ($route_events, $route_warnings, $route_error) = run_request(
         $routing, scope(path => '/missing'),
     );
-    is($route_error, undef, 'Router observation environment failure is contained');
+    is($route_error, undef, 'Router default does not consult the environment');
     assert_pages_error(
-        'invalid environment Router observation', $route_events, 500,
-        'Internal Server Error', 'text/html; charset=utf-8',
+        'invalid environment Router default', $route_events, 404,
+        'Not Found', 'text/html; charset=utf-8',
     );
-    is(scalar @$route_warnings, 2,
-        'Router observation and resolver failures are both reported');
-    like($route_warnings->[0], qr/Invalid PAGI_ENV 'invalid-compose-environment'/,
-        'Router observation failure is reported');
-    like($route_warnings->[1], qr/Invalid PAGI_ENV 'invalid-compose-environment'/,
-        'failsafe resolver failure is reported');
+    is($route_warnings, [], 'ordinary Router 404 does not warn');
 
     my $throwing = compose(app => sub { die "native application failed\n" })->to_app;
     my ($throw_events, $throw_warnings, $throw_error) = run_request($throwing, scope());
@@ -344,6 +333,23 @@ subtest 'post-start incomplete response is reported and rethrown without replace
     is(scalar @$warnings, 1, 'post-start incompletion is reported once');
     like($warnings->[0], qr/^PAGI application error: HTTP application completed after response start/,
         'internal reporter receives the typed guard error');
+
+    my (@client_warnings, $client_error);
+    {
+        local $SIG{__WARN__} = sub { push @client_warnings, @_ };
+        eval {
+            PAGI::Test::Client->new(
+                app => $app,
+                raise_app_exceptions => 1,
+            )->get('/');
+            1;
+        } or $client_error = $@;
+    }
+    isa_ok($client_error, ['PAGI::Exception::IncompleteResponse']);
+    is($client_error->stage, 'after_start',
+        'Test Client receives the rethrown post-start exception');
+    is(scalar @client_warnings, 1,
+        'Test Client path reports the post-start failure once');
 };
 
 subtest 'body before start becomes one clean automatic 500 response' => sub {

@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 use PAGI::Routing::HeadBoundary;
 use PAGI::Test::Client;
+use PAGI::Response::Text ();
 
 sub capture_send {
     my @events;
@@ -59,6 +60,50 @@ subtest 'HEAD forwards metadata and emits one empty terminal body' => sub {
         { type => 'http.response.body', body => '', more => 0 },
         $other,
     ], 'nonterminal/file bytes, trailers, and late bodies never reach transport');
+};
+
+subtest 'middleware inside the final HEAD edge may finish response metadata first' => sub {
+    my ($transport, $events) = capture_send();
+    my (undef, $wire_send) = PAGI::Routing::HeadBoundary->prepare(
+        { type => 'http', method => 'HEAD' }, $transport,
+    );
+    my $middleware_send = sub {
+        my ($event) = @_;
+        if (($event->{type} // '') eq 'http.response.start') {
+            $event = {
+                %$event,
+                headers => [@{$event->{headers} // []},
+                    ['content-length', 14]],
+            };
+        }
+        return Future->wrap($wire_send->($event));
+    };
+
+    $middleware_send->({
+        type => 'http.response.start', status => 404, headers => [],
+    })->get;
+    $middleware_send->({
+        type => 'http.response.body', body => 'representation', more => 0,
+    })->get;
+
+    is($events, [
+        {
+            type => 'http.response.start', status => 404,
+            headers => [['content-length', 14]],
+        },
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'the final edge preserves middleware-derived headers and suppresses only wire payload');
+};
+
+subtest 'a component response emits through the full triplet inside HEAD suppression' => sub {
+    my ($transport, $events) = capture_send();
+    my ($scope, $send) = PAGI::Routing::HeadBoundary->prepare(
+        { type => 'http', method => 'HEAD' }, $transport,
+    );
+    my $receive = sub { return Future->done({ type => 'http.request', body => '', more => 0 }) };
+    PAGI::Response::Text->new('component')->to_app->($scope, $receive, $send)->get;
+    is($events->[-1], { type => 'http.response.body', body => '', more => 0 },
+        'component output reaches the same final HEAD suppression edge');
 };
 
 like(

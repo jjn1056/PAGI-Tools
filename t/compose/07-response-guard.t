@@ -6,6 +6,7 @@ use Scalar::Util qw(blessed refaddr);
 use FindBin qw($Bin);
 use lib "$Bin/lib";
 use ComposeTest qw(scope capture_send);
+use PAGI::Compose qw(compose);
 use PAGI::Compose::ResponseGuard;
 use PAGI::Exception::IncompleteResponse;
 
@@ -260,15 +261,15 @@ subtest 'non-HTTP scopes pass all channels through by identity' => sub {
         'scope receive and send identities are unchanged');
 };
 
-subtest 'HTTP lifecycle observation is lexical under interleaving' => sub {
+subtest 'compiled Compose response-guard state is lexical under interleaving' => sub {
     my (%send_for, %done_for);
-    my $app = PAGI::Compose::ResponseGuard->wrap(sub {
+    my $app = compose(app => sub {
         my ($request_scope, $receive, $send) = @_;
         my $id = $request_scope->{path};
         $send_for{$id} = $send;
         $done_for{$id} = Future->new;
         return $done_for{$id};
-    });
+    })->to_app;
     my ($transport_one, $events_one) = capture_send();
     my ($transport_two, $events_two) = capture_send();
     my $one = $app->(
@@ -287,17 +288,23 @@ subtest 'HTTP lifecycle observation is lexical under interleaving' => sub {
     $done_for{'/one'}->done;
     $one->get;
 
-    $done_for{'/two'}->done;
-    my $two_error;
-    eval { $two->get; 1 } or $two_error = $@;
+    my @warnings;
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        $done_for{'/two'}->done;
+        $two->get;
+    }
     is($events_one, [
         { type => 'http.response.start', status => 200, headers => [] },
         { type => 'http.response.body', body => 'one', more => 0 },
     ], 'first request completes with its own observed lifecycle');
-    is($events_two, [], 'second request receives no leaked response events');
-    isa_ok($two_error, ['PAGI::Exception::IncompleteResponse']);
-    is($two_error->stage, 'before_start',
-        'second request retains independent incomplete state');
+    is($events_two->[0]{status}, 500,
+        'silent second request receives its own safe 500');
+    is(scalar(grep { ($_->{type} // '') eq 'http.response.start' } @$events_two),
+        1, 'second request receives exactly one independent response start');
+    is(scalar @warnings, 1, 'only the silent request is reported');
+    like($warnings[0], qr/completed without starting a response/,
+        'second request retains its independent before-start stage');
 };
 
 done_testing;

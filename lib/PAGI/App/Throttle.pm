@@ -6,6 +6,7 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -103,7 +104,8 @@ sub to_app {
                     . "configure on_limit for scope type '$type'"
                     unless $type eq 'http';
                 await $self->_send_rate_limited(
-                    $scope, $send, $retry_after, $now, $burst, $add_headers,
+                    $scope, $receive, $send,
+                    $retry_after, $now, $burst, $add_headers,
                 );
             }
         }
@@ -111,7 +113,8 @@ sub to_app {
 }
 
 async sub _send_rate_limited {
-    my ($self, $scope, $send, $retry_after, $now, $burst, $add_headers) = @_;
+    my ($self, $scope, $receive, $send,
+        $retry_after, $now, $burst, $add_headers) = @_;
 
     my @headers;
     if ($add_headers) {
@@ -122,11 +125,10 @@ async sub _send_rate_limited {
     }
 
     my $response = PAGI::Pages->too_many_requests(
-        $scope,
         retry_after => $retry_after,
         headers     => \@headers,
     );
-    await Future->wrap($response->respond($send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 # Class method to reset a key's bucket

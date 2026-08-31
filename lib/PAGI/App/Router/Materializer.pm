@@ -25,7 +25,7 @@ sub materialize {
             || $target->isa('PAGI::App::Router'));
     my $is_endpoint = blessed($target)
         && $target->isa('PAGI::Endpoint::Router');
-    croak 'router target must be an immutable Router, App Router, or Endpoint Router'
+    croak 'snapshot target must be an immutable Router or mutable Router frontend'
         unless ($is_app || $is_endpoint)
             && $target->can('_materialize_with');
 
@@ -97,12 +97,13 @@ PAGI::App::Router::Materializer - Root-local mutable routing snapshot materializ
 =head1 DESCRIPTION
 
 This private helper owns active ancestry and completed mutable frontend
-identities for one root snapshot operation. Immutable Routers pass through by
-identity. A completed mutable frontend is reused by sibling placements, while
-an active revisit fails with its declaration placement chain. Completed
-identities first created beneath a failed materialization are rolled back;
-identities completed before that operation remain reusable. All state is
-discarded with the Materializer after the snapshot is built and never enters
-a routing description or request scope.
+identities for one mutable frontend snapshot operation. Immutable Routers pass
+through by identity. App Router callback children use the same identity cache
+as explicit App or Endpoint Router roots. A completed frontend is reused by
+defensive sibling references, while an active malformed revisit fails with its
+declaration placement chain. Completed identities first created beneath a
+failed materialization are rolled back; identities completed before that
+operation remain reusable. All state is discarded after the snapshot is built
+and never enters a routing description or request scope.
 
 =cut

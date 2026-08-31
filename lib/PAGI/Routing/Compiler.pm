@@ -5,21 +5,18 @@ use warnings;
 use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
-use Scalar::Util qw(blessed);
-use PAGI::Context;
+use Scalar::Util qw(blessed refaddr);
+use PAGI::Pages ();
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Resolver ();
+use PAGI::SSE;
 use PAGI::Utils ();
+use PAGI::Utils::Scope ();
+use PAGI::WebSocket;
 
-my $TRACE_RECORDER_FOR;
-my $TRACE_PARENT_KEY = "\0PAGI::Routing::Trace::parent";
-BEGIN {
-    require PAGI::Routing::Trace;
-    PAGI::Routing::Trace->_claim_compiler_recorder_factory(sub {
-        ($TRACE_RECORDER_FOR) = @_;
-    });
-}
+my $ALLOW_STATE_KEY = "\0PAGI::Routing::Compiler::allow";
+my $ALLOW_STATE_TOKEN = sub { return };
 
 sub compile {
     my ($class, $description) = @_;
@@ -39,6 +36,44 @@ sub compile {
     return $class->_compile_router($description);
 }
 
+sub _authoritative_allow_send {
+    my ($class, $state, $send) = @_;
+
+    return sub {
+        my ($event) = @_;
+        if (ref($event) eq 'HASH'
+                && ($event->{type} // '') eq 'http.response.start'
+                && ($event->{status} // 0) == 405
+                && $state->{router_generated}) {
+            my @headers = grep {
+                !(ref($_) eq 'ARRAY'
+                    && defined($_->[0])
+                    && lc($_->[0]) eq 'allow')
+            } @{$event->{headers} // []};
+            push @headers, [
+                'allow',
+                join(', ', @{$state->{allowed_methods} // []}),
+            ];
+            $event = {
+                %$event,
+                headers => \@headers,
+            };
+            $state->{router_generated} = 0;
+        }
+        return Future->wrap($send->($event));
+    };
+}
+
+sub _allow_state {
+    my ($class, $scope) = @_;
+    return unless ref($scope) eq 'HASH';
+    my $state = $scope->{$ALLOW_STATE_KEY};
+    return unless ref($state) eq 'HASH';
+    return unless ref($state->{token})
+        && refaddr($state->{token}) == refaddr($ALLOW_STATE_TOKEN);
+    return $state;
+}
+
 sub _compile_router {
     my ($class, $router) = @_;
 
@@ -56,37 +91,81 @@ sub _compile_router {
 
         my ($head_scope, $wire_send)
             = PAGI::Routing::HeadBoundary->prepare($scope, $send);
-        my $routing_scope = $class->_routing_scope($head_scope, $resolver);
-        my ($trace_scope) = PAGI::Routing::Trace->_ensure_http_scope(
-            $routing_scope,
+        my $allow_state = {
+            token            => $ALLOW_STATE_TOKEN,
+            router_generated => 0,
+            allowed_methods  => undef,
+        };
+        my $authority_scope = {
+            %$head_scope,
+            $ALLOW_STATE_KEY => $allow_state,
+        };
+        my $authority_send = $class->_authoritative_allow_send(
+            $allow_state,
+            $wire_send,
+        );
+        my $routing_scope = $class->_routing_scope(
+            $authority_scope,
+            $resolver,
         );
 
-        my $returned = $app->($trace_scope, $receive, $wire_send);
+        my $returned = $app->($routing_scope, $receive, $authority_send);
         await Future->wrap($returned);
         return;
     };
 }
 
 sub _compile_router_body {
-    my ($class, $router, $resolver, $location_prefix) = @_;
+    my ($class, $router, $resolver, $location_prefix, $enter_child) = @_;
+
+    $location_prefix = [] unless $enter_child;
+
+    my $http_default = defined $router->http_default
+        ? PAGI::Utils::to_app($router->http_default)
+        : PAGI::Utils::to_app(PAGI::Pages->not_found);
 
     my $dispatcher = $class->_compile_dispatcher(
         $router->routes,
         $resolver,
         $location_prefix,
-        'router',
+        $http_default,
     );
 
-    return PAGI::Routing::Middleware->_wrap_descriptors(
+    my $app = PAGI::Routing::Middleware->_wrap_descriptors(
         $router->middleware,
         $dispatcher,
     );
+
+    return $app unless $enter_child;
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        my $child_scope = $class->_enter_child_routing_scope(
+            $scope,
+            $resolver,
+        );
+        await Future->wrap($app->($child_scope, $receive, $send));
+        return;
+    };
 }
 
 sub _compile_dispatcher {
-    my ($class, $nodes, $resolver, $location_prefix, $frame_kind) = @_;
+    my ($class, $nodes, $resolver, $location_prefix, $http_default) = @_;
 
     $location_prefix ||= [];
+
+    my $method_not_allowed = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $state = $class->_allow_state($scope);
+        croak 'Router authoritative Allow state is missing'
+            unless $state;
+        await PAGI::Utils::invoke_app(
+            PAGI::Pages->method_not_allowed(
+                allow => $state->{allowed_methods},
+            ),
+            $scope, $receive, $send,
+        );
+        return;
+    };
 
     my @compiled_entries;
     for my $index (0 .. $#$nodes) {
@@ -109,40 +188,16 @@ sub _compile_dispatcher {
 
         next unless $node->isa('PAGI::Routing::Mount');
 
-        my $mounted_app;
-        if ($node->is_raw) {
-            my $target = PAGI::Utils::to_app($node->target);
-            $mounted_app = async sub {
-                my ($scope, $receive, $send) = @_;
-                my $returned = $target->($scope, $receive, $send);
-                await Future->wrap($returned);
-                return;
-            };
-        }
-        elsif (defined $node->router) {
-            $mounted_app = $class->_compile_router_body(
-                $node->router,
-                $resolver,
-                \@location,
-            );
-        }
-        else {
-            $mounted_app = $class->_compile_dispatcher(
-                $node->routes,
-                $resolver,
-                \@location,
-                'inline',
-            );
-        }
-
-        $mounted_app = PAGI::Routing::Middleware->_wrap_descriptors(
-            $node->middleware,
-            $mounted_app,
-        );
         push @compiled_entries, {
             mount => $node,
             metadata => $metadata,
-            app   => $mounted_app,
+            inspectable_router => blessed($node->app)
+                && $node->app->isa('PAGI::Routing::Router') ? 1 : 0,
+            app   => $class->_compile_mounted_app(
+                $node,
+                $resolver,
+                \@location,
+            ),
         };
     }
 
@@ -166,81 +221,69 @@ sub _compile_dispatcher {
                 return;
             }
 
-            await $class->_send_protocol_not_found($scope, $send);
+            await Future->wrap(
+                $class->_send_protocol_not_found($scope, $send),
+            );
             return;
         }
 
-        my $trace = $scope->{'pagi.routing.trace'};
-        my $recorder = $TRACE_RECORDER_FOR->($trace);
-        my $parent_link = delete $scope->{$TRACE_PARENT_KEY};
-        my $frame_id = $recorder->_begin_frame(
-            { kind => $frame_kind // 'inline' },
-            $parent_link,
+        my $decision = $class->_select_http(
+            \@compiled_entries,
+            $scope,
         );
 
-        my $decision;
-        my $ok = eval {
-            $decision = $class->_select_http(
-                \@compiled_entries,
-                $scope,
-                $recorder,
-                $frame_id,
+        if ($decision->{kind} eq 'full') {
+            my $returned = $decision->{app}->(
+                $decision->{scope},
+                $receive,
+                $send,
             );
-
-            if ($decision->{kind} eq 'full') {
-                my $returned = $decision->{app}->(
-                    $decision->{scope},
-                    $receive,
-                    $send,
-                );
-                await Future->wrap($returned);
-            }
-            1;
-        };
-        unless ($ok) {
-            my $error = $@;
-            $recorder->_complete_exception($frame_id);
-            die $error;
+            await Future->wrap($returned);
+            return;
         }
 
         if ($decision->{kind} eq 'partial') {
-            $recorder->_complete_decline($frame_id, {
-                path_matched => 1,
-                method_matched => 0,
-                allowed_methods => $decision->{allowed_methods},
-            });
+            my $state = $class->_allow_state($scope);
+            croak 'Router authoritative Allow state is missing'
+                unless $state;
+            $state->{router_generated} = 1;
+            $state->{allowed_methods} = [@{$decision->{allowed_methods}}];
+
+            await Future->wrap(
+                $method_not_allowed->($scope, $receive, $send),
+            );
             return;
         }
-        if ($decision->{kind} eq 'none') {
-            $recorder->_complete_decline($frame_id, {
-                path_matched => 0,
-                method_matched => 0,
-                allowed_methods => [],
-            });
-            return;
-        }
-        if (($decision->{_trace_selection} // '') eq 'child') {
-            delete $decision->{scope}{$TRACE_PARENT_KEY};
-            my $completed = eval {
-                $recorder->_complete_child(
-                    $frame_id,
-                    $decision->{_trace_parent_link},
-                );
-                1;
-            };
-            unless ($completed) {
-                my $error = $@;
-                die $error
-                    unless $error =~ /\Arouting parent link was not consumed by a child\b/;
-                $recorder->_complete_success($frame_id);
-            }
-            return;
-        }
-        $recorder->_complete_success($frame_id);
+
+        await Future->wrap($http_default->($scope, $receive, $send));
         return;
     };
 
     return $dispatch;
+}
+
+sub _compile_mounted_app {
+    my ($class, $mount, $root_resolver, $location) = @_;
+
+    my $base = $mount->app;
+    my $app = blessed($base) && $base->isa('PAGI::Routing::Router')
+        ? $class->_compile_router_body(
+            $base,
+            $root_resolver,
+            $location,
+            1,
+        )
+        : PAGI::Utils::to_app($base);
+    my $awaiting = async sub {
+        my ($scope, $receive, $send) = @_;
+        await Future->wrap($app->($scope, $receive, $send));
+        return;
+    };
+
+    return PAGI::Routing::Middleware->_wrap_descriptors(
+        $mount->middleware,
+        $awaiting,
+    );
 }
 
 async sub _send_protocol_not_found {
@@ -249,43 +292,56 @@ async sub _send_protocol_not_found {
 
     if ($type eq 'websocket'
             && !exists(($scope->{extensions} // {})->{'websocket.http.response'})) {
-        await $send->({ type => 'websocket.close' });
+        await Future->wrap($send->({ type => 'websocket.close' }));
         return;
     }
 
     my $prefix = "$type.http.response";
-    await $send->({
+    await Future->wrap($send->({
         type    => "$prefix.start",
         status  => 404,
         headers => [['content-type', 'text/plain']],
-    });
-    await $send->({
+    }));
+    await Future->wrap($send->({
         type => "$prefix.body",
         body => 'Not Found',
         more => 0,
-    });
+    }));
     return;
 }
 
 sub _compile_protocol_leaf {
     my ($class, $route) = @_;
 
+    my $endpoint = $route->endpoint;
     my $app;
-    if ($route->is_raw) {
-        my $raw_app = PAGI::Utils::to_app($route->target);
+    if (ref($endpoint) ne 'CODE') {
+        my $compiled = PAGI::Utils::to_app($endpoint);
         $app = async sub {
             my ($scope, $receive, $send) = @_;
-            my $returned = $raw_app->($scope, $receive, $send);
+            my $returned = $compiled->($scope, $receive, $send);
             await Future->wrap($returned);
             return;
         };
     }
     else {
-        my $handler = $route->target;
+        my $handler = $endpoint;
+        my $kind = $route->kind;
         $app = async sub {
             my ($scope, $receive, $send) = @_;
-            my $context = PAGI::Context->new($scope, $receive, $send);
-            my $returned = $handler->($context);
+            my $cache_key = $kind eq 'websocket'
+                ? 'pagi.websocket'
+                : 'pagi.sse';
+            my $expected_class = $kind eq 'websocket'
+                ? 'PAGI::WebSocket'
+                : 'PAGI::SSE';
+            PAGI::Utils::Scope::_compatible_cached_scope_object(
+                $scope, $cache_key, $expected_class,
+            );
+            my $protocol = $kind eq 'websocket'
+                ? PAGI::WebSocket->new($scope, $receive, $send)
+                : PAGI::SSE->new($scope, $receive, $send);
+            my $returned = $handler->($protocol);
             await Future->wrap($returned);
             return;
         };
@@ -300,19 +356,16 @@ sub _compile_protocol_leaf {
 sub _compile_http_leaf {
     my ($class, $route) = @_;
 
-    my $app;
-    if ($route->is_raw) {
-        my $raw_app = PAGI::Utils::to_app($route->target);
-        $app = async sub {
-            my ($scope, $receive, $send) = @_;
-            my $returned = $raw_app->($scope, $receive, $send);
-            await Future->wrap($returned);
-            return;
-        };
-    }
-    else {
-        $app = $class->_compile_http_handler($route->target);
-    }
+    my $endpoint = $route->endpoint;
+    my $compiled = ref($endpoint) eq 'CODE'
+        ? PAGI::Utils::request_response($endpoint)->to_app
+        : PAGI::Utils::to_app($endpoint);
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        my $returned = $compiled->($scope, $receive, $send);
+        await Future->wrap($returned);
+        return;
+    };
 
     return PAGI::Routing::Middleware->_wrap_descriptors(
         $route->middleware,
@@ -320,25 +373,8 @@ sub _compile_http_leaf {
     );
 }
 
-sub _compile_http_handler {
-    my ($class, $handler) = @_;
-
-    return async sub {
-        my ($scope, $receive, $send) = @_;
-        my $context = PAGI::Context->new($scope, $receive, $send);
-        my $returned = $handler->($context);
-        my $result = await Future->wrap($returned);
-
-        croak 'handler did not return a response'
-            unless PAGI::Utils::is_response($result);
-
-        await $context->respond($result);
-        return;
-    };
-}
-
 sub _select_http {
-    my ($class, $compiled_entries, $scope, $recorder, $frame_id) = @_;
+    my ($class, $compiled_entries, $scope) = @_;
 
     my $path = defined $scope->{path} ? $scope->{path} : '/';
     my $method = uc(defined $scope->{method} ? $scope->{method} : '');
@@ -348,99 +384,54 @@ sub _select_http {
     for my $entry (@$compiled_entries) {
         if (my $mount = $entry->{mount}) {
             my $match = $mount->_pattern->match_mount($path);
-            $class->_record_trace_attempt(
-                $recorder,
-                $frame_id,
-                $entry,
-                defined($match) ? 1 : 0,
-                defined($match) ? 1 : 0,
-            );
             next unless defined $match;
 
-            $class->_record_mount_match(
-                $scope, $entry->{metadata}, $match->{captures},
-            );
-
             my $child_scope = $class->_mount_scope($scope, $match);
-            my $decision = {
+            if ($entry->{inspectable_router}) {
+                $class->_record_mount_match(
+                    $scope, $entry->{metadata}, $match->{captures},
+                );
+            }
+            else {
+                $class->_record_opaque_mount_match(
+                    $scope, $entry->{metadata}, $match->{captures},
+                );
+            }
+            return {
                 kind  => 'full',
                 app   => $entry->{app},
                 scope => $child_scope,
             };
-            if ($recorder) {
-                if ($mount->is_raw) {
-                    $recorder->_select_opaque($frame_id);
-                    $decision->{scope} = $class->_shield_trace_scope(
-                        $child_scope,
-                    );
-                    $decision->{_trace_selection} = 'opaque';
-                }
-                else {
-                    my $link = $recorder->_expect_child($frame_id);
-                    $decision->{scope} = {
-                        %$child_scope,
-                        $TRACE_PARENT_KEY => $link,
-                    };
-                    $decision->{_trace_selection} = 'child';
-                    $decision->{_trace_parent_link} = $link;
-                }
-            }
-            return $decision;
         }
 
         my $route = $entry->{route};
-        unless ($route->kind eq 'route') {
-            $class->_record_trace_attempt(
-                $recorder, $frame_id, $entry, 0, 0,
-            );
-            next;
-        }
+        next unless $route->kind eq 'route';
         my $captures = $route->_pattern->match_route($path);
         my $methods = $route->methods;
         my $method_matches = defined($captures)
             && (!ref($methods) && $methods eq '*'
             ? 1
             : grep { $_ eq $method } @$methods);
-        $class->_record_trace_attempt(
-            $recorder,
-            $frame_id,
-            $entry,
-            defined($captures) ? 1 : 0,
-            $method_matches ? 1 : 0,
-        );
         next unless defined $captures;
 
         if ($method_matches) {
+            my $path_params = $class->_merge_path_params(
+                $scope->{path_params},
+                $captures,
+                $path,
+            );
             $class->_record_leaf_match(
                 $scope, $entry->{metadata}, $captures,
             );
-            my %path_params = (
-                %{ref($scope->{path_params}) eq 'HASH' ? $scope->{path_params} : {}},
-                %$captures,
-            );
             my $matched_scope = {
                 %$scope,
-                path_params => \%path_params,
+                path_params => $path_params,
             };
-            my $decision = {
+            return {
                 kind => 'full',
                 app => $entry->{app},
                 scope => $matched_scope,
             };
-            if ($recorder) {
-                if ($route->is_raw) {
-                    $recorder->_select_opaque($frame_id);
-                    $decision->{scope} = $class->_shield_trace_scope(
-                        $matched_scope,
-                    );
-                    $decision->{_trace_selection} = 'opaque';
-                }
-                else {
-                    $recorder->_select_leaf($frame_id);
-                    $decision->{_trace_selection} = 'leaf';
-                }
-            }
-            return $decision;
         }
 
         for my $allowed (@$methods) {
@@ -457,42 +448,6 @@ sub _select_http {
     return { kind => 'none' };
 }
 
-sub _record_trace_attempt {
-    my ($class, $recorder, $frame_id, $entry, $path_matched,
-        $method_matched) = @_;
-    return unless $recorder;
-
-    my $metadata = ref($entry->{metadata}) eq 'HASH'
-        ? $entry->{metadata}
-        : {};
-    my $match = ref($metadata->{match}) eq 'HASH'
-        ? $metadata->{match}
-        : {};
-    my $candidate_kind = $entry->{mount}
-        ? 'mount'
-        : $entry->{route}->kind;
-    my $declaration = $entry->{mount} || $entry->{route};
-    $recorder->_attempt($frame_id, {
-        namespace      => $metadata->{logical_namespace},
-        pattern        => $declaration->path,
-        name           => $match->{name},
-        desc           => $match->{desc},
-        candidate_kind => $candidate_kind,
-        path_matched   => $path_matched ? 1 : 0,
-        method_matched => $method_matched ? 1 : 0,
-    });
-    return;
-}
-
-sub _shield_trace_scope {
-    my ($class, $scope) = @_;
-    return $scope unless (($scope->{type} // 'http') eq 'http');
-
-    my $child_scope = { %$scope };
-    delete $child_scope->{'pagi.routing.trace'};
-    return $child_scope;
-}
-
 sub _select_protocol {
     my ($class, $compiled_entries, $scope, $protocol) = @_;
 
@@ -502,14 +457,21 @@ sub _select_protocol {
             my $match = $mount->_pattern->match_mount($path);
             next unless defined $match;
 
-            $class->_record_mount_match(
-                $scope, $entry->{metadata}, $match->{captures},
-            );
-
+            my $child_scope = $class->_mount_scope($scope, $match);
+            if ($entry->{inspectable_router}) {
+                $class->_record_mount_match(
+                    $scope, $entry->{metadata}, $match->{captures},
+                );
+            }
+            else {
+                $class->_record_opaque_mount_match(
+                    $scope, $entry->{metadata}, $match->{captures},
+                );
+            }
             return {
                 kind  => 'full',
                 app   => $entry->{app},
-                scope => $class->_mount_scope($scope, $match),
+                scope => $child_scope,
             };
         }
 
@@ -518,20 +480,20 @@ sub _select_protocol {
         my $captures = $route->_pattern->match_route($path);
         next unless defined $captures;
 
+        my $path_params = $class->_merge_path_params(
+            $scope->{path_params},
+            $captures,
+            $path,
+        );
         $class->_record_leaf_match(
             $scope, $entry->{metadata}, $captures,
-        );
-
-        my %path_params = (
-            %{ref($scope->{path_params}) eq 'HASH' ? $scope->{path_params} : {}},
-            %$captures,
         );
         return {
             kind => 'full',
             app => $entry->{app},
             scope => {
                 %$scope,
-                path_params => \%path_params,
+                path_params => $path_params,
             },
         };
     }
@@ -571,6 +533,27 @@ sub _routing_scope {
     };
 }
 
+sub _enter_child_routing_scope {
+    my ($class, $scope, $resolver) = @_;
+    my $container = $scope->{'pagi.routing'};
+    croak 'inspectable child Router requires compatible routing metadata'
+        unless $class->_compatible_routing_container($container);
+    my $parent = $class->_current_routing_frame($scope);
+    croak 'inspectable child Router requires a parent routing frame'
+        unless $parent;
+
+    my $frame = {
+        resolver          => $resolver,
+        root_path         => $parent->{root_path},
+        logical_namespace => $parent->{logical_namespace},
+        captures          => { %{$parent->{captures}} },
+        mounts            => [map { +{%$_} } @{$parent->{mounts}}],
+        match             => undef,
+    };
+    push @{$container->{frames}}, $frame;
+    return $scope;
+}
+
 sub _compatible_routing_container {
     my ($class, $container) = @_;
 
@@ -584,7 +567,7 @@ sub _compatible_routing_container {
         return 0 unless ref($frame) eq 'HASH';
         return 0 unless blessed($frame->{resolver})
             && $frame->{resolver}->can('path_for')
-            && $frame->{resolver}->can('reverse_for_context');
+            && $frame->{resolver}->can('reverse_for_scope');
         return 0 unless PAGI::Routing::Resolver::_is_canonical_namespace(
             $frame->{logical_namespace},
         );
@@ -623,12 +606,24 @@ sub _record_mount_match {
     $frame->{logical_namespace} = $metadata->{logical_namespace};
     $frame->{captures} = { %effective_captures };
 
-    if ($metadata->{is_raw}) {
-        $frame->{match} = { %{$metadata->{match}} };
-        return;
-    }
-
     push @{$frame->{mounts}}, { %{$metadata->{mount}} };
+    return;
+}
+
+sub _record_opaque_mount_match {
+    my ($class, $scope, $metadata, $captures) = @_;
+    return unless ref($metadata) eq 'HASH';
+    my $frame = $class->_current_routing_frame($scope);
+    return unless $frame;
+
+    my %effective_captures = (
+        %{ref($frame->{captures}) eq 'HASH' ? $frame->{captures} : {}},
+        %{ref($captures) eq 'HASH' ? $captures : {}},
+    );
+    $frame->{match} = { %{$metadata->{match}} };
+    $frame->{logical_namespace}
+        = $metadata->{match}{logical_namespace};
+    $frame->{captures} = { %effective_captures };
     return;
 }
 
@@ -650,17 +645,21 @@ sub _record_leaf_match {
 sub _mount_scope {
     my ($class, $scope, $match) = @_;
 
-    my %path_params = (
-        %{ref($scope->{path_params}) eq 'HASH' ? $scope->{path_params} : {}},
-        %{$match->{captures}},
+    my $effective_path = defined $scope->{path} ? $scope->{path} : '/';
+    my $path_params = $class->_merge_path_params(
+        $scope->{path_params},
+        $match->{captures},
+        $effective_path,
     );
     my $child_scope = {
         %$scope,
-        path_params => \%path_params,
+        path_params => $path_params,
     };
 
     if (length $match->{consumed}) {
-        $child_scope->{path} = $match->{remainder};
+        $child_scope->{path} = $match->{remainder} eq ''
+            ? '/'
+            : $match->{remainder};
         $child_scope->{root_path} = $class->_join_path_boundary(
             $scope->{root_path},
             $match->{consumed},
@@ -668,6 +667,22 @@ sub _mount_scope {
     }
 
     return $child_scope;
+}
+
+sub _merge_path_params {
+    my ($class, $incoming, $captures, $effective_path) = @_;
+
+    $incoming = {} unless ref($incoming) eq 'HASH';
+    $captures = {} unless ref($captures) eq 'HASH';
+    for my $name (sort keys %$captures) {
+        croak "duplicate path parameter '$name' while entering '$effective_path'"
+            if exists $incoming->{$name};
+    }
+
+    return {
+        %$incoming,
+        %$captures,
+    };
 }
 
 sub _join_path_boundary {
@@ -688,75 +703,73 @@ PAGI::Routing::Compiler - Internal declarative routing compiler
 
 =head1 DESCRIPTION
 
-Compiles declarative routing descriptions into fresh application graphs. Full
-decisions invoke their selected leaf or declaration-ordered mount. HTTP
-partial and none decisions record a trusted decline and complete normally
-without calling the send channel. Application mounts remain opaque after
-their prefix matches. WebSocket and SSE misses retain their protocol-specific
-denial and close outcomes.
+Compiles declarative routing descriptions into fresh application graphs. A
+Router scans its declarations in order. A full Route or Mount invokes its
+compiled application and owns the request. HTTP PARTIAL produces a concrete
+Pages-backed 405 Response with the first-seen method union, while HTTP NONE
+invokes the Router's compiled C<http_default> or constructs the stock
+Pages-backed 404 Response. Both stock outcomes negotiate from the active
+request metadata and emit through the complete native triplet.
+WebSocket and SSE misses retain their protocol-specific denial and close
+outcomes and never invoke C<http_default>.
 
-For HTTP requests, a directly compiled Router also ensures a request-local
-L<PAGI::Routing::Trace> and publishes trusted structural selection evidence.
-Router and inline-subtree frames preserve child ownership, while raw routes
-and opaque mounts receive a shallow scope without the parent collector.
-Candidate detail is development-only, declaration-derived, and bounded by the
-collector. WebSocket, SSE, and lifespan scopes do not install or modify this
-HTTP evidence.
+Each public Router invocation installs request-local routing metadata,
+authoritative-Allow state, and the final HEAD wire boundary outside Router,
+Mount, child Router, and Route middleware. A Router-generated 405 marks that
+private state before emission. The outer send adapter removes every
+case-insensitive C<Allow> field after routing middleware has run and appends
+one normalized authoritative value. Selected endpoint or opaque-application
+405 responses are not marked and are therefore not rewritten by this policy.
+HEAD suppresses body, sendfile, and trailer events only after inner middleware
+has observed the GET-equivalent representation and completed its headers.
 
-Direct Router compilation is therefore a routing component rather than a
-complete HTTP application policy. Ordinary
-L<PAGI::Middleware::Routing::NotFound> and
-L<PAGI::Middleware::Routing::MethodNotAllowed> middleware may render declines
-at Router or routing-aware Mount boundaries. The compiler itself neither
-chooses HTTP fallback status nor seeds or repairs a response.
-
-An explicit C<< router => $child >> mount is transparent to composed route
-inspection but is a child dispatch boundary at runtime. Once its prefix
+An explicit C<< app => $child >> Router Mount is inspectable for reverse
+routing but remains a child application boundary at runtime. Once its prefix
 matches, the child Router owns its full, partial, none, WebSocket, and SSE
 outcomes; the parent neither resumes scanning nor unions its method evidence.
 The child contributes its own dispatcher and Router middleware. The containing
 Resolver supplies placement-specific effective metadata without mutating the
 child description or invoking the child's public C<to_app> boundary.
 
-This ownership is final after a matching Router-mount prefix. Unanswered child
-completion bubbles only outward through the selected middleware boundaries;
-it never resumes parent declaration scanning. A root Router mount consumes no
-prefix and leaves C<path> and C<root_path> unchanged.
+This ownership is final after a matching Mount prefix. Child Router 404 and
+405 responses unwind through child Router, Mount, and parent Router
+middleware, but never resume parent declaration scanning. A root Mount
+consumes no prefix and leaves C<path> and C<root_path> unchanged.
 
-The executable nesting order is outer Router middleware, Router-mount
-middleware, child Router middleware, any selected inline-mount middleware,
-route middleware, and handler. Unanswered child completion unwinds through
-those routing boundaries, allowing the first applicable fallback middleware
-to respond; protocol-miss outcomes unwind through the same selected wrappers.
-Each placement is compiled independently, and each public compilation
-constructs another fresh set of middleware wrappers.
+The executable nesting order is outer Router middleware, Mount middleware,
+child Router middleware, nested Mount middleware, route middleware, and
+handler. Router defaults and generated 405 responses use the same selected
+wrappers without entering Route middleware. Each placement is compiled
+independently, including one default-app coercion and fresh middleware graph,
+and each public compilation constructs another fresh set of wrappers.
 
 C<compile> is a synchronous build-time boundary: it resolves middleware,
 native components, and match entries but starts no request and emits no events.
-It returns a native async PAGI coderef. Invocation of that coderef installs
-exactly one fresh request-local C<pagi.routing> frame and one outermost HEAD
-wire boundary. Mounted Router bodies share that frame and HEAD owner, so all
-middleware sees the complete downstream match and the unsuppressed GET
-representation before HEAD body and sendfile suppression at the edge. The
-compiler matches the request, adapts synchronous and Future-backed
-completions, and emits or forwards only selected application and
-protocol-specific events.
+It returns a native async PAGI coderef. Invocation of that coderef installs a
+fresh root C<pagi.routing> frame. Entering an inspectable mounted Router
+appends a child boundary frame that retains the root Resolver and root entry
+C<root_path> while copying the selected placement's logical namespace,
+captures, and cumulative Mount chain. The child description remains immutable.
+Opaque mounted applications instead retain terminal Mount metadata in the
+current frame and may install their own metadata if they compile another
+Router behind that boundary.
 
-Compatible version-1 routing metadata contributes ancestor frames. Opaque,
-malformed, or newer metadata is preserved on the incoming scope as an
+Compatible version-1 routing metadata contributes ancestor frames. Malformed
+or newer metadata is preserved on the incoming scope as an
 incompatible boundary: the new shallow child scope receives a fresh version-1
 container and ignores foreign ancestry rather than croaking or mutating it.
-Each frame captures the compiled router's entry C<root_path>; Context reverse
-routing uses that field and falls back only for legacy/manual v1 frames that
-omit it. Every API-created frame also begins with canonical
-C<logical_namespace> C</> and a fresh empty C<captures> hash. Entering an
-inline or Router mount replaces both values with that placement's logical
-namespace and a fresh snapshot of consumed effective-prefix captures. A FULL
-leaf replaces them with its containing logical namespace and complete
-effective captures.
-PARTIAL candidates never publish leaf state, so unanswered declines retain
-only the logical namespace and prefix snapshot owned by their selected Mount
-ancestry. The capture hash is never aliased to C<< scope->{path_params} >> and
-no mutable frame state is shared between requests.
+Each root frame begins with canonical C<logical_namespace> C</>, fresh
+C<captures> and C<mounts> containers, and no leaf match. A selected leaf
+publishes its effective pattern, canonical name, kind, description, namespace,
+and complete capture snapshot. PARTIAL and NONE publish no leaf. Capture,
+Mount, frame, container, and authoritative-Allow state are request-local; only
+the immutable compiled Resolver is shared between concurrent requests. Every
+application and response completion seam accepts either an immediate value or
+a Future through C<Future-E<gt>wrap>.
+
+This is an internal compiler. Public composition and migration contracts are
+documented by L<PAGI::Routing>, L<PAGI::Routing::Router>,
+L<PAGI::Routing::Mount>, L<PAGI::Compose>, and the
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
 
 =cut

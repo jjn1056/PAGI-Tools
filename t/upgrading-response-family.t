@@ -1,0 +1,290 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use Encode qw(encode);
+use File::Find qw(find);
+use Future;
+use IPC::Open3 qw(open3);
+use JSON::MaybeXS qw(decode_json);
+use Symbol qw(gensym);
+use Test2::V0;
+
+use lib 'lib';
+
+use PAGI::App::File;
+use PAGI::Middleware::CORS;
+use PAGI::Pages qw(not_found);
+use PAGI::Request;
+use PAGI::Response qw(:all);
+use PAGI::Routing qw(route);
+use PAGI::SSE;
+use PAGI::Utils qw(app_path invoke_app);
+use PAGI::WebSocket;
+
+sub http_scope {
+    my (%changes) = @_;
+    my $path = $changes{path} // '/';
+    return {
+        type         => 'http',
+        http_version => '1.1',
+        method       => 'GET',
+        scheme       => 'http',
+        path         => $path,
+        raw_path     => $path,
+        root_path    => '',
+        query_string => '',
+        headers      => [],
+        server       => ['testserver', 80],
+        client       => ['127.0.0.1', 50000],
+        %changes,
+    };
+}
+
+sub receive_http {
+    return Future->done({
+        type => 'http.request', body => '', more => 0,
+    });
+}
+
+sub run_http {
+    my ($app, $scope) = @_;
+    my @events;
+    $app->(
+        $scope // http_scope(),
+        \&receive_http,
+        sub { push @events, $_[0]; Future->done },
+    )->get;
+    return \@events;
+}
+
+sub body_from {
+    my ($events) = @_;
+    return join '', map { $_->{body} // '' }
+        grep { ($_->{type} // '') eq 'http.response.body' } @$events;
+}
+
+sub run_perl_snippet {
+    my ($snippet) = @_;
+    my $stderr = gensym;
+    my $pid = open3(undef, my $stdout, $stderr,
+        $^X, '-Ilib', '-e', $snippet);
+    my $out = do { local $/; <$stdout> // '' };
+    my $err = do { local $/; <$stderr> // '' };
+    waitpid $pid, 0;
+    return ($? >> 8, $out . $err);
+}
+
+subtest 'documented class form explicitly loads its concrete subclass' => sub {
+    open my $fh, '<', 'lib/PAGI/Response.pm' or die $!;
+    my $pod = do { local $/; <$fh> };
+    my ($indented) = $pod =~ /
+        Use\ either\ explicit\ class\ construction\ or\ the\ matching\ optional\ export:\n\n
+        ((?:[ ]{4}[^\n]*\n)+)
+    /x;
+    ok(defined $indented, 'primary class/factory example is present');
+
+    $indented =~ s/^[ ]{4}//mg;
+    my ($status, $output) = run_perl_snippet($indented);
+    is($status, 0,
+        'primary class-form example compiles and executes in a fresh process')
+        or diag($output);
+};
+
+subtest 'Response factories replace the mutable builder and Request bridge' => sub {
+    my $request = PAGI::Request->new(http_scope(), \&receive_http);
+    ok(!$request->can('response'), 'Request no longer manufactures a Response');
+
+    my @removed = qw(
+        text html json send send_raw redirect empty send_file stream
+        scope is_sent has_body_source cors writer
+    );
+    for my $method (@removed) {
+        ok(!PAGI::Response->can($method), "removed Response method $method has no alias");
+    }
+
+    my @matrix = (
+        [response('bytes'),                  'PAGI::Response'],
+        [text_response('text'),              'PAGI::Response::Text'],
+        [html_response('<b>html</b>'),       'PAGI::Response::HTML'],
+        [json_response({ ok => \1 }),         'PAGI::Response::JSON'],
+        [problem_response({ status => 409 }), 'PAGI::Response::Problem'],
+        [redirect_response('/next'),         'PAGI::Response::Redirect'],
+        [empty_response(),                   'PAGI::Response::Empty'],
+        [file_response(__FILE__),            'PAGI::Response::File'],
+        [stream_response(sub { }),           'PAGI::Response::Stream'],
+    );
+    isa_ok($_->[0], $_->[1]) for @matrix;
+};
+
+subtest 'explicit bytes replace the custom-charset finisher' => sub {
+    my $response = response(
+        encode('ISO-8859-1', "caf\x{e9}"),
+        content_type => 'text/plain; charset=iso-8859-1',
+    );
+    is($response->body, "caf\xe9", 'caller-owned encoding supplies exact bytes');
+    is($response->content_type, 'text/plain; charset=iso-8859-1',
+        'caller supplies the matching media-type parameter');
+};
+
+subtest 'scope state and CORS belong to request and middleware owners' => sub {
+    my $scope = http_scope(headers => [['Origin' => 'https://example.test']]);
+    my $request = PAGI::Request->new($scope, \&receive_http);
+    is($request->raw, $scope, 'Request remains the HTTP scope source');
+
+    my $app = PAGI::Middleware::CORS->new(
+        origins => ['https://example.test'],
+    )->wrap(text_response('ok')->to_app);
+    my $events = run_http($app, $scope);
+    my ($start) = grep { $_->{type} eq 'http.response.start' } @$events;
+    ok(grep({ lc($_->[0]) eq 'access-control-allow-origin'
+            && $_->[1] eq 'https://example.test' } @{$start->{headers}}),
+        'CORS middleware applies request-origin policy');
+
+    my $literal = text_response('ok')->header(
+        'Access-Control-Expose-Headers' => 'X-Request-ID',
+    );
+    is($literal->header('access-control-expose-headers'), 'X-Request-ID',
+        'ordinary header remains available for one literal field');
+};
+
+subtest 'Stream owns Writer creation and each write is awaited' => sub {
+    my @seen;
+    my $stream = stream_response(sub {
+        my ($writer) = @_;
+        push @seen, ref($writer);
+        return $writer->write('chunk');
+    });
+    my $events = run_http($stream->to_app);
+    is(\@seen, ['PAGI::Response::Writer'], 'producer receives the invocation Writer');
+    is(body_from($events), 'chunk', 'awaited Writer output reaches the wire');
+};
+
+subtest 'Response emission is application-only' => sub {
+    my $response = text_response('created', status => 201);
+    ok(!$response->can('respond'),
+        'removed public respond method has no compatibility alias');
+
+    my $to_app_events = run_http($response->to_app);
+    is([$to_app_events->[0]{status}, body_from($to_app_events)],
+        [201, 'created'], 'to_app emits the complete response');
+
+    my @invoked_events;
+    invoke_app(
+        $response, http_scope(), \&receive_http,
+        sub { push @invoked_events, $_[0]; Future->done },
+    )->get;
+    is([$invoked_events[0]{status}, body_from(\@invoked_events)],
+        [201, 'created'], 'invoke_app emits the complete Response application');
+
+    ok(!PAGI::Utils->can('is_response'),
+        'removed nominal Response predicate has no compatibility alias');
+};
+
+subtest 'live library documentation has no public respond call surface' => sub {
+    my @files;
+    find(sub {
+        return unless -f $_ && /\.(?:pm|pod)\z/;
+        push @files, $File::Find::name;
+    }, 'lib');
+
+    my @stale;
+    for my $file (sort @files) {
+        open my $handle, '<', $file or die "Cannot read $file: $!";
+        while (my $line = <$handle>) {
+            push @stale, "$file:$.:$line" if $line =~ /->respond\(/;
+        }
+        close $handle or die "Cannot close $file: $!";
+    }
+    is(\@stale, [],
+        'live lib code and POD contain no Response->respond invocation');
+};
+
+subtest 'File application construction has one unambiguous spelling' => sub {
+    ok(!PAGI::App::File->can('app_path'),
+        'removed class app_path constructor has no alias');
+    local $ENV{PAGI_HOME} = '/tmp/pagi-tools-upgrading';
+    isa_ok(PAGI::App::File->from_app_path('static'), 'PAGI::App::File');
+    like(app_path('static'), qr{pagi-tools-upgrading/static\z},
+        'utility app_path still returns a path string');
+};
+
+subtest 'Pages functions are source-free applications' => sub {
+    my $route_app = route('/missing' => not_found())->to_app;
+    my $route_events = run_http($route_app, http_scope(path => '/missing'));
+    is($route_events->[0]{status}, 404,
+        'source-free Pages application executes as a Route endpoint');
+
+    my $native = not_found()->to_app;
+    my $native_events = run_http($native);
+    is($native_events->[0]{status}, 404,
+        'Pages application explicitly converts with to_app for native placement');
+};
+
+subtest 'WebSocket denial and SSE decline take concrete Responses' => sub {
+    my @ws_events;
+    my $ws = PAGI::WebSocket->new(
+        {
+            type => 'websocket', method => 'GET', path => '/socket', headers => [],
+            extensions => { 'websocket.http.response' => {} },
+        },
+        sub { Future->done({ type => 'websocket.connect' }) },
+        sub { push @ws_events, $_[0]; Future->done },
+    );
+    like(dies { $ws->deny(status => 401, body => 'no')->get },
+        qr/exactly one concrete PAGI::Response/i,
+        'removed WebSocket denial option list fails directly');
+    $ws->deny(text_response('no', status => 401))->get;
+    is([map { $_->{type} } @ws_events], [
+        'websocket.http.response.start', 'websocket.http.response.body',
+    ], 'Response-valued WebSocket denial executes');
+
+    my @sse_events;
+    my $sse = PAGI::SSE->new(
+        { type => 'sse', method => 'GET', path => '/events', headers => [] },
+        sub { Future->new },
+        sub { push @sse_events, $_[0]; Future->done },
+    );
+    like(dies { $sse->decline(status => 404, body => 'missing')->get },
+        qr/exactly one concrete PAGI::Response/i,
+        'removed SSE decline option list fails directly');
+    $sse->decline(problem_response({
+        title  => 'Not Found',
+        status => 404,
+    }))->get;
+    is([map { $_->{type} } @sse_events], [
+        'sse.http.response.start', 'sse.http.response.body',
+    ], 'Response-valued SSE decline executes');
+    is($sse_events[0]{status}, 404,
+        'the documented decline preserves the concrete Response status');
+    ok(grep({ lc($_->[0]) eq 'content-type'
+            && $_->[1] =~ m{\Aapplication/problem\+json\b} }
+            @{$sse_events[0]{headers}}),
+        'the documented decline preserves the concrete Response media type');
+};
+
+subtest 'live decline examples construct concrete Responses' => sub {
+    my @documents = (
+        ['UPGRADING.md', qr/await \$sse->decline\(\s*problem_response\(/s],
+        ['lib/PAGI/Tools/Tutorial.pod',
+            qr/await \$sse->decline\(\s*problem_response\(/s],
+    );
+
+    for my $document (@documents) {
+        open my $handle, '<', $document->[0]
+            or die "Cannot read $document->[0]: $!";
+        my $source = do { local $/; <$handle> };
+        close $handle or die "Cannot close $document->[0]: $!";
+        like($source, $document->[1],
+            "$document->[0] passes a concrete Response to SSE decline");
+    }
+};
+
+subtest 'JSON migration asserts values, never object member order' => sub {
+    my $response = json_response({ beta => 2, alpha => 1 });
+    is(decode_json($response->body), { alpha => 1, beta => 2 },
+        'JSON response contract is semantic, independent of serialized key order');
+};
+
+done_testing;

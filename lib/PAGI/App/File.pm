@@ -5,13 +5,14 @@ use warnings;
 use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
-use Digest::MD5 qw(md5_hex);
 use Errno qw(EACCES ENOENT ENOTDIR EPERM);
 use Fcntl qw(S_ISDIR S_ISREG);
 use File::Spec;
 use Scalar::Util qw(blessed);
 use PAGI::App::File::Result;
 use PAGI::Pages;
+use PAGI::Response::File;
+use PAGI::Response::File::Plan ();
 use PAGI::Routing::HeadBoundary;
 use PAGI::Utils ();
 
@@ -27,20 +28,30 @@ PAGI::App::File - Serve static files
         root => '/var/www/static',
     )->to_app;
 
-    my $files = PAGI::App::File->app_path('static');
-    my $app   = PAGI::App::File->app_path('static')->to_app;
+    my $files = PAGI::App::File->from_app_path('static');
+    my $app   = PAGI::App::File->from_app_path('static')->to_app;
 
 The component can be mounted directly in a declarative router:
 
     use PAGI::Routing qw(router mount);
 
     my $routing = router(routes => [
-        mount('/static' => PAGI::App::File->app_path('static')),
+        mount('/static', app => PAGI::App::File->from_app_path('static')),
     ]);
+
+The named C<app> option matters: Route is a complete URL leaf, while this Mount
+composes the file application under a prefix and passes the remaining child
+path to it.
 
 =head1 DESCRIPTION
 
-PAGI::App::File serves static files from a configured root directory.
+PAGI::App::File serves static files from a configured root directory. It
+resolves an untrusted request URL path and owns traversal, hidden-file, index,
+missing, forbidden, and method policy. After it selects one trusted regular
+path, it delegates metadata and delivery planning to
+L<PAGI::Response::File>. A direct File Response is the complementary value: it
+sends one path the application already selected and never interprets the
+request URL.
 
 =head2 Features
 
@@ -111,7 +122,7 @@ forbidden rather than bypassed in favor of a later index.
 
 Synchronously constructs and inspects one request's lexical candidate and
 returns a L<PAGI::App::File::Result>.  The selected file's size and mtime are
-captured in the Result for response generation without another C<stat>.
+captured in the Result as location metadata.
 Index candidates may each be inspected while selecting in declaration order.
 
 C<locate> does not open a filehandle.  The PAGI server remains responsible for
@@ -122,10 +133,11 @@ race between inspection and open.
 
     await $files->serve($scope, $send, $result);
 
-Asynchronously renders any Result returned by L</locate>.  File Results use
-the shared MIME, ETag, conditional-request, and strict range behavior.  The response
-contains a PAGI C<file> body event, so the server owns the eventual open;
-C<serve> does not inspect or open the pathname again.
+Asynchronously renders any Result returned by L</locate>. File Results pass
+only their trusted selected path into L<PAGI::Response::File>'s shared
+request-time metadata, MIME, ETag, conditional-request, strict range, and file
+event plan. The response contains a PAGI C<file> body event, so the server owns
+the eventual open; C<serve> does not open the pathname itself.
 
 Missing and directory Results render a negotiated 404, while forbidden Results
 render a negotiated 403.  Callers may intercept a Result before choosing
@@ -152,40 +164,6 @@ disconnect, rather than assuming the file was necessarily delivered in full.
 
 =cut
 
-our %MIME_TYPES = (
-    html => 'text/html',
-    htm  => 'text/html',
-    css  => 'text/css',
-    js   => 'application/javascript',
-    json => 'application/json',
-    xml  => 'application/xml',
-    txt  => 'text/plain',
-    csv  => 'text/csv',
-    pl   => 'text/plain',
-    md   => 'text/plain',
-    png  => 'image/png',
-    jpg  => 'image/jpeg',
-    jpeg => 'image/jpeg',
-    gif  => 'image/gif',
-    svg  => 'image/svg+xml',
-    ico  => 'image/x-icon',
-    webp => 'image/webp',
-    woff => 'font/woff',
-    woff2=> 'font/woff2',
-    ttf  => 'font/ttf',
-    otf  => 'font/otf',
-    eot  => 'application/vnd.ms-fontobject',
-    pdf  => 'application/pdf',
-    zip  => 'application/zip',
-    gz   => 'application/gzip',
-    tar  => 'application/x-tar',
-    mp3  => 'audio/mpeg',
-    mp4  => 'video/mp4',
-    webm => 'video/webm',
-    ogg  => 'audio/ogg',
-    wav  => 'audio/wav',
-);
-
 sub import {
     my $class = shift;
     my ($package, $source) = caller;
@@ -195,9 +173,9 @@ sub import {
     return;
 }
 
-sub app_path {
+sub from_app_path {
     my ($class, @components) = @_;
-    croak 'PAGI::App::File->app_path is a class constructor '
+    croak 'PAGI::App::File->from_app_path is a class constructor '
         . 'and requires a class invocant'
         if ref($class);
 
@@ -338,43 +316,6 @@ sub locate {
     return _result('directory', $path);
 }
 
-sub _single_byte_range {
-    my ($range, $size) = @_;
-    return undef unless defined $range;
-    return { invalid => 1 }
-        unless $range =~ /\Abytes=([0-9]*)-([0-9]*)\z/;
-
-    my ($start_text, $end_text) = ($1, $2);
-    return { invalid => 1 }
-        if $start_text eq '' && $end_text eq '';
-
-    my ($start, $end);
-    if ($start_text eq '') {
-        my $suffix_length = 0 + $end_text;
-        return { invalid => 1 } if $suffix_length == 0 || $size == 0;
-        $suffix_length = $size if $suffix_length > $size;
-        $start = $size - $suffix_length;
-        $end = $size - 1;
-    } else {
-        $start = 0 + $start_text;
-        return { invalid => 1 } if $start >= $size;
-
-        if ($end_text eq '') {
-            $end = $size - 1;
-        } else {
-            $end = 0 + $end_text;
-            return { invalid => 1 } if $start > $end;
-            $end = $size - 1 if $end >= $size;
-        }
-    }
-
-    return {
-        start  => $start,
-        end    => $end,
-        length => $end - $start + 1,
-    };
-}
-
 sub _development_file_attempt {
     my ($file_path) = @_;
     require PAGI::Utils;
@@ -458,98 +399,37 @@ async sub serve {
         if $result->is_forbidden;
 
     my $file_path = $result->path;
-    my $size = $result->size;
-    my $mtime = $result->mtime;
-    my $etag = '"' . md5_hex("$mtime-$size") . '"';
-
-    # Check If-None-Match
-    my $if_none_match = $self->_get_header(
-        $boundary_scope, 'if-none-match',
+    my @file_options = (handle_ranges => $self->{handle_ranges});
+    my $default_type = PAGI::Response::File::Plan->_content_type_for(
+        $file_path, 'application/octet-stream',
     );
-    if ($if_none_match && $if_none_match eq $etag) {
-        await $send->({
-            type => 'http.response.start',
-            status => 304,
-            headers => [['etag', $etag]],
-        });
-        await $send->({ type => 'http.response.body', body => '', more => 0 });
-        return;
+    if ($default_type eq 'application/octet-stream'
+            && $self->{default_type} ne $default_type) {
+        push @file_options, content_type => $self->{default_type};
     }
 
-    # Determine MIME type
-    my ($ext) = $file_path =~ /\.([^.]+)$/;
-    my $content_type = $MIME_TYPES{lc($ext // '')} // $self->{default_type};
-
-    # Check for Range request (only if handle_ranges is enabled)
-    my $range;
-    if ($self->{handle_ranges}) {
-        my @range_values = $self->_get_header_values(
-            $boundary_scope, 'range',
+    my $response = PAGI::Response::File->new(
+        $file_path, @file_options,
+    );
+    my $plan = $response->_plan_for_scope($boundary_scope);
+    if ($plan->status == 416) {
+        return await _respond_page(
+            $boundary_scope, $send, 'range_not_satisfiable',
+            length => $plan->_logical_length,
         );
-        $range = join ',', map {
-            defined($_) && !ref($_) ? $_ : ''
-        } @range_values if @range_values;
-    }
-    my $parsed_range = _single_byte_range($range, $size);
-    if (defined $parsed_range) {
-        if ($parsed_range->{invalid}) {
-            return await _respond_page(
-                $boundary_scope, $send, 'range_not_satisfiable',
-                length => $size,
-            );
-        }
-
-        my $start = $parsed_range->{start};
-        my $end = $parsed_range->{end};
-        my $length = $parsed_range->{length};
-
-        await $send->({
-            type => 'http.response.start',
-            status => 206,
-            headers => [
-                ['content-type', $content_type],
-                ['content-length', $length],
-                ['content-range', "bytes $start-$end/$size"],
-                ['accept-ranges', 'bytes'],
-                ['etag', $etag],
-            ],
-        });
-
-        await $send->({
-            type   => 'http.response.body',
-            file   => $file_path,
-            offset => $start,
-            length => $length,
-        });
-        return;
     }
 
-    # Full file response
-    await $send->({
-        type => 'http.response.start',
-        status => 200,
-        headers => [
-            ['content-type', $content_type],
-            ['content-length', $size],
-            ['accept-ranges', 'bytes'],
-            ['etag', $etag],
-        ],
-    });
-
-    await $send->({
-        type => 'http.response.body',
-        file => $file_path,
-    });
-    return;
+    return await $response->_respond_with_plan($send, $plan);
 }
 
 sub _get_header_values {
     my ($self, $scope, $name) = @_;
 
-    $name = lc($name);
+    $name = lc $name;
     my @values;
-    for my $h (@{$scope->{headers} // []}) {
-        push @values, $h->[1] if lc($h->[0]) eq $name;
+    for my $header (@{$scope->{headers} // []}) {
+        push @values, $header->[1]
+            if lc($header->[0]) eq $name;
     }
     return @values;
 }
@@ -562,8 +442,13 @@ sub _get_header {
 
 async sub _respond_page {
     my ($scope, $send, $method, @options) = @_;
-    my $response = PAGI::Pages->$method($scope, @options);
-    return await Future->wrap($response->respond($send));
+    my $response = PAGI::Pages->$method(@options);
+    my $receive = sub {
+        return Future->done({ type => 'http.disconnect' });
+    };
+    return await PAGI::Utils::invoke_app(
+        $response, $scope, $receive, $send,
+    );
 }
 
 1;
@@ -572,17 +457,28 @@ __END__
 
 =head1 CONSTRUCTORS
 
-=head2 app_path
+=head2 from_app_path
 
-    my $files = PAGI::App::File->app_path('static');
-    my $app   = PAGI::App::File->app_path('static')->to_app;
+    my $files = PAGI::App::File->from_app_path('static');
+    my $app   = PAGI::App::File->from_app_path('static')->to_app;
 
 Returns a C<PAGI::App::File> component object rooted at the application path
 formed from its logical path components. It is a class-only constructor and
-preserves subclasses, so C<< MyApp::Files->app_path('static') >> returns a
+preserves subclasses, so C<< MyApp::Files->from_app_path('static') >> returns a
 C<MyApp::Files> object. With no path components it selects the application
 home. All arguments are path components; use C<< ->new(root =E<gt> ...) >>
 when advanced file-app options are required.
+
+Do not confuse this class constructor with L<PAGI::Utils/app_path>, which
+returns an absolute path string for application-owned selection:
+
+    my $path = app_path('public', 'index.html');
+    my $app  = PAGI::App::File->from_app_path('static');
+
+Filesystem existence is not required at component construction. Request-time
+selection and File preflight observe the current tree. Applications that need
+startup configuration validation must perform explicit checks during startup
+or lifespan handling.
 
 Its C<PAGI_HOME> precedence and path-component semantics are shared with
 L<PAGI::Utils/app_path>. Each ordinary C<use PAGI::App::File> records that
@@ -618,9 +514,13 @@ among HTML, problem JSON, and plain text from the request C<Accept> header.
 Unsafe, hidden, or unreadable paths are 403; missing paths and unintercepted
 directories are 404; and unsupported methods are 405. These defaults are
 non-cacheable; 405 responses advertise C<GET, HEAD>, and 416 responses include
-the known representation length. File MIME selection, streaming, caching, and
-range handling for successful responses remain owned by this component,
-including the C<default_type> seam.
+the known representation length. After safe selection, successful file
+metadata, MIME selection, streaming, caching, and range planning are delegated
+to L<PAGI::Response::File>. This component retains its C<default_type> seam for
+unknown suffixes.
+
+See L<PAGI::Routing::Mount> for prefix composition and L<PAGI::Compose> for
+root ErrorHandler, response-completion, and lifespan ownership.
 
 =over 4
 

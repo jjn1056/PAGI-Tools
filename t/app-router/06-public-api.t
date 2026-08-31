@@ -8,12 +8,13 @@ use overload ();
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::App::Router::Builder ();
+use PAGI::Response::Text ();
 use PAGI::Routing::Router ();
 
-sub context_handler {
+sub request_handler {
     return sub {
-        my ($c) = @_;
-        return $c->text('ok');
+        my ($request) = @_;
+        return PAGI::Response::Text->new('ok');
     };
 }
 
@@ -30,13 +31,13 @@ subtest 'the public class is only the mutable Builder facade' => sub {
     isa_ok($router, 'PAGI::App::Router::Builder');
     for my $method (qw(
         get post put patch delete head options any route websocket sse
-        group mount name desc constraints to_router to_app
+        mount http_default name desc constraints to_router to_app
         named_routes route_named path_for
     )) {
         ok($router->can($method), "public facade provides $method");
     }
 
-    for my $removed (qw(uri_for as namespace auto_head)) {
+    for my $removed (qw(group uri_for as namespace auto_head)) {
         ok(!$router->can($removed), "removed $removed surface is absent");
     }
     for my $old_array (qw(routes websocket_routes sse_routes mounts)) {
@@ -51,42 +52,42 @@ subtest 'the public class is only the mutable Builder facade' => sub {
     );
 };
 
-subtest 'raw package names are rejected before declaration or loading' => sub {
+subtest 'application package names are rejected before declaration or loading' => sub {
     for my $leaf (qw(get websocket sse)) {
         my $router = PAGI::App::Router->new;
         delete $INC{'TestRoutes/Admin.pm'};
 
         like(
-            dies { $router->$leaf('/blocked', raw => 'TestRoutes::Admin') },
-            qr/raw target must be an explicitly compiled coderef/,
-            "$leaf rejects a raw package name at declaration time",
+            dies { $router->$leaf('/blocked', 'TestRoutes::Admin') },
+            qr/route endpoint must be a coderef or instantiated object with to_app/,
+            "$leaf rejects an application package name at declaration time",
         );
         ok(!exists $INC{'TestRoutes/Admin.pm'},
             "$leaf does not load the rejected package");
         is($router->_declarations, [],
-            "$leaf does not retain a rejected raw declaration");
+            "$leaf does not retain a rejected application declaration");
     }
 };
 
-subtest 'direct routes, structural groups, and both mount forms materialize in written order' => sub {
+subtest 'direct routes and both Mount forms materialize in written order' => sub {
     my $people = PAGI::App::Router->new;
-    $people->get('/{id}' => context_handler())->name('show');
+    $people->get('/{id}' => request_handler())->name('show');
 
     my $opaque = native_app();
     my $router = PAGI::App::Router->new(desc => 'public routes');
-    my $group_child;
-    $router->get('/direct' => context_handler())->name('direct');
-    $router->group('/api' => sub {
+    my $routes_child;
+    $router->get('/direct' => request_handler())->name('direct');
+    $router->mount('/api', routes => sub {
         my ($child) = @_;
-        $group_child = $child;
-        $child->post('/items' => context_handler())->name('items');
+        $routes_child = $child;
+        $child->post('/items' => request_handler())->name('items');
     })->name('api');
-    $router->mount('/people', router => $people)->name('people');
-    $router->mount('/assets' => $opaque)->desc('opaque assets');
+    $router->mount('/people', app => $people->to_router)->name('people');
+    $router->mount('/assets', app => $opaque)->desc('opaque assets');
 
-    isa_ok($group_child, 'PAGI::App::Router');
-    isnt(refaddr($group_child), refaddr($router),
-        'a group callback receives a fresh public child');
+    isa_ok($routes_child, 'PAGI::App::Router');
+    isnt(refaddr($routes_child), refaddr($router),
+        'a routes callback receives a fresh public child');
 
     my $snapshot = $router->to_router;
     isa_ok($snapshot, 'PAGI::Routing::Router');
@@ -94,30 +95,30 @@ subtest 'direct routes, structural groups, and both mount forms materialize in w
 
     my $nodes = $snapshot->routes;
     is(
-        [map { [$_->kind, $_->path, $_->name, $_->is_raw] } @$nodes],
+        [map { [$_->kind, $_->path, $_->name] } @$nodes],
         [
-            ['route', '/direct', 'direct', 0],
-            ['mount', '/api', 'api', 0],
-            ['mount', '/people', 'people', 0],
-            ['mount', '/assets', undef, 1],
+            ['route', '/direct', 'direct'],
+            ['mount', '/api', 'api'],
+            ['mount', '/people', 'people'],
+            ['mount', '/assets', undef],
         ],
-        'one immutable node sequence preserves direct, group, and mount order',
+        'one immutable node sequence preserves direct and Mount order',
     );
     is(
-        [map { [$_->kind, $_->path, $_->name] } @{$nodes->[1]->routes}],
+        [map { [$_->kind, $_->path, $_->name] } @{$nodes->[1]->app->routes}],
         [['route', '/items', 'items']],
-        'the group remains an inspectable inline structural child',
+        'callback routes become an inspectable child Router app',
     );
-    isa_ok($nodes->[2]->router, 'PAGI::Routing::Router');
-    is($nodes->[3]->target, $opaque, 'the opaque mount retains its native target');
+    isa_ok($nodes->[2]->app, 'PAGI::Routing::Router');
+    is($nodes->[3]->app, $opaque, 'the opaque Mount retains its native app');
 };
 
 subtest 'snapshots are fresh and convenience inspection rematerializes' => sub {
     my $router = PAGI::App::Router->new;
-    $router->get('/first' => context_handler())->name('first');
+    $router->get('/first' => request_handler())->name('first');
 
     my $first = $router->to_router;
-    $router->get('/second' => context_handler())->name('second');
+    $router->get('/second' => request_handler())->name('second');
     my $second = $router->to_router;
 
     isnt(refaddr($first), refaddr($second), 'each to_router call returns a fresh Router');

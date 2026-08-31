@@ -8,6 +8,7 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib";
 use Scalar::Util qw(refaddr);
 use TestApps::FakeMiddleware;
+use PAGI::Response::Text ();
 use PAGI::Routing qw(router route websocket sse mount middleware);
 
 {
@@ -74,12 +75,12 @@ subtest 'all four middleware entry forms normalize without protocol work' => sub
     my $child = router(routes => []);
     my @forms = (
         ['Router', sub { return router(routes => [], middleware => $_[0]) }],
-        ['HTTP route', sub { return route('/http' => sub { return $_[0]->text('ok') }, middleware => $_[0]) }],
+        ['HTTP route', sub { return route('/http' => sub { return PAGI::Response::Text->new('ok') }, middleware => $_[0]) }],
         ['WebSocket route', sub { return websocket('/socket' => async sub { await $_[0]->close }, middleware => $_[0]) }],
         ['SSE route', sub { return sse('/events' => async sub { await $_[0]->close }, middleware => $_[0]) }],
-        ['inline mount', sub { return mount('/inline', routes => [], middleware => $_[0]) }],
-        ['Router mount', sub { return mount('/router', router => $child, name => 'child', middleware => $_[0]) }],
-        ['opaque mount', sub { return mount('/opaque' => sub { return }, middleware => $_[0]) }],
+        ['routes-shorthand Mount', sub { return mount('/shorthand', routes => [], middleware => $_[0]) }],
+        ['Router application Mount', sub { return mount('/router', app => $child, name => 'child', middleware => $_[0]) }],
+        ['coderef application Mount', sub { return mount('/coderef', app => sub { return }, middleware => $_[0]) }],
     );
 
     for my $form (@forms) {
@@ -106,7 +107,7 @@ subtest 'all four middleware entry forms normalize without protocol work' => sub
     is($object->wraps, 0, 'normalization does not wrap direct objects');
 };
 
-subtest 'router, inline mount, and HTTP route factories keep nested order' => sub {
+subtest 'router, routes-shorthand Mount, and HTTP route factories keep nested order' => sub {
     my (@builds, @runs);
     my $router_factory = tracing_factory('router', \@builds, \@runs);
     my $mount_factory  = tracing_factory('mount',  \@builds, \@runs);
@@ -117,7 +118,7 @@ subtest 'router, inline mount, and HTTP route factories keep nested order' => su
             mount('/api', routes => [
                 route('/item' => sub {
                     push @runs, 'handler:http';
-                    return $_[0]->text('ok');
+                    return PAGI::Response::Text->new('ok');
                 }, middleware => [$route_factory]),
             ], middleware => [$mount_factory]),
         ],
@@ -130,17 +131,50 @@ subtest 'router, inline mount, and HTTP route factories keep nested order' => su
         'first visible execution proceeds outermost to handler');
 };
 
-subtest 'opaque mount, WebSocket, and SSE accept bare factories' => sub {
+subtest 'Router, Mount, and Route middleware remain native three-argument apps' => sub {
+    my @argument_counts;
+    my $recording_factory = sub {
+        my ($label) = @_;
+        return sub {
+            my ($inner) = @_;
+            return sub {
+                push @argument_counts, [$label, scalar @_];
+                return $inner->(@_);
+            };
+        };
+    };
+    my @handler_argument_counts;
+    my $app = router(
+        middleware => [$recording_factory->('Router')],
+        routes => [
+            mount('/api', routes => [
+                route('/item' => sub {
+                    push @handler_argument_counts, scalar @_;
+                    return PAGI::Response::Text->new('ok');
+                }, middleware => [$recording_factory->('Route')]),
+            ], middleware => [$recording_factory->('Mount')]),
+        ],
+    )->to_app;
+
+    run_scope($app, scope(path => '/api/item', raw_path => '/api/item'));
+    is(\@argument_counts, [
+        ['Router', 3], ['Mount', 3], ['Route', 3],
+    ], 'every middleware boundary receives the exact native PAGI triplet');
+    is(\@handler_argument_counts, [1],
+        'the normal handler inside middleware receives only one Request');
+};
+
+subtest 'coderef Mount, WebSocket, and SSE accept bare factories' => sub {
     my (@builds, @runs);
-    my $opaque = tracing_factory('opaque', \@builds, \@runs);
+    my $mounted = tracing_factory('mounted', \@builds, \@runs);
     my $ws = tracing_factory('ws', \@builds, \@runs);
     my $events = tracing_factory('sse', \@builds, \@runs);
     my $app = router(routes => [
-        mount('/opaque' => async sub {
+        mount('/mounted', app => async sub {
             my ($request_scope, $receive, $send) = @_;
             await $send->({ type => 'http.response.start', status => 204, headers => [] });
             await $send->({ type => 'http.response.body', body => '', more => 0 });
-        }, middleware => [$opaque]),
+        }, middleware => [$mounted]),
         websocket('/socket' => async sub {
             push @runs, 'handler:websocket';
             await $_[0]->close(1000, 'done');
@@ -151,14 +185,14 @@ subtest 'opaque mount, WebSocket, and SSE accept bare factories' => sub {
         }, middleware => [$events]),
     ])->to_app;
 
-    run_scope($app, scope(path => '/opaque', raw_path => '/opaque'));
+    run_scope($app, scope(path => '/mounted', raw_path => '/mounted'));
     run_scope($app, scope(type => 'websocket', path => '/socket', raw_path => '/socket'));
     run_scope($app, scope(type => 'sse', path => '/events', raw_path => '/events'));
     is(\@runs, [
-        'opaque:http',
+        'mounted:http',
         'ws:websocket', 'handler:websocket',
         'sse:sse', 'handler:sse',
-    ], 'each protocol and opaque boundary executes its bare factory wrapper');
+    ], 'each protocol and mounted application executes its bare factory wrapper');
 };
 
 subtest 'bare router factory surrounds unanswered routing and mixed lists retain order' => sub {
@@ -182,7 +216,7 @@ subtest 'bare router factory surrounds unanswered routing and mixed lists retain
         return sub { push @runs, 'explicit'; return $inner->(@_) };
     });
     my $app = router(
-        routes => [route('/present' => sub { return $_[0]->text('present') })],
+        routes => [route('/present' => sub { return PAGI::Response::Text->new('present') })],
         middleware => [$observer, $explicit],
     )->to_app;
 
@@ -190,12 +224,13 @@ subtest 'bare router factory surrounds unanswered routing and mixed lists retain
     run_scope($app, scope(method => 'POST', path => '/present'));
     is(\@runs, [qw(bare explicit bare explicit)],
         'mixed bare and explicit list keeps first-listed-outermost order');
-    is(\@statuses, [], 'unanswered Router exhaustion emits no statuses');
+    is(\@statuses, [404, 405],
+        'Router middleware observes owned NONE and PARTIAL statuses in request order');
 };
 
 subtest 'bare factory timing and failures remain compile-time behavior' => sub {
     my $builds = 0;
-    my $description = route('/fresh' => sub { return $_[0]->text('fresh') },
+    my $description = route('/fresh' => sub { return PAGI::Response::Text->new('fresh') },
         middleware => [sub { ++$builds; return $_[0] }]);
     my $one = $description->to_app;
     my $two = $description->to_app;
@@ -205,7 +240,7 @@ subtest 'bare factory timing and failures remain compile-time behavior' => sub {
     is($builds, 2, 'requests do not rerun the factory');
 
     like dies {
-        route('/bad' => sub { return $_[0]->text('bad') },
+        route('/bad' => sub { return PAGI::Response::Text->new('bad') },
             middleware => [sub { return 'not an app' }])->to_app
     }, qr/middleware factory must return PAGI app coderef/,
         'invalid bare factory result fails at to_app';
@@ -248,7 +283,7 @@ subtest 'mixed direct entry forms resolve only while compiling and retain order'
 
     my $description = route('/mixed' => sub {
         push @trace, 'handler';
-        return $_[0]->text('mixed');
+        return PAGI::Response::Text->new('mixed');
     }, middleware => [
         '^TestApps::FakeMiddleware',
         $factory,
@@ -279,7 +314,7 @@ subtest 'mixed direct entry forms resolve only while compiling and retain order'
     {
         local *TestApps::FakeMiddleware::wrap = sub { return 'not an app' };
         like dies {
-            route('/invalid-class' => sub { return $_[0]->text('bad') }, middleware => [
+            route('/invalid-class' => sub { return PAGI::Response::Text->new('bad') }, middleware => [
                 '^TestApps::FakeMiddleware',
             ])->to_app
         }, qr/middleware wrap must return PAGI app coderef/,

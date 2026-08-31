@@ -7,15 +7,28 @@ use Future;
 
 use lib 'lib';
 use PAGI::Endpoint::HTTP;
+use PAGI::Response;
+use PAGI::Response::Empty ();
+use PAGI::Response::Text ();
 
 package HelloEndpoint {
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
 
-    async sub get {
-        my ($self, $ctx) = @_;
-        my $name = $ctx->request->query_param('name') // 'World';
-        return $ctx->response->text("Hello, $name");
+    sub get {
+        my ($self, $request) = @_;
+        my $name = $request->query_param('name') // 'World';
+        return PAGI::Response::Text->new("Hello, $name");
+    }
+}
+
+package ScopeValidationEndpoint {
+    use parent 'PAGI::Endpoint::HTTP';
+    our $calls = 0;
+
+    sub get {
+        ++$calls;
+        return PAGI::Response::Empty->new;
     }
 }
 
@@ -41,12 +54,26 @@ subtest 'app handles full request cycle' => sub {
 
     $app->($scope, $receive, $send)->get;
 
-    ok(@sent >= 1, 'sent response events');
+    is(scalar @sent, 2, 'emits exactly a start and terminal body event');
     is($sent[0]{type}, 'http.response.start', 'starts with response.start');
+    is($sent[1]{type}, 'http.response.body', 'finishes with response.body');
+    is($sent[1]{more}, 0, 'body is terminal');
+    is($sent[1]{body}, 'Hello, PAGI', 'Request query reaches handler');
 };
 
-subtest 'context_class defaults to PAGI::Context' => sub {
-    is(HelloEndpoint->context_class, 'PAGI::Context', 'default context class');
+subtest 'invalid scopes fail before a handler runs' => sub {
+    my $app = ScopeValidationEndpoint->to_app;
+    $ScopeValidationEndpoint::calls = 0;
+
+    like(dies {
+        $app->({}, sub { Future->done }, sub { Future->done })->get;
+    }, qr/PAGI::Request scope type is required/, 'missing type is rejected');
+    is($ScopeValidationEndpoint::calls, 0, 'missing type does not call the handler');
+
+    like(dies {
+        $app->({ type => 'websocket' }, sub { Future->done }, sub { Future->done })->get;
+    }, qr/PAGI::Request requires HTTP scope/, 'non-HTTP type is rejected');
+    is($ScopeValidationEndpoint::calls, 0, 'non-HTTP type does not call the handler');
 };
 
 done_testing;

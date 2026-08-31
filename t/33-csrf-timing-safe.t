@@ -17,6 +17,7 @@ use Future::AsyncAwait;
 use IO::Async::Loop;
 
 require PAGI::Middleware::CSRF;
+require PAGI::CSRF;
 
 my $loop = IO::Async::Loop->new;
 
@@ -120,6 +121,23 @@ subtest 'CSRF middleware token validation' => sub {
         await $wrapped->($scope, $receive, $send);
     });
     ok($app_called, 'GET passes through without CSRF check');
+};
+
+subtest 'CSRF facade delegates verification to secure_compare' => sub {
+    my @arguments;
+    no warnings qw(once redefine);
+    local *PAGI::Utils::SecureCompare::secure_compare = sub {
+        @arguments = @_;
+        return 1;
+    };
+
+    my $guard = PAGI::CSRF->new({
+        type       => 'http',
+        csrf_token => 'provider-token',
+    });
+    ok($guard->verify('submitted-token'), 'utility result is returned');
+    is(\@arguments, ['submitted-token', 'provider-token'],
+        'submitted and provider tokens are passed to the timing-safe utility');
 };
 
 done_testing;

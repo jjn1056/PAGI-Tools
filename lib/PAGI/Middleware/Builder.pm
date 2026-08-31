@@ -68,14 +68,15 @@ our $_current_builder;
 
 Create a composed application using the DSL. The block should
 call enable(), enable_if(), mount(), and return the final app.
-The final value of the block is coerced via L<PAGI::Utils/to_app>,
-so you can return a component object or class name directly:
+The final value of the block is the fallback application and is coerced via
+L<PAGI::Utils/to_app>. Return a native coderef or an instantiated component
+object directly:
 
-    use PAGI::Pages ();
+    use PAGI::Pages qw(not_found);
 
     my $app = builder {
         enable 'ContentLength';
-        PAGI::Pages->not_found;
+        not_found(detail => 'No matching route');
     };
 
 =cut
@@ -135,12 +136,15 @@ sub enable_if (&$;@) {
 
     mount '/path' => $app;
     mount '/static' => PAGI::App::File->new(root => $dir);
-    mount '/api'    => 'MyApp::API';
+    mount '/api'    => MyApp::API->new;
 
 Mount an application at a path prefix. Requests matching the
 prefix are routed to the mounted app with adjusted paths. The app
-argument accepts anything L<PAGI::Utils/to_app> accepts: a coderef,
-a component object with C<to_app>, or a class name.
+argument accepts the two native application forms supported by
+L<PAGI::Utils/to_app>: a coderef or an instantiated component object with
+C<to_app>. Package-name strings are rejected; load and construct mounted
+applications explicitly. Middleware class strings remain valid only in
+C<enable> and C<enable_if> middleware positions.
 
 =cut
 
@@ -238,6 +242,9 @@ sub add_middleware_if {
 
 Add a path-based mount point (OO interface).
 
+The target must be a native coderef or an instantiated C<to_app> object.
+Package-name strings are rejected synchronously.
+
 =cut
 
 sub add_mount {
@@ -257,11 +264,15 @@ sub add_mount {
 
     my $app = $builder->to_app($inner_app);
 
-Build the composed application. C<$inner_app> accepts anything
-L<PAGI::Utils/to_app> accepts: a coderef, a component object with
-C<to_app>, or a class name. This means C<builder { ...; $router }> and
-C<builder { ...; PAGI::Pages->not_found }> work without an explicit
-C<< ->to_app >> call.
+Build the composed application. C<$inner_app> is the fallback when no Builder
+mount matches. It accepts a native coderef or instantiated component object
+with C<to_app>; package-name strings are rejected synchronously. This means
+C<builder { ...; $router }> and
+C<builder { ...; not_found(detail =E<gt> 'No matching route') }> work without
+an explicit C<< ->to_app >> call. Pages factories return application-valued
+objects and are native at this application boundary. Class strings remain available to C<enable> and
+C<enable_if> because those are middleware-loading positions, not application
+positions.
 
 =cut
 

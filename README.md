@@ -2,6 +2,21 @@
 
 PAGI::Tools - Application toolkit for the PAGI specification
 
+Route matches a complete URL leaf. Mount composes an application under a
+prefix. Router selects and owns routing outcomes. Middleware wraps behavior.
+Compose owns the application root and lifespan.
+
+Callable values keep these four meanings:
+
+    Route CODE endpoint        -> one Request/WebSocket/SSE argument
+    Route to_app object        -> native PAGI application
+    Mount/Compose/default CODE -> native PAGI application
+    handler result             -> native CODE or instantiated to_app object
+
+A native CODE at a Route is wrapped explicitly with `PAGI::Utils::as_app`.
+Mount, Compose `app`, and Router `http_default` remain native application
+positions and take a three-channel CODE directly.
+
 # SYNOPSIS
 
 Raw PAGI is deliberately minimal — an application is just an `async` sub that
@@ -24,37 +39,42 @@ middleware suite — so the same application reads like this:
 
     use PAGI::App::Router;
     use PAGI::Compose qw(compose);
+    use PAGI::Response qw(json_response);
     use Future::AsyncAwait;
 
     my $router = PAGI::App::Router->new;
 
     $router->get('/' => async sub {
-        my ($c) = @_;
-        return $c->json({ hello => 'world' });
+        my ($request) = @_;
+        return json_response({ hello => 'world' });
     })->name('home');
 
     $router->get('/users/{id}' => async sub {
-        my ($c) = @_;
-        return $c->json({ id => $c->path_param('id') });
+        my ($request) = @_;
+        return json_response({ id => $request->path_param('id') });
     })->name('user');
 
     my $routing = $router->to_router; # retain one immutable snapshot
     my $app = compose(app => $routing)->to_app; # complete deployed app
 
-For a small conventional landing page or HTTP error, [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) builds an
-ordinary negotiated Response or a terminal endpoint:
+For a small conventional landing page or HTTP error, [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) builds a
+deferred negotiated HTTP application:
 
-    use PAGI::Pages;
+    use PAGI::Pages qw(not_found welcome);
 
-    my $response = PAGI::Pages->not_found($context);
-    my $endpoint = PAGI::Pages->welcome;
+    my $landing = welcome();
+    my $missing = not_found(detail => 'No such page');
+
+Factories take options only; negotiation uses the later invocation scope. The
+returned object can be placed directly at an exact Route or as Router
+`http_default`.
 
 For a conventional static tree, use the rooted file component rather than
 constructing paths or reading files in a handler:
 
     use PAGI::App::File;
 
-    my $static = PAGI::App::File->app_path('public')->to_app;
+    my $static = PAGI::App::File->from_app_path('public')->to_app;
 
 Its request-path construction is lexical and performs no I/O; the PAGI server
 opens the resulting `file` event. Configured symlinks extend administrator
@@ -69,18 +89,19 @@ for the intentionally changed statuses, hidden-file policy, and mapping rules.
 Routing has three public frontends over that same immutable snapshot and
 compiler:
 
-    PAGI::Routing          immutable functional declarations   $c handlers
-    PAGI::App::Router      mutable imperative builder          verb methods + $c
+    PAGI::Routing          immutable functional declarations   Request handlers
+    PAGI::App::Router      mutable imperative builder          verb methods + Request
     PAGI::Endpoint::Router class/role-oriented frontend        local method names
 
 Use the functional frontend when the declarations are already immutable:
 
     use PAGI::Routing qw(:routes);
     use PAGI::Compose qw(compose);
+    use PAGI::Response qw(json_response);
 
     async sub home {
-        my ($c) = @_;
-        return $c->json({ hello => 'world' });
+        my ($request) = @_;
+        return json_response({ hello => 'world' });
     }
 
     my $routing = router(routes => [
@@ -89,21 +110,37 @@ Use the functional frontend when the declarations are already immutable:
 
     my $app = compose(app => $routing)->to_app;
 
-Functional routing distinguishes inline `routes => [...]`, inspectable
-`router => $child` mounts with a required local `name`, and positional opaque
-application mounts. Named routes compose into slash addresses such as
-`/person/show`; request Contexts can generate relative links from the active
-placement, with compact or named path/query/fragment arguments. These helpers
+Every Mount names its target: `routes => [...]` constructs a complete child
+Router, while `app => $child` composes a native application or instantiated
+component. An immutable Router in `app` remains inspectable; other applications
+are opaque. Named routes compose into slash addresses such as
+`/person/show`; `PAGI::Routing::URL` can generate request-relative links from
+the active placement, with compact or named path/query/fragment arguments. Its helpers
 return strings or croak, perform no protocol I/O, and do not replace normal
 authorization checks.
 
+Response classes make representation and delivery cost explicit. Base, Text,
+HTML, JSON, Problem, Redirect, and Empty are finite buffered values; File sends
+one already selected path; Stream produces chunks with awaited send-Future
+backpressure. Route and Mount retain separate ownership:
+
+    Route('/x')       exact complete path leaf
+    Route('/*path')   explicit real catchall leaf
+    Mount('/x')       selected owner of /x and its complete subtree
+
 The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
-route metadata, constraints, GET/HEAD behavior, nonterminal HTTP decline
-evidence, first-seen method unions, written declaration order, and reverse
-routing. Ordinary HTTP handlers receive `$c` and return a Response. Native
-channel ownership is always explicit with `raw`. A naked `to_app` Router is
-a low-level routing component: a miss sends no response. Compose supplies the
-complete deployed boundary and mandatory inert 404, 405, and 500 failsafes.
+route metadata, constraints, GET/HEAD behavior, Router-owned 404/405 outcomes,
+first-seen method unions, written declaration order, and reverse
+routing. Ordinary HTTP handlers receive `PAGI::Request` and return an
+application value, normally a Response or Pages object; WebSocket and SSE
+handlers receive their direct protocol objects. Native CODE ownership at a
+Route is always explicit with `as_app`. Without explicit `methods`, that Route
+uses GET plus automatic HEAD; unrestricted delegation uses scalar
+`methods => '*'`. A bare Router sends its own
+negotiated 404 and compliant 405 and installs its own HeadBoundary, but it
+deliberately has no root ErrorHandler, response-completion guard, or lifespan
+driver. Compose adds an outer idempotent application-root HEAD boundary and
+supplies those deployed application policies.
 See the
 [router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md)
 for the intentionally breaking migration from the previous App and Endpoint
@@ -133,10 +170,10 @@ description:
 
 [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) is an optional application-root composer, not a base class or
 a replacement router. Build an explicit router and pass it through `app` when
-router-specific configuration or inspection is needed. Official fallback and
-error representations are ordinary middleware inside request IDs, access
-logging, and security middleware; the outer automatic Pages-backed responses
-remain a stock last resort.
+router-specific configuration or inspection is needed. Configure a Router
+`http_default` for custom missing-route presentation and ordinary ErrorHandler
+middleware for official application errors. Compose keeps its stock error and
+response-lifecycle boundary outside author middleware as the final safety net.
 
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
@@ -144,6 +181,22 @@ behavior. Its request-aware URLs consume normalized scope data; the shipped
 ReverseProxy and TrustedHosts middleware still process HTTP only, so
 WebSocket/SSE deployments must normalize and validate those scopes outside
 routing.
+
+PAGI follows Starlette's Route/Mount/Router/application topology, not every
+method on Starlette Request. `PAGI::Request` owns HTTP input; imports identify
+the Router or middleware that supplies optional behavior. This keeps URL,
+Session, Stash, CSRF, State, and Transport ownership visible and lets another
+framework use its own Router without teaching Request that framework's API.
+
+The Starlette influence is conceptual, not API identity. PAGI distinguishes
+direct protocol handlers from native three-channel application positions, validates
+constraints without coercion, uses slash logical names and relative lookup,
+treats SSE as a first-class scope, and exposes an HTTP-only `http_default`.
+Starlette's single multiprotocol Router `default` was considered and not copied,
+so PAGI retains its stock WebSocket and SSE miss behavior. PAGI middleware is
+pure app-to-app wrapping; Compose, rather than Router, owns root lifespan.
+OpenAPI and schema generation remain deferred until a concrete consumer is
+designed.
 
 Run it with any PAGI server (such as `pagi-server` from the `PAGI-Server`
 distribution), or mount it inside a larger PAGI application.
@@ -166,10 +219,13 @@ WebSocket chat/echo, PSGI bridging)
 - [PAGI::Endpoint::HTTP](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AHTTP), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter),
 [PAGI::Endpoint::SSE](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ASSE), [PAGI::Endpoint::WebSocket](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AWebSocket) - high-level endpoint
 framework
-- [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::Context](https://metacpan.org/pod/PAGI%3A%3AContext) - request
-processing and ergonomics
+- [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) and [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse) - HTTP input and detached output values; WebSocket and SSE
+handlers receive their direct protocol objects
+- `PAGI::State`, `PAGI::Stash`, `PAGI::Session`, `PAGI::CSRF`,
+`PAGI::Transport`, and `PAGI::Routing::URL` - explicitly imported optional
+scope capabilities
 - [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) - negotiated conventional welcome, redirect, and HTTP
-error Responses and terminal endpoints
+error Responses returned by ordinary Request handlers
 - [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter), and
 [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter) - immutable functional, mutable imperative, and
 method-oriented frontends over one immutable routing engine

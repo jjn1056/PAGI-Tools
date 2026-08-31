@@ -2,6 +2,9 @@ use strict;
 use warnings;
 use Test2::V0;
 use PAGI::Authority;
+use PAGI::Request;
+use PAGI::WebSocket;
+use PAGI::SSE;
 
 subtest 'validate preserves accepted authority spellings' => sub {
     my @valid = (
@@ -124,6 +127,32 @@ subtest 'host_from_scope validates raw Host header cardinality and leaves scope 
     };
     is(PAGI::Authority->host_from_scope($scope), 'Example.COM:443', 'Host is extracted');
     is($scope, $before, 'Host extraction does not mutate its input');
+};
+
+subtest 'Request and protocol objects expose their raw scopes to Host validation' => sub {
+    my $receive = sub { };
+    my $send = sub { };
+    my @sources = (
+        ['raw scope', sub { return $_[0] }],
+        ['Request', sub { return PAGI::Request->new($_[0], $receive) }],
+        ['WebSocket', sub { return PAGI::WebSocket->new($_[0], $receive, $send) }],
+        ['SSE', sub { return PAGI::SSE->new($_[0], $receive, $send) }],
+    );
+
+    for my $case (@sources) {
+        my ($name, $build) = @{$case};
+        my $type = $name eq 'Request' || $name eq 'raw scope' ? 'http' : lc $name;
+        my $scope = { type => $type, method => 'GET', headers => [['Host', 'example.test:8443']] };
+        my $source = $build->($scope);
+        my $source_scope = ref($source) eq 'HASH' ? $source : $source->scope;
+        is(PAGI::Authority->host_from_scope($source_scope),
+            'example.test:8443', "$name preserves a valid Host");
+
+        $scope->{headers} = [['Host', 'one.test'], ['host', 'two.test']];
+        like(dies {
+            PAGI::Authority->host_from_scope($source_scope);
+        }, qr/Host header must occur at most once/, "$name rejects duplicate Host fields");
+    }
 };
 
 subtest 'from_scope prefers Host and only falls back when Host is absent' => sub {

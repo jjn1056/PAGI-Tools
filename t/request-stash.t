@@ -5,10 +5,13 @@ use Future::AsyncAwait;
 
 use PAGI::Request;
 use PAGI::Stash;
+use PAGI::WebSocket;
+use PAGI::SSE;
 
 my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
+my $stash_factory = PAGI::Stash->can('stash') ? \&PAGI::Stash::stash : undef;
 
-subtest 'stash accessor' => sub {
+subtest 'class and factory accept PAGI::Request sources' => sub {
     my $scope = {
         type         => 'http',
         method       => 'GET',
@@ -18,14 +21,13 @@ subtest 'stash accessor' => sub {
     };
 
     my $req = PAGI::Request->new($scope, $receive);
-    my $stash = PAGI::Stash->new($req);
+    my $class_stash = PAGI::Stash->new($req);
+    ok($stash_factory, 'stash factory is available') or return;
+    my $factory_stash = $stash_factory->($req);
 
-    # Default stash is empty hashref
-    is($stash->data, {}, 'stash returns empty hashref by default');
-
-    # Can set values
-    $stash->set(user => { id => 1, name => 'test' });
-    is($stash->get('user')->{id}, 1, 'stash values persist');
+    is($factory_stash->data, {}, 'factory returns an empty stash by default');
+    $class_stash->set(user => { id => 1, name => 'test' });
+    is($factory_stash->get('user')->{id}, 1, 'factory sees class data');
 };
 
 subtest 'stash lives in scope' => sub {
@@ -38,7 +40,8 @@ subtest 'stash lives in scope' => sub {
     };
 
     my $req = PAGI::Request->new($scope, $receive);
-    my $stash = PAGI::Stash->new($req);
+    ok($stash_factory, 'stash factory is available') or return;
+    my $stash = $stash_factory->($req);
 
     $stash->set(db => 'connection', config => { debug => 1 });
 
@@ -58,11 +61,12 @@ subtest 'stash shared via scope enables middleware data sharing' => sub {
 
     # Simulate middleware setting a value
     my $req1 = PAGI::Request->new($scope, $receive);
-    PAGI::Stash->new($req1)->set(user => { id => 42, role => 'admin' });
+    ok($stash_factory, 'stash factory is available') or return;
+    $stash_factory->($req1)->set(user => { id => 42, role => 'admin' });
 
     # Simulate handler reading middleware-set value (same scope)
     my $req2 = PAGI::Request->new($scope, $receive);
-    my $user = PAGI::Stash->new($req2)->get('user');
+    my $user = $stash_factory->($req2)->get('user');
 
     is($user->{id}, 42, 'handler sees middleware-set value');
     is($user->{role}, 'admin', 'full structure accessible');
@@ -128,6 +132,23 @@ subtest 'path_param only returns path params, not query params' => sub {
     );
     is($req->path_param('baz', strict => 0), undef, 'strict => 0 returns undef for missing');
     is($req->query_param('baz'), 'qux', 'query() returns query param');
+};
+
+subtest 'protocol objects retain direct default path parameter access' => sub {
+    my @cases = (
+        ['WebSocket', 'websocket', sub { PAGI::WebSocket->new($_[0], sub {}, sub {}) }],
+        ['SSE', 'sse', sub { PAGI::SSE->new($_[0], sub {}, sub {}) }],
+    );
+
+    for my $case (@cases) {
+        my ($name, $type, $build) = @{$case};
+        my $source = $build->({
+            type => $type, headers => [], path_params => { room => 'lobby' },
+        });
+        is($source->path_params, { room => 'lobby' }, "$name returns direct path parameters");
+        is($source->path_param('room'), 'lobby', "$name returns a present path parameter");
+        is($source->path_param('missing'), undef, "$name defaults a missing path parameter to undef");
+    }
 };
 
 done_testing;

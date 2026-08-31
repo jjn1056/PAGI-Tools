@@ -4,26 +4,26 @@ This is a small executable `PAGI::Routing` application. It demonstrates the
 ordinary shape without turning the example into a framework:
 
 - handlers loaded normally from `MyApp::Routes::Home` and passed as fully
-  qualified coderefs;
-- an inline `/api` mount whose local `api` name segment composes the absolute
-  logical address `/api/item`;
+  qualified coderefs, receiving `PAGI::Request` directly;
+- a separately configured `/api` Router mounted with `app =>`, whose local
+  `api` name segment composes the absolute logical address `/api/item`;
 - a numeric path constraint;
 - one bare pure route middleware factory, normalized to an inspectable description;
-- custom 404 and 405 routing middleware handlers rendered through
-  `PAGI::Pages`;
-- absolute slash-addressed `path_for` and request-aware `url_for` generation
-  (both return strings and perform no protocol I/O); and
-- a final `compose(app => $routing, middleware => [...])->to_app` expression,
-  so `app.pl` evaluates to the complete native PAGI application coderef a
-  server expects.
+- distinct root and API Router `http_default` endpoints rendered through
+  `PAGI::Pages`, plus the child Router's authoritative stock 405 and `Allow`;
+- absolute slash-addressed `path_for($request, ...)` and request-aware
+  `url_for($request, ...)` from `PAGI::Routing::URL` (both return strings and
+  perform no protocol I/O); and
+- a final `compose(app => $routing)` expression, so `app.pl` evaluates to an
+  inspectable `PAGI::Compose` object that a conforming server compiles once
+  through its `to_app` method.
 
-The custom handlers receive an HTTP Context plus the routing snapshot for the
-boundary they enclose. In particular, the 405 renderer reads
-`$trace->allowed_methods`; Router exhaustion does not seed an `Allow` header or
-invoke a Router callback. The handlers pass that evidence to `PAGI::Pages`,
-which supplies content negotiation and the required `Allow` response field.
-They remain the application's official policy inside Compose's mandatory plain
-outer safeguards, which stay inert once the custom response starts.
+Each selected Router owns exhaustion at its own boundary. An API constraint
+miss receives `No API route matched`; an unknown root path receives
+`No root route matched`. A method mismatch never invokes `http_default`: the
+API Router renders its negotiated stock Method Not Allowed response with
+`Allow: GET, HEAD`. Compose adds application error, completion, and lifespan
+safety without interpreting those Router outcomes.
 
 Run it from the distribution root:
 
@@ -43,6 +43,6 @@ curl -i -H 'Accept: application/problem+json' \
 ```
 
 The example stays HTTP-only on purpose. The complete `websocket`, `sse`, raw
-application, three-form mount (including modular `router =>` children),
-relative reverse-routing, query/fragment, and matched-route metadata recipes
-live in `PAGI::Routing` and `PAGI::Tools::Cookbook`.
+application, `mount(app => ...)`, `mount(routes => ...)`, relative
+reverse-routing, query/fragment, and matched-route metadata recipes live in
+`PAGI::Routing` and `PAGI::Tools::Cookbook`.

@@ -35,6 +35,7 @@ subtest 'run waits for disconnect and calls on_close' => sub {
 
     ok($cleanup_ran, 'on_close callback ran');
     ok($sse->is_closed, 'connection is closed');
+    ok(!$sse->is_connected, 'direct disconnect clears SSE liveness');
 };
 
 subtest 'multiple on_close callbacks run in order' => sub {

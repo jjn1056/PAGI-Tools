@@ -60,6 +60,29 @@ subtest 'each_text iterates text frames' => sub {
     is(\@received, ['hello', 'world'], 'received text messages only');
 };
 
+subtest 'each_bytes iterates binary frames' => sub {
+    my @events = (
+        { type => 'websocket.connect' },
+        { type => 'websocket.receive', text => 'ignored' },
+        { type => 'websocket.receive', bytes => "\x00\x01" },
+        { type => 'websocket.receive', bytes => "\xff" },
+        { type => 'websocket.disconnect', code => 1000 },
+    );
+    my $index = 0;
+    my $ws = PAGI::WebSocket->new(
+        { type => 'websocket', headers => [] },
+        sub { Future->done($events[$index++]) },
+        sub { Future->done },
+    );
+    $ws->accept->get;
+
+    my @received;
+    $ws->each_bytes(async sub { push @received, $_[0] })->get;
+
+    is(\@received, ["\x00\x01", "\xff"],
+        'each_bytes yields binary frames and skips text frames');
+};
+
 subtest 'each_json iterates and decodes' => sub {
     my @events = (
         { type => 'websocket.connect' },

@@ -3,10 +3,13 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
+use PAGI::Response::Empty ();
+use PAGI::Response::Text ();
 
 sub invoke {
     my ($app, %scope) = @_;
@@ -30,12 +33,12 @@ sub body {
 
 subtest 'basic App routing returns Responses through the shared compiler' => sub {
     my $router = PAGI::App::Router->new;
-    $router->get('/users' => sub { return $_[0]->text('Users list') });
-    my $app = compose(app => $router)->to_app;
+    $router->get('/users' => sub { return PAGI::Response::Text->new('Users list') });
+    my $app = $router->to_app;
 
     my $matched = invoke($app, path => '/users');
     is([$matched->[0]{status}, body($matched)], [200, 'Users list'],
-        'exact path returns its Context Response');
+        'exact path returns its Request handler Response');
     is(invoke($app, path => '/posts')->[0]{status}, 404,
         'unknown path returns 404');
     my $wrong = invoke($app, method => 'POST', path => '/users');
@@ -45,20 +48,20 @@ subtest 'basic App routing returns Responses through the shared compiler' => sub
     is($allow, 'GET, HEAD', 'shared automatic HEAD appears in Allow');
 };
 
-subtest 'brace parameters and terminal wildcards reach Context' => sub {
+subtest 'brace parameters and terminal wildcards reach Request' => sub {
     my @captured;
     my $router = PAGI::App::Router->new;
     $router->get('/users/{id}' => sub {
         push @captured, $_[0]->path_params;
-        return $_[0]->text('user');
+        return PAGI::Response::Text->new('user');
     });
     $router->get('/users/{user_id}/posts/{post_id}' => sub {
         push @captured, $_[0]->path_params;
-        return $_[0]->text('post');
+        return PAGI::Response::Text->new('post');
     });
     $router->get('/files/*filepath' => sub {
         push @captured, $_[0]->path_params;
-        return $_[0]->text('file');
+        return PAGI::Response::Text->new('file');
     });
     my $app = $router->to_app;
 
@@ -69,19 +72,19 @@ subtest 'brace parameters and terminal wildcards reach Context' => sub {
         { id => 123 },
         { user_id => 42, post_id => 99 },
         { filepath => 'path/to/file.txt' },
-    ], 'all shared Pattern captures are exposed by Context');
+    ], 'all shared Pattern captures are exposed by Request');
 };
 
 subtest 'HTTP verb methods and automatic HEAD retain shared behavior' => sub {
     my $router = PAGI::App::Router->new;
     $router->post('/users' => sub {
-        return $_[0]->response->status(201)->text('Created');
+        return PAGI::Response::Text->new('Created', status => 201);
     });
     $router->delete('/users/{id}' => sub {
-        return $_[0]->response->status(204)->text('');
+        return PAGI::Response::Empty->new(status => 204);
     });
     $router->get('/report' => sub {
-        return $_[0]->response->status(203)->text('representation');
+        return PAGI::Response::Text->new('representation', status => 203);
     });
     my $app = $router->to_app;
 
@@ -98,14 +101,14 @@ subtest 'route information lives in pagi.routing rather than pagi.router' => sub
     my $captured;
     my $router = PAGI::App::Router->new;
     $router->get('/users/{id}' => sub {
-        my ($c) = @_;
-        my $frame = $c->scope->{'pagi.routing'}{frames}[-1];
+        my ($request) = @_;
+        my $frame = $request->scope->{'pagi.routing'}{frames}[-1];
         $captured = {
             match => { %{$frame->{match}} },
             captures => { %{$frame->{captures}} },
-            has_old => exists $c->scope->{'pagi.router'} ? 1 : 0,
+            has_old => exists $request->scope->{'pagi.router'} ? 1 : 0,
         };
-        return $c->text('OK');
+        return PAGI::Response::Text->new('OK');
     })->name('show')->desc('Show user');
 
     invoke($router->to_app, path => '/users/123');
@@ -120,6 +123,51 @@ subtest 'route information lives in pagi.routing rather than pagi.router' => sub
         captures => { id => 123 },
         has_old => 0,
     }, 'the shared metadata frame records the effective route');
+};
+
+subtest 'App Router HTTP default is one-shot, retained, and HTTP NONE only' => sub {
+    my @default_calls;
+    my $default = sub {
+        my ($scope, $receive, $send) = @_;
+        push @default_calls, [$scope->{type}, scalar @_];
+        $send->({
+            type => 'http.response.start', status => 404, headers => [],
+        })->get;
+        $send->({
+            type => 'http.response.body', body => 'custom', more => 0,
+        })->get;
+        return Future->done;
+    };
+
+    my $constructor = PAGI::App::Router->new(http_default => $default);
+    my $first = $constructor->to_router;
+    is(refaddr($first->http_default), refaddr($default),
+        'constructor retains the exact native application');
+    like(dies { $constructor->http_default(sub { }) },
+        qr/http_default.*only.*once|already configured/i,
+        'constructor configuration consumes the one method slot');
+
+    my $method = PAGI::App::Router->new;
+    is($method->http_default($default), $method,
+        'method configuration returns the mutable Router');
+    my $method_snapshot = $method->to_router;
+    $method->get('/late' => sub { return PAGI::Response::Text->new('late') });
+    is($method_snapshot->routes, [],
+        'later parent mutation cannot alter an old snapshot');
+    is(refaddr($method_snapshot->http_default), refaddr($default),
+        'the old snapshot retains its configured default identity');
+    like(dies { $method->http_default($default) },
+        qr/http_default.*only.*once|already configured/i,
+        'a second method configuration croaks');
+
+    my $app = $constructor->to_app;
+    is(body(invoke($app, path => '/missing')), 'custom',
+        'HTTP NONE invokes the custom default');
+    invoke($app, type => 'websocket', method => undef, path => '/missing',
+        extensions => { 'websocket.http.response' => {} });
+    invoke($app, type => 'sse', method => undef, path => '/missing');
+    is(\@default_calls, [['http', 3]],
+        'WebSocket and SSE misses never invoke the HTTP default');
 };
 
 done_testing;

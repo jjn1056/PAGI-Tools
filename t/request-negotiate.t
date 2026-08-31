@@ -5,6 +5,8 @@ use Test2::V0;
 use PAGI::Request::Negotiate;
 use PAGI::Request;
 
+my $no_body = sub { die 'body unavailable' };
+
 # Test: parse_accept with quality values
 subtest 'parse_accept with quality values' => sub {
     my @types = PAGI::Request::Negotiate->parse_accept(
@@ -364,11 +366,11 @@ subtest 'parse_accept handles q values out of range' => sub {
 # Test integration with PAGI::Request
 subtest 'PAGI::Request preferred_type' => sub {
     my $scope = {
-        method => 'GET',
+        type => 'http', method => 'GET',
         path => '/',
         headers => [['accept', 'text/html, application/json;q=0.9']],
     };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     is $req->preferred_type('json', 'html'), 'html', 'prefers html';
     is $req->preferred_type('json'), 'json', 'accepts json';
@@ -377,11 +379,11 @@ subtest 'PAGI::Request preferred_type' => sub {
 
 subtest 'PAGI::Request accepts with quality' => sub {
     my $scope = {
-        method => 'GET',
+        type => 'http', method => 'GET',
         path => '/',
         headers => [['accept', 'text/html, application/json;q=0.9']],
     };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     ok $req->accepts('text/html'), 'accepts text/html';
     ok $req->accepts('application/json'), 'accepts json';
@@ -392,14 +394,14 @@ subtest 'PAGI::Request accepts with quality' => sub {
 # Test with multiple Accept headers (RFC 7230 Section 3.2.2)
 subtest 'PAGI::Request accepts with multiple headers' => sub {
     my $scope = {
-        method => 'GET',
+        type => 'http', method => 'GET',
         path => '/',
         headers => [
             ['accept', 'text/html'],
             ['accept', 'application/json'],
         ],
     };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     ok $req->accepts('text/html'), 'accepts first header value';
     ok $req->accepts('application/json'), 'accepts second header value';

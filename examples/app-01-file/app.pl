@@ -20,6 +20,6 @@ use PAGI::App::File;
 #   http://localhost:5000/style.css  -> CSS
 #   http://localhost:5000/subdir/nested.txt -> nested file
 
-my $app = PAGI::App::File->app_path('static')->to_app;
+my $app = PAGI::App::File->from_app_path('static')->to_app;
 
 $app;

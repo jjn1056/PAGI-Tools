@@ -118,12 +118,13 @@ sub _request {
 
     # Build send (captures response). Strict: illegal events (per
     # PAGI::SendValidation's http rules) fail the returned Future -- a
-    # canonical test client must not accept what a real server would reject
-    # -- and are never appended to @events. extensions is the SAME hashref
-    # advertised on the scope above (see %HTTP_EXTENSIONS) -- one source of
-    # truth, not two lists that can drift.
+    # canonical test client must not accept what a real server would reject.
+    # extensions is the SAME hashref advertised on the scope above (see
+    # %HTTP_EXTENSIONS) -- one source of truth, not two lists that can drift.
+    # Validated events are handed to PAGI::Test::Response's one captured-wire
+    # decoder.
     my $sv = PAGI::SendValidation->new(scope_type => 'http', extensions => $scope->{extensions});
-    my @events;
+    my $response = PAGI::Test::Response->new(events => []);
     my $send = async sub {
         my ($event) = @_;
 
@@ -162,13 +163,9 @@ sub _request {
                 $captured{body} = '';
                 delete @captured{qw(fh file offset length)};
             }
-            elsif (exists $captured{fh} || exists $captured{file}) {
-                $captured{body} = $self->_response_body_bytes(\%captured);
-                delete @captured{qw(fh file offset length)};
-            }
         }
 
-        push @events, \%captured;
+        $response->_capture_event(\%captured);
 
         if (my $conn = $scope->{'pagi.connection'}) {
             $conn->_mark_response_complete if $sv->complete;
@@ -195,7 +192,7 @@ sub _request {
                 $conn->_mark_complete;
             }
             warn "exception after response completed: $exception";
-            return $self->_build_response(\@events);
+            return $self->_finish_response($response);
         }
 
         # Mimic server behavior: return 500 response
@@ -204,9 +201,18 @@ sub _request {
             $conn->_mark_disconnected('server_error');# abnormal end — not on_complete
         }
         return PAGI::Test::Response->new(
-            status    => 500,
-            headers   => [['content-type', 'text/plain']],
-            body      => 'Internal Server Error',
+            events => [
+                {
+                    type    => 'http.response.start',
+                    status  => 500,
+                    headers => [['content-type', 'text/plain']],
+                },
+                {
+                    type => 'http.response.body',
+                    body => 'Internal Server Error',
+                    more => 0,
+                },
+            ],
             exception => $exception,
         );
     }
@@ -226,21 +232,29 @@ sub _request {
             # server's "Application Produced No Response" backstop: the
             # synthesized 500, not an empty 200.
             return PAGI::Test::Response->new(
-                status  => 500,
-                headers => [['content-type', 'text/plain']],
-                body    => 'Internal Server Error',
+                events => [
+                    {
+                        type    => 'http.response.start',
+                        status  => 500,
+                        headers => [['content-type', 'text/plain']],
+                    },
+                    {
+                        type => 'http.response.body',
+                        body => 'Internal Server Error',
+                        more => 0,
+                    },
+                ],
             );
         }
 
-        return $self->_build_response(\@events);
+        return $self->_finish_response($response);
     }
 
     if (my $conn = $scope->{'pagi.connection'}) {
         $conn->_mark_complete;
     }
 
-    # Parse response from captured events
-    return $self->_build_response(\@events);
+    return $self->_finish_response($response);
 }
 
 sub _build_scope {
@@ -291,124 +305,16 @@ sub _build_scope {
     return $scope;
 }
 
-sub _build_response {
-    my ($self, $events) = @_;
+sub _finish_response {
+    my ($self, $response) = @_;
 
-    my $status = 200;
-    my @headers;
-    my $body = '';
-    my $response_started = 0;
-    my $body_complete = 0;
-
-    for my $event (@$events) {
-        my $type = $event->{type} // '';
-
-        if ($type eq 'http.response.start') {
-            next if $response_started;
-            $response_started = 1;
-            $status = $event->{status} // 200;
-            @headers = @{$event->{headers} // []};
-        }
-        elsif ($type eq 'http.response.body') {
-            next unless $response_started;
-            next if $body_complete;
-
-            $body .= $self->_response_body_bytes($event);
-
-            my $more = $event->{more} // 0;
-            $body_complete = 1 unless $more;
+    for my $cookie (@{$response->header_all('set-cookie')}) {
+        if ($cookie =~ /^([^=]+)=([^;]*)/) {
+            $self->{cookies}{$1} = $2;
         }
     }
 
-    # Extract Set-Cookie headers and store cookies
-    for my $h (@headers) {
-        if (lc($h->[0]) eq 'set-cookie') {
-            if ($h->[1] =~ /^([^=]+)=([^;]*)/) {
-                $self->{cookies}{$1} = $2;
-            }
-        }
-    }
-
-    return PAGI::Test::Response->new(
-        status  => $status,
-        headers => \@headers,
-        body    => $body,
-    );
-}
-
-sub _response_body_bytes {
-    my ($self, $event) = @_;
-
-    return $event->{body} // '' if exists $event->{body};
-
-    if (exists $event->{file}) {
-        return _read_file_bytes(
-            $event->{file},
-            $event->{offset} // 0,
-            $event->{length},
-        );
-    }
-
-    if (exists $event->{fh}) {
-        return _read_fh_bytes(
-            $event->{fh},
-            $event->{offset} // 0,
-            $event->{length},
-        );
-    }
-
-    return '';
-}
-
-sub _read_file_bytes {
-    my ($path, $offset, $length) = @_;
-
-    open my $fh, '<:raw', $path
-        or croak "Cannot open file response '$path': $!";
-
-    seek($fh, $offset, 0)
-        or croak "Cannot seek file response '$path': $!"
-        if $offset;
-
-    my $content = _slurp_fh_bytes($fh, $length);
-    close $fh;
-
-    return $content;
-}
-
-sub _read_fh_bytes {
-    my ($fh, $offset, $length) = @_;
-
-    seek($fh, $offset, 0)
-        or croak "Cannot seek filehandle response: $!"
-        if $offset;
-
-    return _slurp_fh_bytes($fh, $length);
-}
-
-sub _slurp_fh_bytes {
-    my ($fh, $length) = @_;
-
-    my $content = '';
-    my $remaining = $length;
-
-    while (1) {
-        my $to_read = 65536;
-        if (defined $remaining) {
-            last if $remaining <= 0;
-            $to_read = $remaining if $remaining < $to_read;
-        }
-
-        my $bytes_read = read($fh, my $chunk, $to_read);
-        croak "Cannot read response body from filehandle: $!"
-            unless defined $bytes_read;
-        last if $bytes_read == 0;
-
-        $content .= $chunk;
-        $remaining -= $bytes_read if defined $remaining;
-    }
-
-    return $content;
+    return $response;
 }
 
 sub websocket {
@@ -585,9 +491,18 @@ sub sse {
         # sent, not an SSE connection object. There is no stream to hand a
         # callback either, so the callback (if any) is never invoked.
         return PAGI::Test::Response->new(
-            status  => $sse->_decline_status,
-            headers => $sse->_decline_headers,
-            body    => $sse->_decline_body,
+            events => [
+                {
+                    type    => 'http.response.start',
+                    status  => $sse->_decline_status,
+                    headers => $sse->_decline_headers,
+                },
+                {
+                    type => 'http.response.body',
+                    body => $sse->_decline_body,
+                    more => 0,
+                },
+            ],
         );
     }
 
@@ -1097,9 +1012,9 @@ C<denial_complete> states), so it is genuinely advertised.
 
 =item app (required)
 
-The PAGI application to test. Accepts anything L<PAGI::Utils/to_app> accepts:
-a coderef, a component object (anything with a C<to_app> method), or a class
-name string:
+The PAGI application to test. This native application position accepts the two
+forms supported by L<PAGI::Utils/to_app>: a coderef or an instantiated
+component object with a C<to_app> method:
 
     # Coderef (existing style)
     my $client = PAGI::Test::Client->new(app => $coderef);
@@ -1107,8 +1022,19 @@ name string:
     # Component object
     my $client = PAGI::Test::Client->new(app => MyApp::Main->new(%opts));
 
-    # Class name - auto-required, then compiled via to_app
-    my $client = PAGI::Test::Client->new(app => 'MyApp::Main');
+    # Terminal Response object (also an instantiated to_app component)
+    use PAGI::Response::Text ();
+    my $client = PAGI::Test::Client->new(
+        app => PAGI::Response::Text->new('ready'),
+    );
+
+Package-name strings are rejected synchronously. Load and construct the
+component explicitly so configuration and object identity stay visible:
+
+    use MyApp::Main;
+    my $client = PAGI::Test::Client->new(
+        app => MyApp::Main->new(%opts),
+    );
 
 =item headers
 
@@ -1160,7 +1086,10 @@ When B<true>: Exceptions propagate to the test, useful for debugging:
 
 =head1 HTTP METHODS
 
-All HTTP methods return a L<PAGI::Test::Response> object.
+All HTTP methods return a L<PAGI::Test::Response> object decoded from the
+events the application sent. This remains true when C<app> is a production
+L<PAGI::Response>: the client returns captured wire data, not that production
+object or a proxy for it.
 
 =head2 get
 

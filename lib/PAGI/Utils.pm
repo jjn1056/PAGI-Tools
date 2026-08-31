@@ -3,12 +3,14 @@ package PAGI::Utils;
 use strict;
 use warnings;
 use Exporter ();
+use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use File::Basename qw(basename dirname);
 use File::Spec;
 use Scalar::Util qw(blessed);
 use PAGI::Lifespan;
+use PAGI::Utils::_App;
 
 my @PAGI_ENVIRONMENTS = qw(development test staging production);
 my %VALID_PAGI_ENV = map { $_ => 1 } @PAGI_ENVIRONMENTS;
@@ -20,7 +22,7 @@ my @PATH_EXPORTS = qw(
 );
 
 our @EXPORT_OK = (
-    qw(handle_lifespan to_app is_response),
+    qw(handle_lifespan to_app as_app request_response invoke_app),
     @ENV_EXPORTS,
     @PATH_EXPORTS,
 );
@@ -288,14 +290,6 @@ sub _app_path_from_origin {
     return File::Spec->canonpath(File::Spec->catfile($home, @components));
 }
 
-# True if $x is a PAGI response value: a blessed object that can respond($send).
-# The single source of truth for the "did the handler return a response?" check
-# (used by the endpoint and router dispatch paths).
-sub is_response {
-    my ($x) = @_;
-    return blessed($x) && $x->can('respond') ? 1 : 0;
-}
-
 async sub handle_lifespan {
     my ($scope, $receive, $send, %opts) = @_;
 
@@ -312,35 +306,50 @@ async sub handle_lifespan {
 }
 
 sub to_app {
-    my ($thing) = @_;
+    my ($value) = @_;
+    _validate_app_value($value, 'to_app() application');
+    return $value if ref($value) eq 'CODE';
+    my $app = $value->to_app;
+    croak ref($value) . '->to_app must return a coderef'
+        unless ref($app) eq 'CODE';
+    return $app;
+}
 
-    croak "to_app() requires an app, component, or class name"
-        unless defined $thing;
+sub as_app {
+    croak 'as_app() requires exactly one native coderef'
+        unless @_ == 1 && ref($_[0]) eq 'CODE';
+    my ($code) = @_;
+    return PAGI::Utils::_App->new($code);
+}
 
-    return $thing if ref($thing) eq 'CODE';
+sub request_response {
+    croak 'request_response handler must be a coderef'
+        unless @_ == 1 && ref($_[0]) eq 'CODE';
+    require PAGI::Routing::RequestResponse;
+    return PAGI::Routing::RequestResponse->new(handler => $_[0]);
+}
 
-    if (blessed($thing)) {
-        return $thing->to_app if $thing->can('to_app');
-        croak ref($thing) . " looks like middleware, not an app"
-            . " - pass it to enable(), or wrap an app with ->wrap(\$app)"
-            if $thing->can('wrap');
-        croak "Cannot coerce " . ref($thing) . " object to a PAGI app (no to_app method)";
+async sub invoke_app {
+    my ($value, $scope, $receive, $send) = @_;
+    my $app = to_app($value);
+    my $returned = $app->($scope, $receive, $send);
+    return await Future->wrap($returned);
+}
+
+sub _validate_app_value {
+    my ($value, $label) = @_;
+    $label = 'application' unless defined $label && length $label;
+
+    if (blessed($value) && $value->can('wrap') && !$value->can('to_app')) {
+        croak "$label middleware object is not an app";
     }
 
-    if (!ref($thing)) {
-        croak "Cannot coerce '$thing' to a PAGI app"
-            unless $thing =~ /\A\w+(?:::\w+)*\z/;
-        unless ($thing->can('to_app')) {
-            local $@;
-            eval "require $thing; 1" or croak "Failed to load '$thing': $@";
-        }
-        return $thing->to_app if $thing->can('to_app');
-        croak "'$thing' looks like middleware, not an app - pass it to enable()"
-            if $thing->can('wrap');
-        croak "'$thing' does not have a to_app() method";
-    }
-
-    croak "Cannot coerce " . ref($thing) . " reference to a PAGI app";
+    my $separator = $label =~ /:\z/ ? ' ' : ' must be ';
+    croak "$label${separator}a coderef or instantiated object with to_app"
+        unless defined $value
+            && (ref($value) eq 'CODE'
+                || (blessed($value) && $value->can('to_app')));
+    return $value;
 }
 
 1;
@@ -537,32 +546,70 @@ Coerce C<$thing> into a PAGI application (an async coderef). Accepts:
 
 =item * an object with a C<to_app> method - compiled by calling it
 
-=item * a class name with a C<to_app> method - auto-required if needed,
-then compiled by calling C<< $class->to_app >>
-
 =back
 
-Anything else croaks. A middleware object or class (something with C<wrap>
-but no C<to_app>) gets a croak pointing at C<enable()> instead, since
-middleware belongs in middleware position, not app position.
+Application positions accept native coderefs and instantiated component objects
+only. They never load package names. Anything else croaks. A middleware object
+(something with C<wrap> but no C<to_app>) gets a middleware-specific croak,
+since middleware belongs in middleware position, not app position.
 
-All composition points in this distribution (builder mounts, router
-targets, cascades, the test client) call this for you, so user code can
-pass components and class names directly:
+Native composition points in this distribution (Mount, Compose, Router
+defaults, cascades, and the test client) call this for you, so user code can pass
+native apps and instantiated components directly:
 
-    mount '/static' => PAGI::App::File->new(root => $dir);
-    mount '/api'    => 'MyApp::API';
+    mount('/static', app => PAGI::App::File->new(root => $dir));
+    mount('/api',    app => MyApp::API->new);
 
-=cut
+A Route is the exceptional adapter boundary: a bare CODE is a one-argument
+Request, WebSocket, or SSE handler, while an instantiated C<to_app> object is
+a native application endpoint.
 
-=head2 is_response
+=head2 as_app
 
-    croak "handler did not return a response" unless is_response($value);
+    use PAGI::Utils qw(as_app);
 
-Returns 1 if C<$value> is a PAGI response value -- a blessed object with a
-C<respond> method -- and 0 otherwise. This is the single source of truth for the
-"did the handler return a response?" check used across the endpoint and router
-dispatch paths, so those checks stay consistent (same predicate, same C<croak>
-diagnostics) instead of each re-deriving C<< blessed($x) && $x->can('respond') >>.
+    route('/native' => as_app($native));
+    route('/relay' => as_app($native), methods => '*');
+
+Returns an opaque application object whose C<to_app> returns the exact supplied
+coderef. It does not inspect arity, alter Future behavior, capture a scope, or
+add protocol policy. At an HTTP Route, no explicit methods means GET plus
+automatic HEAD; scalar C<< methods => '*' >> is unrestricted.
+
+=head2 request_response
+
+    use PAGI::Utils qw(request_response);
+
+    router(
+        routes       => \@routes,
+        http_default => request_response(\&custom_not_found),
+    );
+
+Adapts one Request handler to a native HTTP application component. Route does
+this automatically for bare CODE endpoints; use the helper only when a
+one-Request handler must occupy a native application position. Each invocation
+constructs one Request, awaits the immediate or Future-backed result, and
+invokes the returned native CODE or instantiated C<to_app> object against the
+original triplet. Returned objects are normalized per handler invocation, not
+cached across requests.
+
+Advanced returned applications receive the unchanged scope and remaining body
+stream. Already consumed body events are not replayed; no lifespan is replayed;
+and the returned app's routes, reverse names, and schema metadata remain opaque
+to the outer Router.
+
+=head2 invoke_app
+
+    use PAGI::Utils qw(invoke_app);
+
+    await invoke_app($value, $scope, $receive, $send);
+
+Normalizes C<$value> through C<to_app>, invokes it with the exact supplied
+triplet, and awaits immediate or Future-backed completion. It installs no HEAD,
+scope-rewrite, response-completion, error, or lifespan policy. Use this at a
+native triplet boundary instead of a Response-specific emission method.
+
+Middleware positions have a separate explicit class-loading contract; pass a
+middleware class name there, not in an application position.
 
 =cut

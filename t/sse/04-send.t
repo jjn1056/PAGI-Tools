@@ -73,6 +73,18 @@ subtest 'send_event with string data' => sub {
     is($sent[1]{data}, 'plain text', 'string data not encoded');
 };
 
+subtest 'send_comment sends a direct SSE comment event' => sub {
+    my @sent;
+    my $send = sub { push @sent, $_[0]; Future->done };
+    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    $sse->start->get;
+
+    $sse->send_comment('heartbeat')->get;
+
+    is($sent[1], { type => 'sse.comment', comment => 'heartbeat' },
+        'send_comment emits the direct comment protocol event');
+};
+
 subtest 'send auto-starts if not started' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };

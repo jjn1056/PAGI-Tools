@@ -3,6 +3,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use JSON::MaybeXS qw(decode_json);
@@ -14,8 +15,9 @@ use PAGI::Middleware::CORS;
 use PAGI::Middleware::SecurityHeaders;
 use PAGI::Middleware::TrustedHosts;
 use PAGI::Middleware::CSRF;
-use PAGI::Context;
 use PAGI::Headers;
+use PAGI::Response::Text;
+use PAGI::Utils qw(invoke_app);
 
 my $loop = IO::Async::Loop->new;
 
@@ -29,6 +31,31 @@ sub response_header_values {
     my ($event, $name) = @_;
     return map { $_->[1] }
         grep { lc($_->[0]) eq lc($name) } @{$event->{headers}};
+}
+
+sub assert_owned_response_settlement {
+    my ($wrapped, $scope, $receive, $label) = @_;
+    my ($start_gate, $body_gate) = (Future->new, Future->new);
+    my @events;
+    my $running = $wrapped->(
+        $scope,
+        $receive,
+        sub {
+            push @events, $_[0];
+            return @events == 1 ? $start_gate : $body_gate;
+        },
+    );
+
+    is scalar(@events), 1, "$label emits only response start before settlement";
+    ok !$running->is_ready, "$label waits for response-start settlement";
+    $start_gate->done;
+    is scalar(@events), 2, "$label emits one body after response-start settlement";
+    ok !$running->is_ready, "$label waits for terminal-body settlement";
+    $body_gate->done;
+    is dies { $loop->await($running) }, undef,
+        "$label completes after the terminal send settles";
+    ok !$start_gate->is_cancelled && !$body_gate->is_cancelled,
+        "$label does not cancel server-owned send Futures";
 }
 
 # =============================================================================
@@ -80,11 +107,71 @@ subtest 'CORS handles preflight OPTIONS request' => sub {
 
     ok !$app_called, 'app not called for preflight';
     is $sent[0]{status}, 204, 'preflight returns 204';
+    is $sent[1], {
+        type => 'http.response.body',
+        body => '',
+        more => 0,
+    }, 'preflight sends one terminal empty body event';
 
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
     is $headers{'access-control-allow-origin'}, 'https://example.com', 'Allow-Origin header present';
     like $headers{'access-control-allow-methods'}, qr/POST/, 'Allow-Methods contains POST';
     like $headers{'access-control-allow-headers'}, qr/Content-Type/, 'Allow-Headers present';
+    ok !exists($headers{'content-type'}) && !exists($headers{'content-length'})
+        && !exists($headers{'transfer-encoding'}),
+        'body-forbidden preflight has no representation framing fields';
+};
+
+subtest 'CORS preflight rejects an unknown origin without delegating' => sub {
+    my $mw = PAGI::Middleware::CORS->new(
+        origins => ['https://allowed.com'],
+    );
+    my $app_called = 0;
+    my $wrapped = $mw->wrap(async sub { $app_called++ });
+    my @events;
+
+    run_async(async sub {
+        await $wrapped->(
+            {
+                type    => 'http',
+                path    => '/api/data',
+                method  => 'OPTIONS',
+                headers => [['origin', 'https://evil.com']],
+            },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; push @events, $event },
+        );
+    });
+
+    is $app_called, 0, 'unknown-origin preflight does not reach downstream';
+    is $events[0]{status}, 204, 'unknown-origin preflight is still complete';
+    is [grep { $_->[0] =~ /^access-control/i } @{$events[0]{headers}}], [],
+        'unknown-origin preflight receives no CORS permission fields';
+    is $events[1], {
+        type => 'http.response.body', body => '', more => 0,
+    }, 'unknown-origin preflight retains the empty terminal event';
+};
+
+subtest 'CORS preflight uses the native HTTP triplet' => sub {
+    my $mw = PAGI::Middleware::CORS->new;
+    my $wrapped = $mw->wrap(async sub { die 'preflight reached downstream' });
+    my @events;
+    my $future = $wrapped->(
+        {
+            type    => 'http',
+            path    => '/api/data',
+            method  => 'OPTIONS',
+            headers => [['origin', 'https://example.com']],
+        },
+        undef,
+        async sub { my ($event) = @_; push @events, $event },
+    );
+    $loop->await($future);
+
+    ok $future->is_failed, 'invalid receive callback rejects preflight emission';
+    like [$future->failure]->[0], qr/receive.*coderef/i,
+        'preflight reports the native receive requirement';
+    is \@events, [], 'triplet validation happens before response start';
 };
 
 subtest 'CORS adds headers to actual requests' => sub {
@@ -93,18 +180,22 @@ subtest 'CORS adds headers to actual requests' => sub {
         credentials => 1,
     );
 
+    my ($start, $body);
     my $app = async sub  {
         my ($scope, $receive, $send) = @_;
-        await $send->({
+        $start = {
             type    => 'http.response.start',
             status  => 200,
             headers => [['content-type', 'application/json']],
-        });
-        await $send->({
+            extension_sentinel => 'kept',
+        };
+        $body = {
             type => 'http.response.body',
             body => '{"data":"test"}',
             more => 0,
-        });
+        };
+        await $send->($start);
+        await $send->($body);
     };
 
     my $wrapped = $mw->wrap($app);
@@ -127,6 +218,40 @@ subtest 'CORS adds headers to actual requests' => sub {
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
     is $headers{'access-control-allow-origin'}, 'https://example.com', 'Origin header on response';
     is $headers{'access-control-allow-credentials'}, 'true', 'Credentials header present';
+    is refaddr($sent[0]), refaddr($start),
+        'credentialed CORS mutates literal response metadata in place';
+    is refaddr($sent[1]), refaddr($body),
+        'credentialed CORS forwards the downstream body event by identity';
+    is $sent[0]{extension_sentinel}, 'kept',
+        'credentialed CORS preserves response-start extension fields';
+};
+
+subtest 'CORS wildcard simple request retains literal star policy' => sub {
+    my $mw = PAGI::Middleware::CORS->new(origins => ['*']);
+    my $wrapped = $mw->wrap(async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({
+            type => 'http.response.start', status => 200, headers => [],
+        });
+        await $send->({ type => 'http.response.body', body => 'OK', more => 0 });
+    });
+    my @events;
+
+    run_async(async sub {
+        await $wrapped->(
+            {
+                type    => 'http', path => '/', method => 'GET',
+                headers => [['origin', 'https://site.example']],
+            },
+            async sub { { type => 'http.disconnect' } },
+            async sub { my ($event) = @_; push @events, $event },
+        );
+    });
+
+    is [response_header_values($events[0], 'Access-Control-Allow-Origin')],
+        ['*'], 'simple wildcard request retains literal star policy';
+    is [response_header_values($events[0], 'Access-Control-Allow-Credentials')],
+        [], 'simple wildcard request does not enable credentials';
 };
 
 subtest 'CORS rejects unknown origins' => sub {
@@ -743,6 +868,35 @@ subtest 'TrustedHosts preserves non-HTTP pass-through gate' => sub {
     is $seen_scope, $scope, 'WebSocket scope with duplicate Host passes through untouched';
 };
 
+subtest 'security-owned rejections await concrete response emission' => sub {
+    my @cases = (
+        [
+            'TrustedHosts 400',
+            PAGI::Middleware::TrustedHosts->new(hosts => ['example.com'])
+                ->wrap(async sub { die 'TrustedHosts rejection reached downstream' }),
+            {
+                type => 'http', method => 'GET', path => '/', headers => [],
+            },
+        ],
+        [
+            'CSRF 403',
+            PAGI::Middleware::CSRF->new(secret => 'test-secret')
+                ->wrap(async sub { die 'CSRF rejection reached downstream' }),
+            {
+                type => 'http', method => 'POST', path => '/', headers => [],
+            },
+        ],
+    );
+
+    for my $case (@cases) {
+        assert_owned_response_settlement(
+            $case->[1], $case->[2],
+            sub { Future->done({ type => 'http.disconnect' }) },
+            $case->[0],
+        );
+    }
+};
+
 subtest 'TrustedHosts does not catch downstream exceptions' => sub {
     my $mw = PAGI::Middleware::TrustedHosts->new(hosts => ['example.com']);
     my $diagnostic = "TrustedHosts downstream sentinel\n";
@@ -1064,7 +1218,7 @@ subtest "CSRF enforce => 'app' passes an unsafe request through with no token" =
     like $set_cookie->[1], qr/\Q$seen_token\E/, 'Set-Cookie carries the same token stashed in scope';
 };
 
-subtest "CSRF enforce => 'app' preserves an application-owned Context response" => sub {
+subtest "CSRF enforce => 'app' preserves an application-owned Response" => sub {
     my $mw = PAGI::Middleware::CSRF->new(
         secret => 'test-secret', enforce => 'app',
     );
@@ -1072,10 +1226,11 @@ subtest "CSRF enforce => 'app' preserves an application-owned Context response" 
     my $send = async sub { my ($event) = @_; push @sent, $event };
     my $wrapped = $mw->wrap(async sub {
         my ($scope, $receive, $downstream_send) = @_;
-        my $ctx = PAGI::Context->new($scope, $receive, $downstream_send);
-        await $ctx->respond(
-            $ctx->text('application-owned CSRF rejection', status => 403),
+        my $response = PAGI::Response::Text->new(
+            'application-owned CSRF rejection',
+            status => 403,
         );
+        await invoke_app($response, $scope, $receive, $downstream_send);
     });
 
     run_async(async sub {
@@ -1094,11 +1249,11 @@ subtest "CSRF enforce => 'app' preserves an application-owned Context response" 
     is $sent[0]{status}, 403, 'application retains its chosen status';
     is [response_header_values($sent[0], 'Content-Type')],
         ['text/plain; charset=utf-8'],
-        'application Context response remains literal text despite Accept';
+        'application Response remains literal text despite Accept';
     is [response_header_values($sent[0], 'Vary')], [],
-        'application Context response does not gain Pages negotiation metadata';
+        'application Response does not gain Pages negotiation metadata';
     is $sent[1]{body}, 'application-owned CSRF rejection',
-        'application Context response body remains byte-for-byte literal';
+        'application Response body remains byte-for-byte literal';
 };
 
 subtest "CSRF enforce => 'app' stashes the existing COOKIE token, not a new one" => sub {

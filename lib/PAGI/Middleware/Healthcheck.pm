@@ -4,7 +4,8 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use JSON::MaybeXS ();
+use PAGI::Response::JSON ();
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -27,7 +28,9 @@ PAGI::Middleware::Healthcheck - Health check endpoint middleware
 =head1 DESCRIPTION
 
 PAGI::Middleware::Healthcheck provides a health check endpoint for
-load balancers and monitoring systems. Returns JSON status information.
+load balancers and monitoring systems. It returns protocol JSON status
+information through L<PAGI::Response::JSON>; request Accept fields do not
+change the health representation.
 
 =head1 CONFIGURATION
 
@@ -82,19 +85,19 @@ sub wrap {
 
         # Liveness probe (just check server is responding)
         if (defined $self->{live_path} && $path eq $self->{live_path}) {
-            await $self->_send_live($send);
+            await $self->_send_live($scope, $receive, $send);
             return;
         }
 
         # Readiness probe (run all checks)
         if (defined $self->{ready_path} && $path eq $self->{ready_path}) {
-            await $self->_send_ready($send);
+            await $self->_send_ready($scope, $receive, $send);
             return;
         }
 
         # Main health check endpoint
         if ($path eq $self->{path}) {
-            await $self->_send_health($send);
+            await $self->_send_health($scope, $receive, $send);
             return;
         }
 
@@ -104,28 +107,18 @@ sub wrap {
 }
 
 async sub _send_live {
-    my ($self, $send) = @_;
+    my ($self, $scope, $receive, $send) = @_;
 
-    my $body = JSON::MaybeXS::encode_json({ status => 'ok' });
-
-    await $send->({
-        type    => 'http.response.start',
+    my $response = PAGI::Response::JSON->new(
+        { status => 'ok' },
         status  => 200,
-        headers => [
-            ['Content-Type', 'application/json'],
-            ['Content-Length', length($body)],
-            ['Cache-Control', 'no-cache, no-store'],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+        headers => ['Cache-Control' => 'no-cache, no-store'],
+    );
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 async sub _send_ready {
-    my ($self, $send) = @_;
+    my ($self, $scope, $receive, $send) = @_;
 
     my ($healthy, $results) = $self->_run_checks();
 
@@ -134,27 +127,17 @@ async sub _send_ready {
     };
     $response->{checks} = $results if $self->{include_details};
 
-    my $body = JSON::MaybeXS::encode_json($response);
     my $status = $healthy ? 200 : 503;
-
-    await $send->({
-        type    => 'http.response.start',
+    my $result = PAGI::Response::JSON->new(
+        $response,
         status  => $status,
-        headers => [
-            ['Content-Type', 'application/json'],
-            ['Content-Length', length($body)],
-            ['Cache-Control', 'no-cache, no-store'],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+        headers => ['Cache-Control' => 'no-cache, no-store'],
+    );
+    await PAGI::Utils::invoke_app($result, $scope, $receive, $send);
 }
 
 async sub _send_health {
-    my ($self, $send) = @_;
+    my ($self, $scope, $receive, $send) = @_;
 
     my ($healthy, $results) = $self->_run_checks();
 
@@ -164,23 +147,13 @@ async sub _send_health {
     };
     $response->{checks} = $results if $self->{include_details} && keys %{$self->{checks}};
 
-    my $body = JSON::MaybeXS::encode_json($response);
     my $status = $healthy ? 200 : 503;
-
-    await $send->({
-        type    => 'http.response.start',
+    my $result = PAGI::Response::JSON->new(
+        $response,
         status  => $status,
-        headers => [
-            ['Content-Type', 'application/json'],
-            ['Content-Length', length($body)],
-            ['Cache-Control', 'no-cache, no-store'],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
+        headers => ['Cache-Control' => 'no-cache, no-store'],
+    );
+    await PAGI::Utils::invoke_app($result, $scope, $receive, $send);
 }
 
 sub _run_checks {

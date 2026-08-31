@@ -5,37 +5,66 @@ use Test2::V0;
 use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS;
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::Endpoint::WebSocket;
-use PAGI::Context;
 
 package EchoEndpoint {
     use parent 'PAGI::Endpoint::WebSocket';
     use Future::AsyncAwait;
 
     our @log;
+    our ($seen_connect, $seen_receive, $seen_disconnect);
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
+        my ($self, $websocket) = @_;
         push @log, 'connect';
-        await $ctx->websocket->accept;
+        $seen_connect = $websocket;
+        await $websocket->accept;
     }
 
     async sub on_receive {
-        my ($self, $ctx, $data) = @_;
+        my ($self, $websocket, $data) = @_;
         push @log, "receive:$data";
-        await $ctx->websocket->send_text("echo:$data");
+        $seen_receive //= $websocket;
+        await $websocket->send_text("echo:$data");
     }
 
     sub on_disconnect {
-        my ($self, $ctx, $code, $reason) = @_;
+        my ($self, $websocket, $code, $reason) = @_;
+        $seen_disconnect = $websocket;
         push @log, "disconnect:$code";
     }
 }
 
+{
+    package TextAdapterEndpoint;
+    use parent 'PAGI::Endpoint::WebSocket';
+    our @received;
+    sub on_receive { push @received, $_[2] }
+}
+
+{
+    package BytesAdapterEndpoint;
+    use parent 'PAGI::Endpoint::WebSocket';
+    our @received;
+    sub encoding { 'bytes' }
+    sub on_receive { push @received, $_[2] }
+}
+
+{
+    package JSONAdapterEndpoint;
+    use parent 'PAGI::Endpoint::WebSocket';
+    our @received;
+    sub encoding { 'json' }
+    sub on_receive { push @received, $_[2] }
+}
+
 subtest 'lifecycle via to_app' => sub {
     @EchoEndpoint::log = ();
+    ($EchoEndpoint::seen_connect, $EchoEndpoint::seen_receive,
+        $EchoEndpoint::seen_disconnect) = ();
 
     my $app = EchoEndpoint->to_app;
     my @sent;
@@ -62,39 +91,167 @@ subtest 'lifecycle via to_app' => sub {
     is($EchoEndpoint::log[1], 'receive:hello', 'first message');
     is($EchoEndpoint::log[2], 'receive:world', 'second message');
     like($EchoEndpoint::log[3], qr/disconnect/, 'on_disconnect called');
+    is(ref($EchoEndpoint::seen_connect), 'PAGI::WebSocket',
+        'connect receives direct channel');
+    is(refaddr($EchoEndpoint::seen_connect), refaddr($EchoEndpoint::seen_receive),
+        'receive sees the exact connection object');
+    is(refaddr($EchoEndpoint::seen_connect), refaddr($EchoEndpoint::seen_disconnect),
+        'disconnect sees the exact connection object');
+    is(refaddr($EchoEndpoint::seen_connect->scope), refaddr($scope),
+        'channel owns the exact selected scope');
 
     # Check accept was sent
     ok((grep { ($_->{type} // '') eq 'websocket.accept' } @sent), 'accept sent');
 };
 
-subtest 'context_class defaults to PAGI::Context' => sub {
-    is(EchoEndpoint->context_class, 'PAGI::Context', 'default context class');
-};
-
-subtest 'on_connect receives PAGI::Context::WebSocket' => sub {
+subtest 'immediate on_connect and on_receive results are normalized' => sub {
     {
-        package CheckCtxEndpoint;
+        package ImmediateEndpoint;
         use parent 'PAGI::Endpoint::WebSocket';
-        use Future::AsyncAwait;
 
-        our $captured_ctx_class;
+        our @seen;
 
-        async sub on_connect {
-            my ($self, $ctx) = @_;
-            $captured_ctx_class = ref($ctx);
-            await $ctx->websocket->accept;
+        sub on_connect {
+            my ($self, $websocket) = @_;
+            push @seen, ref($websocket);
+            $websocket->accept;
+            return 'immediate connect result';
+        }
+
+        sub on_receive {
+            my ($self, $websocket, $data) = @_;
+            push @seen, "$data:" . ref($websocket);
+            return 'immediate receive result';
         }
     }
 
-    my $app = CheckCtxEndpoint->to_app;
+    my $app = ImmediateEndpoint->to_app;
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $receive = sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) };
+    my @events = (
+        { type => 'websocket.receive', text => 'hello' },
+        { type => 'websocket.disconnect', code => 1000 },
+    );
+    my $receive = sub { Future->done(shift @events) };
 
     $app->({ type => 'websocket', path => '/ws', headers => [] },
            $receive, $send)->get;
 
-    is($CheckCtxEndpoint::captured_ctx_class, 'PAGI::Context::WebSocket', 'ctx is WebSocket context');
+    is(\@ImmediateEndpoint::seen, [
+        'PAGI::WebSocket',
+        'hello:PAGI::WebSocket',
+    ], 'direct callbacks accept immediate return values');
+};
+
+subtest 'on_receive dispatches each declared message encoding' => sub {
+    for my $case (
+        {
+            name     => 'text',
+            endpoint => 'TextAdapterEndpoint',
+            received => \@TextAdapterEndpoint::received,
+            events   => [
+                { type => 'websocket.receive', bytes => "\x00\xff" },
+                { type => 'websocket.receive', text => 'plain text' },
+                { type => 'websocket.disconnect', code => 1000 },
+            ],
+            want => ['plain text'],
+        },
+        {
+            name     => 'bytes',
+            endpoint => 'BytesAdapterEndpoint',
+            received => \@BytesAdapterEndpoint::received,
+            events   => [
+                { type => 'websocket.receive', text => 'ignored text' },
+                { type => 'websocket.receive', bytes => "\x00\xff" },
+                { type => 'websocket.disconnect', code => 1000 },
+            ],
+            want => ["\x00\xff"],
+        },
+        {
+            name     => 'json',
+            endpoint => 'JSONAdapterEndpoint',
+            received => \@JSONAdapterEndpoint::received,
+            events   => [
+                { type => 'websocket.receive', bytes => 'ignored bytes' },
+                { type => 'websocket.receive', text => '{"kind":"notice","count":2}' },
+                { type => 'websocket.disconnect', code => 1000 },
+            ],
+            want => [{ kind => 'notice', count => 2 }],
+        },
+    ) {
+        subtest "$case->{name} adapter" => sub {
+            @{$case->{received}} = ();
+            my @sent;
+            my @events = @{$case->{events}};
+            my $app = $case->{endpoint}->to_app;
+
+            $app->(
+                { type => 'websocket', path => '/ws', headers => [] },
+                sub { Future->done(shift @events) },
+                sub { push @sent, $_[0]; Future->done },
+            )->get;
+
+            is($case->{received}, $case->{want},
+                "on_receive receives decoded $case->{name} frames only");
+        };
+    }
+};
+
+subtest 'no on_connect override accepts the connection automatically' => sub {
+    my @sent;
+    PAGI::Endpoint::WebSocket->to_app->(
+        { type => 'websocket', path => '/ws', headers => [] },
+        sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+        sub { push @sent, $_[0]; Future->done },
+    )->get;
+
+    is([map { $_->{type} } @sent], ['websocket.accept'],
+        'the default on_connect implementation accepts once');
+};
+
+subtest 'failed callback Future propagates through the endpoint app' => sub {
+    {
+        package FailingReceiveEndpoint;
+        use parent 'PAGI::Endpoint::WebSocket';
+
+        sub on_connect { $_[1]->accept }
+        sub on_receive { Future->fail("receive hook failed\n") }
+    }
+
+    like(dies {
+        FailingReceiveEndpoint->to_app->(
+            { type => 'websocket', path => '/ws', headers => [] },
+            sub { Future->done({ type => 'websocket.receive', text => 'boom' }) },
+            sub { Future->done },
+        )->get;
+    }, qr/receive hook failed/, 'failed receive Future is not swallowed');
+};
+
+subtest 'on_disconnect remains synchronous and its return is not awaited' => sub {
+    {
+        package SynchronousDisconnectEndpoint;
+        use parent 'PAGI::Endpoint::WebSocket';
+        our $returned = Future->new;
+        our $called = 0;
+
+        sub on_connect { $_[1]->accept }
+        sub on_disconnect {
+            $called++;
+            return $returned;
+        }
+    }
+
+    $SynchronousDisconnectEndpoint::returned = Future->new;
+    $SynchronousDisconnectEndpoint::called = 0;
+    my $running = SynchronousDisconnectEndpoint->to_app->(
+        { type => 'websocket', path => '/ws', headers => [] },
+        sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+        sub { Future->done },
+    );
+    is($running->get, undef, 'endpoint completes without disconnect return');
+    is($SynchronousDisconnectEndpoint::called, 1, 'disconnect hook was called');
+    ok(!$SynchronousDisconnectEndpoint::returned->is_ready,
+        'disconnect return Future was not awaited');
 };
 
 done_testing;

@@ -7,8 +7,29 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
-use PAGI::Routing qw(middleware);
+use PAGI::Response::Text ();
+use PAGI::Routing::URL qw(path_for);
 use PAGI::Test::Client;
+
+{
+    package Local::NativeAppObject;
+
+    sub new {
+        my ($class, $app) = @_;
+        return bless { app => $app, builds => 0 }, $class;
+    }
+    sub to_app {
+        my ($self) = @_;
+        ++$self->{builds};
+        return $self->{app};
+    }
+}
+
+{
+    package Local::BrokenNativeAppObject;
+    sub new { return bless {}, $_[0] }
+    sub to_app { return bless {}, 'Local::NotACoderef' }
+}
 
 sub raw_http_app {
     my ($argument_counts) = @_;
@@ -22,25 +43,27 @@ sub raw_http_app {
         })->get;
         $send->({
             type => 'http.response.body',
-            body => 'raw ' . $scope->{path_params}{id},
+            body => 'native ' . $scope->{path_params}{id},
             more => 0,
         })->get;
         return Future->done;
     };
 }
 
-subtest 'ordinary HTTP targets receive Context and emit immediate or Future Responses' => sub {
+subtest 'ordinary HTTP targets receive Request and emit immediate or Future Responses' => sub {
     my @normal_kinds;
     my $router = PAGI::App::Router->new;
     $router->get('/immediate/{id}' => sub {
-        my ($c) = @_;
-        push @normal_kinds, [ref($c), scalar @_];
-        return $c->response->status(201)->text('immediate ' . $c->path_param('id'));
+        my ($request) = @_;
+        push @normal_kinds, [ref($request), scalar @_];
+        return PAGI::Response::Text->new(
+            'immediate ' . $request->path_param('id'), status => 201,
+        );
     });
     $router->get('/future' => sub {
-        my ($c) = @_;
-        push @normal_kinds, [ref($c), scalar @_];
-        return Future->done($c->response->status(202)->text('future'));
+        my ($request) = @_;
+        push @normal_kinds, [ref($request), scalar @_];
+        return Future->done(PAGI::Response::Text->new('future', status => 202));
     });
 
     my $client = PAGI::Test::Client->new(app => $router->to_app);
@@ -52,127 +75,146 @@ subtest 'ordinary HTTP targets receive Context and emit immediate or Future Resp
     is([$future->status, $future->content], [202, 'future'],
         'a Future-backed Response is emitted through the same adapter');
     is(\@normal_kinds, [
-        ['PAGI::Context::HTTP', 1],
-        ['PAGI::Context::HTTP', 1],
-    ], 'ordinary HTTP handlers receive only an HTTP Context');
+        ['PAGI::Request', 1],
+        ['PAGI::Request', 1],
+    ], 'ordinary HTTP handlers receive only a Request');
 };
 
-subtest 'explicit raw HTTP targets retain all three native channels' => sub {
-    my @raw_argument_counts;
+subtest 'application-valued HTTP targets retain all three native channels' => sub {
+    my @native_argument_counts;
+    my $native_object = Local::NativeAppObject->new(
+        raw_http_app(\@native_argument_counts),
+    );
     my $router = PAGI::App::Router->new;
-    $router->get('/raw/{id}', raw => raw_http_app(\@raw_argument_counts));
+    $router->get('/native/{id}' => $native_object);
 
-    my $client = PAGI::Test::Client->new(app => $router->to_app);
-    my $raw = $client->get('/raw/7');
+    is($native_object->{builds}, 0, 'application object is not compiled at declaration');
+    my $app = $router->to_app;
+    is($native_object->{builds}, 1, 'HTTP application object compiles once per to_app');
+    my $client = PAGI::Test::Client->new(app => $app);
+    my $native = $client->get('/native/7');
 
-    is([$raw->status, $raw->content], [209, 'raw 7'],
-        'an explicit raw HTTP route owns native response events');
-    is(\@raw_argument_counts, [3], 'a raw HTTP route receives all three PAGI channels');
+    is([$native->status, $native->content], [209, 'native 7'],
+        'an application-valued HTTP Route owns native response events');
+    is(\@native_argument_counts, [3], 'an HTTP application Route receives all three PAGI channels');
+    is($native_object->{builds}, 1, 'requests never recompile the application object');
+    like(dies {
+        PAGI::App::Router->new
+            ->get('/broken' => Local::BrokenNativeAppObject->new)
+            ->to_app;
+    }, qr/to_app must return a coderef/,
+        'a broken application object fails at compilation');
 };
 
-subtest 'ordinary and raw WebSocket targets receive their declared contracts' => sub {
-    my (@normal, @raw);
+subtest 'handler and application WebSocket targets receive their declared contracts' => sub {
+    my (@normal, @native);
     my $router = PAGI::App::Router->new;
     $router->websocket('/ws/{room}' => sub {
-        my ($c) = @_;
-        push @normal, [ref($c), scalar @_, $c->path_param('room')];
-        $c->accept->get;
-        $c->send_text('normal ' . $c->path_param('room'))->get;
-        return $c->close(1000, 'done');
+        my ($websocket) = @_;
+        push @normal, [ref($websocket), scalar @_, $websocket->path_param('room')];
+        $websocket->accept->get;
+        $websocket->send_text('normal ' . $websocket->path_param('room'))->get;
+        return $websocket->close(1000, 'done');
     });
-    $router->websocket('/raw-ws/{room}', raw => sub {
+    my $native_object = Local::NativeAppObject->new(sub {
         my ($scope, $receive, $send) = @_;
-        push @raw, [scalar @_, $scope->{path_params}{room}];
+        push @native, [scalar @_, $scope->{path_params}{room}];
         $receive->()->get;
         $send->({ type => 'websocket.accept' })->get;
-        $send->({ type => 'websocket.send', text => 'raw ' . $scope->{path_params}{room} })->get;
+        $send->({ type => 'websocket.send', text => 'native ' . $scope->{path_params}{room} })->get;
         $send->({ type => 'websocket.close', code => 1000, reason => 'done' })->get;
         return Future->done;
     });
+    $router->websocket('/native-ws/{room}' => $native_object);
 
-    my $client = PAGI::Test::Client->new(app => $router->to_app);
+    my $app = $router->to_app;
+    is($native_object->{builds}, 1, 'WebSocket application object compiles once');
+    my $client = PAGI::Test::Client->new(app => $app);
     $client->websocket('/ws/lobby', sub {
         my ($ws) = @_;
-        is($ws->receive_text, 'normal lobby', 'normal WebSocket Context emitted text');
+        is($ws->receive_text, 'normal lobby', 'normal WebSocket object emitted text');
     });
-    $client->websocket('/raw-ws/native', sub {
+    $client->websocket('/native-ws/native', sub {
         my ($ws) = @_;
-        is($ws->receive_text, 'raw native', 'raw WebSocket app emitted text');
+        is($ws->receive_text, 'native native', 'WebSocket application emitted text');
     });
 
-    is(\@normal, [['PAGI::Context::WebSocket', 1, 'lobby']],
-        'ordinary WebSocket handler receives only its Context subclass');
-    is(\@raw, [[3, 'native']], 'raw WebSocket target receives the three channels');
+    is(\@normal, [['PAGI::WebSocket', 1, 'lobby']],
+        'ordinary WebSocket handler receives only its protocol object');
+    is(\@native, [[3, 'native']], 'WebSocket application target receives the three channels');
 };
 
-subtest 'ordinary and raw SSE targets receive their declared contracts' => sub {
-    my (@normal, @raw);
+subtest 'handler and application SSE targets receive their declared contracts' => sub {
+    my (@normal, @native);
     my $router = PAGI::App::Router->new;
     $router->sse('/events/{stream}' => sub {
-        my ($c) = @_;
-        push @normal, [ref($c), scalar @_, $c->path_param('stream')];
-        $c->start->get;
-        $c->send_event(event => 'normal', data => $c->path_param('stream'))->get;
-        return $c->close;
+        my ($sse) = @_;
+        push @normal, [ref($sse), scalar @_, $sse->path_param('stream')];
+        $sse->start->get;
+        $sse->send_event(event => 'normal', data => $sse->path_param('stream'))->get;
+        return $sse->close;
     });
-    $router->sse('/raw-events/{stream}', raw => sub {
+    my $native_object = Local::NativeAppObject->new(sub {
         my ($scope, $receive, $send) = @_;
-        push @raw, [scalar @_, $scope->{path_params}{stream}];
+        push @native, [scalar @_, $scope->{path_params}{stream}];
         $send->({ type => 'sse.start', status => 200, headers => [] })->get;
         $send->({
             type => 'sse.send',
-            event => 'raw',
+            event => 'native',
             data => $scope->{path_params}{stream},
         })->get;
         $send->({ type => 'sse.close' })->get;
         return Future->done;
     });
+    $router->sse('/native-events/{stream}' => $native_object);
 
-    my $client = PAGI::Test::Client->new(app => $router->to_app);
+    my $app = $router->to_app;
+    is($native_object->{builds}, 1, 'SSE application object compiles once');
+    my $client = PAGI::Test::Client->new(app => $app);
     $client->sse('/events/news', sub {
         my ($sse) = @_;
         my $event = $sse->receive_event;
         is([$event->{event}, $event->{data}], ['normal', 'news'],
-            'normal SSE Context emitted an event');
+            'normal SSE object emitted an event');
     });
-    $client->sse('/raw-events/native', sub {
+    $client->sse('/native-events/native', sub {
         my ($sse) = @_;
         my $event = $sse->receive_event;
-        is([$event->{event}, $event->{data}], ['raw', 'native'],
-            'raw SSE app emitted an event');
+        is([$event->{event}, $event->{data}], ['native', 'native'],
+            'SSE application emitted an event');
     });
 
-    is(\@normal, [['PAGI::Context::SSE', 1, 'news']],
-        'ordinary SSE handler receives only its Context subclass');
-    is(\@raw, [[3, 'native']], 'raw SSE target receives the three channels');
+    is(\@normal, [['PAGI::SSE', 1, 'news']],
+        'ordinary SSE handler receives only its protocol object');
+    is(\@native, [[3, 'native']], 'SSE application target receives the three channels');
 };
 
-subtest 'slash names, relative Context links, constraints, and metadata share one resolver' => sub {
+subtest 'slash names, relative Request links, constraints, and metadata share one resolver' => sub {
     my @seen;
     my $router = PAGI::App::Router->new;
-    $router->group('/orgs/{org}' => sub {
+    $router->mount('/orgs/{org}', routes => sub {
         my ($org) = @_;
-        $org->group('/people' => sub {
+        $org->mount('/people', routes => sub {
             my ($people) = @_;
             $people->get('/{id}' => sub {
-                my ($c) = @_;
-                my $container = $c->scope->{'pagi.routing'};
+                my ($request) = @_;
+                my $container = $request->scope->{'pagi.routing'};
                 my $frame = $container->{frames}[-1];
                 push @seen, {
                     has_routing => ref($container) eq 'HASH',
                     version => $container->{version},
-                    has_old_router => exists $c->scope->{'pagi.router'} ? 1 : 0,
+                    has_old_router => exists $request->scope->{'pagi.router'} ? 1 : 0,
                     logical_namespace => $frame->{logical_namespace},
                     captures => { %{$frame->{captures}} },
                     match => { %{$frame->{match}} },
-                    link => $c->path_for(
+                    link => path_for($request,
                         'show', {}, { 'a key' => 'x y' }, 'part one',
                     ),
                 };
-                return $c->text($seen[-1]{link});
+                return PAGI::Response::Text->new($seen[-1]{link});
             })->name('show')->desc('Show person')->constraints(id => qr/\A\d+\z/);
             $people->get('/{id}' => sub {
-                return $_[0]->text('constraint fallback');
+                return PAGI::Response::Text->new('constraint fallback');
             });
         })->name('people');
     })->name('org');
@@ -206,7 +248,7 @@ subtest 'slash names, relative Context links, constraints, and metadata share on
 
     is($matched->content,
         '/orgs/acme/people/7?a%20key=x%20y#part%20one',
-        'Context relative reverse routing inherits the active captures');
+        'Request-relative reverse routing inherits the active captures');
     is($rejected->content, 'constraint fallback',
         'dispatch continues in declaration order after a failed constraint');
     is(\@seen, [{
@@ -226,55 +268,52 @@ subtest 'slash names, relative Context links, constraints, and metadata share on
     }], 'dispatch publishes shared pagi.routing metadata and no pagi.router key');
 };
 
-subtest 'custom routing policy and explicit HEAD use the shared compiler' => sub {
-    my @generated;
-    my $router = PAGI::App::Router->new(
-        middleware => [
-            middleware('Routing::NotFound', handler => sub {
-                my ($c, $trace) = @_;
-                push @generated, [
-                    'not_found', $c->response->status,
-                    $c->response->header('Allow'), $trace->allowed_methods,
-                ];
-                return $c->text('custom missing');
-            }),
-            middleware('Routing::MethodNotAllowed', handler => sub {
-                my ($c, $trace) = @_;
-                push @generated, [
-                    'method_not_allowed', $c->response->status,
-                    $c->response->header('Allow'), $trace->allowed_methods,
-                ];
-                return $c->text('custom method');
-            }),
-        ],
-    );
-    $router->get('/only' => sub { return $_[0]->text('only') });
+subtest 'custom HTTP default and explicit HEAD use the shared compiler' => sub {
+    my @default_scopes;
+    my $default = Local::NativeAppObject->new(sub {
+        my ($scope, $receive, $send) = @_;
+        push @default_scopes, [$scope->{type}, scalar @_];
+        $send->({
+            type => 'http.response.start', status => 404,
+            headers => [['content-type', 'text/plain']],
+        })->get;
+        $send->({
+            type => 'http.response.body', body => 'custom missing', more => 0,
+        })->get;
+        return Future->done;
+    });
+    my $router = PAGI::App::Router->new(http_default => $default);
+    $router->get('/only' => sub { return PAGI::Response::Text->new('only') });
     $router->head('/report' => sub {
-        return $_[0]->response->status(203)->text('explicit');
+        return PAGI::Response::Text->new('explicit', status => 203);
     });
     $router->get('/report' => sub {
-        return $_[0]->response->status(200)->text('automatic');
+        return PAGI::Response::Text->new('automatic', status => 200);
     });
 
-    my $client = PAGI::Test::Client->new(app => $router->to_app);
+    my $app = $router->to_app;
+    is($default->{builds}, 1, 'HTTP default object compiles once');
+    my $client = PAGI::Test::Client->new(app => $app);
     my $missing = $client->get('/missing');
-    my $wrong_method = $client->post('/only');
+    my $wrong_method = $client->post('/only',
+        headers => { Accept => 'text/html' });
     my $head = $client->head('/report');
     my $get = $client->get('/report');
 
     is([$missing->status, $missing->content], [404, 'custom missing'],
-        'custom NotFound middleware receives and returns the seeded response');
-    is([$wrong_method->status, $wrong_method->header('Allow'), $wrong_method->content],
-        [405, 'GET, HEAD', 'custom method'],
-        'custom MethodNotAllowed middleware keeps the first-seen Allow outcome');
-    is(\@generated, [
-        ['not_found', 404, undef, []],
-        ['method_not_allowed', 405, undef, ['GET', 'HEAD']],
-    ], 'fallback handlers receive Context state and routing evidence separately');
+        'custom HTTP default owns NONE');
+    is([$wrong_method->status, $wrong_method->header('Allow')],
+        [405, 'GET, HEAD'],
+        'PARTIAL remains the Router stock 405 rather than invoking the default');
+    like($wrong_method->content, qr/Method Not Allowed/,
+        'the PARTIAL body comes from the stock negotiated page');
+    is(\@default_scopes, [['http', 3]],
+        'the custom default receives exactly the three HTTP channels for NONE only');
     is([$head->status, $head->content_length, $head->content], [203, 8, ''],
         'an explicit HEAD declared before GET wins and is body-suppressed');
     is([$get->status, $get->content], [200, 'automatic'],
         'GET skips the earlier HEAD partial and reaches its own route');
+    is($default->{builds}, 1, 'requests never recompile the HTTP default');
 };
 
 done_testing;

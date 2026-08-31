@@ -1,4 +1,6 @@
 use strict; use warnings; use Test::More;
+use Future;
+use Scalar::Util qw(refaddr);
 use Time::HiRes ();
 use PAGI::Test::ConnectionState;
 
@@ -78,7 +80,33 @@ sub still_pending_after {
     is $future->get, 'server_error', 'carries the reason';
 }
 
-# (c) the sharpest break: requested for the FIRST time after a clean
+# (c) every call returns a cancellation-isolated observer. A wait_any race
+# cancels its losing observer; it must not cancel the connection's private
+# disconnect signal or a later observer created for the next race.
+{
+    my $c = PAGI::Test::ConnectionState->new;
+    my $work = Future->done('work');
+    my $first_observer = $c->disconnect_future;
+
+    is(Future->wait_any($work, $first_observer)->get, 'work',
+        'work wins the race');
+    ok $first_observer->is_cancelled,
+        'wait_any cancels only its losing observer';
+
+    my $fresh_observer = $c->disconnect_future;
+    isnt refaddr($fresh_observer), refaddr($first_observer),
+        'the next accessor call returns a fresh observer';
+    ok !$fresh_observer->is_ready,
+        'the fresh observer remains pending before disconnect';
+
+    $c->_mark_disconnected('client_closed');
+    is $fresh_observer->get, 'client_closed',
+        'the later disconnect resolves the fresh observer';
+    ok $first_observer->is_cancelled,
+        'the first losing observer remains cancelled';
+}
+
+# (d) the sharpest break: requested for the FIRST time after a clean
 # completion -- pending forever, not resolved. (A disconnect_future
 # requested BEFORE the completion and left unawaited would, per production,
 # also just stay pending -- this covers the first-request-after case, which

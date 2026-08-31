@@ -9,6 +9,9 @@ use lib 'lib';
 use PAGI::Endpoint::HTTP;
 use PAGI::Endpoint::WebSocket;
 use PAGI::Endpoint::SSE;
+use PAGI::Response;
+use PAGI::Response::Empty ();
+use PAGI::Response::JSON ();
 
 # A realistic multi-protocol endpoint setup
 package MyApp::UserAPI {
@@ -16,18 +19,18 @@ package MyApp::UserAPI {
     use Future::AsyncAwait;
 
     async sub get {
-        my ($self, $ctx) = @_;
-        return $ctx->response->json({ users => ['alice', 'bob'] });
+        my ($self, $request) = @_;
+        return PAGI::Response::JSON->new({ users => ['alice', 'bob'] });
     }
 
     async sub post {
-        my ($self, $ctx) = @_;
-        return $ctx->response->status(201)->json({ created => 1 });
+        my ($self, $request) = @_;
+        return PAGI::Response::JSON->new({ created => 1 }, status => 201);
     }
 
     async sub delete {
-        my ($self, $ctx) = @_;
-        return $ctx->response->status(204)->empty;
+        my ($self, $request) = @_;
+        return PAGI::Response::Empty->new(status => 204);
     }
 }
 
@@ -38,15 +41,14 @@ package MyApp::ChatWS {
     sub encoding { 'json' }
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $ws = $ctx->websocket;
-        await $ws->accept;
-        await $ws->send_json({ type => 'welcome' });
+        my ($self, $websocket) = @_;
+        await $websocket->accept;
+        await $websocket->send_json({ type => 'welcome' });
     }
 
     async sub on_receive {
-        my ($self, $ctx, $data) = @_;
-        await $ctx->websocket->send_json({ type => 'echo', data => $data });
+        my ($self, $websocket, $data) = @_;
+        await $websocket->send_json({ type => 'echo', data => $data });
     }
 }
 
@@ -57,8 +59,7 @@ package MyApp::EventsSSE {
     sub keepalive_interval { 30 }
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $sse = $ctx->sse;
+        my ($self, $sse) = @_;
         await $sse->send_event(
             event => 'connected',
             data  => { server_time => time() },

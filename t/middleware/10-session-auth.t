@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use MIME::Base64 qw(encode_base64);
@@ -34,6 +35,31 @@ sub response_header_values {
     my ($event, $name) = @_;
     return map { $_->[1] }
         grep { lc($_->[0]) eq lc($name) } @{$event->{headers}};
+}
+
+sub assert_auth_rejection_settlement {
+    my ($wrapped, $scope, $label) = @_;
+    my ($start_gate, $body_gate) = (Future->new, Future->new);
+    my @events;
+    my $running = $wrapped->(
+        $scope,
+        sub { Future->done({ type => 'http.disconnect' }) },
+        sub {
+            push @events, $_[0];
+            return @events == 1 ? $start_gate : $body_gate;
+        },
+    );
+
+    is scalar(@events), 1, "$label emits only response start before settlement";
+    ok !$running->is_ready, "$label waits for response-start settlement";
+    $start_gate->done;
+    is scalar(@events), 2, "$label emits one body after response-start settlement";
+    ok !$running->is_ready, "$label waits for terminal-body settlement";
+    $body_gate->done;
+    is dies { $loop->await($running) }, undef,
+        "$label completes after the terminal send settles";
+    ok !$start_gate->is_cancelled && !$body_gate->is_cancelled,
+        "$label does not cancel server-owned send Futures";
 }
 
 # ===================
@@ -395,6 +421,34 @@ subtest 'Auth realms quote backslash before quote and emit one challenge' => sub
                 [$scheme->[2]->($quoted)],
                 "$scheme->[0] safely quotes realm '$input' once";
         }
+    }
+};
+
+subtest 'authentication-owned rejections await concrete response emission' => sub {
+    my @cases = (
+        [
+            'Basic 401',
+            PAGI::Middleware::Auth::Basic->new(
+                realm => 'Test', authenticator => sub { 0 },
+            ),
+        ],
+        [
+            'Bearer 401',
+            PAGI::Middleware::Auth::Bearer->new(
+                realm => 'Test', validator => sub { undef },
+            ),
+        ],
+    );
+
+    for my $case (@cases) {
+        my $wrapped = $case->[1]->wrap(async sub {
+            die "$case->[0] rejection reached downstream";
+        });
+        assert_auth_rejection_settlement(
+            $wrapped,
+            make_scope(headers => [['Accept', 'text/plain']]),
+            $case->[0],
+        );
     }
 };
 

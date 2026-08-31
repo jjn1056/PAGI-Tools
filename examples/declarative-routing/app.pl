@@ -4,9 +4,21 @@ use File::Basename qw(dirname);
 use lib dirname(__FILE__) . '/lib';
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
-use PAGI::Routing qw(:routes middleware);
+use PAGI::Pages qw(not_found);
+use PAGI::Routing qw(:routes);
+use PAGI::Utils qw(request_response);
 use PAGI::Middleware::Helpers qw(wrap_send);
 use MyApp::Routes::Home ();
+
+sub api_not_found {
+    my ($request) = @_;
+    return not_found(detail => 'No API route matched');
+}
+
+sub root_not_found {
+    my ($request) = @_;
+    return not_found(detail => 'No root route matched');
+}
 
 my $home_header = sub {
     my ($app) = @_;
@@ -31,6 +43,19 @@ my $home_header = sub {
     };
 };
 
+my $api_routing = router(
+    routes => [
+        route('/items/{id}' => \&MyApp::Routes::Home::show_item,
+            name        => 'item',
+            desc        => 'Show one numeric item',
+            methods     => ['GET'],
+            constraints => { id => qr/\d+/ },
+        ),
+    ],
+    desc => 'Example JSON API',
+    http_default => request_response(\&api_not_found),
+);
+
 my $routing = router(
     desc => 'Declarative routing example',
     routes => [
@@ -40,26 +65,12 @@ my $routing = router(
             middleware => [$home_header],
         ),
         mount('/api',
-            routes => [
-                route('/items/{id}' => \&MyApp::Routes::Home::show_item,
-                    name        => 'item',
-                    desc        => 'Show one numeric item',
-                    methods     => ['GET'],
-                    constraints => { id => qr/\d+/ },
-                ),
-            ],
+            app  => $api_routing,
             name => 'api',
-            desc      => 'Example JSON API',
+            desc => 'Example JSON API',
         ),
     ],
+    http_default => request_response(\&root_not_found),
 );
 
-compose(
-    app => $routing,
-    middleware => [
-        middleware('Routing::NotFound',
-            handler => \&MyApp::Routes::Home::not_found),
-        middleware('Routing::MethodNotAllowed',
-            handler => \&MyApp::Routes::Home::method_not_allowed),
-    ],
-)->to_app;
+compose(app => $routing);

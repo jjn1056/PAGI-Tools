@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 use JSON::MaybeXS;
@@ -46,6 +47,31 @@ sub response_body {
     my ($events) = @_;
     return join '', map { $_->{body} // '' }
         grep { ($_->{type} // '') eq 'http.response.body' } @$events;
+}
+
+sub assert_body_policy_settlement {
+    my ($wrapped, $scope, $receive, $label) = @_;
+    my ($start_gate, $body_gate) = (Future->new, Future->new);
+    my @events;
+    my $running = $wrapped->(
+        $scope,
+        $receive,
+        sub {
+            push @events, $_[0];
+            return @events == 1 ? $start_gate : $body_gate;
+        },
+    );
+
+    is scalar(@events), 1, "$label emits only response start before settlement";
+    ok !$running->is_ready, "$label waits for response-start settlement";
+    $start_gate->done;
+    is scalar(@events), 2, "$label emits one body after response-start settlement";
+    ok !$running->is_ready, "$label waits for terminal-body settlement";
+    $body_gate->done;
+    is dies { $loop->await($running) }, undef,
+        "$label completes after the terminal send settles";
+    ok !$start_gate->is_cancelled && !$body_gate->is_cancelled,
+        "$label does not cancel server-owned send Futures";
 }
 
 # ===================
@@ -726,6 +752,66 @@ subtest 'ContentNegotiation - strict failures respond once through Pages' => sub
                     '406 retains the safe supported-type detail';
             }
         };
+    }
+};
+
+subtest 'body-policy rejections await concrete response emission' => sub {
+    my @cases = (
+        {
+            name       => 'JSONBody invalid JSON 400',
+            middleware => PAGI::Middleware::JSONBody->new,
+            scope      => make_scope(headers => [
+                ['Content-Type', 'application/json'],
+                ['Accept', 'text/plain'],
+            ]),
+            body       => '{ malformed',
+        },
+        {
+            name       => 'JSONBody size 413',
+            middleware => PAGI::Middleware::JSONBody->new(max_size => 3),
+            scope      => make_scope(headers => [
+                ['Content-Type', 'application/json'],
+                ['Accept', 'text/plain'],
+            ]),
+            body       => 'oversized',
+        },
+        {
+            name       => 'FormBody size 413',
+            middleware => PAGI::Middleware::FormBody->new(max_size => 3),
+            scope      => make_scope(headers => [
+                ['Content-Type', 'application/x-www-form-urlencoded'],
+                ['Accept', 'text/plain'],
+            ]),
+            body       => 'oversized',
+        },
+        {
+            name       => 'ContentNegotiation strict 406',
+            middleware => PAGI::Middleware::ContentNegotiation->new(
+                supported_types => ['application/xml'],
+                strict          => 1,
+            ),
+            scope => make_scope(
+                method  => 'GET',
+                headers => [['Accept', 'image/png']],
+            ),
+        },
+    );
+
+    for my $case (@cases) {
+        my $sent_body = 0;
+        my $receive = sub {
+            return Future->done({ type => 'http.disconnect' })
+                if $sent_body++ || !exists $case->{body};
+            return Future->done({
+                type => 'http.request', body => $case->{body}, more => 0,
+            });
+        };
+        my $wrapped = $case->{middleware}->wrap(async sub {
+            die "$case->{name} rejection reached downstream";
+        });
+        assert_body_policy_settlement(
+            $wrapped, $case->{scope}, $receive, $case->{name},
+        );
     }
 };
 

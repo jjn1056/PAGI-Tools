@@ -2,15 +2,15 @@ package PAGI::App::Directory;
 
 use strict;
 use warnings;
-use bytes ();
 use Carp qw(croak);
 use Encode qw(decode encode FB_CROAK LEAVE_SRC);
 use Errno qw(EACCES EPERM);
 use Fcntl qw(S_ISDIR);
 use Future::AsyncAwait;
 use parent 'PAGI::App::File';
-use JSON::MaybeXS ();
 use File::Spec;
+use PAGI::Response::HTML ();
+use PAGI::Response::JSON ();
 use PAGI::Routing::HeadBoundary;
 use PAGI::Utils ();
 
@@ -137,7 +137,7 @@ sub to_app {
 
         my $relative_path = join '/', _listing_path_parts($request_path);
         return await $self->_send_listing(
-            $send, $listing_scope, $result->path, $relative_path,
+            $listing_scope, $receive, $send, $result->path, $relative_path,
         );
     };
 }
@@ -154,7 +154,7 @@ sub _close_directory {
 }
 
 async sub _send_listing {
-    my ($self, $send, $scope, $dir_path, $rel_path) = @_;
+    my ($self, $scope, $receive, $send, $dir_path, $rel_path) = @_;
 
     $! = 0;
     my $dh = $self->_open_directory($dir_path);
@@ -210,17 +210,10 @@ async sub _send_listing {
     # Check Accept header for JSON
     my $accept = $self->_get_header($scope, 'accept') // '';
     if ($accept =~ m{application/json}) {
-        my $json = JSON::MaybeXS::encode_json(\@entries);
-        await $send->({
-            type => 'http.response.start',
-            status => 200,
-            headers => [
-                ['content-type', 'application/json'],
-                ['content-length', bytes::length($json)],
-            ],
-        });
-        await $send->({ type => 'http.response.body', body => $json, more => 0 });
-        return;
+        my $response = PAGI::Response::JSON->new(\@entries);
+        return await PAGI::Utils::invoke_app(
+            $response, $scope, $receive, $send,
+        );
     }
 
     # HTML listing
@@ -229,7 +222,7 @@ async sub _send_listing {
     my $public_base = _public_listing_base($scope);
 
     # Escape base_path for safe HTML output
-    my $escaped_path = _utf8_bytes(_html_escape($base_path));
+    my $escaped_path = _html_escape($base_path);
 
     my $html = "<!DOCTYPE html><html><head><title>Index of $escaped_path/</title>";
     $html .= '<style>body{font-family:sans-serif;margin:20px}table{border-collapse:collapse}';
@@ -253,22 +246,17 @@ async sub _send_listing {
         my $size = $entry->{is_dir} ? '-' : _format_size($entry->{size});
 
         # Escape all user-controlled values to prevent XSS
-        my $escaped_display = _utf8_bytes(_html_escape($display));
+        my $escaped_display = _html_escape($display);
         my $escaped_href = _html_escape($href);
         $html .= qq{<tr><td><a href="$escaped_href">$escaped_display</a></td><td>$size</td></tr>};
     }
 
     $html .= '</table></body></html>';
 
-    await $send->({
-        type => 'http.response.start',
-        status => 200,
-        headers => [
-            ['content-type', 'text/html; charset=utf-8'],
-            ['content-length', bytes::length($html)],
-        ],
-    });
-    await $send->({ type => 'http.response.body', body => $html, more => 0 });
+    my $response = PAGI::Response::HTML->new($html);
+    return await PAGI::Utils::invoke_app(
+        $response, $scope, $receive, $send,
+    );
 }
 
 sub _format_size {
@@ -294,9 +282,10 @@ an index-free directory receives an HTML or JSON listing.  It uses the one
 inherited C<locate> result for each GET or HEAD request and delegates every
 non-directory result to inherited C<serve>.
 
-L<PAGI::App::File> therefore remains the owner of file and index responses,
-ETags, ranges, conditional requests, file events, and negotiated 403 and 404
-responses.  It also handles unsupported methods before location and returns
+L<PAGI::App::File> therefore remains the owner of safe file and index
+selection plus negotiated 403 and 404 responses, while selected files use the
+shared L<PAGI::Response::File> ETag, range, conditional, and file-event plan.
+The parent also handles unsupported methods before location and returns
 the negotiated 405 response with C<Allow: GET, HEAD>.  Directory listings are
 available only to GET and HEAD.  HEAD preserves the matching GET status and
 headers while emitting no listing bytes.

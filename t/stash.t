@@ -5,6 +5,39 @@ use Test2::V0;
 
 use PAGI::Stash;
 
+my $no_default_imported = eval q{
+    package Local::Stash::NoDefault;
+    PAGI::Stash->import;
+    1;
+};
+
+my $named_imported = eval q{
+    package Local::Stash::Named;
+    PAGI::Stash->import('stash');
+    1;
+};
+
+my $all_imported = eval q{
+    package Local::Stash::All;
+    PAGI::Stash->import(':ALL');
+    1;
+};
+
+ok($no_default_imported && !Local::Stash::NoDefault->can('stash'),
+    'stash is not exported by default');
+ok($named_imported && Local::Stash::Named->can('stash'),
+    'stash is available as a named export');
+ok($all_imported && Local::Stash::All->can('stash'),
+    'uppercase :ALL exports stash');
+
+my $lowercase_tag_error;
+{
+    local $SIG{__WARN__} = sub { };
+    $lowercase_tag_error = dies { PAGI::Stash->import(':all') };
+}
+like($lowercase_tag_error, qr/"?:all"? is not defined|Can't continue/i,
+    'lowercase :all is not an export tag');
+
 # ===================
 # from_data constructor
 # ===================
@@ -32,11 +65,17 @@ subtest 'from_data dies without hashref' => sub {
 # new($scope) — scope-based constructor
 # ===================
 
-subtest 'new from scope hashref' => sub {
+subtest 'class and factory construct separate facades over raw scope data' => sub {
     my $scope = { type => 'http' };
-    my $stash = PAGI::Stash->new($scope);
-    $stash->set(user => 'bob');
-    is($scope->{'pagi.stash'}{user}, 'bob', 'stash created lazily in scope');
+    my $class_stash = PAGI::Stash->new($scope);
+    my $factory = Local::Stash::Named->can('stash');
+    ok($factory, 'named stash export is callable') or return;
+    my $factory_stash = $factory->($scope);
+    $class_stash->set(user => 'bob');
+    is($factory_stash->get('user'), 'bob', 'factory sees class mutation');
+    $factory_stash->set(role => 'admin');
+    is($class_stash->get('role'), 'admin', 'class sees factory mutation');
+    is($scope->{'pagi.stash'}{user}, 'bob', 'stash is created lazily in scope');
 };
 
 subtest 'new from scope with existing pagi.stash' => sub {
@@ -53,19 +92,31 @@ subtest 'new from object with ->scope' => sub {
     is($scope->{'pagi.stash'}{x}, 42, 'stash lives in object scope');
 };
 
-subtest 'new ignores extra positional args' => sub {
+subtest 'class and factory require exactly one source' => sub {
     my $scope = { type => 'http' };
-    my $receive = sub {};
-    my $send = sub {};
-    my $stash = PAGI::Stash->new($scope, $receive, $send);
-    $stash->set(ok => 1);
-    is($stash->get('ok'), 1, 'works with extra args');
+    like(dies { PAGI::Stash->new($scope, sub { }) },
+        qr/PAGI::Stash.*exactly one.*scope/i, 'class rejects extra arguments');
+    my $factory = Local::Stash::Named->can('stash');
+    ok($factory, 'named stash export is callable') or return;
+    like(dies { $factory->($scope, sub { }) },
+        qr/PAGI::Stash.*exactly one.*scope/i, 'factory rejects extra arguments');
 };
 
-subtest 'new dies on invalid argument' => sub {
-    like(dies { PAGI::Stash->new("string") }, qr/requires/, 'dies on string');
-    like(dies { PAGI::Stash->new(undef) }, qr/requires/, 'dies on undef');
-    like(dies { PAGI::Stash->new() }, qr/requires/, 'dies on no args');
+subtest 'class and factory reject malformed sources' => sub {
+    like(dies { PAGI::Stash->new([]) },
+        qr/PAGI::Stash.*unblessed scope hashref.*scope\(\)/i,
+        'class rejects a non-scope reference');
+    like(dies { PAGI::Stash->new() },
+        qr/PAGI::Stash.*exactly one.*scope/i,
+        'class rejects a missing source');
+    my $factory = Local::Stash::Named->can('stash');
+    ok($factory, 'named stash export is callable') or return;
+    like(dies { $factory->([]) },
+        qr/PAGI::Stash.*unblessed scope hashref.*scope\(\)/i,
+        'factory rejects a non-scope reference');
+    like(dies { $factory->() },
+        qr/PAGI::Stash.*exactly one.*scope/i,
+        'factory rejects a missing source');
 };
 
 # ===================

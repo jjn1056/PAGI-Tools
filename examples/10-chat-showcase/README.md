@@ -54,23 +54,28 @@ request dispatch. The bare `middleware => [\&with_logging]` factory shorthand
 is normalized into an inspectable immutable middleware description when the
 Compose root is constructed.
 
-The root Compose also supplies mandatory plain HTTP 404, 405, and 500
-failsafes. They do not change the WebSocket or SSE ownership described below.
+The selected Router supplies negotiated HTTP 404 and 405 outcomes. Root
+Compose supplies the response-completion and 500 failsafes; neither layer
+changes the WebSocket or SSE ownership described below.
 
 The WebSocket and SSE targets are existing native PAGI applications, so their
 route declarations use explicit `raw`. The opaque `/` HTTP mount is written
-last: the shared router preserves declaration order, and a matching prefix
-owns dispatch at that position. `ChatApp::HTTP` therefore gives its internal
+last as `mount('/', app => $http_handler)`: the shared router preserves
+declaration order, and a matching prefix owns dispatch at that position.
+`ChatApp::HTTP` therefore gives its internal
 API Router a Compose boundary of its own. An unknown `/api/...` path receives
-that child's complete 404 instead of leaking an unanswered decline through the
-opaque mount or falling through to static serving.
+that child's complete 404 instead of being reinterpreted by the opaque parent
+mount or falling through to static serving.
 
 Inside that HTTP boundary, `/api/...` dispatch runs first. Every other HTTP
 request is delegated to one caller-relative
-`PAGI::App::File->app_path('public')->to_app`, which owns index selection,
+`PAGI::App::File->from_app_path('public')->to_app`, which owns index selection,
 streaming, MIME types, ranges, conditional requests, and negotiated errors.
 The example does not duplicate filesystem path filtering or read static files
 into application memory.
+
+The final `compose(...)` expression remains an inspectable object in
+`app.pl`; the server compiles its `to_app` method once when loading it.
 
 See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)
 for the status, hidden-file, symlink, and XSendfile migration contract.

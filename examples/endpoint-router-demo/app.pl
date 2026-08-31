@@ -26,4 +26,4 @@ compose(
             $state->{resource}{closed} = 1;
         },
     },
-)->to_app;
+);

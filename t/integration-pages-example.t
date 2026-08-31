@@ -3,80 +3,120 @@ use warnings;
 
 use Test2::V0;
 use FindBin qw($Bin);
+use IO::Async::Loop;
+use PAGI::Server;
 use PAGI::Test::Client;
 
-my $app_file = "$Bin/../examples/pages/app.pl";
-my $app = do $app_file;
-my $load_error = $@ || $!;
-ok(!$load_error, 'Pages example loads cleanly') or diag($load_error);
-is(ref($app), 'CODE', 'example returns one Compose-rooted PAGI app');
+use PAGI::Pages;
 
-subtest 'Pages example exercises route, mount, Context, raw, and lifespan forms' => sub {
-    plan skip_all => 'Pages example did not load' unless ref($app) eq 'CODE';
+# A bare Pages application is intentionally HTTP-only. PAGI::Server's default
+# automatic lifespan mode interprets its lifespan exception as a conforming
+# decline and continues startup. Operator-selected lifespan_mode => 'on' is
+# strict and rejects the same root because Pages does not claim lifecycle
+# ownership; applications that require lifecycle hooks use PAGI::Compose.
+sub lifespan_probe {
+    my ($mode) = @_;
+    my $loop = IO::Async::Loop->new;
+    my $server = PAGI::Server->new(
+        app => PAGI::Pages->welcome,
+        host => '127.0.0.1', port => 0, quiet => 1,
+        lifespan_mode => $mode,
+        lifespan_startup_timeout => 1,
+    );
+    $loop->add($server);
+    my $result = $server->_run_lifespan_startup->get;
+    $loop->remove($server);
+    return $result;
+}
+
+my $automatic = lifespan_probe('auto');
+is($automatic->{success}, 1,
+    'bare Pages root starts when the server uses automatic lifespan mode');
+is($automatic->{lifespan_supported}, 0,
+    'automatic mode records the Pages exception as a lifespan decline');
+
+my $strict = lifespan_probe('on');
+is($strict->{success}, 0,
+    'bare Pages root is rejected when the operator requires lifespan');
+like($strict->{message}, qr/lifespan_mode.*on.*application raised.*Pages.*HTTP/is,
+    'strict mode preserves the HTTP-only decline as its startup diagnostic');
+
+my $client = PAGI::Test::Client->new(app => PAGI::Pages->welcome);
+my $html = $client->get('/', headers => { Accept => 'text/html' });
+is($html->status, 200, 'the bare application still serves HTTP after no factory I/O');
+is($html->content_type, 'text/html; charset=utf-8',
+    'the root application negotiates HTML per HTTP invocation');
+like($html->text, qr/<title>200 Welcome to PAGI<\/title>/,
+    'the root invocation renders the stock Pages document');
+
+my $app_file = "$Bin/../examples/pages/app.pl";
+my $example = do $app_file;
+my $load_error = $@ || $!;
+ok(!$load_error, 'the complete Pages example loads cleanly')
+    or diag($load_error);
+isa_ok($example, 'PAGI::Compose');
+
+subtest 'class, configured, exported, Route, Mount, raw, and lifespan forms execute' => sub {
+    plan skip_all => 'Pages example did not load'
+        unless ref($example) eq 'PAGI::Compose';
 
     my $state;
-    PAGI::Test::Client->run($app, sub {
-        my ($client) = @_;
-        $state = $client->state;
+    PAGI::Test::Client->run($example, sub {
+        my ($example_client) = @_;
+        $state = $example_client->state;
         is($state->{pages_example}, 'started',
-            'Compose startup receives server-owned lifespan state');
+            'Compose starts the Pages example lifespan');
 
-        my $welcome = $client->get('/', headers => { Accept => 'text/html' });
-        is($welcome->status, 200, 'Welcome route responds');
-        is($welcome->content_type, 'text/html; charset=utf-8',
-            'Welcome route negotiates HTML');
+        my $welcome = $example_client->get('/',
+            headers => { Accept => 'text/html' });
+        is($welcome->status, 200,
+            'exported Welcome application works directly in Route');
         like($welcome->text, qr/<title>200 Welcome to PAGI<\/title>/,
-            'Welcome route renders the stock Pages document');
+            'direct application Route negotiates HTML');
 
-        my $redirect = $client->get('/old');
-        is($redirect->status, 308, 'fixed route returns a permanent redirect');
-        is($redirect->header('Location'), '/new',
-            'fixed route publishes its Pages redirect target');
-
-        my $route_child = $client->get('/old/child',
-            headers => { Accept => 'text/plain' });
-        is($route_child->status, 404,
-            'an exact Route does not own descendant paths');
-        is($route_child->header('Location'), undef,
-            'the descendant does not reach the redirect endpoint');
-
-        my $problem = $client->get('/missing',
+        my $missing = $example_client->get('/missing',
             headers => { Accept => 'application/problem+json' });
-        is($problem->status, 404, 'missing route returns Not Found');
-        is($problem->content_type, 'application/problem+json',
-            'error route negotiates problem JSON');
-        is($problem->json->{status}, 404,
-            'problem JSON identifies the terminal status');
-        is($problem->json->{title}, 'Not Found',
-            'problem JSON carries the stock title');
+        is($missing->status, 404,
+            'class factory application works directly in Route');
+        is($missing->content_type, 'application/problem+json',
+            'class factory application negotiates problem JSON');
 
-        my $mounted = $client->get('/terminal/child',
+        my $configured = $example_client->get('/configured');
+        is($configured->status, 404,
+            'configured Pages policy works directly in Route');
+        is($configured->content_type, 'text/plain; charset=utf-8',
+            'configured policy supplies its text default');
+        like($configured->text, qr/configured Pages policy/,
+            'configured policy retains its application detail');
+
+        my $redirect = $example_client->get('/old');
+        is($redirect->status, 308,
+            'direct redirect application responds');
+        is($redirect->header('Location'), '/new',
+            'returned redirect application retains its target');
+
+        my $terminal = $example_client->delete('/terminal/anything',
             headers => { Accept => 'text/plain' });
-        is($mounted->status, 410,
-            'Mount owns a descendant path with its terminal Pages app');
-        is($mounted->content_type, 'text/plain; charset=utf-8',
-            'mounted endpoint negotiates text');
-        like($mounted->text, qr/^410 Gone/m,
-            'mounted descendant renders the Gone page');
+        is($terminal->status, 410,
+            'direct Pages application owns the complete Mount subtree');
 
-        my $context = $client->get('/context');
-        is($context->status, 404,
-            'Context handler returns its unsent Response value');
-        is($context->header('X-Demo'), 'Context response value',
-            'Context handler modifies the Response before Router sends it');
-        is($context->content_type, 'text/plain; charset=utf-8',
-            'Context handler fixes the text representation');
+        my $request = $example_client->get('/request');
+        is($request->status, 404,
+            'one-Request handler returns a request-derived Pages application');
+        like($request->text, qr/No page at \/request/,
+            'returned application includes request-derived detail');
+        is($request->header('X-Demo'), 'Request application value',
+            'returned application retains configured headers');
 
-        my $raw = $client->get('/raw');
-        is($raw->status, 404, 'raw closure sends its Response explicitly');
-        is($raw->header('X-Demo'), 'raw response value',
-            'raw closure modifies the Response before respond');
-        is($raw->content_type, 'text/plain; charset=utf-8',
-            'raw closure sends the fixed text representation');
+        my $raw = $example_client->get('/raw');
+        is($raw->status, 404,
+            'as_app native Route delegates the Pages application');
+        is($raw->header('X-Demo'), 'Raw application value',
+            'raw triplet invoke_app delegation retains configured headers');
     });
 
     is($state->{pages_example}, 'stopped',
-        'Compose shutdown updates the same lifespan state');
+        'Compose stops the Pages example lifespan');
 };
 
 done_testing;

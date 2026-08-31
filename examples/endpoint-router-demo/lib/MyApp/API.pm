@@ -3,7 +3,11 @@ use parent 'PAGI::Endpoint::Router';
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use PAGI::Pages;
+use PAGI::Pages qw(not_found unauthorized);
+use PAGI::Response qw(html_response json_response);
+use PAGI::Routing::URL qw(path_for);
+use PAGI::State qw(app_state);
+use PAGI::Utils qw(invoke_app);
 
 use MyApp::API::Events;
 
@@ -23,52 +27,79 @@ sub Int { return qr/\A\d+\z/ }
 sub routes {
     my ($self, $r) = @_;
 
+    $r->http_default($self->app_as('api_not_found'));
     $r->get('/index' => [$self->middleware_as('require_demo_token')] => 'index')
         ->name('index');
     $r->get('/show/{user_id:&Int}' => [$self->middleware_as('require_demo_token')] => 'show')
         ->name('show');
-    $r->mount('/events', router => $self->{events})->name('events');
+    $r->mount('/tools', routes => sub {
+        my ($tools) = @_;
+        $tools->get('/status' => 'status')->name('status');
+    })->name('tools');
+    $r->mount('/events', app => $self->{events}->to_router)->name('events');
+}
+
+async sub api_not_found {
+    my ($self, $scope, $receive, $send) = @_;
+    my $response = not_found(
+        detail => 'No API Endpoint route matched');
+    await invoke_app($response, $scope, $receive, $send);
 }
 
 sub require_demo_token {
     my ($self, $inner) = @_;
     return async sub {
         my ($scope, $receive, $send) = @_;
-        my $c = $self->new_context($scope, $receive, $send);
+        my $request = $self->new_request($scope, $receive);
 
         return await $inner->($scope, $receive, $send)
-            if ($c->request->header('x-demo-token') // '') eq 'demo-token';
+            if ($request->header('x-demo-token') // '') eq 'demo-token';
 
-        my $response = PAGI::Pages->unauthorized($scope,
+        my $response = unauthorized(
             challenge => 'DemoToken realm="endpoint-router-demo"',
             detail    => 'demo token required');
-        return await $response->respond($send);
+        return await invoke_app($response, $scope, $receive, $send);
     };
 }
 
 async sub index {
-    my ($self, $c) = @_;
-    $c->state->{metrics}{requests}++;
+    my ($self, $request) = @_;
+    my $state = app_state($request)
+        or die 'endpoint-router-demo requires Compose lifespan state';
+    $state->get('metrics')->{requests}++;
 
-    my $alice = $c->path_for('show', { user_id => 1 });
-    return $c->html(<<"HTML");
+    my $alice = path_for($request, 'show', { user_id => 1 });
+    my $resource = $state->get('resource')->{name};
+    return html_response(<<"HTML");
 <!doctype html>
 <title>Demo API</title>
 <h1>Demo API</h1>
-<p>Resource: $c->state->{resource}{name}</p>
+<p>Resource: $resource</p>
 <p><a href="$alice">Alice</a></p>
 HTML
 }
 
 async sub show {
-    my ($self, $c) = @_;
-    $c->state->{metrics}{requests}++;
+    my ($self, $request) = @_;
+    my $state = app_state($request)
+        or die 'endpoint-router-demo requires Compose lifespan state';
+    $state->get('metrics')->{requests}++;
 
-    my $user_id = $c->path_param('user_id');
+    my $user_id = $request->path_param('user_id');
     my ($user) = grep { $_->{id} == $user_id } @USERS;
-    return $c->html("<h1>$user->{name}</h1>") if $user;
-    return PAGI::Pages->not_found($c,
+    return html_response("<h1>$user->{name}</h1>") if $user;
+    return not_found(
         detail => 'User not found');
+}
+
+async sub status {
+    my ($self, $request) = @_;
+    my $state = app_state($request)
+        or die 'endpoint-router-demo requires Compose lifespan state';
+    return json_response({
+        status   => 'ready',
+        resource => $state->get('resource')->{name},
+    });
 }
 
 1;

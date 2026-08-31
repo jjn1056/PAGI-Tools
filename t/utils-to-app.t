@@ -2,77 +2,52 @@ use strict;
 use warnings;
 
 use Test2::V0;
-use Future::AsyncAwait;
-use FindBin;
-use lib "$FindBin::Bin/lib";
-
 use PAGI::Utils qw(to_app);
-use TestApps::Component;
-use TestApps::FakeMiddleware;
 
-# Helper to capture response events
-sub mock_send {
-    my @sent;
-    my $send = sub { my ($msg) = @_; push @sent, $msg; Future->done };
-    return ($send, \@sent);
+{
+    package Local::UtilsDefaultImports;
+    use PAGI::Utils;
 }
 
-subtest 'coderef passes through unchanged' => sub {
-    my $app = async sub { my ($scope, $receive, $send) = @_; };
-    ref_is to_app($app), $app, 'same reference back';
-};
+{
+    package Local::App;
+    our $CALLS = 0;
+    our $COMPILED = sub { return 'compiled' };
+    sub new { return bless {}, $_[0] }
+    sub to_app { $CALLS++; return $COMPILED }
+}
 
-subtest 'component object is compiled via its to_app method' => sub {
-    my $component = TestApps::Component->new(body => 'hello');
-    my $app = to_app($component);
-    is ref($app), 'CODE', 'returns a coderef';
+{
+    package Local::BrokenApp;
+    sub new { return bless {}, $_[0] }
+    sub to_app { return {} }
+}
 
-    my ($send, $sent) = mock_send();
-    $app->({ type => 'http', method => 'GET', path => '/' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'hello', 'compiled app serves the component config';
-};
+{
+    package Local::Middleware;
+    sub new { return bless {}, $_[0] }
+    sub wrap { return $_[1] }
+}
 
-subtest 'loaded class name is compiled via class-method to_app' => sub {
-    my $app = to_app('TestApps::Component');
-    is ref($app), 'CODE', 'returns a coderef';
-};
+my $native = sub { return 'native' };
+my $compiled = $Local::App::COMPILED;
 
-subtest 'unloaded class name is auto-required' => sub {
-    ok !TestApps::AutoLoaded->can('to_app'), 'fixture not yet loaded';
-    my $app = to_app('TestApps::AutoLoaded');
-    is ref($app), 'CODE', 'returns a coderef';
-
-    my ($send, $sent) = mock_send();
-    $app->({ type => 'http', method => 'GET', path => '/' }, sub { Future->done }, $send)->get;
-    is $sent->[1]{body}, 'autoloaded', 'auto-required component works';
-};
-
-subtest 'middleware object gets a guidance croak' => sub {
-    my $mw = TestApps::FakeMiddleware->new;
-    like dies { to_app($mw) },
-        qr/looks like middleware, not an app.*enable/s,
-        'croak points at enable()';
-};
-
-subtest 'object without to_app croaks' => sub {
-    my $obj = bless {}, 'TestApps::NoSuchMethod';
-    like dies { to_app($obj) },
-        qr/Cannot coerce TestApps::NoSuchMethod object to a PAGI app/,
-        'names the class and the problem';
-};
-
-subtest 'unloadable class croaks' => sub {
-    like dies { to_app('TestApps::DoesNotExist') },
-        qr/Failed to load 'TestApps::DoesNotExist'/,
-        'load failure surfaces';
-};
-
-subtest 'garbage inputs croak' => sub {
-    like dies { to_app(undef) }, qr/requires an app/, 'undef croaks';
-    like dies { to_app({})    }, qr/Cannot coerce HASH reference/, 'hashref croaks';
-    like dies { to_app('not a package name!') },
-        qr/Cannot coerce 'not a package name!'/,
-        'non-package string croaks without being evaled';
-};
+is(to_app($native), $native, 'a native coderef is already an app');
+is(to_app(Local::App->new), $compiled, 'an instantiated component compiles');
+is($Local::App::CALLS, 1, 'an instantiated component compiles exactly once');
+like(dies { to_app('Local::App') }, qr/instantiated object.*to_app/i,
+    'a package name is never loaded as an app');
+like(dies { to_app(Local::BrokenApp->new) }, qr/to_app.*coderef/i,
+    'an object must compile to a native coderef');
+like(dies { to_app(Local::Middleware->new) }, qr/middleware.*not an app/i,
+    'middleware-object guidance remains specific');
+like(dies { to_app([]) }, qr/coderef or instantiated object.*to_app/i,
+    'unblessed references are not apps');
+like(dies { to_app(undef) }, qr/coderef or instantiated object.*to_app/i,
+    'undefined is not an app');
+ok(!Local::UtilsDefaultImports->can('as_app'),
+    'as_app is not exported by default');
+ok(!Local::UtilsDefaultImports->can('invoke_app'),
+    'invoke_app is not exported by default');
 
 done_testing;

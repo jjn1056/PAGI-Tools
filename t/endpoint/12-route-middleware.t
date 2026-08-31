@@ -4,9 +4,12 @@ use warnings;
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
+use Scalar::Util ();
 
 use lib 'lib';
 use PAGI::Endpoint::Router ();
+use PAGI::Response ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(middleware);
 use PAGI::Test::Client ();
 
@@ -152,25 +155,25 @@ sub run_scope {
     }
 
     sub admin {
-        my ($self, $c) = @_;
+        my ($self, $request) = @_;
         push @order, 'handler';
-        push @handler_scopes, $c->scope;
-        return $c->text('admin');
+        push @handler_scopes, $request->scope;
+        return PAGI::Response::Text->new('admin');
     }
 
     sub socket {
-        my ($self, $c) = @_;
+        my ($self, $websocket) = @_;
         push @order, 'handler';
-        push @handler_scopes, $c->scope;
-        return $c->close(1000, 'middleware');
+        push @handler_scopes, $websocket->scope;
+        return $websocket->close(1000, 'middleware');
     }
 
     sub events {
-        my ($self, $c) = @_;
+        my ($self, $sse) = @_;
         push @order, 'handler';
-        push @handler_scopes, $c->scope;
-        $c->start->get;
-        return $c->close;
+        push @handler_scopes, $sse->scope;
+        $sse->start->get;
+        return $sse->close;
     }
 }
 
@@ -180,7 +183,7 @@ sub run_scope {
     sub routes {
         my ($self, $r) = @_;
         $r->get('/bad' => [$self->middleware_as('missing')] => sub {
-            return $_[0]->text('bad');
+            return PAGI::Response::Text->new('bad');
         });
     }
 }
@@ -191,12 +194,47 @@ sub run_scope {
     sub routes {
         my ($self, $r) = @_;
         $r->get('/bad' => [$self->middleware_as('async_factory')] => sub {
-            return $_[0]->text('bad');
+            return PAGI::Response::Text->new('bad');
         });
     }
     sub async_factory {
         my ($self, $inner) = @_;
         return Future->done(sub { return $inner->(@_) });
+    }
+}
+
+{
+    package Local::MountMiddlewareEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+    our @order;
+
+    sub routes {
+        my ($self, $r) = @_;
+        $r->mount('/nested',
+            routes => sub {
+                my ($child) = @_;
+                $child->get('/leaf' => 'leaf');
+            },
+            middleware => [$self->middleware_as('around_mount')],
+        );
+    }
+
+    sub around_mount {
+        my ($self, $inner) = @_;
+        $self->{factory_receiver} = Scalar::Util::refaddr($self);
+        return async sub {
+            push @order, 'mount before';
+            await Future->wrap($inner->(@_));
+            push @order, 'mount after';
+            return;
+        };
+    }
+
+    sub leaf {
+        my ($self, $request) = @_;
+        $self->{handler_receiver} = Scalar::Util::refaddr($self);
+        push @order, 'leaf';
+        return PAGI::Response::Text->new('nested');
     }
 }
 
@@ -309,6 +347,23 @@ subtest 'the same universal middleware contract applies to WebSocket and SSE lea
         is($Local::MiddlewareEndpoint::handler_scopes[0]{endpoint_clone}, 'present',
             "$type handler sees the middleware scope clone");
     }
+};
+
+subtest 'named Mount middleware and callback handlers share the Endpoint receiver' => sub {
+    my $endpoint = bless {}, 'Local::MountMiddlewareEndpoint';
+    my $identity = Scalar::Util::refaddr($endpoint);
+    @Local::MountMiddlewareEndpoint::order = ();
+
+    my $response = PAGI::Test::Client->new(app => $endpoint->to_app)
+        ->get('/nested/leaf');
+    is($response->text, 'nested', 'the callback child route dispatches');
+    is($endpoint->{factory_receiver}, $identity,
+        'middleware_as binds Mount middleware to the Endpoint instance');
+    is($endpoint->{handler_receiver}, $identity,
+        'the callback child facade binds its handler to the same Endpoint instance');
+    is(\@Local::MountMiddlewareEndpoint::order,
+        ['mount before', 'leaf', 'mount after'],
+        'Mount middleware surrounds the callback child application');
 };
 
 done_testing;

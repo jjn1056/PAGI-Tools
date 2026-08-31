@@ -9,6 +9,7 @@ use JSON::MaybeXS ();
 use MIME::Base64 qw(decode_base64url);
 use Digest::SHA qw(hmac_sha256);
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -103,7 +104,9 @@ sub wrap {
         my $auth_header = $self->_get_header($scope, 'authorization');
 
         unless ($auth_header) {
-            await $self->_send_unauthorized($scope, $send, 'Token required');
+            await $self->_send_unauthorized(
+                $scope, $receive, $send, 'Token required',
+            );
             return;
         }
 
@@ -112,7 +115,7 @@ sub wrap {
 
         unless ($token) {
             await $self->_send_unauthorized(
-                $scope, $send, 'Invalid authorization header',
+                $scope, $receive, $send, 'Invalid authorization header',
             );
             return;
         }
@@ -121,7 +124,9 @@ sub wrap {
         my $claims = $self->_validate_token($token);
 
         unless ($claims) {
-            await $self->_send_unauthorized($scope, $send, 'Invalid token');
+            await $self->_send_unauthorized(
+                $scope, $receive, $send, 'Invalid token',
+            );
             return;
         }
 
@@ -254,15 +259,14 @@ sub _quote_realm {
 }
 
 async sub _send_unauthorized {
-    my ($self, $scope, $send, $error) = @_;
+    my ($self, $scope, $receive, $send, $error) = @_;
     my $realm = $self->_quote_realm;
     my $challenge = qq{Bearer realm="$realm"};
     my $response = PAGI::Pages->unauthorized(
-        $scope,
         challenge => $challenge,
         detail    => $error,
     );
-    await Future->wrap($response->respond($send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _get_header {

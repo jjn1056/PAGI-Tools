@@ -19,7 +19,7 @@ Visit http://localhost:5000/
 - Static file serving from `public/`
 
 ```perl
-my $static_app = PAGI::App::File->app_path('public')->to_app;
+my $static_app = PAGI::App::File->from_app_path('public')->to_app;
 ```
 
 Only `public` uses the component constructor; writable uploads retain their explicit filesystem path.

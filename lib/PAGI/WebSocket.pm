@@ -7,6 +7,7 @@ use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
+use PAGI::Response ();
 use Scalar::Util qw(blessed);
 
 
@@ -31,7 +32,7 @@ sub new {
         scope   => $scope,
         receive => $receive,
         send    => $send,
-        _state  => 'connecting',  # connecting -> connected -> closed
+        _state  => 'connecting',  # connecting -> denying -> closed, or connected -> closed
         _close_code   => undef,
         _close_reason => undef,
         _on_close     => [],
@@ -293,10 +294,9 @@ async sub _run_close_callbacks {
 }
 
 # Internal: mark closed and fire on_close callbacks for a disconnect that
-# arrived directly off the wire (not via close()). Shared by receive()'s own
-# disconnect handling and PAGI::Context::WebSocket's _sync_terminal_disconnect
-# hook (fired when the disconnect is instead consumed via $ctx->run()). Does
-# NOT send a websocket.close wire event -- the peer is already gone.
+# arrived directly off the wire (not via close()). Used by receive() and run()
+# when either consumes the terminal event. Does NOT send a websocket.close wire
+# event -- the peer is already gone.
 async sub _note_disconnected {
     my ($self, $code, $reason) = @_;
 
@@ -364,6 +364,10 @@ async sub _trigger_error {
 async sub accept {
     my ($self, %opts) = @_;
 
+    croak 'WebSocket denial response is pending'
+        if $self->{_state} eq 'denying';
+    return $self if $self->is_closed;
+
     my $event = {
         type => 'websocket.accept',
     };
@@ -380,6 +384,8 @@ async sub accept {
 async sub close {
     my ($self, $code, $reason) = @_;
 
+    croak 'WebSocket denial response is pending'
+        if $self->{_state} eq 'denying';
     # Idempotent - don't send close twice
     return if $self->is_closed;
 
@@ -402,43 +408,78 @@ async sub close {
 # See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 sub supports_denial_response {
     my $self = shift;
-    return $self->{scope}{extensions}{'websocket.http.response'} ? 1 : 0;
+    my $extensions = $self->{scope}{extensions};
+    return 0 unless ref($extensions) eq 'HASH';
+    return $extensions->{'websocket.http.response'} ? 1 : 0;
 }
 
-# Reject the handshake with a custom HTTP response (status/headers/body) instead
-# of the bare 403. Falls back to a plain close when the server does not advertise
-# the extension. Valid only before accept.
+# Reject the handshake with a concrete HTTP Response. Falls back to a policy
+# close when the server does not advertise the denial extension. Valid only
+# before accept.
 # See L<PAGI::Spec::Www/"WebSocket Denial Response">.
-async sub deny {
-    my ($self, %opts) = @_;
+sub deny {
+    my ($self, @args) = @_;
+    croak 'WebSocket denial response is pending'
+        if $self->{_state} eq 'denying';
+    croak 'WebSocket deny is only valid before accept while connecting'
+        unless $self->{_state} eq 'connecting';
+    croak 'WebSocket deny requires exactly one concrete PAGI::Response'
+        unless @args == 1;
+    my $response = $args[0];
+    PAGI::Response::_validate_protocol_response($response, 'WebSocket denial');
 
-    my $status  = $opts{status}  // 403;
-    my $headers = $opts{headers} // [];
-    my $body    = defined $opts{body} ? $opts{body} : '';
+    $self->{_state} = 'denying';
+    my $committed = 0;
+    my $lifecycle = async sub {
+        my $completed = eval {
+            if (!$self->supports_denial_response) {
+                await Future->wrap($self->{send}->({
+                    type => 'websocket.close', code => 1008, reason => '',
+                }));
+                $committed = 1;
+                $self->_set_closed(1008, '');
+            }
+            else {
+                await PAGI::Response::_respond_for_protocol(
+                    $response,
+                    $self->{scope},
+                    $self->{receive},
+                    $self->{send},
+                    'websocket.http.response',
+                    'WebSocket denial',
+                    sub {
+                        # The accepted HTTP start owns the handshake response
+                        # slot even while its body remains in flight. It is not
+                        # a WebSocket close frame, so the RFC 6455 close fields
+                        # remain undefined.
+                        $committed = 1;
+                        $self->{_state} = 'closed';
+                    },
+                );
+            }
+            1;
+        };
+        my $error = $@ unless $completed;
 
-    if (!$self->supports_denial_response) {
-        await $self->{send}->({ type => 'websocket.close', code => 1008, reason => '' });
-        $self->_set_closed(1008, '');
+        if (!$committed) {
+            $self->{_state} = 'connecting'
+                if $self->{_state} eq 'denying';
+            die $error unless $completed;
+        }
+
+        await $self->_run_close_callbacks if $committed;
+        die $error unless $completed;
         return $self;
-    }
+    }->();
 
-    await $self->{send}->({
-        type    => 'websocket.http.response.start',
-        status  => $status,
-        headers => $headers,
+    $self->{_response_lifecycle} = $lifecycle;
+    $lifecycle->on_ready(sub {
+        my ($ready) = @_;
+        delete $self->{_response_lifecycle}
+            if $self->{_response_lifecycle}
+                && $self->{_response_lifecycle} == $ready;
     });
-    await $self->{send}->({
-        type => 'websocket.http.response.body',
-        body => $body,
-        more => 0,
-    });
-
-    # An HTTP denial sends a response, not a WebSocket close frame — there is no
-    # RFC6455 close code, so mark closed without recording one (close_code stays
-    # undef). The bare-403 fallback above DID send a real close frame and keeps
-    # its 1008 via _set_closed.
-    $self->{_state} = 'closed';
-    return $self;
+    return $lifecycle->without_cancel;
 }
 
 # Send text message
@@ -1037,30 +1078,53 @@ See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
 =head2 deny
 
-    await $ws->deny(status => 401);
-    await $ws->deny(status => 401, headers => [['www-authenticate', 'Bearer']], body => '{"error":"unauthorized"}');
+    use PAGI::Response qw(text_response);
 
-Rejects the WebSocket handshake with a custom HTTP response instead of the bare
-C<403 Forbidden>. Valid only before C<accept>. Marks the connection closed on
+    await $ws->deny(text_response(
+        'Unauthorized',
+        status  => 401,
+        headers => ['www-authenticate' => 'Bearer'],
+    ));
+
+Rejects the WebSocket handshake with one concrete L<PAGI::Response> instead of
+accepting it. Valid only before C<accept>. Marks the connection closed on
 return.
 
 When the server advertises the C<websocket.http.response> extension
-(C<supports_denial_response()> is true), sends two events in sequence:
-C<websocket.http.response.start> (status + headers) and
-C<websocket.http.response.body> (body). When the extension is absent, falls back
-to a plain C<websocket.close>.
+(C<supports_denial_response()> is true), the Response must advertise the
+inheritable C<body-events-v1> protocol capability. Its HTTP start/body events
+are mapped incrementally in order to C<websocket.http.response.start> and
+C<websocket.http.response.body>, retaining multi-chunk C<more> values and send
+backpressure. Successful mapped-start settlement permanently owns the handshake
+response slot even while the body is pending or later fails. File returns no
+capability because PAGI Www permits only the body form and does not use
+C<file>/C<fh> for denial bodies; trailer and unknown events are also rejected.
+The concrete Response is invoked through its application contract; Response
+has no separate public emission method.
+When the extension is absent, the Response body is ignored and denial falls
+back to a C<websocket.close> with policy code 1008. See
+L<PAGI::Spec::Www/"WebSocket Denial Response (extension)">.
 
-Options:
+The Response is invoked with a shallow HTTP-scope clone whose C<type> is
+C<http> and C<method> is C<GET>; the live WebSocket scope and all nested
+references are left unchanged.
 
-=over 4
+"Successful settlement" means the PAGI server validated and consumed the
+mapped start event and accepted it into outbound processing, or finished
+discarding it after the connection ended. It does not mean the client received
+it. While that send is pending, C<connection_state> is C<denying> and no other
+first event may claim the response slot. A genuine start-send failure releases
+the reservation and leaves the WebSocket connecting. At settlement, denial
+commits and the object becomes closed; a later body failure cannot reopen the
+handshake. Cancelling the Future returned to the caller does not cancel a PAGI
+send or abandon the retained denial lifecycle and its cleanup.
 
-=item C<status> - HTTP status code. Defaults to 403.
-
-=item C<headers> - ArrayRef of C<[$name, $value]> pairs. Defaults to C<[]>.
-
-=item C<body> - Response body as bytes. Defaults to C<"">.
-
-=back
+A body send pending at disconnect resolves under the same PAGI 0.002007
+settlement rule rather than failing merely because the peer vanished. Disconnect cleanup
+therefore follows authoritative connection state and the protocol's disconnect
+watcher/event, never an inferred send failure. Genuine validation and resource
+send failures still propagate. C<deny> never starts a live WebSocket receive
+loop or introduces reconnection behavior.
 
 See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
@@ -1070,7 +1134,7 @@ See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
     if ($ws->is_connected) { ... }
     if ($ws->is_closed) { ... }
-    my $state = $ws->connection_state; # 'connecting', 'connected', 'closed'
+    my $state = $ws->connection_state; # connecting, denying, connected, closed
 
 =head2 close_code, close_reason
 

@@ -6,6 +6,8 @@ use Test2::V0;
 use lib 'lib';
 use PAGI::Request;
 
+my $no_body = sub { die 'body unavailable' };
+
 subtest 'params from scope' => sub {
     my $scope = {
         type    => 'http',
@@ -19,7 +21,7 @@ subtest 'params from scope' => sub {
         },
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     is($req->path_params, { user_id => '42', post_id => '100' }, 'params returns hashref');
     is($req->path_param('user_id'), '42', 'param() gets single value');
@@ -42,7 +44,7 @@ subtest 'params set via scope' => sub {
         headers => [],
         path_params => { id => '123', slug => 'hello-world' },
     };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     is($req->path_param('id'), '123', 'param from scope');
     is($req->path_param('slug'), 'hello-world', 'another param');
@@ -50,7 +52,7 @@ subtest 'params set via scope' => sub {
 
 subtest 'no params' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     is($req->path_params, {}, 'empty params by default');
 
@@ -71,7 +73,7 @@ subtest 'path_param does not include query params' => sub {
         query_string => 'foo=bar&baz=qux',
         path_params => { id => '42' },
     };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     # path_param only returns path params, not query params
     is($req->path_param('id'), '42', 'path param exists');
@@ -99,7 +101,7 @@ subtest 'path_params strict option (per-call)' => sub {
     # per-call strict option on path_param.
 
     my $scope_no_params = { type => 'http', method => 'GET', headers => [] };
-    my $req = PAGI::Request->new($scope_no_params);
+    my $req = PAGI::Request->new($scope_no_params, $no_body);
 
     # Non-strict (default): empty hashref, no death
     is($req->path_params, {}, 'default: path_params returns empty hashref');
@@ -133,7 +135,7 @@ subtest 'path_params strict option (per-call)' => sub {
         type => 'http', method => 'GET', headers => [],
         path_params => { id => '42' },
     };
-    $req = PAGI::Request->new($scope_with_params);
+    $req = PAGI::Request->new($scope_with_params, $no_body);
 
     is($req->path_params, { id => '42' }, 'path_params returns scope params');
     is($req->path_params(strict => 1), { id => '42' }, 'strict => 1: returns scope params when set');

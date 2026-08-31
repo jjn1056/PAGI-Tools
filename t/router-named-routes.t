@@ -6,8 +6,9 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
+use PAGI::Response::Text ();
 
-sub handler { return sub { return $_[0]->text('ok') } }
+sub handler { return sub { return PAGI::Response::Text->new('ok') } }
 
 subtest 'public names are local segments and inspection uses slash addresses' => sub {
     my $router = PAGI::App::Router->new;
@@ -113,11 +114,11 @@ subtest 'known mounts compose nested names without copying them' => sub {
     $users->get('/{id}' => handler())->name('show');
 
     my $api = PAGI::App::Router->new;
-    $api->mount('/users', router => $users)->name('users');
+    $api->mount('/users', app => $users->to_router)->name('users');
 
     my $main = PAGI::App::Router->new;
     $main->get('/' => handler())->name('home');
-    $main->mount('/api', router => $api)->name('api');
+    $main->mount('/api', app => $api->to_router)->name('api');
 
     is([sort keys %{$main->named_routes}], [
         '/api/users/list', '/api/users/show', '/home',
@@ -132,18 +133,17 @@ subtest 'known mounts compose nested names without copying them' => sub {
     my $first = $snapshot->route_named('/api/users/show');
     is(refaddr($first), refaddr($snapshot->route_named('/api/users/show')),
         'a retained snapshot preserves leaf identity');
-    isnt(refaddr($main->route_named('/api/users/show')),
+    is(refaddr($main->route_named('/api/users/show')),
         refaddr($main->route_named('/api/users/show')),
-        'builder convenience inspection rematerializes identities');
+        'explicit immutable child snapshots retain caller-owned leaf identity');
 };
 
-subtest 'opaque mounts never publish or accept namespace names' => sub {
+subtest 'opaque mounts accept placement metadata but publish no leaf names' => sub {
     my $opaque = sub { return Future->done };
     my $router = PAGI::App::Router->new;
-    $router->mount('/legacy' => $opaque);
-    like(dies { $router->name('legacy') },
-        qr/opaque mounts cannot be named/,
-        'an opaque mount cannot be named');
+    $router->mount('/legacy', app => $opaque)->name('legacy');
+    is($router->to_router->routes->[0]->name, 'legacy',
+        'an opaque Mount retains its local placement name');
     is($router->named_routes, {}, 'opaque target contributes no names');
 };
 

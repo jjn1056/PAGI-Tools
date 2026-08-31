@@ -13,6 +13,7 @@ subtest 'initial state is pending' => sub {
     is($sse->connection_state, 'pending', 'initial connection_state is pending');
     ok(!$sse->is_started, 'is_started is false');
     ok(!$sse->is_closed, 'is_closed is false');
+    ok(!$sse->is_connected, 'pending SSE is not connected');
 };
 
 subtest 'state transitions' => sub {
@@ -22,11 +23,13 @@ subtest 'state transitions' => sub {
     is($sse->connection_state, 'started', 'connection_state is started');
     ok($sse->is_started, 'is_started is true');
     ok(!$sse->is_closed, 'is_closed is false');
+    ok($sse->is_connected, 'started SSE is connected');
 
     $sse->_set_closed;
     is($sse->connection_state, 'closed', 'connection_state is closed');
     ok(!$sse->is_started, 'is_started is false after close');
     ok($sse->is_closed, 'is_closed is true');
+    ok(!$sse->is_connected, 'closed SSE is not connected');
 };
 
 subtest 'run() resolves cleanly when receive fails' => sub {

@@ -1,9 +1,10 @@
-# Pages Response Factory
+# Pages Application Values
 
-This runnable example puts `PAGI::Pages` behind one `PAGI::Compose` application
-root. It demonstrates the Welcome page, fixed redirects, negotiated errors,
-the difference between Route and Mount, both Response ownership models, and
-lifespan startup and shutdown.
+This runnable example places source-free `PAGI::Pages` applications behind one
+`PAGI::Compose` root. It demonstrates class, configured-object, and exported
+factories; direct Route placement; Request-derived application returns; a
+direct application Mount; explicit native Route delegation; negotiated
+representations; and lifespan startup/shutdown.
 
 Run it from the PAGI-Tools checkout:
 
@@ -11,46 +12,91 @@ Run it from the PAGI-Tools checkout:
 pagi-server --app examples/pages/app.pl --port 5000
 ```
 
-Try each stock representation:
+Try each representation and placement:
 
 ```bash
 curl -i -H 'Accept: text/html' http://localhost:5000/
 curl -i -H 'Accept: application/problem+json' http://localhost:5000/missing
+curl -i http://localhost:5000/configured
 curl -i -H 'Accept: text/plain' http://localhost:5000/terminal/anything
+curl -i http://localhost:5000/raw
 curl -i http://localhost:5000/old
 ```
 
-`route('/old' => ...)` is an exact route, so `/old/child` does not reach its
-redirect endpoint. `mount('/terminal' => ...)` transfers the entire subtree to
-an opaque terminal application, so both `/terminal` and every descendant such
-as `/terminal/anything` return the configured Gone page for every HTTP method.
+## Factories and direct Routes
 
-The `/context` handler receives `$c`. `PAGI::Pages->not_found($c)` returns an
-ordinary unsent `PAGI::Response`; the handler adds `X-Demo` and returns it so
-Router can own the send step:
+Every factory returns an HTTP application value without request input or I/O.
+An exported factory application and a class factory application can therefore
+sit directly in Route:
 
 ```perl
-route('/context' => sub {
-    my ($c) = @_;
-    my $response = PAGI::Pages->not_found($c, as => 'text');
-    $response->header('X-Demo' => 'Context response value');
-    return $response;
+route('/' => welcome());
+route('/missing' => PAGI::Pages->not_found);
+```
+
+Configured policies retain their exact object and decide representation when
+the application is invoked:
+
+```perl
+my $pages = PAGI::Pages->new(as => 'auto', default => 'text');
+route('/configured' => $pages->not_found(
+    detail => 'Missing under configured Pages policy',
+));
+```
+
+The `/request` handler receives one `PAGI::Request` and returns an application
+whose detail is derived from that request. Router invokes the returned value:
+
+```perl
+route('/request' => sub {
+    my ($request) = @_;
+    return not_found(
+        as      => 'text',
+        detail  => 'No page at ' . $request->path,
+        headers => ['X-Demo' => 'Request application value'],
+    );
 });
 ```
 
-The `/raw` route is explicitly marked `raw`. Its native PAGI closure owns
-`$scope`, `$receive`, and `$send`, so constructing the unsent Response and
-sending it are separate operations:
+The fixed redirect is another direct application Route. Because
+`route('/old' => ...)` is exact, `/old/child` does not reach it.
+
+## Native placements
+
+A Mount `app` is a native application position. The static Gone application
+can therefore own the `/terminal` subtree directly:
 
 ```perl
-route('/raw', raw => async sub {
+mount('/terminal', app => gone(
+    detail => 'This mounted subtree is gone',
+));
+```
+
+The `/raw` leaf deliberately owns all three PAGI channels. Native CODE at a
+Route is marked with `as_app`, and raw triplet delegation to the Pages value is
+performed by `invoke_app`:
+
+```perl
+route('/raw' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
-    my $response = PAGI::Pages->not_found($scope, as => 'text');
-    $response->header('X-Demo' => 'raw response value');
-    await Future->wrap($response->respond($send));
-});
+    await invoke_app(
+        not_found(as => 'text'),
+        $scope, $receive, $send,
+    );
+}));
 ```
 
-Compose owns the deployed protocol boundary around those routes, including
-lifespan startup/shutdown, the final automatic 404/405 policy, and HEAD body
-suppression.
+`invoke_app` belongs at that existing native boundary. Direct application
+Routes and one-Request handlers returning applications do not need it.
+
+## Root and lifespan behavior
+
+The final `compose(...)` expression is an inspectable root application. Compose
+owns startup/shutdown, error handling, and response completion; its enclosed
+Router owns negotiated 404/405 and automatic HEAD behavior.
+
+A Pages application can also be the root directly, for example
+`PAGI::Pages->welcome`. Pages is intentionally HTTP-only: a server using
+automatic lifespan mode treats its lifespan exception as a clean decline,
+while strict `lifespan_mode => 'on'` rejects that root. Use Compose when the
+application must own lifecycle hooks, as this executable example does.

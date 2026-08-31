@@ -5,13 +5,19 @@ use Test2::V0;
 
 use lib 'lib';
 use PAGI::App::Router::Builder ();
+use PAGI::Response::Text ();
+use PAGI::Test::Client ();
 
 {
     package Local::BuilderAlpha;
+    our @handler_types;
     sub Int { return qr/alpha/ }
     sub declare {
         my ($builder) = @_;
-        $builder->get('/get/{id:&Int}' => sub { });
+        $builder->get('/get/{id:&Int}' => sub {
+            push @handler_types, ref($_[0]);
+            return PAGI::Response::Text->new('alpha');
+        });
         $builder->post('/post/{id:&Int}' => sub { });
         $builder->put('/put/{id:&Int}' => sub { });
         $builder->patch('/patch/{id:&Int}' => sub { });
@@ -66,10 +72,10 @@ use PAGI::App::Router::Builder ();
     sub Int { return qr/prefix/ }
     sub declare {
         my ($builder, $child) = @_;
-        $builder->group('/group/{group:&Int}' => sub {
+        $builder->mount('/group/{group:&Int}', routes => sub {
             $_[0]->get('/leaf' => sub { });
         });
-        $builder->mount('/mount/{mount:&Int}', router => $child)->name('mount');
+        $builder->mount('/mount/{mount:&Int}', app => $child)->name('mount');
     }
 }
 
@@ -99,6 +105,17 @@ subtest 'each public-style builder declaration captures its direct package' => s
         'beta declarations do not rebind to another caller package');
 };
 
+subtest 'the mutable frontend inherits direct Request dispatch' => sub {
+    @Local::BuilderAlpha::handler_types = ();
+    my $alpha = PAGI::App::Router::Builder->new;
+    Local::BuilderAlpha::declare($alpha);
+    my $response = PAGI::Test::Client->new(app => $alpha->to_app)
+        ->get('/get/alpha');
+    is([$response->text, \@Local::BuilderAlpha::handler_types],
+        ['alpha', ['PAGI::Request']],
+        'declaration-package capture does not add a frontend Context adapter');
+};
+
 subtest 'wrappers and role methods remain declaration-package boundaries' => sub {
     my $wrapper = PAGI::App::Router::Builder->new;
     Local::BuilderWrapperConsumer::declare($wrapper);
@@ -117,24 +134,24 @@ subtest 'wrappers and role methods remain declaration-package boundaries' => sub
         'a role method does not rebind to its consuming class provider');
 };
 
-subtest 'group and routing-aware mount prefixes retain the App declaration package' => sub {
+subtest 'routes and app Mount prefixes retain the App declaration package' => sub {
     my $child = PAGI::App::Router::Builder->new;
     $child->get('/leaf' => sub { });
     my $builder = PAGI::App::Router::Builder->new;
-    Local::BuilderPrefixes::declare($builder, $child);
+    Local::BuilderPrefixes::declare($builder, $child->to_router);
     my $nodes = $builder->to_router->routes;
 
     is([map {
         $_->_pattern->match_mount($_->path =~ s/\{(?:group|mount):&Int\}/prefix/r)
             ->{captures}
     } @$nodes], [{ group => 'prefix' }, { mount => 'prefix' }],
-        'group and routing-aware mount providers resolve in their declaring package');
+        'both Mount forms resolve providers in their declaring package');
     is([map {
         my $match = $_->_pattern->match_mount(
             $_->path =~ s/\{(?:group|mount):&Int\}/other/r);
         $match;
     } @$nodes], [undef, undef],
-        'both App prefix providers reject values outside that package constraint');
+        'both Mount prefix providers reject values outside that package constraint');
 };
 
 done_testing;

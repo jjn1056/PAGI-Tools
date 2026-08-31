@@ -9,7 +9,10 @@ use FindBin qw($Bin);
 use lib "$Bin/lib";
 use ComposeTest qw(scope run_scope capture_send);
 use PAGI::Compose qw(compose);
+use PAGI::Response::Empty ();
+use PAGI::Response::Text ();
 use PAGI::Routing qw(route middleware router);
+use PAGI::Utils qw(as_app);
 
 sub response_header {
     my ($events, $name) = @_;
@@ -63,6 +66,23 @@ sub deriving_body_length {
 }
 
 subtest 'application middleware derives HEAD headers from the full body' => sub {
+    my @observed_bodies;
+    my $observer = sub {
+        my ($inner) = @_;
+        return async sub {
+            my ($request_scope, $receive, $send) = @_;
+            my $observing_send = sub {
+                my ($event) = @_;
+                push @observed_bodies, $event->{body}
+                    if ($event->{type} // '') eq 'http.response.body';
+                return $send->($event);
+            };
+            await Future->wrap(
+                $inner->($request_scope, $receive, $observing_send),
+            );
+            return;
+        };
+    };
     my $raw = async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
@@ -70,21 +90,24 @@ subtest 'application middleware derives HEAD headers from the full body' => sub 
     };
     my $app = compose(
         app => $raw,
-        middleware => [middleware('ContentLength')],
+        middleware => [$observer, middleware('ContentLength')],
     )->to_app;
     my $get = run_scope($app, scope(method => 'GET'));
+    @observed_bodies = ();
     my $head = run_scope($app, scope(method => 'HEAD'));
     is(response_header($get, 'Content-Length'), 14, 'GET length is calculated');
     is(response_header($head, 'Content-Length'), 14, 'HEAD retains GET-equivalent length');
     is(response_bodies($head), [
         { type => 'http.response.body', body => '', more => 0 },
     ], 'wire receives one empty terminal body');
+    is(\@observed_bodies, ['representation'],
+        'author middleware sees unsuppressed HEAD representation bytes');
 };
 
 subtest 'Router middleware derives identical GET and HEAD representation metadata' => sub {
     my $routing = router(
         routes => [
-            route('/representation', raw => async sub {
+            route('/representation' => as_app(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type => 'http.response.start', status => 200, headers => [],
@@ -92,7 +115,7 @@ subtest 'Router middleware derives identical GET and HEAD representation metadat
                 await $send->({
                     type => 'http.response.body', body => 'representation', more => 0,
                 });
-            }),
+            })),
         ],
         middleware => [deriving_body_length()],
     );
@@ -108,27 +131,31 @@ subtest 'Router middleware derives identical GET and HEAD representation metadat
     ], 'HEAD emits one empty terminal wire body');
 };
 
-subtest 'built-in routing and error bodies retain derived headers under HEAD' => sub {
+subtest 'Router outcomes and root errors retain derived headers under HEAD' => sub {
     local $ENV{PAGI_ENV} = 'production';
     my @cases = (
         [
-            'NotFound',
+            'Router 404',
             compose(routes => [
-                route('/known' => sub { return $_[0]->text('known') }),
+                route('/known' => sub {
+                    return PAGI::Response::Text->new('known');
+                }),
             ])->to_app,
             scope(method => 'GET', path => '/missing'),
             scope(method => 'HEAD', path => '/missing'),
         ],
         [
-            'MethodNotAllowed',
+            'Router 405',
             compose(routes => [
-                route('/known' => sub { return $_[0]->text('known') }, methods => 'POST'),
+                route('/known' => sub {
+                    return PAGI::Response::Text->new('known');
+                }, methods => 'POST'),
             ])->to_app,
             scope(method => 'GET', path => '/known'),
             scope(method => 'HEAD', path => '/known'),
         ],
         [
-            'ErrorHandler',
+            'root ErrorHandler',
             compose(app => sub { die "HEAD error\n" })->to_app,
             scope(method => 'GET'),
             scope(method => 'HEAD'),
@@ -157,7 +184,7 @@ subtest 'built-in routing and error bodies retain derived headers under HEAD' =>
 subtest 'sendfile length is available before HEAD wire suppression' => sub {
     my $routing = router(
         routes => [
-            route('/file', raw => async sub {
+            route('/file' => as_app(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type => 'http.response.start', status => 200, headers => [],
@@ -166,7 +193,7 @@ subtest 'sendfile length is available before HEAD wire suppression' => sub {
                     type => 'http.response.body', file => '/tmp/example',
                     offset => 4, length => 37,
                 });
-            }),
+            })),
         ],
         middleware => [deriving_body_length()],
     );
@@ -190,12 +217,14 @@ subtest 'an explicit HEAD route can avoid its expensive GET sibling' => sub {
     my @called;
     my $app = compose(routes => [
         route('/resource' => sub {
-            push @called, ['head', $_[0]->request->method];
-            return $_[0]->response->header('x-source' => 'head')->text('');
+            push @called, ['head', $_[0]->method];
+            return PAGI::Response::Empty->new(
+                headers => ['x-source' => 'head'],
+            );
         }, methods => 'HEAD'),
         route('/resource' => sub {
-            push @called, ['get', $_[0]->request->method];
-            return $_[0]->text('expensive representation');
+            push @called, ['get', $_[0]->method];
+            return PAGI::Response::Text->new('expensive representation');
         }, methods => 'GET'),
     ])->to_app;
     my $events = run_scope($app, scope(method => 'HEAD', path => '/resource'));
@@ -206,16 +235,16 @@ subtest 'an explicit HEAD route can avoid its expensive GET sibling' => sub {
     ], 'outer boundary remains terminal');
 };
 
-subtest 'one Compose owner covers a separately compiled router' => sub {
+subtest 'Compose HEAD boundary is idempotent with a Router direct boundary' => sub {
     my $child = router(
         routes => [
-            route('/item', raw => async sub {
+            route('/item' => as_app(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({ type => 'http.response.start', status => 200, headers => [] });
                 await $send->({
                     type => 'http.response.body', body => 'child representation', more => 0,
                 });
-            }),
+            })),
         ],
         middleware => [middleware('ContentLength')],
     );
@@ -228,7 +257,7 @@ subtest 'one Compose owner covers a separately compiled router' => sub {
         'both middleware layers see the complete child representation');
     is(response_bodies($events), [
         { type => 'http.response.body', body => '', more => 0 },
-    ], 'nested router recognizes the existing owner');
+    ], 'nested Router boundary recognizes the existing Compose owner');
 };
 
 subtest 'byte stream file terminal trailers and late bodies are suppressed' => sub {

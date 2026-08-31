@@ -3,6 +3,7 @@ package PAGI::Request::BodyStream;
 use strict;
 use warnings;
 
+use Future;
 use Future::AsyncAwait;
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Carp qw(croak);
@@ -238,7 +239,10 @@ consumers may have legitimate uses for whatever partial data they already
 collected -- so C<truncated> is how you tell "the client hung up early"
 apart from "the body really ended here". An immediate disconnect before any
 bytes ever arrive is treated as an empty stream, not a truncation. Check
-C<< $req->disconnect_reason >> for why the client disconnected.
+the optional connection directly for a disconnect reason:
+
+    my $connection = $req->connection;
+    my $reason = $connection ? $connection->disconnect_reason : undef;
 
 =cut
 
@@ -336,11 +340,10 @@ async sub stream_to {
         last unless defined $chunk;
         next unless length $chunk;
 
-        # Call callback - it may be async
+        # Future->wrap is the complete sink contract: immediate values settle
+        # now and real Future values retain their backpressure.
         my $result = $callback->($chunk);
-        if (ref($result) && $result->can('get')) {
-            await $result;
-        }
+        await Future->wrap($result);
 
         $bytes_processed += length($chunk);
     }
@@ -517,4 +520,3 @@ L<PAGI::Request>, L<Future::AsyncAwait>
 PAGI Contributors
 
 =cut
-

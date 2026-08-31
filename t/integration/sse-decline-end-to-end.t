@@ -5,11 +5,11 @@ use IO::Async::Loop;
 use FindBin;
 use lib "$FindBin::Bin/../../lib";
 
-# Cross-repo smoke test: PAGI-Tools' PAGI::App::Router must drive the real
-# PAGI::Server to return a normal HTTP 404 for an unmatched SSE route, instead
-# of crashing the connection. Each repo is unit-tested in isolation; this proves
-# the whole chain (router emits sse.http.response.* -> server returns a real
-# HTTP response -> client reads a 404, not an event stream).
+# Cross-repo smoke test: a PAGI-Tools SSE route must drive the real PAGI::Server
+# to return one concrete Response through PAGI::SSE->decline, instead of
+# starting an event stream. Each repo is unit-tested in isolation; this proves
+# the whole chain (Response emits HTTP events -> SSE maps decline events ->
+# server returns a real HTTP response -> client reads a 404).
 #
 # Skips unless PAGI::Server is on @INC, so PAGI-Tools' standalone suite stays
 # independent. Run it with:
@@ -33,6 +33,7 @@ plan skip_all => "PAGI::Server $PAGI::Server::VERSION does not support the sse.h
 plan skip_all => "Server integration tests not supported on Windows" if $^O eq 'MSWin32';
 
 use PAGI::App::Router;
+use PAGI::Response::Text;
 use IO::Socket::INET;
 
 my $loop = IO::Async::Loop->new;
@@ -69,18 +70,17 @@ sub sse_get {
     return ($wire, $eof);
 }
 
-subtest 'unmatched SSE route returns a real HTTP 404 over the real server' => sub {
+subtest 'concrete SSE decline Response returns a real HTTP 404 over the real server' => sub {
     my $router = PAGI::App::Router->new;
-    # An SSE route exists, but the request targets a different path.
     $router->sse('/events' => sub {
-        my ($c) = @_;
-        return $c->start(status => 200);
+        my ($sse) = @_;
+        return $sse->decline(PAGI::Response::Text->new('Not Found', status => 404));
     });
 
     my $server = create_server($router->to_app);
-    my ($wire, $eof) = sse_get($server->port, '/nope');
+    my ($wire, $eof) = sse_get($server->port, '/events');
 
-    like($wire, qr{HTTP/1\.1 404},        'unmatched SSE route -> 404, not a crash');
+    like($wire, qr{HTTP/1\.1 404},        'concrete decline Response -> 404, not a crash');
     like($wire, qr/Not Found/,             'decline body delivered');
     unlike($wire, qr{text/event-stream},   'NOT an event stream');
     ok($eof, 'connection closed');

@@ -67,6 +67,18 @@ subtest 'try_send_event works' => sub {
     is($sent[1]{event}, 'ping', 'event name sent');
 };
 
+subtest 'try_send_comment succeeds with a direct comment event' => sub {
+    my @sent;
+    my $send = sub { push @sent, $_[0]; Future->done };
+    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    $sse->start->get;
+
+    ok($sse->try_send_comment('alive')->get,
+        'try_send_comment returns true on success');
+    is($sent[1], { type => 'sse.comment', comment => 'alive' },
+        'try_send_comment emits the direct comment protocol event');
+};
+
 subtest 'on_error fires when try_send fails' => sub {
     my $send = sub { Future->fail("Connection lost") };
     my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);

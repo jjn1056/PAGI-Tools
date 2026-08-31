@@ -3,15 +3,16 @@
 Patterns for running work after sending a response.
 
 This example deliberately sends responses before starting follow-up work, so
-its App Router declarations use explicit `raw` handlers. Ordinary App handlers
-instead receive `$c`, return a Response, and leave emission to the shared
-routing compiler.
+its App Router declarations wrap native three-channel applications with
+`as_app`. Ordinary App handlers instead receive `PAGI::Request`, return an
+application value, and leave invocation to the shared routing compiler.
 
 The final Router is deployed through `compose(app => $router)`. Direct
-`$router->to_app` remains useful as a low-level routing component, but an
-unknown HTTP path then completes without response events; Compose supplies the
-complete application boundary used by the server example. Its automatic
-fallbacks are mandatory and inert after any route starts a response.
+`$router->to_app` remains useful as a low-level routing component, and the
+Router itself emits complete stock or configured 404 and 405 responses,
+including negotiated bodies and `Allow`. Compose supplies lifecycle,
+application-error, and response-completion safety around that routing
+component; it does not reinterpret the Router's fallback outcomes.
 
 ## Run
 
@@ -48,7 +49,8 @@ Runs in a child process, doesn't block the event loop.
 For very fast operations (<10ms) after response - just call directly after `await`:
 
 ```perl
-await $res->json({ status => 'ok' })->respond($send);
+my $response = json_response({ status => 'ok' });
+await invoke_app($response, $scope, $receive, $send);
 quick_sync_task("log");  # runs after response is sent
 ```
 

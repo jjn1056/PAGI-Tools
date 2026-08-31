@@ -2,29 +2,46 @@
 use strict;
 use warnings;
 
-use Future;
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
-use PAGI::Pages;
+use PAGI::Pages qw(welcome redirect not_found gone);
 use PAGI::Routing qw(router route mount);
+use PAGI::Utils qw(as_app invoke_app);
+
+my $configured_pages = PAGI::Pages->new(
+    as      => 'auto',
+    default => 'text',
+);
 
 my $routing = router(routes => [
-    route('/' => PAGI::Pages->welcome, name => 'welcome'),
-    route('/old' => PAGI::Pages->permanent_redirect('/new')),
+    route('/' => welcome(), name => 'welcome'),
+    route('/old' => redirect('/new', status => 308)),
     route('/missing' => PAGI::Pages->not_found),
-    mount('/terminal' => PAGI::Pages->gone),
-    route('/context' => sub {
-        my ($c) = @_;
-        my $response = PAGI::Pages->not_found($c, as => 'text');
-        $response->header('X-Demo' => 'Context response value');
-        return $response;
+    route('/configured' => $configured_pages->not_found(
+        detail => 'Missing under configured Pages policy',
+    )),
+    mount('/terminal', app => gone(
+        detail => 'This mounted subtree is gone',
+    )),
+    route('/request' => sub {
+        my ($request) = @_;
+        return not_found(
+            as      => 'text',
+            detail  => 'No page at ' . $request->path,
+            headers => ['X-Demo' => 'Request application value'],
+        );
     }),
-    route('/raw', raw => async sub {
+    route('/raw' => as_app(async sub {
         my ($scope, $receive, $send) = @_;
-        my $response = PAGI::Pages->not_found($scope, as => 'text');
-        $response->header('X-Demo' => 'raw response value');
-        await Future->wrap($response->respond($send));
-    }),
+        await invoke_app(
+            not_found(
+                as      => 'text',
+                detail  => 'Native Route delegated this application',
+                headers => ['X-Demo' => 'Raw application value'],
+            ),
+            $scope, $receive, $send,
+        );
+    })),
 ]);
 
 compose(
@@ -41,4 +58,4 @@ compose(
             return;
         },
     },
-)->to_app;
+);

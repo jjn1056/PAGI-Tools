@@ -4,6 +4,7 @@ use warnings;
 use Future::AsyncAwait;
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
+use PAGI::Utils qw(as_app);
 
 # Safe sleep that works even without Future::IO backend
 my $HAS_FUTURE_IO = eval { require Future::IO; 1 };
@@ -29,7 +30,7 @@ my $router = PAGI::App::Router->new;
 # ============================================================================
 
 # Hello World endpoint
-$router->get('/', raw => async sub {
+$router->get('/' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
 
     await $send->({
@@ -42,10 +43,10 @@ $router->get('/', raw => async sub {
         body => 'Hello, World!',
         more => 0,
     });
-})->name('hello');
+}))->name('hello');
 
 # POST Echo - echoes back the request body
-$router->post('/echo', raw => async sub {
+$router->post('/echo' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
 
     # Find content-type from request headers (array of pairs)
@@ -79,10 +80,10 @@ $router->post('/echo', raw => async sub {
         body => $body,
         more => 0,
     });
-})->name('echo');
+}))->name('echo');
 
 # HTTP Streaming - sends chunks with delays
-$router->get('/stream', raw => async sub {
+$router->get('/stream' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
 
     # Access shared state from lifespan
@@ -111,13 +112,13 @@ $router->get('/stream', raw => async sub {
         });
         await maybe_sleep(0.5) if $more;
     }
-})->name('http_stream');
+}))->name('http_stream');
 
 # ============================================================================
 # WebSocket Route
 # ============================================================================
 
-$router->websocket('/ws/echo', raw => async sub {
+$router->websocket('/ws/echo' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
 
     # Wait for connect event
@@ -149,13 +150,13 @@ $router->websocket('/ws/echo', raw => async sub {
             last;
         }
     }
-})->name('ws_echo');
+}))->name('ws_echo');
 
 # ============================================================================
 # SSE Route
 # ============================================================================
 
-$router->sse('/events', raw => async sub {
+$router->sse('/events' => as_app(async sub {
     my ($scope, $receive, $send) = @_;
 
     # Start SSE stream
@@ -200,7 +201,7 @@ $router->sse('/events', raw => async sub {
     # just retain the still-pending watcher instead -- it resolves on its
     # own whenever the transport eventually reports the real disconnect.
     $disconnect->retain unless $disconnect->is_ready;
-})->name('sse_events');
+}))->name('sse_events');
 
 # ============================================================================
 # Main Application with Lifespan

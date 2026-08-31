@@ -49,10 +49,10 @@ sub app_as {
     return sub { return $method->($self, @_) };
 }
 
-sub new_context {
-    my ($self, $scope, $receive, $send) = @_;
-    require PAGI::Context;
-    return PAGI::Context->new($scope, $receive, $send);
+sub new_request {
+    my ($self, @arguments) = @_;
+    require PAGI::Request;
+    return PAGI::Request->new(@arguments);
 }
 
 sub app_path {
@@ -105,7 +105,10 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
     use parent 'PAGI::Endpoint::Router';
     use Future::AsyncAwait;
     use PAGI::Compose qw(compose);
+    use PAGI::Response::JSON ();
+    use PAGI::Response::Text ();
     use PAGI::Routing qw(middleware);
+    use PAGI::Utils qw(as_app);
 
     sub new {
         my ($class, %args) = @_;
@@ -115,21 +118,28 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 
     sub routes {
         my ($self, $r) = @_;
+        $r->http_default($self->app_as('not_found_app'));
         $r->get('/people/{id}' => [
             'RequestId',
             $self->middleware_as('authenticate'),
             $self->{configured_middleware},
             middleware('Session', cookie_name => 'sid'),
         ] => 'show')->name('show');
-        $r->get('/download', raw => $self->app_as('download'));
+        $r->get('/download', as_app($self->app_as('download')));
         $r->websocket('/chat/{room}' => 'chat')->name('chat');
         $r->sse('/events' => 'events')->name('events');
-        $r->mount('/admin' => $self->app_as('admin_app'));
+        $r->mount('/admin', routes => sub {
+            my ($admin) = @_;
+            $admin->get('/users' => 'users')->name('users');
+        })->name('admin');
+        $r->mount('/legacy', app => $self->app_as('legacy_app'));
     }
 
     sub show {
-        my ($self, $c) = @_;
-        return $c->json($self->{repository}->find($c->path_param('id')));
+        my ($self, $request) = @_;
+        return PAGI::Response::JSON->new(
+            $self->{repository}->find($request->path_param('id')),
+        );
     }
 
     sub authenticate {
@@ -149,13 +159,13 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 C<PAGI::Endpoint::Router> is the method-oriented mutable frontend over
 L<PAGI::App::Router> and the shared immutable routing compiler. It binds route
 handler names to one ordinary Perl object. It does not match requests, build
-Contexts for compiled routes, adapt Responses, load handler packages, inject
+protocol objects for compiled routes, adapt Responses, load handler packages, inject
 state, or maintain a separate middleware chain.
 
 =head1 MIGRATING
 
 This release intentionally replaces the previous Endpoint handler,
-middleware, state, Context, nesting, and naming contracts without a
+middleware, state, handler-object, nesting, and naming contracts without a
 compatibility layer. See the
 L<standalone router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>
 in the source distribution for concrete before-and-after examples with
@@ -180,83 +190,99 @@ retains that exact object. Each call materializes a fresh immutable
 L<PAGI::Routing::Router> snapshot, so later changes to ordinary object fields
 do not alter an existing snapshot's declaration graph.
 
-Nested Endpoint objects are mounted with the routing-aware form:
+Convert a nested Endpoint explicitly when its names must be discoverable
+through the outer Router:
 
-    $r->mount('/people', router => $people_endpoint)->name('people');
+    $r->mount('/people', app => $people_endpoint->to_router)
+        ->name('people');
 
-All nested mutable frontends materialize in the same root operation. Reusing
-one object at sibling placements reuses one child Router identity within that
-snapshot while each Mount retains independent path, name, and metadata.
-Recursive Endpoint graphs fail with the shared placement-cycle diagnostic.
+Each C<to_router> call makes an immutable child snapshot. Mounting an Endpoint
+object directly with C<< app => $endpoint >> is also valid application
+composition, but that boundary is opaque: dispatch enters the Endpoint's
+C<to_app>, while the outer reverse resolver does not guess its route names.
 
 =head2 to_app
 
 Materializes one fresh snapshot and compiles it through the shared compiler.
 Retain the returned native PAGI routing component for its intended lifetime. A
 class call constructs one Endpoint instance; an object call keeps its receiver.
-Direct C<to_app> is legal low-level compilation, but an exhausted HTTP search
-emits no response. Use an enclosing L<PAGI::Compose> for a complete deployed
-application, or attach routing fallback middleware at the enclosing Router or
-Mount boundary.
+Direct C<to_app> is legal low-level compilation. HTTP NONE invokes the
+Router's declared C<http_default>, or its stock negotiated 404 when none was
+declared; HTTP PARTIAL likewise retains the Router's negotiated 405. It never
+completes HTTP exhaustion silently. L<PAGI::Compose> remains an optional
+application-root composer for application middleware, lifespan callbacks, and
+its HTTP safety boundary; it is not required merely to produce Router-owned
+404 or 405 responses.
 
 =head1 ROUTE DECLARATIONS
 
 C<routes($builder)> receives an Endpoint-aware facade over one public App
 Router. It provides C<get>, C<post>, C<put>, C<patch>, C<delete>, C<head>,
-C<options>, C<any>, C<route>, C<websocket>, C<sse>, C<group>, C<mount>, and the
-last-declaration modifiers C<name>, C<desc>, and C<constraints>. Declarations
-remain in exact first-seen order. Groups receive another Endpoint facade bound
-to the same object.
+C<options>, C<any>, C<route>, C<websocket>, C<sse>, C<mount>,
+C<http_default>, and the last-declaration modifiers C<name>, C<desc>, and
+C<constraints>. It intentionally has no C<group>. Declarations remain in exact
+first-seen order. A Mount C<routes> callback receives a fresh Endpoint facade
+bound to the same object and a fresh child App Router.
 
 The same snapshot and reverse-routing rules as L<PAGI::App::Router> apply.
 Names are local logical segments; nested names form canonical slash addresses.
-Context C<path_for> resolves relative to the active placement, while an
-absolute name starts with C</>.
+L<PAGI::Routing::URL/path_for> can resolve from the selected Request relative
+to the active placement, while an absolute name starts with C</>.
 
 =head1 HANDLERS
 
     $r->get('/method' => 'show');
     $r->get('/closure' => sub {
-        my ($c) = @_;
-        return $c->text('closure');
+        my ($request) = @_;
+        return PAGI::Response::Text->new('closure');
     });
 
 A plain unqualified string in handler position is validated with C<can> while
 the snapshot is built. The exact resulting method CODE is retained and later
-called as C<($endpoint, $context)>. Local, inherited, and role-installed or
+called as C<($endpoint, $protocol)>. HTTP methods receive a
+L<PAGI::Request>, WebSocket methods receive a L<PAGI::WebSocket>, and SSE
+methods receive a L<PAGI::SSE>. Local, inherited, and role-installed or
 aliased methods therefore work. Missing methods and qualified strings are
 errors; handler strings never load packages.
 
 A handler coderef passes to the shared App Router unmodified. It receives only
-the ordinary protocol-specific Context and is never rebound to the Endpoint.
-HTTP handlers return an immediate Response or a Future resolving to one.
-WebSocket and SSE handlers use their Context operations and may complete
+the ordinary protocol-specific object and is never rebound to the Endpoint.
+HTTP handlers return an immediate application value or a Future resolving to
+one.
+WebSocket and SSE handlers use their protocol-object operations and may complete
 immediately or through a Future. All response validation and protocol events
 belong to the shared compiler.
 
-=head1 RAW LEAVES
+For HTTP application objects, explicit Route methods win; otherwise
+C<allowed_methods> is snapshotted once when the immutable Route is built;
+otherwise GET plus automatic HEAD is used. The mutable Endpoint declaration
+does not query that capability. Each fresh C<to_router> call constructs fresh
+Routes and therefore takes one fresh snapshot; a retained immutable Router
+retains its method policy. Only scalar C<< methods => '*' >> is unrestricted.
+WebSocket and SSE leaves never consult that HTTP capability.
 
-Endpoint accepts the same explicit native leaf grammar as App Router, after
-the optional positional middleware array:
+=head1 APPLICATION LEAVES
 
-    $r->get('/raw-http' => [
+Endpoint accepts application objects at leaf positions after the optional
+positional middleware array. Wrap a native closure from C<app_as> explicitly:
+
+    $r->get('/native-http' => [
         $self->middleware_as('audit'),
-    ], raw => $native_http_app);
-    $r->websocket('/raw-ws', raw => $native_ws_app);
-    $r->sse('/raw-events', raw => $native_sse_app);
+    ], as_app($self->app_as('native_http')));
 
-The C<raw> marker and native application coderef pass unchanged to the shared
-App builder. The target receives exactly C<($scope, $receive, $send)> and owns
-its protocol events; route middleware still wraps that native application.
-Malformed raw declarations fail synchronously with raw-target diagnostics.
+The application owns the native C<($scope, $receive, $send)> channels and
+route middleware still wraps it. An ordinary method-name target binds
+C<($endpoint, $protocol)>. An ordinary handler coderef passes through
+unchanged and receives one protocol object.
 
-An ordinary method-name target continues to bind C<($endpoint, $context)>.
-An ordinary handler coderef continues to pass through unchanged and receive
-one Context. Neither form becomes raw without the explicit marker.
+A dynamic application returned by an HTTP handler is normalized per request.
+It receives the unchanged scope and remaining body stream, receives no
+lifespan replay, and remains opaque to the outer Router's reverse/schema
+metadata. Synchronous method handlers run inline and may block the event loop.
 
 =head1 MIDDLEWARE
 
-Every router, group, mount, and route middleware array uses the universal four
+Every router, mount, and route middleware array uses the universal four
 forms:
 
 =over 4
@@ -277,7 +303,7 @@ Factories and C<wrap> methods must return a native app coderef synchronously.
 The first item listed is outermost. The resulting native middleware controls
 whether it calls downstream, which scope it passes, and how it wraps
 C<receive> and C<send>. This contract is identical for HTTP, WebSocket, and
-SSE; there is no response-valued C<($context, $next)> Endpoint middleware.
+SSE; there is no response-valued C<($protocol, $next)> Endpoint middleware.
 
 =head2 middleware_as
 
@@ -291,26 +317,32 @@ immediately. Constructing the helper performs no protocol I/O.
 =head2 app_as
 
     my $app = $endpoint->app_as('native_app');
-    $r->get('/download', raw => $endpoint->app_as('native_app'));
-    $r->mount('/legacy' => $endpoint->app_as('native_app'));
+    $r->get('/download', as_app($endpoint->app_as('native_app')));
+    $r->mount('/legacy', app => $endpoint->app_as('native_app'));
+    $r->http_default($endpoint->app_as('not_found_app'));
 
 Validates the method and returns a native application closure. When invoked,
 the method receives C<($endpoint, $scope, $receive, $send)>. The helper is
-useful as the target of an exact raw leaf, an opaque mount, or another native
-composition boundary, and does no work merely by being constructed. A raw
-leaf remains method-aware and keeps its matched path; an opaque mount owns and
-rewrites a matched prefix.
+useful as the source for an explicitly wrapped application leaf, an opaque
+mount, or another native composition boundary, including C<http_default>, and
+does no work merely by being constructed. An application leaf remains
+method-aware and keeps its matched path; an opaque mount owns and rewrites a
+matched prefix.
 
-=head1 CONTEXT AND STATE
+=head1 REQUEST AND STATE
 
-=head2 new_context
+=head2 new_request
 
-    my $c = $endpoint->new_context($scope, $receive, $send);
+    my $request = $endpoint->new_request($scope, $receive);
 
-This explicit convenience method calls C<PAGI::Context-E<gt>new> and therefore
-selects the built-in HTTP, WebSocket, or SSE subclass. It is not the routing
-compiler's Context factory. Overriding it affects only explicit calls to the
-helper, never compiled route dispatch.
+This explicit convenience method calls C<PAGI::Request-E<gt>new>. It accepts
+only an HTTP scope and the receive channel used for request-body consumption.
+All arguments are forwarded to that constructor, so a C<$send> callback or any
+other extra argument is rejected by the one Request validator.
+It is not the routing compiler's Request factory. Overriding it affects only
+explicit calls to the helper, never compiled route dispatch. WebSocket and SSE
+objects are supplied directly by compiled handlers rather than through this
+HTTP-only convenience.
 
 =head2 app_path
 
@@ -328,18 +360,27 @@ affects only explicit C<app_path> calls; it does not affect route compilation
 or dispatch.
 
 Endpoint object fields and request lifespan state are separate mechanisms.
-Use validated constructor fields for object configuration. C<$c-E<gt>state>
-reads the C<state> supplied in the server-owned request scope, including state
-prepared through L<PAGI::Compose> lifespan callbacks. Endpoint neither creates
-nor injects that key and has no C<state> or C<context_class> method.
+Use validated constructor fields for object configuration.
+C<$request-E<gt>state> returns the strict L<PAGI::State> facade for a C<state>
+hash supplied in the server-owned request scope, including state prepared
+through L<PAGI::Compose> lifespan callbacks. It returns C<undef> when the key
+is absent. Endpoint neither creates nor injects that key and has no C<state>
+method or protocol-object factory override.
 
 =head1 SNAPSHOTS AND ORDER
 
 Each C<to_router> returns a fresh immutable snapshot, and each C<to_app>
-compiles one retained snapshot. Matching, middleware folds, nonterminal HTTP
-exhaustion, first-seen method evidence, route metadata, reverse resolution, and
-request-local scope cloning are exactly those documented by
+compiles one retained snapshot. Matching, middleware folds, Router-owned HTTP
+outcomes, first-seen method evidence, route metadata, reverse resolution, and
+request-local routing state are exactly those documented by
 L<PAGI::App::Router>. Endpoint adds only method binding over that machinery and
-does not add Router fallback callback options or accessors.
+forwards the Router's one-shot native C<http_default> declaration without
+adding separate fallback callback accessors.
+
+=head1 SEE ALSO
+
+L<PAGI::Routing>, L<PAGI::Routing::Router>, L<PAGI::Routing::Mount>,
+L<PAGI::Compose>, L<PAGI::App::Router>, and the
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
 
 =cut

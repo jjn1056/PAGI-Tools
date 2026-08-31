@@ -8,7 +8,7 @@ use Encode qw(encode);
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util 'blessed';
-use PAGI::Context;
+use PAGI::Request;
 use PAGI::Pages ();
 use PAGI::Utils ();
 
@@ -64,15 +64,30 @@ facts. Statuses such as 401, 405, 407, and 426 therefore require a handler.
 
 =item * handler (default: undef)
 
-Optional renderer invoked as C<< $handler->($context, $original_error) >>.
-It must return an immediate or Future-backed PAGI response value. The cached
-Context response is seeded with the configured or exception-provided status;
-an explicit renderer status wins. A custom renderer owns its response content
-type and cache policy unchanged.
+Optional renderer invoked as C<< $handler->($request, $original_error) >>.
+It must return an immediate or Future-backed concrete L<PAGI::Response> value.
+ErrorHandler applies the configured or exception-provided
+status through C<status_try> only after the handler returns; an explicit
+renderer status wins. It then emits the value through
+the Response application contract. A custom renderer owns its response
+content type and cache policy unchanged.
 
-Use the handler seam to force a fixed Pages representation:
+Use the handler seam to force a fixed representation:
 
-    handler => PAGI::Pages->internal_server_error(as => 'json')
+    use PAGI::Response qw(problem_response);
+    handler => sub {
+        my ($request, $error) = @_;
+        return problem_response({
+            title  => 'Internal Server Error',
+            status => 500,
+        });
+    }
+
+The wrapper may inspect C<$request> or C<$error> when it deliberately chooses
+safe response fields. ErrorHandler requires a concrete Response from this
+custom renderer; source-free Pages application values belong at Route,
+Mount, Router-default, or Compose application boundaries instead. Pages does not
+consume that callback metadata itself.
 
 =back
 
@@ -145,18 +160,19 @@ sub wrap {
             }
 
             my $status = $self->_status_for_error($error);
-            my $context_scope = defined($scope->{type})
+            my $request_scope = defined($scope->{type})
                 ? $scope : { %$scope, type => 'http' };
-            my $context = PAGI::Context->new($context_scope, $receive, $send);
-            $context->response->status($status);
+            my $request = PAGI::Request->new($request_scope, $receive);
 
             my $response;
             if ($self->{handler}) {
                 $response = await Future->wrap(
-                    $self->{handler}->($context, $error),
+                    $self->{handler}->($request, $error),
                 );
-                croak 'handler did not return a response'
-                    unless PAGI::Utils::is_response($response);
+                croak 'handler did not return a PAGI::Response'
+                    unless blessed($response)
+                        && $response->isa('PAGI::Response');
+                $response->status_try($status);
             }
             else {
                 my $development = await $self->_development_for_request;
@@ -172,7 +188,7 @@ sub wrap {
 
                 my $rendered = eval {
                     $response = PAGI::Pages->status(
-                        $context, $status, @detail,
+                        $status, @detail,
                     );
                     1;
                 };
@@ -182,7 +198,12 @@ sub wrap {
                 }
             }
 
-            await Future->wrap($context->respond($response));
+            await PAGI::Utils::invoke_app(
+                $response,
+                $request_scope,
+                $receive,
+                $wrapped_send,
+            );
         }
     };
 }
@@ -300,8 +321,8 @@ __END__
 
 =head1 BOUNDARIES AND DATABASE FAILURES
 
-ErrorHandler is ordinary middleware and uses the same placement rules as the
-routing fallbacks. Application middleware provides whole-application policy:
+ErrorHandler is ordinary middleware and uses the same placement rules as every
+pure PAGI wrapper. Application middleware provides whole-application policy:
 
     compose(
         app => $routing,
@@ -324,7 +345,7 @@ Mount middleware list changes only one mounted occurrence:
     );
 
     mount('/api/v1',
-        router     => $api,
+        app        => $api,
         name       => 'v1',
         middleware => [
             middleware('ErrorHandler',
@@ -332,9 +353,9 @@ Mount middleware list changes only one mounted occurrence:
         ],
     )
 
-Unlike Routing::NotFound and Routing::MethodNotAllowed, ErrorHandler is also
-useful on a Route: exceptions happen after that Route is selected, while route
-exhaustion does not.
+ErrorHandler is also useful on a Route: exceptions happen after that Route is
+selected. Router NONE and PARTIAL are already ordinary 404/405 responses, not
+exceptions; customize NONE with Router C<http_default>.
 
 If a database call throws or returns a failed Future before response start,
 C<on_error> settles before the custom or built-in renderer runs. If the same
@@ -420,5 +441,8 @@ transformation.
 =head1 SEE ALSO
 
 L<PAGI::Middleware> - Base class for middleware
+
+L<PAGI::Routing>, L<PAGI::Routing::Mount>, and L<PAGI::Compose> - routing,
+placement, and application-root ownership
 
 =cut

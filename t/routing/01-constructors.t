@@ -2,11 +2,14 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future ();
 use Scalar::Util qw(refaddr);
 use overload ();
 
 use lib 'lib';
 use PAGI::Routing qw(:ALL);
+use PAGI::Response::Text ();
+use PAGI::Utils qw(as_app request_response);
 
 {
     package NoImports;
@@ -30,8 +33,32 @@ use PAGI::Routing qw(:ALL);
 
 {
     package TestRoutingApp;
+    our $CALLS = 0;
     sub new { bless { app => $_[1] }, $_[0] }
-    sub to_app { $_[0]->{app} }
+    sub to_app { $CALLS++; return $_[0]->{app} }
+}
+
+{
+    package Local::MethodEndpoint;
+    sub new {
+        my ($class, @methods) = @_;
+        return bless {
+            methods => \@methods,
+            calls => 0,
+            contexts => [],
+        }, $class;
+    }
+    sub to_app { return sub { } }
+    sub allowed_methods {
+        my ($self) = @_;
+        ++$self->{calls};
+        push @{$self->{contexts}},
+            !defined wantarray ? 'void' : wantarray ? 'list' : 'scalar';
+        return @{$self->{methods}};
+    }
+    sub calls { return $_[0]{calls} }
+    sub contexts { return [@{$_[0]{contexts}}] }
+    sub replace_methods { $_[0]{methods} = [@_[1 .. $#_]]; return }
 }
 
 {
@@ -56,7 +83,9 @@ use PAGI::Routing qw(:ALL);
     sub Owned { $CALLS++; return qr/factory/ }
 
     sub http { return route('/http/{id:&Owned}' => sub { }) }
-    sub raw_http { return route('/raw/{id:&Owned}', raw => sub { }) }
+    sub native_http {
+        return route('/native/{id:&Owned}' => PAGI::Utils::as_app(sub { }));
+    }
     sub socket { return websocket('/socket/{id:&Owned}' => sub { }) }
     sub events { return sse('/events/{id:&Owned}' => sub { }) }
     sub inline_mount {
@@ -64,14 +93,14 @@ use PAGI::Routing qw(:ALL);
     }
     sub router_mount {
         return mount('/known/{id:&Owned}',
-            router => router(routes => []), name      => 'known');
+            app => router(routes => []), name      => 'known');
     }
     sub opaque_mount {
-        return mount('/opaque/{id:&Owned}' => sub { });
+        return mount('/opaque/{id:&Owned}', app => sub { });
     }
     sub direct_route {
         return PAGI::Routing::Route->new(
-            'route', '/direct/{id:&Owned}' => sub { },
+            path => '/direct/{id:&Owned}', endpoint => sub { },
         );
     }
     sub direct_mount {
@@ -146,6 +175,10 @@ subtest 'exports are opt-in and tag-specific' => sub {
     ok(!RouteImports->can('middleware'), 'routes tag excludes middleware');
     ok(MiddlewareImports->can('middleware'), 'middleware tag exports middleware');
     ok(!MiddlewareImports->can('route'), 'middleware tag excludes route');
+    ok(!PAGI::Routing->can('request_app'),
+        'Routing no longer contains the Request-to-Response adapter');
+    ok(defined &request_response,
+        'request_response is imported from PAGI::Utils instead');
     my ($error, $stderr);
     {
         local *STDERR;
@@ -162,7 +195,7 @@ subtest 'public constructors retain their direct declaration package' => sub {
     $Local::FactoryDeclaration::CALLS = 0;
     my @leaves = (
         [Local::FactoryDeclaration::http(), '/http/factory'],
-        [Local::FactoryDeclaration::raw_http(), '/raw/factory'],
+        [Local::FactoryDeclaration::native_http(), '/native/factory'],
         [Local::FactoryDeclaration::socket(), '/socket/factory'],
         [Local::FactoryDeclaration::events(), '/events/factory'],
         [Local::FactoryDeclaration::direct_route(), '/direct/factory'],
@@ -230,7 +263,7 @@ subtest 'public constructors retain their direct declaration package' => sub {
         { id => 'factory' }, 'the placed descriptor retains its source predicate');
 };
 
-subtest 'route descriptions preserve target identity and normalize HTTP methods' => sub {
+subtest 'route descriptions preserve endpoint identity and normalize HTTP methods' => sub {
     my $handler = sub { return 'context handler' };
     my $config = { enabled => 1 };
     my $mw = middleware('Example::Trace', level => 2, config => $config);
@@ -246,11 +279,29 @@ subtest 'route descriptions preserve target identity and normalize HTTP methods'
     is($node->path, '/things/{host}', 'route path');
     is($node->name, 'things', 'route name');
     is($node->desc, '', 'empty description is retained');
-    is(refaddr($node->target), refaddr($handler), 'handler identity is retained');
+    is(refaddr($node->endpoint), refaddr($handler), 'endpoint identity is retained');
     is($node->methods, ['POST', 'GET', 'HEAD', 'RPC'], 'methods normalize, deduplicate, and add HEAD');
     is(refaddr($node->constraints->{host}), refaddr($host_constraint), 'route constraints retain declared checker');
     is($node->middleware, [$mw], 'route middleware descriptors');
-    ok(!$node->is_raw, 'normal route is not raw');
+
+    my $plain_route = route('/plain' => sub { });
+    is($plain_route->constraints, {},
+        'Route exposes omitted explicit constraints as an empty hash');
+    my $plain_route_constraints = $plain_route->constraints;
+    $plain_route_constraints->{probe} = qr/mutated/;
+    is($plain_route->constraints, {},
+        'Route omitted constraints accessor remains a fresh empty hash');
+
+    my $empty_route = route('/empty' => sub { }, constraints => {});
+    is($empty_route->constraints, {},
+        'Route exposes explicit empty constraints with the same shape');
+    my $empty_route_constraints = $empty_route->constraints;
+    $empty_route_constraints->{probe} = qr/mutated/;
+    is($empty_route->constraints, {},
+        'Route explicit empty constraints accessor remains a fresh hash');
+
+    ok(!$node->can('target') && !$node->can('is_raw'),
+        'retired target modes have no compatibility accessors');
     ok(!$node->can('namespace'), 'public namespace accessor is removed from Route');
     is($node->routes, undef, 'routes are inapplicable to route');
 
@@ -271,17 +322,23 @@ subtest 'route descriptions preserve target identity and normalize HTTP methods'
     is(route('/default' => $handler)->methods, ['GET', 'HEAD'], 'HTTP routes default to GET and HEAD');
 };
 
-subtest 'raw and protocol-specific route descriptions' => sub {
-    my $app = sub { return 'raw app' };
-    my $raw = route '/raw', raw => $app, desc => 'raw app';
-    is($raw->kind, 'route', 'raw HTTP route kind');
-    ok($raw->is_raw, 'raw route is marked raw');
-    is(refaddr($raw->target), refaddr($app), 'raw app target identity is retained');
-    is($raw->methods, ['GET', 'HEAD'], 'raw HTTP routes retain default methods');
+subtest 'application-valued and protocol-specific route descriptions' => sub {
+    my $app = sub { return 'native app' };
+    my $native = as_app($app);
+    my $native_route = route '/native' => $native, desc => 'native app';
+    is($native_route->kind, 'route', 'native HTTP route kind');
+    is(refaddr($native_route->endpoint), refaddr($native),
+        'wrapped native app endpoint identity is retained');
+    is($native_route->methods, ['GET', 'HEAD'],
+        'native HTTP routes retain safe default methods');
 
     my $component = TestRoutingApp->new($app);
-    my $raw_component = route '/component', raw => $component;
-    is(refaddr($raw_component->target), refaddr($component), 'raw component identity is retained for compiler coercion');
+    $TestRoutingApp::CALLS = 0;
+    my $component_route = route '/component' => $component;
+    is(refaddr($component_route->endpoint), refaddr($component),
+        'component endpoint identity is retained for compiler coercion');
+    is($TestRoutingApp::CALLS, 0,
+        'component is not compiled at description construction');
 
     my $ws_regex = qr/ws/;
     my $ws_code = sub { return $_[0] eq 'code' };
@@ -293,7 +350,8 @@ subtest 'raw and protocol-specific route descriptions' => sub {
     };
     my $websocket = websocket '/socket/{regex}/{code}/{object}' => sub { },
         constraints => $ws_constraints;
-    my $raw_websocket = websocket '/raw-socket', raw => $app;
+    my $native_websocket_endpoint = as_app($app);
+    my $native_websocket = websocket '/native-socket' => $native_websocket_endpoint;
     my $sse_regex = qr/sse/;
     my $sse_code = sub { return $_[0] eq 'stream' };
     my $sse_object = Local::ProtocolConstraint->new('event');
@@ -304,13 +362,14 @@ subtest 'raw and protocol-specific route descriptions' => sub {
     };
     my $sse = sse '/events/{regex}/{code}/{object}' => sub { },
         constraints => $sse_constraints;
-    my $raw_sse = sse '/raw-events', raw => $app;
+    my $native_sse_endpoint = as_app($app);
+    my $native_sse = sse '/native-events' => $native_sse_endpoint;
     is($websocket->kind, 'websocket', 'WebSocket kind');
     is($sse->kind, 'sse', 'SSE kind');
-    ok(!$websocket->is_raw, 'normal WebSocket route is not raw');
-    ok($raw_websocket->is_raw, 'raw WebSocket route is raw');
-    ok(!$sse->is_raw, 'normal SSE route is not raw');
-    ok($raw_sse->is_raw, 'raw SSE route is raw');
+    is(refaddr($native_websocket->endpoint), refaddr($native_websocket_endpoint),
+        'WebSocket accepts an application-valued endpoint');
+    is(refaddr($native_sse->endpoint), refaddr($native_sse_endpoint),
+        'SSE accepts an application-valued endpoint');
     is($websocket->methods, undef, 'WebSocket has no methods');
     is(refaddr($websocket->constraints->{regex}), refaddr($ws_regex),
         'WebSocket retains a declared regex constraint');
@@ -352,7 +411,72 @@ subtest 'raw and protocol-specific route descriptions' => sub {
         'SSE returns a defensive constraint hash');
 };
 
-subtest 'mount and router descriptions copy their collections' => sub {
+subtest 'object and functional Route constructors share the canonical endpoint model' => sub {
+    my $endpoint = sub { return 'handler' };
+    my $functional = route('/same' => $endpoint,
+        name => 'same', desc => 'Same route', methods => ['post']);
+    my $object = PAGI::Routing::Route->new(
+        path => '/same', endpoint => $endpoint,
+        name => 'same', desc => 'Same route', methods => ['post'],
+    );
+
+    for my $accessor (qw(kind path name desc methods)) {
+        is($object->$accessor, $functional->$accessor,
+            "object and functional constructors agree on $accessor");
+    }
+    is(refaddr($object->endpoint), refaddr($endpoint),
+        'object constructor retains the exact endpoint');
+    is($object->kind, 'route', 'object constructor always creates HTTP');
+};
+
+subtest 'HTTP methods use explicit, capability, then safe-default precedence' => sub {
+    my $capable = Local::MethodEndpoint->new(
+        qw(get GET post options POST),
+    );
+    my $from_capability = route('/capability' => $capable);
+    is($from_capability->methods, [qw(GET HEAD POST OPTIONS)],
+        'capability methods normalize in first-seen order');
+    is($capable->calls, 1, 'capability is consulted exactly once');
+    is($capable->contexts, ['list'], 'capability is called in list context');
+
+    $capable->replace_methods(qw(DELETE));
+    is($from_capability->methods, [qw(GET HEAD POST OPTIONS)],
+        'capability methods are an immutable construction-time snapshot');
+    is($capable->calls, 1, 'snapshot access does not consult capability again');
+
+    my $explicit = Local::MethodEndpoint->new(qw(GET POST));
+    is(route('/explicit' => $explicit, methods => ['patch'])->methods,
+        ['PATCH'], 'explicit methods win over endpoint capability');
+    is($explicit->calls, 0,
+        'explicit methods avoid the capability call entirely');
+
+    my $response = PAGI::Response::Text->new('file');
+    is(route('/file' => $response)->methods, [qw(GET HEAD)],
+        'ordinary application objects use the safe default');
+    my $native = as_app(sub { });
+    is(route('/relay' => $native, methods => '*')->methods, '*',
+        'only explicit scalar wildcard enables unrestricted dispatch');
+
+    my $protocol_capable = Local::MethodEndpoint->new(qw(POST));
+    is(websocket('/socket' => $protocol_capable)->methods, undef,
+        'WebSocket routes have no method set');
+    is(sse('/events' => $protocol_capable)->methods, undef,
+        'SSE routes have no method set');
+    is($protocol_capable->calls, 0,
+        'protocol routes never consult allowed_methods');
+    like dies {
+        websocket('/socket-methods' => $protocol_capable, methods => 'GET')
+    }, qr/WebSocket routes do not accept methods/,
+        'WebSocket rejects methods before capability resolution';
+    like dies {
+        sse('/event-methods' => $protocol_capable, methods => 'GET')
+    }, qr/SSE routes do not accept methods/,
+        'SSE rejects methods before capability resolution';
+    is($protocol_capable->calls, 0,
+        'rejected protocol method declarations do not leak capability calls');
+};
+
+subtest 'Mount retains one base app and Router retains declared HTTP defaults' => sub {
     my $handler = sub { };
     my $leaf = route '/leaf' => $handler;
     my $children = [$leaf];
@@ -369,33 +493,42 @@ subtest 'mount and router descriptions copy their collections' => sub {
     is($inline->name, 'API', 'inline mount exposes its local name');
     ok(!$inline->can('namespace'), 'public namespace accessor is removed from Mount');
     is($inline->desc, '', 'mount empty description');
-    is($inline->routes, [$leaf], 'inline mount routes');
+    isa_ok($inline->app, ['PAGI::Routing::Router'],
+        'routes shorthand constructs a child Router application');
     is(refaddr($inline->constraints->{tenant}), refaddr($tenant_constraint), 'mount constraints retain declared checker');
-    ok(!$inline->is_raw, 'inline mount is not raw');
-    is($inline->target, undef, 'inline mount has no target');
+
+    my $plain_mount = mount('/plain-mount', routes => []);
+    is($plain_mount->constraints, {},
+        'Mount exposes omitted explicit constraints as an empty hash');
+    my $plain_mount_constraints = $plain_mount->constraints;
+    $plain_mount_constraints->{probe} = qr/mutated/;
+    is($plain_mount->constraints, {},
+        'Mount omitted constraints accessor remains a fresh empty hash');
+
+    ok(!$inline->can('target') && !$inline->can('router')
+        && !$inline->can('is_raw') && !$inline->can('routes'),
+        'removed Mount modes have no compatibility accessors');
     is($inline->methods, undef, 'methods are inapplicable to mount');
     is($inline->middleware, [$mount_middleware], 'mount middleware preserves descriptor');
 
     push @$children, route '/other' => $handler;
     $constraints->{tenant} = qr/b/;
     push @$mount_middleware_input, middleware('MountInputMutation');
-    my $returned_routes = $inline->routes;
     my $returned_constraints = $inline->constraints;
     my $returned_mount_middleware = $inline->middleware;
-    push @$returned_routes, route '/third' => $handler;
     $returned_constraints->{tenant} = qr/c/;
     push @$returned_mount_middleware, middleware('MountResultMutation');
-    is($inline->routes, [$leaf], 'mount route arrays are copied');
+    is($inline->app->routes, [$leaf], 'routes shorthand copies the child route array');
     is(refaddr($inline->constraints->{tenant}), refaddr($tenant_constraint), 'mount constraints are copied');
     is($inline->middleware, [$mount_middleware], 'mount middleware arrays are copied');
 
     my $app = sub { };
-    my $raw = mount '/app' => $app;
-    ok($raw->is_raw, 'application mount is raw');
-    is(refaddr($raw->target), refaddr($app), 'mount target preserves app identity');
-    is($raw->routes, undef, 'application mount has no inline routes');
-    my $component_mount = mount '/component' => TestRoutingApp->new($app);
-    ok($component_mount->target->isa('TestRoutingApp'), 'application mount preserves component target for compiler coercion');
+    my $raw = mount '/app', app => $app;
+    is(refaddr($raw->app), refaddr($app), 'Mount retains its exact base app');
+    my $component = TestRoutingApp->new($app);
+    my $component_mount = mount '/component', app => $component;
+    is(refaddr($component_mount->app), refaddr($component),
+        'Mount retains its exact component application');
 
     my $child = router(routes => [
         route('/' => sub { }, name => 'index'),
@@ -403,41 +536,12 @@ subtest 'mount and router descriptions copy their collections' => sub {
     my $known = mount('/known',
         desc      => 'Known child',
         name      => 'known',
-        router    => $child,
+        app       => $child,
     );
-    is(refaddr($known->router), refaddr($child), 'Router target is preserved');
-    is($known->target, undef, 'Router mount has no opaque target');
-    is($known->routes, undef, 'Router mount has no inline routes');
+    is(refaddr($known->app), refaddr($child), 'Router application identity is preserved');
     is($known->name, 'known', 'Router mount exposes its local name');
-    ok(!$known->is_raw, 'Router mount is inspectable');
 
-    my $routes_first = mount('/routes-first',
-        routes => [$leaf], desc => 'Routes first', name      => 'first',
-    );
-    my $routes_middle = mount('/routes-middle',
-        desc => 'Routes middle', routes => [$leaf], name      => 'middle',
-    );
-    my $routes_last = mount('/routes-last',
-        desc => 'Routes last', name      => 'last', routes => [$leaf],
-    );
-    is($routes_first->routes, [$leaf], 'inline routes selector may come first');
-    is($routes_middle->routes, [$leaf], 'inline routes selector may come between options');
-    is($routes_last->routes, [$leaf], 'inline routes selector may come last');
-
-    my $router_first = mount('/router-first',
-        router => $child, desc => 'Router first', name      => 'router-first',
-    );
-    my $router_middle = mount('/router-middle',
-        desc => 'Router middle', router => $child, name      => 'router-middle',
-    );
-    my $router_last = mount('/router-last',
-        desc => 'Router last', name      => 'router-last', router => $child,
-    );
-    is(refaddr($router_first->router), refaddr($child), 'Router selector may come first');
-    is(refaddr($router_middle->router), refaddr($child), 'Router selector may come between options');
-    is(refaddr($router_last->router), refaddr($child), 'Router selector may come last');
-
-    my $routes = [$inline, $raw];
+    my $routes = [$leaf];
     my $router_middleware = middleware('Top');
     my $router_middleware_input = [$router_middleware];
     my $router = router(
@@ -449,7 +553,21 @@ subtest 'mount and router descriptions copy their collections' => sub {
     is($router->kind, 'router', 'router kind');
     is($router->name, undef, 'name is inapplicable to router');
     is($router->desc, 'Root routes', 'router description');
-    is($router->routes, [$inline, $raw], 'router routes');
+    is($router->routes, [$leaf], 'router routes');
+    is($router->http_default, undef, 'Router omits an HTTP default by default');
+    my $default = sub { };
+    my $component_default = TestRoutingApp->new($default);
+    local $TestRoutingApp::CALLS = 0;
+    my $with_default = router(routes => [], http_default => $default);
+    my $with_component_default = router(
+        routes => [], http_default => $component_default,
+    );
+    is(refaddr($with_default->http_default), refaddr($default),
+        'Router retains HTTP default coderef identity without compilation');
+    is(refaddr($with_component_default->http_default), refaddr($component_default),
+        'Router retains HTTP default component identity without compilation');
+    is($TestRoutingApp::CALLS, 0,
+        'Router construction does not compile its declared HTTP default');
     is($router->middleware, [$router_middleware], 'router middleware preserves descriptor');
     push @$routes, $leaf;
     push @$router_middleware_input, middleware('RouterInputMutation');
@@ -457,13 +575,13 @@ subtest 'mount and router descriptions copy their collections' => sub {
     my $returned_router_middleware = $router->middleware;
     push @$returned_router_routes, $leaf;
     push @$returned_router_middleware, middleware('RouterResultMutation');
-    is($router->routes, [$inline, $raw], 'router route arrays are copied');
+    is($router->routes, [$leaf], 'router route arrays are copied');
     is($router->middleware, [$router_middleware], 'router middleware arrays are copied');
     is($router->path, undef, 'path is inapplicable to router');
-    is($router->target, undef, 'target is inapplicable to router');
-    is($router->is_raw, undef, 'raw status is inapplicable to router');
     is($router->methods, undef, 'methods are inapplicable to router');
     is($router->constraints, undef, 'constraints are inapplicable to router');
+    ok(!$router->can('target') && !$router->can('is_raw'),
+        'retired target modes have no Router compatibility accessors');
     ok(!$router->can('namespace'), 'public namespace accessor is removed from Router');
     ok(!$router->can('not_found'), 'Router has no not-found callback accessor');
     ok(!$router->can('method_not_allowed'),
@@ -493,7 +611,7 @@ subtest 'descriptions have no coderef overload and defer compilation' => sub {
     for my $node (
         router(routes => []),
         route('/' => sub { }),
-        mount('/app' => sub { }),
+        mount('/app', app => sub { }),
     ) {
         ok(!overload::Method($node, '&{}'), ref($node) . ' has no coderef overload');
         ok($node->can('to_app'), ref($node) . ' has to_app boundary');
@@ -510,7 +628,7 @@ subtest 'every routing middleware position normalizes bare factories' => sub {
         route('/http' => $handler, middleware => $input),
         websocket('/socket' => $handler, middleware => [$factory]),
         sse('/events' => $handler, middleware => [$factory]),
-        mount('/opaque' => sub { }, middleware => [$factory]),
+        mount('/opaque', app => sub { }, middleware => [$factory]),
         mount('/inline', routes => [], middleware => [$factory]),
         router(routes => [], middleware => [$factory]),
     );
@@ -543,48 +661,117 @@ subtest 'every routing middleware position normalizes bare factories' => sub {
 subtest 'constructors reject invalid declarations' => sub {
     my $handler = sub { };
     my $child_router = router(routes => []);
-    like dies { route '/missing' }, qr/route requires exactly one of handler or raw/, 'route requires a target';
-    like dies { route '/both' => $handler, raw => $handler }, qr/route requires exactly one of handler or raw/, 'route rejects handler plus raw';
+    like dies { route '/missing' }, qr/route requires an endpoint/,
+        'functional route requires an endpoint';
+    like dies { PAGI::Routing::Route->new(path => '/missing') },
+        qr/route requires an endpoint/,
+        'object Route constructor requires an endpoint';
+    like dies { PAGI::Routing::Route->new(endpoint => $handler) },
+        qr/route requires a path/,
+        'object Route constructor requires a path';
+    like dies { route '/odd' => $handler, 'desc' },
+        qr/route option list must be key\/value pairs/,
+        'functional route rejects an odd option tail';
+    like dies {
+        PAGI::Routing::Route->new(path => '/odd', endpoint => $handler, 'desc')
+    }, qr/route option list must be key\/value pairs/,
+        'object Route constructor rejects an odd option list';
+    like dies { route '/duplicate' => $handler, name => 'a', name => 'b' },
+        qr/duplicate route option 'name'/,
+        'functional route rejects duplicate options before hash construction';
+    like dies {
+        PAGI::Routing::Route->new(
+            path => '/first', endpoint => $handler, path => '/second',
+        )
+    }, qr/duplicate route option 'path'/,
+        'object Route constructor rejects duplicate structural options';
+    like dies {
+        PAGI::Routing::Route->new(
+            path => '/duplicate-endpoint',
+            endpoint => $handler, endpoint => $handler,
+        )
+    }, qr/duplicate route option 'endpoint'/,
+        'object Route constructor rejects duplicate endpoints';
+    like dies { route '/legacy' => $handler, raw => $handler },
+        qr/unknown route option 'raw'/,
+        'raw is not parsed as a legacy endpoint mode';
     like dies { route '/unknown' => $handler, nope => 1 }, qr/unknown route option/, 'route rejects unknown option';
+    like dies {
+        PAGI::Routing::Route->new(
+            path => '/unknown', endpoint => $handler, kind => 'sse',
+        )
+    }, qr/unknown route option 'kind'/,
+        'object Route constructor cannot select another protocol kind';
     like dies { route '/bad-methods' => $handler, methods => {} }, qr/methods must be a method string, arrayref, or '\*'/, 'methods require supported shape';
     like dies { route '/empty-methods' => $handler, methods => [] }, qr/methods must be a method string, arrayref, or '\*'/, 'methods may not be empty';
+    like dies { route '/array-wildcard' => $handler, methods => ['*'] },
+        qr/methods must be a method string, arrayref, or '\*'/,
+        'array wildcard is rejected';
+    like dies { route '/mixed-wildcard' => $handler, methods => ['GET', '*'] },
+        qr/methods must be a method string, arrayref, or '\*'/,
+        'mixed wildcard list is rejected';
     like dies { route '/separator' => $handler, methods => 'GET POST' }, qr/methods must be a method string, arrayref, or '\*'/, 'methods reject separators';
     like dies { websocket '/socket' => $handler, methods => 'GET' }, qr/WebSocket routes do not accept methods/, 'WebSocket rejects methods';
     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
-    like dies { route '/not-code' => 'not a handler' }, qr/handler must be a coderef/, 'normal route handler must be a coderef';
-    like dies { route '/not-component' => TestRoutingApp->new($handler) }, qr/handler must be a coderef/, 'normal route does not coerce component targets';
-    like dies { mount '/missing' }, qr/mount requires exactly one of target, routes, or router/, 'mount requires one selector';
-    like dies { mount '/both' => $handler, routes => [] }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects target plus routes';
-    like dies { mount '/target-router' => $handler, router => $child_router, name      => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects target plus router';
-    like dies { mount '/routes-router', routes => [], router => $child_router, name      => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects routes plus router';
-    like dies { mount '/all' => $handler, routes => [], router => $child_router, name      => 'child' }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects all selectors';
-    like dies { mount '/undefined-target', undef }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects an undefined target';
-    like dies { mount '/undefined-mixed', undef, routes => [] }, qr/mount requires exactly one of target, routes, or router/, 'mount rejects undefined target plus routes';
-    like dies { mount '/unblessed-router', router => [], name      => 'bad' }, qr/router mount target must be a PAGI::Routing::Router/, 'router selector rejects an unblessed target';
-    like dies { mount '/bad-router', router => TestRoutingApp->new($handler), name      => 'bad' }, qr/router mount target must be a PAGI::Routing::Router/, 'router selector rejects a non-Router object';
-    like dies { mount('/x', router => $child_router) }, qr/router mount requires a name/, 'router selector requires a name';
-    like dies { mount('/x' => $handler, name => 'x') }, qr/opaque application mounts do not accept name/, 'opaque mount rejects name';
+    like dies { route '/not-code' => 'not a handler' }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects package strings';
+    like dies { route '/not-component' => [] }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects unblessed component lookalikes';
+    ok(lives { route '/component' => PAGI::Response::Text->new('component') },
+        'normal route accepts an instantiated to_app component');
+    my $broken_component = bless {}, 'BrokenRouteComponent';
+    like dies { route '/broken-component' => $broken_component },
+        qr/route endpoint must be a coderef or instantiated object with to_app/,
+        'route rejects an instantiated object without to_app';
+    for my $case (
+        [empty     => [],                 qr/route endpoint allowed_methods returned no methods/],
+        [separator => ['GET POST'],       qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [reference => [{}],               qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [future    => [Future->done('GET')], qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [wildcard  => ['*'],              qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [mixed     => ['GET', '*'],        qr/route endpoint allowed_methods must return valid HTTP method strings/],
+    ) {
+        my ($label, $returned, $error) = @$case;
+        my $endpoint = Local::MethodEndpoint->new(@$returned);
+        like dies { route "/invalid-capability-$label" => $endpoint },
+            $error,
+            "$label allowed_methods failure names the endpoint capability";
+    }
+    like dies { mount '/missing' }, qr/mount requires exactly one of app or routes/, 'mount requires one target form';
+    like dies { mount '/both', app => $handler, routes => [] }, qr/mount requires exactly one of app or routes/, 'mount rejects app plus routes';
+    like dies { mount '/positional' => $handler }, qr/mount option list must be key\/value pairs/, 'mount rejects positional targets';
+    like dies { mount '/router', router => $child_router }, qr/unknown mount option 'router'/, 'mount rejects legacy router option';
+    for my $key (qw(methods schema lifespan fallback)) {
+        like dies { mount '/removed-option', routes => [], $key => sub { } },
+            qr/unknown mount option '\Q$key\E'/,
+            "mount rejects removed '$key' option";
+    }
+    like dies { mount '/undefined-app', app => undef }, qr/mount app must be a coderef or instantiated object with to_app/, 'mount validates app through the strict app validator';
+    like dies { mount '/bad-app', app => [] }, qr/mount app must be a coderef or instantiated object with to_app/, 'mount rejects non-app values';
+    ok(lives { mount '/valid-name', app => $handler, name => 'x' },
+        'named application mounts are accepted');
     like dies { mount('/old-namespace', routes => [], namespace => 'old') }, qr/unknown mount option 'namespace'/, 'legacy namespace option is rejected';
-    like dies { mount('/malformed-pos-code', $handler, 'desc') }, qr/mount option list must be key\/value pairs/, 'malformed positional coderef tail is diagnosed before hash construction';
-    like dies { mount('/malformed-pos-object', TestRoutingApp->new($handler), 'desc') }, qr/mount option list must be key\/value pairs/, 'malformed positional object tail is diagnosed before hash construction';
     like dies { mount('/malformed-named', routes => [], 'desc') }, qr/mount option list must be key\/value pairs/, 'malformed named tail is diagnosed before hash construction';
     like dies { mount '/bad-routes', routes => 'nope' }, qr/routes must contain PAGI::Routing nodes/, 'mount routes must be an arrayref';
     like dies { mount '/bad-node', routes => [bless {}, 'Elsewhere'] }, qr/routes must contain PAGI::Routing nodes/, 'mount routes contain only nodes';
     like dies { router(routes => 'nope') }, qr/routes must contain PAGI::Routing nodes/, 'router routes must be an arrayref';
     like dies { mount '/nested-router', routes => [$child_router] },
-        qr/mount\('\/prefix', router => \$router, name => '\.\.\.'\)/,
+        qr/mount\('\/prefix', app => \$router\)/,
         'inline mount routes reject a nested Router with application-mount guidance';
     like dies { router(routes => [$child_router]) },
-        qr/mount\('\/prefix', router => \$router, name => '\.\.\.'\)/,
+        qr/mount\('\/prefix', app => \$router\)/,
         'router route lists reject a nested Router rather than accepting an inert node';
-    my $opaque_router = mount('/opaque' => $child_router);
-    is(refaddr($opaque_router->target), refaddr($child_router), 'positional Router remains an opaque application target');
-    is($opaque_router->router, undef, 'positional Router is not the explicit Router form');
-    ok($opaque_router->is_raw, 'positional Router remains raw');
-    for my $removed (qw(not_found method_not_allowed)) {
+    for my $removed (qw(default not_found method_not_allowed)) {
         like dies { router($removed => sub { }) },
             qr/unknown router option '\Q$removed\E'/,
             "removed Router option '$removed' is rejected without compatibility";
+    }
+    for my $invalid (
+        [undef, qr/router http_default must be a coderef or instantiated object with to_app/],
+        [[], qr/router http_default must be a coderef or instantiated object with to_app/],
+        [bless({}, 'RouterDefaultWithoutToApp'), qr/router http_default must be a coderef or instantiated object with to_app/],
+    ) {
+        my ($value, $pattern) = @$invalid;
+        like dies { router(routes => [], http_default => $value) }, $pattern,
+            'Router validates its declared HTTP default synchronously';
     }
     like dies { route '/bad-middleware' => $handler, middleware => 'nope' }, qr/middleware must be an arrayref/, 'middleware must be an arrayref';
     my $not_middleware = bless {}, 'NotMiddlewareObject';
@@ -609,6 +796,9 @@ subtest 'constructors reject invalid declarations' => sub {
     }
     is(route('/desc-slash' => $handler, desc => '/')->desc, '/', 'route descriptions retain ordinary text validation');
     is(mount('/desc-dot', routes => [], desc => 'person/show')->desc, 'person/show', 'mount descriptions retain ordinary text validation');
+    like dies { request_response('not a handler') },
+        qr/request_response handler must be a coderef/,
+        'Utils request_response validates its handler at construction';
 };
 
 done_testing;

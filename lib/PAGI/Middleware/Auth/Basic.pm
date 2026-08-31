@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use MIME::Base64 qw(decode_base64);
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -91,7 +92,7 @@ sub wrap {
         my $auth_header = $self->_get_header($scope, 'authorization');
 
         unless ($auth_header) {
-            await $self->_send_unauthorized($scope, $send);
+            await $self->_send_unauthorized($scope, $receive, $send);
             return;
         }
 
@@ -99,14 +100,14 @@ sub wrap {
         my ($username, $password) = $self->_parse_basic_auth($auth_header);
 
         unless (defined $username) {
-            await $self->_send_unauthorized($scope, $send);
+            await $self->_send_unauthorized($scope, $receive, $send);
             return;
         }
 
         # Validate credentials
         my $valid = eval { $self->{authenticator}->($username, $password) };
         if ($@ || !$valid) {
-            await $self->_send_unauthorized($scope, $send);
+            await $self->_send_unauthorized($scope, $receive, $send);
             return;
         }
 
@@ -162,13 +163,13 @@ sub _quote_realm {
 }
 
 async sub _send_unauthorized {
-    my ($self, $scope, $send) = @_;
+    my ($self, $scope, $receive, $send) = @_;
     my $realm = $self->_quote_realm;
     my $challenge = qq{Basic realm="$realm", charset="UTF-8"};
     my $response = PAGI::Pages->unauthorized(
-        $scope, challenge => $challenge,
+        challenge => $challenge,
     );
-    await Future->wrap($response->respond($send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _get_header {

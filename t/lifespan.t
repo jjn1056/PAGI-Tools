@@ -3,6 +3,7 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use FindBin;
+use Scalar::Util qw(refaddr);
 use lib "$FindBin::Bin/lib";
 
 my $loaded = eval { require PAGI::Lifespan; 1 };
@@ -66,10 +67,12 @@ subtest 'startup and shutdown callbacks' => sub {
 };
 
 subtest 'state injected into scope for requests' => sub {
+    my $received_scope;
     my $scope_state;
 
     my $inner_app = async sub {
         my ($scope, $receive, $send) = @_;
+        $received_scope = $scope;
         $scope_state = $scope->{state};
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
         await $send->({ type => 'http.response.body', body => 'ok' });
@@ -101,13 +104,55 @@ subtest 'state injected into scope for requests' => sub {
 
         # Now make an HTTP request
         my @sent;
+        my $request_scope = {
+            type => 'http', method => 'GET', path => '/', headers => [],
+        };
         await $app->(
-            { type => 'http', method => 'GET', path => '/', headers => [] },
+            $request_scope,
             sub { Future->done({ type => 'http.request', body => '' }) },
             sub { push @sent, $_[0]; Future->done }
         );
 
+        is(refaddr($received_scope), refaddr($request_scope),
+            'inner app receives the exact caller scope');
+        ok(exists $request_scope->{state},
+            'injected state is visible on the caller scope');
+        is(refaddr($request_scope->{state}), refaddr($scope_state),
+            'caller and inner app observe the same injected state');
+        is(refaddr($request_scope->{state}), refaddr($lifespan->state),
+            'caller and manager observe the same injected state');
         is($scope_state->{db}, 'test-connection', 'state injected into scope');
+    })->()->get;
+};
+
+subtest 'caller-provided request state remains authoritative and shared' => sub {
+    my @received;
+    my $inner_app = async sub {
+        my ($scope) = @_;
+        push @received, $scope;
+    };
+    my $lifespan = PAGI::Lifespan->new(app => $inner_app);
+    my $app = $lifespan->to_app;
+
+    (async sub {
+        my $supplied_state = { owner => 'caller' };
+        my $supplied_scope = { type => 'http', state => $supplied_state };
+        await $app->($supplied_scope, sub { Future->done }, sub { Future->done });
+
+        is(refaddr($received[0]), refaddr($supplied_scope),
+            'inner app receives the exact scope with caller-provided state');
+        is(refaddr($received[0]{state}), refaddr($supplied_state),
+            'inner app receives the exact caller-provided state');
+        is(refaddr($lifespan->state), refaddr($supplied_state),
+            'manager adopts the caller-provided state');
+
+        my $next_scope = { type => 'websocket' };
+        await $app->($next_scope, sub { Future->done }, sub { Future->done });
+
+        is(refaddr($received[1]), refaddr($next_scope),
+            'the next request also retains its exact scope');
+        is(refaddr($next_scope->{state}), refaddr($supplied_state),
+            'manager state is injected visibly and shared with the next caller');
     })->()->get;
 };
 

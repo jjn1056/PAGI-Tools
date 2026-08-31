@@ -3,7 +3,8 @@ package PAGI::App::Healthcheck;
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use JSON::MaybeXS ();
+use PAGI::Response::JSON ();
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -66,19 +67,15 @@ sub to_app {
         $response->{version} = $version if defined $version;
         $response->{checks} = \%results if %results;
 
-        my $body = JSON::MaybeXS::encode_json($response);
         my $status = $all_ok ? 200 : 503;
-
-        await $send->({
-            type => 'http.response.start',
-            status => $status,
-            headers => [
-                ['content-type', 'application/json'],
-                ['content-length', length($body)],
-                ['cache-control', 'no-cache'],
-            ],
-        });
-        await $send->({ type => 'http.response.body', body => $body, more => 0 });
+        my $result = PAGI::Response::JSON->new(
+            $response,
+            status  => $status,
+            headers => ['Cache-Control' => 'no-cache'],
+        );
+        return await PAGI::Utils::invoke_app(
+            $result, $scope, $receive, $send,
+        );
     };
 }
 

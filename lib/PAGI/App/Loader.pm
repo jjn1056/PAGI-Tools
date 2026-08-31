@@ -6,6 +6,7 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -43,7 +44,7 @@ sub to_app {
             my $type = $scope->{type} // '<missing>';
             croak "application could not be loaded for scope type '$type'"
                 unless $type eq 'http';
-            await $self->_send_load_failure($scope, $send);
+            await $self->_send_load_failure($scope, $receive, $send);
             return;
         }
 
@@ -52,10 +53,10 @@ sub to_app {
 }
 
 async sub _send_load_failure {
-    my ($self, $scope, $send) = @_;
+    my ($self, $scope, $receive, $send) = @_;
 
-    my $response = PAGI::Pages->internal_server_error($scope);
-    await Future->wrap($response->respond($send));
+    my $response = PAGI::Pages->internal_server_error;
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _get_app {

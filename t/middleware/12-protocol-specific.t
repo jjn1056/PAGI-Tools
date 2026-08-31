@@ -2,10 +2,27 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
+use File::Temp qw(tempdir);
 use IO::Async::Loop;
 
 use PAGI::Middleware::SSE::Retry;
+use PAGI::Middleware::Auth::Basic;
+use PAGI::Middleware::Auth::Bearer;
+use PAGI::Middleware::CSRF;
+use PAGI::Middleware::ContentNegotiation;
+use PAGI::Middleware::FormBody;
+use PAGI::Middleware::JSONBody;
+use PAGI::Middleware::Maintenance;
+use PAGI::Middleware::RateLimit;
+use PAGI::Middleware::TrustedHosts;
+use PAGI::Middleware::CORS;
+use PAGI::Middleware::Healthcheck;
+use PAGI::Middleware::HTTPSRedirect;
+use PAGI::Middleware::ReverseProxy;
+use PAGI::Middleware::Rewrite;
+use PAGI::Middleware::Static;
 
 my $loop = IO::Async::Loop->new;
 
@@ -81,6 +98,106 @@ subtest 'SSE::Retry - passes through non-SSE' => sub {
     run_async { $wrapped->($scope, async sub { {} }, async sub { }) };
 
     ok !exists $captured_scope->{'pagi.sse.retry'}, 'no retry for HTTP';
+};
+
+subtest 'HTTP policy middleware preserves non-HTTP event streams and send settlement' => sub {
+    my $static_root = tempdir(CLEANUP => 1);
+    my @cases = (
+        ['Auth::Basic', sub {
+            PAGI::Middleware::Auth::Basic->new(
+                authenticator => sub { 0 },
+            );
+        }],
+        ['Auth::Bearer', sub {
+            PAGI::Middleware::Auth::Bearer->new(
+                validator => sub { undef },
+            );
+        }],
+        ['CSRF', sub {
+            PAGI::Middleware::CSRF->new(secret => 'test-secret');
+        }],
+        ['ContentNegotiation', sub {
+            PAGI::Middleware::ContentNegotiation->new(
+                supported_types => ['application/json'],
+                strict          => 1,
+            );
+        }],
+        ['FormBody', sub { PAGI::Middleware::FormBody->new }],
+        ['JSONBody', sub { PAGI::Middleware::JSONBody->new }],
+        ['Maintenance', sub {
+            PAGI::Middleware::Maintenance->new(enabled => 1);
+        }],
+        ['RateLimit', sub {
+            PAGI::Middleware::RateLimit->new(burst => 0);
+        }],
+        ['TrustedHosts', sub {
+            PAGI::Middleware::TrustedHosts->new(hosts => ['example.com']);
+        }],
+        ['CORS', sub { PAGI::Middleware::CORS->new }],
+        ['Healthcheck', sub {
+            PAGI::Middleware::Healthcheck->new(path => '/events');
+        }],
+        ['HTTPSRedirect', sub {
+            PAGI::Middleware::HTTPSRedirect->new;
+        }],
+        ['ReverseProxy', sub {
+            PAGI::Middleware::ReverseProxy->new(trust_all => 1);
+        }],
+        ['Rewrite', sub {
+            PAGI::Middleware::Rewrite->new(
+                rules => [{ from => '/events', to => '/elsewhere' }],
+                redirect => 1,
+            );
+        }],
+        ['Static', sub {
+            PAGI::Middleware::Static->new(root => $static_root);
+        }],
+    );
+
+    my @downstream = (
+        { type => 'sse.start' },
+        { type => 'sse.send', data => 'first' },
+        { type => 'sse.send', data => 'second' },
+    );
+
+    for my $case (@cases) {
+        my ($name, $middleware) = @$case;
+        subtest $name => sub {
+            my $start_gate = Future->new;
+            my @events;
+            my $calls = 0;
+            my $wrapped = $middleware->()->wrap(async sub {
+                my ($scope, $receive, $send) = @_;
+                for my $event (@downstream) {
+                    await $send->($event);
+                }
+            });
+            my $scope = {
+                type    => 'sse',
+                path    => '/events',
+                headers => [['Accept', 'application/problem+json']],
+            };
+            my $running = $wrapped->(
+                $scope,
+                async sub { { type => 'sse.disconnect' } },
+                sub {
+                    push @events, $_[0];
+                    return ++$calls == 1 ? $start_gate : Future->done;
+                },
+            );
+
+            is \@events, [$downstream[0]],
+                "$name forwards the first event without buffering later events";
+            ok !$running->is_ready,
+                "$name waits for the downstream send Future";
+            $start_gate->done;
+            $loop->await($running);
+            is \@events, \@downstream,
+                "$name preserves the complete non-HTTP event stream literally";
+            ok !$start_gate->is_cancelled,
+                "$name does not cancel the server-owned send Future";
+        };
+    }
 };
 
 done_testing;

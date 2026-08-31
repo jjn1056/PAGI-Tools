@@ -8,12 +8,14 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router::Builder ();
 use PAGI::Compose qw(compose);
+use PAGI::Response::Text ();
+use PAGI::Routing::URL qw(path_for);
 use PAGI::Routing::Router ();
 use PAGI::Test::Client ();
 
 sub handler {
     my ($body) = @_;
-    return sub { return $_[0]->text($body) };
+    return sub { return PAGI::Response::Text->new($body) };
 }
 
 sub receive {
@@ -41,6 +43,20 @@ sub router_methods_exist {
         $ok = 0 unless ok($builder->can($method), "Builder provides $method");
     }
     return $ok;
+}
+
+sub malformed_child_mount {
+    my ($path, $child, $name) = @_;
+    return {
+        node_kind           => 'mount',
+        declaration_package => __PACKAGE__,
+        path                => $path,
+        child               => $child,
+        middleware          => [],
+        name                => $name,
+        desc                => undef,
+        constraints         => undef,
+    };
 }
 
 {
@@ -94,47 +110,46 @@ subtest 'snapshots are immutable, root-local, and fresh' => sub {
     is([map { $_->path } @{$second->routes}], ['/one', '/two'],
         'a later snapshot sees the later declaration in written order');
     is(PAGI::Test::Client->new(
-        app => compose(app => $first)->to_app,
+        app => $first->to_app,
     )->get('/two')->status, 404,
         'the retained first snapshot cannot dispatch a later mutation');
     is(PAGI::Test::Client->new(app => $second->to_app)->get('/two')->text, 'two',
         'the later snapshot dispatches its own immutable declaration set');
 };
 
-subtest 'mutable frontends cannot enter snapshots through opaque or raw targets' => sub {
+subtest 'mutable frontends are valid opaque app values without name discovery' => sub {
     my $parent = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($parent);
     $parent->get('/safe' => handler('safe'))->name('safe');
 
     my $opaque_child = PAGI::App::Router::Builder->new;
     $opaque_child->get('/before' => handler('opaque before'));
-    like(dies { $parent->mount('/opaque' => $opaque_child) },
-        qr/mutable router frontend.*opaque mount.*router =>.*coderef/i,
-        'an opaque Builder child is rejected in favor of a known mount or compiled app');
+    $parent->mount('/opaque', app => $opaque_child)->name('opaque');
 
-    my $raw_child = PAGI::App::Router::Builder->new;
-    $raw_child->get('/before' => handler('raw before'));
-    like(dies { $parent->get('/raw', raw => $raw_child) },
-        qr/mutable router frontend.*raw.*coderef/i,
-        'a raw Builder target is rejected in favor of an explicitly compiled app');
+    my $endpoint_child = PAGI::App::Router::Builder->new;
+    $endpoint_child->get('/before' => handler('endpoint before'));
+    $parent->get('/endpoint', $endpoint_child)->name('endpoint');
 
     my $snapshot = $parent->to_router;
-    $opaque_child->get('/after' => handler('opaque after'));
-    $raw_child->get('/after' => handler('raw after'));
-    is([map { $_->path } @{$snapshot->routes}], ['/safe'],
-        'rejected mutable targets cannot expose later mutation through a snapshot');
-    is([map { $_->{path} } @{$parent->_declarations}], ['/safe'],
-        'rejected mutable targets never enter the parent declaration array');
+    is(refaddr($snapshot->routes->[1]->app), refaddr($opaque_child),
+        'opaque Mount retains the mutable application by identity');
+    is(refaddr($snapshot->routes->[2]->endpoint), refaddr($endpoint_child),
+        'Route retains the mutable application by identity');
+    is($snapshot->route_named('/opaque/before'), undef,
+        'opaque mutable Mount internals are not discovered');
+    is($snapshot->route_named('/endpoint'), $snapshot->routes->[2],
+        'the application-valued leaf itself remains discoverable');
 };
 
-subtest 'sibling mutable reuse shares identity only inside one snapshot' => sub {
+subtest 'one immutable child Router is reusable at named sibling placements' => sub {
     my $child = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($child);
     $child->get('/item/{id}' => handler('child'))->name('show');
 
+    my $child_router = $child->to_router;
     my $parent = PAGI::App::Router::Builder->new;
-    $parent->mount('/left' => router => $child)->name('left')->desc('Left placement');
-    $parent->mount('/right' => router => $child)->name('right')->desc('Right placement');
+    $parent->mount('/left', app => $child_router)->name('left')->desc('Left placement');
+    $parent->mount('/right', app => $child_router)->name('right')->desc('Right placement');
     my $first = $parent->to_router;
     my $first_nodes = $first->routes;
 
@@ -144,21 +159,21 @@ subtest 'sibling mutable reuse shares identity only inside one snapshot' => sub 
         ['/left', 'left', 'Left placement'],
         ['/right', 'right', 'Right placement'],
     ], 'two placements retain distinct path, local name, and description metadata');
-    is(refaddr($first_nodes->[0]->router), refaddr($first_nodes->[1]->router),
-        'one child Builder maps to one child Router identity inside a snapshot');
+    is(refaddr($first_nodes->[0]->app), refaddr($first_nodes->[1]->app),
+        'both placements retain one immutable child Router identity');
 
     my $second_nodes = $parent->to_router->routes;
-    isnt(refaddr($first_nodes->[0]->router), refaddr($second_nodes->[0]->router),
-        'a separate root snapshot receives a fresh child Router identity');
-    is(refaddr($second_nodes->[0]->router), refaddr($second_nodes->[1]->router),
-        'the second snapshot independently reuses its one completed child identity');
+    is(refaddr($first_nodes->[0]->app), refaddr($second_nodes->[0]->app),
+        'an explicit immutable app remains caller-owned across root snapshots');
+    is(refaddr($second_nodes->[0]->app), refaddr($second_nodes->[1]->app),
+        'the second snapshot retains the same reusable child identity');
 
     my $immutable = PAGI::Routing::Router->new(routes => []);
     my $immutable_parent = PAGI::App::Router::Builder->new;
-    $immutable_parent->mount('/one', router => $immutable)->name('one');
-    $immutable_parent->mount('/two', router => $immutable)->name('two');
+    $immutable_parent->mount('/one', app => $immutable)->name('one');
+    $immutable_parent->mount('/two', app => $immutable)->name('two');
     my $immutable_nodes = $immutable_parent->to_router->routes;
-    is([map { refaddr($_->router) } @$immutable_nodes],
+    is([map { refaddr($_->app) } @$immutable_nodes],
         [refaddr($immutable), refaddr($immutable)],
         'immutable Router inputs retain their original identity at every placement');
 };
@@ -167,8 +182,8 @@ subtest 'active mutable revisits report the placement chain and clean up' => sub
     my $a = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($a);
     my $b = PAGI::App::Router::Builder->new;
-    $a->mount('/b', router => $b)->name('b');
-    $b->mount('/a', router => $a)->name('a');
+    push @{$a->{declarations}}, malformed_child_mount('/b', $b, 'b');
+    push @{$b->{declarations}}, malformed_child_mount('/a', $a, 'a');
 
     my $error = dies { $a->to_router };
     like($error, qr{/b(?::b)?.*->.*/a(?::a)?},
@@ -207,8 +222,10 @@ subtest 'a failed root rolls back completed descendants before retry' => sub {
     my $fails_late = Local::FailOnceBuilder->new;
     $fails_late->get('/eventual' => handler('eventual'));
     my $root = PAGI::App::Router::Builder->new;
-    $root->mount('/child', router => $child)->name('child');
-    $root->mount('/late', router => $fails_late)->name('late');
+    push @{$root->{declarations}},
+        malformed_child_mount('/child', $child, 'child');
+    push @{$root->{declarations}},
+        malformed_child_mount('/late', $fails_late, 'late');
 
     require PAGI::App::Router::Materializer;
     my $materializer = PAGI::App::Router::Materializer->new;
@@ -220,10 +237,10 @@ subtest 'a failed root rolls back completed descendants before retry' => sub {
 
     $child->get('/after' => handler('after'));
     my $retry = $materializer->materialize($root, '<retry>');
-    my $retried_child = $retry->routes->[0]->router;
+    my $retried_child = $retry->routes->[0]->app;
     is([map { $_->path } @{$retried_child->routes}], ['/before', '/after'],
         'retry rematerializes the child and observes mutation after the failed attempt');
-    is(refaddr($retry->routes->[0]->router),
+    is(refaddr($retry->routes->[0]->app),
         refaddr($materializer->materialize($child, '<completed-child>')),
         'the successful retry still retains completed identity reuse');
 };
@@ -244,7 +261,7 @@ subtest 'to_app materializes once and compiles the retained snapshot' => sub {
     return unless router_methods_exist($builder);
     $builder->get('/item' => handler('item'));
     my $root_app = $builder->to_app;
-    my $app = compose(app => $root_app)->to_app;
+    my $app = $root_app;
     is($builder->{to_router_calls}, 1, 'to_app calls to_router exactly once');
     $builder->get('/late' => handler('late'));
     my $client = PAGI::Test::Client->new(app => $app);
@@ -287,15 +304,16 @@ subtest 'one compiled app isolates two in-flight reused-child requests' => sub {
     my $child = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($child);
     $child->get('/item/{id}' => sub {
-        my ($context) = @_;
-        push @contexts, $context;
+        my ($request) = @_;
+        push @contexts, $request;
         my $gate = Future->new;
         push @gates, $gate;
         return $gate;
     })->name('show');
     my $parent = PAGI::App::Router::Builder->new;
-    $parent->mount('/left', router => $child)->name('left');
-    $parent->mount('/right', router => $child)->name('right');
+    my $child_router = $child->to_router;
+    $parent->mount('/left', app => $child_router)->name('left');
+    $parent->mount('/right', app => $child_router)->name('right');
     my $app = $parent->to_app;
 
     my (@left_events, @right_events);
@@ -331,7 +349,7 @@ subtest 'one compiled app isolates two in-flight reused-child requests' => sub {
         'the first request retains only its left placement metadata');
     is([map { $_->{name} } @{$right_frame->{mounts}}], ['right'],
         'the second request retains only its right placement metadata');
-    is([$contexts[0]->path_for('show'), $contexts[1]->path_for('show')],
+    is([path_for($contexts[0], 'show'), path_for($contexts[1], 'show')],
         ['/left/item/one', '/right/item/two'],
         'concurrent reverse generation uses each active placement and capture');
     is(refaddr($left_frame->{resolver}), refaddr($right_frame->{resolver}),
@@ -344,8 +362,8 @@ subtest 'one compiled app isolates two in-flight reused-child requests' => sub {
     is($right_frame->{match}{consumer_only}, undef,
         'consumer mutation of one match record is absent from the other');
 
-    $gates[0]->done($contexts[0]->text('left one'));
-    $gates[1]->done($contexts[1]->text('right two'));
+    $gates[0]->done(PAGI::Response::Text->new('left one'));
+    $gates[1]->done(PAGI::Response::Text->new('right two'));
     $left->get;
     $right->get;
     is(response_body(\@left_events), 'left one',

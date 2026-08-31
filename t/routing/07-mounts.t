@@ -7,10 +7,12 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
+use PAGI::Response::Text ();
 use PAGI::Routing qw(router route mount middleware);
-use PAGI::Routing::Trace;
+use PAGI::Utils qw(as_app);
 
-sub MountProvider { return qr/accepted/ }
+our $MOUNT_PROVIDER_CALLS = 0;
+sub MountProvider { ++$MOUNT_PROVIDER_CALLS; return qr/accepted/ }
 
 sub scope {
     my (%changes) = @_;
@@ -108,6 +110,7 @@ sub tracing_middleware {
 subtest 'application mounts rewrite static and exact-prefix scopes' => sub {
     my @seen;
     my @middleware_seen;
+    my @middleware_argument_counts;
     my $mounted = async sub {
         my ($request_scope, $receive, $send) = @_;
         push @seen, $request_scope;
@@ -117,20 +120,20 @@ subtest 'application mounts rewrite static and exact-prefix scopes' => sub {
         my ($inner) = @_;
         return sub {
             push @middleware_seen, $_[0];
+            push @middleware_argument_counts, scalar @_;
             return $inner->(@_);
         };
     });
     my $app = router(routes => [
-        mount('/api' => $mounted, middleware => [$scope_middleware]),
+        mount('/api', app => $mounted, middleware => [$scope_middleware]),
     ])->to_app;
 
-    my ($parent_scope, $parent_trace)
-        = PAGI::Routing::Trace->_ensure_http_scope(scope(
+    my $parent_scope = scope(
         path        => '/api/users',
         root_path   => '/outer',
         raw_path    => '/outer/api/users%20raw',
         path_params => { retained => 'yes' },
-    ));
+    );
     run_scope($app, $parent_scope);
     run_app(
         $app,
@@ -176,23 +179,42 @@ subtest 'application mounts rewrite static and exact-prefix scopes' => sub {
     );
     is($parent_scope->{path_params}, { retained => 'yes' },
         'path-parameter merging leaves the parent hash unchanged');
-    is($parent_scope->{'pagi.routing.trace'}, $parent_trace,
-        'the incoming compatible Trace remains installed on the parent scope');
-    ok(!exists $middleware_seen[0]{'pagi.routing.trace'},
-        'opaque mount middleware receives a scope shielded from parent Trace');
-    ok(!exists $seen[0]{'pagi.routing.trace'},
-        'the opaque mounted target cannot publish into parent Trace');
     is(
         [@{$middleware_seen[0]}{qw(path root_path raw_path)}],
         ['/users', '/outer/api', '/outer/api/users%20raw'],
         'mount middleware receives the rewritten child scope before the mounted application',
     );
+    is(\@middleware_argument_counts, [(3) x 4],
+        'Mount middleware remains an exact three-argument native app');
+};
+
+subtest 'an exact Mount prefix enters a child root without redirecting' => sub {
+    my @paths;
+    my $child = router(routes => [
+        route('/' => sub {
+            push @paths, $_[0]->scope->{path};
+            return PAGI::Response::Text->new('apples');
+        }),
+    ]);
+    my $app = router(routes => [
+        mount('/apples', app => $child),
+    ])->to_app;
+
+    my $exact = run_app($app, path => '/apples', raw_path => '/apples');
+    my $slash = run_app($app, path => '/apples/', raw_path => '/apples/');
+
+    is([map { response_start($_)->{status} } ($exact, $slash)], [200, 200],
+        'exact and trailing-slash spellings reach the child without a redirect');
+    is([response_body($exact), response_body($slash)], ['apples', 'apples'],
+        'both spellings select the child root leaf');
+    is(\@paths, ['/', '/'],
+        'the child root leaf receives slash for both spellings');
 };
 
 subtest 'trailing declarations, dynamic prefixes, and nested mounts use actual captures' => sub {
     my @trailing;
     my $trailing_app = router(routes => [
-        mount('/api/' => async sub {
+        mount('/api/', app => async sub {
             push @trailing, $_[0];
             await response_app('trailing')->(@_);
         }),
@@ -206,10 +228,10 @@ subtest 'trailing declarations, dynamic prefixes, and nested mounts use actual c
         mount('/tenants/{tenant}',
             routes => [
                 mount('/api/{version}', routes => [
-                    route('/users/{id}', raw => async sub {
+                    route('/users/{id}' => as_app(async sub {
                         push @seen, $_[0];
                         await response_app('nested')->(@_);
-                    }),
+                    })),
                 ]),
             ],
             constraints => { tenant => qr/[a-z]+/ },
@@ -221,7 +243,7 @@ subtest 'trailing declarations, dynamic prefixes, and nested mounts use actual c
         path        => '/tenants/acme/api/v2/users/42',
         root_path   => '/edge',
         raw_path    => '/edge/tenants/acme/api/v2/users%2F42',
-        path_params => { retained => 'yes', tenant => 'stale', id => 'stale' },
+        path_params => { retained => 'yes' },
     );
 
     is(
@@ -237,12 +259,112 @@ subtest 'trailing declarations, dynamic prefixes, and nested mounts use actual c
                 id       => '42',
             },
         },
-        'nested mounts append actual decoded prefixes while mount and leaf captures override unknown incoming collisions',
+        'nested mounted applications combine disjoint prefix and leaf captures',
     );
 };
 
-subtest 'provider constraints select every mount form before middleware or target invocation' => sub {
-    my (@middleware_seen, @inline_seen, @router_seen, @opaque_seen);
+subtest 'path parameter merges are fresh and disjoint before child invocation' => sub {
+    my ($mount_calls, $leaf_calls) = (0, 0);
+    my $mounted = router(routes => [
+        route('/{id}' => sub {
+            ++$leaf_calls;
+            return PAGI::Response::Text->new('must not run');
+        }),
+    ]);
+    my $hidden = Local::CountedComponent->new($mounted);
+    my $app = router(routes => [
+        mount('/tenants/{id}', app => $hidden),
+        mount('/accounts/{account}', app => async sub {
+            ++$mount_calls;
+            await response_app('must not run')->(@_);
+        }),
+    ])->to_app;
+
+    like(
+        dies {
+            run_app($app,
+                path => '/tenants/outer/inner',
+                raw_path => '/tenants/outer/inner');
+        },
+        qr/duplicate path parameter 'id' while entering '\/inner'/,
+        'a Router hidden by an app object rejects a duplicate leaf capture',
+    );
+    is($leaf_calls, 0, 'the hidden Router rejects the collision before its leaf runs');
+
+    my $incoming = { account => 'existing' };
+    like(
+        dies {
+            run_app($app,
+                path => '/accounts/new',
+                raw_path => '/accounts/new',
+                path_params => $incoming);
+        },
+        qr/duplicate path parameter 'account' while entering '\/accounts\/new'/,
+        'a Mount rejects a duplicate incoming capture before its child runs',
+    );
+    is($mount_calls, 0, 'the mounted coderef is not invoked after a merge collision');
+    is($incoming, { account => 'existing' },
+        'a rejected merge leaves the parent path-parameter hash unchanged');
+};
+
+subtest 'mounted Router runtime metadata publishes named and unnamed captures' => sub {
+    my @frames;
+    my $blogs = router(routes => [
+        route('/{blog_id}' => sub {
+            my $frame = $_[0]->scope->{'pagi.routing'}{frames}[-1];
+            push @frames, {
+                root_path => $frame->{root_path},
+                namespace => $frame->{logical_namespace},
+                captures => { %{$frame->{captures}} },
+                scope_root => $_[0]->scope->{root_path},
+            };
+            return PAGI::Response::Text->new('blog');
+        }, name => 'show'),
+        route('/*rest' => sub {
+            my $frame = $_[0]->scope->{'pagi.routing'}{frames}[-1];
+            push @frames, {
+                root_path => $frame->{root_path},
+                namespace => $frame->{logical_namespace},
+                captures => { %{$frame->{captures}} },
+                scope_root => $_[0]->scope->{root_path},
+            };
+            return PAGI::Response::Text->new('catchall');
+        }),
+    ]);
+    my $person = router(routes => [
+        mount('/{person_id}/blog', app => $blogs, name => 'blog'),
+    ]);
+    my $app = router(routes => [
+        mount('/person', app => $person, name => 'person'),
+    ])->to_app;
+
+    is(response_body(run_app($app,
+        path => '/person/42/blog/7', raw_path => '/person/42/blog/7',
+        root_path => '/proxy')), 'blog',
+        'the named mounted leaf completes normally');
+    is(response_body(run_app($app,
+        path => '/person/42/blog/missing/path',
+        raw_path => '/person/42/blog/missing/path', root_path => '/proxy')),
+        'catchall', 'the unnamed catchall completes normally');
+    is(\@frames, [
+        {
+            root_path => '/proxy',
+            namespace => '/person/blog',
+            captures => { person_id => 42, blog_id => 7 },
+            scope_root => '/proxy/person/42/blog',
+        },
+        {
+            root_path => '/proxy',
+            namespace => '/person/blog',
+            captures => { person_id => 42, rest => 'missing/path' },
+            scope_root => '/proxy/person/42/blog',
+        },
+    ], 'compiled Mounts publish the root boundary, namespace, and selected captures');
+};
+
+subtest 'provider constraints select every mounted application form once' => sub {
+    $MOUNT_PROVIDER_CALLS = 0;
+    my (@middleware_seen, @shorthand_seen, @router_seen, @coderef_seen);
     my $selected_mount = middleware(sub {
         my ($inner) = @_;
         return sub {
@@ -253,54 +375,66 @@ subtest 'provider constraints select every mount form before middleware or targe
     my $known = router(routes => [
         route('/leaf' => sub {
             push @router_seen, $_[0]->path_param('id');
-            return $_[0]->text('known ' . $_[0]->path_param('id'));
+            return PAGI::Response::Text->new(
+                'known ' . $_[0]->path_param('id'),
+            );
         }),
     ]);
     my $app = router(routes => [
-        mount('/inline-provider/{id:&MountProvider}', routes => [
+        mount('/shorthand-provider/{id:&MountProvider}', routes => [
             route('/leaf' => sub {
-                push @inline_seen, $_[0]->path_param('id');
-                return $_[0]->text('inline ' . $_[0]->path_param('id'));
+                push @shorthand_seen, $_[0]->path_param('id');
+                return PAGI::Response::Text->new(
+                    'shorthand ' . $_[0]->path_param('id'),
+                );
             }),
         ], middleware => [$selected_mount]),
         mount('/router-provider/{id:&MountProvider}',
-            router => $known, name => 'known',
+            app => $known, name => 'known',
             middleware => [$selected_mount]),
-        mount('/opaque-provider/{id:&MountProvider}' => async sub {
-            push @opaque_seen, $_[0]{path_params}{id};
-            await response_app('opaque ' . $_[0]{path_params}{id})->(@_);
+        mount('/coderef-provider/{id:&MountProvider}', app => async sub {
+            push @coderef_seen, $_[0]{path_params}{id};
+            await response_app('coderef ' . $_[0]{path_params}{id})->(@_);
         }, middleware => [$selected_mount]),
     ])->to_app;
 
+    is($MOUNT_PROVIDER_CALLS, 3,
+        'each provider-backed Mount resolves its provider once at construction');
+
     my @accepted = (
-        ['/inline-provider/accepted/leaf', 'inline accepted'],
+        ['/shorthand-provider/accepted/leaf', 'shorthand accepted'],
         ['/router-provider/accepted/leaf', 'known accepted'],
-        ['/opaque-provider/accepted/leaf', 'opaque accepted'],
+        ['/coderef-provider/accepted/leaf', 'coderef accepted'],
     );
     for my $case (@accepted) {
         my ($path, $body) = @$case;
-        is(response_body(run_app($app, path => $path, raw_path => $path)), $body,
+        my $events = run_app($app, path => $path, raw_path => $path);
+        is(response_start($events)->{status}, 200,
+            "$path completes with HTTP 200");
+        is(response_body($events), $body,
             "$path selects its constrained mount");
     }
 
-    for my $prefix (qw(inline-provider router-provider opaque-provider)) {
+    for my $prefix (qw(shorthand-provider router-provider coderef-provider)) {
         my $path = "/$prefix/rejected/leaf";
         my $events = run_app($app, path => $path, raw_path => $path);
-        is($events, [],
-            "$prefix provider rejection leaves the Router unanswered");
+        is(response_start($events)->{status}, 404,
+            "$prefix provider rejection reaches the Router 404");
     }
 
-    is(\@inline_seen, ['accepted'], 'inline child runs only for the accepted prefix');
+    is(\@shorthand_seen, ['accepted'], 'routes shorthand runs only for the accepted prefix');
     is(\@router_seen, ['accepted'], 'Router child runs only for the accepted prefix');
-    is(\@opaque_seen, ['accepted'], 'opaque target runs only for the accepted prefix');
+    is(\@coderef_seen, ['accepted'], 'coderef child runs only for the accepted prefix');
     is(scalar @middleware_seen, 3,
         'mount middleware runs only for the three selected prefixes');
+    is($MOUNT_PROVIDER_CALLS, 3,
+        'dispatch completion never reinvokes a resolved Mount provider');
 };
 
 subtest 'a root mount consumes nothing and leaves path arithmetic unchanged' => sub {
     my @seen;
     my $app = router(routes => [
-        mount('/' => async sub {
+        mount('/', app => async sub {
             push @seen, $_[0];
             await response_app('root')->(@_);
         }),
@@ -331,8 +465,8 @@ subtest 'a root mount consumes nothing and leaves path arithmetic unchanged' => 
 
 subtest 'mount ownership follows declaration order without inspecting child outcomes' => sub {
     my $earlier = router(routes => [
-        mount('/api' => response_app('earlier mount')),
-        route('/api/exact' => sub { return $_[0]->text('later route') }),
+        mount('/api', app => response_app('earlier mount')),
+        route('/api/exact' => sub { return PAGI::Response::Text->new('later route') }),
     ])->to_app;
     is(
         response_body(run_app($earlier, path => '/api/exact', raw_path => '/api/exact')),
@@ -341,8 +475,8 @@ subtest 'mount ownership follows declaration order without inspecting child outc
     );
 
     my $broad = router(routes => [
-        mount('/api' => response_app('broad mount')),
-        mount('/api/admin' => response_app('narrow mount')),
+        mount('/api', app => response_app('broad mount')),
+        mount('/api/admin', app => response_app('narrow mount')),
     ])->to_app;
     is(
         response_body(run_app($broad, path => '/api/admin/users', raw_path => '/api/admin/users')),
@@ -351,9 +485,9 @@ subtest 'mount ownership follows declaration order without inspecting child outc
     );
 
     my $constraint_fallback = router(routes => [
-        mount('/api/{tenant}' => response_app('must not run'),
+        mount('/api/{tenant}', app => response_app('must not run'),
             constraints => { tenant => sub { return 0 } }),
-        route('/api/acme' => sub { return $_[0]->text('later match') }),
+        route('/api/acme' => sub { return PAGI::Response::Text->new('later match') }),
     ])->to_app;
     is(
         response_body(run_app($constraint_fallback, path => '/api/acme', raw_path => '/api/acme')),
@@ -363,51 +497,36 @@ subtest 'mount ownership follows declaration order without inspecting child outc
 
     my $child_missing = router(routes => [
         mount('/api', routes => []),
-        route('/api/missing' => sub { return $_[0]->text('parent resumed') }),
+        route('/api/missing' => sub { return PAGI::Response::Text->new('parent resumed') }),
     ])->to_app;
     my $missing = run_app($child_missing, path => '/api/missing', raw_path => '/api/missing');
-    is($missing, [], 'an unanswered inline child remains terminal');
+    is(response_start($missing)->{status}, 404,
+        'a routes-shorthand child owns its complete 404');
 
-    my $opaque_405 = router(routes => [
-        route('/api/item' => sub { return $_[0]->text('parent GET') }, methods => 'GET'),
-        mount('/api' => response_app(
+    my $child_405 = router(routes => [
+        route('/api/item' => sub { return PAGI::Response::Text->new('parent GET') }, methods => 'GET'),
+        mount('/api', app => response_app(
             'child method',
             status => 405,
             headers => [['Allow' => 'PATCH']],
         )),
     ])->to_app;
     my $method = run_app(
-        $opaque_405,
+        $child_405,
         method => 'PUT',
         path => '/api/item',
         raw_path => '/api/item',
     );
-    is(response_start($method)->{status}, 405, 'an opaque child controls its 405 status');
-    is(response_header($method, 'Allow'), 'PATCH', 'the parent partial GET is not merged into the opaque child Allow');
+    is(response_start($method)->{status}, 405, 'the mounted application controls its 405 status');
+    is(response_header($method, 'Allow'), 'PATCH', 'the parent partial GET is not merged into the child application Allow');
 };
 
-subtest 'inline Mount fallback middleware owns local decline evidence' => sub {
-    my @fallback_calls;
+subtest 'routes-shorthand Mount owns local Router outcomes' => sub {
     my $app = router(routes => [
-        route('/api/item' => sub { return $_[0]->text('parent POST') }, methods => 'POST'),
+        route('/api/item' => sub { return PAGI::Response::Text->new('parent POST') }, methods => 'POST'),
         mount('/api', routes => [
-                route('/item' => sub { return $_[0]->text('child GET') }, methods => 'GET'),
-        ], middleware => [
-            middleware('Routing::NotFound', handler => sub {
-                my ($context) = @_;
-                push @fallback_calls, ['not_found', $context->request->path];
-                return $context->response
-                    ->header('X-Fallback' => 'inline')
-                    ->text('child missing');
-            }),
-            middleware('Routing::MethodNotAllowed', handler => sub {
-                my ($context, $snapshot) = @_;
-                push @fallback_calls,
-                    ['method_not_allowed', join(', ', @{$snapshot->allowed_methods})];
-                return $context->response
-                    ->header('X-Fallback' => 'inline')
-                    ->text('child method');
-            }),
+            route('/item' => sub { return PAGI::Response::Text->new('child GET') },
+                methods => 'GET'),
         ]),
     ])->to_app;
 
@@ -417,28 +536,21 @@ subtest 'inline Mount fallback middleware owns local decline evidence' => sub {
         path => '/api/item',
         raw_path => '/api/item',
     );
-    is(response_start($method)->{status}, 405, 'the inline fallback renders 405');
-    is(response_header($method, 'Allow'), 'GET, HEAD', 'the child uses a fresh local Allow set without parent POST');
-    is(response_header($method, 'X-Fallback'), 'inline', 'the inline Mount rendered its child outcome');
+    is(response_start($method)->{status}, 405,
+        'the shorthand child emits its built-in 405');
+    is(response_header($method, 'Allow'), 'GET, HEAD',
+        'the child uses a fresh local Allow set without parent POST');
 
     my $missing = run_app(
         $app,
         path => '/api/missing',
         raw_path => '/api/missing',
     );
-    is(response_start($missing)->{status}, 404, 'the inline fallback renders 404');
-    is(response_body($missing), 'child missing', 'the inline Mount renders inside its subtree');
-    is(
-        \@fallback_calls,
-        [
-            ['method_not_allowed', 'GET, HEAD'],
-            ['not_found', '/missing'],
-        ],
-        'both inline handlers observe rewritten scope and child-only evidence',
-    );
+    is(response_start($missing)->{status}, 404,
+        'the shorthand child emits its stock 404');
 };
 
-subtest 'Mount middleware surrounds fallback-rendered child declines while route middleware is full-only' => sub {
+subtest 'Mount middleware surrounds child outcomes while route middleware is full-only' => sub {
     my @trace;
     my $route_runs = 0;
     my $route_middleware = middleware(sub {
@@ -453,19 +565,11 @@ subtest 'Mount middleware surrounds fallback-rendered child declines while route
             mount('/api',
                 routes => [
                     route('/item' => sub {
-                        return $_[0]->text('item');
+                        return PAGI::Response::Text->new('item');
                     }, methods => 'GET', middleware => [$route_middleware]),
                 ],
                 middleware => [
                     tracing_middleware('mount', \@trace),
-                    middleware('Routing::NotFound', handler => sub {
-                        push @trace, 'not found';
-                        return $_[0]->text('missing');
-                    }),
-                    middleware('Routing::MethodNotAllowed', handler => sub {
-                        push @trace, 'method not allowed';
-                        return $_[0]->text('wrong method');
-                    }),
                 ],
             ),
         ],
@@ -474,8 +578,8 @@ subtest 'Mount middleware surrounds fallback-rendered child declines while route
     run_app($app, path => '/api/missing', raw_path => '/api/missing');
     is(
         \@trace,
-        ['mount before', 'not found', 'mount after'],
-        'Mount middleware surrounds its rendered child 404',
+        ['mount before', 'mount after'],
+        'Mount middleware surrounds its child 404',
     );
     is($route_runs, 0, 'route middleware does not run for child 404');
 
@@ -483,8 +587,8 @@ subtest 'Mount middleware surrounds fallback-rendered child declines while route
     run_app($app, method => 'POST', path => '/api/item', raw_path => '/api/item');
     is(
         \@trace,
-        ['mount before', 'method not allowed', 'mount after'],
-        'Mount middleware surrounds its rendered child 405',
+        ['mount before', 'mount after'],
+        'Mount middleware surrounds its child 405',
     );
     is($route_runs, 0, 'route middleware does not run for child 405');
 };
@@ -502,7 +606,7 @@ subtest 'application-mounted routers retain independent middleware boundaries an
         routes => [
             route('/item' => sub {
                 push @trace, 'handler';
-                return $_[0]->text('item');
+                return PAGI::Response::Text->new('item');
             }, middleware => [tracing_middleware('child route', \@trace)]),
         ],
     );
@@ -510,7 +614,7 @@ subtest 'application-mounted routers retain independent middleware boundaries an
     my $app = router(
         middleware => [tracing_middleware('parent router', \@trace)],
         routes => [
-            mount('/api' => $component,
+            mount('/api', app => $component,
                 middleware => [
                     tracing_middleware('mount', \@trace),
                     $counted_mount_middleware,
@@ -562,13 +666,13 @@ subtest 'two mount occurrences compile independent wrapper-local state' => sub {
             return $inner->($child_scope, $receive, $send);
         };
     });
-    my $shared_leaf = route('/state', raw => async sub {
+    my $shared_leaf = route('/state' => as_app(async sub {
         my ($request_scope, $receive, $send) = @_;
         my $body = join ':',
             $request_scope->{'task7.wrapper'},
             $request_scope->{'task7.requests'};
         await response_app($body)->(@_);
-    }, middleware => [$stateful_middleware]);
+    }), middleware => [$stateful_middleware]);
     my $app = router(routes => [
         mount('/left', routes => [$shared_leaf]),
         mount('/right', routes => [$shared_leaf]),

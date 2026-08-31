@@ -23,6 +23,7 @@ use lib dirname(__FILE__) . '/lib';
 
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
+use PAGI::Utils qw(as_app);
 
 use ChatApp::State qw(get_stats);
 use ChatApp::HTTP;
@@ -74,9 +75,9 @@ sub with_logging {
 # endpoints are first-class routes; everything else (static files and the
 # REST API) is mounted at the root, where ChatApp::HTTP handles it.
 my $router = PAGI::App::Router->new;
-$router->websocket('/ws/chat', raw => $ws_handler);
-$router->sse('/events', raw => $sse_handler);
-$router->mount('/'            => $http_handler);
+$router->websocket('/ws/chat' => as_app($ws_handler));
+$router->sse('/events' => as_app($sse_handler));
+$router->mount('/', app => $http_handler);
 
 compose(
     app => $router,
@@ -96,7 +97,7 @@ compose(
             say STDERR "[lifespan] Final stats: $stats->{users_online} users, $stats->{messages_total} messages";
         },
     },
-)->to_app;
+);
 
 __END__
 

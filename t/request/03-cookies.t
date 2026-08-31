@@ -6,6 +6,8 @@ use Test2::V0;
 use lib 'lib';
 use PAGI::Request;
 
+my $no_body = sub { die 'body unavailable' };
+
 subtest 'cookies parsing' => sub {
     my $scope = {
         type    => 'http',
@@ -15,7 +17,7 @@ subtest 'cookies parsing' => sub {
         ],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
     my $cookies = $req->cookies;
 
     is(ref($cookies), 'HASH', 'cookies returns hashref');
@@ -33,7 +35,7 @@ subtest 'cookie() shortcut' => sub {
         ],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     is($req->cookie('token'), 'xyz789', 'cookie() returns value');
     is($req->cookie('missing'), undef, 'missing cookie returns undef');
@@ -41,7 +43,7 @@ subtest 'cookie() shortcut' => sub {
 
 subtest 'no cookies' => sub {
     my $scope = { type => 'http', method => 'GET', headers => [] };
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     is($req->cookies, {}, 'empty cookies returns empty hash');
     is($req->cookie('anything'), undef, 'missing returns undef');
@@ -56,7 +58,7 @@ subtest 'cookies with special characters' => sub {
         ],
     };
 
-    my $req = PAGI::Request->new($scope);
+    my $req = PAGI::Request->new($scope, $no_body);
 
     # Cookie::Baker handles URL decoding
     is($req->cookie('data'), 'hello world', 'decodes URL encoding');

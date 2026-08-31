@@ -9,15 +9,16 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router::Builder ();
 use PAGI::Compose qw(compose);
+use PAGI::Response::Text ();
 use PAGI::Routing::Router ();
 use PAGI::Test::Client ();
 
 sub handler {
     my ($body, $counter) = @_;
     return sub {
-        my ($context) = @_;
+        my ($request) = @_;
         ++$$counter if $counter;
-        return $context->text($body);
+        return PAGI::Response::Text->new($body);
     };
 }
 
@@ -52,123 +53,84 @@ sub complete_client_for {
 sub router_methods_exist {
     my ($builder) = @_;
     my $ok = 1;
-    for my $method (qw(group mount to_router to_app)) {
+    for my $method (qw(mount to_router to_app)) {
         $ok = 0 unless ok($builder->can($method), "Builder provides $method");
     }
     return $ok;
 }
 
-subtest 'groups and mounts retain structural shape and strict target grammar' => sub {
+subtest 'routes and app Mounts retain one structural shape' => sub {
     my $builder = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($builder);
 
     my $parent_identity = refaddr($builder);
     my ($child_identity, $callback_calls);
     my $factory = sub { return $_[0] };
-    my $callback_return = bless {}, 'Local::IgnoredGroupReturn';
-    my $returned = $builder->group('/api/{tenant}' => [$factory] => sub {
+    my $callback_return = bless {}, 'Local::IgnoredMountReturn';
+    my $returned = $builder->mount('/api/{tenant}', routes => sub {
         my ($child) = @_;
         ++$callback_calls;
         $child_identity = refaddr($child);
         $child->get('/users/{id}' => handler('nested'))
             ->name('users')->desc('users route')->constraints(id => qr/\d+/);
-        $child->group('/v2' => sub {
+        $child->mount('/v2', routes => sub {
             my ($grandchild) = @_;
             $grandchild->post('/items' => handler('deep'))->name('items');
-        })->name('v2')->desc('nested group');
+        })->name('v2')->desc('nested Mount');
         return $callback_return;
-    });
-    is($returned, $builder, 'group ignores the callback return and returns the parent');
-    isnt($child_identity, $parent_identity, 'group callback receives a fresh child Builder');
-    is($callback_calls, 1, 'group callback runs synchronously exactly once');
-    $builder->name('api')->desc('API group')->constraints(tenant => qr/[a-z]+/);
+    }, middleware => [$factory]);
+    is($returned, $builder, 'Mount ignores the callback return and returns the parent');
+    isnt($child_identity, $parent_identity, 'routes callback receives a fresh child Builder');
+    is($callback_calls, 1, 'routes callback runs synchronously exactly once');
+    $builder->name('api')->desc('API Mount')->constraints(tenant => qr/[a-z]+/);
 
     my $opaque = opaque_app('opaque');
-    $builder->mount('/assets/{bucket}' => $opaque)
-        ->desc('opaque assets')->constraints(bucket => qr/[a-z]+/);
-    like(dies { $builder->name('assets') },
-        qr/opaque mounts cannot be named/,
-        'an opaque mount cannot be named');
+    $builder->mount('/assets/{bucket}', app => $opaque)
+        ->name('assets')->desc('opaque assets')
+        ->constraints(bucket => qr/[a-z]+/);
 
     my $immutable = PAGI::Routing::Router->new(routes => []);
-    $builder->mount('/immutable' => [$factory] => router => $immutable)
+    $builder->mount('/immutable', app => $immutable, middleware => [$factory])
         ->name('immutable')->desc('immutable child');
-    my $mutable = PAGI::App::Router::Builder->new;
-    $mutable->get('/inside' => handler('mutable'))->name('inside');
-    $builder->mount('/mutable/{account}' => router => $mutable)
-        ->name('mutable')->desc('mutable child')
-        ->constraints(account => qr/\d+/);
 
     my $records = $builder->_declarations;
     is([map { $_->{node_kind} } @$records],
-        [qw(group mount mount mount)],
-        'one declaration array retains group and mount records in written order');
+        [qw(mount mount mount)],
+        'one declaration array retains every Mount in written order');
+    ok(!exists $records->[0]{router} && !exists $records->[0]{is_raw},
+        'Mount records contain no retired router or mode keys');
+    ok(exists $records->[0]{child} && exists $records->[1]{app},
+        'Mount records distinguish declaration children from application values');
 
     my $router = $builder->to_router;
     my $nodes = $router->routes;
     isa_ok($nodes->[0], 'PAGI::Routing::Mount');
     is([$nodes->[0]->path, $nodes->[0]->name, $nodes->[0]->desc],
-        ['/api/{tenant}', 'api', 'API group'],
-        'a group becomes one inline Mount with its local metadata');
+        ['/api/{tenant}', 'api', 'API Mount'],
+        'a callback becomes one Mount with its local metadata');
     is($nodes->[0]->constraints, { tenant => qr/[a-z]+/ },
-        'group constraints are materialized on the inline Mount');
+        'Mount constraints are materialized');
     is(scalar @{$nodes->[0]->middleware}, 1,
-        'optional group middleware is retained once');
-    is([map { [$_->kind, $_->path, $_->name] } @{$nodes->[0]->routes}], [
+        'named Mount middleware is retained once');
+    is([map { [$_->kind, $_->path, $_->name] } @{$nodes->[0]->app->routes}], [
         ['route', '/users/{id}', 'users'],
         ['mount', '/v2', 'v2'],
-    ], 'nested group contents remain inline and ordered');
+    ], 'nested callback contents remain ordered in a child Router');
     is([map { [$_->kind, $_->path, $_->name] }
-            @{$nodes->[0]->routes->[1]->routes}],
+            @{$nodes->[0]->app->routes->[1]->app->routes}],
         [['route', '/items', 'items']],
-        'a second group level remains an inline structural Mount');
+        'a second callback level becomes another Router application');
 
-    ok($nodes->[1]->is_raw, 'an opaque mount remains opaque');
-    is(refaddr($nodes->[1]->target), refaddr($opaque),
-        'an opaque mount target is stored untouched');
-    is([$nodes->[1]->desc, $nodes->[1]->constraints],
-        ['opaque assets', { bucket => qr/[a-z]+/ }],
-        'opaque mounts retain descriptions and constraints');
-    is(refaddr($nodes->[2]->router), refaddr($immutable),
+    is(refaddr($nodes->[1]->app), refaddr($opaque),
+        'an opaque app is stored untouched');
+    is([$nodes->[1]->name, $nodes->[1]->desc, $nodes->[1]->constraints],
+        ['assets', 'opaque assets', { bucket => qr/[a-z]+/ }],
+        'opaque app Mounts retain all chained modifiers');
+    is(refaddr($nodes->[2]->app), refaddr($immutable),
         'an immutable Router mount retains child identity');
-    isa_ok($nodes->[3]->router, 'PAGI::Routing::Router');
-    is([$nodes->[3]->name, $nodes->[3]->desc, $nodes->[3]->constraints],
-        ['mutable', 'mutable child', { account => qr/\d+/ }],
-        'known mutable mounts materialize with placement metadata');
-    is($nodes->[3]->router->routes->[0]->name, 'inside',
-        'a mutable child Builder becomes a Router Mount child');
-
-    like(dies { PAGI::App::Router::Builder->new->mount('/missing' => undef) },
-        qr/mount.*target.*defined|mount requires/i,
-        'undefined opaque mount targets are rejected');
-    like(dies {
-        PAGI::App::Router::Builder->new->mount('/package' => 'No::Load::Me')
-    }, qr/opaque mount target must be a coderef or object with to_app/,
-        'package-name opaque targets are rejected without loading them');
-    like(dies {
-        PAGI::App::Router::Builder->new->mount(
-            '/opaque-object' => bless({}, 'Local::UnsupportedOpaqueTarget'))
-    }, qr/opaque mount target must be a coderef or object with to_app/,
-        'unsupported opaque objects are rejected at declaration time');
-    like(dies {
-        PAGI::App::Router::Builder->new->mount('/package', router => 'No::Load::Me')
-    }, qr/router target must be an immutable Router, App Router, or Endpoint Router/,
-        'package-name router targets are rejected without loading them');
-    ok(!$INC{'No/Load/Me.pm'}, 'rejecting a package-name target does not load it');
-    like(dies {
-        PAGI::App::Router::Builder->new->mount(
-            '/object', router => bless({}, 'Local::UnsupportedRouterTarget'))
-    }, qr/router target must be an immutable Router, App Router, or Endpoint Router/,
-        'unsupported blessed router targets are rejected');
-    like(dies {
-        PAGI::App::Router::Builder->new->mount('/none', router => undef)
-    }, qr/router target must be an immutable Router, App Router, or Endpoint Router/,
-        'undefined known router targets are rejected');
-    like(dies {
-        PAGI::App::Router::Builder->new
-            ->mount('/unnamed', router => $immutable)->to_router
-    }, qr/router mount requires a name/,
-        'a known Router mount requires a local placement name');
+    is([$nodes->[2]->name, $nodes->[2]->desc],
+        ['immutable', 'immutable child'],
+        'immutable Router apps retain placement metadata');
 };
 
 subtest 'parameter and static routes keep exact declaration precedence' => sub {
@@ -229,7 +191,7 @@ subtest 'prefix mounts own at their declaration position relative to routes' => 
     my ($mount_calls, $route_calls) = (0, 0);
     my $mount_first = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($mount_first);
-    $mount_first->mount('/api' => opaque_app('mount', \$mount_calls));
+    $mount_first->mount('/api', app => opaque_app('mount', \$mount_calls));
     $mount_first->get('/api/item' => handler('route', \$route_calls));
     is(client_for($mount_first)->get('/api/item')->text, 'mount',
         'an earlier matching prefix mount owns immediately');
@@ -239,7 +201,7 @@ subtest 'prefix mounts own at their declaration position relative to routes' => 
     ($mount_calls, $route_calls) = (0, 0);
     my $route_first = PAGI::App::Router::Builder->new;
     $route_first->get('/api/item' => handler('route', \$route_calls));
-    $route_first->mount('/api' => opaque_app('mount', \$mount_calls));
+    $route_first->mount('/api', app => opaque_app('mount', \$mount_calls));
     is(client_for($route_first)->get('/api/item')->text, 'route',
         'an earlier FULL sibling route wins before a matching mount');
     is([$mount_calls, $route_calls], [0, 1],
@@ -249,45 +211,45 @@ subtest 'prefix mounts own at their declaration position relative to routes' => 
 subtest 'root and api mounts are never reordered by prefix length' => sub {
     my $root_first = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($root_first);
-    $root_first->mount('/' => opaque_app('root'));
-    $root_first->mount('/api' => opaque_app('api'));
+    $root_first->mount('/', app => opaque_app('root'));
+    $root_first->mount('/api', app => opaque_app('api'));
     is(client_for($root_first)->get('/api/item')->text, 'root',
         'an earlier root mount beats a longer later prefix');
 
     my $api_first = PAGI::App::Router::Builder->new;
-    $api_first->mount('/api' => opaque_app('api'));
-    $api_first->mount('/' => opaque_app('root'));
+    $api_first->mount('/api', app => opaque_app('api'));
+    $api_first->mount('/', app => opaque_app('root'));
     is(client_for($api_first)->get('/api/item')->text, 'api',
         'an earlier api mount beats a later root mount');
 };
 
-subtest 'groups own requests before, between, and after parent siblings' => sub {
+subtest 'callback Mounts own requests at their written parent position' => sub {
     my $before = PAGI::App::Router::Builder->new;
     return unless router_methods_exist($before);
-    $before->group('/api' => sub {
-        $_[0]->get('/item' => handler('group before'));
+    $before->mount('/api', routes => sub {
+        $_[0]->get('/item' => handler('Mount before'));
     });
     $before->get('/api/item' => handler('parent after'));
-    is(client_for($before)->get('/api/item')->text, 'group before',
-        'a group before a parent sibling owns first');
+    is(client_for($before)->get('/api/item')->text, 'Mount before',
+        'a callback Mount before a parent sibling owns first');
 
     my $between = PAGI::App::Router::Builder->new;
     $between->get('/api/item' => handler('parent partial'));
-    $between->group('/api' => sub {
-        $_[0]->post('/item' => handler('group between'));
+    $between->mount('/api', routes => sub {
+        $_[0]->post('/item' => handler('Mount between'));
     });
     $between->post('/api/item' => handler('parent after'));
-    is(client_for($between)->post('/api/item')->text, 'group between',
-        'a group between parent siblings wins after an earlier PARTIAL');
+    is(client_for($between)->post('/api/item')->text, 'Mount between',
+        'a callback Mount between parent siblings wins after an earlier PARTIAL');
 
     my $after = PAGI::App::Router::Builder->new;
     $after->get('/api/item' => handler('parent partial'));
     $after->post('/api/item' => handler('parent before'));
-    $after->group('/api' => sub {
-        $_[0]->post('/item' => handler('group after'));
+    $after->mount('/api', routes => sub {
+        $_[0]->post('/item' => handler('Mount after'));
     });
     is(client_for($after)->post('/api/item')->text, 'parent before',
-        'a group after a parent FULL sibling is not hoisted');
+        'a callback Mount after a parent FULL sibling is not hoisted');
 };
 
 subtest 'mixed protocols and two nested levels retain exact node order' => sub {
@@ -296,10 +258,10 @@ subtest 'mixed protocols and two nested levels retain exact node order' => sub {
     $builder->websocket('/socket-a' => sub { });
     $builder->get('/http-a' => handler('http a'));
     $builder->sse('/events-a' => sub { });
-    $builder->group('/one' => sub {
+    $builder->mount('/one', routes => sub {
         my ($one) = @_;
         $one->post('/parent-first' => handler('parent first'));
-        $one->group('/two' => sub {
+        $one->mount('/two', routes => sub {
             my ($two) = @_;
             $two->sse('/deep-events' => sub { });
             $two->get('/deep-http' => handler('deep http'));
@@ -316,14 +278,14 @@ subtest 'mixed protocols and two nested levels retain exact node order' => sub {
         ['sse', '/events-a'],
         ['mount', '/one'],
         ['route', '/http-b'],
-    ], 'HTTP, WebSocket, SSE, and group nodes share one unsorted root order');
-    my $one = $root->[3]->routes;
+    ], 'HTTP, WebSocket, SSE, and Mount nodes share one unsorted root order');
+    my $one = $root->[3]->app->routes;
     is([map { [$_->kind, $_->path] } @$one], [
         ['route', '/parent-first'],
         ['mount', '/two'],
         ['route', '/parent-last'],
-    ], 'first nested level retains declarations around its child group');
-    my $two = $one->[1]->routes;
+    ], 'first nested level retains declarations around its child Mount');
+    my $two = $one->[1]->app->routes;
     is([map { [$_->kind, $_->path] } @$two], [
         ['sse', '/deep-events'],
         ['route', '/deep-http'],

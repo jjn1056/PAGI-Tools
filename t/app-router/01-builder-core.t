@@ -7,20 +7,47 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router ();
 use PAGI::App::Router::Builder ();
+use PAGI::Response::Text ();
 use PAGI::Routing::Middleware ();
+use PAGI::Test::Client ();
+use PAGI::Utils qw(as_app);
 
 {
     package Local::StringifiedOption;
     use overload '""' => sub { return 'methods' }, fallback => 1;
 }
 
+{
+    package Local::BuilderApp;
+
+    sub new { return bless { builds => 0 }, $_[0] }
+    sub to_app {
+        my ($self) = @_;
+        ++$self->{builds};
+        return sub { return };
+    }
+}
+
+{
+    package Local::MethodEndpoint;
+
+    sub new { return bless { allowed_calls => 0, builds => 0 }, $_[0] }
+    sub allowed_methods { ++$_[0]{allowed_calls}; return qw(GET POST OPTIONS) }
+    sub to_app {
+        ++$_[0]{builds};
+        return sub { return };
+    }
+}
+
 subtest 'constructor copies and normalizes router configuration' => sub {
     my $factory = sub { return $_[0] };
     my $middleware = [$factory];
+    my $default = Local::BuilderApp->new;
 
     my $builder = PAGI::App::Router::Builder->new(
         desc       => 'root routes',
         middleware => $middleware,
+        http_default => $default,
     );
 
     my $options = $builder->_router_options;
@@ -31,6 +58,26 @@ subtest 'constructor copies and normalizes router configuration' => sub {
         'materialized Router options have no method-not-allowed callback key');
     ok($options->{middleware}[0]->isa('PAGI::Routing::Middleware'),
         'normalizes top-level middleware immediately');
+    is(refaddr($options->{http_default}), refaddr($default),
+        'retains the original HTTP default application');
+    ok($options->{has_http_default}, 'records that HTTP default was configured');
+    is($default->{builds}, 0, 'constructor configuration performs no compilation');
+    is(refaddr($builder->to_router->http_default), refaddr($default),
+        'the configured application reaches the immutable Router unchanged');
+    is($default->{builds}, 0, 'materialization performs no application compilation');
+    like(dies { $builder->http_default(sub { }) },
+        qr/http_default.*only.*once|already configured/i,
+        'constructor and method forms share one-shot configuration');
+
+    my $method_default = Local::BuilderApp->new;
+    my $method_builder = PAGI::App::Router::Builder->new;
+    is($method_builder->http_default($method_default), $method_builder,
+        'the method form returns its builder');
+    is(refaddr($method_builder->to_router->http_default), refaddr($method_default),
+        'the method form propagates the original application');
+    like(dies { $method_builder->http_default($default) },
+        qr/http_default.*only.*once|already configured/i,
+        'a second method configuration croaks');
 
     push @$middleware, sub { return $_[0] };
     push @{$options->{middleware}}, PAGI::Routing::Middleware->new(sub { return $_[0] });
@@ -43,6 +90,13 @@ subtest 'constructor copies and normalizes router configuration' => sub {
     like dies { PAGI::App::Router::Builder->new(unknown => 1) },
         qr/unknown router option 'unknown'/,
         'unknown router options are rejected';
+    like dies {
+        PAGI::App::Router::Builder->new(
+            http_default => $default,
+            http_default => $method_default,
+        );
+    }, qr/duplicate router option 'http_default'/,
+        'duplicate constructor options are rejected before hash construction';
     like dies { PAGI::App::Router::Builder->new(desc => []) },
         qr/desc must be a string/,
         'invalid descriptions are rejected';
@@ -62,7 +116,7 @@ subtest 'constructor copies and normalizes router configuration' => sub {
 subtest 'all leaf declarations retain one exact ordered record sequence' => sub {
     my $builder = PAGI::App::Router::Builder->new;
     my $handler = sub { return 'context result' };
-    my $raw = sub { return 'native result' };
+    my $native = as_app(sub { return 'native result' });
     my $factory = sub { return $_[0] };
     my $methods = ['RPC'];
 
@@ -77,7 +131,7 @@ subtest 'all leaf declarations retain one exact ordered record sequence' => sub 
     $builder->route('/rpc' => $handler, methods => $methods);
     $builder->websocket('/socket' => $handler);
     $builder->sse('/events' => $handler);
-    $builder->get('/raw', raw => $raw);
+    $builder->get('/native' => $native);
     $builder->get('/wrapped' => [$factory] => $handler);
 
     my $records = $builder->_declarations;
@@ -95,13 +149,13 @@ subtest 'all leaf declarations retain one exact ordered record sequence' => sub 
             ['route',     ['RPC'],     '/rpc'],
             ['websocket', undef, '/socket'],
             ['sse', undef, '/events'],
-            ['route',     ['GET'], '/raw'],
+            ['route',     ['GET'], '/native'],
             ['route',     ['GET'], '/wrapped'],
         ],
         'all declarations preserve one exact insertion order across protocols',
     );
-    ok($records->[11]{is_raw}, 'explicit raw tag is retained on raw target');
-    is(refaddr($records->[11]{target}), refaddr($raw), 'raw target identity is retained');
+    is(refaddr($records->[11]{endpoint}), refaddr($native),
+        'explicitly wrapped native application identity is retained');
     ok($records->[12]{middleware}[0]->isa('PAGI::Routing::Middleware'),
         'positional middleware is normalized at declaration time');
 
@@ -113,16 +167,18 @@ subtest 'all leaf declarations retain one exact ordered record sequence' => sub 
         'record middleware lists are defensive');
 };
 
-subtest 'leaf grammar distinguishes Context targets from explicit raw targets' => sub {
+subtest 'leaf grammar accepts application values and requires explicit native wrapping' => sub {
     my $builder = PAGI::App::Router::Builder->new;
     my $handler = sub { };
-    my $raw = sub { };
+    my $native = as_app(sub { });
     my $factory = sub { return $_[0] };
+    my $raw_object = Local::BuilderApp->new;
 
     $builder->get('/normal' => $handler);
     $builder->get('/wrapped' => [$factory] => $handler);
-    $builder->get('/raw', raw => $raw);
-    $builder->get('/raw-wrapped' => [$factory], raw => $raw);
+    $builder->get('/native' => $native);
+    $builder->get('/native-wrapped' => [$factory], $native);
+    $builder->get('/object', $raw_object);
     $builder->route('/rpc' => $handler, methods => ['RPC']);
 
     like dies { $builder->get('/missing') }, qr/requires a target/,
@@ -139,13 +195,14 @@ subtest 'leaf grammar distinguishes Context targets from explicit raw targets' =
     like dies { $builder->sse('/events' => $handler, methods => ['GET']) },
         qr/SSE routes do not accept methods/,
         'SSE declarations reject methods';
-    like dies { $builder->route('/missing-methods' => $handler) },
-        qr/route requires methods option/,
-        'generic route declarations require methods';
-    like dies { $builder->get('/raw', raw => undef) }, qr/raw target must be defined/,
-        'raw tags require their target';
-    like dies { $builder->get('/normal' => 'native') }, qr/handler must be a coderef/,
-        'ordinary targets must be Context handler coderefs';
+    like dies { $builder->get('/normal' => 'native') },
+        qr/route endpoint must be a coderef or instantiated object with to_app/,
+        'package strings are not application values';
+    like(dies { $builder->get('/package', 'Local::BuilderApp') },
+        qr/route endpoint must be a coderef or instantiated object with to_app/,
+        'application package strings are rejected through the shared app validator');
+    is($raw_object->{builds}, 0,
+        'application objects are retained without compilation at declaration');
     like dies { $builder->get('/bad-middleware' => [undef] => $handler) },
         qr/middleware entry 0 must be/,
         'invalid positional middleware entries are rejected';
@@ -154,6 +211,11 @@ subtest 'leaf grammar distinguishes Context targets from explicit raw targets' =
             bless({}, 'Local::StringifiedOption') => ['GET']);
     }, qr/route option names must be strings/,
         'stringified reference option keys are rejected before hash construction';
+    like dies {
+        $builder->route('/duplicate-methods' => $handler,
+            methods => ['GET'], methods => ['POST']);
+    }, qr/duplicate route option 'methods'/,
+        'duplicate route options are rejected before hash construction';
 };
 
 subtest 'last declaration modifiers update only the latest compatible route' => sub {
@@ -195,6 +257,10 @@ subtest 'last declaration modifiers update only the latest compatible route' => 
         'description uses shared text validation';
     like dies { $builder->constraints('id') }, qr/constraints option list must be key\/value pairs/,
         'constraints require key/value pairs';
+    like dies {
+        $builder->constraints(id => qr/\d+/, id => qr/[a-z]+/);
+    }, qr/duplicate constraints option 'id'/,
+        'duplicate constraint options are rejected before hash construction';
 };
 
 subtest 'materialization defers immutable HTTP normalization to Route' => sub {
@@ -203,6 +269,7 @@ subtest 'materialization defers immutable HTTP normalization to Route' => sub {
 
     $builder->get('/get' => $handler);
     $builder->route('/rpc' => $handler, methods => ['RPC']);
+    $builder->route('/generic-any' => $handler, methods => '*');
     $builder->any('/any' => $handler);
     $builder->websocket('/socket' => $handler);
     $builder->sse('/events' => $handler);
@@ -211,10 +278,101 @@ subtest 'materialization defers immutable HTTP normalization to Route' => sub {
     is([map { [$_->kind, $_->methods, $_->path] } @$nodes], [
         ['route', ['GET', 'HEAD'], '/get'],
         ['route', ['RPC'], '/rpc'],
+        ['route', '*', '/generic-any'],
         ['route', '*', '/any'],
         ['websocket', undef, '/socket'],
         ['sse', undef, '/events'],
     ], 'immutable Route owns method normalization, including automatic HEAD');
+};
+
+subtest 'materialization preserves explicit generic methods presence' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+
+    $builder->route('/undefined' => sub { }, methods => undef);
+
+    like dies { $builder->_materialize_nodes(undef) },
+        qr/methods must be a method string, arrayref, or '\*'/,
+        'explicit undef reaches immutable Route validation';
+};
+
+subtest 'generic application objects default through immutable Route construction' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+    my $endpoint = Local::BuilderApp->new;
+    my $error = dies { $builder->route('/default' => $endpoint) };
+
+    is($error, undef,
+        'a generic application object does not require explicit methods');
+    return if defined $error;
+
+    my $route = $builder->to_router->routes->[0];
+    is($route->endpoint, $endpoint,
+        'the immutable Route retains the exact endpoint object');
+    is($route->methods, ['GET', 'HEAD'],
+        'the immutable Route supplies GET plus automatic HEAD');
+    is($endpoint->{builds}, 0,
+        'method fallback does not compile the endpoint application');
+};
+
+subtest 'generic CODE handlers default through immutable Route construction' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+    my $handler = sub {
+        return PAGI::Response::Text->new('generic handler default');
+    };
+    my $error = dies { $builder->route('/default' => $handler) };
+
+    is($error, undef,
+        'a generic CODE handler does not require explicit methods');
+    return if defined $error;
+
+    my $route = $builder->to_router->routes->[0];
+    is($route->endpoint, $handler,
+        'the immutable Route retains the exact handler CODE');
+    is($route->methods, ['GET', 'HEAD'],
+        'the immutable Route supplies GET plus automatic HEAD');
+
+    my $client = PAGI::Test::Client->new(app => $builder->to_app);
+    is($client->get('/default')->text, 'generic handler default',
+        'GET dispatches through the generic handler');
+    my $partial = $client->post('/default');
+    is($partial->status, 405, 'Router owns the unsupported-method outcome');
+    is($partial->header('allow'), 'GET, HEAD',
+        'Router publishes the fallback method set in Allow');
+};
+
+subtest 'application capability is snapshotted once per immutable Route construction' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+    my $endpoint = Local::MethodEndpoint->new;
+    $builder->route('/inferred' => $endpoint);
+
+    is($endpoint->{allowed_calls}, 0,
+        'mutable declaration does not query endpoint capabilities');
+
+    my $first = $builder->to_router->routes->[0];
+    is($first->endpoint, $endpoint,
+        'the immutable Route retains the exact endpoint object');
+    is($first->methods, ['GET', 'HEAD', 'POST', 'OPTIONS'],
+        'the first immutable Route receives one normalized capability snapshot');
+    is($endpoint->{allowed_calls}, 1,
+        'the first immutable Route construction queries the capability once');
+
+    my $second = $builder->to_router->routes->[0];
+    is($second->methods, ['GET', 'HEAD', 'POST', 'OPTIONS'],
+        'a later immutable snapshot retains the same normalized capability');
+    is($endpoint->{allowed_calls}, 2,
+        'each fresh immutable Route construction takes one fresh snapshot');
+    is($endpoint->{builds}, 0,
+        'method inference does not compile the endpoint application');
+};
+
+subtest 'explicit generic methods bypass endpoint capability inference' => sub {
+    my $builder = PAGI::App::Router::Builder->new;
+    my $endpoint = Local::MethodEndpoint->new;
+    $builder->route('/explicit' => $endpoint, methods => ['PATCH']);
+
+    my $route = $builder->to_router->routes->[0];
+    is($route->methods, ['PATCH'], 'explicit methods reach the immutable Route');
+    is($endpoint->{allowed_calls}, 0,
+        'explicit methods do not query the endpoint capability');
 };
 
 done_testing;

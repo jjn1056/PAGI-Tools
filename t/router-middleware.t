@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 
 use lib 'lib';
 use PAGI::App::Router;
+use PAGI::Response::Text ();
 use PAGI::Routing qw(middleware);
 
 async sub request {
@@ -75,18 +76,18 @@ subtest 'public route middleware uses native app-to-app onion order' => sub {
         factory('outer', \@trace, \$builds),
         factory('inner', \@trace, \$builds),
     ] => sub {
-        my ($c) = @_;
-        push @trace, 'handler ' . ref($c);
-        return $c->text('home');
+        my ($request) = @_;
+        push @trace, 'handler ' . ref($request);
+        return PAGI::Response::Text->new('home');
     });
 
     is($builds, 0, 'declaration normalizes without wrapping');
     my $app = $router->to_app;
     is($builds, 2, 'both factories run at compilation');
     my $events = request($app)->get;
-    is(event_body($events), 'home', 'the Context handler response is emitted');
+    is(event_body($events), 'home', 'the Request handler response is emitted');
     is(\@trace, [
-        'outer before', 'inner before', 'handler PAGI::Context::HTTP',
+        'outer before', 'inner before', 'handler PAGI::Request',
         'inner after', 'outer after',
     ], 'first listed middleware is outermost');
 
@@ -106,7 +107,7 @@ subtest 'object and explicit description forms compose on the public route' => s
     my $router = PAGI::App::Router->new;
     $router->get('/' => [$object, $description] => sub {
         push @trace, 'handler';
-        return $_[0]->text('mixed');
+        return PAGI::Response::Text->new('mixed');
     });
 
     my $snapshot = $router->to_router;
@@ -126,8 +127,10 @@ subtest 'object and explicit description forms compose on the public route' => s
 subtest 'class-name middleware is accepted and resolved at compilation' => sub {
     my $router = PAGI::App::Router->new;
     $router->get('/' => ['RequestId'] => sub {
-        my ($c) = @_;
-        return $c->text(defined $c->scope->{request_id} ? 'has id' : 'missing id');
+        my ($request) = @_;
+        return PAGI::Response::Text->new(
+            defined $request->scope->{request_id} ? 'has id' : 'missing id',
+        );
     });
 
     my $events = request($router->to_app)->get;
@@ -152,7 +155,7 @@ subtest 'middleware can short circuit or wrap native channels' => sub {
     my $router = PAGI::App::Router->new;
     $router->get('/denied' => [$auth] => sub {
         ++$handler_calls;
-        return $_[0]->text('must not run');
+        return PAGI::Response::Text->new('must not run');
     });
 
     my $denied = request($router->to_app, path => '/denied')->get;
@@ -164,7 +167,9 @@ subtest 'middleware can short circuit or wrap native channels' => sub {
         return sub {
             my ($scope, $receive, $send) = @_;
             my $wrapped_receive = sub {
-                return Future->done({ type => 'synthetic' });
+                return Future->done({
+                    type => 'http.request', body => 'synthetic', more => 0,
+                });
             };
             my $wrapped_send = sub {
                 my ($event) = @_;
@@ -180,44 +185,46 @@ subtest 'middleware can short circuit or wrap native channels' => sub {
         };
     };
     my $channels = PAGI::App::Router->new;
-    $channels->get('/channels' => [$inject] => sub {
-        my ($c) = @_;
-        my $event = $c->receive->()->get;
-        return $c->text($event->{type});
+    $channels->get('/channels' => [$inject] => async sub {
+        my ($request) = @_;
+        my $body = await $request->body;
+        return PAGI::Response::Text->new($body);
     });
     my $events = request($channels->to_app, path => '/channels')->get;
-    is(event_body($events), 'synthetic', 'wrapped receive reaches the Context');
+    is(event_body($events), 'synthetic', 'wrapped receive reaches the Request body');
     my ($wrapped) = map { $_->[1] }
         grep { lc($_->[0]) eq 'x-wrapped' } @{$events->[0]{headers}};
     is($wrapped, 'yes', 'wrapped send changes the emitted Response');
 };
 
-subtest 'group, known mount, opaque mount, and route middleware stack once' => sub {
+subtest 'callback Mount, Router app, and route middleware stack once' => sub {
     my (@trace, $builds);
     my $child = PAGI::App::Router->new(
         middleware => [factory('child router', \@trace, \$builds)],
     );
     $child->get('/data' => [factory('route', \@trace, \$builds)] => sub {
         push @trace, 'handler';
-        return $_[0]->text('data');
+        return PAGI::Response::Text->new('data');
     });
 
     my $root = PAGI::App::Router->new(
         middleware => [factory('root router', \@trace, \$builds)],
     );
-    $root->group('/api' => [factory('group', \@trace, \$builds)] => sub {
+    $root->mount('/api', routes => sub {
         my ($api) = @_;
-        $api->mount('/v1' => [factory('known mount', \@trace, \$builds)],
-            router => $child)->name('v1');
-    });
+        $api->mount('/v1',
+            app => $child->to_router,
+            middleware => [factory('known mount', \@trace, \$builds)],
+        )->name('v1');
+    }, middleware => [factory('callback Mount', \@trace, \$builds)]);
 
     my $events = request($root->to_app, path => '/api/v1/data')->get;
     is(event_body($events), 'data', 'nested public middleware graph responds');
     is(\@trace, [
-        'root router before', 'group before', 'known mount before',
+        'root router before', 'callback Mount before', 'known mount before',
         'child router before', 'route before', 'handler',
         'route after', 'child router after', 'known mount after',
-        'group after', 'root router after',
+        'callback Mount after', 'root router after',
     ], 'every structural layer retains native onion order');
     is($builds, 5, 'each declared occurrence wraps once');
 };
@@ -239,9 +246,9 @@ subtest 'route middleware is uniform for normal WebSocket and SSE handlers' => s
     request($app, type => 'websocket', method => undef, path => '/ws')->get;
     request($app, type => 'sse', method => undef, path => '/events')->get;
     is(\@trace, [
-        'protocol before', 'handler PAGI::Context::WebSocket', 'protocol after',
-        'protocol before', 'handler PAGI::Context::SSE', 'protocol after',
-    ], 'protocol middleware wraps the shared Context adapter');
+        'protocol before', 'handler PAGI::WebSocket', 'protocol after',
+        'protocol before', 'handler PAGI::SSE', 'protocol after',
+    ], 'protocol middleware wraps the shared direct-object adapter');
 };
 
 subtest 'invalid entries fail during public declaration normalization' => sub {

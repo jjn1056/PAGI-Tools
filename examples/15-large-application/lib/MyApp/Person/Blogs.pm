@@ -2,16 +2,25 @@ package MyApp::Person::Blogs;
 
 use v5.40;
 use Types::Standard qw(Int);
+use PAGI::Pages qw(not_found);
+use PAGI::Response qw(html_response);
 use PAGI::Routing qw(router route);
+use PAGI::Routing::URL qw(path_for url_for);
 use MyApp::View ();
 
-sub list_blogs($c) {
-    my $person_id = $c->path_param('person_id');
-    my $data = $c->state->{data};
+sub data($request) {
+    my $state = $request->state
+        or die 'MyApp::Person::Blogs requires Compose lifespan state';
+    return $state->get('data');
+}
+
+sub list_blogs($request) {
+    my $person_id = $request->path_param('person_id');
+    my $data = data($request);
     my $person = $data->person($person_id);
 
     unless ($person) {
-        return $c->html(
+        return html_response(
             MyApp::View->document(
                 'Blogs not found',
                 '    <h1>Blogs not found</h1>',
@@ -23,7 +32,7 @@ sub list_blogs($c) {
     my @items;
     for my $blog (@{$data->blogs_for($person_id)}) {
         # blog_id is explicit; person_id is inherited from the match.
-        my $path = $c->path_for('show', {
+        my $path = path_for($request, 'show', {
             blog_id => $blog->{id},
         });
         push @items,
@@ -31,9 +40,9 @@ sub list_blogs($c) {
     }
 
     # ../show resolves from /person/blog to /person/show and inherits person_id.
-    my $person_path = $c->path_for('../show');
+    my $person_path = path_for($request, '../show');
 
-    return $c->html(MyApp::View->document(
+    return html_response(MyApp::View->document(
         "Blogs by $person->{name}",
         qq{    <a href="$person_path">$person->{name}</a>\n}
             . "    <h1>Blogs</h1>\n    <ul>\n"
@@ -42,14 +51,14 @@ sub list_blogs($c) {
     ));
 }
 
-sub show_blog($c) {
-    my $person_id = $c->path_param('person_id');
-    my $blog_id = $c->path_param('blog_id');
-    my $blog = $c->state->{data}->blog($person_id, $blog_id);
+sub show_blog($request) {
+    my $person_id = $request->path_param('person_id');
+    my $blog_id = $request->path_param('blog_id');
+    my $blog = data($request)->blog($person_id, $blog_id);
 
     unless ($blog) {
-        my $blogs_path = $c->path_for('index');
-        return $c->html(
+        my $blogs_path = path_for($request, 'index');
+        return html_response(
             MyApp::View->document(
                 'Blog not found',
                 qq{    <a href="$blogs_path">Blogs</a>\n}
@@ -59,15 +68,15 @@ sub show_blog($c) {
         );
     }
 
-    my $home_path = $c->path_for('/home');
-    my $person_path = $c->path_for('../show');
-    my $blogs_path = $c->path_for('index');
-    my $canonical = $c->url_for('show',
+    my $home_path = path_for($request, '/home');
+    my $person_path = path_for($request, '../show');
+    my $blogs_path = path_for($request, 'index');
+    my $canonical = url_for($request, 'show',
         query    => { view => 'full' },
         fragment => 'comments',
     );
 
-    return $c->html(MyApp::View->document(
+    return html_response(MyApp::View->document(
         $blog->{title},
         qq{    <a href="$home_path">Home</a> / }
             . qq{<a href="$person_path">Person</a> / }
@@ -76,19 +85,6 @@ sub show_blog($c) {
             . qq{<p>$blog->{body}</p></article>\n}
             . qq{    <a href="$canonical">Comments view</a>},
     ));
-}
-
-sub blogs_not_found($c) {
-    # The unnamed catchall still has /person/blog as its containing namespace.
-    my $blogs_path = $c->path_for('index');
-    return $c->html(
-        MyApp::View->document(
-            'Blogs section not found',
-            qq{    <a href="$blogs_path">Blogs</a>\n}
-                . '    <h1>Blogs section not found</h1>',
-        ),
-        status => 404,
-    );
 }
 
 sub routing($class) {
@@ -102,11 +98,10 @@ sub routing($class) {
                 name => 'show',
                 desc => 'Show one blog',
             ),
-            route('/*path' => \&blogs_not_found,
-                desc => 'Blogs-local catchall',
-            ),
         ],
         desc => 'Blog routes',
+        http_default => not_found(
+            detail => 'No Blogs route matched this path.'),
     );
 }
 

@@ -84,7 +84,7 @@ sub stop_metrics_broadcaster {
 }
 
 # Static file serving via PAGI::App::File
-my $static_app = PAGI::App::File->app_path('public')->to_app;
+my $static_app = PAGI::App::File->from_app_path('public')->to_app;
 
 # Main app
 my $app = async sub {

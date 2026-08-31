@@ -3,6 +3,7 @@ use parent 'PAGI::Endpoint::Router';
 use strict;
 use warnings;
 use Future::AsyncAwait;
+use PAGI::State qw(app_state);
 
 sub routes {
     my ($self, $r) = @_;
@@ -10,12 +11,14 @@ sub routes {
 }
 
 async sub stream {
-    my ($self, $c) = @_;
-    await $c->send_event(
+    my ($self, $sse) = @_;
+    my $state = app_state($sse)
+        or die 'endpoint-router-demo requires Compose lifespan state';
+    await $sse->send_event(
         event => 'ready',
-        data  => { resource => $c->state->{resource}{name} },
+        data  => { resource => $state->get('resource')->{name} },
     );
-    await $c->sse->run;
+    await $sse->run;
 }
 
 1;

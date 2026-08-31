@@ -4,6 +4,8 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Response::Empty ();
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -27,7 +29,14 @@ PAGI::Middleware::CORS - Cross-Origin Resource Sharing middleware
 
 PAGI::Middleware::CORS implements Cross-Origin Resource Sharing (CORS)
 for PAGI applications. It handles preflight OPTIONS requests and adds
-the appropriate CORS headers to responses.
+the appropriate CORS headers to responses. Actual responses remain literal
+downstream events whose start metadata is amended in place. Preflight policy
+is computed here and emitted as a bodyless L<PAGI::Response::Empty>.
+
+CORS is request policy, not representation metadata, so it is deliberately not
+a Response method. Replace response-level C<cors(...)> calls with this
+middleware. For one unconditional literal C<Access-Control-*> field only, use
+the ordinary L<PAGI::Response/header> method instead.
 
 =head1 CONFIGURATION
 
@@ -95,7 +104,9 @@ sub wrap {
 
         # Check if this is a preflight request
         if ($scope->{method} eq 'OPTIONS' && $origin) {
-            await $self->_handle_preflight($scope, $send, $origin);
+            await $self->_handle_preflight(
+                $scope, $receive, $send, $origin,
+            );
             return;
         }
 
@@ -116,7 +127,7 @@ sub wrap {
 }
 
 async sub _handle_preflight {
-    my ($self, $scope, $send, $origin) = @_;
+    my ($self, $scope, $receive, $send, $origin) = @_;
 
     my @headers;
 
@@ -129,17 +140,11 @@ async sub _handle_preflight {
         push @headers, ['Access-Control-Max-Age', $self->{max_age}];
     }
 
-    await $send->({
-        type    => 'http.response.start',
+    my $response = PAGI::Response::Empty->new(
         status  => 204,
-        headers => \@headers,
-    });
-
-    await $send->({
-        type => 'http.response.body',
-        body => '',
-        more => 0,
-    });
+        headers => [map { @$_ } @headers],
+    );
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 sub _add_cors_headers {

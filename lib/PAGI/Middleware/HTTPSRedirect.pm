@@ -8,6 +8,8 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
 use PAGI::Pages;
+use PAGI::Response::Redirect ();
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -30,11 +32,12 @@ scope server tuple. It never invents a C<localhost> authority; duplicate or
 malformed Host data and unusable server fallbacks receive a generic HTTP 400
 response. Useful for enforcing secure connections in production.
 
-Redirect and invalid-authority responses are rendered by L<PAGI::Pages> from
-the original request scope. Incoming raw query data is preserved without
-re-encoding and is inserted before the first fragment in the redirect target.
-Authority selection, exclusions, secure-request pass-through, and HSTS remain
-owned by this middleware; there is no Pages configuration option.
+Redirect targets use L<PAGI::Response::Redirect>. Invalid-authority responses
+are rendered by L<PAGI::Pages> from the original request scope. Incoming raw
+query data is preserved without re-encoding and is inserted before the first
+fragment in the redirect target. Authority selection, exclusions,
+secure-request pass-through, and HSTS remain owned by this middleware; there
+is no response-policy configuration option.
 
 Non-HTTP scopes continue to pass through unchanged without authority handling.
 
@@ -138,14 +141,14 @@ sub wrap {
             $authority_error = $@;
         }
         if ($authority_error) {
-            await $self->_send_error($scope, $send, 400);
+            await $self->_send_error($scope, $receive, $send, 400);
             return;
         }
 
         my $path = $scope->{path} // '/';
         my $url = "https://$authority$path";
 
-        await $self->_send_redirect($scope, $send, $url);
+        await $self->_send_redirect($scope, $receive, $send, $url);
     };
 }
 
@@ -163,21 +166,21 @@ sub _is_excluded {
 }
 
 async sub _send_redirect {
-    my ($self, $scope, $send, $location) = @_;
-    my $response = PAGI::Pages->redirect(
-        $scope,
-        $location,
-        status         => $self->{redirect_code},
-        preserve_query => 1,
+    my ($self, $scope, $receive, $send, $location) = @_;
+    my $response = PAGI::Response::Redirect->new(
+        PAGI::Response::_location_with_raw_query(
+            $location, $scope->{query_string},
+        ),
+        status => $self->{redirect_code},
     );
-    await Future->wrap($response->respond($send));
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 async sub _send_error {
-    my ($self, $scope, $send, $status) = @_;
+    my ($self, $scope, $receive, $send, $status) = @_;
     croak "HTTPSRedirect does not own status $status" unless $status == 400;
-    my $response = PAGI::Pages->bad_request($scope);
-    await Future->wrap($response->respond($send));
+    my $response = PAGI::Pages->bad_request;
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;
@@ -192,10 +195,10 @@ when behind a reverse proxy (use ReverseProxy middleware).
 
 Host validation and server fallback are only used when constructing an HTTP
 redirect. Existing HTTPS, excluded paths, and non-HTTP scopes retain their
-pass-through behavior. In redirect branches, Pages owns the negotiated body,
-Location construction, fragment-safe raw-query preservation, and response
-validation. HSTS is still added only to responses from an already-secure
-request when enabled.
+pass-through behavior. In redirect branches, this middleware constructs the
+fragment-safe final Location and Redirect validates and renders it. Invalid
+authorities retain Pages negotiation. HSTS is still added only to responses
+from an already-secure request when enabled.
 
 =head1 SEE ALSO
 

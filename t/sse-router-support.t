@@ -78,12 +78,12 @@ subtest 'param returns undef when no route params in scope' => sub {
     is($sse->path_params, {}, 'params returns empty hash when no params');
 };
 
-subtest 'App Router supplies captures to an ordinary SSE Context handler' => sub {
+subtest 'App Router supplies captures to an ordinary SSE object handler' => sub {
     my @seen;
     my $router = PAGI::App::Router->new;
     $router->sse('/events/{channel}' => sub {
-        my ($c) = @_;
-        push @seen, [ref($c), scalar @_, $c->path_params];
+        my ($sse) = @_;
+        push @seen, [ref($sse), scalar @_, $sse->path_params];
         return Future->done;
     });
 
@@ -94,8 +94,8 @@ subtest 'App Router supplies captures to an ordinary SSE Context handler' => sub
     )->get;
 
     is(\@seen, [[
-        'PAGI::Context::SSE', 1, { channel => 'news' },
-    ]], 'normal SSE routing uses Context and shared path_params');
+        'PAGI::SSE', 1, { channel => 'news' },
+    ]], 'normal SSE routing uses its direct object and shared path_params');
 };
 
 done_testing;

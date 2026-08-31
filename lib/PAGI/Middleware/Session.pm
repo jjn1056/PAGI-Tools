@@ -244,9 +244,9 @@ logic instead of stacking multiple Session middleware instances:
 
 If there is a session, WebSocket and SSE connections see it too: a scope
 whose C<type> is not C<'http'> but which still carries a C<headers> key --
-both a WebSocket upgrade request and an SSE request are typed this way (see
-L<PAGI::Context>'s C<is_websocket>/C<is_sse>; SSE is its own distinct scope
-C<type>, not C<'http'> plus a flag) -- gets a B<read-only> session: the
+both a WebSocket upgrade request and an SSE request are typed this way (SSE is
+its own distinct scope C<type>, not C<'http'> plus a flag) -- gets a
+B<read-only> session: the
 same C<state-E<gt>extract> + C<store-E<gt>get> lookup the C<'http'> path
 uses, populating C<< $scope->{'pagi.session'} >> (and
 C<< $scope->{'pagi.session_id'} >>, when a real session was found) before

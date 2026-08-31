@@ -16,6 +16,7 @@ use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::AccessLog;
 use PAGI::Pages;
+use PAGI::Utils qw(invoke_app);
 
 
 #---------------------------------------------------------
@@ -24,6 +25,7 @@ use PAGI::Pages;
 package MessageAPI {
     use parent 'PAGI::Endpoint::HTTP';
     use Future::AsyncAwait;
+    use PAGI::Response::JSON;
 
     my @messages = (
         { id => 1, text => 'Hello, World!' },
@@ -32,20 +34,20 @@ package MessageAPI {
     my $next_id = 3;
 
     async sub get {
-        my ($self, $ctx) = @_;
-        return $ctx->json(\@messages);
+        my ($self, $request) = @_;
+        return PAGI::Response::JSON->new(\@messages);
     }
 
     async sub post {
-        my ($self, $ctx) = @_;
-        my $data = await $ctx->request->json;
+        my ($self, $request) = @_;
+        my $data = await $request->json;
         my $message = { id => $next_id++, text => $data->{text} };
         push @messages, $message;
 
         # Notify SSE subscribers -- awaited, not fired and forgotten.
         await MessageEvents::broadcast($message);
 
-        return $ctx->json($message, status => 201);
+        return PAGI::Response::JSON->new($message, status => 201);
     }
 }
 
@@ -60,15 +62,14 @@ package EchoWS {
     sub ping_interval { 25 }  # Keep connection alive
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $ws = $ctx->websocket;
-        await $ws->accept;
-        await $ws->send_json({ type => 'connected', message => 'Welcome!' });
+        my ($self, $websocket) = @_;
+        await $websocket->accept;
+        await $websocket->send_json({ type => 'connected', message => 'Welcome!' });
     }
 
     async sub on_receive {
-        my ($self, $ctx, $data) = @_;
-        await $ctx->websocket->send_json({
+        my ($self, $websocket, $data) = @_;
+        await $websocket->send_json({
             type => 'echo',
             original => $data,
             timestamp => time(),
@@ -76,7 +77,7 @@ package EchoWS {
     }
 
     sub on_disconnect {
-        my ($self, $ctx, $code) = @_;
+        my ($self, $websocket, $code) = @_;
         print STDERR "WebSocket client disconnected: $code\n";
     }
 }
@@ -87,6 +88,7 @@ package EchoWS {
 package MessageEvents {
     use parent 'PAGI::Endpoint::SSE';
     use Future::AsyncAwait;
+    use PAGI::Stash qw(stash);
 
     sub keepalive_interval { 25 } # seconds
 
@@ -114,11 +116,10 @@ package MessageEvents {
     }
 
     async sub on_connect {
-        my ($self, $ctx) = @_;
-        my $sse = $ctx->sse;
+        my ($self, $sse) = @_;
         my $id = ++$sub_id;
         $subscribers{$id} = $sse;
-        $ctx->stash->set(sub_id => $id);
+        stash($sse)->set(sub_id => $id);
 
         await $sse->send_event(
             event => 'connected',
@@ -127,8 +128,8 @@ package MessageEvents {
     }
 
     sub on_disconnect {
-        my ($self, $ctx) = @_;
-        my $id = $ctx->stash->get('sub_id', 'unknown');
+        my ($self, $sse) = @_;
+        my $id = stash($sse)->get('sub_id', 'unknown');
         delete $subscribers{$id};
     }
 }
@@ -173,10 +174,12 @@ my $require_json = sub {
             }
 
             unless ($content_type =~ m{application/json}i) {
-                my $response = PAGI::Pages->unsupported_media_type($scope,
+                my $response = PAGI::Pages->unsupported_media_type(
                     as     => 'json',
                     detail => 'Content-Type must be application/json');
-                return await $response->respond($send);
+                return await invoke_app(
+                    $response, $scope, $receive, $send,
+                );
             }
         }
 
@@ -192,15 +195,24 @@ my $router = PAGI::App::Router->new;
 # Mount API endpoint with middleware:
 # - $access_log: logs each request (PAGI::Middleware instance)
 # - $require_json: validates Content-Type for POST (coderef middleware)
-$router->mount('/api/messages' => [$access_log, $require_json] => MessageAPI->to_app);
+$router->mount('/api/messages',
+    app        => MessageAPI->to_app,
+    middleware => [$access_log, $require_json],
+);
 
 # WebSocket with timing middleware
-$router->mount('/ws/echo' => [$access_log, $timing] => EchoWS->to_app);
+$router->mount('/ws/echo',
+    app        => EchoWS->to_app,
+    middleware => [$access_log, $timing],
+);
 
 # SSE with timing middleware
-$router->mount('/events' => [$timing] => MessageEvents->to_app);
+$router->mount('/events',
+    app        => MessageEvents->to_app,
+    middleware => [$timing],
+);
 
 # Static files as fallback for everything else (no middleware)
-$router->mount('/' => PAGI::App::File->app_path('public'));
+$router->mount('/', app => PAGI::App::File->from_app_path('public'));
 
-compose(app => $router)->to_app;
+compose(app => $router);

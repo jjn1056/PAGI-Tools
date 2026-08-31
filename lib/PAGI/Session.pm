@@ -2,7 +2,13 @@ package PAGI::Session;
 
 use strict;
 use warnings;
-use Scalar::Util 'blessed';
+use Carp qw(croak);
+use Exporter 'import';
+use PAGI::Utils::Scope ();
+
+our @EXPORT = ();
+our @EXPORT_OK = qw(session);
+our %EXPORT_TAGS = (ALL => [@EXPORT_OK]);
 
 =head1 NAME
 
@@ -10,12 +16,11 @@ PAGI::Session - Standalone helper object for session data access
 
 =head1 SYNOPSIS
 
-    use PAGI::Session;
+    use PAGI::Session qw(session);
 
     # Construct from scope or request object
-    my $session = PAGI::Session->new($scope);
-    my $session = PAGI::Session->new($req);  # any object with ->scope
-    my $session = PAGI::Session->new(@_);    # extra args ignored
+    my $session = session($scope);
+    my $session = session($req);  # any object with ->scope
 
     # Test convenience - wrap raw data directly
     my $session = PAGI::Session->from_data({ _id => 'test', user_id => 42 });
@@ -48,19 +53,31 @@ The strict C<get()> method dies when a key does not exist, catching
 typos at runtime. Use the two-argument form C<get($key, $default)>
 for keys that may or may not be present.
 
+=head1 FUNCTIONS
+
+=head2 session
+
+    my $session = session($scope);
+    my $session = session($request);
+
+Constructs a session facade from exactly one unblessed scope hashref or object
+with a C<scope> method. This function is an opt-in named export and is also
+available through the uppercase C<:ALL> tag. Nothing is exported by default.
+
+=cut
+
+sub session { return __PACKAGE__->new(@_) }
+
 =head1 CONSTRUCTOR
 
 =head2 new
 
     my $session = PAGI::Session->new($scope);
     my $session = PAGI::Session->new($request);   # any object with ->scope
-    my $session = PAGI::Session->new(@_);          # extra args ignored
 
 Scope-based constructor. Resolves to the C<< $scope->{'pagi.session'} >>
 hashref. Accepts a scope hashref directly, or any blessed object with a
-C<scope()> method. Extra positional arguments (C<$receive>, C<$send>) are
-silently ignored, so you can write C<< PAGI::Session->new(@_) >> in a
-handler.
+C<scope()> method. Exactly one source argument is required.
 
 Dies if the scope does not contain a C<pagi.session> key (session
 middleware must run first).
@@ -77,23 +94,10 @@ to one created via C<new()>.
 
 sub new {
     my ($class, @args) = @_;
-
-    my $arg = $args[0];
-
-    # Object with ->scope method (e.g., PAGI::Request, PAGI::SSE)
-    if (blessed($arg) && $arg->can('scope')) {
-        my $scope = $arg->scope;
-        die "PAGI::Session requires scope hashref with 'pagi.session' key\n"
-            unless ref $scope eq 'HASH' && exists $scope->{'pagi.session'};
-        return bless { _data => $scope->{'pagi.session'} }, $class;
-    }
-
-    # Scope hashref - must have pagi.session key
-    if (ref $arg eq 'HASH' && exists $arg->{'pagi.session'}) {
-        return bless { _data => $arg->{'pagi.session'} }, $class;
-    }
-
-    die "PAGI::Session requires a scope hashref (with 'pagi.session' key) or object with ->scope method\n";
+    my $scope = PAGI::Utils::Scope::scope_from_source($class, @args);
+    croak 'PAGI::Session requires Session middleware (missing pagi.session)'
+        unless exists $scope->{'pagi.session'};
+    return bless { _data => $scope->{'pagi.session'} }, $class;
 }
 
 sub from_data {

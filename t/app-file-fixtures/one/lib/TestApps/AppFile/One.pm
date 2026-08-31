@@ -5,7 +5,7 @@ use warnings;
 use PAGI::App::File;
 
 sub files {
-    return PAGI::App::File->app_path('static');
+    return PAGI::App::File->from_app_path('static');
 }
 
 1;

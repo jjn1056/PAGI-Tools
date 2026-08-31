@@ -9,7 +9,8 @@ use lib "$Bin/lib";
 use ComposeTest qw(scope run_scope);
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
-use PAGI::Routing qw(route middleware);
+use PAGI::Response::Text ();
+use PAGI::Routing qw(route middleware router);
 
 {
     package ComposeDirectMiddleware;
@@ -59,51 +60,38 @@ sub entry_wrapper {
     };
 }
 
-subtest 'HTTP enters the exact automatic and declared wrapper order' => sub {
+subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
     require PAGI::Compose::ResponseGuard;
     require PAGI::Middleware::ErrorHandler;
-    require PAGI::Middleware::Routing::MethodNotAllowed;
-    require PAGI::Middleware::Routing::NotFound;
     require PAGI::Routing::HeadBoundary;
-    require PAGI::Routing::Trace;
 
     my @trace;
+    my %wraps;
     my $head_prepare = \&PAGI::Routing::HeadBoundary::prepare;
-    my $fresh_scope = \&PAGI::Routing::Trace::_fresh_http_scope;
     my $error_wrap = \&PAGI::Middleware::ErrorHandler::wrap;
     my $guard_wrap = \&PAGI::Compose::ResponseGuard::wrap;
-    my $fallback_wrap = \&PAGI::Middleware::Routing::_Fallback::wrap;
 
     no warnings qw(redefine once);
     local *PAGI::Routing::HeadBoundary::prepare = sub {
         push @trace, 'HEAD';
         return $head_prepare->(@_);
     };
-    local *PAGI::Routing::Trace::_fresh_http_scope = sub {
-        push @trace, 'fresh Trace';
-        return $fresh_scope->(@_);
-    };
     local *PAGI::Middleware::ErrorHandler::wrap = sub {
+        ++$wraps{ErrorHandler};
         my $wrapped = $error_wrap->(@_);
         return entry_wrapper('ErrorHandler', \@trace, $wrapped);
     };
     local *PAGI::Compose::ResponseGuard::wrap = sub {
+        ++$wraps{ResponseGuard};
         my $wrapped = $guard_wrap->(@_);
         return entry_wrapper('ResponseGuard', \@trace, $wrapped);
-    };
-    local *PAGI::Middleware::Routing::NotFound::wrap = sub {
-        my $wrapped = $fallback_wrap->(@_);
-        return entry_wrapper('NotFound', \@trace, $wrapped);
-    };
-    local *PAGI::Middleware::Routing::MethodNotAllowed::wrap = sub {
-        my $wrapped = $fallback_wrap->(@_);
-        return entry_wrapper('MethodNotAllowed', \@trace, $wrapped);
     };
 
     my $author_entry = sub {
         my ($name) = @_;
         return sub {
             my ($inner) = @_;
+            ++$wraps{$name};
             return entry_wrapper($name, \@trace, $inner);
         };
     };
@@ -123,18 +111,27 @@ subtest 'HTTP enters the exact automatic and declared wrapper order' => sub {
             $author_entry->('author inner'),
         ],
     )->to_app;
+    is(\%wraps, {
+        ErrorHandler => 1,
+        ResponseGuard => 1,
+        'author outer' => 1,
+        'author inner' => 1,
+    }, 'each safety and author wrapper compiles exactly once');
     run_scope($app, scope(method => 'HEAD'));
     is(\@trace, [
         'HEAD',
-        'fresh Trace',
         'ErrorHandler',
         'ResponseGuard',
-        'NotFound',
-        'MethodNotAllowed',
         'author outer',
         'author inner',
         'target',
-    ], 'the complete automatic and declared entry sequence is exact');
+    ], 'HEAD, ErrorHandler, guard, authors, and target enter in exact order');
+    is(\%wraps, {
+        ErrorHandler => 1,
+        ResponseGuard => 1,
+        'author outer' => 1,
+        'author inner' => 1,
+    }, 'requests do not rebuild the compiled wrappers');
 };
 
 subtest 'first listed middleware is outermost for requests and lifespan' => sub {
@@ -172,7 +169,7 @@ subtest 'first listed middleware is outermost for requests and lifespan' => sub 
     ], 'same middleware stack surrounds the complete lifecycle loop');
 };
 
-subtest 'application middleware sees every delegated protocol but automatic outcomes stay outside' => sub {
+subtest 'application middleware sees delegated protocols and Router outcomes' => sub {
     my @scope_types;
     my @target_types;
     my $observer = sub {
@@ -217,159 +214,34 @@ subtest 'application middleware sees every delegated protocol but automatic outc
         };
     };
     my $routing_app = compose(
-        routes => [route('/present' => sub { return $_[0]->text('present') })],
+        routes => [route('/present' => sub {
+            return PAGI::Response::Text->new('present');
+        })],
         middleware => [$outcome_observer],
     )->to_app;
     my $events = run_scope($routing_app, scope(type => 'http', path => '/missing'));
-    is(\@statuses, [],
-        'automatic routing fallback does not travel inward through author middleware');
-    is($events->[0]{status}, 404, 'the outer automatic boundary still emits 404');
+    is(\@statuses, [404],
+        'the Router-owned 404 travels outward through author middleware');
+    is($events->[0]{status}, 404, 'the Router emits its own default 404');
 };
 
-subtest 'author-rendered 404 405 and 500 cross only earlier author middleware' => sub {
-    local $ENV{PAGI_ENV} = 'production';
+subtest 'Router-owned 404 and 405 cross the complete author stack' => sub {
     my @trace;
     my $app = compose(
         routes => [
             route('/items' => sub {
-                push @trace, 'target full';
-                return $_[0]->text('item');
+                return PAGI::Response::Text->new('item');
             }, methods => 'GET'),
-            route('/explode' => sub {
-                push @trace, 'target throw';
-                die "author target failed\n";
-            }),
-        ],
-        middleware => [
-            tracing_factory('author outer', \@trace),
-            middleware('Routing::NotFound', handler => sub {
-                my ($context) = @_;
-                push @trace, 'author NotFound render';
-                return $context->text('author 404');
-            }),
-            middleware('Routing::MethodNotAllowed', handler => sub {
-                my ($context) = @_;
-                push @trace, 'author MethodNotAllowed render';
-                return $context->text('author 405');
-            }),
-            middleware('ErrorHandler',
-                on_error => sub {
-                    push @trace, 'author ErrorHandler report';
-                    return;
-                },
-                handler => sub {
-                    my ($context) = @_;
-                    push @trace, 'author ErrorHandler render';
-                    return $context->text('author 500');
-                },
-            ),
-            middleware(tracing_factory('author inner', \@trace)),
-        ],
-    )->to_app;
-
-    my @cases = (
-        [
-            '404', scope(path => '/missing'), 'author NotFound render',
-            'author 404',
-        ],
-        [
-            '405', scope(path => '/items', method => 'DELETE'),
-            'author MethodNotAllowed render', 'author 405',
-        ],
-        [
-            '500', scope(path => '/explode'), 'author ErrorHandler render',
-            'author 500',
-        ],
-    );
-
-    for my $case (@cases) {
-        my ($label, $request_scope, $renderer, $expected_body) = @$case;
-        @trace = ();
-        my $events = run_scope($app, $request_scope);
-        my @send_trace = grep { / send / } @trace;
-        is(\@send_trace, [
-            'author outer send http.response.start',
-            'author outer send http.response.body',
-        ], "author-rendered $label crosses only the earlier outer wrapper");
-        ok((grep { $_ eq 'author inner before http' } @trace),
-            "author inner is entered before the $label outcome");
-        ok((grep { $_ eq $renderer } @trace),
-            "the intended author $label renderer owns the response");
-        is($events->[1]{body}, $expected_body,
-            "author-rendered $label response reaches the wire");
-        is(scalar(grep { ($_->{type} // '') eq 'http.response.start' } @$events),
-            1, "author-rendered $label starts one response");
-    }
-
-    @trace = ();
-    my $error_events = run_scope($app, scope(path => '/explode'));
-    is([grep { /ErrorHandler/ } @trace], [
-        'author ErrorHandler report', 'author ErrorHandler render',
-    ], 'author ErrorHandler reports before rendering');
-    ok(!(grep { /NotFound render|MethodNotAllowed render/ } @trace),
-        'author routing fallbacks do not replace an author-rendered 500');
-    is($error_events->[0]{status}, 500, 'author ErrorHandler retains status 500');
-};
-
-subtest 'inner custom Pages middleware owns responses inside stock failsafes' => sub {
-    local $ENV{PAGI_ENV} = 'production';
-    my $pages = ComposeOwnedPages->new(as => 'text');
-    my $app = compose(
-        routes => [
-            route('/items' => sub { return $_[0]->text('item') }, methods => 'GET'),
-            route('/explode' => sub { die "custom Pages target failed\n" }),
-        ],
-        middleware => [
-            middleware('Routing::NotFound', handler => $pages->not_found),
-            middleware('Routing::MethodNotAllowed', handler => sub {
-                my ($context, $snapshot) = @_;
-                return $pages->method_not_allowed(
-                    $context,
-                    allow => $snapshot->allowed_methods,
-                );
-            }),
-            middleware('ErrorHandler', handler => $pages->internal_server_error),
-        ],
-    )->to_app;
-
-    my @cases = (
-        ['404', scope(path => '/missing'), 404, "owned:404:Not Found\n"],
-        [
-            '405', scope(path => '/items', method => 'DELETE'),
-            405, "owned:405:Method Not Allowed\n",
-        ],
-        [
-            '500', scope(path => '/explode'),
-            500, "owned:500:Internal Server Error\n",
-        ],
-    );
-    for my $case (@cases) {
-        my ($label, $request_scope, $status, $body) = @$case;
-        my $events = run_scope($app, $request_scope);
-        is scalar(grep { ($_->{type} // '') eq 'http.response.start' } @$events),
-            1, "inner custom Pages $label emits exactly one response start";
-        is $events->[0]{status}, $status,
-            "inner custom Pages $label status reaches the wire";
-        is $events->[1]{body}, $body,
-            "inner custom Pages $label renderer wins over stock outer defaults";
-    }
-};
-
-subtest 'automatic fallback runs after the declared author stack unwinds' => sub {
-    local $ENV{PAGI_ENV} = 'production';
-    my @trace;
-    my $app = compose(
-        routes => [
-            route('/items' => sub { return $_[0]->text('item') }, methods => 'GET'),
         ],
         middleware => [
             tracing_factory('author outer', \@trace),
             tracing_factory('author inner', \@trace),
         ],
     )->to_app;
+
     for my $case (
-        ['NotFound', scope(path => '/missing'), 404],
-        ['MethodNotAllowed', scope(path => '/items', method => 'DELETE'), 405],
+        ['404', scope(path => '/missing'), 404],
+        ['405', scope(path => '/items', method => 'DELETE'), 405],
     ) {
         my ($label, $request_scope, $status) = @$case;
         @trace = ();
@@ -377,40 +249,65 @@ subtest 'automatic fallback runs after the declared author stack unwinds' => sub
         is(\@trace, [
             'author outer before http',
             'author inner before http',
+            'author inner send http.response.start',
+            'author outer send http.response.start',
+            'author inner send http.response.body',
+            'author outer send http.response.body',
             'author inner after http',
             'author outer after http',
-        ], "automatic $label sends no event through either author wrapper");
-        is([map { $_->{type} } @$events], [
-            'http.response.start', 'http.response.body',
-        ], "automatic $label renders after author completion");
-        is($events->[0]{status}, $status, "automatic $label owns its decline");
+        ], "Router $label unwinds through both author wrappers");
+        is($events->[0]{status}, $status, "Router owns the $label response");
     }
+};
 
-    @trace = ();
-    my $error_app = compose(
+subtest 'author ErrorHandler response crosses only earlier middleware' => sub {
+    local $ENV{PAGI_ENV} = 'production';
+    my @trace;
+    my $app = compose(
         routes => [route('/explode' => sub {
             push @trace, 'target throw';
-            die "automatic error path\n";
+            die "author target failed\n";
         })],
         middleware => [
             tracing_factory('author outer', \@trace),
-            tracing_factory('author inner', \@trace),
+            middleware('ErrorHandler',
+                on_error => sub {
+                    push @trace, 'author ErrorHandler report';
+                    return;
+                },
+                handler => sub {
+                    my ($request) = @_;
+                    push @trace, 'author ErrorHandler render';
+                    return PAGI::Response::Text->new('author 500');
+                },
+            ),
+            middleware(tracing_factory('author inner', \@trace)),
         ],
     )->to_app;
-    my $error_events;
-    {
-        local $SIG{__WARN__} = sub { return };
-        $error_events = run_scope($error_app, scope(path => '/explode'));
-    }
-    is(\@trace, [
-        'author outer before http',
-        'author inner before http',
-        'target throw',
-    ], 'automatic ErrorHandler response bypasses the failed author stack');
-    ok(!(grep { / send / } @trace),
-        'automatic ErrorHandler sends no event through author wrappers');
-    is($error_events->[0]{status}, 500,
-        'automatic ErrorHandler owns the unhandled author failure');
+
+    my $events = run_scope($app, scope(path => '/explode'));
+    is([grep { /ErrorHandler/ } @trace], [
+        'author ErrorHandler report', 'author ErrorHandler render',
+    ], 'author ErrorHandler reports before rendering');
+    is([grep { / send / } @trace], [
+        'author outer send http.response.start',
+        'author outer send http.response.body',
+    ], 'author error response crosses only the earlier outer wrapper');
+    is($events->[0]{status}, 500, 'author ErrorHandler retains status 500');
+    is($events->[1]{body}, 'author 500', 'author renderer owns the body');
+};
+
+subtest 'a retained Router owns its configured HTTP default inside Compose safety' => sub {
+    my $pages = ComposeOwnedPages->new(as => 'text');
+    my $routing = router(
+        routes => [],
+        http_default => $pages->not_found,
+    );
+    my $events = run_scope(compose(app => $routing)->to_app,
+        scope(path => '/missing'));
+    is($events->[0]{status}, 404, 'custom Router default retains status 404');
+    is($events->[1]{body}, "owned:404:Not Found\n",
+        'custom Router default owns the response body');
 };
 
 subtest 'ordinary shallow cloning preserves state proof and changes visible scope' => sub {

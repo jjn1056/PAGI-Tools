@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Authority;
 use PAGI::Pages;
+use PAGI::Utils ();
 
 =head1 NAME
 
@@ -98,7 +99,7 @@ sub wrap {
             } @{ $scope->{headers} // [] };
 
         if (@forwarded_host > 1) {
-            await $self->_send_error($scope, $send, 400);
+            await $self->_send_error($scope, $receive, $send, 400);
             return;
         }
 
@@ -113,7 +114,7 @@ sub wrap {
                 $validation_error = $@;
             }
             if ($validation_error) {
-                await $self->_send_error($scope, $send, 400);
+                await $self->_send_error($scope, $receive, $send, 400);
                 return;
             }
         }
@@ -235,11 +236,11 @@ sub _get_header {
 }
 
 async sub _send_error {
-    my ($self, $scope, $send, $status) = @_;
+    my ($self, $scope, $receive, $send, $status) = @_;
     die "PAGI::Middleware::ReverseProxy does not own status $status"
         unless $status == 400;
-    my $response = PAGI::Pages->bad_request($scope);
-    await Future->wrap($response->respond($send));
+    my $response = PAGI::Pages->bad_request;
+    await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
 }
 
 1;
