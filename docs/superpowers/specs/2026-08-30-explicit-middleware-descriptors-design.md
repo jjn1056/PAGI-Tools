@@ -10,9 +10,13 @@ coderef, a configured object with `wrap`, or an explicit
 `PAGI::Routing::Middleware` description returned by `middleware(...)`.
 Constructors silently normalize the first three shapes into the fourth.
 
-That convenience weakens the otherwise strict Route/Mount/Router separation.
-It also leaves `middleware(...)` looking optional when its real purpose is to
-record deferred middleware construction, configuration, and inspection.
+The four accepted inputs are disjoint Perl shapes, so the old normalization
+was deterministic type dispatch rather than signature inference. The problem
+was representational: immutable composition nodes accepted several input
+forms and silently converted them into one stored description. Requiring an
+explicit description gives the core one inspectable configuration value and
+makes deferred construction visible, while higher-level frontends retain the
+same unambiguous convenience dispatch.
 
 This design makes the immutable composition layer explicit:
 
@@ -232,6 +236,22 @@ materialize `middleware($factory)` internally.
 `PAGI::Middleware::Builder` remains a higher-level builder and may retain
 `enable 'RequestId'`. Its exact-package escape changes from `^` to the Plack-
 familiar `+` so middleware naming is consistent throughout the distribution.
+
+### 8.1 Deliberate grammar and naming tradeoff
+
+The distribution intentionally ends with two public grammars. Immutable core
+lists accept only descriptions; App Router, Endpoint Router, and Middleware
+Builder accept disjoint concise values and materialize descriptions before
+entering the core. This is more total surface, not a claim that all middleware
+syntax was simplified.
+
+The cost falls most visibly on zero-configuration declarative middleware:
+`middleware => [middleware('RequestId')]`. PAGI keeps that spelling because the
+inner function constructs a middleware description and remains searchable and
+self-documenting. `mw(...)` is too cryptic, `use_middleware(...)` incorrectly
+suggests immediate wrapping, and `Middleware(...)` is class-like rather than
+idiomatic Perl. The repeated noun is an accepted cost of the explicit core
+boundary.
 
 ## 9. Documentation and examples
 
