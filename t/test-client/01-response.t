@@ -139,6 +139,14 @@ subtest 'body_complete accessor' => sub {
         { type => 'http.response.start', status => 200, headers => [] },
         { type => 'http.response.body', body => 'x', more => 1 },
     ])->body_complete, 0, 'a response with no terminal body is incomplete');
+
+    is(PAGI::Test::Response->new(events => [])->body_complete, 0,
+        'a response with no events at all is incomplete');
+
+    is(PAGI::Test::Response->new(events => [
+        { type => 'http.response.start', status => 200, headers => [] },
+    ])->body_complete, 0,
+        'a response whose client vanished after start is incomplete');
 };
 
 subtest 'status helpers' => sub {
