@@ -11,6 +11,35 @@
     protocol fault and is still rejected. Previously every abandoned stream
     died with "HTTP application completed after response start without a
     terminal body" and logged an application error.
+  - FIX: components that observe response completeness now decide from the
+    event stream they received, not from the request's disconnect state. A
+    response that stops after http.response.start -- because the client
+    vanished, or because the application returned early -- no longer causes
+    ETag to attach a validator computed over a partial body, GZip or
+    ContentLength to claim a length or an encoding for bytes that never
+    arrived, Cascade to fail the application Future, Lint to report a
+    nonexistent missing-await bug (fatally, in strict mode), or Debug to
+    swallow the response entirely. AccessLog records aborted transfers with
+    their disconnect reason. Response and Test::Response share one
+    discriminator, and Test::Response exposes the body_complete it already
+    tracked.
+
+    The guard these components use asks whether a terminal body event was
+    received, not why the request ended. Keying on disconnect state was wrong
+    in both directions: it could not see an application that stopped early
+    while its client was still connected -- where ETag attached
+    ETag: "d41d8cd98f00b204e9800998ecf8427e", the MD5 of the empty string, to
+    a complete and cacheable 200 -- and, when it did fire, it discarded the
+    application's own http.response.start, so every outer observer saw a
+    request that never started a response. That is a different state: servers
+    report it differently, and a client that read no bytes may retry an
+    idempotent request (RFC 9110 S9.2.2). See PAGI::Spec::Www, "Which signal
+    answers which question".
+  - FIX: ContentLength no longer appends its computed length into the
+    application's own headers arrayref. An application that builds headers
+    once and reuses them across requests had the first request's length baked
+    in permanently, and every later response shipped a wrong Content-Length
+    (a hung or truncated response over HTTP/1.1).
   - New example `process-streaming`: streams an external command's stdout as
     an HTTP response through `stream_response` and `pipe_from`, using a
     four-line `Future::IO` source that names no event loop, so the same
