@@ -43,4 +43,9 @@ Baseline: Perl 5.42.2; `prove -lr t` passed 218 files / 2373 tests at `b2bfb00`.
 
 ## Deviations and rulings
 
-None.
+Ruling: Under the approved subagent-driven workflow, the controller owns and
+commits the execution ledger; task implementers skip the plan's ledger-editing
+and ledger-commit substeps. This preserves one authoritative recovery record
+and keeps implementer diffs task-scoped. Cost if wrong: git history uses one
+controller tracking commit per review gate rather than the plan's suggested
+implementer-local evidence commit, while retaining the same SHAs and evidence.
