@@ -384,6 +384,48 @@ subtest 'a disconnected client gets no fabricated content-length' => sub {
         'no content-length is fabricated for an aborted response');
 };
 
+subtest 'an application headers arrayref reused across requests is not mutated' => sub {
+    # Building headers once and reusing them is an ordinary Perl idiom. The
+    # middleware must not write its computed length into the application's
+    # own arrayref, or request 1's length is baked in permanently and every
+    # later response ships a wrong Content-Length.
+    my $shared_headers = [['content-type', 'text/plain']];
+    my $mw = PAGI::Middleware::ContentLength->new;   # one instance, as in a real stack
+
+    my @lengths;
+    for my $body ('hello world', 'bye', 'a much longer body than the first one') {
+        my @sent;
+        my $app = sub {
+            my ($app_scope, $receive, $inner_send) = @_;
+            return (async sub {
+                await $inner_send->({ type => 'http.response.start',
+                                      status => 200, headers => $shared_headers });
+                await $inner_send->({ type => 'http.response.body',
+                                      body => $body, more => 0 });
+                return;
+            })->();
+        };
+
+        my $wrapped = $mw->wrap($app);
+        Future->wrap($wrapped->(
+            { type => 'http', method => 'GET', path => '/x', headers => [] },
+            sub { Future->done },
+            sub { push @sent, $_[0]; Future->done },
+        ))->get;
+
+        my ($start) = grep { $_->{type} eq 'http.response.start' } @sent;
+        my ($cl) = map { $_->[1] }
+                   grep { lc($_->[0]) eq 'content-length' } @{ $start->{headers} || [] };
+        push @lengths, [length($body), $cl];
+    }
+
+    is($lengths[0][1], $lengths[0][0], 'request 1 declares its own length');
+    is($lengths[1][1], $lengths[1][0], 'request 2 declares its own length, not request 1s');
+    is($lengths[2][1], $lengths[2][0], 'request 3 declares its own length');
+    is(scalar(@$shared_headers), 1,
+        "the application's headers arrayref was never appended to");
+};
+
 subtest 'no content-length is claimed without a terminal event' => sub {
     {
         package LiveConnC1;

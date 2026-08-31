@@ -155,11 +155,19 @@ sub wrap {
                 }
             }
 
-            # Send start with Content-Length
+            # Send start with Content-Length. The headers arrayref belongs to
+            # the application, which may build it once and reuse it across
+            # requests -- appending in place would bake this request's length
+            # into every later response. Copy, then add.
             for my $event (@buffered_events) {
                 if ($event->{type} eq 'http.response.start') {
-                    push @{$event->{headers}}, ['content-length', $body_length];
+                    my @with_length = (@{ $event->{headers} // [] },
+                                       ['content-length', $body_length]);
+                    await $send->({ %$event, headers => \@with_length });
+                    next;
                 }
+                # Body events are forwarded verbatim, which preserves each
+                # one's `more` value.
                 await $send->($event);
             }
         }
