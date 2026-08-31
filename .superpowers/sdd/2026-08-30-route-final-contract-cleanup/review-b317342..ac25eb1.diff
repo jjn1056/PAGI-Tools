@@ -16,7 +16,7 @@ index 837ac34..5cc9f0e 100644
 +++ b/Changes
 @@ -1,13 +1,15 @@
  # Revision history for PAGI-Tools
- 
+
  0.002003 - UNRELEASED
 +  - Fixed invalid allowed_methods diagnostics to identify the route endpoint
 +    capability rather than a nonexistent methods option.
@@ -36,12 +36,12 @@ index 7ff9434..d58bafc 100644
 +++ b/lib/PAGI/Routing/Route.pm
 @@ -72,25 +72,28 @@ sub _build {
      );
- 
+
      if ($kind ne 'route' && exists $opts->{methods}) {
          my %kind_name = (websocket => 'WebSocket', sse => 'SSE');
          croak $kind_name{$kind} . ' routes do not accept methods';
      }
- 
+
      my $methods;
      if ($kind eq 'route') {
          if (exists $opts->{methods}) {
@@ -68,13 +68,13 @@ index 7ff9434..d58bafc 100644
 @@ -122,40 +125,51 @@ sub _validate_logical_segment {
              && index($value, '/') < 0 && $value ne '.' && $value ne '..';
  }
- 
+
  sub _validate_constraints {
      my ($constraints) = @_;
      croak 'constraints must be a hashref'
          unless ref($constraints) eq 'HASH';
  }
- 
+
  sub _normalize_methods {
 -    my ($methods) = @_;
 -    return '*' if defined $methods && !ref($methods) && $methods eq '*';
@@ -89,7 +89,7 @@ index 7ff9434..d58bafc 100644
 +    return '*'
 +        if !$from_capability
 +            && defined($methods) && !ref($methods) && $methods eq '*';
- 
+
      my @methods;
 -    if (defined $methods && !ref($methods)) {
 +    if (!$from_capability && defined($methods) && !ref($methods)) {
@@ -102,12 +102,12 @@ index 7ff9434..d58bafc 100644
 -        croak "methods must be a method string, arrayref, or '*'";
 +        croak $shape_error;
      }
- 
+
 -    croak "methods must be a method string, arrayref, or '*'" unless @methods;
 +    croak 'route endpoint allowed_methods returned no methods'
 +        if $from_capability && !@methods;
 +    croak $shape_error unless @methods;
- 
+
      my %seen;
      my @normalized;
      for my $method (@methods) {

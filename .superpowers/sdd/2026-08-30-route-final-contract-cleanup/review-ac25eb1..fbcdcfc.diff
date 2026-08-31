@@ -17,7 +17,7 @@ index 5cc9f0e..335adb4 100644
 +++ b/Changes
 @@ -1,15 +1,17 @@
  # Revision history for PAGI-Tools
- 
+
  0.002003 - UNRELEASED
    - Fixed invalid allowed_methods diagnostics to identify the route endpoint
      capability rather than a nonexistent methods option.
@@ -39,12 +39,12 @@ index 411e527..d3fdf9d 100644
 +++ b/lib/PAGI/Routing/Mount.pm
 @@ -28,47 +28,48 @@ sub _new_from {
      }
- 
+
      my $has_app = exists $opts{app};
      my $has_routes = exists $opts{routes};
      croak 'mount requires exactly one of app or routes'
          unless $has_app != $has_routes;
- 
+
      PAGI::Routing::Route::_validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
      PAGI::Routing::Route::_validate_logical_segment('name', $opts{name}) if exists $opts{name};
      PAGI::Routing::Route::_validate_constraints($opts{constraints}) if exists $opts{constraints};
@@ -55,14 +55,14 @@ index 411e527..d3fdf9d 100644
          exists $opts{middleware} ? $opts{middleware} : [],
          'middleware',
      );
- 
+
      my $app = $has_app
          ? PAGI::Utils::_validate_app_value($opts{app}, 'mount app')
          : do {
              require PAGI::Routing::Router;
              PAGI::Routing::Router->new(routes => $opts{routes});
          };
- 
+
 -    my $has_constraints = exists $opts{constraints};
      my $pattern = PAGI::Routing::Pattern->new(
          path => $path,
@@ -71,7 +71,7 @@ index 411e527..d3fdf9d 100644
 +        constraints => $constraints,
          declaration_package => $declaration_package,
      );
- 
+
      return bless {
          kind        => 'mount',
          _pattern    => $pattern,
@@ -82,7 +82,7 @@ index 411e527..d3fdf9d 100644
          middleware  => $middleware,
      }, $class;
  }
- 
+
  sub _validate_routes {
      my ($routes) = @_;
      croak 'routes must contain PAGI::Routing nodes' unless ref($routes) eq 'ARRAY';
@@ -93,7 +93,7 @@ index 411e527..d3fdf9d 100644
                      || $node->isa('PAGI::Routing::Mount'));
      }
  }
- 
+
  sub kind        { $_[0]->{kind} }
  sub path        { $_[0]->{_pattern}->path }
  sub parameters  { $_[0]->{_pattern}->parameters }
@@ -104,9 +104,9 @@ index 411e527..d3fdf9d 100644
 +sub constraints { $_[0]->{_pattern}->constraints }
  sub middleware  { [ @{$_[0]->{middleware}} ] }
  sub methods     { undef }
- 
+
  sub _pattern    { $_[0]->{_pattern} }
- 
+
  sub to_app {
      my ($self) = @_;
      require PAGI::Routing::Compiler;
@@ -115,13 +115,13 @@ index 411e527..d3fdf9d 100644
 @@ -149,22 +150,26 @@ consuming package as that caller; wrapping it in another sub makes the wrapper
  package the declaration package. A constructor called from a role method
  likewise resolves providers in the role package.
- 
+
  Provider-backed and explicit prefix constraints run before mount middleware
  and the base application are selected. Named descendants reuse the same
  normalized prefix predicates during reverse routing.
- 
+
  =head1 ACCESSORS
- 
+
  C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<app>, and
 -C<constraints> return declaration values. C<app> always returns the one base
 -application. C<middleware> returns a fresh arrayref of normalized
@@ -133,11 +133,11 @@ index 411e527..d3fdf9d 100644
 +arrayref of normalized
  C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
  identity. C<methods> returns undef for a mount.
- 
+
  =head1 METHODS
- 
+
  =head2 to_app
- 
+
  Synchronously compiles this mount through a fresh complete one-node router on
  every call. It emits no events. When the returned app is later invoked and the
  prefix matches, dispatch creates a request-local shallow child scope, merges
@@ -147,12 +147,12 @@ index d58bafc..f78ee6c 100644
 +++ b/lib/PAGI/Routing/Route.pm
 @@ -59,20 +59,23 @@ sub _build {
      my ($class, $declaration_package, $kind, $path, $endpoint, $opts) = @_;
- 
+
      croak 'route path must be a string' unless defined $path && !ref($path);
      PAGI::Utils::_validate_app_value(
          $endpoint, 'route endpoint',
      );
- 
+
      _validate_text('desc', $opts->{desc}, 0) if exists $opts->{desc};
      _validate_logical_segment('name', $opts->{name}) if exists $opts->{name};
      _validate_constraints($opts->{constraints}) if exists $opts->{constraints};
@@ -163,12 +163,12 @@ index d58bafc..f78ee6c 100644
          exists $opts->{middleware} ? $opts->{middleware} : [],
          'middleware',
      );
- 
+
      if ($kind ne 'route' && exists $opts->{methods}) {
          my %kind_name = (websocket => 'WebSocket', sse => 'SSE');
          croak $kind_name{$kind} . ' routes do not accept methods';
      }
- 
+
 @@ -85,36 +88,34 @@ sub _build {
              my @capability_methods = $endpoint->allowed_methods;
              $methods = _normalize_methods(
@@ -188,7 +188,7 @@ index d58bafc..f78ee6c 100644
 +        constraints => $constraints,
          declaration_package => $declaration_package,
      );
- 
+
      return bless {
          kind        => $kind,
          _pattern    => $pattern,
@@ -200,17 +200,17 @@ index d58bafc..f78ee6c 100644
          middleware  => $middleware,
      }, $class;
  }
- 
+
  sub _validate_text {
      my ($label, $value, $required) = @_;
      my $message = $required ? "$label must be a nonempty string" : "$label must be a string";
      croak $message unless defined $value && !ref($value) && (!$required || length $value);
  }
- 
+
 @@ -176,21 +177,21 @@ sub _normalize_methods {
      return \@normalized;
  }
- 
+
  sub kind        { $_[0]->{kind} }
  sub path        { $_[0]->{_pattern}->path }
  sub parameters  { $_[0]->{_pattern}->parameters }
@@ -223,22 +223,22 @@ index d58bafc..f78ee6c 100644
  sub middleware  { [ @{$_[0]->{middleware}} ] }
  sub routes      { undef }
  sub _pattern    { $_[0]->{_pattern} }
- 
+
  sub to_app {
      my ($self) = @_;
      require PAGI::Routing::Compiler;
      return PAGI::Routing::Compiler->compile($self);
  }
- 
+
 @@ -249,20 +250,24 @@ the Router owns unsupported-method 405 and C<Allow> outcomes.
  An inline provider such as C<{id:&Int}> is resolved in the package that
  directly called C<route>, C<websocket>, C<sse>, or C<new>. Re-exporting a
  constructor preserves the consuming package as that caller; wrapping it in
  another sub makes the wrapper package the declaration package. A constructor
  called from a role method likewise resolves providers in the role package.
- 
+
  =head1 ACCESSORS
- 
+
  C<kind>, C<path>, C<parameters>, C<name>, C<desc>, C<endpoint>, C<methods>,
  and C<constraints> return the corresponding declaration values.
 +C<constraints> returns a fresh hashref containing the explicitly declared
@@ -254,13 +254,13 @@ index d58bafc..f78ee6c 100644
  Only HTTP routes accept C<methods>. An inline provider and explicit constraint
  may target the same parameter; the inline predicate runs first and both must
  pass before the endpoint is selected.
- 
+
 diff --git a/t/routing/01-constructors.t b/t/routing/01-constructors.t
 index d318783..71b634d 100644
 --- a/t/routing/01-constructors.t
 +++ b/t/routing/01-constructors.t
 @@ -276,20 +276,37 @@ subtest 'route descriptions preserve endpoint identity and normalize HTTP method
- 
+
      isa_ok($node, 'PAGI::Routing::Route');
      is($node->kind, 'route', 'HTTP route kind');
      is($node->path, '/things/{host}', 'route path');
@@ -291,7 +291,7 @@ index d318783..71b634d 100644
          'retired target modes have no compatibility accessors');
      ok(!$node->can('namespace'), 'public namespace accessor is removed from Route');
      is($node->routes, undef, 'routes are inapplicable to route');
- 
+
      $methods->[0] = 'DELETE';
      $constraints->{host} = qr/changed[.]test/;
      my $returned_methods = $node->methods;
@@ -322,7 +322,7 @@ index d318783..71b634d 100644
          'removed Mount modes have no compatibility accessors');
      is($inline->methods, undef, 'methods are inapplicable to mount');
      is($inline->middleware, [$mount_middleware], 'mount middleware preserves descriptor');
- 
+
      push @$children, route '/other' => $handler;
      $constraints->{tenant} = qr/b/;
      push @$mount_middleware_input, middleware('MountInputMutation');

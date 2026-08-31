@@ -14,16 +14,16 @@ index d4c759d..6b9febd 100644
 --- a/docs/superpowers/specs/2026-08-30-route-endpoints-and-application-valued-responses-design.md
 +++ b/docs/superpowers/specs/2026-08-30-route-endpoints-and-application-valued-responses-design.md
 @@ -545,22 +545,26 @@ selects the File application only for that complete path, while:
- 
+
  ```perl
  mount('/manual', app => PAGI::App::Directory->new(root => $root));
  ```
- 
+
  delegates every matching path beneath the prefix after Mount rewrites the
  child scope. Documentation for both constructors must show this contrast.
- 
+
  ### 8.5 Compilation lifetime
- 
+
 -Router compilation preserves the declared endpoint and records its normalized
 -kind for introspection.
 +Router compilation preserves the exact declared endpoint. Route exposes the
@@ -32,7 +32,7 @@ index d4c759d..6b9febd 100644
 +versus instantiated-object shape is the canonical endpoint classification,
 +and compilation normalizes that value without replacing the declared
 +`endpoint` accessor.
- 
+
  - A CODE endpoint is wrapped in one `RequestResponse` component and compiled
    once per enclosing Router `to_app` call.
  - A static `to_app` endpoint is compiled once per enclosing Router `to_app`
@@ -45,14 +45,14 @@ index d4c759d..6b9febd 100644
 @@ -1426,20 +1430,27 @@ create larger lifecycle and handle-safety problems than it solves. Immediate
  returns remain supported; blocking work is documented until an executor is
  designed separately.
- 
+
  ### 21.7 “Preserve old Pages handler exports as aliases”
- 
+
  Aliases would preserve two mental models: source-first immediate response
  construction and source-free deferred application construction. The API is
  unreleased and the examples are migrating together. Removing the old form is
  clearer than carrying a source-first alias indefinitely.
- 
+
 +### 21.8 “Endpoint classification needs another accessor”
 +
 +Declined. The public endpoint value already carries the complete structural
@@ -61,10 +61,10 @@ index d4c759d..6b9febd 100644
 +`endpoint_kind` value could drift and has no current consumer.
 +
  ## 22. Source references
- 
+
  The Starlette comparison is grounded in its current routing and endpoint
  contracts rather than only surface resemblance:
- 
+
  - [Starlette Routing](https://www.starlette.io/routing/) documents function
    endpoints, `Route`, `Mount`, reverse lookup, and method declarations;
  - [Starlette Endpoints](https://www.starlette.io/endpoints/) documents
@@ -75,7 +75,7 @@ index f78ee6c..87c1c54 100644
 --- a/lib/PAGI/Routing/Route.pm
 +++ b/lib/PAGI/Routing/Route.pm
 @@ -277,18 +277,28 @@ pass before the endpoint is selected.
- 
+
  Synchronously compiles this route through a fresh complete one-node router on
  every call. Compilation resolves middleware and component targets but emits no
  events. The returned app performs matching and invokes the handler later;
@@ -84,7 +84,7 @@ index f78ee6c..87c1c54 100644
  normal WebSocket/SSE dispatch awaits the direct protocol handler's completion,
  and application endpoints retain native event ownership. Every middleware
  wrapper remains a native C<($scope, $receive, $send)> application.
- 
+
 +The compiled application is a complete routing boundary. A path miss invokes
 +the stock negotiated Pages 404. A path match with a method mismatch invokes
 +the stock Pages 405 and reasserts the Router-authoritative Allow header. Its
@@ -101,5 +101,5 @@ index f78ee6c..87c1c54 100644
  metadata. Expensive static objects belong directly in Route or another native
  application position. Synchronous handlers run inline and can block the event
  loop.
- 
+
  =cut
