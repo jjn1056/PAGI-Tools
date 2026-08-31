@@ -4,7 +4,6 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -63,6 +62,7 @@ sub wrap {
         my $is_streaming = 0;
         my $status;
         my @headers;
+        my $terminal_seen = 0;
 
         # Create intercepting send to buffer response
         my $wrapped_send = async sub  {
@@ -115,6 +115,9 @@ sub wrap {
 
                 # Buffer body events
                 push @buffered_events, $event;
+
+                # `more` defaults to 0, so an omitted `more` is terminal.
+                $terminal_seen = 1 unless $event->{more};
             }
             else {
                 # Pass through other events (trailers, etc.)
@@ -125,9 +128,25 @@ sub wrap {
         # Run the inner app
         await $app->($scope, $receive, $wrapped_send);
 
+        return unless @buffered_events;
+
+        # No terminal event means there is no length to claim. Emit what we
+        # withheld, verbatim, so the response the application started is not
+        # destroyed -- but attach nothing. Forwarding the events unchanged also
+        # preserves each one's `more`: it defaults to 0, so reconstructing them
+        # and dropping it would assert a completeness the application never
+        # claimed. Keyed on what we received rather than on why the application
+        # stopped, so this also covers an early return with the client still
+        # connected -- a case the disconnect signal cannot see.
+        if (!$terminal_seen) {
+            for my $buffered (@buffered_events) {
+                await $send->($buffered);
+            }
+            return;
+        }
+
         # If we have buffered events, calculate Content-Length and send
-        if (@buffered_events && !$has_content_length && !$is_streaming
-            && !request_ended_abnormally($scope)) {
+        if (!$has_content_length && !$is_streaming) {
             # Calculate total body length
             my $body_length = 0;
             for my $event (@buffered_events) {

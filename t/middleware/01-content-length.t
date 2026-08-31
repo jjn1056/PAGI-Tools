@@ -378,8 +378,48 @@ subtest 'a disconnected client gets no fabricated content-length' => sub {
 
     my @headers = map { @{ $_->{headers} || [] } }
                   grep { $_->{type} eq 'http.response.start' } @sent;
+    is(scalar(grep { $_->{type} eq 'http.response.start' } @sent), 1,
+        'a start event was actually forwarded, so the header check below is not vacuous');
     is(scalar(grep { lc($_->[0]) eq 'content-length' } @headers), 0,
         'no content-length is fabricated for an aborted response');
+};
+
+subtest 'no content-length is claimed without a terminal event' => sub {
+    {
+        package LiveConnC1;
+        sub new               { return bless {}, shift }
+        sub is_connected      { return 1 }
+        sub disconnect_reason { return undef }
+        sub on_disconnect     { return }
+    }
+
+    # Client still connected -- the application just stopped after committing
+    # its status. The disconnect signal cannot see this case at all.
+    my @sent;
+    my $app = sub {
+        my ($app_scope, $receive, $inner_send) = @_;
+        return (async sub {
+            await $inner_send->({ type => 'http.response.start',
+                                  status => 200,
+                                  headers => [['content-type', 'text/plain']] });
+            return;
+        })->();
+    };
+
+    my $wrapped = PAGI::Middleware::ContentLength->new->wrap($app);
+    Future->wrap($wrapped->(
+        { type => 'http', method => 'GET', path => '/x', headers => [],
+          'pagi.connection' => LiveConnC1->new },
+        sub { Future->done },
+        sub { push @sent, $_[0]; Future->done },
+    ))->get;
+
+    my @headers = map { @{ $_->{headers} || [] } }
+                  grep { $_->{type} eq 'http.response.start' } @sent;
+    is(scalar(grep { lc($_->[0]) eq 'content-length' } @headers), 0,
+        'no content-length over a body that never terminated');
+    is(scalar(grep { $_->{type} eq 'http.response.start' } @sent), 1,
+        "the application's own response start still reaches the wire");
 };
 
 done_testing;
