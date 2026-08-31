@@ -47,3 +47,4 @@ None.
 ## Review record
 
 - Task 1: complete (commits `fad7d06..28d1566`, review clean).
+- Task 2: complete (commits `b81539f..b2fde61`, review clean).
