@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use Time::HiRes qw(time);
 use JSON::MaybeXS ();
+use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -147,6 +148,24 @@ sub wrap {
         };
 
         await $app->($scope, $receive, $wrapped_send);
+
+        # The response never reached its terminal event, so the buffered
+        # start and body were never flushed. Forward what the application
+        # actually produced -- without inventing a terminal event, which
+        # would assert a completeness it never claimed.
+        if (!$headers_sent && $response_status) {
+            await $send->({
+                type    => 'http.response.start',
+                status  => $response_status,
+                headers => \@response_headers,
+            });
+            $headers_sent = 1;
+            await $send->({
+                type => 'http.response.body',
+                body => $body,
+                more => 1,
+            }) if length $body;
+        }
     };
 }
 
