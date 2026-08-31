@@ -64,11 +64,12 @@ sub audit_factory {
 }
 ```
 
-`PAGI::App::Router`, `PAGI::Endpoint::Router`, and
-`PAGI::Middleware::Builder` remain higher-level frontends and may retain their
-concise middleware forms. They materialize or compile the corresponding core
-descriptions; this migration does not alter their concise declaration syntax
-or runtime behavior.
+`PAGI::App::Router` and `PAGI::Endpoint::Router` remain higher-level
+frontends and may retain their concise middleware forms; they materialize
+explicit descriptions for the immutable core. `PAGI::Middleware::Builder` is
+a separate concise composition API: it retains its own middleware records and
+constructs or wraps them during `to_app`. This migration does not alter those
+frontend declaration syntaxes or runtime behavior.
 
 ## Breaking: Route endpoints and application-valued responses
 
