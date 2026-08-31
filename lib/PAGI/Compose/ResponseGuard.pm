@@ -64,6 +64,17 @@ sub wrap {
         if ($body_before_start) {
             die $body_before_start;
         }
+
+        # A request whose client already disconnected did not end because the
+        # application misbehaved: it ended abnormally with its own disconnect
+        # reason, and PAGI::Spec::Www exempts it from both incomplete-response
+        # rules ("Application Left a Response Incomplete" and "Application
+        # Produced No Response"). A streaming response deliberately omits its
+        # terminal event in that case. A body sent before response start is a
+        # protocol fault rather than an incompleteness, so it is rejected
+        # above regardless.
+        return if _ended_abnormally($scope);
+
         unless ($started) {
             die PAGI::Exception::IncompleteResponse->new(
                 stage   => 'before_start',
@@ -84,6 +95,17 @@ sub wrap {
         }
         return;
     };
+}
+
+# The spec's discriminator for an abnormal end is a defined disconnect reason,
+# never is_connected on its own: a clean completion also reports false there,
+# and those responses must still be guarded.
+sub _ended_abnormally {
+    my ($scope) = @_;
+    my $connection = $scope->{'pagi.connection'} or return 0;
+    return 0 unless eval { $connection->can('disconnect_reason') };
+    my $reason = $connection->disconnect_reason;
+    return defined($reason) && length($reason) ? 1 : 0;
 }
 
 1;

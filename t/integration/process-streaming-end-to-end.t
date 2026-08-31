@@ -150,16 +150,12 @@ subtest 'a client that disconnects mid-stream does not disturb the server' => su
     like($head, qr{^HTTP/1\.1 200},
         'server serves a later request normally after the abandoned stream');
 
-    # Known defect, recorded rather than asserted as correct:
-    # PAGI::Response::Stream omits the terminal body event on disconnect, which
-    # is what the spec requires. PAGI::Compose::ResponseGuard then reports an
-    # incomplete response, even though PAGI::Spec::Www ("Application Left a
-    # Response Incomplete") exempts the case where the client had already
-    # disconnected. Every abandoned stream therefore logs a spurious
-    # application error. Drop this todo when the guard honours the carve-out.
-    my $todo = todo 'ResponseGuard lacks the client-already-disconnected carve-out';
+    # A stream that stops because its client vanished is an abnormal end, not
+    # an application fault: Stream omits the terminal event by design and
+    # PAGI::Spec::Www exempts the case, so Compose's guard must stay quiet.
     is(scalar(grep { /application error/i } @warnings), 0,
-        'no application error is logged for a client that disconnected mid-stream');
+        'no application error is logged for a client that disconnected mid-stream')
+        or diag("unexpected warnings:\n" . join("\n", @warnings));
 };
 
 sub dechunk {

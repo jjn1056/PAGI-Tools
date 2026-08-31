@@ -133,6 +133,90 @@ subtest 'normal incomplete completion throws the exact typed stage' => sub {
     }
 };
 
+# PAGI::Spec::Www exempts a request whose client already disconnected from
+# both incomplete-response rules ("Application Left a Response Incomplete" and
+# "Application Produced No Response"): the request already ended abnormally
+# with its own disconnect reason, so it is not an application error. A
+# streaming response deliberately omits its terminal event in that case, so
+# without this carve-out every abandoned stream fails its application Future.
+#
+# The discriminator is a defined disconnect_reason, not is_connected: a clean
+# completion also flips is_connected, and must still be guarded.
+{
+    package DisconnectedConn;
+    sub new {
+        my ($class, %args) = @_;
+        return bless { reason => $args{reason} }, $class;
+    }
+    sub is_connected      { return $_[0]->{reason} ? 0 : 1 }
+    sub disconnect_reason { return $_[0]->{reason} }
+    sub on_disconnect     { return }
+}
+
+sub disconnected_scope {
+    my ($reason) = @_;
+    my $request_scope = scope();
+    $request_scope->{'pagi.connection'}
+        = DisconnectedConn->new(reason => $reason);
+    return $request_scope;
+}
+
+subtest 'a client that disconnected mid-response is not an application error' => sub {
+    my $streamed = sub {
+        my ($request_scope, $receive, $send) = @_;
+        $send->({ type => 'http.response.start', status => 200, headers => [] })->get;
+        # Producer stops here because the client vanished; no terminal event.
+        return $send->({ type => 'http.response.body', body => 'partial', more => 1 });
+    };
+
+    my $events;
+    ok(lives { $events = run_guard($streamed, disconnected_scope('client_closed')) },
+        'an incomplete stream does not raise once the client has disconnected')
+        or note($@);
+    is(scalar @$events, 2, 'the events the application did send are still forwarded');
+
+    my $never_started = sub { return };
+    ok(lives { run_guard($never_started, disconnected_scope('client_closed')) },
+        'a response never started does not raise once the client has disconnected')
+        or note($@);
+
+    my $declared_trailers = sub {
+        my ($request_scope, $receive, $send) = @_;
+        $send->({
+            type => 'http.response.start', status => 200, headers => [], trailers => 1,
+        })->get;
+        return $send->({ type => 'http.response.body', body => 'partial', more => 0 });
+    };
+    ok(lives { run_guard($declared_trailers, disconnected_scope('write_error')) },
+        'undelivered declared trailers do not raise once the client has disconnected')
+        or note($@);
+};
+
+subtest 'the carve-out is limited to abnormal ends and real protocol faults' => sub {
+    my $incomplete = sub {
+        my ($request_scope, $receive, $send) = @_;
+        $send->({ type => 'http.response.start', status => 200, headers => [] })->get;
+        return $send->({ type => 'http.response.body', body => 'partial', more => 1 });
+    };
+
+    # A connection object that is still connected must not suppress anything.
+    my $error = guard_error($incomplete, disconnected_scope(undef));
+    isa_ok($error, ['PAGI::Exception::IncompleteResponse'],
+        'a still-connected request still reports an incomplete response');
+    is($error->stage, 'after_start', 'and keeps its exact stage');
+
+    # A body before response start is an application protocol fault, not an
+    # incompleteness, so a disconnect never excuses it.
+    my $body_first = sub {
+        my ($request_scope, $receive, $send) = @_;
+        return $send->({ type => 'http.response.body', body => 'early', more => 0 });
+    };
+    my $fault = guard_error($body_first, disconnected_scope('client_closed'));
+    isa_ok($fault, ['PAGI::Exception::IncompleteResponse'],
+        'a body before start still raises even after a disconnect');
+    is($fault->stage, 'body_before_start', 'and keeps the body_before_start stage');
+};
+
 subtest 'declared trailers are required before completion' => sub {
     my $start = {
         type => 'http.response.start', status => 200, headers => [], trailers => 1,

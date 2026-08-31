@@ -1,6 +1,16 @@
 # Revision history for PAGI-Tools
 
 0.002003 - UNRELEASED
+  - FIX: Compose's response guard no longer fails the application Future when
+    a client disconnects mid-response. A streaming response deliberately omits
+    its terminal body event once the client is gone, and PAGI::Spec::Www
+    exempts an already-disconnected request from both incomplete-response
+    rules; the guard now honours that carve-out, keyed on a defined
+    disconnect reason (an abnormal end) rather than on is_connected, which a
+    clean completion also clears. A body sent before response start remains a
+    protocol fault and is still rejected. Previously every abandoned stream
+    died with "HTTP application completed after response start without a
+    terminal body" and logged an application error.
   - New example `process-streaming`: streams an external command's stdout as
     an HTTP response through `stream_response` and `pipe_from`, using a
     four-line `Future::IO` source that names no event loop, so the same
