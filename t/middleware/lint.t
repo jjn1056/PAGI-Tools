@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 use Future::AsyncAwait;
 use IO::Async::Loop;
 
@@ -309,6 +310,79 @@ subtest 'body sent after response already complete is still caught (via the shar
 
     ok grep(/already complete/i, @warnings), 'warned about the send after response complete';
     is scalar(@events), 3, 'still forwarded (non-strict, diagnostician)';
+};
+
+# ===================================================================
+# (f) Disconnect reclassification: a client that vanished mid-response
+# is reported truthfully as a disconnect, never as a missing-await bug,
+# and never fails the application Future, in either mode.
+# ===================================================================
+
+subtest 'a disconnected client is reported as a disconnect, not a missing await' => sub {
+    {
+        package AbortedConn6;
+        sub new               { return bless {}, shift }
+        sub is_connected      { return 0 }
+        sub disconnect_reason { return 'client_closed' }
+        sub on_disconnect     { return }
+    }
+
+    my $scope = { type => 'http', method => 'GET', path => '/x', scheme => 'http',
+                  headers => [], 'pagi.connection' => AbortedConn6->new };
+    my $send = sub { return Future->done };
+
+    my $app = sub {
+        my ($app_scope, $receive, $inner_send) = @_;
+        return (async sub {
+            await $inner_send->({ type => 'http.response.start',
+                                  status => 200, headers => [] });
+            await $inner_send->({ type => 'http.response.body',
+                                  body => 'partial', more => 1 });
+            return;
+        })->();
+    };
+
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, join '', @_ };
+
+    my $wrapped = PAGI::Middleware::Lint->new->wrap($app);
+    ok(lives {
+        Future->wrap($wrapped->($scope, sub { Future->done }, $send))->get;
+    }, 'a disconnect does not fail the application Future') or note($@);
+
+    is(scalar(grep { /forget to .await./i } @warnings), 0,
+        'no misleading missing-await diagnosis');
+    is(scalar(grep { /disconnect/i } @warnings), 1,
+        'the disconnect is still reported, with its reason');
+    like(join('', @warnings), qr/client_closed/,
+        'the report names the disconnect reason');
+};
+
+subtest 'strict mode does not fail a disconnected request' => sub {
+    my $scope = { type => 'http', method => 'GET', path => '/x', scheme => 'http',
+                  headers => [], 'pagi.connection' => AbortedConn6->new };
+
+    my $app = sub {
+        my ($app_scope, $receive, $inner_send) = @_;
+        return (async sub {
+            await $inner_send->({ type => 'http.response.start',
+                                  status => 200, headers => [] });
+            await $inner_send->({ type => 'http.response.body',
+                                  body => 'partial', more => 1 });
+            return;
+        })->();
+    };
+
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, join '', @_ };
+
+    my $wrapped = PAGI::Middleware::Lint->new(strict => 1)->wrap($app);
+    ok(lives {
+        Future->wrap($wrapped->($scope, sub { Future->done },
+            sub { Future->done }))->get;
+    }, 'strict mode does not die for a client that disconnected') or note($@);
+    is(scalar(grep { /Lint Error/ } @warnings), 0,
+        'no fatal Lint error was raised');
 };
 
 done_testing;

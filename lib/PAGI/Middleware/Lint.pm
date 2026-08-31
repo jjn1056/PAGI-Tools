@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::SendValidation;
+use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
 
@@ -179,8 +180,13 @@ sub wrap {
         if ($err) {
             my $lint_context = "";
             if ($sv) {
-                my $diag = $self->_finalize_diagnosis($sv);
-                if (defined $diag && $diag eq 'no_start') {
+                my $diag = $self->_finalize_diagnosis($sv, $scope);
+                if (defined $diag && $diag eq 'disconnected') {
+                    my $conn = $scope->{'pagi.connection'};
+                    my $reason = $conn->disconnect_reason;
+                    $lint_context = "\n(Lint note: the client disconnected ($reason) before the app "
+                                   . "finished; an incomplete response here is correct, not a bug)";
+                } elsif (defined $diag && $diag eq 'no_start') {
                     $lint_context = "\n(Lint note: app exited without sending http.response.start)";
                 } elsif (defined $diag && $diag eq 'no_body') {
                     $lint_context = "\n(Lint note: app exited without sending final http.response.body)";
@@ -193,8 +199,15 @@ sub wrap {
 
         # Post-completion checks (only if app completed without throwing)
         if ($sv) {
-            my $diag = $self->_finalize_diagnosis($sv);
-            if (defined $diag && $diag eq 'no_start') {
+            my $diag = $self->_finalize_diagnosis($sv, $scope);
+            if (defined $diag && $diag eq 'disconnected') {
+                my $conn = $scope->{'pagi.connection'};
+                my $reason = $conn->disconnect_reason;
+                $self->_note(
+                    "HTTP app stopped after the client disconnected ($reason); "
+                  . "no terminal http.response.body was sent, which is correct."
+                );
+            } elsif (defined $diag && $diag eq 'no_start') {
                 $self->_warn(
                     "HTTP app completed without sending http.response.start. "
                   . "This usually means you forgot to 'await' your \$send calls, "
@@ -346,11 +359,17 @@ sub _context_for_send_error {
          . "app calls \$send in for this response.";
 }
 
-# One place that turns $sv->finalize's outcome into which of the three
+# One place that turns $sv->finalize's outcome -- or, when the client
+# disconnected mid-response, that fact itself -- into which of the four
 # post-completion stories applies -- shared by the post-completion warning
-# path and the app-threw context note, so they can't drift.
+# path and the app-threw context note, so they can't drift. A disconnect is
+# checked first and short-circuits: the application is required not to send
+# a terminal event once it knows its client is gone, so $sv->finalize would
+# otherwise misreport that legal silence as one of the other three.
 sub _finalize_diagnosis {
-    my ($self, $sv) = @_;
+    my ($self, $sv, $scope) = @_;
+
+    return 'disconnected' if request_ended_abnormally($scope);
 
     my $err = $sv->finalize;
     return undef unless $err;
@@ -378,6 +397,20 @@ sub _advise {
         $self->{on_warning}->($msg);
     } else {
         warn "PAGI Lint Warning: $msg\n";
+    }
+}
+
+# Reports without ever dying, regardless of strict mode -- like _advise,
+# but for a diagnosis that isn't a smell to maybe fix: it's a true fact
+# about correct, spec-required behavior (e.g. an incomplete response
+# because the client disconnected) that would otherwise go unreported.
+sub _note {
+    my ($self, $msg) = @_;
+
+    if ($self->{on_warning}) {
+        $self->{on_warning}->($msg);
+    } else {
+        warn "PAGI Lint Note: $msg\n";
     }
 }
 
@@ -439,6 +472,26 @@ previous one was awaited) are flagged, in both strict and non-strict mode.
 
 =item * HTTP apps that declared trailers send C<http.response.trailers>
 before returning
+
+=item * None of the three checks above are diagnosed when the client
+disconnected before the app finished -- see L</Disconnect Reporting>.
+
+=back
+
+=head2 Disconnect Reporting
+
+=over 4
+
+=item * A response left incomplete because the client disconnected
+mid-response is never diagnosed as a missing C<http.response.start>, a
+missing final C<http.response.body>, or unsent trailers -- the application
+is required not to send the terminal event once it knows its client is
+gone, so an "incomplete" response here is correct, not a bug.
+
+=item * It is still reported, as its own advisory note naming the
+disconnect reason, so the signal isn't lost -- and, like Lint's own
+complementary checks (see L</Division of labor>), this note is never
+fatal, even in strict mode.
 
 =back
 
