@@ -6,6 +6,7 @@ use Carp qw(croak);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Exception::IncompleteResponse ();
+use PAGI::Utils qw(request_ended_abnormally);
 
 sub wrap {
     my ($class, $app) = @_;
@@ -73,7 +74,7 @@ sub wrap {
         # terminal event in that case. A body sent before response start is a
         # protocol fault rather than an incompleteness, so it is rejected
         # above regardless.
-        return if _ended_abnormally($scope);
+        return if request_ended_abnormally($scope);
 
         unless ($started) {
             die PAGI::Exception::IncompleteResponse->new(
@@ -95,17 +96,6 @@ sub wrap {
         }
         return;
     };
-}
-
-# The spec's discriminator for an abnormal end is a defined disconnect reason,
-# never is_connected on its own: a clean completion also reports false there,
-# and those responses must still be guarded.
-sub _ended_abnormally {
-    my ($scope) = @_;
-    my $connection = $scope->{'pagi.connection'} or return 0;
-    return 0 unless eval { $connection->can('disconnect_reason') };
-    my $reason = $connection->disconnect_reason;
-    return defined($reason) && length($reason) ? 1 : 0;
 }
 
 1;
