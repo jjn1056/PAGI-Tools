@@ -12,6 +12,64 @@ Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Breaking: use explicit middleware descriptions at core boundaries
+
+The immutable core middleware lists in Route, Mount, Router, and Compose now
+contain only descriptions made with `middleware(...)`. A description records
+how middleware is constructed and later wrapped around the inner application;
+it does not construct or run middleware at declaration time.
+
+**Before (removed):** declarative core lists accepted concise strings,
+coderefs, and configured wrapper objects directly.
+
+```perl
+middleware => ['RequestId', \&audit, $object]
+```
+
+**After (shipped):** make each core entry an explicit description.
+
+```perl
+middleware => [
+    middleware('RequestId'),
+    middleware(\&audit),
+    middleware($object),
+]
+```
+
+Short package names still resolve beneath `PAGI::Middleware::`. For a package
+outside that namespace, use Plack's leading-`+` exact-package convention.
+
+```perl
+# Before: exact package
+middleware('^MyApp::Middleware::Auth')
+
+# After: Plack-familiar exact package
+middleware('+MyApp::Middleware::Auth')
+```
+
+A coderef description can receive named configuration along with the inner
+application. Its synchronous result, like an object's `wrap` result, must be
+a PAGI application value: a native application coderef or an instantiated
+object with `to_app`.
+
+```perl
+middleware(\&audit_factory, label => 'items')
+
+sub audit_factory {
+    my ($inner, %config) = @_;
+    return MyApp::AuditBoundary->new(
+        inner => $inner,
+        label => $config{label},
+    );
+}
+```
+
+`PAGI::App::Router`, `PAGI::Endpoint::Router`, and
+`PAGI::Middleware::Builder` remain higher-level frontends and may retain their
+concise middleware forms. They materialize or compile the corresponding core
+descriptions; this migration does not alter their concise declaration syntax
+or runtime behavior.
+
 ## Breaking: Route endpoints and application-valued responses
 
 There are now four callable boundaries. The distinction is structural, not

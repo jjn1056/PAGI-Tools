@@ -1,9 +1,15 @@
 # Revision history for PAGI-Tools
 
 0.002003 - UNRELEASED
-  - Middleware descriptions now pass explicit configuration to factory
-    coderefs, use a leading `+` for exact class packages, and compile
-    application-valued factory and `wrap` results through `to_app`.
+  - BREAKING: Immutable core middleware lists (Route, Mount, Router, and
+    Compose) now require `middleware(...)` construction descriptions rather
+    than bare strings, coderefs, or configured wrapper objects. Short package
+    names resolve beneath `PAGI::Middleware::`; a leading `+` selects an exact
+    package (replacing the retired `^` spelling). Descriptions pass named
+    configuration to coderef factories and normalize application-valued
+    factory and `wrap` results through `to_app`. The higher-level App Router,
+    Endpoint Router, and Middleware Builder retain their concise frontend
+    forms and their existing runtime behavior.
   - Fixed invalid allowed_methods diagnostics to identify the route endpoint
     capability rather than a nonexistent methods option.
   - Route and Mount constraint accessors now always return fresh hashrefs,
