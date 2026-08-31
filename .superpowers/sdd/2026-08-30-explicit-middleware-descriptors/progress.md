@@ -60,3 +60,11 @@ approved; one documentation minor deferred).
 Task 2: complete (commits 72b3f06..982dfd4, review clean). The reviewer
 confirmed the App Router Builder call-site rename was the minimal dependency
 adjustment required by the private helper split, not premature Task 3 work.
+
+Ruling: Task 3's predicted RED is stale because Task 2 necessarily switched
+the three App Router Builder call sites to `_normalize_frontend_entries` when
+the old private helper was removed. Task 3 will add focused regression and
+materialization evidence; it must not manufacture a failure or make unrelated
+production edits if the approved behavior already passes. Cost if wrong: Task
+3 may be a tests-only commit, but the behavior remains guarded and the Task 2
+review already verified the production seam.
