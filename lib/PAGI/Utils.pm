@@ -22,7 +22,8 @@ my @PATH_EXPORTS = qw(
 );
 
 our @EXPORT_OK = (
-    qw(handle_lifespan to_app as_app request_response invoke_app),
+    qw(handle_lifespan to_app as_app request_response invoke_app
+       request_ended_abnormally),
     @ENV_EXPORTS,
     @PATH_EXPORTS,
 );
@@ -305,6 +306,18 @@ async sub handle_lifespan {
     return await $manager->handle($scope, $receive, $send);
 }
 
+sub request_ended_abnormally {
+    my ($scope) = @_;
+    return 0 unless ref($scope) eq 'HASH';
+
+    my $connection = $scope->{'pagi.connection'};
+    return 0 unless blessed($connection)
+        && $connection->can('disconnect_reason');
+
+    my $reason = $connection->disconnect_reason;
+    return defined($reason) && length($reason) ? 1 : 0;
+}
+
 sub to_app {
     my ($value) = @_;
     _validate_app_value($value, 'to_app() application');
@@ -531,6 +544,33 @@ C<shutdown> callbacks can be passed in via C<%opts>.
 B<Important:> This function will C<croak> if called with a non-lifespan scope.
 Always check C<< $scope->{type} eq 'lifespan' >> before calling, as shown
 in the synopsis.
+
+=head2 request_ended_abnormally
+
+    return if request_ended_abnormally($scope);
+
+True when this request ended B<abnormally> -- the client disconnected, a
+timeout fired, or the server aborted the exchange -- and false otherwise,
+including for a request that completed cleanly, one still in flight, and a
+scope carrying no C<pagi.connection> object.
+
+The discriminator is a defined C<disconnect_reason>, B<not> C<is_connected>:
+a clean completion also reports false for C<is_connected>, and those
+responses must still be validated. See L<PAGI::Spec::Www/"Application Left a
+Response Incomplete">.
+
+Components that observe response events use this to tell a spec-legal
+disconnect from an application fault. They cannot tell them apart from the
+event stream alone: an application that stops early because its client
+vanished is required B<not> to send the terminal event, so its stream is
+indistinguishable from a buggy one. An observer that infers completeness
+from events must therefore ask the request.
+
+Anything that emits response events on an application's behalf -- middleware
+that buffers a body and re-emits it, or any intermediary wrapping C<$send> --
+must not complete an incomplete stream, and must not compute a validator, a
+C<Content-Length>, or other completeness-dependent metadata from the bytes it
+happened to observe.
 
 =head2 to_app
 
