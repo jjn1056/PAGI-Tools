@@ -115,3 +115,12 @@ be described as distribution-clean until those packaging issues are resolved
 or explicitly accepted.
 
 Task 6: complete (commits 56a4b39..7ca500a, review approved after fix round 1).
+
+Final review: fix wave 1/1 addressed all five findings: stale core examples and
+claims in `UPGRADING.md`, the declarative-routing README wording, the missing
+Middleware Builder `^` to `+` migration example, the overgeneralized Compose
+summary, and blessed-coderef factory classification. The production fix was
+developed RED then GREEN and the combined gate passed 13 files / 243 tests.
+Scoped re-review passed 2 files / 39 tests and approved commits
+`8ff156f828af87d51981f5d82ad0014ec690d9e7` and
+`eb696cccc0946cc9dd43540e9964f5525fd90c76` with no new breakage.
