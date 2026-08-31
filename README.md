@@ -6,6 +6,8 @@ Route matches a complete URL leaf. Mount composes an application under a
 prefix. Router selects and owns routing outcomes. Middleware wraps behavior.
 Compose owns the application root and lifespan.
 
+# SYNOPSIS
+
 Callable values keep these four meanings:
 
     Route CODE endpoint        -> one Request/WebSocket/SSE argument
@@ -16,8 +18,6 @@ Callable values keep these four meanings:
 A native CODE at a Route is wrapped explicitly with `PAGI::Utils::as_app`.
 Mount, Compose `app`, and Router `http_default` remain native application
 positions and take a three-channel CODE directly.
-
-# SYNOPSIS
 
 Raw PAGI is deliberately minimal — an application is just an `async` sub that
 speaks the protocol directly:
@@ -110,11 +110,11 @@ Use the functional frontend when the declarations are already immutable:
 
     my $app = compose(app => $routing)->to_app;
 
-Every Mount names its target: `routes => [...]` constructs a complete child
-Router, while `app => $child` composes a native application or instantiated
-component. An immutable Router in `app` remains inspectable; other applications
-are opaque. Named routes compose into slash addresses such as
-`/person/show`; `PAGI::Routing::URL` can generate request-relative links from
+Every Mount names its target: `routes => [...]` constructs a complete
+child Router, while `app => $child` composes a native application or
+instantiated component. An immutable Router in `app` remains inspectable;
+other applications are opaque. Named routes compose into slash addresses such as
+`/person/show`; [PAGI::Routing::URL](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3AURL) can generate request-relative links from
 the active placement, with compact or named path/query/fragment arguments. Its helpers
 return strings or croak, perform no protocol I/O, and do not replace normal
 authorization checks.
@@ -131,11 +131,11 @@ backpressure. Route and Mount retain separate ownership:
 The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
 route metadata, constraints, GET/HEAD behavior, Router-owned 404/405 outcomes,
 first-seen method unions, written declaration order, and reverse
-routing. Ordinary HTTP handlers receive `PAGI::Request` and return an
+routing. Ordinary HTTP handlers receive [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) and return an
 application value, normally a Response or Pages object; WebSocket and SSE
 handlers receive their direct protocol objects. Native CODE ownership at a
-Route is always explicit with `as_app`. Without explicit `methods`, that Route
-uses GET plus automatic HEAD; unrestricted delegation uses scalar
+Route is always explicit with `as_app`. Without explicit `methods`, that
+Route uses GET plus automatic HEAD; unrestricted delegation uses scalar
 `methods => '*'`. A bare Router sends its own
 negotiated 404 and compliant 405 and installs its own HeadBoundary, but it
 deliberately has no root ErrorHandler, response-completion guard, or lifespan
@@ -183,7 +183,7 @@ WebSocket/SSE deployments must normalize and validate those scopes outside
 routing.
 
 PAGI follows Starlette's Route/Mount/Router/application topology, not every
-method on Starlette Request. `PAGI::Request` owns HTTP input; imports identify
+method on Starlette Request. [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) owns HTTP input; imports identify
 the Router or middleware that supplies optional behavior. This keeps URL,
 Session, Stash, CSRF, State, and Transport ownership visible and lets another
 framework use its own Router without teaching Request that framework's API.
@@ -192,11 +192,11 @@ The Starlette influence is conceptual, not API identity. PAGI distinguishes
 direct protocol handlers from native three-channel application positions, validates
 constraints without coercion, uses slash logical names and relative lookup,
 treats SSE as a first-class scope, and exposes an HTTP-only `http_default`.
-Starlette's single multiprotocol Router `default` was considered and not copied,
-so PAGI retains its stock WebSocket and SSE miss behavior. PAGI middleware is
-pure app-to-app wrapping; Compose, rather than Router, owns root lifespan.
-OpenAPI and schema generation remain deferred until a concrete consumer is
-designed.
+Starlette's single multiprotocol Router `default` was considered and not
+copied, so PAGI retains its stock WebSocket and SSE miss behavior. PAGI
+middleware is pure app-to-app wrapping; Compose, rather than Router, owns root
+lifespan. OpenAPI and schema generation remain deferred until a concrete
+consumer is designed.
 
 Run it with any PAGI server (such as `pagi-server` from the `PAGI-Server`
 distribution), or mount it inside a larger PAGI application.
@@ -219,13 +219,13 @@ WebSocket chat/echo, PSGI bridging)
 - [PAGI::Endpoint::HTTP](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AHTTP), [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter),
 [PAGI::Endpoint::SSE](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ASSE), [PAGI::Endpoint::WebSocket](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AWebSocket) - high-level endpoint
 framework
-- [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) and [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse) - HTTP input and detached output values; WebSocket and SSE
-handlers receive their direct protocol objects
-- `PAGI::State`, `PAGI::Stash`, `PAGI::Session`, `PAGI::CSRF`,
-`PAGI::Transport`, and `PAGI::Routing::URL` - explicitly imported optional
+- [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) and [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse) - HTTP input and detached output
+values; WebSocket and SSE handlers receive their direct protocol objects
+- [PAGI::State](https://metacpan.org/pod/PAGI%3A%3AState), [PAGI::Stash](https://metacpan.org/pod/PAGI%3A%3AStash), [PAGI::Session](https://metacpan.org/pod/PAGI%3A%3ASession), [PAGI::CSRF](https://metacpan.org/pod/PAGI%3A%3ACSRF),
+[PAGI::Transport](https://metacpan.org/pod/PAGI%3A%3ATransport), and [PAGI::Routing::URL](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3AURL) - explicitly imported optional
 scope capabilities
-- [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) - negotiated conventional welcome, redirect, and HTTP
-error Responses returned by ordinary Request handlers
+- [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) - deferred negotiated conventional welcome, redirect,
+and HTTP error applications
 - [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::App::Router](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3ARouter), and
 [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter) - immutable functional, mutable imperative, and
 method-oriented frontends over one immutable routing engine
