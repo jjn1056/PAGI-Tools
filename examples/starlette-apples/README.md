@@ -76,13 +76,11 @@ Router under `/apples`.
 #!/usr/bin/env perl
 use v5.40;
 
-use File::Basename qw(dirname);
 use Future::AsyncAwait;
-use List::Util qw(max);
 use Types::Standard qw(Int);
-use lib dirname(__FILE__) . '/lib';
 
 use AppleApp::Middleware qw(with_apples_api_header);
+use AppleApp::Model;
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(file_response json_response);
@@ -93,39 +91,36 @@ use PAGI::Utils qw(app_path);
 my $manager_file = app_path('public', 'index.html');
 
 sub startup($state, $scope) {
-    $state->{apples_db} = {
-        1 => { id => 1, name => 'Gala',       color => 'Red/Yellow' },
-        2 => { id => 2, name => 'Honeycrisp', color => 'Rosy Red' },
-    };
+    $state->{apples} = AppleApp::Model->new;
     return;
 }
 
-sub apples_db($request) {
+sub apples($request) {
     my $state = $request->state
         or die 'starlette-apples requires Compose lifespan state';
-    return $state->get('apples_db');
+    return $state->get('apples');
 }
 
 async sub list_apples($request) {
-    my $db = apples_db($request);
+    my $apples = apples($request);
 
     return json_response([
         map {
             +{
-                %{$db->{$_}},
+                %$_,
                 url => url_for(
                     $request,
                     'read',
-                    { apple_id => $_ },
+                    { apple_id => $_->{id} },
                 ),
             }
-        } sort { $a <=> $b } keys %$db
+        } @{$apples->all}
     ]);
 }
 
 async sub read_apple($request) {
     my $id = $request->path_param('apple_id');
-    my $apple = apples_db($request)->{$id};
+    my $apple = apples($request)->find($id);
 
     return json_response($apple) if $apple;
     return json_response(
@@ -135,11 +130,8 @@ async sub read_apple($request) {
 }
 
 async sub create_apple($request) {
-    my $db = apples_db($request);
     my $data = await $request->json;
-    my $id = max(0, keys %$db) + 1;
-    my $apple = { id => $id, %$data };
-    $db->{$id} = $apple;
+    my $apple = apples($request)->create($data);
 
     return json_response(
         $apple,
@@ -148,38 +140,44 @@ async sub create_apple($request) {
             Location => path_for(
                 $request,
                 'read',
-                { apple_id => $id },
+                { apple_id => $apple->{id} },
             ),
         ],
     );
 }
 
 async sub update_apple($request) {
-    my $db = apples_db($request);
     my $id = $request->path_param('apple_id');
+    my $apples = apples($request);
 
     return json_response(
         { error => 'Apple not found' },
         status => 404,
-    ) unless exists $db->{$id};
+    ) unless $apples->find($id);
 
     my $data = await $request->json;
-    $db->{$id} = { %{$db->{$id}}, %$data };
-    return json_response($db->{$id});
+    my $apple = $apples->update($id, $data);
+
+    return json_response(
+        { error => 'Apple not found' },
+        status => 404,
+    ) unless $apple;
+
+    return json_response($apple);
 }
 
 async sub delete_apple($request) {
-    my $db = apples_db($request);
     my $id = $request->path_param('apple_id');
+    my $apple = apples($request)->delete($id);
 
     return json_response(
         { error => 'Apple not found' },
         status => 404,
-    ) unless exists $db->{$id};
+    ) unless $apple;
 
     return json_response({
         success => \1,
-        deleted => delete $db->{$id},
+        deleted => $apple,
     });
 }
 
@@ -221,9 +219,11 @@ compose(
 ```
 
 The static root file, `/welcome` Pages value, CRUD JSON values, and custom root
-404 are direct application values. The exact root file and `/welcome` remain
-Route endpoints, while `/apples` is a subtree-owning child Router. The custom
-root 404 is the Router's `http_default`, so it handles unknown paths without
+404 are direct application values. `AppleApp::Model` owns the fixture and CRUD
+state through a Moose native `Hash` attribute, while lifespan owns the model's
+application lifetime. The exact root file and `/welcome` remain Route
+endpoints, while `/apples` is a subtree-owning child Router. The custom root
+404 is the Router's `http_default`, so it handles unknown paths without
 swallowing the 405 for a known path such as `PUT /welcome`.
 
 | Starlette | PAGI::Tools |
@@ -261,10 +261,12 @@ be global or scoped to one routing boundary.
 
 ## Run
 
-This example requires Perl 5.40 or newer.
+This example requires Perl 5.40 or newer, Moose, and Type::Tiny. The runner is
+responsible for adding `examples/starlette-apples/lib` to Perl's library path.
 
 ```bash
-pagi-server --app examples/starlette-apples/app.pl --port 5000
+pagi-server --lib examples/starlette-apples/lib \
+    --app examples/starlette-apples/app.pl --port 5000
 ```
 
 ## Try it
