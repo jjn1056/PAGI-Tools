@@ -50,3 +50,5 @@ None.
 - Task 2: complete (commits `b81539f..b2fde61`, review clean).
 - Task 3: fix round 1/5 (1 addressed, 0 open — corrected non-resolving implementation SHA; commit `7ff1911`).
 - Task 3: complete (commits `e095bad..7ff1911`, review clean).
+- Task 4: minor (deferred): the task report uses task-local worktree/base provenance while this ledger retains plan-wide repository/base provenance; both are accurate, but the distinction is not labeled explicitly.
+- Task 4: complete (commits `f845935..fd8c5d5`, review clean with 1 deferred minor).
