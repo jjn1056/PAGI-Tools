@@ -641,10 +641,10 @@ my @migration_cases = (
                 return sub { push @trace, 'factory'; return $inner->(@_) };
             };
             my $object = Local::UpgradeObjectMiddleware->new(\@trace);
-            my $explicit = middleware('^TestApps::FakeMiddleware');
+            my $explicit = middleware('+TestApps::FakeMiddleware');
             my $router = PAGI::App::Router->new;
             $router->get('/middleware' => [
-                '^TestApps::FakeMiddleware', $factory, $object, $explicit,
+                '+TestApps::FakeMiddleware', $factory, $object, $explicit,
             ] => sub {
                 push @trace, 'handler';
                 return PAGI::Response::Text->new('ok');

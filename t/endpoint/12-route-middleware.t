@@ -238,6 +238,36 @@ sub run_scope {
     }
 }
 
+{
+    package Local::PrivateMiddlewareEndpoint;
+    use parent 'PAGI::Endpoint::Router';
+    our ($factory_calls, $wrapper_calls, @order);
+
+    sub routes {
+        my ($self, $r) = @_;
+        $r->get('/private' => [
+            $self->middleware_as('authenticate'),
+        ] => 'show');
+    }
+
+    sub authenticate {
+        my ($self, $inner) = @_;
+        ++$factory_calls;
+        return async sub {
+            ++$wrapper_calls;
+            push @order, 'authenticate before';
+            await Future->wrap($inner->(@_));
+            push @order, 'authenticate after';
+            return;
+        };
+    }
+
+    sub show {
+        push @order, 'show';
+        return PAGI::Response::Text->new('private');
+    }
+}
+
 sub reset_runtime {
     @Local::MiddlewareEndpoint::order = ();
     @Local::MiddlewareEndpoint::handler_scopes = ();
@@ -276,8 +306,42 @@ subtest 'four universal forms normalize at declaration and compile synchronously
         qr/has no middleware method "missing"/,
         'middleware_as validates the method during route declaration');
     like(dies { Local::AsyncMiddlewareFactory->to_app },
-        qr/middleware factory must return PAGI app coderef; got Future/,
+        qr/middleware factory must return a PAGI application value: Future/,
         'middleware factory must return its native app synchronously');
+};
+
+subtest 'middleware_as materializes once as an explicit Route description' => sub {
+    $Local::PrivateMiddlewareEndpoint::factory_calls = 0;
+    $Local::PrivateMiddlewareEndpoint::wrapper_calls = 0;
+    @Local::PrivateMiddlewareEndpoint::order = ();
+
+    my $endpoint = Local::PrivateMiddlewareEndpoint->new;
+    my $router = $endpoint->to_router;
+    is($Local::PrivateMiddlewareEndpoint::factory_calls, 0,
+        'declaration normalization does not invoke the local middleware method');
+
+    my $descriptions = $router->routes->[0]->middleware;
+    is(scalar @$descriptions, 1,
+        'the materialized Route receives one middleware description');
+    isa_ok($descriptions->[0], ['PAGI::Routing::Middleware'],
+        'middleware_as is materialized as an explicit description');
+
+    my $app = $router->to_app;
+    is($Local::PrivateMiddlewareEndpoint::factory_calls, 1,
+        'the bound local factory runs once while compiling the native app');
+
+    my $client = PAGI::Test::Client->new(app => $app);
+    is($client->get('/private')->text, 'private',
+        'the protected Route dispatches through the compiled native app');
+    is([$Local::PrivateMiddlewareEndpoint::wrapper_calls,
+        \@Local::PrivateMiddlewareEndpoint::order],
+        [1, ['authenticate before', 'show', 'authenticate after']],
+        'the bound middleware wrapper runs once around the native app request');
+    is($client->get('/private')->text, 'private',
+        'the compiled app is reusable for a second request');
+    is([$Local::PrivateMiddlewareEndpoint::factory_calls,
+        $Local::PrivateMiddlewareEndpoint::wrapper_calls], [1, 2],
+        'compilation invokes the factory once while the wrapper runs once per request');
 };
 
 subtest 'HTTP middleware is first-listed-outermost, calls downstream, wraps send, and clones scope' => sub {

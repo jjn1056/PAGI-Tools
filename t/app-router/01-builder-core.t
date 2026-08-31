@@ -8,6 +8,7 @@ use lib 'lib';
 use PAGI::App::Router ();
 use PAGI::App::Router::Builder ();
 use PAGI::Response::Text ();
+use PAGI::Routing qw(middleware);
 use PAGI::Routing::Middleware ();
 use PAGI::Test::Client ();
 use PAGI::Utils qw(as_app);
@@ -37,6 +38,13 @@ use PAGI::Utils qw(as_app);
         ++$_[0]{builds};
         return sub { return };
     }
+}
+
+{
+    package Local::ConfiguredMiddleware;
+
+    sub new { return bless {}, $_[0] }
+    sub wrap { return $_[1] }
 }
 
 subtest 'constructor copies and normalizes router configuration' => sub {
@@ -111,6 +119,51 @@ subtest 'constructor copies and normalizes router configuration' => sub {
                 "$class rejects removed option '$removed'";
         }
     }
+};
+
+subtest 'App Router materializes frontend middleware sugar at Router, Route, and Mount positions' => sub {
+    my $factory = sub { return $_[0] };
+    my $object = Local::ConfiguredMiddleware->new;
+    my $explicit = middleware('ContentLength');
+    my $entries = [
+        'RequestId',
+        '+Local::ExactMiddleware',
+        $factory,
+        $object,
+        $explicit,
+    ];
+    my $builder = PAGI::App::Router::Builder->new(middleware => $entries);
+    $builder->get('/route' => $entries => sub { });
+    $builder->mount('/mount', app => as_app(sub { }), middleware => $entries);
+
+    my $routing = $builder->to_router;
+    my @positions = (
+        ['Router', $routing->middleware],
+        ['Route', $routing->routes->[0]->middleware],
+        ['Mount', $routing->routes->[1]->middleware],
+    );
+    my @expected_factories = (
+        'RequestId', '+Local::ExactMiddleware', refaddr($factory),
+        refaddr($object), 'ContentLength',
+    );
+    for my $position (@positions) {
+        my ($name, $descriptions) = @$position;
+        is([map { ref($_) } @$descriptions],
+            [('PAGI::Routing::Middleware') x 5],
+            "$name materializes five explicit middleware descriptions");
+        is([map {
+                my $target = $_->factory;
+                ref($target) ? refaddr($target) : $target;
+            } @$descriptions],
+            \@expected_factories,
+            "$name preserves the frontend middleware order");
+        is(refaddr($descriptions->[4]), refaddr($explicit),
+            "$name retains the explicit description by identity");
+    }
+
+    my @bare_descriptions = map { @{$_->[1]}[0 .. 3] } @positions;
+    is(scalar keys %{ { map { refaddr($_) => 1 } @bare_descriptions } }, 12,
+        'every bare frontend middleware occurrence receives its own description');
 };
 
 subtest 'all leaf declarations retain one exact ordered record sequence' => sub {

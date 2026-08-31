@@ -170,7 +170,7 @@ subtest 'all levels preserve first-listed-outermost and build inner-to-outer' =>
     );
     return unless router_methods_exist($child);
     $child->get('/item' => [
-        '^Local::TraceClass', $route_factory, $route_object, $route_explicit,
+        '+Local::TraceClass', $route_factory, $route_object, $route_explicit,
     ] => handler('ok', undef, \@runtime));
 
     my $root = PAGI::App::Router::Builder->new(
