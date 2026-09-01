@@ -55,7 +55,46 @@ Push target: origin/feature/compose-retained-router after authorization
 
 ## Retained user-facing `to_router` inventory
 
-Pending final classification in Task 5.
+- `examples/endpoint-router-demo/lib/MyApp/Main.pm` converts API because Main's
+  `home` handler resolves `/api/index`; the parent must discover API's named
+  descendants.
+- `examples/endpoint-router-demo/lib/MyApp/API.pm` converts Events so the API
+  snapshot publishes `/api/events/stream`; the README and integration test
+  exercise that inspectable nested boundary.
+- `lib/PAGI/Compose.pm`, `lib/PAGI/App/Router.pm`, and
+  `lib/PAGI/Endpoint/Router.pm` retain parent/child examples in which the parent
+  calls `path_for` on a converted child's slash-addressed name. App Router's
+  `named_routes`, `route_named`, and `path_for`, and both frontend `to_app`
+  implementations also use `to_router` as their documented snapshot or
+  compilation primitive.
+- `lib/PAGI/Tools/Cookbook.pod` retains an App Router parent-discovery example,
+  a deliberately retained snapshot used for `path_for`, and an Endpoint parent
+  that resolves child names. `lib/PAGI/Tools/Tutorial.pod` mentions conversion
+  only for reverse discovery or coherent retained inspection.
+- `UPGRADING.md` retains two explicitly labelled historical `compose(router
+  => ...)` examples, their stable-snapshot replacements, one nested
+  parent-discovery migration, and one coherent inspection snapshot used for
+  `route_named`, `path_for`, and `to_app`.
+- The remaining hits under `t/` are subject construction, snapshot identity,
+  materialization/cycle/constraint/middleware tests, parent-name discovery, or
+  source-regression assertions. They are not public deployment guidance.
+
+Task 5 audit: 130 textual hits across 31 live files were classified. Categories
+1--5 account for every hit; category 6 (stale deployment ceremony) has zero
+hits. The three flattening-search hits are explicitly labelled lossy examples
+in `PAGI::Compose`, `PAGI::Routing::Mount`, and `UPGRADING.md`.
+
+## Task 5 work-map reconfirmation
+
+- Repository: `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools/.worktrees/compose-retained-router`
+- Branch: `feature/compose-retained-router`
+- Verification-start HEAD: `05b2dd5354080970a41c7689a294a54049f112e7`
+- `main`: `558b14c282a38051bd8c1bb712290fe1df398330`
+- `origin/main`: `558b14c282a38051bd8c1bb712290fe1df398330`
+- Push target before any authorized publish:
+  `origin/feature/compose-retained-router` at
+  `8dea8d0f3b21212d6a58b1b729a962e597eefb89`
+- Worktree was clean at verification start. No sibling repository is in scope.
 
 ## Deviations
 
