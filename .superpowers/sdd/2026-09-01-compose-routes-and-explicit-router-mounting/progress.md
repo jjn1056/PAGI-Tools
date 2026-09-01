@@ -16,8 +16,8 @@ Baseline: `perlbrew exec --with perl-5.42.2@default prove -lr t` — Files=224, 
 | Task | Status | Implementation commit | Tests | Evidence |
 | --- | --- | --- | --- | --- |
 | 1. Compose constructor | complete | e4a0216370de8fd4d056fbb98b0c6fddaf48836f | 1 file, 55 tests PASS; syntax OK | TDD red: 6/56 failed under old constructor; green: 55/55; task review found no Critical or Important issues |
-| 2. Root Mount contract | in progress | — | — | — |
-| 3. Lifecycle and safety | pending | — | — | — |
+| 2. Root Mount contract | complete | 6809879763b80e5de6f0876585546d569b7a0a44 | 3 files, 32 tests PASS | Characterization passed without production changes; task review approved with no findings |
+| 3. Lifecycle and safety | in progress | — | — | — |
 | 4. Router frontends | pending | — | — | — |
 | 5. Declarative examples | pending | — | — | — |
 | 6. Class-based examples | pending | — | — | — |
@@ -73,3 +73,5 @@ None.
 Task 1: minor (deferred): `t/compose/01-description.t` verifies stable root Router identity after routing delegates but does not repeat the identity assertion after `middleware` and `lifespan`; those accessors are independently exercised on another Compose instance. Point the final whole-branch review at this item.
 
 Task 1: complete (commits f57e831..e4a0216, spec compliant; no Critical/Important findings; one deferred minor).
+
+Task 2: complete (commits f713cce..6809879, review clean).
