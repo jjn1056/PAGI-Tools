@@ -126,7 +126,7 @@ sub composition_modes {
     my ($routes) = @_;
     return (
         ['routes', compose(routes => $routes)->to_app],
-        ['app Router', compose(app => router(routes => $routes))->to_app],
+        ['retained Router', compose(router => router(routes => $routes))->to_app],
     );
 }
 
@@ -161,7 +161,7 @@ subtest 'Compose routes receive ordinary Router HTTP outcomes' => sub {
     is(\@warnings, [], 'ordinary Router outcomes do not warn');
 };
 
-subtest 'explicit matched application responses pass unchanged in both target modes' => sub {
+subtest 'explicit matched application responses pass unchanged in both Router forms' => sub {
     local $ENV{PAGI_ENV} = 'production';
     for my $mode (composition_modes(route_set())) {
         my ($label, $app) = @$mode;
@@ -184,13 +184,12 @@ subtest 'explicit matched application responses pass unchanged in both target mo
 subtest 'selected silent targets become production-safe 500 through Test Client' => sub {
     local $ENV{PAGI_ENV} = 'production';
     my @cases = (
-        ['native app', compose(app => sub { return })->to_app, scope()],
         [
             'selected raw route',
             compose(routes => [
-                route('/raw' => as_app(sub { return })),
+                route('/silent' => as_app(sub { return })),
             ])->to_app,
-            scope(path => '/raw'),
+            scope(path => '/silent'),
         ],
         [
             'selected opaque Mount',
@@ -222,12 +221,14 @@ subtest 'selected silent targets become production-safe 500 through Test Client'
 subtest 'thrown and failed-Future targets become one Test Client 500' => sub {
     local $ENV{PAGI_ENV} = 'production';
     my @cases = (
-        ['database-like throw', compose(app => sub {
-            die "DB connection lost\n";
-        })->to_app, scope(), qr/DB connection lost/],
-        ['database-like failed Future', compose(app => sub {
-            return Future->fail("DB transaction failed\n");
-        })->to_app, scope(), qr/DB transaction failed/],
+        ['database-like throw', compose(routes => [
+            route('/explode' => as_app(sub { die "DB connection lost\n" })),
+        ])->to_app, scope(path => '/explode'), qr/DB connection lost/],
+        ['database-like failed Future', compose(routes => [
+            route('/fail' => as_app(sub {
+                return Future->fail("DB transaction failed\n");
+            })),
+        ])->to_app, scope(path => '/fail'), qr/DB transaction failed/],
     );
 
     for my $case (@cases) {
@@ -235,7 +236,9 @@ subtest 'thrown and failed-Future targets become one Test Client 500' => sub {
         my (@warnings, $response);
         {
             local $SIG{__WARN__} = sub { push @warnings, @_ };
-            $response = PAGI::Test::Client->new(app => $app)->get('/');
+            $response = PAGI::Test::Client->new(app => $app)->get(
+                $request_scope->{path},
+            );
         }
         assert_client_pages_error(
             $label, $response, 500, 'Internal Server Error',
@@ -248,27 +251,28 @@ subtest 'thrown and failed-Future targets become one Test Client 500' => sub {
     }
 };
 
-subtest 'Compose does not reinterpret or replace routing metadata' => sub {
+subtest 'Compose leaves routing metadata to the retained Router' => sub {
     my $routing_metadata = { selected => '/complete', captures => { id => 7 } };
     my $incoming_scope = scope(path => '/complete');
     $incoming_scope->{'pagi.routing'} = $routing_metadata;
-    my ($seen_scope, $seen_metadata);
+    my $seen_metadata;
     my $app = compose(
-        app => sub {
+        routes => [route('/complete' => as_app(sub {
             my ($request_scope, $receive, $send) = @_;
-            $seen_scope = $request_scope;
             $seen_metadata = $request_scope->{'pagi.routing'};
             $send->({ type => 'http.response.start', status => 204, headers => [] })->get;
             return $send->({ type => 'http.response.body', body => '', more => 0 });
-        },
+        }))],
     )->to_app;
     my ($events, $warnings, $error) = run_request($app, $incoming_scope);
     is($error, undef, 'request with routing metadata completes');
     is($warnings, [], 'routing metadata does not trigger diagnostics');
-    is(refaddr($seen_scope), refaddr($incoming_scope),
-        'non-HEAD scope reaches the direct app by identity');
-    is(refaddr($seen_metadata), refaddr($routing_metadata),
-        'routing metadata reaches the app by identity');
+    is(refaddr($incoming_scope->{'pagi.routing'}), refaddr($routing_metadata),
+        'Compose leaves incoming routing metadata untouched');
+    is($seen_metadata->{version}, 1,
+        'the retained Router supplies its own routing metadata version');
+    is(scalar @{$seen_metadata->{frames}}, 1,
+        'the retained Router supplies one root routing frame');
     assert_rendered('metadata-preserving complete response', $events, 204, '');
 };
 
@@ -288,9 +292,12 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
     );
     is($route_warnings, [], 'ordinary Router 404 does not warn');
 
-    my $throwing = compose(app => sub { die "native application failed\n" })->to_app;
-    my ($throw_events, $throw_warnings, $throw_error) = run_request($throwing, scope());
-    is($throw_error, undef, 'throwing native app remains contained');
+    my $throwing = compose(routes => [
+        route('/explode' => as_app(sub { die "native application failed\n" })),
+    ])->to_app;
+    my ($throw_events, $throw_warnings, $throw_error)
+        = run_request($throwing, scope(path => '/explode'));
+    is($throw_error, undef, 'throwing selected app remains contained');
     assert_pages_error(
         'invalid environment throwing native app', $throw_events, 500,
         'Internal Server Error', 'text/html; charset=utf-8',
@@ -302,28 +309,28 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
     like($throw_warnings->[1], qr/Invalid PAGI_ENV 'invalid-compose-environment'/,
         'the resolver failure is reported second');
 
-    my $complete = compose(app => sub {
+    my $complete = compose(routes => [route('/complete' => as_app(sub {
         my ($request_scope, $receive, $send) = @_;
         $send->({ type => 'http.response.start', status => 200, headers => [] })->get;
         return $send->({ type => 'http.response.body', body => 'complete', more => 0 });
-    })->to_app;
+    }))])->to_app;
     my ($complete_events, $complete_warnings, $complete_error)
-        = run_request($complete, scope());
-    is($complete_error, undef, 'normally complete native app does not consult PAGI_ENV');
-    is($complete_warnings, [], 'normally complete native app does not warn');
-    assert_rendered('invalid environment complete native app',
+        = run_request($complete, scope(path => '/complete'));
+    is($complete_error, undef, 'normally complete selected app does not consult PAGI_ENV');
+    is($complete_warnings, [], 'normally complete selected app does not warn');
+    assert_rendered('invalid environment complete selected app',
         $complete_events, 200, 'complete');
 };
 
 subtest 'post-start incomplete response is reported and rethrown without replacement' => sub {
     local $ENV{PAGI_ENV} = 'production';
-    my $app = compose(app => sub {
+    my $app = compose(routes => [route('/incomplete' => as_app(sub {
         my ($request_scope, $receive, $send) = @_;
         return $send->({
             type => 'http.response.start', status => 200, headers => [],
         });
-    })->to_app;
-    my ($events, $warnings, $error) = run_request($app, scope());
+    }))])->to_app;
+    my ($events, $warnings, $error) = run_request($app, scope(path => '/incomplete'));
     isa_ok($error, ['PAGI::Exception::IncompleteResponse']);
     is($error && $error->can('stage') ? $error->stage : undef,
         'after_start', 'guard reports the exact post-start stage');
@@ -341,7 +348,7 @@ subtest 'post-start incomplete response is reported and rethrown without replace
             PAGI::Test::Client->new(
                 app => $app,
                 raise_app_exceptions => 1,
-            )->get('/');
+            )->get('/incomplete');
             1;
         } or $client_error = $@;
     }
@@ -357,11 +364,11 @@ subtest 'body before start becomes one clean automatic 500 response' => sub {
     my $invalid = {
         type => 'http.response.body', body => 'must not reach the wire', more => 0,
     };
-    my $app = compose(app => sub {
+    my $app = compose(routes => [route('/invalid' => as_app(sub {
         my ($request_scope, $receive, $send) = @_;
         return $send->($invalid);
-    })->to_app;
-    my ($events, $warnings, $error) = run_request($app, scope());
+    }))])->to_app;
+    my ($events, $warnings, $error) = run_request($app, scope(path => '/invalid'));
 
     is($error, undef, 'automatic ErrorHandler contains the guard exception');
     is([map { $_->{type} } @$events], [

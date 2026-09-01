@@ -4,13 +4,13 @@ use warnings;
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
-use Scalar::Util qw(refaddr);
 use FindBin qw($Bin);
 use lib "$Bin/lib", "$Bin/../lib";
 use ComposeTest qw(scope run_scope capture_send);
 use PAGI::Compose qw(compose);
 use PAGI::Response::Text ();
-use PAGI::Routing qw(route websocket sse);
+use PAGI::Routing qw(mount route websocket sse);
+use PAGI::Utils qw(as_app);
 
 subtest 'routes mode dispatches HTTP WebSocket and SSE' => sub {
     my $app = compose(routes => [
@@ -55,66 +55,117 @@ subtest 'routes mode dispatches HTTP WebSocket and SSE' => sub {
     sub new { return bless {}, $_[0] }
     sub to_app {
         ++$COMPILES;
-        return sub { return Future->done };
+        return sub {
+            my ($scope, $receive, $send) = @_;
+            $send->({
+                type => 'http.response.start', status => 204, headers => [],
+            })->get;
+            return $send->({
+                type => 'http.response.body', body => '', more => 0,
+            });
+        };
     }
 }
-subtest 'non-HTTP immediate and Future-backed app completion remain normalized' => sub {
+{
+    package Local::CountingRouter;
+    use parent 'PAGI::Routing::Router';
+    our $TO_APP_CALLS = 0;
+
+    sub to_app {
+        my ($self) = @_;
+        ++$TO_APP_CALLS;
+        return $self->SUPER::to_app;
+    }
+}
+
+subtest 'retained Router compiles once per Compose to_app' => sub {
+    local $Local::CountingRouter::TO_APP_CALLS = 0;
+    my $routing = Local::CountingRouter->new(routes => [
+        route('/' => sub { return PAGI::Response::Text->new('home') }),
+    ]);
+    my $description = compose(router => $routing);
+    is($Local::CountingRouter::TO_APP_CALLS, 0,
+        'Compose construction does not compile Router');
+    my $app_one = $description->to_app;
+    is($Local::CountingRouter::TO_APP_CALLS, 1,
+        'first Compose to_app compiles retained Router once');
+    my $app_two = $description->to_app;
+    is($Local::CountingRouter::TO_APP_CALLS, 2,
+        'second Compose to_app creates one fresh Router graph');
+    my $one_events = run_scope($app_one, scope());
+    is([$one_events->[0]{status}, $one_events->[1]{body}], [200, 'home'],
+        'first compiled app dispatches independently');
+    my $two_events = run_scope($app_two, scope());
+    is([$two_events->[0]{status}, $two_events->[1]{body}], [200, 'home'],
+        'second compiled app dispatches independently');
+};
+
+subtest 'selected native immediate and Future-backed completion remain normalized' => sub {
     my $immediate_calls = 0;
-    my $immediate = compose(app => sub { ++$immediate_calls; return })->to_app;
-    run_scope($immediate, scope(type => 'example.extension'));
+    my $immediate = compose(routes => [
+        route('/immediate' => as_app(sub {
+            my ($scope, $receive, $send) = @_;
+            ++$immediate_calls;
+            $send->({
+                type => 'http.response.start', status => 204, headers => [],
+            })->get;
+            $send->({
+                type => 'http.response.body', body => '', more => 0,
+            })->get;
+            return;
+        })),
+    ])->to_app;
+    is(run_scope($immediate, scope(path => '/immediate')), [
+        { type => 'http.response.start', status => 204, headers => [] },
+        { type => 'http.response.body', body => '', more => 0 },
+    ], 'immediate app emits its complete response');
     is($immediate_calls, 1, 'immediate app completes normally');
 
     my $pending = Future->new;
-    my $future_app = compose(app => sub { return $pending })->to_app;
+    my $future_app = compose(routes => [
+        route('/future' => as_app(sub {
+            my ($scope, $receive, $send) = @_;
+            $send->({
+                type => 'http.response.start', status => 204, headers => [],
+            })->get;
+            $send->({
+                type => 'http.response.body', body => '', more => 0,
+            })->get;
+            return $pending;
+        })),
+    ])->to_app;
     my ($send) = capture_send();
     my $running = $future_app->(
-        scope(type => 'example.extension'),
+        scope(path => '/future'),
         sub { return Future->done },
         $send,
     );
     ok(!$running->is_ready, 'compiled app awaits a pending target Future');
     $pending->done('ignored target value');
     is($running->get, undef, 'target result is inert');
-
-    my $throwing = compose(app => sub { die "target threw\n" })->to_app;
-    like(dies { run_scope($throwing, scope(type => 'example.extension')) },
-        qr/target threw/, 'synchronous target errors propagate');
-    my $failing = compose(app => sub {
-        return Future->fail("target Future failed\n");
-    })->to_app;
-    like(dies { run_scope($failing, scope(type => 'example.extension')) },
-        qr/target Future failed/, 'failed target Futures propagate');
 };
 
-subtest 'object targets compile once per to_app' => sub {
+subtest 'routed object targets compile once per to_app' => sub {
     local $Local::ComposeComponent::COMPILES = 0;
-    my $object_description = compose(app => Local::ComposeComponent->new);
+    my $object_description = compose(routes => [
+        route('/object' => Local::ComposeComponent->new),
+    ]);
     my $object_app = $object_description->to_app;
-    run_scope($object_app, scope(type => 'example.extension'));
-    run_scope($object_app, scope(type => 'example.extension'));
+    run_scope($object_app, scope(path => '/object'));
+    run_scope($object_app, scope(path => '/object'));
     is($Local::ComposeComponent::COMPILES, 1, 'requests reuse one object compilation');
     my $object_app_two = $object_description->to_app;
     is($Local::ComposeComponent::COMPILES, 2, 'second to_app recompiles object');
 };
 
-subtest 'app mode delegates unknown non-lifespan scopes by channel identity' => sub {
-    my @seen;
-    my $target = sub {
-        push @seen, [map { refaddr($_) } @_];
-        return;
-    };
-    my $app = compose(app => $target)->to_app;
-    my $extension_scope = { type => 'example.extension', value => 1 };
-    my $receive = sub { return Future->done };
-    my $send = sub { return Future->done };
-    $app->($extension_scope, $receive, $send)->get;
-    is($seen[0], [map { refaddr($_) } ($extension_scope, $receive, $send)],
-        'all three native channels reach the target unchanged');
-};
-
 subtest 'no-hook lifespan succeeds without state and never reaches target' => sub {
     my $target_calls = 0;
-    my $app = compose(app => sub { ++$target_calls })->to_app;
+    my $app = compose(routes => [
+        route('/' => sub {
+            ++$target_calls;
+            return PAGI::Response::Text->new('target');
+        }),
+    ])->to_app;
     my $events = run_scope($app, scope(type => 'lifespan'), [
         { type => 'lifespan.startup' },
         { type => 'lifespan.shutdown' },
@@ -130,16 +181,21 @@ subtest 'only the outer composition owns nested lifecycle' => sub {
     my $inner_startup = 0;
     my $request_calls = 0;
     my $inner = compose(
-        app => sub { ++$request_calls; return },
+        routes => [route('/' => sub {
+            ++$request_calls;
+            return PAGI::Response::Text->new('inner');
+        })],
         lifespan => { startup => sub { ++$inner_startup; return } },
     );
-    my $outer = compose(app => $inner)->to_app;
+    my $outer = compose(routes => [
+        mount('/inner', app => $inner->to_app),
+    ])->to_app;
     run_scope($outer, scope(type => 'lifespan'), [
         { type => 'lifespan.startup' },
         { type => 'lifespan.shutdown' },
     ]);
     is($inner_startup, 0, 'outer owner never delegates lifecycle to nested Compose');
-    run_scope($outer, scope(type => 'example.extension'));
+    run_scope($outer, scope(path => '/inner/'));
     is($request_calls, 1, 'nested Compose remains a normal request target');
 };
 
