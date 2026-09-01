@@ -10,6 +10,7 @@ use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Response::Text ();
 use PAGI::Routing qw(mount);
+use PAGI::Routing::URL qw(path_for);
 use PAGI::Utils qw(as_app);
 
 sub channels {
@@ -84,6 +85,33 @@ subtest 'Compose preserves an explicit App Router snapshot through Mount' => sub
         'root Mount retains the immutable snapshot');
     is($root->path_for('/home'), '/',
         'outer Resolver discovers snapshot names');
+};
+
+subtest 'Compose mounts an App Router frontend directly for ordinary deployment' => sub {
+    my $default = PAGI::Response::Text->new(
+        'frontend missing', status => 404,
+    );
+    my $builder = PAGI::App::Router->new(http_default => $default);
+    $builder->get('/target' => sub {
+        my ($request) = @_;
+        return PAGI::Response::Text->new(path_for($request, 'target'));
+    })->name('target');
+
+    my $composition = compose(routes => [
+        mount('/' => app => $builder),
+    ]);
+
+    is($composition->route_named('/target'), undef,
+        'the outer Resolver does not inspect a frontend application');
+    my $app = $composition->to_app;
+    is(response_body(run_scope($app, path => '/target')), '/target',
+        'the selected frontend installs its own resolver for local links');
+    is(response_body(run_scope($app, path => '/missing')), 'frontend missing',
+        'the selected frontend retains its own HTTP default');
+    my $wrong = run_scope($app, method => 'POST', path => '/target');
+    is([$wrong->[0]{status}, response_header($wrong, 'Allow')],
+        [405, 'GET, HEAD'],
+        'the selected frontend retains Router-owned 405 and Allow');
 };
 
 subtest 'App Router to_app stays a bare Router compilation' => sub {

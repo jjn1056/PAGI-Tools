@@ -1056,7 +1056,7 @@ subtest 'removed compatibility surface stays absent' => sub {
         'Endpoint has no context_class hook');
 };
 
-subtest 'Compose distinguishes inspectable Endpoint snapshots from opaque frontends' => sub {
+subtest 'Compose treats direct Endpoint mounting as canonical while snapshots remain inspectable' => sub {
     my $endpoint = Local::UpgradeChildEndpoint->new;
 
     like(dies { compose(router => $endpoint) },
@@ -1074,15 +1074,17 @@ subtest 'Compose distinguishes inspectable Endpoint snapshots from opaque fronte
     ok($inspectable->route_named('/show'),
         'immutable snapshot is inspectable');
 
-    my $opaque = compose(routes => [
+    my $direct = compose(routes => [
         mount('/' => app => $endpoint),
     ]);
-    ok(!$opaque->route_named('/show'),
+    is(refaddr($direct->routes->[0]->app), refaddr($endpoint),
+        'ordinary deployment retains the exact Endpoint application object');
+    ok(!$direct->route_named('/show'),
         'frontend application remains opaque to parent inspection');
 
     is([
         response_body(run_scope($inspectable->to_app, scope(path => '/item/7'))),
-        response_body(run_scope($opaque->to_app, scope(path => '/item/7'))),
+        response_body(run_scope($direct->to_app, scope(path => '/item/7'))),
     ], ['nested:7', 'nested:7'],
         'inspectable and opaque mounts dispatch to the same Endpoint behavior');
 };

@@ -87,7 +87,7 @@ subtest 'background-task example keeps response-first HTTP dispatch at the Compo
         'the root Router dispatches the response-first index through Compose');
 };
 
-subtest 'a mounted object is one compiled application boundary' => sub {
+subtest 'a directly mounted application object compiles once per parent graph' => sub {
     my $component = Local::MountedIntegrationApp->new;
     my $middleware_builds = 0;
     my $mount_middleware = middleware(sub {
