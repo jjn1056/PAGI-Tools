@@ -428,6 +428,26 @@ subtest 'public documentation publishes one final routing model' => sub {
     }
 
     for my $file (
+        'examples/background-tasks/README.md',
+        'examples/endpoint-demo/README.md',
+        'examples/full-demo/README.md',
+        'examples/10-chat-showcase/README.md',
+    ) {
+        my $source = slurp_file($file);
+        unlike($source, qr/\$router->routes/,
+            "$file never teaches routes on the mutable frontend");
+        like($source,
+            qr/my\s+\$snapshot\s*=\s*\$router->to_router;.*?compose\(\s*routes\s*=>\s*\[\s*mount\('\/'\s*=>\s*app\s*=>\s*\$snapshot\)\s*\]/s,
+            "$file snapshots the frontend before the explicit root Mount");
+        like($source,
+            qr/\$snapshot->routes.*?deliberate.*?lossy.*?flatten/is,
+            "$file names snapshot routes as deliberate lossy flattening");
+        like($source,
+            qr/mount(?:ing)?\s+(?:the\s+)?(?:mutable\s+)?(?:frontend|\$router)\s+directly.*?valid.*?PAGI\s+application.*?opaque.*?(?:parent\s+Resolver|outer\s+reverse-routing\s+inspection)/is,
+            "$file calls direct mutable mounting valid but opaque");
+    }
+
+    for my $file (
         'lib/PAGI/Tools/Tutorial.pod',
         'lib/PAGI/Tools/Cookbook.pod',
     ) {

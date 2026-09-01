@@ -94,12 +94,19 @@ streaming, MIME types, ranges, conditional requests, and negotiated errors.
 The example does not duplicate filesystem path filtering or read static files
 into application memory.
 
-Both chat frontends materialize immutable Routers while each Compose boundary
-builds its own root Router. An unnamed `mount('/' => app =>
-$router->to_router)` consumes no path and adds no route-name namespace,
-preserving chat middleware, defaults, and reverse resolution; `$router->routes`
-would flatten those policies. `ChatApp::HTTP` uses the same boundary for its
-internal API Router before compiling it. See [PAGI::Compose](../../lib/PAGI/Compose.pm)
+Both chat frontends snapshot before each Compose boundary builds its own root
+Router:
+
+```perl
+my $snapshot = $router->to_router;
+compose(routes => [mount('/' => app => $snapshot)]);
+```
+
+The unnamed Mount preserves chat middleware, defaults, and reverse resolution;
+`$snapshot->routes` is deliberate, lossy flattening. Mounting the mutable
+frontend directly is valid as a PAGI application, but it is opaque to outer
+reverse-routing inspection. `ChatApp::HTTP` uses the same snapshot boundary
+for its internal API Router before compiling it. See [PAGI::Compose](../../lib/PAGI/Compose.pm)
 and [PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for details.
 
 See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)

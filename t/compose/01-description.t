@@ -59,6 +59,14 @@ my $routes_view = $composition->routes;
 is($routes_view, [$leaf], 'routes delegates to owned root Router');
 is(refaddr($composition->router), $root_router_addr,
     'router identity remains stable after routes accessor');
+is(scalar @{$composition->middleware}, 1,
+    'middleware accessor returns the configured root description');
+is(refaddr($composition->router), $root_router_addr,
+    'router identity remains stable after middleware accessor');
+is([sort keys %{$composition->lifespan}], ['startup'],
+    'lifespan accessor returns the configured root callback set');
+is(refaddr($composition->router), $root_router_addr,
+    'router identity remains stable after lifespan accessor');
 is(refaddr($composition->http_default), refaddr($default),
     'http_default delegates by identity');
 is(refaddr($composition->router), $root_router_addr,

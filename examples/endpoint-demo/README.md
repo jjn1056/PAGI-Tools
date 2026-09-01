@@ -96,12 +96,18 @@ explicit `app =>` positions, with Mount middleware declared by name. The `/`
 static-file mount is last because the shared routing engine preserves written
 order and a matched mount prefix owns dispatch immediately.
 
-The endpoint frontend materializes an immutable root Router. Compose constructs
-its own root Router, so the endpoint tree enters through an unnamed
-`mount('/' => app => $router->to_router)`. It consumes no path and adds no
-route-name namespace, preserving the endpoint mount middleware, defaults, and
-reverse resolver; `$router->routes` would flatten those policies. The HTTP,
-WebSocket, and SSE applications remain opaque at their existing mounts; see
+Snapshot the mutable endpoint frontend before mounting it beneath Compose:
+
+```perl
+my $snapshot = $router->to_router;
+compose(routes => [mount('/' => app => $snapshot)]);
+```
+
+This preserves endpoint Mount middleware, defaults, and reverse routing.
+`$snapshot->routes` is deliberate, lossy flattening. Mounting the mutable
+frontend directly is valid as a PAGI application, but it is opaque to outer
+reverse-routing inspection. The HTTP, WebSocket, and SSE applications remain
+opaque at their existing mounts; see
 [PAGI::Compose](../../lib/PAGI/Compose.pm) and
 [PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the boundary model.
 

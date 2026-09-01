@@ -107,8 +107,9 @@ $router->websocket('/ws/echo' => as_app(async sub { ... }));
 $router->sse('/events' => as_app(async sub { ... }));
 
 # Complete application boundary and lifespan callbacks
+my $snapshot = $router->to_router;
 compose(
-    routes => [mount('/' => app => $router->to_router)],
+    routes => [mount('/' => app => $snapshot)],
     lifespan => {
         startup  => async sub { ... },
         shutdown => async sub { ... },
@@ -119,13 +120,12 @@ compose(
 These handlers intentionally demonstrate the protocol channels directly, so
 each native coderef is explicitly marked with `as_app`. An ordinary App Router handler would receive
 `PAGI::Request` and return a Response. The declarations run in exactly the
-order shown. The demo frontend materializes an immutable Router, and Compose
-builds its own root Router around an unnamed `mount('/' => app =>
-$router->to_router)`. That Mount consumes no path and adds no route-name
-namespace, preserving the demo's Router middleware, defaults, and reverse
-resolver; `$router->routes` would flatten and discard those policies. Compose
-keeps the same callbacks and state identity while the selected Router owns its
-404 and 405 outcomes. See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
+order shown. The snapshot's unnamed root Mount preserves the demo Router's
+middleware, defaults, and reverse resolver; `$snapshot->routes` is the
+deliberate, lossy flattening form. Mounting the mutable frontend directly is
+valid as a PAGI application, but it is opaque to the parent Resolver. Compose
+keeps the same callbacks and state identity while the selected snapshot owns
+its 404 and 405 outcomes. See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
 [PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the complete boundary model.
 
 ## Lifespan State
