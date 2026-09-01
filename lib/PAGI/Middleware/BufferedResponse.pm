@@ -26,8 +26,9 @@ sub buffer_whole_response {
 
         my ($status, $headers);
         my @body_parts;
-        my $passing       = 0;
-        my $terminal_seen = 0;
+        my $passing        = 0;
+        my $terminal_seen  = 0;
+        my $terminal_event;   # the app's own event, re-emitted with a new body
 
         # Flush the withheld head plus whatever we buffered, as non-terminal
         # chunks, then hand the rest of the response straight through.
@@ -80,7 +81,8 @@ sub buffer_whole_response {
                     await $flush_as_stream->();
                     return;
                 }
-                $terminal_seen = 1;
+                $terminal_seen  = 1;
+                $terminal_event = $event;
                 return;
             }
 
@@ -116,8 +118,13 @@ sub buffer_whole_response {
         await $send->({ type    => 'http.response.start',
                         status  => $out_status,
                         headers => $out_headers // [] });
-        await $send->({ type => 'http.response.body',
-                        body => $out_body // '', more => 0 });
+
+        # Re-emit the application's own terminal event with the transformed
+        # body substituted, rather than constructing a fresh one. That keeps
+        # the event's native shape -- including an omitted `more`, which
+        # defaults to 0 and means the same thing but is not the same event.
+        # A middleware should change what it needs to and nothing else.
+        await $send->({ %$terminal_event, body => $out_body // '' });
         return;
     };
 }

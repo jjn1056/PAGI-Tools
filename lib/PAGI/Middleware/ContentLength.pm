@@ -3,7 +3,7 @@ package PAGI::Middleware::ContentLength;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
-use Future::AsyncAwait;
+use PAGI::Middleware::BufferedResponse qw(buffer_whole_response);
 
 =head1 NAME
 
@@ -49,133 +49,22 @@ sub _init {
 sub wrap {
     my ($self, $app) = @_;
 
-    return async sub  {
-        my ($scope, $receive, $send) = @_;
-        # Skip for non-HTTP requests
-        if ($scope->{type} ne 'http') {
-            await $app->($scope, $receive, $send);
-            return;
-        }
-
-        my @buffered_events;
-        my $has_content_length = 0;
-        my $is_streaming = 0;
-        my $status;
-        my @headers;
-        my $terminal_seen = 0;
-
-        # Create intercepting send to buffer response
-        my $wrapped_send = async sub  {
-        my ($event) = @_;
-            my $type = $event->{type};
-
-            if ($type eq 'http.response.start') {
-                $status = $event->{status};
-                @headers = @{$event->{headers} // []};
-
-                # Check if Content-Length already present
-                for my $h (@headers) {
-                    if (lc($h->[0]) eq 'content-length') {
-                        $has_content_length = 1;
-                        last;
-                    }
-                }
-
-                # If already has Content-Length or is streaming, pass through
-                if ($has_content_length || $is_streaming || $self->{auto_chunked}) {
-                    await $send->($event);
-                    return;
-                }
-
-                # Buffer the start event to add Content-Length later
-                push @buffered_events, $event;
-            }
-            elsif ($type eq 'http.response.body') {
-                # If we're passing through (has Content-Length or streaming)
-                if ($has_content_length || $is_streaming || $self->{auto_chunked}) {
-                    await $send->($event);
-                    return;
-                }
-
-                # Opaque (file/fh) bodies have no body string to measure --
-                # flush any buffered events unchanged (no Content-Length
-                # synthesized) and switch to pass-through, same as the
-                # streaming (more => 1) case below.
-                if ($event->{more} || PAGI::Middleware::body_event_is_opaque($event)) {
-                    $is_streaming = 1;
-
-                    # Flush buffered events and switch to pass-through
-                    for my $buffered (@buffered_events) {
-                        await $send->($buffered);
-                    }
-                    @buffered_events = ();
-                    await $send->($event);
-                    return;
-                }
-
-                # Buffer body events
-                push @buffered_events, $event;
-
-                # `more` defaults to 0, so an omitted `more` is terminal.
-                $terminal_seen = 1 unless $event->{more};
-            }
-            else {
-                # Pass through other events (trailers, etc.)
-                await $send->($event);
-            }
-        };
-
-        # Run the inner app
-        await $app->($scope, $receive, $wrapped_send);
-
-        return unless @buffered_events;
-
-        # No terminal event means there is no length to claim. Emit what we
-        # withheld, verbatim, so the response the application started is not
-        # destroyed -- but attach nothing. In practice only the start event can
-        # be here: every body event either diverts to the streaming/opaque
-        # branch above or sets $terminal_seen when it is buffered. The loop is
-        # written over the whole buffer anyway, so it stays correct if that
-        # invariant ever changes.
-        #
-        # Keyed on what we received rather than on why the application stopped,
-        # so this also covers an early return with the client still connected --
-        # a case the disconnect signal cannot see.
-        if (!$terminal_seen) {
-            for my $buffered (@buffered_events) {
-                await $send->($buffered);
-            }
-            return;
-        }
-
-        # If we have buffered events, calculate Content-Length and send
-        if (!$has_content_length && !$is_streaming) {
-            # Calculate total body length
-            my $body_length = 0;
-            for my $event (@buffered_events) {
-                if ($event->{type} eq 'http.response.body') {
-                    $body_length += length($event->{body} // '');
-                }
-            }
-
-            # Send start with Content-Length. The headers arrayref belongs to
-            # the application, which may build it once and reuse it across
-            # requests -- appending in place would bake this request's length
-            # into every later response. Copy, then add.
-            for my $event (@buffered_events) {
-                if ($event->{type} eq 'http.response.start') {
-                    my @with_length = (@{ $event->{headers} // [] },
-                                       ['content-length', $body_length]);
-                    await $send->({ %$event, headers => \@with_length });
-                    next;
-                }
-                # Body events are forwarded verbatim, which preserves each
-                # one's `more` value.
-                await $send->($event);
-            }
-        }
-    };
+    return buffer_whole_response($app,
+        engage => sub {
+            my ($status, $headers) = @_;
+            return 0 if $self->{auto_chunked};
+            # An application that set its own length owns it.
+            return 0 if grep { lc($_->[0]) eq 'content-length' } @$headers;
+            return 1;
+        },
+        transform => sub {
+            my ($status, $headers, $body) = @_;
+            push @$headers, ['content-length', length $body];
+            return ($status, $headers, $body);
+        },
+    );
 }
+
 
 1;
 

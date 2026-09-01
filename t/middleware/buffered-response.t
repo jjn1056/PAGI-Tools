@@ -154,6 +154,30 @@ subtest 'transform does not see the application headers arrayref' => sub {
         "the application's own headers arrayref was not appended to");
 };
 
+subtest 'the terminal event keeps its native shape' => sub {
+    # The application omitted `more`, which defaults to 0. The helper must
+    # re-emit its event with the transformed body substituted, not construct
+    # a fresh one carrying an explicit more => 0: semantically identical, but
+    # a middleware should change what it needs to and nothing else.
+    my $app = sub {
+        my ($s, $r, $send) = @_;
+        return (async sub {
+            await $send->({ type => 'http.response.start', status => 200,
+                            headers => [] });
+            await $send->({ type => 'http.response.body', body => 'native' });
+            return;
+        })->();
+    };
+
+    my @sent = drive(buffer_whole_response($app,
+        engage    => sub { 1 },
+        transform => sub { my ($st, $h, $b) = @_; return ($st, $h, uc $b) }));
+
+    my ($body) = grep { $_->{type} eq 'http.response.body' } @sent;
+    is($body, { type => 'http.response.body', body => 'NATIVE' },
+        'the event is the application\'s, with only the body changed');
+};
+
 subtest 'an opaque body is forwarded and transform is skipped' => sub {
     my $called = 0;
     my $app = sub {
