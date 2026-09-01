@@ -6,8 +6,8 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
 
 | Task | Status | Implementation commit | Tests | Evidence |
 |---|---|---|---|---|
-| 1. Retained description | in progress | — | — | — |
-| 2. Compiler and safety | pending | — | — | — |
+| 1. Retained description | complete | `9b9e4f16c5dcfba83e5018f961e7ed296c990ec3` | 4 files, 104 tests | RED: `t/compose/01-description.t` stopped after 4 assertions with `unknown compose option 'router'`; GREEN: focused constructor/reverse suite passed. |
+| 2. Compiler and safety | in progress | — | — | — |
 | 3. Lifespan and ordering | pending | — | — | — |
 | 4. Router frontends | pending | — | — | — |
 | 5. Flagship examples | pending | — | — | — |
