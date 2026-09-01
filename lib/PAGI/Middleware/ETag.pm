@@ -3,8 +3,8 @@ package PAGI::Middleware::ETag;
 use strict;
 use warnings;
 use parent 'PAGI::Middleware';
-use Future::AsyncAwait;
 use Digest::MD5 qw(md5_hex);
+use PAGI::Middleware::BufferedResponse qw(buffer_whole_response);
 
 =head1 NAME
 
@@ -45,148 +45,19 @@ sub _init {
 sub wrap {
     my ($self, $app) = @_;
 
-    return async sub  {
-        my ($scope, $receive, $send) = @_;
-        if ($scope->{type} ne 'http') {
-            await $app->($scope, $receive, $send);
-            return;
-        }
-
-        my @body_parts;
-        my $original_headers;
-        my $status;
-        my $is_streaming = 0;
-        my $terminal_seen = 0;
-
-        my $wrapped_send = async sub  {
-        my ($event) = @_;
-            if ($event->{type} eq 'http.response.start') {
-                $status = $event->{status};
-                $original_headers = $event->{headers};
-                # Check if already has ETag
-                for my $h (@{$original_headers // []}) {
-                    if (lc($h->[0]) eq 'etag') {
-                        # Already has ETag, pass through
-                        await $send->($event);
-                        $is_streaming = 1;  # Flag to pass through body
-                        return;
-                    }
-                }
-            }
-            elsif ($event->{type} eq 'http.response.body') {
-                if ($is_streaming) {
-                    await $send->($event);
-                    return;
-                }
-
-                # Opaque (file/fh) bodies have no body string to hash --
-                # flush anything buffered so far as streaming chunks and
-                # forward the opaque event verbatim, without an ETag.
-                if (PAGI::Middleware::body_event_is_opaque($event)) {
-                    # No start was ever observed -- don't invent one to carry it.
-                    return unless defined $status;
-
-                    $is_streaming = 1;
-                    await $send->({
-                        type    => 'http.response.start',
-                        status  => $status,
-                        headers => $original_headers // [],
-                    });
-                    for my $part (@body_parts) {
-                        await $send->({
-                            type => 'http.response.body',
-                            body => $part,
-                            more => 1,
-                        });
-                    }
-                    @body_parts = ();
-                    await $send->($event);
-                    return;
-                }
-
-                push @body_parts, $event->{body} // '';
-
-                # `more` defaults to 0, so an omitted `more` is terminal.
-                $terminal_seen = 1 unless $event->{more};
-
-                # If streaming, can't generate ETag
-                if ($event->{more}) {
-                    # No start was ever observed (a malformed inner app sent
-                    # a body chunk first) -- don't invent one to carry it.
-                    return unless defined $status;
-
-                    $is_streaming = 1;
-                    await $send->({
-                        type    => 'http.response.start',
-                        status  => $status,
-                        headers => $original_headers,
-                    });
-                    for my $part (@body_parts) {
-                        await $send->({
-                            type => 'http.response.body',
-                            body => $part,
-                            more => 1,
-                        });
-                    }
-                    @body_parts = ();
-                }
-            }
-            else {
-                await $send->($event);
-            }
-        };
-
-        await $app->($scope, $receive, $wrapped_send);
-
-        return if $is_streaming;
-
-        # The inner app never sent a start event at all -- don't invent a
-        # response it never gave us; let the server's no-response backstop
-        # fire with its accurate diagnostic.
-        return unless defined $status;
-
-        # We withheld the application's start event; emit it whatever else
-        # happened. Swallowing it tells every outer observer that no response
-        # was ever started -- a different state, which servers report
-        # differently and which can license a client to retry an idempotent
-        # request (RFC 9110 S9.2.2).
-        #
-        # Only a terminal event we actually received licenses the validator:
-        # an ETag over a partial body asserts those bytes are the whole
-        # representation, forbidden for any producer by PAGI::Spec::Www,
-        # "Application Left a Response Incomplete". This asks what we
-        # received, not why the application stopped, so it is equally correct
-        # for a client that vanished and for an application that returned
-        # early with its client still connected -- a case the disconnect
-        # signal cannot see at all.
-        unless ($terminal_seen) {
-            await $send->({
-                type    => 'http.response.start',
-                status  => $status,
-                headers => $original_headers // [],
-            });
-            return;
-        }
-
-        # Generate ETag from body
-        my $body = join('', @body_parts);
-        my $etag = $self->_generate_etag($body);
-
-        # Add ETag to headers
-        my @new_headers = @{$original_headers // []};
-        push @new_headers, ['ETag', $etag];
-
-        await $send->({
-            type    => 'http.response.start',
-            status  => $status,
-            headers => \@new_headers,
-        });
-        await $send->({
-            type => 'http.response.body',
-            body => $body,
-            more => 0,
-        });
-    };
+    return buffer_whole_response($app,
+        engage => sub {
+            my ($status, $headers) = @_;
+            # An application that set its own ETag owns it.
+            return 0 if grep { lc($_->[0]) eq 'etag' } @$headers;
+            return 1;
+        },
+        transform => sub {
+            my ($status, $headers, $body) = @_;
+            push @$headers, ['ETag', $self->_generate_etag($body)];
+            return ($status, $headers, $body);
+        },
+    );
 }
 
 sub _generate_etag {
