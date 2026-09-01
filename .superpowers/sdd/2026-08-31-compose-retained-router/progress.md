@@ -12,8 +12,8 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
 | 4. Router frontends | complete | `f3e3972` | 6 files, 57 tests | RED: focused frontend gate failed in the background-task root and retired Compose-native bridge, plus the old `router =>` classifier; GREEN: all six required frontend/POD-example files passed with explicit frontend snapshots. |
 | 5. Flagship examples | complete | `ae8e37f` | 2 files, 12 top-level tests | RED: new source-shape assertions rejected the retired apples nested Router and large-app `app =>` boundary; GREEN: both flagship integrations passed with CRUD, URL, default, static-file, middleware, and lifespan coverage. |
 | 6. Remaining examples | complete | `c1129e6d0fc55939dd04c2a480aa50d88c5ffbaa` | 9 files, 109 tests | RED: source-shape gate rejected every retired live app-mode target; GREEN: every selected example loaded and retained HTTP, WebSocket, SSE, lifespan, stream terminal, and disconnect behavior. |
-| 7. Public docs and upgrade | in progress | — | — | — |
-| 8. Final verification | pending | — | — | — |
+| 7. Public docs and upgrade | complete | `8aa8283c50563014909727e09be4d5f9981e7c99` | 3 files, 36 tests | Compose POD, public cross-links, exact migration recipes, Starlette comparison, Cookbook synchronization, and release notes now describe the retained-Router surface; POD syntax and semantic searches are clean. |
+| 8. Final verification | in progress | — | — | — |
 
 ## Task 6 example inventory (before edits)
 
@@ -59,6 +59,46 @@ over the eight planned maintained-example integrations plus
 the process-streaming end-to-end bulk/404/client-disconnect cases and the
 Endpoint Router WebSocket/SSE cases. The post-edit retired-mode search
 `rg -n -U 'compose\(\s*app\s*=>' examples t` produced no matches.
+
+## Task 7 public-documentation evidence
+
+Commit `8aa8283c50563014909727e09be4d5f9981e7c99` rewrites the public Compose
+contract around one retained Router, adds the exact immutable Router, mutable
+frontend, flattened routes-form, and arbitrary-native-app migration recipes,
+and records the deliberate Starlette lifespan comparison against the official
+application, routing, and routing-test sources. App and Endpoint Router POD now
+distinguish bare Router `to_app` from root `compose(router => $routing)`
+deployment. The Cookbook's complete apples block again matches the runnable
+example byte for byte.
+
+Focused GREEN evidence:
+
+```text
+perlbrew exec --with perl-5.42.2@default prove -lv \
+  t/00-pod t/upgrading-router-frontends.t \
+  t/upgrading-routing-composition.t
+Files=3, Tests=36, Result: PASS
+```
+
+`podchecker` reported `pod syntax OK` for all 11 modified public POD sources,
+including the three additional live contract cross-links in Router Mount,
+ErrorHandler, and Response. `git diff --check` passed. No malformed-POD or
+other warnings were present in the focused gate.
+
+The required multiline search
+`rg -n -U 'compose\(\s*app\s*=>' lib examples t README.md UPGRADING.md Changes`
+has exactly these intentional migration-before matches:
+
+```text
+UPGRADING.md:29:compose(app => $router)
+UPGRADING.md:47:compose(app => $builder)
+UPGRADING.md:64:compose(
+UPGRADING.md:65:    app => router(routes => \@routes, http_default => $default),
+```
+
+The companion semantic search for arbitrary-app acceptance, routes/app
+constructor claims, and temporary routes-mode Router construction produced no
+matches. Tutorial terminal event examples retain their explicit `more => 0`.
 
 ## Work map
 
@@ -165,3 +205,9 @@ None.
   and client-disconnect contract. `sse-close`, `sse-dashboard`, and all
   WebSocket examples were inspected without protocol-semantic edits; no
   concerns.)
+- Task 7: complete (implementation commit `8aa8283`; RED documentation
+  assertions identified the retired Compose callable position, missing
+  migration recipes, missing Starlette sources, and stale frontend/root
+  distinction; GREEN: 3 focused files / 36 tests plus 11 clean POD syntax
+  checks. Semantic searches leave only the three intentional `UPGRADING.md`
+  before recipes; self-review found no concerns.)
