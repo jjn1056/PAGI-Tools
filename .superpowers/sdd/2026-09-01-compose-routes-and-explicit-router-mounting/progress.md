@@ -18,8 +18,8 @@ Baseline: `perlbrew exec --with perl-5.42.2@default prove -lr t` — Files=224, 
 | 1. Compose constructor | complete | e4a0216370de8fd4d056fbb98b0c6fddaf48836f | 1 file, 55 tests PASS; syntax OK | TDD red: 6/56 failed under old constructor; green: 55/55; task review found no Critical or Important issues |
 | 2. Root Mount contract | complete | 6809879763b80e5de6f0876585546d569b7a0a44 | 3 files, 32 tests PASS | Characterization passed without production changes; task review approved with no findings |
 | 3. Lifecycle and safety | complete | 5a799d0 | 7 files, 118 tests PASS | Compiler and ResponseGuard unchanged; task review approved with no findings |
-| 4. Router frontends | in progress | — | — | — |
-| 5. Declarative examples | pending | — | — | — |
+| 4. Router frontends | complete | e177809, c45c155 | 5 files, 54 tests PASS | Inspectable/opaque frontend boundaries covered; task review approved with no findings |
+| 5. Declarative examples | in progress | — | — | — |
 | 6. Class-based examples | pending | — | — | — |
 | 7. Public documentation | pending | — | — | — |
 | 8. Final verification | pending | — | — | — |
@@ -79,3 +79,5 @@ Task 1: complete (commits f57e831..e4a0216, spec compliant; no Critical/Importan
 Task 2: complete (commits f713cce..6809879, review clean).
 
 Task 3: complete (commits 7619b0f..5a799d0, review clean).
+
+Task 4: complete (commits 08f198f..c45c155, review clean after controller boundary ruling).
