@@ -82,5 +82,7 @@ None.
   PASS, task quality PASS, no findings).
 - Task 2: complete (commits `0b460bb..3e5dae3`, review clean; spec compliance
   PASS, task quality PASS, no findings).
+- Task 3: complete (commits `8899a69..0368801`, review clean; spec compliance
+  PASS, task quality PASS, no findings).
 - Task 3: complete (commits `da561c6`; focused root-lifespan, middleware,
   mounted-boundary, and HEAD/buffering gate PASS; no production code changed).
