@@ -806,8 +806,19 @@ async sub every {
 
     # Future::IO must be configured with a backend
     no warnings 'once';
-    croak "Future::IO backend not configured. Add to your app.pl:\n"
-        . "  use Future::IO::Impl::IOAsync;\n"
+    croak "every() needs a Future::IO implementation, and none is configured.\n"
+        . "Binding one is the job of the program that starts the event loop --\n"
+        . "not a module, and not your application:\n"
+        . "  * under pagi-server: it binds one at startup, before loading your\n"
+        . "    application. Seeing this there is a bug in the server.\n"
+        . "  * writing your own runner around PAGI::Server -- a custom stack,\n"
+        . "    other things attached to ->loop: your runner IS that program.\n"
+        . "    Bind one there, before it loads the application.\n"
+        . "  * outside a server entirely (a test, a one-off script): likewise,\n"
+        . "    bind one in the script.\n"
+        . "    use Future::IO::Impl::IOAsync;   # or ::UV, ::Glib\n"
+        . "Bind it before anything calls Future::IO: the first call latches an\n"
+        . "implementation permanently, and a later bind cannot replace it.\n"
         unless $Future::IO::IMPL;
 
     await $self->start unless $self->is_started;
@@ -1406,24 +1417,49 @@ If callback returns a hashref, sends it as an event.
 Periodically executes a callback with a delay between iterations.
 The loop continues until the connection closes or the callback throws.
 
-B<Requires Future::IO> - this method will C<croak> if Future::IO is not
-installed and configured. You must configure Future::IO in your app before
-using C<every()>.
+B<Requires Future::IO> with an implementation bound. This method C<croak>s if
+Future::IO is not installed, or if no implementation has been configured.
 
-B<For apps running under PAGI::Server> (using C<pagi-server>):
+B<Do not bind one in your application.> Naming an implementation in
+application code ties that application to one event loop, which is exactly
+what PAGI's protocol exists to avoid. Binding belongs in the program that
+starts the event loop:
 
-    # app.pl
-    use Future::IO::Impl::IOAsync;
+=over 4
 
-    # ... rest of your app
+=item * B<Running under C<pagi-server>>
 
-B<For apps running under other event loops>:
+Nothing to do. The runner binds an implementation at startup, before it loads
+your application.
 
-    # If using IO::Async (PAGI::Server)
-    use Future::IO::Impl::IOAsync;
+=item * B<Writing your own runner around L<PAGI::Server>>
 
-    # If using UV
-    use Future::IO::Impl::UV;
+Your runner is that program -- this is the usual case when you are building a
+custom stack, or attaching other things to the server's C<< ->loop >>. Bind an
+implementation there, before the runner loads the application:
+
+    # my-runner.pl
+    use Future::IO::Impl::IOAsync;   # matches PAGI::Server's loop
+    use PAGI::Server;
+
+    my $server = PAGI::Server->new(app => $app, ...);
+    # ... attach your own things to $server->loop ...
+    $server->run;
+
+=item * B<Running outside a server>
+
+A test, or a one-off script. Same rule: bind one in the script.
+
+    use Future::IO::Impl::IOAsync;   # or ::UV, ::Glib
+
+=back
+
+B<Bind before anything calls Future::IO.> The first call latches an
+implementation permanently. If any code reaches Future::IO before you bind
+one, the blocking default is installed and your later bind is refused with
+C<Unable to set Future::IO implementation ...> -- after which awaiting a
+Future::IO future under an external event loop hangs, because nothing drives
+the default implementation.
 
 Parameters:
 

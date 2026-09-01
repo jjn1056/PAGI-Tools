@@ -36,6 +36,22 @@
     from it identified only the fragment while naming the resource. Pinned by
     t/middleware/head-promises.t, a matrix of head commitments against every
     body-transforming middleware.
+  - PAGI::SSE->every's unconfigured-Future::IO diagnostic no longer tells
+    application authors to bind an implementation in their own app. That
+    advice named IO::Async specifically -- wrong under any other loop -- and
+    put the binding in the one place it does not belong: naming an
+    implementation in application code ties the application to one event
+    loop, which is what the PAGI protocol exists to avoid. Binding belongs in
+    the program that starts the loop, which is pagi-server when you use it,
+    your own runner when you build a custom stack around PAGI::Server, and
+    your script when you run outside a server entirely. The message and POD
+    now say which of those you are in and what each one owes.
+
+    Both also now record the sharp edge, which nothing documented: the first
+    Future::IO call latches an implementation permanently, so a late bind is
+    refused and every subsequent await hangs, because nothing drives the
+    blocking default under an external event loop.
+
   - Documentation and examples now write more => 0 explicitly when
     originating a response. The key defaults to 0, so omitting it on a
     complete response is correct -- but omitting it on a re-emitted
