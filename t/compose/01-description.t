@@ -18,11 +18,6 @@ use PAGI::Routing qw(router route middleware);
     use PAGI::Compose qw(:ALL);
 }
 {
-    package DeferredComponentCheck;
-    sub new { return bless {}, $_[0] }
-    sub to_app { return sub { return } }
-}
-{
     package ComposeConfiguredMiddleware;
     sub new { return bless {}, $_[0] }
     sub wrap { return $_[1] }
@@ -48,38 +43,53 @@ my $leaf = route('/' => sub {
 }, name => 'home');
 
 my $default = PAGI::Pages->not_found(detail => 'No root route');
-my $routing = router(
-    routes       => [$leaf],
-    http_default => $default,
-    desc         => 'Retained root',
-);
-
+my $input_routes = [$leaf];
 my $composition = compose(
-    router     => $routing,
+    routes       => $input_routes,
+    http_default => $default,
+    desc         => 'Constructed root',
     middleware => [middleware('RequestId')],
     lifespan   => { startup => sub { return } },
 );
 
 isa_ok($composition, 'PAGI::Compose');
-is(refaddr($composition->router), refaddr($routing),
-    'router form retains exact Router identity');
-is($composition->routes, [$leaf], 'routes delegates to retained Router');
+isa_ok($composition->router, 'PAGI::Routing::Router');
+my $root_router_addr = refaddr($composition->router);
+my $routes_view = $composition->routes;
+is($routes_view, [$leaf], 'routes delegates to owned root Router');
+is(refaddr($composition->router), $root_router_addr,
+    'router identity remains stable after routes accessor');
 is(refaddr($composition->http_default), refaddr($default),
     'http_default delegates by identity');
-is($composition->desc, 'Retained root', 'desc delegates');
+is(refaddr($composition->router), $root_router_addr,
+    'router identity remains stable after http_default accessor');
+is($composition->desc, 'Constructed root', 'desc delegates');
+is(refaddr($composition->router), $root_router_addr,
+    'router identity remains stable after desc accessor');
 is($composition->path_for('/home'), '/', 'path_for delegates');
+is(refaddr($composition->router), $root_router_addr,
+    'router identity remains stable after path_for accessor');
 is(refaddr($composition->route_named('/home')), refaddr($leaf),
     'route_named delegates');
+is(refaddr($composition->router), $root_router_addr,
+    'router identity remains stable after route_named accessor');
 ok(exists $composition->named_routes->{'/home'},
     'named_routes delegates');
+is(refaddr($composition->router), $root_router_addr,
+    'router identity remains stable after named_routes accessor');
 ok(!$composition->can('app'), 'retired app accessor is absent');
 ok(!overload::Method($composition, '&{}'), 'composition has no coderef overload');
+
+push @$input_routes, route('/mutated' => sub {
+    return PAGI::Response::Text->new('bad');
+});
+is($composition->routes, [$leaf],
+    'Router retains a shallow copy of the supplied routes');
 
 my $factory = sub { my ($inner) = @_; return $inner };
 my $bare_configured = ComposeConfiguredMiddleware->new;
 my $mw = middleware('RequestId', header => 'X-Request-ID');
 my $startup = sub { return };
-my $routes = [$leaf];
 my $middleware = [
     middleware('RequestId'),
     middleware($factory),
@@ -88,7 +98,7 @@ my $middleware = [
 ];
 my $lifespan = { startup => $startup };
 my $shallow = compose(
-    router     => $routing,
+    routes     => [$leaf],
     middleware => $middleware,
     lifespan   => $lifespan,
 );
@@ -104,30 +114,10 @@ is(refaddr($stored->[3]), refaddr($mw),
     'explicit description identity is retained');
 is(refaddr($shallow->lifespan->{startup}), refaddr($startup),
     'callback identity is retained');
-
-my $from_routes = compose(
-    routes       => $routes,
-    http_default => $default,
-    desc         => 'Constructed root',
-);
-
-isa_ok($from_routes->router, 'PAGI::Routing::Router');
-is($from_routes->routes, [$leaf], 'routes form retains constructed Router');
-is(refaddr($from_routes->http_default), refaddr($default),
-    'routes form passes http_default to Router');
-is($from_routes->desc, 'Constructed root',
-    'routes form passes desc to Router');
-
-push @$routes, route('/mutated' => sub {
-    return PAGI::Response::Text->new('bad');
-});
 push @$middleware, middleware(sub { return $_[0] });
 $lifespan->{shutdown} = sub { return };
-push @{$from_routes->routes}, $leaf;
 push @{$shallow->middleware}, $mw;
 $shallow->lifespan->{shutdown} = sub { return };
-is($from_routes->routes, [$leaf],
-    'Router retains a shallow copy of the supplied routes');
 is(scalar @{$shallow->middleware}, 4,
     'normalized middleware input and accessor arrays are defensively copied');
 is([sort keys %{$shallow->lifespan}], ['startup'],
@@ -150,32 +140,17 @@ my @invalid = (
     ['server_error is not a Compose option',
         [routes => [], server_error => sub { }],
         qr/unknown compose option 'server_error'/],
-    ['missing target', [], qr/exactly one of routes or router/],
-    ['both targets', [routes => [], router => $routing],
-        qr/exactly one of routes or router/],
-    ['retired app Router', [app => $routing],
-        qr/no longer accepts 'app'.*router =>/s],
+    ['missing routes', [], qr/compose requires routes/],
+    ['router option', [router => router(routes => [])],
+        qr/compose no longer accepts 'router'.*mount\('\/' => app => \$router\)/s],
+    ['router plus routes', [routes => [], router => router(routes => [])],
+        qr/compose no longer accepts 'router'/],
+    ['retired app Router', [app => router(routes => [])],
+        qr/compose no longer accepts 'app'.*Mount/s],
     ['retired native app', [app => sub { return }],
         qr/no longer accepts 'app'.*deploy.*directly/s],
-    ['router undef', [router => undef],
-        qr/instantiated PAGI::Routing::Router/],
-    ['router coderef', [router => sub { return }],
-        qr/instantiated PAGI::Routing::Router/],
-    ['router generic to_app object',
-        [router => DeferredComponentCheck->new],
-        qr/instantiated PAGI::Routing::Router/],
-    ['router with http_default',
-        [router => $routing, http_default => $default],
-        qr/http_default cannot be combined with router/],
-    ['router with undef http_default',
-        [router => $routing, http_default => undef],
-        qr/http_default cannot be combined with router/],
-    ['router with desc', [router => $routing, desc => 'override'],
-        qr/desc cannot be combined with router/],
-    ['router with undef desc', [router => $routing, desc => undef],
-        qr/desc cannot be combined with router/],
-    ['routes not array', [routes => {}],
-        qr/routes must contain PAGI::Routing nodes/],
+    ['routes undef', [routes => undef], qr/compose routes must be an arrayref/],
+    ['routes hash', [routes => {}], qr/compose routes must be an arrayref/],
     ['invalid route member', [routes => [{}]],
         qr/routes must contain PAGI::Routing nodes/],
     ['middleware not array', [routes => [], middleware => {}], qr/middleware must be an arrayref/],
