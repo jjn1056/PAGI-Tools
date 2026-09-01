@@ -5,6 +5,7 @@ Repository: /Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools/.worktrees/comp
 Ticket: none
 Branch: feature/compose-retained-router
 Approved-spec commit: f03b78226f836cb631bb24d9c46b9baa086cf274
+Planning base: f03b78226f836cb631bb24d9c46b9baa086cf274
 Execution-start HEAD: f5f7c92efbb50e05d507e256d686b6ef3ad9f3e8
 Planning-time main/origin-main: 558b14c282a38051bd8c1bb712290fe1df398330
 Deployment boundary: unreleased PAGI-Tools distribution
