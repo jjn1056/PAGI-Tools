@@ -101,3 +101,5 @@ Task 7: stale-surface evidence — no live `compose(router => ...)` usage remain
 Task 7: fix round 1/5 (1 addressed, 0 open — example READMEs now assign child Router retention to the unnamed root Mount, and the public-doc guard covers both; commits 829fdc0..4107830).
 
 Task 7: complete (commits bf73d42..4107830, review clean after fix round 1).
+
+Task 8 Ruling: the verification worker owns Steps 1–5 and reports any attributable failure without spawning a reviewer or closing the ledger. The controller then performs the required task review and the execution skill's single broad whole-branch review, dispatches at most one final fix wave if needed, and closes the ledger only after that review evidence exists — this reconciles the plan's review requirement with the no-subagents worker contract and prevents duplicate final reviews; cost if wrong is process sequencing only, not product behavior.
