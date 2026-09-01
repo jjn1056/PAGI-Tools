@@ -194,6 +194,11 @@ None.
   PASS, task quality PASS, no findings).
 - Task 6: complete (commits `0ecf0eb..8769ea5`, review clean; spec compliance
   PASS, task quality PASS, no findings).
+- Task 7: fix round 1/5 (2 addressed, 0 open — corrected the routes/router
+  value-type distinction and restored Mount's exact target contract; commit
+  `c49ba0d`).
+- Task 7: complete (commits `df0c489..c49ba0d`, review clean after fix round
+  1; both Important findings addressed, no new breakage).
 - Task 5: complete (commit `ae8e37f`; RED exercised the new source-shape
   canaries; GREEN: `t/integration-starlette-apples.t` and
   `t/integration-large-application.t` passed. Reviewed the direct
