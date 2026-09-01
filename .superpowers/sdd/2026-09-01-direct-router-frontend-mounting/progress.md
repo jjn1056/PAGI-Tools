@@ -41,6 +41,11 @@ Push target: origin/feature/compose-retained-router after authorization
 
 - Ruling: The controller created the plan-specific ledger before Task 1 because the SDD skill requires recovery metadata before dispatch. Task 1 will verify and commit it rather than create it from scratch. Cost if wrong: Task 1's first procedural step differs from the plan wording, but the committed file content and audit guarantees are stronger and no product behavior changes.
 
+## Review log
+
+- Task 1: fix round 1/5 (1 addressed, 0 open — added the exact planning-base work-map field; commit 5de9ffc).
+- Task 1: complete (commits f5f7c92..5de9ffc, review clean).
+
 ## Retained user-facing `to_router` inventory
 
 Pending final classification in Task 5.
