@@ -22,7 +22,7 @@ sub new {
     my %allowed = map { $_ => 1 }
         qw(routes http_default desc middleware lifespan);
 
-    croak q{compose no longer accepts 'router'; put an existing Router in mount('/' => app => $router)}
+    croak q{compose no longer accepts 'router'; mount an existing Router at the root through app => $router}
         if exists $opts{router};
 
     croak q{compose no longer accepts 'app'; deploy the application directly or compose it through Mount}
@@ -176,11 +176,15 @@ C<desc>, C<middleware>, and C<lifespan>. Exactly one of C<routes> and
 C<router> is required. An odd option list, an unknown key, or providing
 neither or both forms is an error.
 
-C<app> is no longer a Compose option. A Router belongs in C<router>. A mutable
-L<PAGI::App::Router> or L<PAGI::Endpoint::Router> crosses the immutable
-boundary explicitly with C<to_router>. An arbitrary native application has
-no direct Compose form in this release; deploy it directly or use a separately
-designed application boundary.
+C<app> and C<router> are no longer Compose options. Put an existing immutable
+Router behind an explicit root Mount instead:
+
+    compose(routes => [mount('/', app => $router)])
+
+A mutable L<PAGI::App::Router> or L<PAGI::Endpoint::Router> crosses the
+immutable boundary explicitly with C<to_router>. An arbitrary native
+application has no direct Compose form in this release; deploy it directly or
+use a separately designed application boundary.
 
 Callable meaning is positional and deliberate:
 
