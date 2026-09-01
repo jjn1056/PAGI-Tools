@@ -155,11 +155,21 @@ sub to_app {
                 return if $forwarded_start;
             }
 
+            # A client that had already gone is not an application fault, and
+            # the exemption covers this raise as much as the after_start one
+            # above (PAGI::Spec::Www, "Application Produced No Response":
+            # already disconnected "is not an application error"). Trying
+            # further children for a client that left would be pointless
+            # anyway.
+            return if request_ended_abnormally($scope);
+
             die PAGI::Exception::IncompleteResponse->new(
                 stage   => 'before_start',
                 message => 'HTTP application completed without starting a response',
             );
         }
+
+        return if request_ended_abnormally($scope);
 
         die PAGI::Exception::IncompleteResponse->new(
             stage   => 'before_start',
@@ -182,6 +192,14 @@ child begins. A final response always passes through unchanged, even when its
 status is listed in C<catch>. Exceptions and applications that complete without
 starting a response never advance; silence throws
 L<PAGI::Exception::IncompleteResponse>.
+
+The one exception is a request whose client B<already disconnected>, which
+L<PAGI::Spec::Www/"Application Produced No Response"> says "is not an
+application error". Cascade stays silent for those, whether the response never
+started or started and stopped short, matching
+L<PAGI::Compose::ResponseGuard>. The discriminator is a defined
+C<disconnect_reason>, not C<is_connected>, which a clean completion also
+clears.
 
 Response starts and body chunks from a non-caught child are forwarded as they
 arrive rather than buffered until completion. Caught events are suppressed.
