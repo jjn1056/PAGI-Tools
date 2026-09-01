@@ -59,6 +59,12 @@ subtest 'Endpoint methods receive direct protocol objects' => sub {
         'WebSocket Endpoint method receives WebSocket');
     like($events, qr/sub stream\s*\{.*?my \(\$self, \$sse\) = \@_/s,
         'SSE Endpoint method receives SSE');
+    like($main,
+        qr{mount\('/api'\s*,\s*app\s*=>\s*\$self->\{api\}->to_router\)},
+        'Main keeps the API snapshot because it resolves API descendant names');
+    like($api,
+        qr{mount\('/events'\s*,\s*app\s*=>\s*\$self->\{events\}->to_router\)},
+        'API keeps the Events snapshot in its inspectable namespace');
     like($api, qr/\$self->new_request\(\$scope, \$receive\)/,
         'native middleware explicitly constructs Request');
     unlike($api . $main . $events, qr/new_context|\$c\b/,
@@ -82,6 +88,11 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
 
     my $app_file = "$Bin/../examples/endpoint-router-demo/app.pl";
     my $app_source = source_text($app_file);
+    like($app_source,
+        qr{mount\('/'\s*=>\s*app\s*=>\s*\$main\)},
+        'Compose mounts the configured Main Endpoint directly');
+    unlike($app_source, qr/\$main->to_router/,
+        'the root does not materialize an unused Main snapshot');
     my $app = do $app_file;
     my $load_error = $@ || $!;
     ok(!$load_error, 'the real Endpoint demo app file loads cleanly')

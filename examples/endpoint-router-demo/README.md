@@ -1,8 +1,8 @@
 # Nested Endpoint Router Demo
 
 This is the canonical nested `PAGI::Endpoint::Router` example. Three ordinary
-objects declare one immutable routing snapshot; the deployed root uses
-`PAGI::Compose` to own mutable server state and lifecycle callbacks.
+objects declare a nested routing tree; the deployed root uses `PAGI::Compose`
+to own mutable server state and lifecycle callbacks.
 
 ## Package tree
 
@@ -22,19 +22,21 @@ my $api    = MyApp::API->new(events => $events);
 my $main   = MyApp::Main->new(api => $api);
 
 my $app = compose(
-    routes => [mount('/' => app => $main->to_router)],
-    lifespan => { ... },
+    routes => [mount('/' => app => $main)],
+    lifespan => { startup => \&startup, shutdown => \&shutdown },
 );
 ```
 
-`app.pl` returns that to_app-capable Compose object for the server to compile.
-The nested Endpoint tree materializes one immutable Router while Compose builds
-its own root Router. The unnamed root Mount consumes no path and adds no
-route-name namespace, preserving the tree's API middleware, defaults, and
-reverse resolver; `$main->to_router->routes` would flatten and discard those
-policies. The selected Endpoint Router therefore owns its negotiated 404 and
-405 while Compose supplies response-completion and application-error safeguards.
-See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
+`Main` is already a PAGI application and needs no root conversion. Main's own
+compilation installs the resolver used by `home`. Main converts API because
+`home` resolves `/api/index`; API converts Events so
+`/api/events/stream` remains part of the inspectable tree. The outer Compose
+Router does not need Main's descendant names merely to deploy it, so the root
+mount keeps `$main` as the application boundary. `$main->to_router` remains
+useful to tests and tools that inspect the whole tree. The selected Endpoint
+Router therefore owns its negotiated 404 and 405 while Compose supplies
+response-completion and application-error safeguards. See
+[PAGI::Compose](../../lib/PAGI/Compose.pm) and
 [PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for details.
 
 Each package owns only its immutable configuration: `Main` keeps its `api`

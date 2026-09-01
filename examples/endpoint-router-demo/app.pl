@@ -15,7 +15,7 @@ my $main   = MyApp::Main->new(api => $api);
 
 compose(
     routes => [
-        mount('/' => app => $main->to_router),
+        mount('/' => app => $main),
     ],
     lifespan => {
         startup => sub {
