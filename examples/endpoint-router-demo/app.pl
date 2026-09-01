@@ -13,7 +13,7 @@ my $api    = MyApp::API->new(events => $events);
 my $main   = MyApp::Main->new(api => $api);
 
 compose(
-    app => $main->to_router,
+    router => $main->to_router,
     lifespan => {
         startup => sub {
             my ($state) = @_;

@@ -208,7 +208,7 @@ $router->sse('/events' => as_app(async sub {
 # ============================================================================
 
 compose(
-    app => $router,
+    router => $router->to_router,
     lifespan => {
         startup => async sub {
             my ($state) = @_;

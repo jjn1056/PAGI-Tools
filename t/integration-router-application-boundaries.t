@@ -72,6 +72,15 @@ local $ENV{PAGI_ENV} = 'production';
 
 subtest 'background-task example remains a composable routing object during response migration' => sub {
     my $file = "$Bin/../examples/background-tasks/app.pl";
+    my $source = do {
+        open my $fh, '<', $file or die "cannot open $file: $!\n";
+        local $/;
+        <$fh>;
+    };
+    unlike($source, qr/compose\s*\(\s*app\s*=>/s,
+        'background-task example does not use retired Compose app mode');
+    like($source, qr/compose\s*\(\s*router\s*=>\s*\$router->to_router/s,
+        'background-task example crosses its App Router with to_router');
     my $app = do $file;
     my $load_error = $@;
     ok(!$load_error, 'background-task example loads cleanly')

@@ -7,6 +7,15 @@ use lib "$Bin/../examples/declarative-routing/lib";
 use PAGI::Test::Client;
 
 my $app_file = "$Bin/../examples/declarative-routing/app.pl";
+my $app_source = do {
+    open my $fh, '<', $app_file or die "cannot open $app_file: $!\n";
+    local $/;
+    <$fh>;
+};
+unlike($app_source, qr/compose\s*\(\s*app\s*=>/s,
+    'declarative-routing does not use retired Compose app mode');
+like($app_source, qr/compose\s*\(\s*router\s*=>\s*\$routing/s,
+    'declarative-routing retains its configured Router at the Compose root');
 
 my $package_loaded = eval {
     require MyApp::Routes::Home;

@@ -81,6 +81,11 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
     )], 'nested local names form canonical absolute addresses');
 
     my $app_file = "$Bin/../examples/endpoint-router-demo/app.pl";
+    my $app_source = source_text($app_file);
+    unlike($app_source, qr/compose\s*\(\s*app\s*=>/s,
+        'Endpoint Router demo does not use retired Compose app mode');
+    like($app_source, qr/compose\s*\(\s*router\s*=>\s*\$main->to_router/s,
+        'Endpoint Router demo crosses its mutable frontend with to_router');
     my $app = do $app_file;
     my $load_error = $@ || $!;
     ok(!$load_error, 'the real Endpoint demo app file loads cleanly')

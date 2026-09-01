@@ -73,4 +73,4 @@ my $routing = router(
     http_default => request_response(\&root_not_found),
 );
 
-compose(app => $routing);
+compose(router => $routing);

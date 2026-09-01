@@ -13,6 +13,10 @@ curl -s http://localhost:5000/reports/bulk | wc -c
 
 ## What it demonstrates
 
+**A direct declarative root.** The application gives Compose its two root
+routes with `routes => [...]` and its `http_default` directly, so no separate
+Router needs to be retained just to deploy this small HTTP application.
+
 **A four-line source adapter.** `PAGI::Response::Writer::pipe_from` needs one
 method — `next_chunk`, returning bytes or `undef` at end of stream, immediately
 or as a Future. A child process's stdout becomes a response body with:

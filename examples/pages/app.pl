@@ -45,7 +45,7 @@ my $routing = router(routes => [
 ]);
 
 compose(
-    app => $routing,
+    router => $routing,
     lifespan => {
         startup => sub {
             my ($state, $scope) = @_;

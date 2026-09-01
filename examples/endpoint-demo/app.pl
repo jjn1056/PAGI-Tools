@@ -215,4 +215,4 @@ $router->mount('/events',
 # Static files as fallback for everything else (no middleware)
 $router->mount('/', app => PAGI::App::File->from_app_path('public'));
 
-compose(app => $router);
+compose(router => $router->to_router);

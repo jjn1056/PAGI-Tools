@@ -42,6 +42,13 @@ for my $case (@cases) {
         unlike($source, qr/PAGI::App::File->new\s*\(/,
             'contains no manual App File constructor');
 
+        if ($case->{name} eq 'endpoint demo') {
+            unlike($source, qr/compose\s*\(\s*app\s*=>/s,
+                'endpoint demo does not use retired Compose app mode');
+            like($source, qr/compose\s*\(\s*router\s*=>\s*\$router->to_router/s,
+                'endpoint demo crosses its App Router with to_router');
+        }
+
         local $ENV{PAGI_HOME};
         delete $ENV{PAGI_HOME};
         local $ENV{PAGI_ENV} = 'production';

@@ -21,7 +21,7 @@ my $events = MyApp::API::Events->new;
 my $api    = MyApp::API->new(events => $events);
 my $main   = MyApp::Main->new(api => $api);
 
-my $app = compose(app => $main->to_router, lifespan => { ... });
+my $app = compose(router => $main->to_router, lifespan => { ... });
 ```
 
 `app.pl` returns that to_app-capable Compose object for the server to compile.

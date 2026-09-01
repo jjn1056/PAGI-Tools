@@ -78,7 +78,7 @@ sub handler {
     $router->get('/api/room/{name}/users' => \&_room_users_handler);
     $router->get('/api/stats' => \&_stats_handler);
 
-    my $api_app = compose(app => $router)->to_app;
+    my $api_app = compose(router => $router->to_router)->to_app;
 
     return async sub {
         my ($scope, $receive, $send) = @_;

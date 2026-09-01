@@ -14,7 +14,7 @@ ordinary shape without turning the example into a framework:
 - absolute slash-addressed `path_for($request, ...)` and request-aware
   `url_for($request, ...)` from `PAGI::Routing::URL` (both return strings and
   perform no protocol I/O); and
-- a final `compose(app => $routing)` expression, so `app.pl` evaluates to an
+- a final `compose(router => $routing)` expression, so `app.pl` evaluates to an
   inspectable `PAGI::Compose` object that a conforming server compiles once
   through its `to_app` method.
 

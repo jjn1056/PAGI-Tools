@@ -50,6 +50,15 @@ like($html->text, qr/<title>200 Welcome to PAGI<\/title>/,
     'the root invocation renders the stock Pages document');
 
 my $app_file = "$Bin/../examples/pages/app.pl";
+my $app_source = do {
+    open my $fh, '<', $app_file or die "cannot open $app_file: $!\n";
+    local $/;
+    <$fh>;
+};
+unlike($app_source, qr/compose\s*\(\s*app\s*=>/s,
+    'Pages example does not use retired Compose app mode');
+like($app_source, qr/compose\s*\(\s*router\s*=>\s*\$routing/s,
+    'Pages example retains its configured Router at the Compose root');
 my $example = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'the complete Pages example loads cleanly')

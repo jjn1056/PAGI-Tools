@@ -18,7 +18,17 @@ sub source_text {
 
 my $app_file = "$Bin/../examples/10-chat-showcase/app.pl";
 my $http_file = "$Bin/../examples/10-chat-showcase/lib/ChatApp/HTTP.pm";
+my $app_source = source_text($app_file);
 my $http_source = source_text($http_file);
+
+unlike($app_source, qr/compose\s*\(\s*app\s*=>/s,
+    'chat root does not use retired Compose app mode');
+like($app_source, qr/compose\s*\(\s*router\s*=>\s*\$router->to_router/s,
+    'chat root crosses its App Router with to_router');
+unlike($http_source, qr/compose\s*\(\s*app\s*=>/s,
+    'chat HTTP child does not use retired Compose app mode');
+like($http_source, qr/compose\s*\(\s*router\s*=>\s*\$router->to_router/s,
+    'chat HTTP child crosses its App Router with to_router');
 
 like($http_source,
     qr/PAGI::App::File->from_app_path\('public'\)->to_app/,

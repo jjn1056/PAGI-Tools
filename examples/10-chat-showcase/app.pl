@@ -81,7 +81,7 @@ $router->sse('/events' => as_app($sse_handler));
 $router->mount('/', app => $http_handler);
 
 compose(
-    app => $router,
+    router => $router->to_router,
     middleware => [middleware(\&with_logging)],
     lifespan => {
         startup => async sub {

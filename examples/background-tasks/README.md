@@ -7,7 +7,9 @@ its App Router declarations wrap native three-channel applications with
 `as_app`. Ordinary App handlers instead receive `PAGI::Request`, return an
 application value, and leave invocation to the shared routing compiler.
 
-The final Router is deployed through `compose(app => $router)`. Direct
+The final App Router is deployed through
+`compose(router => $router->to_router)`: `to_router` makes the explicit
+immutable Router crossing before Compose receives it. Direct
 `$router->to_app` remains useful as a low-level routing component, and the
 Router itself emits complete stock or configured 404 and 405 responses,
 including negotiated bodies and `Allow`. Compose supplies lifecycle,

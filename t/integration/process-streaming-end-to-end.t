@@ -30,6 +30,16 @@ eval { require PAGI::Server; 1 }
 my $app_file = "$FindBin::Bin/../../examples/process-streaming/app.pl";
 plan skip_all => "example not found: $app_file" unless -f $app_file;
 
+my $source = do {
+    open my $fh, '<', $app_file or die "cannot open $app_file: $!\n";
+    local $/;
+    <$fh>;
+};
+unlike($source, qr/compose\s*\(\s*app\s*=>/s,
+    'process-streaming does not use retired Compose app mode');
+like($source, qr/compose\s*\(\s*routes\s*=>/s,
+    'process-streaming declares its direct root with routes');
+
 my $app = do $app_file;
 die "cannot load $app_file: " . ($@ || $!) unless defined $app;
 # The example ends in compose(...), which yields an application-provider

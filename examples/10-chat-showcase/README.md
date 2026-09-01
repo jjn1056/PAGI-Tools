@@ -74,8 +74,11 @@ streaming, MIME types, ranges, conditional requests, and negotiated errors.
 The example does not duplicate filesystem path filtering or read static files
 into application memory.
 
-The final `compose(...)` expression remains an inspectable object in
-`app.pl`; the server compiles its `to_app` method once when loading it.
+The final `compose(router => $router->to_router, ...)` expression crosses the
+App Router explicitly into an immutable Router and remains an inspectable
+object in `app.pl`; the server compiles its `to_app` method once when loading
+it. `ChatApp::HTTP` makes the same explicit `to_router` crossing for its
+internal API Router before compiling that child boundary.
 
 See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)
 for the status, hidden-file, symlink, and XSendfile migration contract.

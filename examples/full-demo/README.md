@@ -108,7 +108,7 @@ $router->sse('/events' => as_app(async sub { ... }));
 
 # Complete application boundary and lifespan callbacks
 compose(
-    app => $router,
+    router => $router->to_router,
     lifespan => {
         startup  => async sub { ... },
         shutdown => async sub { ... },
@@ -119,7 +119,8 @@ compose(
 These handlers intentionally demonstrate the protocol channels directly, so
 each native coderef is explicitly marked with `as_app`. An ordinary App Router handler would receive
 `PAGI::Request` and return a Response. The declarations run in exactly the
-order shown. Compose
+order shown. `to_router` materializes the App Router's immutable snapshot
+before Compose receives it. Compose
 keeps the same callbacks and state identity while providing lifecycle,
 application-error, and response-completion safety around the Router. The
 Router itself emits complete stock or configured 404 and 405 responses;

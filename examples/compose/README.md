@@ -2,7 +2,8 @@
 
 This example uses `PAGI::Compose` to put one declarative route target,
 application-wide request-ID middleware, and startup/shutdown callbacks at the
-deployed application root. `compose(%options)` returns an immutable description;
+deployed application root. Its direct root declares `routes => [...]`;
+`compose(%options)` returns an immutable description;
 the final `->to_app` compiles the PAGI coderef that the server runs.
 
 Run it with:
