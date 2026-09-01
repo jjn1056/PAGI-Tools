@@ -35,6 +35,7 @@ PAGI::App::Router - Mutable declarations for the immutable PAGI router
     use PAGI::Compose qw(compose);
     use Future::AsyncAwait;
     use PAGI::Pages ();
+    use PAGI::Routing qw(mount);
 
     my $people = PAGI::App::Router->new;
     $people->get('/{id}' => \&show)->name('show');
@@ -57,7 +58,10 @@ PAGI::App::Router - Mutable declarations for the immutable PAGI router
     $r->mount('/people', app => $people->to_router)->name('people');
     $r->mount('/static', app => $static_app);
 
-    my $app = compose(router => $r->to_router)->to_app;
+    my $snapshot = $r->to_router;
+    my $app = compose(
+        routes => [mount('/' => app => $snapshot)],
+    )->to_app;
 
 =head1 DESCRIPTION
 
@@ -253,12 +257,17 @@ protocol misses use stock protocol behavior. Direct compilation deliberately
 does not install lifespan handling, error handling, or a response guard.
 Call C<to_router> when the immutable snapshot must be retained or inspected.
 
-For root deployment, retain the immutable boundary explicitly:
+For root deployment, retain and mount the immutable boundary explicitly:
 
-    my $routing = $r->to_router;
-    my $root = compose(router => $routing);
+    my $snapshot = $r->to_router;
+    my $app = compose(
+        routes => [mount('/' => app => $snapshot)],
+    )->to_app;
 
-C<< compose(router => $routing) >> retains that exact snapshot and supplies
+The explicit snapshot Mount is inspectable: its names remain available through
+the outer Compose Router. Mounting C<$r> itself with C<< app => $r >> is also
+valid, but it is an opaque application boundary: Compose does not call
+C<to_router> automatically or expose the frontend's names. Compose supplies
 application middleware, root lifespan, ErrorHandler, response-completion
 guarding, and the outer HEAD boundary. It does not add lifespan to the Router.
 

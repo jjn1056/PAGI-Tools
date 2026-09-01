@@ -236,7 +236,9 @@ sub immutable_router_projection {
 
 sub exercise_representative {
     my ($routing, $seen) = @_;
-    my $app = compose(router => $routing)->to_app;
+    my $app = compose(routes => [
+        mount('/' => app => $routing),
+    ])->to_app;
     my $full = run_scope($app, scope(path => '/resource/7'));
     my $partial = run_scope($app, scope(
         method => 'DELETE', path => '/resource/7'));
@@ -436,7 +438,9 @@ my @migration_cases = (
                         label => 'get', request_method => 'GET',
                         routing => {
                             logical_namespace => '/', captures => { id => 7 },
-                            mounts => [],
+                            mounts => [{
+                                path => '/', name => undef, desc => undef,
+                            }],
                             match => {
                                 kind => 'route', route => '/resource/{id}',
                                 name => '/get_resource', logical_namespace => '/',
@@ -447,7 +451,9 @@ my @migration_cases = (
                         label => 'get', request_method => 'HEAD',
                         routing => {
                             logical_namespace => '/', captures => { id => 7 },
-                            mounts => [],
+                            mounts => [{
+                                path => '/', name => undef, desc => undef,
+                            }],
                             match => {
                                 kind => 'route', route => '/resource/{id}',
                                 name => '/get_resource', logical_namespace => '/',
@@ -459,10 +465,13 @@ my @migration_cases = (
                         routing => {
                             logical_namespace => '/api',
                             captures => { tenant => 'acme', child_id => 9 },
-                            mounts => [{
-                                path => '/api/{tenant}', name => 'api',
-                                desc => 'API boundary',
-                            }],
+                            mounts => [
+                                { path => '/', name => undef, desc => undef },
+                                {
+                                    path => '/api/{tenant}', name => 'api',
+                                    desc => 'API boundary',
+                                },
+                            ],
                             match => {
                                 kind => 'route',
                                 route => '/api/{tenant}/detail/{child_id}',
@@ -474,7 +483,9 @@ my @migration_cases = (
                         label => 'websocket',
                         routing => {
                             logical_namespace => '/', captures => { room => 'lobby' },
-                            mounts => [],
+                            mounts => [{
+                                path => '/', name => undef, desc => undef,
+                            }],
                             match => {
                                 kind => 'websocket', route => '/socket/{room}',
                                 name => '/socket', logical_namespace => '/',
@@ -485,7 +496,9 @@ my @migration_cases = (
                         label => 'sse',
                         routing => {
                             logical_namespace => '/', captures => { stream => 'news' },
-                            mounts => [],
+                            mounts => [{
+                                path => '/', name => undef, desc => undef,
+                            }],
                             match => {
                                 kind => 'sse', route => '/events/{stream}',
                                 name => '/events', logical_namespace => '/',
@@ -786,7 +799,7 @@ my @migration_cases = (
             my $endpoint = Local::UpgradeEndpoint->new;
             my $state = {};
             my $app = compose(
-                router => $endpoint->to_router,
+                routes => [mount('/' => app => $endpoint->to_router)],
                 lifespan => { startup => sub { $_[0]{phase} = 'ready' } },
             )->to_app;
             my @messages = (
@@ -1043,17 +1056,31 @@ subtest 'removed compatibility surface stays absent' => sub {
         'Endpoint has no context_class hook');
 };
 
-subtest 'Compose retains an explicit Endpoint Router snapshot' => sub {
-    my $endpoint = Local::UpgradeEndpoint->new;
+subtest 'Compose distinguishes inspectable Endpoint snapshots from opaque frontends' => sub {
+    my $endpoint = Local::UpgradeChildEndpoint->new;
 
     like(dies { compose(router => $endpoint) },
-        qr/instantiated PAGI::Routing::Router/,
-        'Compose does not guess Endpoint frontend materialization');
+        qr/no longer accepts 'router'.*mount/s,
+        'Compose rejects the retired Router constructor mode');
 
-    my $routing = $endpoint->to_router;
-    my $root = compose(router => $routing);
-    is(refaddr($root->router), refaddr($routing),
-        'explicit Endpoint Router snapshot is retained');
+    my $snapshot = $endpoint->to_router;
+    my $inspectable = compose(routes => [
+        mount('/' => app => $snapshot),
+    ]);
+    ok($inspectable->route_named('/show'),
+        'immutable snapshot is inspectable');
+
+    my $opaque = compose(routes => [
+        mount('/' => app => $endpoint),
+    ]);
+    ok(!$opaque->route_named('/show'),
+        'frontend application remains opaque to parent inspection');
+
+    is([
+        response_body(run_scope($inspectable->to_app, scope(path => '/item/7'))),
+        response_body(run_scope($opaque->to_app, scope(path => '/item/7'))),
+    ], ['nested:7', 'nested:7'],
+        'inspectable and opaque mounts dispatch to the same Endpoint behavior');
 };
 
 done_testing;

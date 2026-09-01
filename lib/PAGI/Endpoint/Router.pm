@@ -107,7 +107,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
     use PAGI::Compose qw(compose);
     use PAGI::Response::JSON ();
     use PAGI::Response::Text ();
-    use PAGI::Routing qw(middleware);
+    use PAGI::Routing qw(middleware mount);
     use PAGI::Utils qw(as_app);
 
     sub new {
@@ -152,7 +152,10 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 
     my $endpoint = MyApp::Endpoint->new(repository => $repository);
     my $static = $endpoint->app_path('static');
-    my $app = compose(router => $endpoint->to_router)->to_app;
+    my $snapshot = $endpoint->to_router;
+    my $app = compose(
+        routes => [mount('/' => app => $snapshot)],
+    )->to_app;
 
 =head1 DESCRIPTION
 
@@ -212,16 +215,21 @@ declared; HTTP PARTIAL likewise retains the Router's negotiated 405. It never
 completes HTTP exhaustion silently.
 Call C<to_router> when the immutable snapshot must be retained or inspected.
 
-For root deployment, cross the immutable boundary explicitly:
+For root deployment, cross the immutable boundary and mount it explicitly:
 
-    my $routing = $endpoint->to_router;
-    my $root = compose(router => $routing);
+    my $snapshot = $endpoint->to_router;
+    my $app = compose(
+        routes => [mount('/' => app => $snapshot)],
+    )->to_app;
 
-C<< compose(router => $routing) >> retains that exact snapshot and adds
-application middleware, root lifespan callbacks, ErrorHandler,
-response-completion guarding, and the outer HEAD boundary. Compose does not
-add lifespan to the Router, and it is not required merely to produce
-Router-owned 404 or 405 responses.
+The explicit snapshot Mount is inspectable: its names remain available through
+the outer Compose Router. Mounting C<$endpoint> itself with C<< app =>
+$endpoint >> is also valid, but it is an opaque application boundary: Compose
+does not call C<to_router> automatically or expose the Endpoint's names.
+Compose adds application middleware, root lifespan callbacks, ErrorHandler,
+response-completion guarding, and the outer HEAD boundary. It does not add
+lifespan to the Router, and it is not required merely to produce Router-owned
+404 or 405 responses.
 
 =head1 ROUTE DECLARATIONS
 

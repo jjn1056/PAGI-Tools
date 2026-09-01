@@ -302,6 +302,10 @@ subtest 'public documentation publishes one final routing model' => sub {
         ],
         'lib/PAGI/App/Router.pm' => [
             qr/There is no positional Mount target, C<< router => >> form, or C<group>/,
+            qr/routes => \[mount\('\/' => app => \$snapshot\)\]/,
+        ],
+        'lib/PAGI/Endpoint/Router.pm' => [
+            qr/routes => \[mount\('\/' => app => \$snapshot\)\]/,
         ],
         'lib/PAGI/App/URLMap.pm' => [
             qr/\$map->mount\('\/(?:api|static)'\s*=>/,
@@ -338,14 +342,17 @@ subtest 'public documentation publishes one final routing model' => sub {
     }
 
     for my $migration (
-        qr/Before:.*?compose\(app => \$router\).*?After:.*?compose\(router => \$router\)/s,
-        qr/Before:.*?compose\(app => \$builder\).*?After:.*?compose\(router => \$builder->to_router\)/s,
+        qr/Before:.*?compose\(router => \$routing\).*?After:.*?compose\(routes => \[mount\('\/' => app => \$routing\)\]\)/s,
+        qr/Before:.*?compose\(router => \$builder->to_router\).*?After:.*?compose\(routes => \[mount\('\/' => app => \$builder->to_router\)\]\)/s,
         qr'Before:.*?app => router\(routes => \\@routes, http_default => \$default\).*?After:.*?routes\s+=> \\@routes,.*?http_default\s+=> \$default's,
         qr'For arbitrary native applications, Compose has no direct replacement in this\s+release.*?Deploy the native coderef directly.*?root Mount is not an equivalent conversion'is,
     ) {
         like($upgrading, $migration,
             'upgrade guide publishes one complete Compose migration recipe');
     }
+    like($upgrading,
+        qr/\$routing->routes.*?flatten.*?discard.*?Router-level policy/is,
+        'upgrade guide identifies route-array flattening as policy loss');
 
     my $compose_pod = slurp_file('lib/PAGI/Compose.pm');
     like($compose_pod,
@@ -374,8 +381,11 @@ subtest 'public documentation publishes one final routing model' => sub {
     for my $file ('lib/PAGI/App/Router.pm', 'lib/PAGI/Endpoint/Router.pm') {
         my $source = slurp_file($file);
         like($source,
-            qr/C<to_app>.*?bare Router.*?C<to_router>.*?C<< compose\(router => \$routing\) >>.*?root/is,
-            "$file distinguishes bare Router compilation from Compose root deployment");
+            qr/C<to_app>.*?bare Router/is,
+            "$file documents direct bare Router compilation");
+        like($source,
+            qr/C<to_router>.*?mount\('\/' => app => \$snapshot\).*?inspectable.*?opaque/is,
+            "$file documents inspectable snapshots and opaque frontend Mounts");
     }
 
     for my $file (
@@ -613,7 +623,7 @@ subtest 'direct Router remains low-level and Compose supplies safety' => sub {
 
     local $ENV{PAGI_ENV} = 'production';
     my ($safe, $safe_error, $safe_warnings) = run_http(
-        compose(router => $routing)->to_app,
+        compose(routes => [mount('/' => app => $routing)])->to_app,
         path => '/silent', raw_path => '/silent',
     );
     is($safe_error, undef, 'Compose contains the before-start failure');

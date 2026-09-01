@@ -9,6 +9,7 @@ use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Response::Text ();
+use PAGI::Routing qw(mount);
 use PAGI::Utils qw(as_app);
 
 sub channels {
@@ -65,18 +66,24 @@ sub handler {
     };
 }
 
-subtest 'Compose retains an explicit App Router snapshot' => sub {
+subtest 'Compose preserves an explicit App Router snapshot through Mount' => sub {
     my $builder = PAGI::App::Router->new;
     $builder->get('/' => handler('home'))->name('home');
 
     like(dies { compose(router => $builder) },
-        qr/instantiated PAGI::Routing::Router/,
-        'Compose does not guess mutable frontend materialization');
+        qr/no longer accepts 'router'.*mount/s,
+        'Compose rejects the retired Router constructor mode');
 
     my $routing = $builder->to_router;
-    my $root = compose(router => $routing);
-    is(refaddr($root->router), refaddr($routing),
-        'explicit App Router snapshot is retained');
+    my $root_mount = mount('/' => app => $routing);
+    my $root = compose(routes => [$root_mount]);
+
+    isnt(refaddr($root->router), refaddr($routing),
+        'Compose owns a distinct root Router');
+    is(refaddr($root->routes->[0]->app), refaddr($routing),
+        'root Mount retains the immutable snapshot');
+    is($root->path_for('/home'), '/',
+        'outer Resolver discovers snapshot names');
 };
 
 subtest 'App Router to_app stays a bare Router compilation' => sub {
@@ -104,7 +111,9 @@ subtest 'ordinary HTTP routing uses Request handlers and shared path grammar' =>
     $router->get('/users/{id}' => handler('show', \@calls));
     $router->post('/users' => handler('create', \@calls));
     $router->get('/files/*path' => handler('file', \@calls));
-    my $app = compose(router => $router->to_router)->to_app;
+    my $app = compose(routes => [
+        mount('/' => app => $router->to_router),
+    ])->to_app;
 
     is(response_body(run_scope($app, path => '/users')), 'list',
         'a static route dispatches');
@@ -142,7 +151,9 @@ subtest 'literal paths and constraints use the shared Pattern implementation' =>
     $router->get('/people/{name:[A-Za-z]+}' => handler('name', \@calls));
     $router->get('/posts/{slug}' => handler('post', \@calls))
         ->constraints(slug => qr/\A[a-z0-9-]+\z/);
-    my $app = compose(router => $router->to_router)->to_app;
+    my $app = compose(routes => [
+        mount('/' => app => $router->to_router),
+    ])->to_app;
 
     is(response_body(run_scope($app, path => '/api/v1.0/report[2024]')), 'literal',
         'regex metacharacters remain literal path text');
@@ -174,7 +185,9 @@ subtest 'any and generic route declarations replace the old method option' => su
     my $router = PAGI::App::Router->new;
     $router->any('/health' => handler('health'));
     $router->route('/resource' => handler('resource'), methods => ['GET', 'POST']);
-    my $app = compose(router => $router->to_router)->to_app;
+    my $app = compose(routes => [
+        mount('/' => app => $router->to_router),
+    ])->to_app;
 
     for my $method (qw(GET POST PUT DELETE PATCH HEAD OPTIONS)) {
         is(run_scope($app, method => $method, path => '/health')->[0]{status}, 200,
