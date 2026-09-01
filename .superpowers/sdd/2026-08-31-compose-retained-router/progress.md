@@ -94,3 +94,7 @@ None.
   mounted-boundary, and HEAD/buffering gate PASS; no production code changed).
 - Task 4: complete (commit `f3e3972`; focused frontend, integration, upgrading,
   and Cookbook-example gate PASS: 6 files, 57 tests; no concerns).
+- Task 4: fix round 1/5 (2 addressed, 0 open — corrected bare-Router safety
+  and Cascade deployment prose; commit `669b51b`).
+- Task 4: complete (commits `da55ee4..669b51b`, review clean after fix round
+  1; both Important findings addressed, no new breakage).
