@@ -68,51 +68,58 @@ subtest 'GZip compresses large responses' => sub {
 # Test: Concurrent requests don't interfere
 # =============================================================================
 
-subtest 'concurrent requests have independent state' => sub {
+subtest 'genuinely interleaved requests have independent state' => sub {
+    # The hazard this guards is a transformer shared across concurrent
+    # responses -- the reason begin() is a per-response factory. Driving
+    # requests one after another CANNOT detect it: the terminal event clears
+    # the transformer before the next request begins, so a shared one looks
+    # fine. Two responses must be in flight through ONE wrapped app at once.
     my $gzip = PAGI::Middleware::GZip->new(min_size => 100);
 
-    # App that responds with request-specific content
+    # An app that parks after its first chunk until released, so a second
+    # request can run to completion inside the first one's lifetime.
+    my %gate;
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         my $id = $scope->{path};
-        my $body = "response-$id-" . ('x' x 500);
-        await $send->({ type => 'http.response.start', status => 200, headers => [['content-type', 'text/plain']] });
-        await $send->({ type => 'http.response.body', body => $body, more => 0 });
+        await $send->({ type => 'http.response.start', status => 200,
+                        headers => [['content-type', 'text/plain']] });
+        await $send->({ type => 'http.response.body',
+                        body => "$id-" . ($id x 200), more => 1 });
+        await $gate{$id} if $gate{$id};
+        await $send->({ type => 'http.response.body',
+                        body => "$id-tail-" . ($id x 200), more => 0 });
     };
 
     my $wrapped = $gzip->wrap($app);
+    my (%events);
+    my $send_for = sub { my ($id) = @_; return async sub { push @{$events{$id}}, $_[0] } };
+    my $receive  = async sub { { type => 'http.disconnect' } };
+    my $scope_for = sub { { type => 'http', path => $_[0],
+                            headers => [['accept-encoding', 'gzip']] } };
 
-    # Run multiple requests concurrently
-    my @results;
-    for my $i (1..5) {
-        my @events;
-        my $scope = { type => 'http', path => $i, headers => [['accept-encoding', 'gzip']] };
+    $gate{A} = Future->new;                       # A will park mid-response
 
-        run_async(async sub {
-            await $wrapped->(
-                $scope,
-                async sub { { type => 'http.disconnect' } },
-                async sub { push @events, $_[0] },
-            );
-        });
+    run_async(async sub {
+        my $a = $wrapped->($scope_for->('A'), $receive, $send_for->('A'));
+        await $wrapped->($scope_for->('B'), $receive, $send_for->('B'));  # B completes inside A
+        $gate{A}->done;                           # release A
+        await $a;
+    });
 
-        # Decompress and check
-        my $compressed = $events[1]{body};
-        my $uncompressed;
-        gunzip(\$compressed, \$uncompressed) or die "gunzip failed: $GunzipError";
-
-        push @results, $uncompressed;
-    }
-
-    # Each result should be unique and contain its request ID
-    for my $i (1..5) {
-        like($results[$i-1], qr/^response-$i-x+$/, "request $i got correct response");
+    for my $id (qw(A B)) {
+        my ($start) = grep { $_->{type} eq 'http.response.start' } @{$events{$id}};
+        ok(scalar(grep { lc($_->[0]) eq 'content-encoding' } @{$start->{headers}}),
+            "$id was compressed");
+        my $compressed = join '', map { $_->{body} // '' }
+                         grep { $_->{type} eq 'http.response.body' } @{$events{$id}};
+        my $plain = '';
+        ok(gunzip(\$compressed => \$plain), "$id decompresses -- its deflate stream is its own")
+            or diag("gunzip failed for $id: $GunzipError");
+        is($plain, "$id-" . ($id x 200) . "$id-tail-" . ($id x 200),
+            "$id round-trips to its own bytes, uncontaminated by the other response");
     }
 };
-
-# =============================================================================
-# Test: Streaming responses bypass compression
-# =============================================================================
 
 subtest 'streaming responses are compressed incrementally' => sub {
     my $gzip = PAGI::Middleware::GZip->new(min_size => 10);

@@ -29,6 +29,7 @@ sub buffer_whole_response {
         my $passing        = 0;
         my $terminal_seen  = 0;
         my $terminal_event;   # the app's own event, re-emitted with a new body
+        my @after_body;       # events that must not overtake the withheld head
 
         # Flush the withheld head plus whatever we buffered, as non-terminal
         # chunks, then hand the rest of the response straight through.
@@ -39,6 +40,8 @@ sub buffer_whole_response {
                                 body => $part, more => 1 });
             }
             @body_parts = ();
+            for my $held (@after_body) { await $send->($held) }
+            @after_body = ();
             $passing = 1;
         };
 
@@ -85,7 +88,12 @@ sub buffer_whole_response {
                 return;
             }
 
-            await $send->($event);
+            # Anything else -- trailers, extension events. While the head is
+            # withheld these must not overtake it: forwarding a trailers event
+            # now would put it on the wire before the http.response.start it
+            # belongs to. Hold it and emit it after the head and body, in the
+            # order the application sent it.
+            push @after_body, $event;
         };
 
         await $app->($scope, $receive, $wrapped_send);
@@ -106,6 +114,7 @@ sub buffer_whole_response {
                 await $send->({ type => 'http.response.body',
                                 body => $part, more => 1 });
             }
+            for my $held (@after_body) { await $send->($held) }
             return;
         }
 
@@ -122,6 +131,7 @@ sub buffer_whole_response {
         # defaults to 0 and means the same thing but is not the same event.
         # A middleware should change what it needs to and nothing else.
         await $send->({ %$terminal_event, body => $out_body // '' });
+        for my $held (@after_body) { await $send->($held) }
         return;
     };
 }

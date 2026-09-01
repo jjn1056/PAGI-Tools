@@ -70,7 +70,9 @@ my @CASES = (
         start => { type => 'http.response.start', status => 200, trailers => 1,
                    headers => [['content-type', 'text/plain']] },
         body  => [ { type => 'http.response.body', body => 'checksum me',
-                     more => 0 } ],
+                     more => 0 },
+                   { type => 'http.response.trailers',
+                     headers => [['digest', 'sha-256=abc']] } ],
         check => sub {
             my (@sent) = @_;
             my ($start) = grep { $_->{type} eq 'http.response.start' } @sent;
@@ -78,6 +80,14 @@ my @CASES = (
                 'the trailers declaration survives re-emission');
             is(scalar(grep { $_ eq 'content-length' } header_names(@sent)), 0,
                 'no Content-Length is added, which would make the trailers unsendable');
+
+            # Ordering matters as much as survival: a middleware holding the
+            # head must not let the trailers event overtake it onto the wire.
+            my ($start_at)    = grep { $sent[$_]{type} eq 'http.response.start' } 0..$#sent;
+            my ($trailers_at) = grep { $sent[$_]{type} eq 'http.response.trailers' } 0..$#sent;
+            ok(defined $trailers_at, 'the trailers event is forwarded');
+            ok(defined $start_at && defined $trailers_at && $start_at < $trailers_at,
+                'and it does not overtake the response start it belongs to');
         },
     },
     {

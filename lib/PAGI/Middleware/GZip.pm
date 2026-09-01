@@ -50,26 +50,28 @@ Streaming responses B<are> compressed, incrementally. gzip is an incremental
 format, so each chunk is deflated and flushed as it arrives rather than the
 whole body being buffered first.
 
-Two consequences are visible to clients:
+A response is B<streaming> here if its first body event carries
+C<<< more => 1 >>>. One whose first body event is already terminal is the
+whole representation, and is treated as it always was: compressed up front,
+declaring the encoded C<Content-Length>, with C<min_size> honoured.
+
+Only a genuinely streaming response differs, in two ways visible to clients:
 
 =over
 
 =item *
 
-The response carries no C<Content-Length> -- the compressed size is not known
-in advance -- so it is framed with chunked transfer coding. Any
-C<Content-Length> the application set is removed, since it described the
-uncompressed representation.
+It carries no C<Content-Length> -- the compressed size is not known in
+advance -- so it is framed with chunked transfer coding.
 
 =item *
 
-C<min_size> does not apply, per the note above.
+C<min_size> does not apply, because there is no size to compare.
 
 =back
 
-A response whose first body event is already terminal is the whole
-representation, so its size B<is> knowable and C<min_size> is honoured as
-usual.
+Either way, a C<Content-Length> the application set is replaced or removed,
+since it described the uncompressed representation.
 
 Not compressed under any circumstances: a response that already carries a
 C<Content-Encoding>, one whose media type is outside C<mime_types>, and a
@@ -121,10 +123,27 @@ sub wrap {
         );
         return undef unless $deflate && $err == Z_OK;
 
-        # The compressed length is not known before the body is compressed,
-        # so the response is chunked and carries no Content-Length.
+        # The application's Content-Length described the identity
+        # representation, so it is wrong either way once encoded.
         @$headers = grep { lc($_->[0]) ne 'content-length' } @$headers;
         push @$headers, ['Content-Encoding', 'gzip'], ['Vary', 'Accept-Encoding'];
+
+        # A terminal first body event IS the whole representation, so it can
+        # be compressed here and the encoded length declared -- the response
+        # stays Content-Length framed exactly as it was before streaming
+        # support, rather than being forced to chunked for no reason. Only a
+        # genuinely streaming response has to go without.
+        if (!$first_body->{more}) {
+            my $whole = '';
+            $deflate->deflate($first_body->{body} // '', $whole);
+            $deflate->flush($whole, Z_FINISH);
+            push @$headers, ['Content-Length', length $whole];
+            my $emitted = 0;
+            return {
+                chunk  => sub { $emitted++ ? '' : $whole },
+                finish => sub { '' },
+            };
+        }
 
         return {
             chunk => sub {

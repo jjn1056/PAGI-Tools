@@ -16,12 +16,14 @@
     format, and GZip previously abandoned compression entirely for any
     response with more => 1 -- so the bodies that most benefit, large
     streaming exports, were the ones never compressed. Visible consequences:
-    such responses now carry Content-Encoding: gzip and no Content-Length
-    (the compressed size is not knowable in advance), so they are chunked;
-    any application-set Content-Length is dropped, having described the
-    uncompressed representation. min_size still applies to a response whose
-    first body event is terminal, whose size IS knowable, and cannot apply to
-    a stream. Moving GZip to an incremental transform also removes it from
+    a STREAMING response now carries Content-Encoding: gzip and no
+    Content-Length -- the compressed size is not knowable in advance -- so it
+    is chunked. A buffered response is unchanged in framing: it is the whole
+    representation, so it is compressed up front and declares the encoded
+    length exactly as before. Either way an application-set Content-Length is
+    replaced or removed, having described the uncompressed representation.
+    min_size likewise still applies to a response whose first body event is
+    terminal, whose size IS knowable, and cannot apply to a stream. Moving GZip to an incremental transform also removes it from
     this bug class by construction: it never withholds the head, so it has
     nothing to swallow and nothing to fabricate.
   - FIX: intermediaries examine the response head before transforming a body
@@ -34,11 +36,6 @@
     from it identified only the fragment while naming the resource. Pinned by
     t/middleware/head-promises.t, a matrix of head commitments against every
     body-transforming middleware.
-  - FIX: ContentLength no longer appends its computed length into the
-    application's own headers arrayref. An application that builds headers
-    once and reuses them across requests had the first request's length baked
-    in permanently, and every later response shipped a wrong Content-Length
-    (a hung or truncated response over HTTP/1.1).
   - Documentation and examples now write more => 0 explicitly when
     originating a response. The key defaults to 0, so omitting it on a
     complete response is correct -- but omitting it on a re-emitted
