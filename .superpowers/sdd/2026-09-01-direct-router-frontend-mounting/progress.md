@@ -79,9 +79,10 @@ Push target: origin/feature/compose-retained-router after authorization
   materialization/cycle/constraint/middleware tests, parent-name discovery, or
   source-regression assertions. They are not public deployment guidance.
 
-Task 5 audit: 130 textual hits across 32 live files were classified. Categories
-1--5 account for every hit; category 6 (stale deployment ceremony) has zero
-hits. The three flattening-search hits are explicitly labelled lossy examples
+Task 5 audit: 130 matching lines across 32 live files, containing 132 literal
+`->to_router` occurrences, were classified. Categories 1--5 account for every
+occurrence; category 6 (stale deployment ceremony) has zero hits. The three
+flattening-search hits are explicitly labelled lossy examples
 in `PAGI::Compose`, `PAGI::Routing::Mount`, and `UPGRADING.md`.
 
 ## Task 5 work-map reconfirmation
