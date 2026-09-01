@@ -75,3 +75,8 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
 ## Deviations
 
 None.
+
+## Task review log
+
+- Task 1: complete (commits `dab35e7..8801391`, review clean; spec compliance
+  PASS, task quality PASS, no findings).
