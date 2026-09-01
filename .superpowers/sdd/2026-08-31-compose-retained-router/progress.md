@@ -13,7 +13,7 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
 | 5. Flagship examples | complete | `ae8e37f` | 2 files, 12 top-level tests | RED: new source-shape assertions rejected the retired apples nested Router and large-app `app =>` boundary; GREEN: both flagship integrations passed with CRUD, URL, default, static-file, middleware, and lifespan coverage. |
 | 6. Remaining examples | complete | `c1129e6d0fc55939dd04c2a480aa50d88c5ffbaa` | 9 files, 109 tests | RED: source-shape gate rejected every retired live app-mode target; GREEN: every selected example loaded and retained HTTP, WebSocket, SSE, lifespan, stream terminal, and disconnect behavior. |
 | 7. Public docs and upgrade | complete | `8aa8283c50563014909727e09be4d5f9981e7c99` | 3 files, 36 tests | Compose POD, public cross-links, exact migration recipes, Starlette comparison, Cookbook synchronization, and release notes now describe the retained-Router surface; POD syntax and semantic searches are clean. |
-| 8. Final verification | in progress | — | — | — |
+| 8. Final verification | in progress | `887c2b54cfd9a1f9f5ee0ea0c9f5b8686144451b` | focused: 5 files, 39 tests; full: 224 files, 2,459 tests | Diff/syntax/search clean; focused settlement gate PASS; host-access full suite PASS; `dzil build` PASS with 563 archive members and 123 example assets. Final whole-branch review pending. |
 
 ## Task 6 example inventory (before edits)
 
