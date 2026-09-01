@@ -46,8 +46,9 @@ lib/MyApp/
 - `MyApp::Root`, `MyApp::Person`, and `MyApp::Person::Blogs` each expose a
   `routing()` method that returns an immutable `PAGI::Routing::Router`
   description.
-- `MyApp::Root` is the one Compose boundary. Its `to_app()` returns the
-  composition of `MyApp::Root->routing` with startup and shutdown callbacks.
+- `MyApp::Root` is the one Compose boundary. Its `to_app()` gives Compose the
+  reusable immutable Router returned by `MyApp::Root->routing`, together with
+  the root startup and shutdown callbacks.
 - Root mounts Person with `app =>` and name `person`; Person mounts Blogs with
   `app =>` and name `blog`. The application values are immutable Router
   objects, so these mounts form one inspectable reverse-routing graph.

@@ -30,6 +30,7 @@ sub _slurp {
 
 subtest 'README preserves the comparison and current executable source' => sub {
     my $readme = _slurp($readme_file);
+    my $app_source = _slurp($app_file);
     my ($python) = $readme =~ /```python\n(.*?)```/s;
     my ($perl) = $readme =~ /```perl\n(.*?)```/s;
 
@@ -38,8 +39,17 @@ subtest 'README preserves the comparison and current executable source' => sub {
         '5841982d7452eaaba77a23fc9063fbe6fef53b8ea291371e7ed179789adb1835',
         'the supplied Python Starlette application remains byte-for-byte intact',
     );
-    is($perl, _slurp($app_file),
+    is($perl, $app_source,
         'the copied Perl application stays identical to the executable example');
+
+    like($app_source, qr/compose\s*\(\s*routes\s*=>/s,
+        'apples uses direct routes-form Compose');
+    like($app_source, qr/http_default\s*=>\s*not_found/s,
+        'apples configures its root default without nested router ceremony');
+    unlike($app_source, qr/compose\s*\(\s*app\s*=>/s,
+        'apples has no retired Compose app mode');
+    unlike($app_source, qr/compose\s*\(\s*router\s*=>\s*router\s*\(/s,
+        'apples does not construct a redundant nested Router expression');
 };
 
 subtest 'Moose model owns fixture and CRUD behavior' => sub {

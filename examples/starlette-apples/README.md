@@ -84,7 +84,7 @@ use AppleApp::Model qw(apple_model);
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(file_response json_response);
-use PAGI::Routing qw(route mount router middleware);
+use PAGI::Routing qw(route mount middleware);
 use PAGI::Routing::URL qw(url_for path_for);
 use PAGI::Utils qw(app_path);
 
@@ -182,49 +182,53 @@ async sub delete_apple($request) {
 }
 
 compose(
-    app => router(
-        routes => [
-            route('/' => file_response($manager_file, inline => 1),
-                name => 'home',
-                desc => 'Apple manager SPA',
-            ),
-            route('/welcome' => welcome(),
-                name => 'welcome',
-                desc => 'PAGI welcome page',
-            ),
-            mount('/apples',
-                routes => [
-                    route('/' => \&list_apples,
-                        methods => ['GET'], name => 'list'),
-                    route('/' => \&create_apple,
-                        methods => ['POST'], name => 'create'),
-                    route('/{apple_id:&Int}' => \&read_apple,
-                        methods => ['GET'], name => 'read'),
-                    route('/{apple_id:&Int}' => \&update_apple,
-                        methods => ['PUT'], name => 'update'),
-                    route('/{apple_id:&Int}' => \&delete_apple,
-                        methods => ['DELETE'], name => 'delete'),
-                ],
-                name       => 'apples',
-                middleware => [middleware(\&with_apples_api_header)],
-            ),
-        ],
-        http_default => not_found(
-            detail => 'That page does not exist in the Apple demo.',
+    routes => [
+        route('/' => file_response($manager_file, inline => 1),
+            name => 'home',
+            desc => 'Apple manager SPA',
         ),
+        route('/welcome' => welcome(),
+            name => 'welcome',
+            desc => 'PAGI welcome page',
+        ),
+        mount('/apples',
+            routes => [
+                route('/' => \&list_apples,
+                    methods => ['GET'], name => 'list'),
+                route('/' => \&create_apple,
+                    methods => ['POST'], name => 'create'),
+                route('/{apple_id:&Int}' => \&read_apple,
+                    methods => ['GET'], name => 'read'),
+                route('/{apple_id:&Int}' => \&update_apple,
+                    methods => ['PUT'], name => 'update'),
+                route('/{apple_id:&Int}' => \&delete_apple,
+                    methods => ['DELETE'], name => 'delete'),
+            ],
+            name       => 'apples',
+            middleware => [middleware(\&with_apples_api_header)],
+        ),
+    ],
+    http_default => not_found(
+        detail => 'That page does not exist in the Apple demo.',
     ),
     middleware => [middleware('RequestId')],
     lifespan => { startup => \&startup },
+    desc     => 'Starlette apples comparison application',
 );
 ```
+
+Starlette retains a Router inside the Starlette application object and stores
+its lifespan context on that Router. PAGI Compose likewise retains one Router,
+but keeps the root lifespan exchange on Compose so mounted Routers cannot
+silently carry lifecycle callbacks that never run.
 
 The static root file, `/welcome` Pages value, CRUD JSON values, and custom root
 404 are direct application values. `AppleApp::Model` owns the fixture and CRUD
 state through a Moose native `Hash` attribute and exports the opt-in
 `apple_model()` factory, while lifespan owns the model's application lifetime.
-The exact root file and `/welcome` remain Route
-endpoints, while `/apples` is a subtree-owning child Router. The custom root
-404 is the Router's `http_default`, so it handles unknown paths without
+The exact root file and `/welcome` remain Route endpoints, while `/apples` is
+a subtree-owning child Router. The custom root 404 is Compose's `http_default`,
+so it handles unknown paths without
 swallowing the 405 for a known path such as `PUT /welcome`.
 
 | Starlette | PAGI::Tools |
