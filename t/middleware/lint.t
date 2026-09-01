@@ -417,4 +417,36 @@ subtest 'an app that throws after a disconnect keeps its real error, with the di
     like($err_msg, qr/client_closed/, 'the note names the disconnect reason');
 };
 
+subtest 'a complete response is not reported as a disconnect' => sub {
+    # The application sent a full response -- start plus a terminal body --
+    # while disconnect_reason was set. Per PAGI::Spec::Www it should NOT have
+    # sent that terminal event once it knew its client was gone, and Lint
+    # exists to catch exactly that. It must not instead congratulate the app
+    # for silence it did not keep. Establish WHETHER anything was incomplete
+    # before deciding WHY.
+    my @warnings;
+    local $SIG{__WARN__} = sub { push @warnings, $_[0] };
+
+    my $app = sub {
+        my ($app_scope, $receive, $inner_send) = @_;
+        return (async sub {
+            await $inner_send->({ type => 'http.response.start', status => 200,
+                                  headers => [['content-type', 'text/plain']] });
+            await $inner_send->({ type => 'http.response.body',
+                                  body => 'complete', more => 0 });
+            return;
+        })->();
+    };
+
+    my $scope = make_scope();
+    $scope->{'pagi.connection'} = AbortedConn6->new;
+
+    my $wrapped = PAGI::Middleware::Lint->new->wrap($app);
+    Future->wrap($wrapped->($scope, sub { Future->done },
+        sub { Future->done }))->get;
+
+    is(scalar(grep { /no terminal .*was sent, which is correct/ } @warnings), 0,
+        'Lint does not claim a terminal event was withheld when one was sent');
+};
+
 done_testing;

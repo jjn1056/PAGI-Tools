@@ -359,20 +359,26 @@ sub _context_for_send_error {
          . "app calls \$send in for this response.";
 }
 
-# One place that turns $sv->finalize's outcome -- or, when the client
-# disconnected mid-response, that fact itself -- into which of the four
+# One place that turns $sv->finalize's outcome into which of the four
 # post-completion stories applies -- shared by the post-completion warning
-# path and the app-threw context note, so they can't drift. A disconnect is
-# checked first and short-circuits: the application is required not to send
-# a terminal event once it knows its client is gone, so $sv->finalize would
-# otherwise misreport that legal silence as one of the other three.
+# path and the app-threw context note, so they can't drift.
+#
+# Order matters. $sv->finalize answers WHETHER the response was left
+# incomplete; disconnect_reason only answers WHY. Asking why first would
+# report a disconnect for a response that was in fact complete -- and an
+# application that sends its terminal event after the client is gone is
+# exactly the fault this middleware exists to catch, so misreporting it as
+# correct silence defeats the purpose. See PAGI::Spec::Www, "Which signal
+# answers which question".
 sub _finalize_diagnosis {
     my ($self, $sv, $scope) = @_;
 
-    return 'disconnected' if request_ended_abnormally($scope);
-
     my $err = $sv->finalize;
     return undef unless $err;
+
+    # Incomplete, and the client had already gone: legal silence, not a bug.
+    return 'disconnected' if request_ended_abnormally($scope);
+
     return 'trailers' if $err->message =~ /trailers/;
     return $sv->started ? 'no_body' : 'no_start';
 }
