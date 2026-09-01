@@ -9,8 +9,8 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
 | 1. Retained description | complete | `9b9e4f16c5dcfba83e5018f961e7ed296c990ec3` | 4 files, 104 tests | RED: `t/compose/01-description.t` stopped after 4 assertions with `unknown compose option 'router'`; GREEN: focused constructor/reverse suite passed. |
 | 2. Compiler and safety | complete | `b860142fdb7f042626245faa73528b929bb68894` | 7 files, 62 tests | RED: migrated focused gate failed only the retained-Router count (`got 0`, expected `1` then `2`); GREEN: compiler now calls the retained Router and the focused safety gate passed. |
 | 3. Lifespan and ordering | complete | `da561c66545665025d5a927da6474dcebba99f5d` | 4 files, 45 tests | RED: all migrated Compose gates failed on the retired `app =>` constructor; GREEN: root-only lifespan, middleware visibility, mounted boundaries, strict bare-Router failure, and HEAD/buffering gate passed. |
-| 4. Router frontends | in progress | — | — | — |
-| 5. Flagship examples | pending | — | — | — |
+| 4. Router frontends | complete | `f3e3972` | 6 files, 57 tests | RED: focused frontend gate failed in the background-task root and retired Compose-native bridge, plus the old `router =>` classifier; GREEN: all six required frontend/POD-example files passed with explicit frontend snapshots. |
+| 5. Flagship examples | in progress | — | — | — |
 | 6. Remaining examples | pending | — | — | — |
 | 7. Public docs and upgrade | pending | — | — | — |
 | 8. Final verification | pending | — | — | — |
@@ -71,6 +71,12 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
   audit record and compaction recovery map. Cost if wrong: one extra internal
   execution artifact remains in history; deleting it would lose the audit
   trail the user explicitly requested.
+- Task 4 Ruling: `t/00-pod/cookbook-examples.t` is an owned Task 4 file even
+  though the plan's Files list omitted it. Step 5 explicitly runs that test,
+  and it contains executable retired `compose(app => $router)` syntax coupled
+  to the Cookbook POD Task 4 already owns. Update the assertion with the POD.
+  Cost if wrong: one Task 7 documentation-test edit lands earlier than planned;
+  leaving it would make Task 4's mandated focused gate knowingly fail.
 
 ## Deviations
 
@@ -86,3 +92,5 @@ None.
   PASS, task quality PASS, no findings).
 - Task 3: complete (commits `da561c6`; focused root-lifespan, middleware,
   mounted-boundary, and HEAD/buffering gate PASS; no production code changed).
+- Task 4: complete (commit `f3e3972`; focused frontend, integration, upgrading,
+  and Cookbook-example gate PASS: 6 files, 57 tests; no concerns).
