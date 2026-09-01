@@ -100,7 +100,7 @@ Compose owns the application root and lifespan.
         ],
     );
 
-    my $app = compose(app => $routing)->to_app;
+    my $app = compose(router => $routing)->to_app;
 
 =head1 DESCRIPTION
 
@@ -570,7 +570,7 @@ selected handler's 404.
 
 Direct C<< $routing->to_app >> is safe for Router outcomes, but remains a
 low-level deployed root: it has no root ErrorHandler, response-completion guard,
-or lifespan driver. Use C<< compose(app => $routing)->to_app >> when those
+or lifespan driver. Use C<< compose(router => $routing)->to_app >> when those
 application boundaries are required. If a selected native target sends
 nothing, Compose treats that as incomplete output and renders 500 rather than
 inventing a routing 404.

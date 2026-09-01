@@ -289,7 +289,7 @@ subtest 'public documentation publishes one final routing model' => sub {
         'lib/PAGI/Pages.pm',
         'lib/PAGI/Response.pm',
     );
-    my $retired_live_api = qr/PAGI::Routing::Trace|pagi\.routing\.trace|PAGI::Middleware::Routing::(?:NotFound|MethodNotAllowed)|mount\('\/[^']*'\s*=>|router\s*=>|\bgroup\s*\(/;
+    my $retired_live_api = qr/PAGI::Routing::Trace|pagi\.routing\.trace|PAGI::Middleware::Routing::(?:NotFound|MethodNotAllowed)|mount\('\/[^']*'\s*=>|\bgroup\s*\(/;
     my %classified_non_routing_api = (
         'lib/PAGI/Tools/Tutorial.pod' => [
             qr/\$urlmap->mount\('\/(?:api|admin|static)' =>/,
@@ -569,7 +569,7 @@ subtest 'direct Router remains low-level and Compose supplies safety' => sub {
 
     local $ENV{PAGI_ENV} = 'production';
     my ($safe, $safe_error, $safe_warnings) = run_http(
-        compose(app => $routing)->to_app,
+        compose(router => $routing)->to_app,
         path => '/silent', raw_path => '/silent',
     );
     is($safe_error, undef, 'Compose contains the before-start failure');

@@ -112,7 +112,7 @@ subtest 'request_response is the explicit bridge at application-native positions
     my @cases = (
         ['Router http_default', router(routes => [], http_default => request_response($handler))->to_app],
         ['Mount app', router(routes => [mount('/bridge', app => request_response($handler))])->to_app, '/bridge'],
-        ['Compose app', compose(app => request_response($handler))->to_app],
+        ['Direct native app', request_response($handler)->to_app],
     );
     for my $case (@cases) {
         my ($label, $app, $path) = @$case;

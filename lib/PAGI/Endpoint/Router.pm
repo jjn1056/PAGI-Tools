@@ -152,7 +152,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 
     my $endpoint = MyApp::Endpoint->new(repository => $repository);
     my $static = $endpoint->app_path('static');
-    my $app = compose(app => $endpoint->to_router)->to_app;
+    my $app = compose(router => $endpoint->to_router)->to_app;
 
 =head1 DESCRIPTION
 

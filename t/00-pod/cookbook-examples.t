@@ -266,7 +266,7 @@ subtest 'direct Router stays low-level while Compose supplies root safety' => su
     is($direct_warnings, [], 'direct Router emits no root-safety warning');
 
     my ($safe_events, $safe_error) = run_http(
-        compose(app => $router)->to_app,
+        compose(router => $router)->to_app,
         path => '/silent', raw_path => '/silent',
     );
     is($safe_error, undef, 'Compose contains selected application silence');

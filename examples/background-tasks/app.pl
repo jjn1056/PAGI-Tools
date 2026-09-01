@@ -286,4 +286,4 @@ $router->mount('/ws', app => async sub {
     });
 });
 
-compose(app => $router);
+compose(router => $router->to_router);

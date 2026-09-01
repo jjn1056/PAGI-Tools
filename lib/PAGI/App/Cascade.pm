@@ -224,7 +224,7 @@ listed in C<catch>; parent route scanning never resumes.
         ],
     );
 
-    my $app = compose(app => $routing)->to_app;
+    my $app = $routing->to_app;
 
 =head1 OPTIONS
 

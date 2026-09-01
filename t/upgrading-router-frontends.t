@@ -236,7 +236,7 @@ sub immutable_router_projection {
 
 sub exercise_representative {
     my ($routing, $seen) = @_;
-    my $app = compose(app => $routing)->to_app;
+    my $app = compose(router => $routing)->to_app;
     my $full = run_scope($app, scope(path => '/resource/7'));
     my $partial = run_scope($app, scope(
         method => 'DELETE', path => '/resource/7'));
@@ -786,7 +786,7 @@ my @migration_cases = (
             my $endpoint = Local::UpgradeEndpoint->new;
             my $state = {};
             my $app = compose(
-                app => $endpoint->to_app,
+                router => $endpoint->to_router,
                 lifespan => { startup => sub { $_[0]{phase} = 'ready' } },
             )->to_app;
             my @messages = (
@@ -1041,6 +1041,19 @@ subtest 'removed compatibility surface stays absent' => sub {
     ok(!PAGI::Endpoint::Router->can('state'), 'Endpoint has no state method');
     ok(!PAGI::Endpoint::Router->can('context_class'),
         'Endpoint has no context_class hook');
+};
+
+subtest 'Compose retains an explicit Endpoint Router snapshot' => sub {
+    my $endpoint = Local::UpgradeEndpoint->new;
+
+    like(dies { compose(router => $endpoint) },
+        qr/instantiated PAGI::Routing::Router/,
+        'Compose does not guess Endpoint frontend materialization');
+
+    my $routing = $endpoint->to_router;
+    my $root = compose(router => $routing);
+    is(refaddr($root->router), refaddr($routing),
+        'explicit Endpoint Router snapshot is retained');
 };
 
 done_testing;

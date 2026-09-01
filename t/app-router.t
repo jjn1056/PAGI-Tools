@@ -3,11 +3,13 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Response::Text ();
+use PAGI::Utils qw(as_app);
 
 sub channels {
     my @events;
@@ -63,6 +65,38 @@ sub handler {
     };
 }
 
+subtest 'Compose retains an explicit App Router snapshot' => sub {
+    my $builder = PAGI::App::Router->new;
+    $builder->get('/' => handler('home'))->name('home');
+
+    like(dies { compose(router => $builder) },
+        qr/instantiated PAGI::Routing::Router/,
+        'Compose does not guess mutable frontend materialization');
+
+    my $routing = $builder->to_router;
+    my $root = compose(router => $routing);
+    is(refaddr($root->router), refaddr($routing),
+        'explicit App Router snapshot is retained');
+};
+
+subtest 'App Router to_app stays a bare Router compilation' => sub {
+    my $builder = PAGI::App::Router->new;
+    $builder->get('/only' => handler('only'));
+    my $app = $builder->to_app;
+
+    is(run_scope($app, path => '/missing')->[0]{status}, 404,
+        'bare App Router compilation keeps the Router 404');
+    is(run_scope($app, method => 'POST', path => '/only')->[0]{status}, 405,
+        'bare App Router compilation keeps the Router 405');
+    is(run_scope($app, type => 'lifespan'), [],
+        'bare App Router compilation does not drive lifespan');
+
+    my $silent = PAGI::App::Router->new;
+    $silent->get('/silent' => as_app(sub { return Future->done }));
+    is(run_scope($silent->to_app, path => '/silent'), [],
+        'bare App Router compilation has no Compose response-completion guard');
+};
+
 subtest 'ordinary HTTP routing uses Request handlers and shared path grammar' => sub {
     my @calls;
     my $router = PAGI::App::Router->new;
@@ -70,7 +104,7 @@ subtest 'ordinary HTTP routing uses Request handlers and shared path grammar' =>
     $router->get('/users/{id}' => handler('show', \@calls));
     $router->post('/users' => handler('create', \@calls));
     $router->get('/files/*path' => handler('file', \@calls));
-    my $app = compose(app => $router)->to_app;
+    my $app = compose(router => $router->to_router)->to_app;
 
     is(response_body(run_scope($app, path => '/users')), 'list',
         'a static route dispatches');
@@ -108,7 +142,7 @@ subtest 'literal paths and constraints use the shared Pattern implementation' =>
     $router->get('/people/{name:[A-Za-z]+}' => handler('name', \@calls));
     $router->get('/posts/{slug}' => handler('post', \@calls))
         ->constraints(slug => qr/\A[a-z0-9-]+\z/);
-    my $app = compose(app => $router)->to_app;
+    my $app = compose(router => $router->to_router)->to_app;
 
     is(response_body(run_scope($app, path => '/api/v1.0/report[2024]')), 'literal',
         'regex metacharacters remain literal path text');
@@ -140,7 +174,7 @@ subtest 'any and generic route declarations replace the old method option' => su
     my $router = PAGI::App::Router->new;
     $router->any('/health' => handler('health'));
     $router->route('/resource' => handler('resource'), methods => ['GET', 'POST']);
-    my $app = compose(app => $router)->to_app;
+    my $app = compose(router => $router->to_router)->to_app;
 
     for my $method (qw(GET POST PUT DELETE PATCH HEAD OPTIONS)) {
         is(run_scope($app, method => $method, path => '/health')->[0]{status}, 200,

@@ -68,7 +68,7 @@ middleware suite — so the same application reads like this:
     })->name('user');
 
     my $routing = $router->to_router; # retain one immutable snapshot
-    my $app = compose(app => $routing)->to_app; # complete deployed app
+    my $app = compose(router => $routing)->to_app; # complete deployed app
 
 For a small conventional landing page or HTTP error, L<PAGI::Pages> builds a
 deferred negotiated HTTP application:
@@ -121,7 +121,7 @@ Use the functional frontend when the declarations are already immutable:
         route('/' => \&home, name => 'home'),
     ]);
 
-    my $app = compose(app => $routing)->to_app;
+    my $app = compose(router => $routing)->to_app;
 
 Every Mount names its target: C<< routes => [...] >> constructs a complete
 child Router, while C<< app => $child >> composes a native application or

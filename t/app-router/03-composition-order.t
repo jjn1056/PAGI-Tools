@@ -46,7 +46,7 @@ sub client_for {
 sub complete_client_for {
     my ($builder) = @_;
     return PAGI::Test::Client->new(
-        app => compose(app => $builder)->to_app,
+        app => compose(router => $builder->to_router)->to_app,
     );
 }
 

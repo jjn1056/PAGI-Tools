@@ -247,8 +247,9 @@ so a server without lifespan-state support receives a clear startup failure
 whenever callbacks are configured. Plain and Future-backed callbacks are both
 accepted.
 
-C<routes> is the compact form. When a separately configured Router or another
-application component already exists, pass it through C<app> instead:
+C<routes> is the compact form. When a separately configured immutable Router
+already exists, pass it through C<router>; deploy other application components
+directly through C<to_app> instead:
 
   my $routing = router(
       routes => \@nodes,
@@ -256,7 +257,7 @@ application component already exists, pass it through C<app> instead:
   );
 
   my $app = compose(
-      app => $routing,
+      router => $routing,
       middleware => [
           middleware('RequestId'),
       ],
@@ -322,7 +323,7 @@ handlers use the same direct protocol contract as C<PAGI::Routing>:
   $router->sse('/events' => as_app($native_sse_app));
 
   my $snapshot = $router->to_router;
-  my $app = compose(app => $snapshot)->to_app;
+  my $app = compose(router => $snapshot)->to_app;
 
 The middleware entries above are intentional App Router sugar: the frontend
 immediately materializes class names, synchronous factory coderefs, configured
@@ -1402,7 +1403,7 @@ L<PAGI::App::URLMap> routes requests to different apps based on URL prefix:
   $urlmap->mount('/api' => $api_app);
   $urlmap->mount('/admin' => $admin_app);
   $urlmap->mount('/static' => $static);
-  compose(app => $urlmap)->to_app;
+  $urlmap->to_app;
 
 Each selected mount and C<default> is opaque. A Router child is nevertheless a
 complete application for its own 404 and 405 outcomes. URLMap does not inspect
@@ -1421,7 +1422,7 @@ explicit non-final statuses in C<catch>, while silence is always an error:
       catch => [404, 405],
   );
 
-  my $app = compose(app => $routing)->to_app;
+  my $app = $routing->to_app;
 
 A non-caught response streams after its start event. A caught response is
 suppressed and awaited through its terminal body before the next child runs.
@@ -1513,9 +1514,10 @@ F<app.pl> may return either a native coderef or an instantiated component object
 with C<to_app>, including a Compose description. A Router is already complete
 for its own 404/405. Cascade is ordinary status-driven application coordination
 and carries no special Router semantics. Wrap either with
-C<< compose(app => $application) >> when the deployed application also needs
-root ErrorHandler, response-completion guarding, and lifespan. The server may
-compile that component object once, or the file may call C<to_app> explicitly.
+C<< compose(router => $routing) >> when a deployed immutable Router also needs
+root ErrorHandler, response-completion guarding, and lifespan. Other native
+applications are deployed directly through C<to_app>. The server may compile
+that component object once, or the file may call C<to_app> explicitly.
 A C<builder {}> block already returns a native coderef; whether it is complete
 depends on the applications it composes.
 

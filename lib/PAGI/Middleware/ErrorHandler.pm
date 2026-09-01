@@ -325,7 +325,7 @@ ErrorHandler is ordinary middleware and uses the same placement rules as every
 pure PAGI wrapper. Application middleware provides whole-application policy:
 
     compose(
-        app => $routing,
+        router => $routing,
         middleware => [
             middleware('ErrorHandler',
                 handler  => \&site_server_error,

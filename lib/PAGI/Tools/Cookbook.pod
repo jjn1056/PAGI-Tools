@@ -70,7 +70,7 @@ guessing:
       ],
   );
 
-  compose(app => $routing)->to_app;
+  compose(router => $routing)->to_app;
 
 The final expression is the complete native PAGI app. A direct
 C<< $routing->to_app >> already emits the Router's stock/custom 404 and built-in
@@ -299,7 +299,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   }
 
   compose(
-      app => router(
+      router => router(
           routes => [
               route('/' => file_response($manager_file, inline => 1),
                   name => 'home',
@@ -436,7 +436,7 @@ negotiated 405 with authoritative C<Allow>:
           detail => 'No application route matched.',
       ),
   );
-  my $app = compose(app => $routing)->to_app;
+  my $app = compose(router => $routing)->to_app;
 
 Pages selects HTML, RFC 9457 problem JSON, or text from C<Accept>, adds
 C<Vary: Accept>, and defaults errors to C<Cache-Control: no-store>. Use a
@@ -472,7 +472,7 @@ above; the outer idempotent HEAD boundary becomes the wire owner, and the guard
 converts pre-start silence into its production-safe 500.
 
   my $app = compose(
-      app => $routing,
+      router => $routing,
       middleware => [
           middleware('RequestId'),
           middleware('AccessLog'),
@@ -868,7 +868,7 @@ deployed application root with L<PAGI::Compose>:
   use PAGI::Compose qw(compose);
 
   my $app = compose(
-      app => $routing,
+      router => $routing,
       lifespan => {
         startup => async sub {
           my ($state, $scope) = @_;
@@ -1114,7 +1114,7 @@ L<PAGI::Endpoint::Router> provides an object-oriented approach to routing. You d
   # In app.pl:
   # use MyApp;
   # use PAGI::Compose qw(compose);
-  # compose(app => MyApp->new(repository => $repository))->to_app;
+  # compose(router => MyApp->new(repository => $repository)->to_router)->to_app;
 
 Handler methods are called with:
 
@@ -1245,7 +1245,7 @@ server-provided state:
   my $endpoint = MyApp->new(repository => $repository);
 
   my $app = compose(
-      app => $endpoint,
+      router => $endpoint->to_router,
       middleware => [middleware($application_logging)],
       lifespan => {
           startup  => async sub ($state, $scope) {
@@ -1279,7 +1279,7 @@ is specifically required or when composing a hand-built native application:
       shutdown => async sub ($state) {
           $state->{db}->disconnect if $state->{db};
       },
-      app      => compose(app => $endpoint)->to_app,
+      app      => $endpoint->to_app,
   )->to_app;
 
 Here the low-level wrapper owns lifecycle hooks while the nested Router owns
@@ -1418,7 +1418,7 @@ boundary:
   use MyApp;
   use PAGI::Compose qw(compose);
 
-  compose(app => MyApp->new(repository => $repository))->to_app;
+  compose(router => MyApp->new(repository => $repository)->to_router)->to_app;
 
 Now C</api> and C</api/42> are handled by the exact constructed child object.
 The retained snapshot can generate C</api/show> and inspect that child's
@@ -1655,7 +1655,7 @@ state in Compose lifespan state, and every declaration inspectable:
 
   my $snapshot = $endpoint->to_router;
   compose(
-      app => $snapshot,
+      router => $snapshot,
       middleware => [middleware($application_logging)],
       lifespan => {
           startup => async sub {
@@ -2237,7 +2237,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
           ->retain();
   }));
 
-  compose(app => $router)->to_app;
+  compose(router => $router->to_router)->to_app;
 
 B<Warning:> C<< ->retain() >> alone silently swallows errors - always add
 C<< ->on_fail() >> first.
@@ -2299,7 +2299,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
       # $f->retain();
   }));
 
-  compose(app => $router)->to_app;
+  compose(router => $router->to_router)->to_app;
 
 B<Warning:> IO::Async::Function forks child processes. If running with C<--workers N>, each server worker forks its own Function workers. With 4 server workers and 2 Function workers each, you have 12 processes. For high-volume CPU work, consider a dedicated job queue instead.
 

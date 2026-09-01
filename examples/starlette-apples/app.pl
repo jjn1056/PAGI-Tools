@@ -107,7 +107,7 @@ async sub delete_apple($request) {
 }
 
 compose(
-    app => router(
+    router => router(
         routes => [
             route('/' => file_response($manager_file, inline => 1),
                 name => 'home',

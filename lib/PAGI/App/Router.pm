@@ -57,7 +57,7 @@ PAGI::App::Router - Mutable declarations for the immutable PAGI router
     $r->mount('/people', app => $people->to_router)->name('people');
     $r->mount('/static', app => $static_app);
 
-    my $app = compose(app => $r)->to_app;
+    my $app = compose(router => $r->to_router)->to_app;
 
 =head1 DESCRIPTION
 
