@@ -8,7 +8,7 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Middleware ();
 
-our @EXPORT_OK = qw(buffer_whole_response);
+our @EXPORT_OK = qw(buffer_whole_response stream_transform_response);
 
 sub buffer_whole_response {
     my ($app, %opts) = @_;
@@ -24,7 +24,7 @@ sub buffer_whole_response {
             return;
         }
 
-        my ($status, $headers);
+        my ($status, $headers, $start_event);
         my @body_parts;
         my $passing        = 0;
         my $terminal_seen  = 0;
@@ -33,9 +33,7 @@ sub buffer_whole_response {
         # Flush the withheld head plus whatever we buffered, as non-terminal
         # chunks, then hand the rest of the response straight through.
         my $flush_as_stream = async sub {
-            await $send->({ type    => 'http.response.start',
-                            status  => $status,
-                            headers => $headers // [] });
+            await $send->({ %$start_event, headers => $headers // [] });
             for my $part (@body_parts) {
                 await $send->({ type => 'http.response.body',
                                 body => $part, more => 1 });
@@ -51,11 +49,12 @@ sub buffer_whole_response {
             if ($passing) { await $send->($event); return }
 
             if ($type eq 'http.response.start') {
-                $status = $event->{status};
+                $status      = $event->{status};
+                $start_event = $event;
                 # Our own copy: the arrayref belongs to the application, which
                 # may build it once and reuse it across requests.
                 $headers = [ @{ $event->{headers} // [] } ];
-                unless ($engage->($status, $headers)) {
+                unless ($engage->($status, $headers, $start_event)) {
                     $passing = 1;
                     await $send->($event);
                 }
@@ -102,9 +101,7 @@ sub buffer_whole_response {
         # unrepresentable rather than merely discouraged. See PAGI::Spec::Www,
         # "Application Left a Response Incomplete".
         unless ($terminal_seen) {
-            await $send->({ type    => 'http.response.start',
-                            status  => $status,
-                            headers => $headers // [] });
+            await $send->({ %$start_event, headers => $headers // [] });
             for my $part (@body_parts) {
                 await $send->({ type => 'http.response.body',
                                 body => $part, more => 1 });
@@ -115,9 +112,9 @@ sub buffer_whole_response {
         my ($out_status, $out_headers, $out_body) =
             $transform->($status, $headers // [], join('', @body_parts));
 
-        await $send->({ type    => 'http.response.start',
-                        status  => $out_status,
-                        headers => $out_headers // [] });
+        # The application's own start event, with only what transform changed.
+        await $send->({ %$start_event, status  => $out_status,
+                                       headers => $out_headers // [] });
 
         # Re-emit the application's own terminal event with the transformed
         # body substituted, rather than constructing a fresh one. That keeps
@@ -125,6 +122,92 @@ sub buffer_whole_response {
         # defaults to 0 and means the same thing but is not the same event.
         # A middleware should change what it needs to and nothing else.
         await $send->({ %$terminal_event, body => $out_body // '' });
+        return;
+    };
+}
+
+sub stream_transform_response {
+    my ($app, %opts) = @_;
+    croak 'stream_transform_response requires a coderef app'
+        unless ref($app) eq 'CODE';
+    my $begin = $opts{begin} or croak 'begin is required';
+
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        if (($scope->{type} // '') ne 'http') {
+            await $app->($scope, $receive, $send);
+            return;
+        }
+
+        # Per-response, so concurrent requests never share transformer state.
+        my $xform;
+        my ($status, $headers, $start_event);
+        my $head_sent = 0;
+
+        my $wrapped_send = async sub {
+            my ($event) = @_;
+            my $type = $event->{type} // '';
+
+            if ($type eq 'http.response.start') {
+                $status      = $event->{status};
+                $start_event = $event;
+                # Our own copy: the arrayref belongs to the application.
+                $headers = [ @{ $event->{headers} // [] } ];
+                # Held until the first body event, so begin() can see it. That
+                # one event is what tells a transformer whether the response
+                # streams, and how large it is when it does not -- neither is
+                # knowable from the head alone.
+                return;
+            }
+
+            if ($type eq 'http.response.body' && !$head_sent) {
+                return unless defined $status;   # never invent a start
+
+                $xform = PAGI::Middleware::body_event_is_opaque($event)
+                       ? undef                   # nothing to transform
+                       : $begin->($status, $headers, $event, $start_event);
+
+                await $send->({ %$start_event, headers => $headers // [] });
+                $head_sent = 1;
+            }
+
+            if ($type eq 'http.response.body' && $xform) {
+                # An opaque body cannot be transformed in flight. Hand it over
+                # untouched and stop transforming this response.
+                if (PAGI::Middleware::body_event_is_opaque($event)) {
+                    $xform = undef;
+                    await $send->($event);
+                    return;
+                }
+
+                my $out = $xform->{chunk}->($event->{body} // '');
+
+
+                # `more` defaults to 0, so an omitted `more` is terminal.
+                if ($event->{more}) {
+                    await $send->({ type => 'http.response.body',
+                                    body => $out, more => 1 })
+                        if length $out;
+                    return;
+                }
+
+                $out .= $xform->{finish}->();
+                $xform = undef;
+                await $send->({ %$event, body => $out });
+                return;
+            }
+
+            await $send->($event);
+        };
+
+        await $app->($scope, $receive, $wrapped_send);
+
+        # The application committed a status and then stopped without sending
+        # any body event. Emit the head it produced -- swallowing it would
+        # tell every outer observer that no response was ever started.
+        if (!$head_sent && defined $status) {
+            await $send->({ %$start_event, headers => $headers // [] });
+        }
         return;
     };
 }
@@ -181,9 +264,14 @@ incomplete, and outer observers still see that a response was started.
 
 =item * C<engage> (optional, defaults to always true)
 
-Called once with C<< ($status, $headers) >> when C<http.response.start>
-arrives. Return false to pass this response through untouched. C<$headers> is
-the helper's own copy, so C<engage> may modify it freely.
+Called once with C<< ($status, $headers, $start_event) >> when
+C<http.response.start> arrives. Return false to pass this response through
+untouched. C<$headers> is the helper's own copy, so C<engage> may modify it
+freely. C<$start_event> is the application's own event, which carries
+commitments that are not headers -- C<< trailers => 1 >> in particular. The
+spec requires an intermediary to examine the head before transforming a body
+(L<PAGI::Spec::Www/"Application Left a Response Incomplete">), and this is
+what it examines.
 
 =item * C<transform> (required)
 

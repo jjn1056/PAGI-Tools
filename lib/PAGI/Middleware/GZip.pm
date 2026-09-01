@@ -4,7 +4,8 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use IO::Compress::Gzip qw(gzip $GzipError);
+use PAGI::Middleware::BufferedResponse qw(stream_transform_response);
+use Compress::Raw::Zlib qw(WANT_GZIP Z_OK Z_SYNC_FLUSH Z_FINISH);
 
 =head1 NAME
 
@@ -55,183 +56,80 @@ sub _init {
 sub wrap {
     my ($self, $app) = @_;
 
-    return async sub  {
-        my ($scope, $receive, $send) = @_;
-        if ($scope->{type} ne 'http') {
-            await $app->($scope, $receive, $send);
-            return;
+    my $inner = stream_transform_response($app, begin => sub {
+        my ($status, $headers, $first_body) = @_;
+
+        return undef if grep { lc($_->[0]) eq 'content-encoding' } @$headers;
+        # A 206 body is a range whose bounds were computed against the
+        # identity representation; encoding it would describe the transfer of
+        # bytes the Content-Range no longer locates.
+        return undef if ($status // 0) == 206;
+        return undef if grep { lc($_->[0]) eq 'content-range' } @$headers;
+        my ($ct) = map { $_->[1] }
+                   grep { lc($_->[0]) eq 'content-type' } @$headers;
+        return undef unless $self->_type_is_compressible($ct // '');
+
+        # min_size can only be honoured when the size is knowable. A first
+        # body event that is already terminal IS the whole representation, so
+        # apply the threshold. A streaming response has no knowable size --
+        # compressing it is the case this middleware previously gave up on
+        # entirely, so the threshold does not apply there.
+        if (!$first_body->{more}) {
+            return undef
+                if length($first_body->{body} // '') < $self->{min_size};
         }
 
-        # Check if client accepts gzip
-        my $accept_encoding = $self->_get_header($scope, 'accept-encoding') // '';
-        my $accepts_gzip = $accept_encoding =~ /\bgzip\b/i;
+        my ($deflate, $err) = Compress::Raw::Zlib::Deflate->new(
+            WindowBits   => WANT_GZIP,
+            AppendOutput => 1,
+        );
+        return undef unless $deflate && $err == Z_OK;
 
-        unless ($accepts_gzip) {
-            await $app->($scope, $receive, $send);
-            return;
-        }
+        # The compressed length is not known before the body is compressed,
+        # so the response is chunked and carries no Content-Length.
+        @$headers = grep { lc($_->[0]) ne 'content-length' } @$headers;
+        push @$headers, ['Content-Encoding', 'gzip'], ['Vary', 'Accept-Encoding'];
 
-        # Buffer response to compress
-        # NOTE: All request-specific state MUST be lexical variables, not instance
-        # state ($self->{}), because middleware instances are shared across
-        # concurrent requests. Using $self->{} would cause race conditions.
-        my @body_parts;
-        my $response_started = 0;
-        my $content_type = '';
-        my $original_headers;
-        my $status;
-        my $headers_sent = 0;  # Request-local state (NOT on $self!)
-        my $terminal_seen = 0;
-
-        my $wrapped_send = async sub  {
-        my ($event) = @_;
-            if ($event->{type} eq 'http.response.start') {
-                $status = $event->{status};
-                $original_headers = $event->{headers};
-                # Get content type
-                for my $h (@{$event->{headers} // []}) {
-                    if (lc($h->[0]) eq 'content-type') {
-                        $content_type = $h->[1];
-                        last;
-                    }
-                }
-                $response_started = 1;
-                # Don't send yet - buffer to compress
-            }
-            elsif ($event->{type} eq 'http.response.body') {
-                # If we're already in streaming mode, pass through all chunks
-                if ($headers_sent) {
-                    await $send->($event);
-                    return;
-                }
-
-                # Opaque (file/fh) bodies have no body string to buffer or
-                # compress -- flush anything buffered so far as streaming
-                # chunks and forward the opaque event verbatim.
-                if (PAGI::Middleware::body_event_is_opaque($event)) {
-                    # No start was ever observed -- don't invent one to carry it.
-                    return unless defined $status;
-
-                    await $send->({
-                        type    => 'http.response.start',
-                        status  => $status,
-                        headers => $original_headers // [],
-                    });
-                    $headers_sent = 1;
-                    for my $part (@body_parts) {
-                        await $send->({
-                            type => 'http.response.body',
-                            body => $part,
-                            more => 1,
-                        });
-                    }
-                    @body_parts = ();
-                    await $send->($event);
-                    return;
-                }
-
-                push @body_parts, $event->{body} // '';
-
-                # `more` defaults to 0, so an omitted `more` is terminal.
-                $terminal_seen = 1 unless $event->{more};
-
-                # If streaming (more => 1), switch to pass-through mode
-                if ($event->{more}) {
-                    if (!$headers_sent) {
-                        # No start was ever observed -- don't invent one to carry it.
-                        return unless defined $status;
-
-                        await $send->({
-                            type    => 'http.response.start',
-                            status  => $status,
-                            headers => $original_headers // [],
-                        });
-                        $headers_sent = 1;
-                    }
-                    await $send->($event);
-                }
-            }
-            else {
-                await $send->($event);
-            }
+        return {
+            chunk => sub {
+                my ($bytes) = @_;
+                my $out = '';
+                $deflate->deflate($bytes, $out);
+                # Z_SYNC_FLUSH makes each chunk independently deliverable,
+                # which is the whole point of streaming compression.
+                $deflate->flush($out, Z_SYNC_FLUSH);
+                return $out;
+            },
+            finish => sub {
+                my $out = '';
+                $deflate->flush($out, Z_FINISH);
+                return $out;
+            },
         };
+    });
 
-        await $app->($scope, $receive, $wrapped_send);
-
-        # If headers already sent (streaming), we're done
-        return if $headers_sent;
-
-        # The inner app never sent a start event at all -- don't invent a
-        # response it never gave us; let the server's no-response backstop
-        # fire with its accurate diagnostic.
-        return unless defined $status;
-
-        # Same rule as ETag: emit the head we withheld, but compress nothing
-        # and claim nothing. Only a terminal event we actually received
-        # licenses Content-Encoding and Content-Length -- computing either
-        # from a partial buffer asserts a completeness the application never
-        # claimed. Keyed on what we received rather than on why the
-        # application stopped, so it also covers an application that returned
-        # early with its client still connected.
-        unless ($terminal_seen) {
-            await $send->({
-                type    => 'http.response.start',
-                status  => $status,
-                headers => $original_headers // [],
-            });
+    # Accept-Encoding is a request header, so gate on the scope out here;
+    # begin() only ever sees the response.
+    return async sub {
+        my ($scope, $receive, $send) = @_;
+        if (($scope->{type} // '') ne 'http'
+            || !$self->_client_accepts_gzip($scope)) {
+            await $app->($scope, $receive, $send);
             return;
         }
-
-        # Combine body
-        my $body = join('', @body_parts);
-
-        # Decide whether to compress
-        my $should_compress = $self->_should_compress($content_type, length($body));
-
-        if ($should_compress && length($body) > 0) {
-            my $compressed;
-            gzip(\$body, \$compressed) or die "gzip failed: $GzipError";
-
-            # Update headers
-            my @new_headers;
-            for my $h (@{$original_headers // []}) {
-                next if lc($h->[0]) eq 'content-length';
-                push @new_headers, $h;
-            }
-            push @new_headers, ['Content-Encoding', 'gzip'];
-            push @new_headers, ['Content-Length', length($compressed)];
-            push @new_headers, ['Vary', 'Accept-Encoding'];
-
-            await $send->({
-                type    => 'http.response.start',
-                status  => $status,
-                headers => \@new_headers,
-            });
-            await $send->({
-                type => 'http.response.body',
-                body => $compressed,
-                more => 0,
-            });
-        }
-        else {
-            await $send->({
-                type    => 'http.response.start',
-                status  => $status,
-                headers => $original_headers // [],
-            });
-            await $send->({
-                type => 'http.response.body',
-                body => $body,
-                more => 0,
-            });
-        }
+        await $inner->($scope, $receive, $send);
+        return;
     };
 }
 
-sub _should_compress {
-    my ($self, $content_type, $size) = @_;
+sub _client_accepts_gzip {
+    my ($self, $scope) = @_;
+    my $accept_encoding = $self->_get_header($scope, 'accept-encoding') // '';
+    return $accept_encoding =~ /\bgzip\b/i ? 1 : 0;
+}
 
-    return 0 if $size < $self->{min_size};
+sub _type_is_compressible {
+    my ($self, $content_type) = @_;
 
     $content_type =~ s/;.*//;  # Remove charset etc.
     $content_type = lc($content_type);
@@ -245,6 +143,7 @@ sub _should_compress {
     }
     return 0;
 }
+
 
 sub _get_header {
     my ($self, $scope, $name) = @_;

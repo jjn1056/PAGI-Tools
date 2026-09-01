@@ -50,6 +50,13 @@ sub wrap {
             my ($status, $headers) = @_;
             # An application that set its own ETag owns it.
             return 0 if grep { lc($_->[0]) eq 'etag' } @$headers;
+            # A 206 body is a range, not the representation. Hashing it would
+            # label the resource with a validator identifying only the
+            # fragment, so a cache could later serve the fragment as the
+            # whole. See PAGI::Spec::Www, "An intermediary must not
+            # invalidate what the head promised".
+            return 0 if ($status // 0) == 206;
+            return 0 if grep { lc($_->[0]) eq 'content-range' } @$headers;
             return 1;
         },
         transform => sub {

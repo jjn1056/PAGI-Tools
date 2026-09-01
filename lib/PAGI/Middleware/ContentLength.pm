@@ -51,8 +51,13 @@ sub wrap {
 
     return buffer_whole_response($app,
         engage => sub {
-            my ($status, $headers) = @_;
+            my ($status, $headers, $start_event) = @_;
             return 0 if $self->{auto_chunked};
+            # Declaring trailers commits the server to chunked framing over
+            # HTTP/1.1 -- the only framing that can carry a trailer section.
+            # Adding Content-Length would make the server reject the
+            # application's own http.response.trailers event.
+            return 0 if $start_event->{trailers};
             # An application that set its own length owns it.
             return 0 if grep { lc($_->[0]) eq 'content-length' } @$headers;
             return 1;
