@@ -25,12 +25,13 @@ Callable values keep these four meanings:
 
     Route CODE endpoint        -> one Request/WebSocket/SSE argument
     Route to_app object        -> native PAGI application
-    Mount/Compose/default CODE -> native PAGI application
+    Mount/default CODE         -> native PAGI application
     handler result             -> native CODE or instantiated to_app object
 
 A native CODE at a Route is wrapped explicitly with C<PAGI::Utils::as_app>.
-Mount, Compose C<app>, and Router C<http_default> remain native application
-positions and take a three-channel CODE directly.
+Mount C<app> and Router C<http_default> remain native application positions
+and take a three-channel CODE directly. Compose accepts a Router through
+C<routes> or C<router>, not an arbitrary application.
 
 Raw PAGI is deliberately minimal — an application is just an C<async> sub that
 speaks the protocol directly:
@@ -182,11 +183,13 @@ description:
     )->to_app;
 
 L<PAGI::Compose> is an optional application-root composer, not a base class or
-a replacement router. Build an explicit router and pass it through C<app> when
-router-specific configuration or inspection is needed. Configure a Router
+a replacement router. Its C<routes> form constructs and retains one Router;
+its C<router> form retains the supplied immutable Router by identity and
+delegates inspection and reverse routing to it. Configure a Router
 C<http_default> for custom missing-route presentation and ordinary ErrorHandler
-middleware for official application errors. Compose keeps its stock error and
-response-lifecycle boundary outside author middleware as the final safety net.
+middleware for official application errors. Compose keeps root lifespan and
+its stock error and response-lifecycle boundary outside author middleware as
+the final safety net.
 
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
@@ -205,11 +208,14 @@ The Starlette influence is conceptual, not API identity. PAGI distinguishes
 direct protocol handlers from native three-channel application positions, validates
 constraints without coercion, uses slash logical names and relative lookup,
 treats SSE as a first-class scope, and exposes an HTTP-only C<http_default>.
-Starlette's single multiprotocol Router C<default> was considered and not
-copied, so PAGI retains its stock WebSocket and SSE miss behavior. PAGI
-middleware is pure app-to-app wrapping; Compose, rather than Router, owns root
-lifespan. OpenAPI and schema generation remain deferred until a concrete
-consumer is designed.
+Current Starlette owns C<self.router> without subclassing Router and stores
+lifespan handling on Router, making a standalone Starlette Router
+lifecycle-capable. Mounted Starlette Routers do not receive lifespan. PAGI
+preserves one non-cascading root lifecycle but keeps it on Compose; a bare PAGI
+Router declines lifespan and strict mode rejects it. Starlette's single
+multiprotocol Router C<default> was considered and not copied, so PAGI retains
+its stock WebSocket and SSE miss behavior. OpenAPI and schema generation remain
+deferred until a concrete consumer is designed.
 
 Run it with any PAGI server (such as C<pagi-server> from the C<PAGI-Server>
 distribution), or mount it inside a larger PAGI application.
@@ -252,8 +258,8 @@ L<PAGI::Endpoint::Router> - immutable functional, mutable imperative, and
 method-oriented frontends over one immutable routing engine
 
 =item * L<PAGI::Compose> - optional immutable application-root composition of
-one request target, application middleware, explicit lifecycle callbacks, and
-mandatory HTTP routing/error failsafes
+one retained Router, application middleware, explicit lifecycle callbacks, and
+mandatory HTTP error/response-lifecycle failsafes
 
 =item * L<PAGI::Test::Client> and friends - in-process test utilities for
 PAGI applications

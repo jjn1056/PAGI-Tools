@@ -123,6 +123,11 @@ accessors C<name>, C<path>, C<methods>, and C<constraints> return undef. Router
 is a collection and has no leaf C<endpoint> accessor or retired target/mode
 accessors.
 
+L<PAGI::Compose> can retain this exact Router identity through
+C<< compose(router => $router) >>. Its C<router> accessor returns this object,
+and its routing inspection and reverse-routing accessors delegate here rather
+than rebuilding a temporary Router.
+
 =head1 METHODS
 
 =head2 path_for
@@ -185,7 +190,10 @@ responses complete. WebSocket and SSE retain their protocol-specific miss
 behavior.
 
 Unlike L<PAGI::Compose>, a bare Router does not own root ErrorHandler,
-response-completion guarding, or lifespan. See L<PAGI::Routing>,
+response-completion guarding, or lifespan. It declines a lifespan scope; a
+server's strict lifespan mode rejects that decline. Compose adds root lifespan
+around the retained Router but does not add lifecycle behavior or a
+C<lifespan> option to Router itself. See L<PAGI::Routing>,
 L<PAGI::Routing::Mount>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, and
 the
 L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.

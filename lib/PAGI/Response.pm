@@ -92,8 +92,9 @@ response start, so deliberate mutation affects later invocations without
 splitting an invocation already in progress.
 
 A Response is not a terminal deployed root. C<to_app> produces one HTTP-only
-native application; L<PAGI::Compose> remains the usual root owner for lifespan,
-HEAD suppression, ErrorHandler, and incomplete-response policy. Invoking a
+native application. Place the Response at a Route when a routing root needs
+L<PAGI::Compose> lifespan, HEAD suppression, ErrorHandler, and incomplete-
+response policy; Compose itself accepts a Router, not a Response. Invoking a
 Response app with WebSocket, SSE, lifespan, or another non-HTTP scope croaks
 before sending. That is an application failure, not a guaranteed denial wire
 response. Use L<PAGI::WebSocket/deny> or L<PAGI::SSE/decline> for controlled

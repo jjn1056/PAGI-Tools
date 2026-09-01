@@ -206,13 +206,22 @@ C<to_app>, while the outer reverse resolver does not guess its route names.
 Materializes one fresh snapshot and compiles it through the shared compiler.
 Retain the returned native PAGI routing component for its intended lifetime. A
 class call constructs one Endpoint instance; an object call keeps its receiver.
-Direct C<to_app> is legal low-level compilation. HTTP NONE invokes the
+Direct C<to_app> is legal bare Router compilation. HTTP NONE invokes the
 Router's declared C<http_default>, or its stock negotiated 404 when none was
 declared; HTTP PARTIAL likewise retains the Router's negotiated 405. It never
-completes HTTP exhaustion silently. L<PAGI::Compose> remains an optional
-application-root composer for application middleware, lifespan callbacks, and
-its HTTP safety boundary; it is not required merely to produce Router-owned
-404 or 405 responses.
+completes HTTP exhaustion silently.
+Call C<to_router> when the immutable snapshot must be retained or inspected.
+
+For root deployment, cross the immutable boundary explicitly:
+
+    my $routing = $endpoint->to_router;
+    my $root = compose(router => $routing);
+
+C<< compose(router => $routing) >> retains that exact snapshot and adds
+application middleware, root lifespan callbacks, ErrorHandler,
+response-completion guarding, and the outer HEAD boundary. Compose does not
+add lifespan to the Router, and it is not required merely to produce
+Router-owned 404 or 405 responses.
 
 =head1 ROUTE DECLARATIONS
 

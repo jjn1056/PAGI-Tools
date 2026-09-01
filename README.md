@@ -12,12 +12,13 @@ Callable values keep these four meanings:
 
     Route CODE endpoint        -> one Request/WebSocket/SSE argument
     Route to_app object        -> native PAGI application
-    Mount/Compose/default CODE -> native PAGI application
+    Mount/default CODE         -> native PAGI application
     handler result             -> native CODE or instantiated to_app object
 
 A native CODE at a Route is wrapped explicitly with `PAGI::Utils::as_app`.
-Mount, Compose `app`, and Router `http_default` remain native application
-positions and take a three-channel CODE directly.
+Mount `app` and Router `http_default` remain native application positions and
+take a three-channel CODE directly. Compose accepts a Router through `routes`
+or `router`, not an arbitrary application.
 
 Raw PAGI is deliberately minimal — an application is just an `async` sub that
 speaks the protocol directly:
@@ -55,7 +56,7 @@ middleware suite — so the same application reads like this:
     })->name('user');
 
     my $routing = $router->to_router; # retain one immutable snapshot
-    my $app = compose(app => $routing)->to_app; # complete deployed app
+    my $app = compose(router => $routing)->to_app; # complete deployed app
 
 For a small conventional landing page or HTTP error, [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) builds a
 deferred negotiated HTTP application:
@@ -108,7 +109,7 @@ Use the functional frontend when the declarations are already immutable:
         route('/' => \&home, name => 'home'),
     ]);
 
-    my $app = compose(app => $routing)->to_app;
+    my $app = compose(router => $routing)->to_app;
 
 Every Mount names its target: `routes => [...]` constructs a complete
 child Router, while `app => $child` composes a native application or
@@ -169,11 +170,13 @@ description:
     )->to_app;
 
 [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) is an optional application-root composer, not a base class or
-a replacement router. Build an explicit router and pass it through `app` when
-router-specific configuration or inspection is needed. Configure a Router
-`http_default` for custom missing-route presentation and ordinary ErrorHandler
-middleware for official application errors. Compose keeps its stock error and
-response-lifecycle boundary outside author middleware as the final safety net.
+a replacement router. Its `routes` form constructs and retains one Router; its
+`router` form retains the supplied immutable Router by identity and delegates
+inspection and reverse routing to it. Configure a Router `http_default` for
+custom missing-route presentation and ordinary ErrorHandler middleware for
+official application errors. Compose keeps root lifespan and its stock error
+and response-lifecycle boundary outside author middleware as the final safety
+net.
 
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
@@ -192,11 +195,14 @@ The Starlette influence is conceptual, not API identity. PAGI distinguishes
 direct protocol handlers from native three-channel application positions, validates
 constraints without coercion, uses slash logical names and relative lookup,
 treats SSE as a first-class scope, and exposes an HTTP-only `http_default`.
-Starlette's single multiprotocol Router `default` was considered and not
-copied, so PAGI retains its stock WebSocket and SSE miss behavior. PAGI
-middleware is pure app-to-app wrapping; Compose, rather than Router, owns root
-lifespan. OpenAPI and schema generation remain deferred until a concrete
-consumer is designed.
+Current Starlette owns `self.router` without subclassing Router and stores
+lifespan handling on Router, making a standalone Starlette Router
+lifecycle-capable. Mounted Starlette Routers do not receive lifespan. PAGI
+preserves one non-cascading root lifecycle but keeps it on Compose; a bare PAGI
+Router declines lifespan and strict mode rejects it. Starlette's single
+multiprotocol Router `default` was considered and not copied, so PAGI retains
+its stock WebSocket and SSE miss behavior. OpenAPI and schema generation remain
+deferred until a concrete consumer is designed.
 
 Run it with any PAGI server (such as `pagi-server` from the `PAGI-Server`
 distribution), or mount it inside a larger PAGI application.
@@ -230,8 +236,8 @@ and HTTP error applications
 [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter) - immutable functional, mutable imperative, and
 method-oriented frontends over one immutable routing engine
 - [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) - optional immutable application-root composition of
-one request target, application middleware, explicit lifecycle callbacks, and
-mandatory HTTP routing/error failsafes
+one retained Router, application middleware, explicit lifecycle callbacks, and
+mandatory HTTP error/response-lifecycle failsafes
 - [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and friends - in-process test utilities for
 PAGI applications
 - [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils) - composition, lifespan, and lexical path helpers,

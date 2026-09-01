@@ -115,7 +115,7 @@ endpoint must own all three PAGI channels.
 
     Route CODE endpoint        -> one Request/WebSocket/SSE argument
     Route to_app object        -> native PAGI application
-    Mount/Compose/default CODE -> native PAGI application
+    Mount/default CODE         -> native PAGI application
     handler result             -> native CODE or instantiated to_app object
 
 The descriptions do no request I/O. C<to_app> is the explicit compilation
@@ -177,7 +177,7 @@ names and unblessed references are invalid.
 
 =item * C<< request_response($handler) >> from L<PAGI::Utils> is the explicit
 adapter for placing a one-Request handler in a native application position such
-as C<http_default>, Mount C<app>, or Compose C<app>. It never infers coderef
+as C<http_default> or Mount C<app>. It never infers coderef
 arity.
 
 =item * C<< websocket('/x' =E<gt> $code) >> and
@@ -865,6 +865,11 @@ for native applications and its existing hook-registration behavior. Do not
 put two independent lifespan consumers around one root. Missing and unknown
 scope types croak before router middleware or channel I/O.
 
+Compose retains the immutable Router by identity and delegates inspection and
+reverse routing to it. It consumes lifespan before invoking that Router; a
+bare Router therefore declines lifespan, and strict server lifespan mode
+rejects the decline.
+
 Construction and compilation errors are reported early where possible.
 Request-time dispatch, constraint, application, and middleware exceptions
 propagate to an enclosing L<PAGI::Middleware::ErrorHandler>. The router does
@@ -900,8 +905,9 @@ phase; there is no response-valued Endpoint middleware chain.
 Starlette supplied the useful Route/Mount/Router vocabulary, but PAGI does not
 claim API identity. Ordinary PAGI route handlers receive one direct Request,
 WebSocket, or SSE object; C<as_app($code)> marks a native Route CODE, while
-Mount C<app>, Router C<http_default>, and Compose C<app> are native three-
-channel application positions. Package strings
+Mount C<app> and Router C<http_default> are native three-channel application
+positions. Compose instead accepts one immutable Router through C<routes> or
+C<router>. Package strings
 are not coerced in those positions. Middleware strings remain supported
 because middleware descriptors define an explicit loading, construction,
 configuration, and C<wrap> contract.
@@ -912,10 +918,13 @@ Starlette's colon mount namespace. SSE is a first-class routed scope.
 Middleware is pure PAGI app-to-app wrapping at Router, Mount, Route, and
 Compose boundaries.
 
-Starlette's single multiprotocol Router C<default> was considered and
-deliberately not copied. PAGI's C<http_default> handles only HTTP NONE, leaving
-stock WebSocket and SSE miss behavior intact. Router ignores lifespan;
-L<PAGI::Compose> owns the one deployed root lifecycle. OpenAPI generation,
+Current Starlette owns C<self.router> rather than subclassing Router. Starlette
+stores lifespan on Router, which makes a standalone Router lifecycle-capable,
+but mounted Routers do not receive the root lifespan exchange. PAGI preserves
+one non-cascading root lifecycle while keeping it on Compose. Starlette's
+single multiprotocol Router C<default> was considered and deliberately not
+copied. PAGI's C<http_default> handles only HTTP NONE, leaving stock WebSocket
+and SSE miss behavior intact. OpenAPI generation,
 C<schema>, C<include_in_schema>, and arbitrary route metadata remain deferred
 until a concrete consumer is designed; the immutable route tree preserves the
 future inspection seam without advertising an unshipped schema API.

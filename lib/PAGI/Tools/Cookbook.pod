@@ -37,7 +37,7 @@ Callable meaning depends on its structural position:
 
   Route CODE endpoint        -> one Request/WebSocket/SSE argument
   Route to_app object        -> native PAGI application
-  Mount/Compose/default CODE -> native PAGI application
+  Mount/default CODE         -> native PAGI application
   handler result             -> native CODE or instantiated to_app object
 
 =head2 A Declarative Route Tree with Package Handlers
@@ -201,7 +201,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   use PAGI::Compose qw(compose);
   use PAGI::Pages qw(welcome not_found);
   use PAGI::Response qw(file_response json_response);
-  use PAGI::Routing qw(route mount router middleware);
+  use PAGI::Routing qw(route mount middleware);
   use PAGI::Routing::URL qw(url_for path_for);
   use PAGI::Utils qw(app_path);
 
@@ -299,39 +299,38 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   }
 
   compose(
-      router => router(
-          routes => [
-              route('/' => file_response($manager_file, inline => 1),
-                  name => 'home',
-                  desc => 'Apple manager SPA',
-              ),
-              route('/welcome' => welcome(),
-                  name => 'welcome',
-                  desc => 'PAGI welcome page',
-              ),
-              mount('/apples',
-                  routes => [
-                      route('/' => \&list_apples,
-                          methods => ['GET'], name => 'list'),
-                      route('/' => \&create_apple,
-                          methods => ['POST'], name => 'create'),
-                      route('/{apple_id:&Int}' => \&read_apple,
-                          methods => ['GET'], name => 'read'),
-                      route('/{apple_id:&Int}' => \&update_apple,
-                          methods => ['PUT'], name => 'update'),
-                      route('/{apple_id:&Int}' => \&delete_apple,
-                          methods => ['DELETE'], name => 'delete'),
-                  ],
-                  name       => 'apples',
-                  middleware => [middleware(\&with_apples_api_header)],
-              ),
-          ],
-          http_default => not_found(
-              detail => 'That page does not exist in the Apple demo.',
+      routes => [
+          route('/' => file_response($manager_file, inline => 1),
+              name => 'home',
+              desc => 'Apple manager SPA',
           ),
+          route('/welcome' => welcome(),
+              name => 'welcome',
+              desc => 'PAGI welcome page',
+          ),
+          mount('/apples',
+              routes => [
+                  route('/' => \&list_apples,
+                      methods => ['GET'], name => 'list'),
+                  route('/' => \&create_apple,
+                      methods => ['POST'], name => 'create'),
+                  route('/{apple_id:&Int}' => \&read_apple,
+                      methods => ['GET'], name => 'read'),
+                  route('/{apple_id:&Int}' => \&update_apple,
+                      methods => ['PUT'], name => 'update'),
+                  route('/{apple_id:&Int}' => \&delete_apple,
+                      methods => ['DELETE'], name => 'delete'),
+              ],
+              name       => 'apples',
+              middleware => [middleware(\&with_apples_api_header)],
+          ),
+      ],
+      http_default => not_found(
+          detail => 'That page does not exist in the Apple demo.',
       ),
       middleware => [middleware('RequestId')],
       lifespan => { startup => \&startup },
+      desc     => 'Starlette apples comparison application',
   );
 C</apples> and C</apples/> reach the child C</> leaves. The selected child owns
 C<PATCH /apples> and its C<Allow: GET, HEAD, POST>. Constraint C<Int> validates
@@ -450,13 +449,14 @@ HEAD to the Router-generated 405 union.
 
 =head2 Compose Safety and Application Error Policy
 
-Compose installs the same root safety graph for every HTTP target:
+Compose installs the same root safety graph around either retained Router
+form:
 
   outer idempotent application-root HEAD boundary
     automatic ErrorHandler
       response-completion guard
         author middleware, in listed order
-          target
+          retained Router
 
 Router 404/405 responses pass through this graph unchanged. Compose's stock
 error response is a negotiated, no-store Pages 500, with a final hardcoded
@@ -1700,15 +1700,21 @@ capabilities separate also lets a higher-level framework retain its own URL or
 controller API.
 
 Ordinary PAGI handlers receive the direct Request, WebSocket, or SSE object;
-C<as_app>, Mount C<app>, Router C<http_default>, and Compose C<app> receive native three-channel PAGI
-applications. Constraints validate without coercion. Logical names use slash
+C<as_app>, Mount C<app>, and Router C<http_default> receive native three-channel
+PAGI applications. Compose accepts one Router through C<routes> or C<router>.
+Constraints validate without coercion. Logical names use slash
 addresses and relative L<PAGI::Routing::URL> lookup. SSE is a first-class scope, and
 middleware at Router, Mount, Route, and Compose boundaries is pure PAGI
 app-to-app wrapping.
 
+Current Starlette owns C<self.router> without subclassing Router and stores
+lifespan handling on that Router. A standalone Starlette Router is therefore
+lifecycle-capable, while mounted Starlette Routers do not receive lifespan.
+PAGI preserves one non-cascading root lifecycle but keeps it on Compose. A bare
+PAGI Router declines lifespan, and strict mode rejects that decline.
 Starlette's single multiprotocol Router C<default> was considered and
 deliberately not copied. PAGI's C<http_default> handles only HTTP NONE, leaving
-stock WebSocket and SSE misses intact. Compose, not Router, owns root lifespan.
+stock WebSocket and SSE misses intact.
 OpenAPI/schema generation and C<include_in_schema> remain deferred; the
 inspectable immutable tree is a future seam, not a shipped schema API.
 

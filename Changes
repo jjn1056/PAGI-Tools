@@ -2,6 +2,17 @@
 
 0.002003 - UNRELEASED
 
+  [Compose retained Router]
+  - BREAKING: Compose now retains one immutable Router by exact identity. Its
+    constructor accepts exactly one of the `routes` and `router` forms, and
+    delegates inspection and reverse routing to that retained object. The
+    former arbitrary app mode is removed with no direct native-application
+    replacement in this release. The `routes` form flattens the common Router
+    `http_default` and `desc` options; Router middleware remains on an explicit
+    Router. The root-only lifespan behavior is unchanged: Compose owns the one
+    deployed lifecycle, mounted Routers do not receive it, and a bare Router
+    declines lifespan.
+
   [Buffering middleware]
   - NEW: PAGI::Middleware::BufferedResponse, two helpers for the
     buffer-and-re-emit pattern. Four middleware had each hand-rolled it and
@@ -416,7 +427,7 @@
   - All immutable declarative middleware lists now accept the additive
     bare-factory shorthand; the chat showcase uses it at its Compose application root.
   - New PAGI::Compose is an optional immutable application-root description
-    combining either declarative routes or one existing PAGI component with
+    combining either declarative routes or one retained immutable Router with
     application-wide pure event middleware and explicit startup/shutdown
     callbacks. It owns lifespan without delegating it, requires server-provided
     state when callbacks are configured, normalizes immediate/Future callback

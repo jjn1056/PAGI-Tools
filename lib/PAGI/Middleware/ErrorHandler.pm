@@ -85,8 +85,8 @@ Use the handler seam to force a fixed representation:
 
 The wrapper may inspect C<$request> or C<$error> when it deliberately chooses
 safe response fields. ErrorHandler requires a concrete Response from this
-custom renderer; source-free Pages application values belong at Route,
-Mount, Router-default, or Compose application boundaries instead. Pages does not
+custom renderer; source-free Pages application values belong at Route, Mount,
+or Router-default application boundaries instead. Pages does not
 consume that callback metadata itself.
 
 =back

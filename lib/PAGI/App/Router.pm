@@ -246,12 +246,21 @@ Creates exactly one fresh Router snapshot and compiles that retained snapshot.
 Each call builds a fresh middleware and application graph; requests reuse that
 graph and never compile per request.
 
-A direct Router owns normal routing outcomes: HTTP NONE is its custom or stock
+C<to_app> is bare Router compilation. A direct Router owns normal routing
+outcomes: HTTP NONE is its custom or stock
 default, PARTIAL is its negotiated 405 with authoritative C<Allow>, and
 protocol misses use stock protocol behavior. Direct compilation deliberately
 does not install lifespan handling, error handling, or a response guard.
-L<PAGI::Compose> supplies those root lifecycle and safety boundaries for a
-deployed application.
+Call C<to_router> when the immutable snapshot must be retained or inspected.
+
+For root deployment, retain the immutable boundary explicitly:
+
+    my $routing = $r->to_router;
+    my $root = compose(router => $routing);
+
+C<< compose(router => $routing) >> retains that exact snapshot and supplies
+application middleware, root lifespan, ErrorHandler, response-completion
+guarding, and the outer HEAD boundary. It does not add lifespan to the Router.
 
 =head1 INSPECTION AND REVERSE ROUTING
 

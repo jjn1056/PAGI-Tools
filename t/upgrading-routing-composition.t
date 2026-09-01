@@ -256,7 +256,7 @@ subtest 'public documentation publishes one final routing model' => sub {
         Route\s+CODE\s+endpoint.*?one\s+(?:Request/WebSocket/SSE|Request,
             \s*WebSocket,\s*or\s*SSE).*?
         Route\s+to_app\s+object.*?native\s+PAGI\s+application.*?
-        Mount/Compose/default\s+CODE.*?native\s+PAGI\s+application.*?
+        Mount/default\s+CODE.*?native\s+PAGI\s+application.*?
         handler\s+result.*?native\s+CODE.*?instantiated\s+to_app\s+object
     }six;
     for my $file (
@@ -337,6 +337,47 @@ subtest 'public documentation publishes one final routing model' => sub {
             "upgrade guide covers $replacement");
     }
 
+    for my $migration (
+        qr/Before:.*?compose\(app => \$router\).*?After:.*?compose\(router => \$router\)/s,
+        qr/Before:.*?compose\(app => \$builder\).*?After:.*?compose\(router => \$builder->to_router\)/s,
+        qr'Before:.*?app => router\(routes => \\@routes, http_default => \$default\).*?After:.*?routes\s+=> \\@routes,.*?http_default\s+=> \$default's,
+        qr'For arbitrary native applications, Compose has no direct replacement in this\s+release.*?Deploy the native coderef directly.*?root Mount is not an equivalent conversion'is,
+    ) {
+        like($upgrading, $migration,
+            'upgrade guide publishes one complete Compose migration recipe');
+    }
+
+    my $compose_pod = slurp_file('lib/PAGI/Compose.pm');
+    like($compose_pod,
+        qr/use PAGI::Compose qw\(compose\);.*?use PAGI::Routing qw\(route middleware\);.*?routes => \[route\('\/' => \\&home, name => 'home'\)\].*?middleware => \[middleware\('RequestId'\)\].*?startup\s+=> \\&startup.*?shutdown\s+=> \\&shutdown/s,
+        'Compose synopsis leads with the direct routes form');
+    like($compose_pod,
+        qr/accepted top-level keys.*?C<routes>.*?C<router>.*?C<http_default>.*?C<desc>.*?C<middleware>.*?C<lifespan>/s,
+        'Compose documents every constructor key');
+    like($compose_pod,
+        qr/C<router> returns the exact retained.*?C<routes>.*?C<http_default>.*?C<desc>.*?C<named_routes>.*?C<route_named>.*?C<path_for>.*?C<middleware>.*?C<lifespan>/s,
+        'Compose documents retained identity and all delegated accessors');
+    unlike($compose_pod, qr/^=head2 app$/m,
+        'Compose no longer documents an app constructor key');
+    like($compose_pod,
+        qr/Starlette.*?does not subclass.*?self\.router.*?lifespan.*?Router.*?mounted.*?do not receive.*?lifespan.*?bare PAGI Router.*?declines lifespan.*?strict mode.*?rejects/is,
+        'Compose documents the accurate Starlette lifespan comparison');
+    for my $url (
+        'https://github.com/Kludex/starlette/blob/main/starlette/applications.py',
+        'https://github.com/Kludex/starlette/blob/main/starlette/routing.py',
+        'https://github.com/Kludex/starlette/blob/main/tests/test_routing.py',
+    ) {
+        like($compose_pod, qr/\Q$url\E/,
+            "Compose links to official Starlette source $url");
+    }
+
+    for my $file ('lib/PAGI/App/Router.pm', 'lib/PAGI/Endpoint/Router.pm') {
+        my $source = slurp_file($file);
+        like($source,
+            qr/C<to_app>.*?bare Router.*?C<to_router>.*?C<< compose\(router => \$routing\) >>.*?root/is,
+            "$file distinguishes bare Router compilation from Compose root deployment");
+    }
+
     for my $file (
         'lib/PAGI/Tools/Tutorial.pod',
         'lib/PAGI/Tools/Cookbook.pod',
@@ -383,6 +424,9 @@ subtest 'public documentation publishes one final routing model' => sub {
         'release note stays inside unreleased 0.002003');
     like($changes, qr/Route matches a complete URL leaf/,
         'release note records the routing composition redesign');
+    like($changes,
+        qr/retains.*?Router.*?identity.*?routes.*?router.*?delegat.*?reverse routing.*?arbitrary app.*?http_default.*?desc.*?root-only lifespan/is,
+        'release note records the complete retained-Router Compose change');
 
     my @application_docs = (
         'README.md', 'Changes', 'lib/PAGI/Tools.pm',
