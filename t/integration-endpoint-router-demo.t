@@ -82,10 +82,6 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
 
     my $app_file = "$Bin/../examples/endpoint-router-demo/app.pl";
     my $app_source = source_text($app_file);
-    unlike($app_source, qr/compose\s*\(\s*app\s*=>/s,
-        'Endpoint Router demo does not use retired Compose app mode');
-    like($app_source, qr/compose\s*\(\s*router\s*=>\s*\$main->to_router/s,
-        'Endpoint Router demo crosses its mutable frontend with to_router');
     my $app = do $app_file;
     my $load_error = $@ || $!;
     ok(!$load_error, 'the real Endpoint demo app file loads cleanly')
@@ -165,6 +161,14 @@ subtest 'the nested demo exercises the complete Endpoint design' => sub {
             status => 404,
             detail => 'No API Endpoint route matched',
         }, 'app_as custom default renders the API boundary policy');
+
+        my $api_wrong_method = $client->post('/api/index', headers => {
+            'X-Demo-Token' => 'demo-token',
+        });
+        is($api_wrong_method->status, 405,
+            'the mounted API Router retains its automatic method mismatch');
+        is($api_wrong_method->header('Allow'), 'GET, HEAD',
+            'the mounted API Router retains its own Allow union');
 
         $client->websocket('/status', sub {
             my ($ws) = @_;

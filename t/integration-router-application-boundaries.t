@@ -70,22 +70,21 @@ sub response_body {
 
 local $ENV{PAGI_ENV} = 'production';
 
-subtest 'background-task example remains a composable routing object during response migration' => sub {
+subtest 'background-task example keeps response-first HTTP dispatch at the Compose root' => sub {
     my $file = "$Bin/../examples/background-tasks/app.pl";
     my $source = do {
         open my $fh, '<', $file or die "cannot open $file: $!\n";
         local $/;
         <$fh>;
     };
-    unlike($source, qr/compose\s*\(\s*app\s*=>/s,
-        'background-task example does not use retired Compose app mode');
-    like($source, qr/compose\s*\(\s*router\s*=>\s*\$router->to_router/s,
-        'background-task example crosses its App Router with to_router');
     my $app = do $file;
     my $load_error = $@;
     ok(!$load_error, 'background-task example loads cleanly')
         or diag($load_error);
     isa_ok($app, 'PAGI::Compose');
+    my $events = run_http($app->to_app, '/');
+    like(response_body($events), qr/Background Tasks Demo/,
+        'the root Router dispatches the response-first index through Compose');
 };
 
 subtest 'a mounted object is one compiled application boundary' => sub {

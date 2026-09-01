@@ -183,9 +183,6 @@ subtest 'Cookbook publishes the representative final forms' => sub {
     like($cookbook,
         qr/compose\(\s+routes => \[.*?http_default => not_found\(.*?desc\s+=> 'Starlette apples comparison application'/s,
         'Compose routes form publishes flattened Router options');
-    like($cookbook,
-        qr/compose\(router => \$routing\)->to_app/,
-        'Compose Router form publishes explicit retained modular routing');
     unlike($cookbook, qr/compose\(\s*app\s*=>/,
         'Cookbook has no removed Compose app mode');
 };

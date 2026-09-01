@@ -108,7 +108,7 @@ $router->sse('/events' => as_app(async sub { ... }));
 
 # Complete application boundary and lifespan callbacks
 compose(
-    router => $router->to_router,
+    routes => [mount('/' => app => $router->to_router)],
     lifespan => {
         startup  => async sub { ... },
         shutdown => async sub { ... },
@@ -119,13 +119,14 @@ compose(
 These handlers intentionally demonstrate the protocol channels directly, so
 each native coderef is explicitly marked with `as_app`. An ordinary App Router handler would receive
 `PAGI::Request` and return a Response. The declarations run in exactly the
-order shown. `to_router` materializes the App Router's immutable snapshot
-before Compose receives it. Compose
-keeps the same callbacks and state identity while providing lifecycle,
-application-error, and response-completion safety around the Router. The
-Router itself emits complete stock or configured 404 and 405 responses;
-Compose preserves those routing outcomes rather than interpreting them as
-fallbacks of its own.
+order shown. The demo frontend materializes an immutable Router, and Compose
+builds its own root Router around an unnamed `mount('/' => app =>
+$router->to_router)`. That Mount consumes no path and adds no route-name
+namespace, preserving the demo's Router middleware, defaults, and reverse
+resolver; `$router->routes` would flatten and discard those policies. Compose
+keeps the same callbacks and state identity while the selected Router owns its
+404 and 405 outcomes. See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
+[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the complete boundary model.
 
 ## Lifespan State
 

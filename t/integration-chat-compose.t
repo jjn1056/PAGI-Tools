@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
+use Future;
 use lib "$Bin/../lib";
 use lib "$Bin/../examples/10-chat-showcase/lib";
 use PAGI::Test::Client;
@@ -16,19 +17,26 @@ sub source_text {
     return $source;
 }
 
+sub protocol_events {
+    my ($app, %scope) = @_;
+    my @events;
+    my $receive = sub {
+        return Future->done({ type => 'websocket.connect' });
+    };
+    my $send = sub {
+        my ($event) = @_;
+        push @events, $event;
+        return Future->done;
+    };
+
+    Future->wrap($app->(\%scope, $receive, $send))->get;
+    return \@events;
+}
+
 my $app_file = "$Bin/../examples/10-chat-showcase/app.pl";
 my $http_file = "$Bin/../examples/10-chat-showcase/lib/ChatApp/HTTP.pm";
 my $app_source = source_text($app_file);
 my $http_source = source_text($http_file);
-
-unlike($app_source, qr/compose\s*\(\s*app\s*=>/s,
-    'chat root does not use retired Compose app mode');
-like($app_source, qr/compose\s*\(\s*router\s*=>\s*\$router->to_router/s,
-    'chat root crosses its App Router with to_router');
-unlike($http_source, qr/compose\s*\(\s*app\s*=>/s,
-    'chat HTTP child does not use retired Compose app mode');
-like($http_source, qr/compose\s*\(\s*router\s*=>\s*\$router->to_router/s,
-    'chat HTTP child crosses its App Router with to_router');
 
 like($http_source,
     qr/PAGI::App::File->from_app_path\('public'\)->to_app/,
@@ -43,7 +51,7 @@ ok(!$load_error, 'chat app loads cleanly') or diag($load_error);
 isa_ok($app, 'PAGI::Compose');
 
 SKIP: {
-    skip 'chat app did not load', 17
+    skip 'chat app did not load', 25
         unless ref($app) eq 'PAGI::Compose';
 
     my $native_app = $app->to_app;
@@ -76,7 +84,49 @@ SKIP: {
             $css = $client->get('/css/style.css');
             $missing_asset = $client->get('/not-a-static-file',
                 headers => { Accept => 'application/problem+json' });
+
+            $client->websocket('/ws/chat?name=RootMount', sub {
+                my ($ws) = @_;
+                my $connected = $ws->receive_json;
+                is($connected->{type}, 'connected',
+                    'root-mounted Router accepts WebSocket chat');
+                is($connected->{name}, 'RootMount',
+                    'WebSocket chat receives its query string through the root mount');
+                my $joined = $ws->receive_json;
+                is($joined->{type}, 'joined',
+                    'WebSocket chat retains its initial room notification');
+                $ws->send_json({ type => 'ping', ts => 17 });
+                is($ws->receive_json, { type => 'pong', ts => 17 },
+                    'root-mounted Router preserves WebSocket message dispatch');
+            });
+
+            $client->sse('/events', sub {
+                my ($sse) = @_;
+                my $event = $sse->receive_event;
+                is($event->{event}, 'room_created',
+                    'root-mounted Router starts the showcase SSE replay');
+            });
+
+            my $sse_miss = $client->sse('/events/missing');
+            isa_ok($sse_miss, 'PAGI::Test::Response');
+            is($sse_miss->status, 404,
+                'an SSE miss declines as the child Router response');
         });
+
+        my $websocket_miss = protocol_events($native_app,
+            type         => 'websocket',
+            path         => '/ws/missing',
+            raw_path     => '/ws/missing',
+            root_path    => '',
+            query_string => '',
+            headers      => [],
+            client       => ['127.0.0.1', 50000],
+            server       => ['testserver', 80],
+            extensions   => { 'websocket.http.response' => {} },
+        );
+        is([$websocket_miss->[0]{type}, $websocket_miss->[0]{status}],
+            ['websocket.http.response.start', 404],
+            'a WebSocket miss declines as the selected root Router response');
     }
 
     is($stats->status, 200, 'existing HTTP API remains reachable');

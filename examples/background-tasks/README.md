@@ -7,14 +7,13 @@ its App Router declarations wrap native three-channel applications with
 `as_app`. Ordinary App handlers instead receive `PAGI::Request`, return an
 application value, and leave invocation to the shared routing compiler.
 
-The final App Router is deployed through
-`compose(router => $router->to_router)`: `to_router` makes the explicit
-immutable Router crossing before Compose receives it. Direct
-`$router->to_app` remains useful as a low-level routing component, and the
-Router itself emits complete stock or configured 404 and 405 responses,
-including negotiated bodies and `Allow`. Compose supplies lifecycle,
-application-error, and response-completion safety around that routing
-component; it does not reinterpret the Router's fallback outcomes.
+The response-first frontend materializes an immutable Router. Compose builds
+its own root Router, so this Router enters through an unnamed
+`mount('/' => app => $router->to_router)`. It consumes no path and adds no
+route-name namespace, preserving the background handlers' Router middleware,
+defaults, and reverse resolver; `$router->routes` would flatten those policies.
+See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
+[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the full model.
 
 ## Run
 

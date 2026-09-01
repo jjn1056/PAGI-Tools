@@ -96,9 +96,6 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
     like($root_app,
         qr/sub\s+routing\(\$class\)\s*\{.*?return\s+router\s*\(/s,
         'Root routing continues to return its configured Router');
-    like($root_app,
-        qr/sub\s+to_app\(\$class\)\s*\{.*?compose\s*\(\s*router\s*=>\s*\$class->routing\s*,/s,
-        'Root gives its retained Router to Compose at the application boundary');
     unlike($root_app, qr/compose\s*\(\s*app\s*=>/s,
         'Root no longer uses retired Compose app mode');
 

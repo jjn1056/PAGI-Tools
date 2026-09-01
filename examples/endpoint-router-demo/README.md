@@ -21,13 +21,21 @@ my $events = MyApp::API::Events->new;
 my $api    = MyApp::API->new(events => $events);
 my $main   = MyApp::Main->new(api => $api);
 
-my $app = compose(router => $main->to_router, lifespan => { ... });
+my $app = compose(
+    routes => [mount('/' => app => $main->to_router)],
+    lifespan => { ... },
+);
 ```
 
 `app.pl` returns that to_app-capable Compose object for the server to compile.
-It is also the complete deployed HTTP boundary: the selected
-Endpoint Router owns its negotiated 404 and 405, while Compose supplies
-response-completion and application-error safeguards.
+The nested Endpoint tree materializes one immutable Router while Compose builds
+its own root Router. The unnamed root Mount consumes no path and adds no
+route-name namespace, preserving the tree's API middleware, defaults, and
+reverse resolver; `$main->to_router->routes` would flatten and discard those
+policies. The selected Endpoint Router therefore owns its negotiated 404 and
+405 while Compose supplies response-completion and application-error safeguards.
+See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
+[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for details.
 
 Each package owns only its immutable configuration: `Main` keeps its `api`
 child and `API` keeps its `events` child. The server creates the resource and

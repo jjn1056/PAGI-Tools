@@ -7,13 +7,16 @@ use MyApp::Main;
 use MyApp::API;
 use MyApp::API::Events;
 use PAGI::Compose qw(compose);
+use PAGI::Routing qw(mount);
 
 my $events = MyApp::API::Events->new;
 my $api    = MyApp::API->new(events => $events);
 my $main   = MyApp::Main->new(api => $api);
 
 compose(
-    router => $main->to_router,
+    routes => [
+        mount('/' => app => $main->to_router),
+    ],
     lifespan => {
         startup => sub {
             my ($state) = @_;
