@@ -17,7 +17,7 @@ Push target: origin/feature/compose-retained-router after authorization
 | 2. App Router examples | complete | 8ddb014544be465ebbbd3d9245209b30089b18bc | 4 files, 54 tests | Four focused integration commands: PASS |
 | 3. Endpoint Router example | complete | c954880272f59e8f583287db56c0e08807e8e4ef | 1 file, 35 tests | `perlbrew exec --with perl-5.42.2@default prove -lv t/integration-endpoint-router-demo.t`: PASS; see `task-3-report.md` |
 | 4. Public documentation | complete | e82cf15c5c0c1726db9a37083a2d7bbc684d4274, 777b041 | 3 files, 36 top-level tests; review fix: 2 files, 14 top-level tests | `perlbrew exec --with perl-5.42.2@default prove -lv t/upgrading-routing-composition.t t/upgrading-router-frontends.t t/00-pod/cookbook-examples.t`: PASS; no-archive Dist::Zilla build regenerated and matched README; focused review-fix tests: PASS |
-| 5. Final verification | verification complete; review pending | ddd661d6c04e16327e4f8ca36cd34163ccdd4aea | focused: 32 files, 232 tests; full: 224 files, 2,464 tests | Both suites PASS at `ddd661d`; one documented release-only skip, zero failures; distribution build and archive inspection PASS |
+| 5. Final verification | complete | ddd661d6c04e16327e4f8ca36cd34163ccdd4aea, 0ff30ba | focused: 32 files, 232 tests; full: 224 files, 2,464 tests | Both suites PASS at `ddd661d`; one documented release-only skip, zero failures; distribution build and archive inspection PASS; final review found no Critical or Important issues; occurrence-count correction re-review clean |
 
 ## Preflight dependency scan
 
@@ -40,6 +40,8 @@ Push target: origin/feature/compose-retained-router after authorization
 ## Rulings
 
 - Ruling: The controller created the plan-specific ledger before Task 1 because the SDD skill requires recovery metadata before dispatch. Task 1 will verify and commit it rather than create it from scratch. Cost if wrong: Task 1's first procedural step differs from the plan wording, but the committed file content and audit guarantees are stronger and no product behavior changes.
+- Ruling: Final whole-campaign review used execution-start commit `f5f7c92` as its base rather than `origin/main`, because this corrective plan began on an already reviewed feature branch and owns only the 17 commits after that point. Cost if wrong: an interaction introduced earlier on the feature branch could fall outside this review; prior campaign reviews plus the integrated focused suite, complete suite, and archive inspection cover that risk.
+- Ruling: The complete suite was not rerun after commits that changed only the pruned `.superpowers` audit report and ledger. The tested product, tests, examples, and distribution inputs remain exactly those at `ddd661d`, and archive inspection confirmed `.superpowers` is excluded. Cost if wrong: an unexpected distribution-configuration change could make those records load-bearing, but no such change occurred and the inspected archive excludes them.
 
 ## Review log
 
@@ -52,6 +54,9 @@ Push target: origin/feature/compose-retained-router after authorization
 - Task 4: complete (implementation commit e82cf15; focused public-document tests and generated README comparison pass, self-review clean).
 - Task 4: fix round 1/5 (2 Important documentation gaps and regression coverage addressed; commit 777b041; 0 open).
 - Task 4: scoped re-review complete (commit 777b041; 2 files, 14 top-level tests; clean).
+- Task 5: complete (implementation/audit commit ddd661d; focused suite 32 files/232 tests PASS; full suite 224 files/2,464 tests PASS; distribution archive verified).
+- Final whole-campaign review: 0 Critical, 0 Important, 1 Minor audit-count wording issue.
+- Final review fix round 1/1: corrected 130 matching lines versus 132 literal occurrences in commit 0ff30ba; scoped re-review clean; 0 open.
 
 ## Retained user-facing `to_router` inventory
 
