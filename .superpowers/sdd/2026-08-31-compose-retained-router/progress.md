@@ -13,7 +13,7 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
 | 5. Flagship examples | complete | `ae8e37f` | 2 files, 12 top-level tests | RED: new source-shape assertions rejected the retired apples nested Router and large-app `app =>` boundary; GREEN: both flagship integrations passed with CRUD, URL, default, static-file, middleware, and lifespan coverage. |
 | 6. Remaining examples | complete | `c1129e6d0fc55939dd04c2a480aa50d88c5ffbaa` | 9 files, 109 tests | RED: source-shape gate rejected every retired live app-mode target; GREEN: every selected example loaded and retained HTTP, WebSocket, SSE, lifespan, stream terminal, and disconnect behavior. |
 | 7. Public docs and upgrade | complete | `8aa8283c50563014909727e09be4d5f9981e7c99` | 3 files, 36 tests | Compose POD, public cross-links, exact migration recipes, Starlette comparison, Cookbook synchronization, and release notes now describe the retained-Router surface; POD syntax and semantic searches are clean. |
-| 8. Final verification | in progress | `887c2b54cfd9a1f9f5ee0ea0c9f5b8686144451b` | focused: 5 files, 39 tests; full: 224 files, 2,459 tests | Diff/syntax/search clean; focused settlement gate PASS; host-access full suite PASS; `dzil build` PASS with 563 archive members and 123 example assets. Final whole-branch review pending. |
+| 8. Final verification | complete | `c4454a4c7029d7f870f4f54fbe5e288708c55eb0` | focused settlement: 5 files, 39 tests; final docs: 4 files, 61 tests; full: 224 files, 2,459 tests | Diff/syntax/search clean; host-access full suite PASS; final-head `dzil build` PASS; whole-branch review's two Important documentation findings fixed and scoped re-review clean. |
 
 ## Task 6 example inventory (before edits)
 
@@ -199,6 +199,13 @@ None.
   `c49ba0d`).
 - Task 7: complete (commits `df0c489..c49ba0d`, review clean after fix round
   1; both Important findings addressed, no new breakage).
+- Task 8: final review fix wave (2 addressed, 0 open — removed stale generic
+  Compose application-position claims and corrected chat frontend/snapshot
+  documentation; commit `c4454a4`).
+- Task 8: complete (candidate commits `c4d02fa..c4454a4`; whole-branch review
+  clean after one scoped fix wave; no Critical, Important, Minor, deferred, or
+  parked findings remain). Final semantic search contains only the three
+  intentional `UPGRADING.md` before recipes at lines 29, 47, and 64-65.
 - Task 5: complete (commit `ae8e37f`; RED exercised the new source-shape
   canaries; GREEN: `t/integration-starlette-apples.t` and
   `t/integration-large-application.t` passed. Reviewed the direct
