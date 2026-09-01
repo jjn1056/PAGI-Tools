@@ -293,6 +293,65 @@ Responses that turn out to be streaming (a body event with C<< more => 1 >>)
 or opaque (a C<file> or C<fh> body) are flushed and passed through;
 C<transform> does not run for them, because there is no whole body to give it.
 
+=head2 stream_transform_response
+
+    my $wrapped = stream_transform_response($app, begin => \&begin);
+
+For a transform that works incrementally and so does not need the whole body --
+compression, for instance. Body bytes are transformed and forwarded as they
+arrive, rather than buffered.
+
+    return stream_transform_response($app, begin => sub {
+        my ($status, $headers, $first_body, $start_event) = @_;
+        return undef unless $self->_want_to_encode($status, $headers);
+        push @$headers, ['Content-Encoding', 'gzip'];
+        my $encoder = My::Encoder->new;      # per response, see below
+        return {
+            chunk  => sub { $encoder->add($_[0]) },
+            finish => sub { $encoder->flush },
+        };
+    });
+
+=over
+
+=item * C<begin> (required)
+
+Called B<once per response>, with C<< ($status, $headers, $first_body,
+$start_event) >>. Return C<undef> to pass this response through untransformed,
+or a hashref of C<< { chunk => sub {...}, finish => sub {...} } >> holding this
+response's transformer. C<$headers> is the helper's own copy and may be
+modified in place; the modified head is emitted immediately after C<begin>
+returns.
+
+C<begin> is a B<factory>, not a pair of shared callbacks, because a
+transformer usually holds mutable state -- a zlib stream, a digest -- while
+C<wrap> runs once and requests are concurrent. Callbacks created at wrap time
+would share one transformer across every in-flight response and corrupt all of
+them.
+
+=item * C<chunk> / C<finish>
+
+C<chunk> receives each body chunk's bytes and returns the transformed bytes,
+emitted with C<< more => 1 >> (nothing is emitted if it returns the empty
+string). C<finish> takes no arguments and returns any trailing bytes, appended
+to the final chunk, which is emitted with the application's own terminal event.
+
+=back
+
+The head is held until the first body event so C<begin> can see it. That one
+event is what tells a transformer whether the response streams, and how large
+it is when it does not -- neither is knowable from the head alone, and a size
+threshold cannot be applied without it. An application that starts a response
+and then stops without sending any body event still has its head emitted.
+
+Unlike L</buffer_whole_response>, this helper never withholds the head beyond
+that first event, so it cannot swallow a response. It also cannot decline
+after the fact: once the head is emitted the declared transform is committed,
+which is why an opaque C<file>/C<fh> body may not follow inline bytes (see
+L<PAGI::Spec::Www/"Response Body - C<send> event">, "Payload kinds do not mix
+within a response"). Such an event is forwarded so the server can reject it,
+and the transformer is kept in case the application recovers inline.
+
 =head1 SEE ALSO
 
 L<PAGI::Middleware> - Base class for middleware

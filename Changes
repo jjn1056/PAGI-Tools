@@ -1,6 +1,51 @@
 # Revision history for PAGI-Tools
 
 0.002003 - UNRELEASED
+
+  [Buffering middleware]
+  - NEW: PAGI::Middleware::BufferedResponse, two helpers for the
+    buffer-and-re-emit pattern. Four middleware had each hand-rolled it and
+    all four mishandled a stream that ends without its terminal event, so the
+    rule is now enforced by the shape of the API rather than remembered:
+    buffer_whole_response calls its transform callback only when a terminal
+    body event was actually received, so a validator or length computed over
+    a partial body is not something an author can write. ETag and
+    ContentLength migrate onto it, losing 143 and 131 lines of hand-rolled
+    buffering respectively; their existing tests pass unmodified.
+  - CHANGE: GZip compresses streaming responses. gzip is an incremental
+    format, and GZip previously abandoned compression entirely for any
+    response with more => 1 -- so the bodies that most benefit, large
+    streaming exports, were the ones never compressed. Visible consequences:
+    such responses now carry Content-Encoding: gzip and no Content-Length
+    (the compressed size is not knowable in advance), so they are chunked;
+    any application-set Content-Length is dropped, having described the
+    uncompressed representation. min_size still applies to a response whose
+    first body event is terminal, whose size IS knowable, and cannot apply to
+    a stream. Moving GZip to an incremental transform also removes it from
+    this bug class by construction: it never withholds the head, so it has
+    nothing to swallow and nothing to fabricate.
+  - FIX: intermediaries examine the response head before transforming a body
+    or attaching metadata derived from one, per PAGI 0.002008. ContentLength
+    no longer adds Content-Length to a response declaring trailers => 1 --
+    the application omits that header precisely to get the chunked framing
+    that carries trailers, so adding one made the server reject its own
+    trailers event. ETag and GZip decline a 206 or any response carrying
+    Content-Range: a range is not the representation, and a validator derived
+    from it identified only the fragment while naming the resource. Pinned by
+    t/middleware/head-promises.t, a matrix of head commitments against every
+    body-transforming middleware.
+  - FIX: ContentLength no longer appends its computed length into the
+    application's own headers arrayref. An application that builds headers
+    once and reuses them across requests had the first request's length baked
+    in permanently, and every later response shipped a wrong Content-Length
+    (a hung or truncated response over HTTP/1.1).
+  - Documentation and examples now write more => 0 explicitly when
+    originating a response. The key defaults to 0, so omitting it on a
+    complete response is correct -- but omitting it on a re-emitted
+    non-terminal event asserts a completeness the application never claimed,
+    and documentation that relies on the default teaches the habit that makes
+    the dangerous case easy to reach.
+
   - FIX: Compose's response guard no longer fails the application Future when
     a client disconnects mid-response. A streaming response deliberately omits
     its terminal body event once the client is gone, and PAGI::Spec::Www

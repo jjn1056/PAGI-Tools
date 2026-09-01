@@ -33,13 +33,49 @@ client supports it (Accept-Encoding: gzip).
 
 =item * min_size (default: 1024)
 
-Minimum response size to compress (bytes).
+Minimum response size to compress (bytes). B<Applies only to responses whose
+size is knowable> -- that is, one whose first body event is already terminal.
+A streaming response has no size until it has been compressed, so the
+threshold cannot be evaluated and does not apply; see L</STREAMING RESPONSES>.
 
 =item * mime_types (default: text/*, application/json, application/javascript)
 
 MIME types to compress.
 
 =back
+
+=head1 STREAMING RESPONSES
+
+Streaming responses B<are> compressed, incrementally. gzip is an incremental
+format, so each chunk is deflated and flushed as it arrives rather than the
+whole body being buffered first.
+
+Two consequences are visible to clients:
+
+=over
+
+=item *
+
+The response carries no C<Content-Length> -- the compressed size is not known
+in advance -- so it is framed with chunked transfer coding. Any
+C<Content-Length> the application set is removed, since it described the
+uncompressed representation.
+
+=item *
+
+C<min_size> does not apply, per the note above.
+
+=back
+
+A response whose first body event is already terminal is the whole
+representation, so its size B<is> knowable and C<min_size> is honoured as
+usual.
+
+Not compressed under any circumstances: a response that already carries a
+C<Content-Encoding>, one whose media type is outside C<mime_types>, and a
+C<206 Partial Content> or any response carrying C<Content-Range> -- a range's
+bounds are computed against the identity representation, so encoding it would
+describe the transfer of bytes the C<Content-Range> no longer locates.
 
 =cut
 
