@@ -152,6 +152,8 @@ None.
   1; both Important findings addressed, no new breakage).
 - Task 5: complete (commits `ce986ec..61229a9`, review clean; spec compliance
   PASS, task quality PASS, no findings).
+- Task 6: complete (commits `0ecf0eb..8769ea5`, review clean; spec compliance
+  PASS, task quality PASS, no findings).
 - Task 5: complete (commit `ae8e37f`; RED exercised the new source-shape
   canaries; GREEN: `t/integration-starlette-apples.t` and
   `t/integration-large-application.t` passed. Reviewed the direct
