@@ -163,6 +163,15 @@ subtest 'Cookbook publishes the representative final forms' => sub {
         qr/\$main_router->mount\('\/api', app => \$api_router->to_router\)/,
         'mutable App Router shows an explicit application Mount');
     like($cookbook,
+        qr/\$r->mount\('\/api', app => \$self->\{api\}\)->name\('api'\);/,
+        'Endpoint recipe mounts an uninspected API frontend directly');
+    like($cookbook,
+        qr/root application deploys this API directly.*?to_router only when a parent must inspect or discover/is,
+        'Endpoint recipe explains when a parent needs a snapshot');
+    unlike($cookbook,
+        qr/\$r->mount\('\/api', app => \$self->\{api\}->to_router\)/,
+        'Endpoint recipe has no unconsumed API snapshot');
+    like($cookbook,
         qr/\$main_router->mount\('\/reports', routes => sub \{/,
         'mutable App Router shows the routes callback Mount shorthand');
     like($cookbook,

@@ -363,6 +363,24 @@ subtest 'public documentation publishes one final routing model' => sub {
     like($upgrading,
         qr/API is unreleased.*?no compatibility layer/is,
         'upgrade guide explains why the removed constructor has no compatibility layer');
+    like($upgrading,
+        qr/\$builder_app\s*=\s*compose\(\s*routes\s*=>\s*\[mount\('\/'\s*=>\s*app\s*=>\s*\$builder\)\],\s*\)->to_app/s,
+        'upgrade guide deploys the ordinary App Router frontend directly');
+    like($upgrading,
+        qr/\$endpoint_app\s*=\s*compose\(\s*routes\s*=>\s*\[mount\('\/'\s*=>\s*app\s*=>\s*\$endpoint\)\],\s*\)->to_app/s,
+        'upgrade guide deploys the ordinary Endpoint frontend directly');
+    unlike($upgrading,
+        qr/\$(?:builder|endpoint)_snapshot\s*=/,
+        'upgrade guide does not create unconsumed frontend snapshots');
+    like($upgrading,
+        qr/\$r->mount\('\/users', app => \$users\)->name\('users'\);/,
+        'upgrade guide mounts the ordinary Users Endpoint directly');
+    like($upgrading,
+        qr/\$r->mount\('\/admin', app => \$admin\)->name\('admin'\);/,
+        'upgrade guide mounts the ordinary Admin Endpoint directly');
+    unlike($upgrading,
+        qr{\$r->mount\('/(?:users|admin)', app => \$(?:users|admin)->to_router\)},
+        'upgrade guide reserves nested Endpoint snapshots for a real consumer');
 
     my $compose_pod = slurp_file('lib/PAGI/Compose.pm');
     like($compose_pod,

@@ -1415,7 +1415,7 @@ boundary:
       my ($self, $r) = @_;
 
       $r->get('/' => 'home')->name('home');
-      $r->mount('/api', app => $self->{api}->to_router)->name('api');
+      $r->mount('/api', app => $self->{api})->name('api');
   }
 
   async sub home {
@@ -1434,10 +1434,10 @@ boundary:
   compose(routes => [mount('/' => app => $endpoint)])->to_app;
 
 Now C</api> and C</api/42> are handled by the exact constructed child object.
-The parent Endpoint can generate C</api/show> and inspect that child's metadata
-because its named C</api> Mount explicitly uses C<to_router>. Reusing the same
-child object at sibling placements reuses one child Router identity within a
-parent snapshot while each mount keeps its own path and local name.
+The root application deploys this API directly as an opaque application
+boundary. Use to_router only when a parent must inspect or discover descendant
+names. Reusing the same child object at sibling placements retains that exact
+configured object while each mount keeps its own path and local name.
 
 =head3 Complete Example
 

@@ -1956,8 +1956,9 @@ closure builder, or a method-oriented Endpoint, then compile the same immutable
 `PAGI::Routing::Router` model.
 
 ```perl
+use PAGI::Compose qw(compose);
 use PAGI::Response;
-use PAGI::Routing qw(router route);
+use PAGI::Routing qw(mount router route);
 
 my $immutable = router(routes => [
     route('/health' => sub { return PAGI::Response::text_response('ok') }),
@@ -1965,15 +1966,22 @@ my $immutable = router(routes => [
 
 my $builder = PAGI::App::Router->new;
 $builder->get('/health' => sub { return PAGI::Response::text_response('ok') });
-my $builder_snapshot = $builder->to_router;
+my $builder_app = compose(
+    routes => [mount('/' => app => $builder)],
+)->to_app;
 
 my $endpoint = MyApp::Endpoint->new(repository => $repository);
-my $endpoint_snapshot = $endpoint->to_router;
+my $endpoint_app = compose(
+    routes => [mount('/' => app => $endpoint)],
+)->to_app;
 ```
 
 Use `PAGI::Routing` for already-immutable composition, `PAGI::App::Router` for
 incremental closure declarations, and `PAGI::Endpoint::Router` for handlers
-bound to one configured object.
+bound to one configured object. App and Endpoint frontends already implement
+`to_app`, so these ordinary deployments mount them directly. Convert with
+`to_router` only when a parent must discover descendant names or retain an
+immutable snapshot for inspection.
 
 Why: one compiler now gives all three frontends the same matching, middleware,
 metadata, reverse-routing, and Router-owned HTTP outcomes.
@@ -2297,12 +2305,14 @@ use MyApp::Endpoint::Admin;
 my $users = MyApp::Endpoint::Users->new(repository => $repository);
 my $admin = MyApp::Endpoint::Admin->new(policy => $policy);
 
-$r->mount('/users', app => $users->to_router)->name('users');
-$r->mount('/admin', app => $admin->to_router)->name('admin');
+$r->mount('/users', app => $users)->name('users');
+$r->mount('/admin', app => $admin)->name('admin');
 ```
 
 Why: explicit loading and construction make configuration, object identity,
 dependency failures, and recursive router graphs visible to the application.
+These are ordinary opaque application mounts; convert with `to_router` only
+when the parent must discover a child's names or inspect a retained snapshot.
 
 ## Declaration order now governs routes and mounts
 
