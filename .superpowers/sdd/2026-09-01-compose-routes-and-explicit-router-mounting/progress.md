@@ -22,7 +22,7 @@ Baseline: `perlbrew exec --with perl-5.42.2@default prove -lr t` — Files=224, 
 | 5. Declarative examples | complete | 1e6ff71 | 4 files, 43 tests PASS; 3 syntax checks PASS | Apples stayed direct; declarative-routing retained only its configured `/api` Router boundary; Pages folded its disposable root into Compose; task review approved with one ledger-only follow-up completed here |
 | 6. Class-based examples | complete | 9c876e0, 4148ab0 | 7 files, 64 tests PASS; 6 syntax checks PASS; fix gate 1 file, 30 tests PASS | Migrated background-tasks, endpoint-demo, endpoint-router-demo, full-demo, 10-chat-showcase, and 15-large-application through unnamed root Mounts; task review approved after one fix round |
 | 7. Public documentation | complete | 829fdc0, 4107830 | 3 files, 36 tests PASS; 11 POD syntax checks PASS; fix gate 1 file, 10 tests PASS | Routes-only contract, four-way composition comparison, six upgrade recipes, generated README idempotence, and example ownership wording reviewed clean after one fix round |
-| 8. Final verification | pending | — | — | — |
+| 8. Final verification | complete | 9e73882, c51dba1 | focused 33 files/380 tests PASS; full 224 files/2455 tests PASS; `dzil test` 224/2455 PASS; final fix 2 files/69 tests PASS | README idempotent, stale positive constructor count zero, task review and whole-branch review approved after one evidence round and one final fix wave |
 
 ## Preflight interface scan
 
@@ -74,9 +74,9 @@ None.
 
 ## Task review record
 
-Task 1: minor (deferred): `t/compose/01-description.t` verifies stable root Router identity after routing delegates but does not repeat the identity assertion after `middleware` and `lifespan`; those accessors are independently exercised on another Compose instance. Point the final whole-branch review at this item.
+Task 1: minor (resolved in final fix wave): `t/compose/01-description.t` now verifies stable root Router identity after the `middleware` and `lifespan` accessors on the same Compose instance.
 
-Task 1: complete (commits f57e831..e4a0216, spec compliant; no Critical/Important findings; one deferred minor).
+Task 1: complete (commits f57e831..e4a0216, spec compliant; no Critical/Important findings; one deferred minor later resolved in the final fix wave).
 
 Task 2: complete (commits f713cce..6809879, review clean).
 
@@ -103,3 +103,22 @@ Task 7: fix round 1/5 (1 addressed, 0 open — example READMEs now assign child 
 Task 7: complete (commits bf73d42..4107830, review clean after fix round 1).
 
 Task 8 Ruling: the verification worker owns Steps 1–5 and reports any attributable failure without spawning a reviewer or closing the ledger. The controller then performs the required task review and the execution skill's single broad whole-branch review, dispatches at most one final fix wave if needed, and closes the ledger only after that review evidence exists — this reconciles the plan's review requirement with the no-subagents worker contract and prevents duplicate final reviews; cost if wrong is process sequencing only, not product behavior.
+
+Task 8: final mapping — branch `feature/compose-retained-router`; product/documentation candidate `c51dba14feb935d5c203dfaf9f49b3face1a8a44`; `main` and `origin/main` both `558b14c282a38051bd8c1bb712290fe1df398330`; no push, merge, rebase, or sibling-repository mutation.
+
+Task 8: integrated evidence — exact focused aggregate PASS (`Files=33, Tests=380`); one complete source-tree run PASS (`Files=224, Tests=2455`); `perlbrew exec --with perl-5.42.2@default dzil test` PASS (`Files=224, Tests=2455`); generated README produced no diff; `git diff --check` clean; positive live `compose(router => ...)` count zero. The remaining search hits are six labeled Before examples in `UPGRADING.md` and two negative rejection tests.
+
+Task 8: attributable verification fix — `9e73882` aligned the rejected `router` diagnostic with the canonical `mount('/' => app => $router)` spelling; targeted `t/compose/01-description.t` PASS (55 tests before final assertions).
+
+Task 8: evidence fix round 1/5 (1 addressed, 0 open — exact final focused aggregate rerun at `9e73882`, 33 files/380 tests PASS; no product commit).
+
+Final whole-branch review: one Important documentation finding and the deferred Task 1 Minor were fixed together in `c51dba1`; the four mutable App Router READMEs now snapshot through `to_router`, reserve `$snapshot->routes` for deliberate lossy flattening, and explain direct frontend mounting as valid but opaque. Scoped final re-review approved with no new breakage; fresh final fix gate PASS (`Files=2, Tests=69`) under Perl 5.42.2.
+
+Task 8: complete (commits 7fa091b..c51dba1, task review clean after evidence round 1; whole-branch review approved after one final fix wave).
+
+## Campaign closure
+
+- Final product/documentation candidate: `c51dba14feb935d5c203dfaf9f49b3face1a8a44`.
+- Unapproved deviations: 0.
+- Live positive `compose(router => ...)` uses: 0.
+- Branch has not been pushed or merged.
