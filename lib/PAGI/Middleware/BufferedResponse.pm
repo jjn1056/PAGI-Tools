@@ -172,10 +172,17 @@ sub stream_transform_response {
             }
 
             if ($type eq 'http.response.body' && $xform) {
-                # An opaque body cannot be transformed in flight. Hand it over
-                # untouched and stop transforming this response.
+                # An opaque body here is a protocol fault: a response's body is
+                # inline events or one opaque event, never both, and the server
+                # fails this send (PAGI::Spec::Www, "Payload kinds do not mix
+                # within a response"). Forward it and let the server reject it.
+                #
+                # Keep the transformer. An application that ignores the failed
+                # send may still recover inline, and those bytes must continue
+                # to be encoded -- the head already declared an encoding, so
+                # emitting raw bytes after it would produce exactly the corrupt
+                # response the rule exists to prevent.
                 if (PAGI::Middleware::body_event_is_opaque($event)) {
-                    $xform = undef;
                     await $send->($event);
                     return;
                 }

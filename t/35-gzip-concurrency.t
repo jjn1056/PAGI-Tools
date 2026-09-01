@@ -114,7 +114,7 @@ subtest 'concurrent requests have independent state' => sub {
 # Test: Streaming responses bypass compression
 # =============================================================================
 
-subtest 'streaming responses bypass compression' => sub {
+subtest 'streaming responses are compressed incrementally' => sub {
     my $gzip = PAGI::Middleware::GZip->new(min_size => 10);
 
     # App that streams response in multiple chunks
@@ -137,18 +137,22 @@ subtest 'streaming responses bypass compression' => sub {
         );
     });
 
-    # Streaming should pass through without compression
+    # gzip is an incremental format, so a streaming response is compressed
+    # chunk by chunk rather than given up on. min_size does not apply: the
+    # size of a stream is not knowable before it is compressed.
     is(scalar @events, 4, 'four events sent (start + 3 body chunks)');
     is($events[0]{type}, 'http.response.start', 'first event is response start');
 
-    # Check that Content-Encoding: gzip is NOT present (streaming bypasses compression)
-    my $has_gzip = grep { $_->[0] eq 'Content-Encoding' && $_->[1] eq 'gzip' } @{$events[0]{headers}};
-    ok(!$has_gzip, 'streaming response not compressed');
+    my $has_gzip = grep { lc($_->[0]) eq 'content-encoding' && $_->[1] eq 'gzip' } @{$events[0]{headers}};
+    ok($has_gzip, 'streaming response is compressed');
+    is(scalar(grep { lc($_->[0]) eq 'content-length' } @{$events[0]{headers}}), 0,
+        'and carries no Content-Length -- the compressed size is not known in advance');
 
-    # Body chunks should be uncompressed
-    is($events[1]{body}, 'chunk1', 'first chunk intact');
-    is($events[2]{body}, 'chunk2', 'second chunk intact');
-    is($events[3]{body}, 'chunk3', 'third chunk intact');
+    is($events[3]{more}, 0, 'the last chunk is terminal');
+    my $compressed = join '', map { $_->{body} // '' } @events[1..3];
+    my $plain = '';
+    gunzip(\$compressed => \$plain) or die "gunzip failed: $GunzipError";
+    is($plain, 'chunk1chunk2chunk3', 'the stream round-trips to the original bytes');
 };
 
 # =============================================================================
@@ -223,9 +227,10 @@ subtest 'state isolation: streaming then non-streaming' => sub {
         );
     });
 
-    # Streaming should NOT be compressed
-    my $streaming_has_gzip = grep { $_->[0] eq 'Content-Encoding' && $_->[1] eq 'gzip' } @{$streaming_events[0]{headers}};
-    ok(!$streaming_has_gzip, 'streaming response not compressed');
+    # Both shapes are compressed; what this subtest guards is that their
+    # deflate state is per-response, not shared across the middleware instance.
+    my $streaming_has_gzip = grep { lc($_->[0]) eq 'content-encoding' && $_->[1] eq 'gzip' } @{$streaming_events[0]{headers}};
+    ok($streaming_has_gzip, 'streaming response is compressed');
 
     # Buffered should BE compressed
     my $buffered_has_gzip = grep { $_->[0] eq 'Content-Encoding' && $_->[1] eq 'gzip' } @{$buffered_events[0]{headers}};

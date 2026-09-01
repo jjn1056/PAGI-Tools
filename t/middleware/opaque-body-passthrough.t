@@ -109,7 +109,18 @@ for my $mw_name (sort keys %middleware) {
     }
 }
 
-subtest 'mixed sequence: text chunk (more=>1) then opaque file event -- order preserved' => sub {
+# Mixing inline chunks with an opaque event is a protocol fault: a response's
+# body is inline events or one opaque event, never both, and the server fails
+# that send (PAGI::Spec::Www, "Payload kinds do not mix within a response").
+#
+# Middleware sit inside the server's send, so they observe the illegal event
+# before the server rejects it. What matters is that they FORWARD it: a
+# middleware that swallowed it would deny the server the event it needs to
+# raise the error, turning a loud protocol fault into a silent truncation.
+# What a middleware does to the inline bytes around it is its own business --
+# GZip legitimately compresses them, having declared an encoding it cannot
+# retract.
+subtest 'an illegal opaque event still reaches the server, so it can be rejected' => sub {
     for my $mw_name (sort keys %middleware) {
         subtest $mw_name => sub {
             my $mw = $middleware{$mw_name}->();
@@ -149,8 +160,9 @@ subtest 'mixed sequence: text chunk (more=>1) then opaque file event -- order pr
 
             my @body_events = grep { $_->{type} eq 'http.response.body' } @sent;
             is scalar(@body_events), 2, 'two body events sent';
-            is $body_events[0]{body}, 'leading chunk;', 'text chunk sent first, unchanged';
-            ok exists $body_events[1]{fh}, 'file event sent second, forwarded verbatim';
+            ok !exists $body_events[0]{fh}, 'the inline chunk is sent first';
+            ok exists $body_events[1]{fh},
+                'the opaque event is forwarded rather than swallowed, so the server can reject it';
         };
     }
 };
