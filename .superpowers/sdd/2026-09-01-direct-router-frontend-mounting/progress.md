@@ -46,6 +46,7 @@ Push target: origin/feature/compose-retained-router after authorization
 - Task 1: fix round 1/5 (1 addressed, 0 open — added the exact planning-base work-map field; commit 5de9ffc).
 - Task 1: complete (commits f5f7c92..5de9ffc, review clean).
 - Task 2: complete (commits 1c46eb0..219a6e8, review clean).
+- Task 3: complete (commits 2d3cbea..7de261a, review clean).
 - Task 2: complete (implementation commit 8ddb014; four focused integration files pass, review clean).
 - Task 3: complete (implementation commit c954880; focused Endpoint integration passes, review clean).
 
