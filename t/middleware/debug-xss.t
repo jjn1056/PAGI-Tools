@@ -103,6 +103,50 @@ subtest 'an aborted HTML response still reaches the wire' => sub {
         'no terminal body event is fabricated');
 };
 
+subtest 'an app that stops early with its client still connected is not swallowed' => sub {
+    # The paired live-connection case. Debug's flush deliberately does NOT
+    # consult disconnect state, because it synthesizes nothing -- it relays
+    # what the application produced, always tagged more => 1. Gating it on
+    # disconnect state would swallow this case entirely: an application bug,
+    # with a client still waiting, and no response reaching the wire.
+    #
+    # Without this subtest the property is unpinned: both sibling cases use a
+    # disconnected connection, so a disconnect-gated flush passes them.
+    {
+        package LiveConn7;
+        sub new               { return bless {}, shift }
+        sub is_connected      { return 1 }
+        sub disconnect_reason { return undef }
+        sub on_disconnect     { return }
+    }
+
+    my @sent;
+    my $send = sub { push @sent, $_[0]; return Future->done };
+    my $scope = { type => 'http', method => 'GET', path => '/x', headers => [],
+                  'pagi.connection' => LiveConn7->new };
+
+    my $app = sub {
+        my ($app_scope, $receive, $inner_send) = @_;
+        return (async sub {
+            await $inner_send->({ type => 'http.response.start', status => 200,
+                headers => [['content-type', 'text/html']] });
+            await $inner_send->({ type => 'http.response.body',
+                body => '<html><body>partial', more => 1 });
+            return;   # app bug: returns without finishing, client still there
+        })->();
+    };
+
+    my $wrapped = PAGI::Middleware::Debug->new(enabled => 1)->wrap($app);
+    Future->wrap($wrapped->($scope, sub { Future->done }, $send))->get;
+
+    is(scalar(grep { $_->{type} eq 'http.response.start' } @sent), 1,
+        'the start event reaches the wire despite the client being connected');
+    ok(scalar(grep { $_->{type} eq 'http.response.body' } @sent) >= 1,
+        'the buffered body reaches the wire');
+    is(scalar(grep { $_->{type} eq 'http.response.body' && !$_->{more} } @sent), 0,
+        'and still no terminal body event is fabricated');
+};
+
 subtest 'an aborted non-HTML response still forwards normally (control)' => sub {
     {
         package AbortedConn7Plain;
