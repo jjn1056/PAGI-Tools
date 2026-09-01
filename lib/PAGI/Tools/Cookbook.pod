@@ -1282,8 +1282,10 @@ is specifically required or when composing a hand-built native application:
       app      => $endpoint->to_app,
   )->to_app;
 
-Here the low-level wrapper owns lifecycle hooks while the nested Router owns
-its mandatory 404 and 405 outcomes and Compose owns HTTP completion safety.
+Here the low-level wrapper owns lifecycle hooks while the Endpoint's bare
+Router app owns its mandatory 404 and 405 outcomes. No Compose root is present,
+so application error handling and response-completion safety remain the
+low-level deployment's responsibility.
 
 =head3 Route-Level Middleware and Local Adapters
 
