@@ -22,7 +22,7 @@ sub new {
     my %allowed = map { $_ => 1 }
         qw(routes http_default desc middleware lifespan);
 
-    croak q{compose no longer accepts 'router'; mount an existing Router at the root through app => $router}
+    croak q{compose no longer accepts 'router'; mount an existing Router through mount('/' => app => $router)}
         if exists $opts{router};
 
     croak q{compose no longer accepts 'app'; deploy the application directly or compose it through Mount}
