@@ -10,8 +10,8 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
 | 2. Compiler and safety | complete | `b860142fdb7f042626245faa73528b929bb68894` | 7 files, 62 tests | RED: migrated focused gate failed only the retained-Router count (`got 0`, expected `1` then `2`); GREEN: compiler now calls the retained Router and the focused safety gate passed. |
 | 3. Lifespan and ordering | complete | `da561c66545665025d5a927da6474dcebba99f5d` | 4 files, 45 tests | RED: all migrated Compose gates failed on the retired `app =>` constructor; GREEN: root-only lifespan, middleware visibility, mounted boundaries, strict bare-Router failure, and HEAD/buffering gate passed. |
 | 4. Router frontends | complete | `f3e3972` | 6 files, 57 tests | RED: focused frontend gate failed in the background-task root and retired Compose-native bridge, plus the old `router =>` classifier; GREEN: all six required frontend/POD-example files passed with explicit frontend snapshots. |
-| 5. Flagship examples | in progress | — | — | — |
-| 6. Remaining examples | pending | — | — | — |
+| 5. Flagship examples | complete | `ae8e37f` | 2 files, 12 top-level tests | RED: new source-shape assertions rejected the retired apples nested Router and large-app `app =>` boundary; GREEN: both flagship integrations passed with CRUD, URL, default, static-file, middleware, and lifespan coverage. |
+| 6. Remaining examples | in progress | — | — | — |
 | 7. Public docs and upgrade | pending | — | — | — |
 | 8. Final verification | pending | — | — | — |
 
@@ -77,6 +77,13 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
   to the Cookbook POD Task 4 already owns. Update the assertion with the POD.
   Cost if wrong: one Task 7 documentation-test edit lands earlier than planned;
   leaving it would make Task 4's mandated focused gate knowingly fail.
+- Task 5 Ruling: Task 4 already moved the executable apples root from
+  `compose(app => router(...))` to `compose(router => router(...))`, while its
+  README still shows the pre-migration form. Proceed directly to Task 5's
+  approved final `compose(routes => ...)` shape and update the README to match.
+  Cost if wrong: the intermediate Router-form state is not preserved in the
+  example history; preserving it would knowingly retain a README/application
+  mismatch and miss the canary's intended simplification.
 
 ## Deviations
 
@@ -98,3 +105,8 @@ None.
   and Cascade deployment prose; commit `669b51b`).
 - Task 4: complete (commits `da55ee4..669b51b`, review clean after fix round
   1; both Important findings addressed, no new breakage).
+- Task 5: complete (commit `ae8e37f`; RED exercised the new source-shape
+  canaries; GREEN: `t/integration-starlette-apples.t` and
+  `t/integration-large-application.t` passed. Reviewed the direct
+  routes-form apples Compose and retained Router-form modular boundary; no
+  concerns.)
