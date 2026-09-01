@@ -30,8 +30,9 @@ Callable values keep these four meanings:
 
 A native CODE at a Route is wrapped explicitly with C<PAGI::Utils::as_app>.
 Mount C<app> and Router C<http_default> remain native application positions
-and take a three-channel CODE directly. Compose accepts a Router through
-C<routes> or C<router>, not an arbitrary application.
+and take a three-channel CODE directly. Compose accepts route declarations
+through C<routes>, or one immutable Router through C<router>; it does not
+accept an arbitrary application.
 
 Raw PAGI is deliberately minimal — an application is just an C<async> sub that
 speaks the protocol directly:

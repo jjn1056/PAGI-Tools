@@ -119,9 +119,11 @@ PAGI::Routing::Mount - Immutable declarative mount description
 
 Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions. A
-Mount requires one named target, C<app> or C<routes>. C<app> retains its original
-base application exactly: a CODE is a native three-channel PAGI application,
-and an instantiated C<to_app> object is normalized as one. C<routes> is shorthand for constructing a real child
+Mount accepts exactly one of C<app> or C<routes>.
+C<app> retains its original base application exactly: a CODE is a native
+three-channel PAGI application,
+and an instantiated C<to_app> object is normalized as one. C<routes> is
+shorthand for constructing a real child
 L<PAGI::Routing::Router> and storing that Router as C<app>. Both named and
 unnamed mounts use this same representation:
 

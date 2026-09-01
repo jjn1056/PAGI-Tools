@@ -1536,7 +1536,8 @@ Router API.
 
 Ordinary handlers receive the direct Request, WebSocket, or SSE object, while
 C<as_app>, Mount C<app>, and Router C<http_default> receive the native three
-channels. Compose accepts one Router through C<routes> or C<router>.
+channels. Compose accepts route declarations through C<routes>, or one
+immutable Router through C<router>.
 Constraints validate without coercion. Names use slash logical
 addresses and relative L<PAGI::Routing::URL> lookup. SSE is a first-class scope, and all
 middleware is pure PAGI app-to-app wrapping.

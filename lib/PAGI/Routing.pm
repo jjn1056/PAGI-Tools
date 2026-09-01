@@ -906,8 +906,8 @@ Starlette supplied the useful Route/Mount/Router vocabulary, but PAGI does not
 claim API identity. Ordinary PAGI route handlers receive one direct Request,
 WebSocket, or SSE object; C<as_app($code)> marks a native Route CODE, while
 Mount C<app> and Router C<http_default> are native three-channel application
-positions. Compose instead accepts one immutable Router through C<routes> or
-C<router>. Package strings
+positions. Compose instead accepts route declarations through C<routes>, or
+one immutable Router through C<router>. Package strings
 are not coerced in those positions. Middleware strings remain supported
 because middleware descriptors define an explicit loading, construction,
 configuration, and C<wrap> contract.
