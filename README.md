@@ -16,10 +16,10 @@ Callable values keep these four meanings:
     handler result             -> native CODE or instantiated to_app object
 
 A native CODE at a Route is wrapped explicitly with `PAGI::Utils::as_app`.
-Mount `app` and Router `http_default` remain native application positions and
-take a three-channel CODE directly. Compose accepts route declarations through
-`routes`, or one immutable Router through `router`; it does not accept an
-arbitrary application.
+Mount `app` and Router `http_default` remain native application positions
+and take a three-channel CODE directly. Compose accepts route declarations
+through `routes`, or one immutable Router through `router`; it does not
+accept an arbitrary application.
 
 Raw PAGI is deliberately minimal — an application is just an `async` sub that
 speaks the protocol directly:
@@ -33,7 +33,7 @@ speaks the protocol directly:
             status  => 200,
             headers => [['content-type', 'application/json']],
         });
-        await $send->({ type => 'http.response.body', body => '{"hello":"world"}' });
+        await $send->({ type => 'http.response.body', body => '{"hello":"world"}', more => 0 });
     };
 
 PAGI-Tools adds the ergonomics — requests, response values, routing, a
@@ -171,13 +171,13 @@ description:
     )->to_app;
 
 [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) is an optional application-root composer, not a base class or
-a replacement router. Its `routes` form constructs and retains one Router; its
-`router` form retains the supplied immutable Router by identity and delegates
-inspection and reverse routing to it. Configure a Router `http_default` for
-custom missing-route presentation and ordinary ErrorHandler middleware for
-official application errors. Compose keeps root lifespan and its stock error
-and response-lifecycle boundary outside author middleware as the final safety
-net.
+a replacement router. Its `routes` form constructs and retains one Router;
+its `router` form retains the supplied immutable Router by identity and
+delegates inspection and reverse routing to it. Configure a Router
+`http_default` for custom missing-route presentation and ordinary ErrorHandler
+middleware for official application errors. Compose keeps root lifespan and
+its stock error and response-lifecycle boundary outside author middleware as
+the final safety net.
 
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
