@@ -113,8 +113,12 @@ sub wrap {
         # compressing it is the case this middleware previously gave up on
         # entirely, so the threshold does not apply there.
         if (!$first_body->{more}) {
-            return undef
-                if length($first_body->{body} // '') < $self->{min_size};
+            my $len = length($first_body->{body} // '');
+            # Never encode an empty representation: gzip framing would make it
+            # larger than the thing it encodes, and min_size => 0 must not be
+            # read as "compress nothing into 20 bytes".
+            return undef if $len == 0;
+            return undef if $len < $self->{min_size};
         }
 
         my ($deflate, $err) = Compress::Raw::Zlib::Deflate->new(

@@ -90,11 +90,14 @@ my @CASES = (
                 'and it does not overtake the response start it belongs to');
         },
     },
+    # Split deliberately: a case carrying BOTH a 206 status and a
+    # Content-Range cannot tell which guard is load-bearing, because either
+    # one alone still declines. Each signal gets its own cell so removing
+    # either guard fails the suite.
     {
-        name  => 'a 206 body is a range, not the representation',
+        name  => 'a 206 status means the body is a range',
         start => { type => 'http.response.start', status => 206,
-                   headers => [['content-type', 'text/plain'],
-                               ['content-range', 'bytes 4-11/55']] },
+                   headers => [['content-type', 'text/plain']] },
         # Large enough to clear GZip's min_size. With a short body GZip
         # declines for an unrelated reason and the cell passes vacuously.
         body  => [ { type => 'http.response.body', body => ('range bytes ' x 200),
@@ -105,7 +108,37 @@ my @CASES = (
             is(scalar(grep { $_ eq 'etag' } @names), 0,
                 'no validator is derived from a partial body');
             is(scalar(grep { $_ eq 'content-encoding' } @names), 0,
-                'no encoding is applied to a range whose bounds describe the identity representation');
+                'no encoding is applied to a range');
+        },
+    },
+    {
+        name  => 'a Content-Range means the body is a range, whatever the status',
+        start => { type => 'http.response.start', status => 200,
+                   headers => [['content-type', 'text/plain'],
+                               ['content-range', 'bytes 4-11/55']] },
+        body  => [ { type => 'http.response.body', body => ('range bytes ' x 200),
+                     more => 0 } ],
+        check => sub {
+            my (@sent) = @_;
+            my @names = header_names(@sent);
+            is(scalar(grep { $_ eq 'etag' } @names), 0,
+                'no validator is derived from a partial body');
+            is(scalar(grep { $_ eq 'content-encoding' } @names), 0,
+                'no encoding is applied to a range');
+        },
+    },
+    {
+        name  => 'an existing Content-Encoding is the application\'s to own',
+        start => { type => 'http.response.start', status => 200,
+                   headers => [['content-type', 'text/plain'],
+                               ['content-encoding', 'gzip']] },
+        body  => [ { type => 'http.response.body', body => ('already encoded ' x 200),
+                     more => 0 } ],
+        check => sub {
+            my (@sent) = @_;
+            my @names = header_names(@sent);
+            is(scalar(grep { $_ eq 'content-encoding' } @names), 1,
+                'the encoding is not applied a second time, nor the header duplicated');
         },
     },
 );

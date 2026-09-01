@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use Test2::V0;
+use IO::Uncompress::Gunzip qw(gunzip $GunzipError);
 use Future::AsyncAwait;
 use File::Temp qw(tempfile);
 
@@ -159,8 +160,31 @@ subtest 'an illegal opaque event still reaches the server, so it can be rejected
             ));
 
             my @body_events = grep { $_->{type} eq 'http.response.body' } @sent;
+            my ($start)     = grep { $_->{type} eq 'http.response.start' } @sent;
             is scalar(@body_events), 2, 'two body events sent';
-            ok !exists $body_events[0]{fh}, 'the inline chunk is sent first';
+
+            # Check the inline bytes, not merely that they are inline. A
+            # middleware that declared an encoding must have applied it; one
+            # that declared none must have left the bytes alone.
+            my $encoded = grep { lc($_->[0]) eq 'content-encoding'
+                                 && $_->[1] eq 'gzip' } @{ $start->{headers} || [] };
+            my $first = $body_events[0]{body};
+            if ($encoded) {
+                # A streaming chunk is a Z_SYNC_FLUSH fragment of the deflate
+                # stream, not a standalone gzip member, so it cannot be
+                # decoded on its own -- especially here, where the illegal
+                # opaque event means the stream never reaches Z_FINISH. What
+                # is checkable is that the declared encoding was actually
+                # applied: gzip framing present, application bytes absent.
+                is substr($first, 0, 2), "\x1f\x8b",
+                    'the inline chunk carries gzip framing, as the head declared';
+                isnt $first, 'leading chunk;',
+                    'and is not the raw application bytes under a gzip header';
+            }
+            else {
+                is $first, 'leading chunk;', 'the inline chunk is forwarded unchanged';
+            }
+
             ok exists $body_events[1]{fh},
                 'the opaque event is forwarded rather than swallowed, so the server can reject it';
         };

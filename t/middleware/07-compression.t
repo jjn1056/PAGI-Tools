@@ -557,4 +557,28 @@ subtest 'a buffered response keeps Content-Length; only a stream goes without' =
     is($plain, $body, 'and it round-trips');
 };
 
+subtest 'an empty representation is never encoded' => sub {
+    # gzip framing is larger than the thing it encodes here, and min_size => 0
+    # must not be read as "compress nothing into 20 bytes".
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200,
+                        headers => [['content-type', 'text/plain']] });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    };
+
+    my @events;
+    run_async { PAGI::Middleware::GZip->new(min_size => 0)->wrap($app)->(
+        make_scope(headers => [['Accept-Encoding', 'gzip']]),
+        (async sub { { type => 'http.request', body => '', more => 0 } }),
+        (async sub { push @events, $_[0] })) };
+
+    my ($start) = grep { $_->{type} eq 'http.response.start' } @events;
+    is(scalar(grep { lc($_->[0]) eq 'content-encoding' } @{ $start->{headers} }), 0,
+        'no Content-Encoding on an empty body, even with min_size => 0');
+    my $bytes = join '', map { $_->{body} // '' }
+                grep { $_->{type} eq 'http.response.body' } @events;
+    is(length($bytes), 0, 'and no bytes are invented for it');
+};
+
 done_testing;
