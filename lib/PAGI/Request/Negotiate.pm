@@ -349,6 +349,7 @@ sub quality_for_type {
         await $send->({
             type => 'http.response.body',
             body => $body,
+            more => 0,
         });
     }
 

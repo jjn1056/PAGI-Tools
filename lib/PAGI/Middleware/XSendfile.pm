@@ -445,6 +445,7 @@ sub wrap {
                         await $send->({
                             type => 'http.response.body',
                             body => '',
+                            more => 0,
                         });
                         return;
                     }

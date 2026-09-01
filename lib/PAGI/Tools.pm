@@ -44,7 +44,7 @@ speaks the protocol directly:
             status  => 200,
             headers => [['content-type', 'application/json']],
         });
-        await $send->({ type => 'http.response.body', body => '{"hello":"world"}' });
+        await $send->({ type => 'http.response.body', body => '{"hello":"world"}', more => 0 });
     };
 
 PAGI-Tools adds the ergonomics — requests, response values, routing, a

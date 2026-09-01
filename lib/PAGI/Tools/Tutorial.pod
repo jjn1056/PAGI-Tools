@@ -38,6 +38,7 @@ events — the response start (status and headers) and the body:
       await $send->({
           type => 'http.response.body',
           body => 'Hello, world!',
+          more => 0,
       });
   };
 
@@ -930,6 +931,7 @@ Apply middleware to all routes using the C<builder> function:
       await $send->({
           type => 'http.response.body',
           body => 'Hello World',
+          more => 0,
       });
   }));
 
@@ -1273,6 +1275,7 @@ Return early without calling inner app:
               await $send->({
                   type => 'http.response.body',
                   body => 'Forbidden',
+                  more => 0,
               });
               return;  # Don't call $app
           }

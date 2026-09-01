@@ -431,6 +431,7 @@ __END__
         await $send->({
             type => 'http.response.body',
             body => "Uploaded $bytes bytes\n",
+            more => 0,
         });
     }
 

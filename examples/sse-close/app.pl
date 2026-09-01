@@ -76,7 +76,7 @@ my $app = async sub {
             status  => 200,
             headers => [ ['content-type', 'text/html; charset=utf-8'] ],
         });
-        await $send->({ type => 'http.response.body', body => $PAGE });
+        await $send->({ type => 'http.response.body', body => $PAGE, more => 0 });
         return;
     }
 
