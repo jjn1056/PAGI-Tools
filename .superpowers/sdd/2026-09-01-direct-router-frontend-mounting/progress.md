@@ -17,7 +17,7 @@ Push target: origin/feature/compose-retained-router after authorization
 | 2. App Router examples | complete | 8ddb014544be465ebbbd3d9245209b30089b18bc | 4 files, 54 tests | Four focused integration commands: PASS |
 | 3. Endpoint Router example | complete | c954880272f59e8f583287db56c0e08807e8e4ef | 1 file, 35 tests | `perlbrew exec --with perl-5.42.2@default prove -lv t/integration-endpoint-router-demo.t`: PASS; see `task-3-report.md` |
 | 4. Public documentation | complete | e82cf15c5c0c1726db9a37083a2d7bbc684d4274, 777b041 | 3 files, 36 top-level tests; review fix: 2 files, 14 top-level tests | `perlbrew exec --with perl-5.42.2@default prove -lv t/upgrading-routing-composition.t t/upgrading-router-frontends.t t/00-pod/cookbook-examples.t`: PASS; no-archive Dist::Zilla build regenerated and matched README; focused review-fix tests: PASS |
-| 5. Final verification | in progress | — | — | — |
+| 5. Final verification | verification complete; review pending | ddd661d6c04e16327e4f8ca36cd34163ccdd4aea | focused: 32 files, 232 tests; full: 224 files, 2,464 tests | Both suites PASS at `ddd661d`; one documented release-only skip, zero failures; distribution build and archive inspection PASS |
 
 ## Preflight dependency scan
 
@@ -79,7 +79,7 @@ Push target: origin/feature/compose-retained-router after authorization
   materialization/cycle/constraint/middleware tests, parent-name discovery, or
   source-regression assertions. They are not public deployment guidance.
 
-Task 5 audit: 130 textual hits across 31 live files were classified. Categories
+Task 5 audit: 130 textual hits across 32 live files were classified. Categories
 1--5 account for every hit; category 6 (stale deployment ceremony) has zero
 hits. The three flattening-search hits are explicitly labelled lossy examples
 in `PAGI::Compose`, `PAGI::Routing::Mount`, and `UPGRADING.md`.
@@ -95,6 +95,35 @@ in `PAGI::Compose`, `PAGI::Routing::Mount`, and `UPGRADING.md`.
   `origin/feature/compose-retained-router` at
   `8dea8d0f3b21212d6a58b1b729a962e597eefb89`
 - Worktree was clean at verification start. No sibling repository is in scope.
+
+## Task 5 verification evidence
+
+- Integrated focused suite at `ddd661d6c04e16327e4f8ca36cd34163ccdd4aea`:
+  `perlbrew exec --with perl-5.42.2@default prove -lr t/app-router.t
+  t/app-router t/endpoint-router.t t/endpoint
+  t/integration-router-application-boundaries.t
+  t/integration-maintained-examples-load.t
+  t/integration-app-file-examples.t t/integration-chat-compose.t
+  t/integration-endpoint-router-demo.t t/upgrading-routing-composition.t
+  t/upgrading-router-frontends.t t/00-pod` — PASS, 32 files, 232 tests,
+  7 wallclock seconds (6.94 CPU seconds).
+- Complete suite run exactly once at the same candidate HEAD:
+  `perlbrew exec --with perl-5.42.2@default prove -lr t` — PASS, 224
+  files, 2,464 tests, 47 wallclock seconds (42.77 CPU seconds), zero
+  failures, and one documented skip (`t/request/multipart-stream-e2e.t`
+  requires `RELEASE_TESTING=1`). No test warning was reported.
+- `perlbrew exec --with perl-5.42.2@default dzil build` — PASS without
+  running tests. It produced `PAGI-Tools-0.002002.tar.gz`: 1,013,774 bytes,
+  563 entries, SHA-256
+  `5e7793d963ce998f813cc57c247d99647b07e7d196dfdd1517b53a5435562234`.
+  The archive README matches the tracked README; required POD, upgrade,
+  Changes, tests, and affected example READMEs are present; `docs/superpowers`,
+  `.superpowers`, VCS metadata, and untracked build debris are absent. The
+  only `blib` path is the tracked `t/app-path-fixtures/blib` source fixture.
+  Dist::Zilla emitted existing `PkgVersion` layout advisories but completed
+  successfully.
+- `git diff --check` passed and the build left tracked files unchanged. The
+  worktree was clean immediately after archive inspection.
 
 ## Deviations
 
