@@ -64,6 +64,8 @@ Ruling: the controller initializes and commits the ledger before Task 1 dispatch
 
 Ruling: retain the force-added progress ledger as the campaign audit at finish and delete only untracked report/review artifacts — the approved spec and plan require committed task rows and evidence; cost if wrong is one tracked audit file remaining in the repository.
 
+Task 4 Ruling: its required `t/upgrading-routing-composition.t` gate and expected PASS depend on two live documents assigned broadly to Task 7. Move the minimal matching `UPGRADING.md` recipes, `$routing->routes` policy-loss warning, and Compose POD retired-constructor text into Task 4, then leave Task 7 responsible for the complete public-doc audit — this preserves a green task boundary; cost if wrong is that Task 7 revisits two files already touched here.
+
 ## Deviations
 
 None.
