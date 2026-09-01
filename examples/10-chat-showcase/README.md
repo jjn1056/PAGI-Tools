@@ -34,8 +34,9 @@ perl -Ilib -Iexamples/10-chat-showcase/lib bin/pagi-server \
 
 The mutable `PAGI::App::Router` is this showcase's declaration-time frontend
 for HTTP, WebSocket, SSE, and static routes. Its `to_router` method creates the
-immutable `PAGI::Routing::Router` snapshot that the deployed `PAGI::Compose`
-root retains:
+immutable `PAGI::Routing::Router` snapshot. The deployed `PAGI::Compose`
+constructs and owns a distinct outer Router; the unnamed root Mount beneath it
+retains the snapshot:
 
 ```text
 PAGI::App::Router (mutable declaration frontend)

@@ -44,7 +44,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 ## Example List
 
 1. `09-psgi-bridge` - wraps a PSGI app for PAGI use (via `PAGI::App::WrapPSGI`)
-2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging; a mutable HTTP/WebSocket/SSE declaration frontend crosses through `to_router` into the immutable Router retained by Compose
+2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging; a mutable HTTP/WebSocket/SSE declaration frontend crosses through `to_router` into the immutable Router retained by an unnamed root Mount beneath Compose's distinct outer Router
 3. `13-contact-form` - form parsing and file uploads
 4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
 5. `15-large-application` - Perl 5.40+ Compose-rooted modular HTML application with named Person/Blogs Router application mounts, cross-component links, boundary-specific Router defaults, an opaque static-file mount, lifespan data, and a deferred-work ledger

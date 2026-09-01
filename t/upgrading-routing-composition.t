@@ -288,8 +288,15 @@ subtest 'public documentation publishes one final routing model' => sub {
         'lib/PAGI/Middleware/ErrorHandler.pm',
         'lib/PAGI/Pages.pm',
         'lib/PAGI/Response.pm',
+        'examples/README.md',
+        'examples/10-chat-showcase/README.md',
     );
     my $retired_live_api = qr/PAGI::Routing::Trace|pagi\.routing\.trace|PAGI::Middleware::Routing::(?:NotFound|MethodNotAllowed)|mount\('\/[^']*'\s*=>\s*\$|\bgroup\s*\(/;
+    my $stale_compose_ownership = qr{
+        \bRouter\s+retained\s+by\s+Compose\b
+        |
+        \bsnapshot\b.{0,80}\bPAGI::Compose\b.{0,20}\broot\s+retains\b
+    }isx;
     my %classified_non_routing_api = (
         'lib/PAGI/Tools/Tutorial.pod' => [
             qr/\$urlmap->mount\('\/(?:api|admin|static)' =>/,
@@ -323,6 +330,8 @@ subtest 'public documentation publishes one final routing model' => sub {
         }
         is(\@unclassified, [],
             "$file has no unclassified retired routing API");
+        unlike(slurp_file($file), $stale_compose_ownership,
+            "$file does not assign child Router retention to Compose");
     }
 
     my $upgrading = slurp_file('UPGRADING.md');
