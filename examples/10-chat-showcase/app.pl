@@ -73,8 +73,8 @@ sub with_logging {
 }
 
 # Route by protocol and path with PAGI::App::Router. WebSocket and SSE
-# endpoints are first-class routes; everything else (static files and the
-# REST API) is mounted at the root, where ChatApp::HTTP handles it.
+# endpoints are first-class routes; the final HTTP catch-all Route sends
+# static files and the REST API to ChatApp::HTTP.
 my $router = PAGI::App::Router->new;
 $router->websocket('/ws/chat' => as_app($ws_handler));
 $router->sse('/events' => as_app($sse_handler));

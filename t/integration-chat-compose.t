@@ -3,7 +3,6 @@ use strict;
 use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
-use Future;
 use lib "$Bin/../lib";
 use lib "$Bin/../examples/10-chat-showcase/lib";
 use PAGI::Test::Client;
@@ -15,22 +14,6 @@ sub source_text {
     my $source = <$fh>;
     close $fh or die "cannot close $path: $!";
     return $source;
-}
-
-sub protocol_events {
-    my ($app, %scope) = @_;
-    my @events;
-    my $receive = sub {
-        return Future->done({ type => 'websocket.connect' });
-    };
-    my $send = sub {
-        my ($event) = @_;
-        push @events, $event;
-        return Future->done;
-    };
-
-    Future->wrap($app->(\%scope, $receive, $send))->get;
-    return \@events;
 }
 
 my $app_file = "$Bin/../examples/10-chat-showcase/app.pl";
@@ -51,7 +34,7 @@ ok(!$load_error, 'chat app loads cleanly') or diag($load_error);
 isa_ok($app, 'PAGI::Compose');
 
 SKIP: {
-    skip 'chat app did not load', 25
+    skip 'chat app did not load', 26
         unless ref($app) eq 'PAGI::Compose';
 
     my $native_app = $app->to_app;
@@ -100,6 +83,12 @@ SKIP: {
                     'root-mounted Router preserves WebSocket message dispatch');
             });
 
+            my $websocket_miss = $client->websocket('/ws/missing');
+            ok($websocket_miss->is_closed,
+                'a WebSocket miss completes its extension denial');
+            ok(!defined $websocket_miss->close_code,
+                'the extension denial does not emit an RFC6455 close code');
+
             $client->sse('/events', sub {
                 my ($sse) = @_;
                 my $event = $sse->receive_event;
@@ -113,20 +102,6 @@ SKIP: {
                 'an SSE miss declines as the child Router response');
         });
 
-        my $websocket_miss = protocol_events($native_app,
-            type         => 'websocket',
-            path         => '/ws/missing',
-            raw_path     => '/ws/missing',
-            root_path    => '',
-            query_string => '',
-            headers      => [],
-            client       => ['127.0.0.1', 50000],
-            server       => ['testserver', 80],
-            extensions   => { 'websocket.http.response' => {} },
-        );
-        is([$websocket_miss->[0]{type}, $websocket_miss->[0]{status}],
-            ['websocket.http.response.start', 404],
-            'a WebSocket miss declines as the selected root Router response');
     }
 
     is($stats->status, 200, 'existing HTTP API remains reachable');
