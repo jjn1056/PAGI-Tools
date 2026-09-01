@@ -379,6 +379,18 @@ sub _finalize_diagnosis {
     # Incomplete, and the client had already gone: legal silence, not a bug.
     return 'disconnected' if request_ended_abnormally($scope);
 
+    # Deliberately absent: a diagnostic for the opposite fault -- an
+    # application that DID send its terminal event after learning its client
+    # was gone, which PAGI::Spec::Www forbids. It cannot be detected here. A
+    # defined disconnect_reason at completion does not establish that the
+    # disconnect preceded the terminal event: a client aborting in the window
+    # just after a well-behaved application finished leaves exactly the same
+    # post-completion state. Diagnosing it from this predicate would accuse
+    # correct applications -- the same false-diagnostic shape this ordering
+    # was fixed to remove, pointed the other way. Detecting it properly needs
+    # per-event state recorded inside $wrapped_send, which is a feature, not
+    # a reordering.
+
     return 'trailers' if $err->message =~ /trailers/;
     return $sv->started ? 'no_body' : 'no_start';
 }
