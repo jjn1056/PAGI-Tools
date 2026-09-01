@@ -19,7 +19,7 @@ Baseline: `perlbrew exec --with perl-5.42.2@default prove -lr t` — Files=224, 
 | 2. Root Mount contract | complete | 6809879763b80e5de6f0876585546d569b7a0a44 | 3 files, 32 tests PASS | Characterization passed without production changes; task review approved with no findings |
 | 3. Lifecycle and safety | complete | 5a799d0 | 7 files, 118 tests PASS | Compiler and ResponseGuard unchanged; task review approved with no findings |
 | 4. Router frontends | complete | e177809, c45c155 | 5 files, 54 tests PASS | Inspectable/opaque frontend boundaries covered; task review approved with no findings |
-| 5. Declarative examples | in progress | — | — | — |
+| 5. Declarative examples | complete | 1e6ff71 | 4 files, 43 tests PASS; 3 syntax checks PASS | Apples stayed direct; declarative-routing retained only its configured `/api` Router boundary; Pages folded its disposable root into Compose; task review approved with one ledger-only follow-up completed here |
 | 6. Class-based examples | pending | — | — | — |
 | 7. Public documentation | pending | — | — | — |
 | 8. Final verification | pending | — | — | — |
@@ -83,3 +83,7 @@ Task 2: complete (commits f713cce..6809879, review clean).
 Task 3: complete (commits 7619b0f..5a799d0, review clean).
 
 Task 4: complete (commits 08f198f..c45c155, review clean after controller boundary ruling).
+
+Task 5 audit: `starlette-apples` is the direct Compose-routes canary and remained structurally direct; `declarative-routing` had a disposable outer root but retained its intentionally configured `/api` child Router through Mount; `pages` had a disposable outer root and moved its direct nodes and lifespan into Compose. No migration flattened a Router through `$router->routes`.
+
+Task 5: complete (commits f1b3b7f..1e6ff71, spec compliant; no Critical/Important findings; reviewer ledger-only follow-up completed in tracking commit).
