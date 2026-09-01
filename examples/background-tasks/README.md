@@ -7,20 +7,18 @@ its App Router declarations wrap native three-channel applications with
 `as_app`. Ordinary App handlers instead receive `PAGI::Request`, return an
 application value, and leave invocation to the shared routing compiler.
 
-The response-first `$router` is a mutable declaration frontend. Take its
-immutable snapshot before placing it beneath Compose's root Router:
+`PAGI::App::Router` already implements `to_app`, so Compose mounts the
+background-task frontend directly:
 
 ```perl
-my $snapshot = $router->to_router;
-compose(routes => [mount('/' => app => $snapshot)]);
+compose(routes => [mount('/' => app => $router)]);
 ```
 
-The unnamed Mount preserves the background handlers' Router middleware,
-defaults, and reverse resolver. `$snapshot->routes` is the deliberate, lossy
-flattening form. Mounting the mutable frontend directly is valid as a PAGI
-application, but it is opaque to the parent Resolver.
-See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
-[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the full model.
+The unnamed root Mount consumes no path and keeps the Router's middleware,
+default, and routing outcomes. The outer Compose Router treats the frontend as
+an application boundary and does not inspect its descendant names. Call
+`$router->to_router` only when a parent must discover those names or retain an
+immutable snapshot; this application has no such parent-side consumer.
 
 ## Run
 

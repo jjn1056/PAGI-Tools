@@ -288,5 +288,5 @@ $router->mount('/ws', app => async sub {
 });
 
 compose(routes => [
-    mount('/' => app => $router->to_router),
+    mount('/' => app => $router),
 ]);

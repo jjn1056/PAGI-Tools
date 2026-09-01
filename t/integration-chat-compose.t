@@ -21,6 +21,18 @@ my $http_file = "$Bin/../examples/10-chat-showcase/lib/ChatApp/HTTP.pm";
 my $app_source = source_text($app_file);
 my $http_source = source_text($http_file);
 
+for my $case (
+    ['chat root', $app_source],
+    ['chat HTTP child', $http_source],
+) {
+    my ($label, $source) = @$case;
+    like($source,
+        qr{mount\('/'\s*=>\s*app\s*=>\s*\$router\)},
+        "$label mounts its App Router directly");
+    unlike($source, qr/\$router->to_router/,
+        "$label does not materialize an unused snapshot");
+}
+
 like($http_source,
     qr/PAGI::App::File->from_app_path\('public'\)->to_app/,
     'chat HTTP uses the application-relative file app');

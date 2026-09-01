@@ -107,9 +107,8 @@ $router->websocket('/ws/echo' => as_app(async sub { ... }));
 $router->sse('/events' => as_app(async sub { ... }));
 
 # Complete application boundary and lifespan callbacks
-my $snapshot = $router->to_router;
 compose(
-    routes => [mount('/' => app => $snapshot)],
+    routes => [mount('/' => app => $router)],
     lifespan => {
         startup  => async sub { ... },
         shutdown => async sub { ... },
@@ -120,13 +119,17 @@ compose(
 These handlers intentionally demonstrate the protocol channels directly, so
 each native coderef is explicitly marked with `as_app`. An ordinary App Router handler would receive
 `PAGI::Request` and return a Response. The declarations run in exactly the
-order shown. The snapshot's unnamed root Mount preserves the demo Router's
-middleware, defaults, and reverse resolver; `$snapshot->routes` is the
-deliberate, lossy flattening form. Mounting the mutable frontend directly is
-valid as a PAGI application, but it is opaque to the parent Resolver. Compose
-keeps the same callbacks and state identity while the selected snapshot owns
-its 404 and 405 outcomes. See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
-[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the complete boundary model.
+order shown. `PAGI::App::Router` already implements `to_app`, so Compose
+mounts the full-demo frontend directly. The unnamed root Mount consumes no path
+and keeps the Router's middleware, default, and routing outcomes. The outer
+Compose Router treats the frontend as an application boundary and does not
+inspect its descendant names. Call `$router->to_router` only when a parent must
+discover those names or retain an immutable snapshot; this application has no
+such parent-side consumer. Compose keeps the same callbacks and state identity
+while the mounted Router owns its 404 and 405 outcomes. See
+[PAGI::Compose](../../lib/PAGI/Compose.pm) and
+[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the complete
+boundary model.
 
 ## Lifespan State
 

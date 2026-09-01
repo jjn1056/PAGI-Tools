@@ -47,6 +47,15 @@ sub response_body {
         grep { ($_->{type} // '') eq 'http.response.body' } @$events;
 }
 
+sub source_text {
+    my ($path) = @_;
+    open my $fh, '<', $path or die "cannot open $path: $!\n";
+    local $/;
+    my $source = <$fh>;
+    close $fh or die "cannot close $path: $!\n";
+    return $source;
+}
+
 {
     package Local::MountedIntegrationApp;
 
@@ -72,11 +81,12 @@ local $ENV{PAGI_ENV} = 'production';
 
 subtest 'background-task example keeps response-first HTTP dispatch at the Compose root' => sub {
     my $file = "$Bin/../examples/background-tasks/app.pl";
-    my $source = do {
-        open my $fh, '<', $file or die "cannot open $file: $!\n";
-        local $/;
-        <$fh>;
-    };
+    my $source = source_text($file);
+    like($source,
+        qr{mount\('/'\s*=>\s*app\s*=>\s*\$router\)},
+        'background-task root mounts the App Router application directly');
+    unlike($source, qr/\$router->to_router/,
+        'background-task root does not materialize an unused snapshot');
     my $app = do $file;
     my $load_error = $@;
     ok(!$load_error, 'background-task example loads cleanly')

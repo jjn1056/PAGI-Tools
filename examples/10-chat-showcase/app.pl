@@ -82,7 +82,7 @@ $router->any('/*path' => as_app($http_handler));
 
 compose(
     routes => [
-        mount('/' => app => $router->to_router),
+        mount('/' => app => $router),
     ],
     middleware => [middleware(\&with_logging)],
     lifespan => {

@@ -217,5 +217,5 @@ $router->mount('/events',
 $router->mount('/', app => PAGI::App::File->from_app_path('public'));
 
 compose(routes => [
-    mount('/' => app => $router->to_router),
+    mount('/' => app => $router),
 ]);

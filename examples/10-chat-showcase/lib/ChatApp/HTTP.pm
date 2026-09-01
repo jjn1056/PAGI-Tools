@@ -80,7 +80,7 @@ sub handler {
     $router->get('/api/stats' => \&_stats_handler);
 
     my $api_app = compose(routes => [
-        mount('/' => app => $router->to_router),
+        mount('/' => app => $router),
     ])->to_app;
 
     return async sub {

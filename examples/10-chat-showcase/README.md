@@ -33,25 +33,18 @@ perl -Ilib -Iexamples/10-chat-showcase/lib bin/pagi-server \
 ## Architecture
 
 The mutable `PAGI::App::Router` is this showcase's declaration-time frontend
-for HTTP, WebSocket, SSE, and static routes. Its `to_router` method creates the
-immutable `PAGI::Routing::Router` snapshot. The deployed `PAGI::Compose`
-constructs and owns a distinct outer Router; the unnamed root Mount beneath it
-retains the snapshot:
+for HTTP, WebSocket, SSE, and static routes. `PAGI::App::Router` already
+implements `to_app`, so Compose mounts both chat frontends directly:
 
 ```text
-PAGI::App::Router (mutable declaration frontend)
-  -> to_router
-    -> PAGI::Routing::Router (immutable snapshot)
-      -> mount('/', app => ...)
-        -> compose(routes => [...])
-        -> PAGI::Compose (deployed root)
+PAGI::App::Router (chat frontend)
+  -> mount('/', app => $router)
+    -> PAGI::Compose (deployed root)
 
-ChatApp::HTTP's PAGI::App::Router (mutable API declarations)
-  -> to_router
-    -> PAGI::Routing::Router (immutable API snapshot)
-      -> mount('/', app => ...)
-        -> compose(routes => [...])->to_app
-        -> internal PAGI::Compose application
+ChatApp::HTTP's PAGI::App::Router (API frontend)
+  -> mount('/', app => $router)
+    -> compose(routes => [...])->to_app
+    -> internal PAGI::Compose application
 ```
 
 At dispatch, those completed boundaries form this graph:
@@ -61,7 +54,7 @@ PAGI::Compose
   -> application-wide logging middleware
     -> Compose root Router
       -> unnamed root Mount
-        -> retained PAGI::Routing::Router
+        -> PAGI::App::Router
           -> opaque HTTP handler
             -> internal PAGI::Compose application or PAGI::App::File
           -> WebSocket / SSE handlers
@@ -94,20 +87,19 @@ streaming, MIME types, ranges, conditional requests, and negotiated errors.
 The example does not duplicate filesystem path filtering or read static files
 into application memory.
 
-Both chat frontends snapshot before each Compose boundary builds its own root
-Router:
+Both chat frontends use the same direct application boundary:
 
 ```perl
-my $snapshot = $router->to_router;
-compose(routes => [mount('/' => app => $snapshot)]);
+compose(routes => [mount('/' => app => $router)]);
 ```
 
-The unnamed Mount preserves chat middleware, defaults, and reverse resolution;
-`$snapshot->routes` is deliberate, lossy flattening. Mounting the mutable
-frontend directly is valid as a PAGI application, but it is opaque to outer
-reverse-routing inspection. `ChatApp::HTTP` uses the same snapshot boundary
-for its internal API Router before compiling it. See [PAGI::Compose](../../lib/PAGI/Compose.pm)
-and [PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for details.
+The unnamed root Mount consumes no path and keeps each Router's middleware,
+default, and routing outcomes. The outer Compose Router treats each frontend
+as an application boundary and does not inspect its descendant names. Call
+`$router->to_router` only when a parent must discover those names or retain an
+immutable snapshot; neither chat frontend has such a parent-side consumer. See
+[PAGI::Compose](../../lib/PAGI/Compose.pm) and
+[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for details.
 
 See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)
 for the status, hidden-file, symlink, and XSendfile migration contract.
