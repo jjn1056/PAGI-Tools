@@ -217,6 +217,29 @@ subtest 'the carve-out is limited to abnormal ends and real protocol faults' => 
     is($fault->stage, 'body_before_start', 'and keeps the body_before_start stage');
 };
 
+subtest 'a body before start is reported even when the app ignored the rejection' => sub {
+    # The subtest above returns the rejected Future to the guard, so the error
+    # that surfaces is the send-time Future->fail -- the post-completion
+    # re-raise never runs, and that subtest passes even if the disconnect
+    # exemption is moved above it.
+    #
+    # An application that swallows the rejection is the only case that
+    # exercises the re-raise, which ResponseGuard keeps "in case it doesn't
+    # await/inspect this". It is therefore also the only case that can catch
+    # the exemption overtaking it.
+    my $ignores_rejection = sub {
+        my ($request_scope, $receive, $send) = @_;
+        $send->({ type => 'http.response.body', body => 'early', more => 0 })
+            ->else_done();          # swallow it, as a careless app would
+        return Future->done;
+    };
+
+    my $fault = guard_error($ignores_rejection, disconnected_scope('client_closed'));
+    isa_ok($fault, ['PAGI::Exception::IncompleteResponse'],
+        'a body before start is reported even when the app ignored the rejection');
+    is($fault->stage, 'body_before_start', 'and keeps the body_before_start stage');
+};
+
 subtest 'declared trailers are required before completion' => sub {
     my $start = {
         type => 'http.response.start', status => 200, headers => [], trailers => 1,
