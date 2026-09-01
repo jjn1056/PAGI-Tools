@@ -12,8 +12,8 @@ Push target: origin/feature/compose-retained-router after authorization
 
 | Task | Status | Implementation commit | Tests | Evidence |
 | --- | --- | --- | --- | --- |
-| 1. Characterize contract | in progress | — | — | Execution-start HEAD: f5f7c92efbb50e05d507e256d686b6ef3ad9f3e8 |
-| 2. App Router examples | pending | — | — | — |
+| 1. Characterize contract | complete | 5fb3bbac3ec0f9473fdf1aeb34318559ebd2cee7 | 3 files, 35 tests | `perlbrew exec --with perl-5.42.2@default prove -lv t/app-router.t t/upgrading-router-frontends.t t/integration-router-application-boundaries.t`: PASS |
+| 2. App Router examples | in progress | — | — | — |
 | 3. Endpoint Router example | pending | — | — | — |
 | 4. Public documentation | pending | — | — | — |
 | 5. Final verification | pending | — | — | — |
