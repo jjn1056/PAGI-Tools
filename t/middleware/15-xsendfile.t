@@ -297,6 +297,7 @@ subtest 'hash mappings choose the most-specific component prefix' => sub {
         is $sent->[1], {
             type => 'http.response.body',
             body => '',
+            more => 0,
         }, "$label emits one terminal empty body";
     }
 };
