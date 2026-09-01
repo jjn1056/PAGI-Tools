@@ -244,17 +244,27 @@ application and can:
     use Future::AsyncAwait;
     use Time::HiRes 'time';
 
+    sub _init {
+        my ($self, $config) = @_;
+
+        # Take the destination as a coderef, defaulting to warn, so the caller
+        # can route output wherever they keep their logs. This is the shape
+        # PAGI::Middleware::AccessLog uses. Middleware that calls warn directly
+        # cannot be redirected by the application that installed it.
+        $self->{logger} = $config->{logger} // sub { warn @_ };
+    }
+
     sub wrap {
         my ($self, $app) = @_;
 
-        return async sub  {
-        my ($scope, $receive, $send) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
             my $start = time();
             my $status;
 
             # Intercept send to capture status
-            my $wrapped_send = $self->intercept_send($send, async sub  {
-        my ($event, $orig_send) = @_;
+            my $wrapped_send = $self->intercept_send($send, async sub {
+                my ($event, $orig_send) = @_;
                 if ($event->{type} eq 'http.response.start') {
                     $status = $event->{status};
                 }
@@ -266,8 +276,8 @@ application and can:
 
             # Log after completion
             my $duration = time() - $start;
-            warn sprintf("%s %s %d %.3fs\n",
-                $scope->{method}, $scope->{path}, $status // 0, $duration);
+            $self->{logger}->(sprintf("%s %s %d %.3fs\n",
+                $scope->{method}, $scope->{path}, $status // 0, $duration));
         };
     }
 
