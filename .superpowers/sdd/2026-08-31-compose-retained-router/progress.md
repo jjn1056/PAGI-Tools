@@ -8,8 +8,8 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
 |---|---|---|---|---|
 | 1. Retained description | complete | `9b9e4f16c5dcfba83e5018f961e7ed296c990ec3` | 4 files, 104 tests | RED: `t/compose/01-description.t` stopped after 4 assertions with `unknown compose option 'router'`; GREEN: focused constructor/reverse suite passed. |
 | 2. Compiler and safety | complete | `b860142fdb7f042626245faa73528b929bb68894` | 7 files, 62 tests | RED: migrated focused gate failed only the retained-Router count (`got 0`, expected `1` then `2`); GREEN: compiler now calls the retained Router and the focused safety gate passed. |
-| 3. Lifespan and ordering | in progress | — | — | — |
-| 4. Router frontends | pending | — | — | — |
+| 3. Lifespan and ordering | complete | `da561c66545665025d5a927da6474dcebba99f5d` | 4 files, 45 tests | RED: all migrated Compose gates failed on the retired `app =>` constructor; GREEN: root-only lifespan, middleware visibility, mounted boundaries, strict bare-Router failure, and HEAD/buffering gate passed. |
+| 4. Router frontends | in progress | — | — | — |
 | 5. Flagship examples | pending | — | — | — |
 | 6. Remaining examples | pending | — | — | — |
 | 7. Public docs and upgrade | pending | — | — | — |
@@ -82,3 +82,5 @@ None.
   PASS, task quality PASS, no findings).
 - Task 2: complete (commits `0b460bb..3e5dae3`, review clean; spec compliance
   PASS, task quality PASS, no findings).
+- Task 3: complete (commits `da561c6`; focused root-lifespan, middleware,
+  mounted-boundary, and HEAD/buffering gate PASS; no production code changed).
