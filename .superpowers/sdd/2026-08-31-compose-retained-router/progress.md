@@ -1,0 +1,77 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-08-31-compose-retained-router.md
+
+## Compose Retained-Router Execution
+
+Base: `558b14c282a38051bd8c1bb712290fe1df398330`
+
+| Task | Status | Implementation commit | Tests | Evidence |
+|---|---|---|---|---|
+| 1. Retained description | in progress | — | — | — |
+| 2. Compiler and safety | pending | — | — | — |
+| 3. Lifespan and ordering | pending | — | — | — |
+| 4. Router frontends | pending | — | — | — |
+| 5. Flagship examples | pending | — | — | — |
+| 6. Remaining examples | pending | — | — | — |
+| 7. Public docs and upgrade | pending | — | — | — |
+| 8. Final verification | pending | — | — | — |
+
+## Work map
+
+| Repository | Ticket | Branch | Base | Owned changes | Deployment boundary | Push target |
+|---|---|---|---|---|---|---|
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | none | `feature/compose-retained-router` | `558b14c282a38051bd8c1bb712290fe1df398330` | Runtime, tests, all live examples, public POD/README/Tutorial/Cookbook, `UPGRADING.md`, and `Changes` required by the retained-Router design | One unreleased PAGI-Tools distribution | `origin/feature/compose-retained-router`, only after user authorization |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI` | none | read-only | published local specification | none | normative reference | none |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Server` | none | read-only | released local server | none | integration reference | none |
+
+## Baseline
+
+- Local `main`, `origin/main`, and the feature-worktree base all resolved to
+  `558b14c282a38051bd8c1bb712290fe1df398330` on 2026-09-01.
+- `perlbrew exec --with perl-5.42.2@default prove -lr -j4 t/` passed:
+  224 files, 2,435 tests, 13 wall-clock seconds.
+- The baseline emitted one existing test-only warning from
+  `t/compose/07-response-guard.t:232` (`else_done` in void context). Task 2
+  owns a lexical-only warning cleanup while preserving the tested behavior.
+
+## Preflight task/interface scan
+
+| Producer | Consumer | Shared file or interface | Finding / ruling |
+|---|---|---|---|
+| Task 1 | Task 2 | `PAGI::Compose->router` and `lib/PAGI/Compose.pm` contract | Clean: Task 2 consumes the exact retained Router produced by Task 1. |
+| Task 1 | Task 3 | Compose lifespan/middleware accessors | Clean: Task 3 tests existing root behavior on the Task 1 description. |
+| Task 1 | Task 4 | strict `router => $immutable_router` constructor | Clean: frontends cross explicitly through `to_router`; Compose performs no coercion. |
+| Task 1 | Tasks 5-6 | routes-form and router-form constructors | Clean: examples consume only the two approved forms. |
+| Task 1 | Task 7 | `lib/PAGI/Compose.pm` implementation then POD | Clean: Task 7 edits documentation after the runtime surface is final. |
+| Task 2 | Task 3 | compiled root layer order | Clean: Task 3 pins lifespan, middleware, and HEAD behavior after retained-Router compilation lands. |
+| Task 2 | Task 8 | ResponseGuard and settlement regression surface | Ruling: direct event-level ResponseGuard tests remain direct; only obsolete Compose app-mode fixtures route through a selected application. Cost if wrong: a routing refactor could accidentally weaken settled disconnect/body/trailer semantics. |
+| Task 3 | Task 7 | root-only lifespan and middleware visibility | Clean: documentation consumes the behavior Task 3 proves. |
+| Task 4 | Tasks 5-6 | App/Endpoint Router `to_router` boundary | Clean: examples use the explicit immutable-Router crossing established by Task 4. |
+| Task 4 | Task 7 | frontend module POD files | Clean: Task 4 may update live examples/assertions; Task 7 performs the final public documentation pass. |
+| Tasks 5-6 | Task 7 | canonical examples and prose | Clean: public docs copy only the already-migrated shapes. |
+| Tasks 1-7 | Task 8 | whole branch | Clean: final semantic searches, focused settlement gate, suite, build, and review cover all prior outputs. |
+
+## Per-task internal consistency scan
+
+| Task | Tests versus implementation | Files versus later steps | Finding / ruling |
+|---|---|---|---|
+| 1 | Constructor/identity tests fail before and pass after `Compose.pm` change | Compiler waits until Task 2 | Clean. |
+| 2 | Counting Router, dispatch, failsafe, and direct guard tests cover only compiler/fixture changes | Task 3 consumes final layer order | Ruling: preserve `558b14c`'s failed-send-Future, post-completion re-raise, abnormal-disconnect exemption, terminal-body, and trailer contracts. The warning cleanup is test-only. Cost if wrong: settled PAGI 0.002008 behavior regresses. |
+| 3 | Lifecycle/middleware/HEAD tests correspond to existing compiler boundaries | No later runtime owner overlaps | Clean. |
+| 4 | Frontend tests cover explicit `to_router` crossing | Example and POD migrations follow | Clean. |
+| 5 | Source-shape and behavioral integrations cover both canaries | Task 7 documents their final API | Clean. |
+| 6 | Execution-time inventory prevents stale example lists | Task 7 follows after every live example | Ruling: inventory includes newly landed `process-streaming`; `sse-close`, `sse-dashboard`, and WebSocket examples retain close/disconnect semantics even when no source edit is required. Cost if wrong: examples could silently regress while the API migration passes. |
+| 7 | POD/upgrading tests and semantic searches match the documented edits | Task 8 verifies the same live surface | Ruling: append to existing `0.002003 - UNRELEASED` notes and preserve explicit `more => 0`; do not rewrite the buffering/disconnect campaign. Cost if wrong: release notes or protocol examples lose current-main facts. |
+| 8 | Focused settlement gate precedes one final full suite and distribution build | No downstream task | Clean. |
+
+## Process rulings
+
+- Ruling: keep this ledger force-added and committed as required by the
+  approved plan, even though the generic SDD workflow normally treats its
+  workspace as disposable scratch. The tracked ledger is the campaign's
+  audit record and compaction recovery map. Cost if wrong: one extra internal
+  execution artifact remains in history; deleting it would lose the audit
+  trail the user explicitly requested.
+
+## Deviations
+
+None.
