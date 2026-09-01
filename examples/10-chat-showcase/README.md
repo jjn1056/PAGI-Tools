@@ -32,18 +32,33 @@ perl -Ilib -Iexamples/10-chat-showcase/lib bin/pagi-server \
 
 ## Architecture
 
-The deployed application root is `PAGI::Compose`, while the mutable
-`PAGI::App::Router` remains deliberately in place for this showcase's existing
-HTTP, WebSocket, SSE, and static route declarations:
+The mutable `PAGI::App::Router` is this showcase's declaration-time frontend
+for HTTP, WebSocket, SSE, and static routes. Its `to_router` method creates the
+immutable `PAGI::Routing::Router` snapshot that the deployed `PAGI::Compose`
+root retains:
+
+```text
+PAGI::App::Router (mutable declaration frontend)
+  -> to_router
+    -> PAGI::Routing::Router (immutable snapshot)
+      -> compose(router => ...)
+        -> PAGI::Compose (deployed root)
+
+ChatApp::HTTP's PAGI::App::Router (mutable API declarations)
+  -> to_router
+    -> PAGI::Routing::Router (immutable API snapshot)
+      -> compose(router => ...)->to_app
+        -> internal PAGI::Compose application
+```
+
+At dispatch, those completed boundaries form this graph:
 
 ```text
 PAGI::Compose
   -> application-wide logging middleware
-    -> PAGI::App::Router
+    -> retained PAGI::Routing::Router
       -> opaque HTTP handler
-        -> PAGI::Compose
-          -> internal API Router
-        -> PAGI::App::File
+        -> internal PAGI::Compose application or PAGI::App::File
       -> WebSocket / SSE handlers
 ```
 
@@ -59,7 +74,7 @@ Compose supplies the response-completion and 500 failsafes; neither layer
 changes the WebSocket or SSE ownership described below.
 
 The WebSocket and SSE targets are existing native PAGI applications, so their
-route declarations use explicit `raw`. The opaque `/` HTTP mount is written
+route declarations use explicit `as_app`. The opaque `/` HTTP mount is written
 last as `mount('/', app => $http_handler)`: the shared router preserves
 declaration order, and a matching prefix owns dispatch at that position.
 `ChatApp::HTTP` therefore gives its internal

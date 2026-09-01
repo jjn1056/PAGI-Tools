@@ -160,9 +160,11 @@
     accepted WebSocket/SSE sessions remain live protocol loops, not HTTP
     Response applications.
   - BREAKING: Route CODE endpoints receive one Request, WebSocket, or SSE;
-    Route application objects own the native PAGI triplet. Mount, Compose, and
-    Router defaults retain the native CODE contract. HTTP handler results are
-    native CODE or instantiated `to_app` objects. Native Route CODE uses
+    Route application objects own the native PAGI triplet. Mount `app` and
+    Router `http_default` retain the native CODE contract. Compose accepts
+    route declarations through `routes`, or one immutable Router through
+    `router`. HTTP handler results are native CODE or instantiated `to_app`
+    objects. Native Route CODE uses
     `as_app`; GET plus automatic HEAD is the default, while scalar
     `methods => '*'` is unrestricted. Object `allowed_methods` is snapshotted
     once at Route construction, so routed Endpoint::HTTP objects contribute
