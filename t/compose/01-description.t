@@ -5,8 +5,9 @@ use Test2::V0;
 use Scalar::Util qw(refaddr);
 use overload ();
 use PAGI::Compose qw(compose);
+use PAGI::Pages ();
 use PAGI::Response::Text ();
-use PAGI::Routing qw(route middleware);
+use PAGI::Routing qw(router route middleware);
 
 {
     package ComposeNoImports;
@@ -18,9 +19,8 @@ use PAGI::Routing qw(route middleware);
 }
 {
     package DeferredComponentCheck;
-    our $CALLS = 0;
     sub new { return bless {}, $_[0] }
-    sub to_app { $CALLS++; return sub { return } }
+    sub to_app { return sub { return } }
 }
 {
     package ComposeConfiguredMiddleware;
@@ -43,7 +43,38 @@ my ($lowercase_error, $lowercase_stderr);
 like($lowercase_error, qr/Can't continue after import errors/, 'lowercase tag is rejected');
 like($lowercase_stderr, qr/"all" is not defined/, 'diagnostic names the invalid tag');
 
-my $leaf = route('/' => sub { return PAGI::Response::Text->new('home') });
+my $leaf = route('/' => sub {
+    return PAGI::Response::Text->new('home');
+}, name => 'home');
+
+my $default = PAGI::Pages->not_found(detail => 'No root route');
+my $routing = router(
+    routes       => [$leaf],
+    http_default => $default,
+    desc         => 'Retained root',
+);
+
+my $composition = compose(
+    router     => $routing,
+    middleware => [middleware('RequestId')],
+    lifespan   => { startup => sub { return } },
+);
+
+isa_ok($composition, 'PAGI::Compose');
+is(refaddr($composition->router), refaddr($routing),
+    'router form retains exact Router identity');
+is($composition->routes, [$leaf], 'routes delegates to retained Router');
+is(refaddr($composition->http_default), refaddr($default),
+    'http_default delegates by identity');
+is($composition->desc, 'Retained root', 'desc delegates');
+is($composition->path_for('/home'), '/', 'path_for delegates');
+is(refaddr($composition->route_named('/home')), refaddr($leaf),
+    'route_named delegates');
+ok(exists $composition->named_routes->{'/home'},
+    'named_routes delegates');
+ok(!$composition->can('app'), 'retired app accessor is absent');
+ok(!overload::Method($composition, '&{}'), 'composition has no coderef overload');
+
 my $factory = sub { my ($inner) = @_; return $inner };
 my $bare_configured = ComposeConfiguredMiddleware->new;
 my $mw = middleware('RequestId', header => 'X-Request-ID');
@@ -56,16 +87,13 @@ my $middleware = [
     $mw,
 ];
 my $lifespan = { startup => $startup };
-my $composition = compose(
-    routes => $routes,
+my $shallow = compose(
+    router     => $routing,
     middleware => $middleware,
-    lifespan => $lifespan,
+    lifespan   => $lifespan,
 );
 
-isa_ok($composition, 'PAGI::Compose');
-is($composition->routes, [$leaf], 'routes accessor returns declared nodes');
-is($composition->app, undef, 'app is absent in routes mode');
-my $stored = $composition->middleware;
+my $stored = $shallow->middleware;
 is(refaddr($stored->[0]), refaddr($middleware->[0]),
     'explicit class description identity is retained');
 is(refaddr($stored->[1]), refaddr($middleware->[1]),
@@ -74,38 +102,36 @@ is(refaddr($stored->[2]), refaddr($middleware->[2]),
     'explicit configured object description identity is retained');
 is(refaddr($stored->[3]), refaddr($mw),
     'explicit description identity is retained');
-is(refaddr($composition->lifespan->{startup}), refaddr($startup), 'callback identity is retained');
-ok(!overload::Method($composition, '&{}'), 'composition has no coderef overload');
+is(refaddr($shallow->lifespan->{startup}), refaddr($startup),
+    'callback identity is retained');
+
+my $from_routes = compose(
+    routes       => $routes,
+    http_default => $default,
+    desc         => 'Constructed root',
+);
+
+isa_ok($from_routes->router, 'PAGI::Routing::Router');
+is($from_routes->routes, [$leaf], 'routes form retains constructed Router');
+is(refaddr($from_routes->http_default), refaddr($default),
+    'routes form passes http_default to Router');
+is($from_routes->desc, 'Constructed root',
+    'routes form passes desc to Router');
 
 push @$routes, route('/mutated' => sub {
     return PAGI::Response::Text->new('bad');
 });
 push @$middleware, middleware(sub { return $_[0] });
 $lifespan->{shutdown} = sub { return };
-push @{$composition->routes}, $leaf;
-push @{$composition->middleware}, $mw;
-$composition->lifespan->{shutdown} = sub { return };
-is($composition->routes, [$leaf], 'routes are defensively copied');
-is(scalar @{$composition->middleware}, 4,
+push @{$from_routes->routes}, $leaf;
+push @{$shallow->middleware}, $mw;
+$shallow->lifespan->{shutdown} = sub { return };
+is($from_routes->routes, [$leaf],
+    'Router retains a shallow copy of the supplied routes');
+is(scalar @{$shallow->middleware}, 4,
     'normalized middleware input and accessor arrays are defensively copied');
-is([sort keys %{$composition->lifespan}], ['startup'], 'lifespan hash is defensively copied');
-
-my $app = sub { return };
-my $object_form = PAGI::Compose->new(app => $app);
-my $function_form = compose(app => $app);
-is(refaddr($object_form->app), refaddr($app), 'OO form retains app identity');
-is(refaddr($function_form->app), refaddr($app), 'functional form retains app identity');
-is($object_form->routes, undef, 'routes are absent in app mode');
-is($object_form->middleware, [], 'middleware defaults empty');
-is($object_form->lifespan, undef, 'lifespan defaults absent');
-
-my $component_app = DeferredComponentCheck->new;
-$DeferredComponentCheck::CALLS = 0;
-my $component_form = compose(app => $component_app);
-is(refaddr($component_form->app), refaddr($component_app),
-    'instantiated app object identity is retained');
-is($DeferredComponentCheck::CALLS, 0,
-    'instantiated app object is not compiled at construction');
+is([sort keys %{$shallow->lifespan}], ['startup'],
+    'lifespan hash is defensively copied');
 
 my $object_without_wrap = bless {}, 'ComposeObjectWithoutWrap';
 
@@ -124,14 +150,34 @@ my @invalid = (
     ['server_error is not a Compose option',
         [routes => [], server_error => sub { }],
         qr/unknown compose option 'server_error'/],
-    ['missing target', [], qr/exactly one of routes or app/],
-    ['both targets', [routes => [], app => $app], qr/exactly one of routes or app/],
-    ['undefined app', [app => undef], qr/compose app must be a coderef or instantiated object with to_app/],
-    ['unblessed app reference', [app => []], qr/compose app must be a coderef or instantiated object with to_app/],
-    ['app package string', [app => 'Local::App'], qr/compose app must be a coderef or instantiated object with to_app/],
-    ['object without to_app', [app => bless({}, 'ComposeObjectWithoutToApp')], qr/compose app must be a coderef or instantiated object with to_app/],
-    ['routes not array', [routes => {}], qr/routes must contain PAGI::Routing nodes/],
-    ['invalid route member', [routes => [{}]], qr/routes must contain PAGI::Routing nodes/],
+    ['missing target', [], qr/exactly one of routes or router/],
+    ['both targets', [routes => [], router => $routing],
+        qr/exactly one of routes or router/],
+    ['retired app Router', [app => $routing],
+        qr/no longer accepts 'app'.*router =>/s],
+    ['retired native app', [app => sub { return }],
+        qr/no longer accepts 'app'.*deploy.*directly/s],
+    ['router undef', [router => undef],
+        qr/instantiated PAGI::Routing::Router/],
+    ['router coderef', [router => sub { return }],
+        qr/instantiated PAGI::Routing::Router/],
+    ['router generic to_app object',
+        [router => DeferredComponentCheck->new],
+        qr/instantiated PAGI::Routing::Router/],
+    ['router with http_default',
+        [router => $routing, http_default => $default],
+        qr/http_default cannot be combined with router/],
+    ['router with undef http_default',
+        [router => $routing, http_default => undef],
+        qr/http_default cannot be combined with router/],
+    ['router with desc', [router => $routing, desc => 'override'],
+        qr/desc cannot be combined with router/],
+    ['router with undef desc', [router => $routing, desc => undef],
+        qr/desc cannot be combined with router/],
+    ['routes not array', [routes => {}],
+        qr/routes must contain PAGI::Routing nodes/],
+    ['invalid route member', [routes => [{}]],
+        qr/routes must contain PAGI::Routing nodes/],
     ['middleware not array', [routes => [], middleware => {}], qr/middleware must be an arrayref/],
     ['bare middleware class', [routes => [], middleware => ['RequestId']],
         qr/compose middleware entry 0 must be a PAGI::Routing::Middleware description returned by middleware\(\.\.\.\)/],
@@ -154,7 +200,6 @@ for my $case (@invalid) {
     like(dies { PAGI::Compose->new(@$args) }, $pattern, $label);
 }
 
-isa_ok($component_form, ['PAGI::Compose'], 'object capability is deferred to compilation');
-ok($component_form->can('to_app'), 'description exposes the explicit compile boundary');
+ok($composition->can('to_app'), 'description exposes the explicit compile boundary');
 
 done_testing;

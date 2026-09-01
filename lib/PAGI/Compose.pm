@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp qw(croak);
 use Exporter 'import';
-use PAGI::Utils ();
+use Scalar::Util qw(blessed);
 use PAGI::Routing::Middleware ();
 use PAGI::Routing::Router ();
 
@@ -20,23 +20,44 @@ sub new {
     croak 'compose option list must be key/value pairs' if @args % 2;
     my %opts = @args;
 
-    my %allowed = map { $_ => 1 } qw(routes app middleware lifespan);
+    my %allowed = map { $_ => 1 }
+        qw(routes router http_default desc middleware lifespan);
+
+    if (exists $opts{app}) {
+        my $hint = blessed($opts{app})
+            && $opts{app}->isa('PAGI::Routing::Router')
+            ? "pass it with router => \$router"
+            : 'deploy a non-routing PAGI application directly';
+        croak "compose no longer accepts 'app'; $hint";
+    }
+
     for my $key (keys %opts) {
         croak "unknown compose option '$key'" unless $allowed{$key};
     }
 
     my $has_routes = exists $opts{routes};
-    my $has_app = exists $opts{app};
-    croak 'compose requires exactly one of routes or app'
-        unless $has_routes != $has_app;
+    my $has_router = exists $opts{router};
+    croak 'compose requires exactly one of routes or router'
+        unless $has_routes != $has_router;
 
-    my $routes;
+    my $router;
     if ($has_routes) {
-        my $validated = PAGI::Routing::Router->new(routes => $opts{routes});
-        $routes = $validated->routes;
+        $router = PAGI::Routing::Router->new(
+            routes => $opts{routes},
+            (exists $opts{http_default}
+                ? (http_default => $opts{http_default}) : ()),
+            (exists $opts{desc} ? (desc => $opts{desc}) : ()),
+        );
     }
     else {
-        PAGI::Utils::_validate_app_value($opts{app}, 'compose app');
+        croak 'compose router must be an instantiated PAGI::Routing::Router'
+            unless blessed($opts{router})
+                && $opts{router}->isa('PAGI::Routing::Router');
+        croak 'compose http_default cannot be combined with router; configure the retained Router'
+            if exists $opts{http_default};
+        croak 'compose desc cannot be combined with router; configure the retained Router'
+            if exists $opts{desc};
+        $router = $opts{router};
     }
 
     my $middleware = PAGI::Routing::Middleware->_require_descriptors(
@@ -48,8 +69,7 @@ sub new {
         : undef;
 
     return bless {
-        routes     => $routes,
-        app        => $has_app ? $opts{app} : undef,
+        router     => $router,
         middleware => $middleware,
         lifespan   => $lifespan,
     }, $class;
@@ -72,12 +92,13 @@ sub _validate_lifespan {
     return { %$lifespan };
 }
 
-sub routes {
-    my ($self) = @_;
-    return defined $self->{routes} ? [@{$self->{routes}}] : undef;
-}
-
-sub app { return $_[0]->{app} }
+sub router       { $_[0]->{router} }
+sub routes       { $_[0]->{router}->routes }
+sub http_default { $_[0]->{router}->http_default }
+sub desc         { $_[0]->{router}->desc }
+sub named_routes { $_[0]->{router}->named_routes }
+sub route_named  { $_[0]->{router}->route_named($_[1]) }
+sub path_for     { my $self = shift; return $self->{router}->path_for(@_) }
 
 sub middleware { return [@{$_[0]->{middleware}}] }
 
