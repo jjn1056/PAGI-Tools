@@ -105,6 +105,8 @@ None.
   and Cascade deployment prose; commit `669b51b`).
 - Task 4: complete (commits `da55ee4..669b51b`, review clean after fix round
   1; both Important findings addressed, no new breakage).
+- Task 5: complete (commits `ce986ec..61229a9`, review clean; spec compliance
+  PASS, task quality PASS, no findings).
 - Task 5: complete (commit `ae8e37f`; RED exercised the new source-shape
   canaries; GREEN: `t/integration-starlette-apples.t` and
   `t/integration-large-application.t` passed. Reviewed the direct
