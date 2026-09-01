@@ -11,9 +11,54 @@ Base: `558b14c282a38051bd8c1bb712290fe1df398330`
 | 3. Lifespan and ordering | complete | `da561c66545665025d5a927da6474dcebba99f5d` | 4 files, 45 tests | RED: all migrated Compose gates failed on the retired `app =>` constructor; GREEN: root-only lifespan, middleware visibility, mounted boundaries, strict bare-Router failure, and HEAD/buffering gate passed. |
 | 4. Router frontends | complete | `f3e3972` | 6 files, 57 tests | RED: focused frontend gate failed in the background-task root and retired Compose-native bridge, plus the old `router =>` classifier; GREEN: all six required frontend/POD-example files passed with explicit frontend snapshots. |
 | 5. Flagship examples | complete | `ae8e37f` | 2 files, 12 top-level tests | RED: new source-shape assertions rejected the retired apples nested Router and large-app `app =>` boundary; GREEN: both flagship integrations passed with CRUD, URL, default, static-file, middleware, and lifespan coverage. |
-| 6. Remaining examples | in progress | — | — | — |
-| 7. Public docs and upgrade | pending | — | — | — |
+| 6. Remaining examples | complete | `c1129e6d0fc55939dd04c2a480aa50d88c5ffbaa` | 9 files, 109 tests | RED: source-shape gate rejected every retired live app-mode target; GREEN: every selected example loaded and retained HTTP, WebSocket, SSE, lifespan, stream terminal, and disconnect behavior. |
+| 7. Public docs and upgrade | in progress | — | — | — |
 | 8. Final verification | pending | — | — | — |
+
+## Task 6 example inventory (before edits)
+
+`rg -l 'PAGI::Compose|compose\(' examples | sort` reported:
+
+```text
+examples/10-chat-showcase/README.md
+examples/10-chat-showcase/app.pl
+examples/10-chat-showcase/lib/ChatApp/HTTP.pm
+examples/15-large-application/README.md
+examples/15-large-application/lib/MyApp/Root.pm
+examples/background-tasks/README.md
+examples/background-tasks/app.pl
+examples/compose/README.md
+examples/compose/app.pl
+examples/declarative-routing/README.md
+examples/declarative-routing/app.pl
+examples/endpoint-demo/README.md
+examples/endpoint-demo/app.pl
+examples/endpoint-router-demo/README.md
+examples/endpoint-router-demo/app.pl
+examples/full-demo/README.md
+examples/full-demo/app.pl
+examples/pages/README.md
+examples/pages/app.pl
+examples/process-streaming/app.pl
+examples/starlette-apples/README.md
+examples/starlette-apples/app.pl
+```
+
+`rg -n -U 'compose\(\s*app\s*=>' examples` identified the retired live
+targets: declarative-routing, endpoint-demo, endpoint-router-demo, pages,
+process-streaming, full-demo, 10-chat-showcase (root and HTTP child), and the
+corresponding README prose. `background-tasks`, `compose`,
+`15-large-application`, and `starlette-apples` already use approved forms.
+`sse-close`, `sse-dashboard`, and the WebSocket examples were inspected for
+their explicit terminal/close/disconnect behavior and contain no Compose
+app-mode usage; they require no source change.
+
+Task 6 GREEN evidence: `perlbrew exec --with perl-5.42.2@default prove -lv`
+over the eight planned maintained-example integrations plus
+`t/integration-app-file-examples.t` passed (9 files, 109 tests). It includes
+the process-streaming end-to-end bulk/404/client-disconnect cases and the
+Endpoint Router WebSocket/SSE cases. The post-edit retired-mode search
+`rg -n -U 'compose\(\s*app\s*=>' examples t` produced no matches.
 
 ## Work map
 
@@ -111,4 +156,10 @@ None.
   canaries; GREEN: `t/integration-starlette-apples.t` and
   `t/integration-large-application.t` passed. Reviewed the direct
   routes-form apples Compose and retained Router-form modular boundary; no
+  concerns.)
+- Task 6: complete (implementation commit `c1129e6`; RED source-shape
+  failures identified retired live Compose app-mode examples; GREEN: 9 focused
+  integrations / 109 tests passed, including the process-streaming terminal
+  and client-disconnect contract. `sse-close`, `sse-dashboard`, and all
+  WebSocket examples were inspected without protocol-semantic edits; no
   concerns.)
