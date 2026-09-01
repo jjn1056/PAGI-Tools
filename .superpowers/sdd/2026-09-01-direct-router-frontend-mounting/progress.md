@@ -14,8 +14,8 @@ Push target: origin/feature/compose-retained-router after authorization
 | Task | Status | Implementation commit | Tests | Evidence |
 | --- | --- | --- | --- | --- |
 | 1. Characterize contract | complete | 5fb3bbac3ec0f9473fdf1aeb34318559ebd2cee7 | 3 files, 35 tests | `perlbrew exec --with perl-5.42.2@default prove -lv t/app-router.t t/upgrading-router-frontends.t t/integration-router-application-boundaries.t`: PASS |
-| 2. App Router examples | in progress | — | — | — |
-| 3. Endpoint Router example | pending | — | — | — |
+| 2. App Router examples | complete | 8ddb014544be465ebbbd3d9245209b30089b18bc | 4 files, 54 tests | Four focused integration commands: PASS |
+| 3. Endpoint Router example | in progress | — | — | — |
 | 4. Public documentation | pending | — | — | — |
 | 5. Final verification | pending | — | — | — |
 
@@ -45,6 +45,7 @@ Push target: origin/feature/compose-retained-router after authorization
 
 - Task 1: fix round 1/5 (1 addressed, 0 open — added the exact planning-base work-map field; commit 5de9ffc).
 - Task 1: complete (commits f5f7c92..5de9ffc, review clean).
+- Task 2: complete (implementation commit 8ddb014; four focused integration files pass, review clean).
 
 ## Retained user-facing `to_router` inventory
 
