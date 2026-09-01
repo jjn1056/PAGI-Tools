@@ -185,10 +185,26 @@ Router behind an explicit root Mount instead:
 
     compose(routes => [mount('/' => app => $router)])
 
-A mutable L<PAGI::App::Router> or L<PAGI::Endpoint::Router> crosses the
-immutable boundary explicitly with C<to_router>. An arbitrary native
-application has no direct Compose form in this release; deploy it directly or
-use a separately designed application boundary.
+App Router and Endpoint Router frontends already implement to_app and may be
+mounted directly for ordinary application composition. Convert a frontend with
+to_router only when the receiving Router must discover its descendant names or
+when the immutable snapshot itself must be retained or inspected. Compose and
+Mount never call to_router automatically.
+
+For ordinary deployment, mount the mutable frontend itself:
+
+    compose(routes => [mount('/' => app => $builder)])
+    compose(routes => [mount('/' => app => $endpoint)])
+
+When a parent must discover a descendant's names, make that structural
+conversion explicit at the named parent Mount and use the parent for reverse
+generation or inspection:
+
+    $parent->mount('/people', app => $child->to_router)->name('people');
+    $parent->path_for('/people/show', { id => 42 });
+
+An arbitrary native application has no direct Compose form in this release;
+deploy it directly or use a separately designed application boundary.
 
 Callable meaning is positional and deliberate:
 
@@ -233,8 +249,9 @@ Resolver, preserve that Router explicitly:
     compose(routes => [mount('/' => app => $routing)])
 
 The Mount retains the configured Router; Compose still constructs and owns a
-distinct outer root Router. Mutable App and Endpoint frontends cross the
-immutable boundary explicitly with C<to_router> before entering that Mount.
+distinct outer root Router. App Router and Endpoint Router frontends are
+ordinary application objects at this boundary; mount them directly unless the
+outer Router must inspect a retained immutable snapshot.
 
 =head2 composition choices
 

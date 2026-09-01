@@ -3,6 +3,11 @@
 0.002003 - UNRELEASED
 
   [Compose routes-only root]
+  - App Router and Endpoint Router objects already implement `to_app`, so
+    ordinary root Mounts now pass those frontend objects directly. `to_router`
+    remains the explicit conversion when a parent must discover descendant
+    names or retain an immutable snapshot; Compose and Mount perform no hidden
+    conversion.
   - BREAKING: Compose now accepts only `routes` and always constructs and owns
     a distinct root Router. Existing Routers are composed through an explicit
     Mount; an unnamed root Mount consumes no path, adds no route-name namespace,

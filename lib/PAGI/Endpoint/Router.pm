@@ -152,10 +152,12 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 
     my $endpoint = MyApp::Endpoint->new(repository => $repository);
     my $static = $endpoint->app_path('static');
-    my $snapshot = $endpoint->to_router;
     my $app = compose(
-        routes => [mount('/' => app => $snapshot)],
+        routes => [mount('/' => app => $endpoint)],
     )->to_app;
+
+This is ordinary application deployment: C<$endpoint> already implements
+C<to_app>.
 
 =head1 DESCRIPTION
 
@@ -193,11 +195,12 @@ retains that exact object. Each call materializes a fresh immutable
 L<PAGI::Routing::Router> snapshot, so later changes to ordinary object fields
 do not alter an existing snapshot's declaration graph.
 
-Convert a nested Endpoint explicitly when its names must be discoverable
-through the outer Router:
+Convert a nested Endpoint explicitly when the parent must discover its
+descendant names:
 
-    $r->mount('/people', app => $people_endpoint->to_router)
+    $parent->mount('/people', app => $people_endpoint->to_router)
         ->name('people');
+    $parent->path_for('/people/show', { id => 42 });
 
 Each C<to_router> call makes an immutable child snapshot. Mounting an Endpoint
 object directly with C<< app => $endpoint >> is also valid application
@@ -213,18 +216,17 @@ Direct C<to_app> is legal bare Router compilation. HTTP NONE invokes the
 Router's declared C<http_default>, or its stock negotiated 404 when none was
 declared; HTTP PARTIAL likewise retains the Router's negotiated 405. It never
 completes HTTP exhaustion silently.
-Call C<to_router> when the immutable snapshot must be retained or inspected.
+Call C<to_router> when a parent must inspect or discover descendant names, or
+when the immutable snapshot itself must be retained or inspected. For ordinary
+application deployment, mount the frontend directly:
 
-For root deployment, cross the immutable boundary and mount it explicitly:
-
-    my $snapshot = $endpoint->to_router;
     my $app = compose(
-        routes => [mount('/' => app => $snapshot)],
+        routes => [mount('/' => app => $endpoint)],
     )->to_app;
 
-The explicit snapshot Mount is inspectable: its names remain available through
-the outer Compose Router. Mounting C<$endpoint> itself with C<< app =>
-$endpoint >> is also valid, but it is an opaque application boundary: Compose
+Calling C<to_router> immediately before an opaque root Mount adds only syntax
+unless the outer root inspects that snapshot. Mounting C<$endpoint> is ordinary
+application composition, but it is an opaque application boundary: Compose
 does not call C<to_router> automatically or expose the Endpoint's names.
 Compose adds application middleware, root lifespan callbacks, ErrorHandler,
 response-completion guarding, and the outer HEAD boundary. It does not add

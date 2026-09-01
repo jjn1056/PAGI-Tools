@@ -95,9 +95,11 @@ compose(routes => [mount('/' => app => $router)]);
 
 The unnamed root Mount consumes no path and keeps each Router's middleware,
 default, and routing outcomes. The outer Compose Router treats each frontend
-as an application boundary and does not inspect its descendant names. Call
-`$router->to_router` only when a parent must discover those names or retain an
-immutable snapshot; neither chat frontend has such a parent-side consumer. See
+as an application boundary and does not inspect its descendant names. Each
+frontend already implements `to_app`: mount it directly for ordinary
+deployment. Use `to_router` only when a parent must discover those names or
+retain an immutable snapshot; neither chat frontend has such a parent-side
+consumer. See
 [PAGI::Compose](../../lib/PAGI/Compose.pm) and
 [PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for details.
 

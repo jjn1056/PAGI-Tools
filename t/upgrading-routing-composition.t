@@ -309,10 +309,6 @@ subtest 'public documentation publishes one final routing model' => sub {
         ],
         'lib/PAGI/App/Router.pm' => [
             qr/There is no positional Mount target, C<< router => >> form, or C<group>/,
-            qr/routes => \[mount\('\/' => app => \$snapshot\)\]/,
-        ],
-        'lib/PAGI/Endpoint/Router.pm' => [
-            qr/routes => \[mount\('\/' => app => \$snapshot\)\]/,
         ],
         'lib/PAGI/App/URLMap.pm' => [
             qr/\$map->mount\('\/(?:api|static)'\s*=>/,
@@ -417,15 +413,21 @@ subtest 'public documentation publishes one final routing model' => sub {
             "Compose links to official Starlette source $url");
     }
 
-    for my $file ('lib/PAGI/App/Router.pm', 'lib/PAGI/Endpoint/Router.pm') {
-        my $source = slurp_file($file);
-        like($source,
-            qr/C<to_app>.*?bare Router/is,
-            "$file documents direct bare Router compilation");
-        like($source,
-            qr/C<to_router>.*?mount\('\/' => app => \$snapshot\).*?inspectable.*?opaque/is,
-            "$file documents inspectable snapshots and opaque frontend Mounts");
-    }
+    my $app_router_pod = slurp_file('lib/PAGI/App/Router.pm');
+    like($app_router_pod,
+        qr/mount\('\/' => app => \$r\).*?ordinary.*?application/is,
+        'App Router leads with direct frontend mounting');
+    like($app_router_pod,
+        qr/to_router.*?parent.*?(?:inspect|discover).*?descendant/is,
+        'App Router reserves to_router for structural discovery');
+
+    my $endpoint_router_pod = slurp_file('lib/PAGI/Endpoint/Router.pm');
+    like($endpoint_router_pod,
+        qr/mount\('\/' => app => \$endpoint\).*?ordinary.*?application/is,
+        'Endpoint Router leads with direct frontend mounting');
+    like($endpoint_router_pod,
+        qr/to_router.*?parent.*?(?:inspect|discover).*?descendant/is,
+        'Endpoint Router reserves to_router for structural discovery');
 
     for my $file (
         'examples/background-tasks/README.md',
@@ -437,15 +439,27 @@ subtest 'public documentation publishes one final routing model' => sub {
         unlike($source, qr/\$router->routes/,
             "$file never teaches routes on the mutable frontend");
         like($source,
-            qr/my\s+\$snapshot\s*=\s*\$router->to_router;.*?compose\(\s*routes\s*=>\s*\[\s*mount\('\/'\s*=>\s*app\s*=>\s*\$snapshot\)\s*\]/s,
-            "$file snapshots the frontend before the explicit root Mount");
+            qr{mount\('/'\s*=>\s*app\s*=>\s*\$router\)},
+            "$file mounts its frontend application directly");
+        unlike($source, qr/\$router->to_router/,
+            "$file has no unconsumed root snapshot conversion");
         like($source,
-            qr/\$snapshot->routes.*?deliberate.*?lossy.*?flatten/is,
-            "$file names snapshot routes as deliberate lossy flattening");
-        like($source,
-            qr/mount(?:ing)?\s+(?:the\s+)?(?:mutable\s+)?(?:frontend|\$router)\s+directly.*?valid.*?PAGI\s+application.*?opaque.*?(?:parent\s+Resolver|outer\s+reverse-routing\s+inspection)/is,
-            "$file calls direct mutable mounting valid but opaque");
+            qr/already implements.*?to_app.*?directly.*?to_router.*?(?:inspect|discover|snapshot)/is,
+            "$file explains direct application mounting and explicit inspection");
     }
+
+    my $endpoint_readme = slurp_file('examples/endpoint-router-demo/README.md');
+    like($endpoint_readme,
+        qr{mount\('/'\s*=>\s*app\s*=>\s*\$main\)},
+        'Endpoint Router README mounts Main directly at the root');
+    like($endpoint_readme,
+        qr{app\s*=>\s*\$self->\{api\}->to_router.*?descendant names remain discoverable}s,
+        'Endpoint Router README retains the API snapshot for parent discovery');
+    like($endpoint_readme,
+        qr{app\s*=>\s*\$self->\{events\}->to_router.*?Events object}s,
+        'Endpoint Router README retains the Events snapshot for parent discovery');
+    is(() = $endpoint_readme =~ /->to_router/g, 2,
+        'Endpoint Router README keeps only the two nested discovery snapshots');
 
     for my $file (
         'lib/PAGI/Tools/Tutorial.pod',

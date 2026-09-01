@@ -32,7 +32,7 @@ compilation installs the resolver used by `home`. Main converts API because
 `home` resolves `/api/index`; API converts Events so
 `/api/events/stream` remains part of the inspectable tree. The outer Compose
 Router does not need Main's descendant names merely to deploy it, so the root
-mount keeps `$main` as the application boundary. `$main->to_router` remains
+mount keeps `$main` as the application boundary. Main's `to_router` remains
 useful to tests and tools that inspect the whole tree. The selected Endpoint
 Router therefore owns its negotiated 404 and 405 while Compose supplies
 response-completion and application-error safeguards. See
@@ -66,9 +66,9 @@ uses its local name, `path_for($request, 'show', { user_id => 1 })`, for
 `Main` owns the home page, static-file mount, and root `/status` WebSocket.
 It places the configured API object explicitly with
 `app => $self->{api}->to_router`, so its descendant names remain discoverable.
-`API` does the same for its configured Events object. Direct Endpoint objects
-are valid opaque applications, but the parent deliberately does not guess
-their route names.
+`API` does the same with `app => $self->{events}->to_router` for its configured
+Events object. Direct Endpoint objects are valid opaque applications, but the
+parent deliberately does not guess their route names.
 
 `API` also demonstrates the callback form of a structural child:
 

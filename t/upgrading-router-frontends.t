@@ -799,7 +799,7 @@ my @migration_cases = (
             my $endpoint = Local::UpgradeEndpoint->new;
             my $state = {};
             my $app = compose(
-                routes => [mount('/' => app => $endpoint->to_router)],
+                routes => [mount('/' => app => $endpoint)],
                 lifespan => { startup => sub { $_[0]{phase} = 'ready' } },
             )->to_app;
             my @messages = (

@@ -72,15 +72,37 @@ protocol misses; the outer Router does not resume scanning, so later root
 siblings cannot win. The child keeps its middleware, `http_default`, `desc`,
 identity, and Resolver.
 
+### Deploy App and Endpoint frontends ordinarily
+
+`PAGI::App::Router` and `PAGI::Endpoint::Router` already implement `to_app`,
+so ordinary root Mounts pass those frontend objects directly. `to_router`
+remains the explicit conversion when a parent must discover descendant names or
+retain an immutable snapshot; Compose and Mount perform no hidden conversion.
+
+```perl
+my $app = compose(
+    routes => [mount('/' => app => $builder)],
+)->to_app;
+
+my $endpoint_app = compose(
+    routes => [mount('/' => app => $endpoint)],
+)->to_app;
+```
+
+The direct Mount is an opaque application boundary to the outer Resolver, but
+the frontend's own handlers and Router continue to dispatch normally.
+
 ### Preserve a PAGI::App::Router snapshot
 
-**Before:** materialize the builder inside the removed constructor form.
+**Before: historical removed constructor form.** Materialize the builder inside
+the removed constructor form.
 
 ```perl
 compose(router => $builder->to_router)
 ```
 
-**After:** choose and retain one immutable snapshot explicitly.
+**After: retain an inspectable snapshot explicitly.** Choose and retain one
+immutable snapshot.
 
 ```perl
 my $snapshot = $builder->to_router;
@@ -88,20 +110,20 @@ compose(routes => [mount('/' => app => $snapshot)])
 ```
 
 Retaining the snapshot keeps inspection, reverse routing, and compilation on
-one stable immutable graph. Mounting the mutable frontend itself as `app` is a
-valid but opaque application boundary; Compose does not call `to_router` for
-you.
+one stable immutable graph. This is an inspection choice, not a requirement
+for ordinary deployment. Compose does not call `to_router` for you.
 
 ### Preserve a PAGI::Endpoint::Router snapshot
 
-**Before:** pass a fresh Endpoint snapshot through the removed constructor
-form.
+**Before: historical removed constructor form.** Pass a fresh Endpoint snapshot
+through the removed constructor form.
 
 ```perl
 compose(router => $endpoint->to_router)
 ```
 
-**After:** retain the Endpoint snapshot as the root Mount application.
+**After: retain an inspectable snapshot explicitly.** Retain the Endpoint
+snapshot as the root Mount application.
 
 ```perl
 my $snapshot = $endpoint->to_router;
@@ -109,8 +131,8 @@ compose(routes => [mount('/' => app => $snapshot)])
 ```
 
 This keeps the Endpoint object's configured immutable Router inspectable.
-Passing `$endpoint` itself as the Mount `app` remains deliberately opaque to
-the outer Resolver.
+It is not required for ordinary deployment: passing `$endpoint` itself as the
+Mount `app` is deliberately opaque to the outer Resolver.
 
 ### Deploy a bare Router directly
 
@@ -2434,9 +2456,8 @@ use PAGI::Response;
 use PAGI::Routing qw(mount);
 use PAGI::State qw(app_state);
 
-my $snapshot = $endpoint->to_router;
 my $app = compose(
-    routes => [mount('/' => app => $snapshot)],
+    routes => [mount('/' => app => $endpoint)],
     lifespan => {
         startup  => sub { $_[0]{database} = connect_database() },
         shutdown => sub { $_[0]{database}->disconnect },

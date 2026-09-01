@@ -1117,8 +1117,13 @@ L<PAGI::Endpoint::Router> provides an object-oriented approach to routing. You d
   # use MyApp;
   # use PAGI::Compose qw(compose);
   # use PAGI::Routing qw(mount);
-  # my $snapshot = MyApp->new(repository => $repository)->to_router;
-  # compose(routes => [mount('/' => app => $snapshot)])->to_app;
+  # my $endpoint = MyApp->new(repository => $repository);
+  # compose(routes => [mount('/' => app => $endpoint)])->to_app;
+
+An Endpoint Router already implements C<to_app>, so this root Mount is ordinary
+application deployment. Use C<to_router> only when a parent must inspect or
+discover a child's routes, or when retaining an immutable snapshot is itself
+the goal.
 
 Handler methods are called with:
 
@@ -1249,7 +1254,7 @@ server-provided state:
   my $endpoint = MyApp->new(repository => $repository);
 
   my $app = compose(
-      routes => [mount('/' => app => $endpoint->to_router)],
+      routes => [mount('/' => app => $endpoint)],
       middleware => [middleware($application_logging)],
       lifespan => {
           startup  => async sub ($state, $scope) {
@@ -1425,19 +1430,20 @@ boundary:
   use PAGI::Compose qw(compose);
   use PAGI::Routing qw(mount);
 
-  my $snapshot = MyApp->new(repository => $repository)->to_router;
-  compose(routes => [mount('/' => app => $snapshot)])->to_app;
+  my $endpoint = MyApp->new(repository => $repository);
+  compose(routes => [mount('/' => app => $endpoint)])->to_app;
 
 Now C</api> and C</api/42> are handled by the exact constructed child object.
-The retained snapshot can generate C</api/show> and inspect that child's
-metadata. Reusing the same child object at sibling placements reuses one child
-Router identity within the snapshot while each mount keeps its own path and
-local name.
+The parent Endpoint can generate C</api/show> and inspect that child's metadata
+because its named C</api> Mount explicitly uses C<to_router>. Reusing the same
+child object at sibling placements reuses one child Router identity within a
+parent snapshot while each mount keeps its own path and local name.
 
 =head3 Complete Example
 
 This root keeps Endpoint configuration in ordinary object fields, request
-state in Compose lifespan state, and every declaration inspectable:
+state in Compose lifespan state, and named child declarations inspectable
+within its own Router:
 
   # lib/MyApp/People.pm
   package MyApp::People;
@@ -1662,9 +1668,8 @@ state in Compose lifespan state, and every declaration inspectable:
       access_factory => $access_factory,
   );
 
-  my $snapshot = $endpoint->to_router;
   compose(
-      routes => [mount('/' => app => $snapshot)],
+      routes => [mount('/' => app => $endpoint)],
       middleware => [middleware($application_logging)],
       lifespan => {
           startup => async sub {
@@ -2255,8 +2260,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
           ->retain();
   }));
 
-  my $snapshot = $router->to_router;
-  compose(routes => [mount('/' => app => $snapshot)])->to_app;
+  compose(routes => [mount('/' => app => $router)])->to_app;
 
 B<Warning:> C<< ->retain() >> alone silently swallows errors - always add
 C<< ->on_fail() >> first.
@@ -2319,8 +2323,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
       # $f->retain();
   }));
 
-  my $snapshot = $router->to_router;
-  compose(routes => [mount('/' => app => $snapshot)])->to_app;
+  compose(routes => [mount('/' => app => $router)])->to_app;
 
 B<Warning:> IO::Async::Function forks child processes. If running with C<--workers N>, each server worker forks its own Function workers. With 4 server workers and 2 Function workers each, you have 12 processes. For high-volume CPU work, consider a dedicated job queue instead.
 

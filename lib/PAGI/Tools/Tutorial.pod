@@ -330,9 +330,8 @@ handlers use the same direct protocol contract as C<PAGI::Routing>:
   $router->websocket('/ws' => as_app($native_ws_app));
   $router->sse('/events' => as_app($native_sse_app));
 
-  my $snapshot = $router->to_router;
   my $app = compose(
-      routes => [mount('/' => app => $snapshot)],
+      routes => [mount('/' => app => $router)],
   )->to_app;
 
 The middleware entries above are intentional App Router sugar: the frontend
@@ -340,9 +339,11 @@ immediately materializes class names, synchronous factory coderefs, configured
 objects with C<wrap>, and explicit C<middleware(...)> descriptions into the
 explicit descriptions required by the immutable core. Factories and C<wrap>
 run while C<to_app> compiles; the native app they return runs per request.
-Each C<to_router> call creates a fresh immutable snapshot, so retain one when
-inspection, reverse routing, and compilation must refer to the same route
-identities.
+The App Router already implements C<to_app>, so this direct Mount is ordinary
+application deployment. Each C<to_router> call creates a fresh immutable
+snapshot; use it only when a parent must inspect or discover descendant names,
+or when inspection, reverse routing, and compilation must refer to the same
+retained route identities.
 
 For handlers bound to a configured object, subclass
 L<PAGI::Endpoint::Router>. Its C<routes($builder)> method uses the same verb

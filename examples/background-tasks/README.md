@@ -16,9 +16,10 @@ compose(routes => [mount('/' => app => $router)]);
 
 The unnamed root Mount consumes no path and keeps the Router's middleware,
 default, and routing outcomes. The outer Compose Router treats the frontend as
-an application boundary and does not inspect its descendant names. Call
-`$router->to_router` only when a parent must discover those names or retain an
-immutable snapshot; this application has no such parent-side consumer.
+an application boundary and does not inspect its descendant names. The frontend
+already implements `to_app`: mount it directly for ordinary deployment. Use
+`to_router` only when a parent must discover those names or retain an immutable
+snapshot; this application has no such parent-side consumer.
 
 ## Run
 

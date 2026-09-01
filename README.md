@@ -58,10 +58,14 @@ middleware suite — so the same application reads like this:
         return json_response({ id => $request->path_param('id') });
     })->name('user');
 
-    my $routing = $router->to_router; # retain one immutable snapshot
     my $app = compose(
-        routes => [mount('/' => app => $routing)],
+        routes => [mount('/' => app => $router)],
     )->to_app; # complete deployed app
+
+An App Router already implements `to_app`, so mount it directly for ordinary
+application deployment. Convert it with `to_router` only when a parent must
+inspect or discover descendant names, or when the immutable snapshot itself
+must be retained.
 
 For a small conventional landing page or HTTP error, [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) builds a
 deferred negotiated HTTP application:
