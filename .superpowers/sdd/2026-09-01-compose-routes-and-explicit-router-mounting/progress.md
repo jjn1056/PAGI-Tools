@@ -20,7 +20,7 @@ Baseline: `perlbrew exec --with perl-5.42.2@default prove -lr t` — Files=224, 
 | 3. Lifecycle and safety | complete | 5a799d0 | 7 files, 118 tests PASS | Compiler and ResponseGuard unchanged; task review approved with no findings |
 | 4. Router frontends | complete | e177809, c45c155 | 5 files, 54 tests PASS | Inspectable/opaque frontend boundaries covered; task review approved with no findings |
 | 5. Declarative examples | complete | 1e6ff71 | 4 files, 43 tests PASS; 3 syntax checks PASS | Apples stayed direct; declarative-routing retained only its configured `/api` Router boundary; Pages folded its disposable root into Compose; task review approved with one ledger-only follow-up completed here |
-| 6. Class-based examples | pending | — | — | — |
+| 6. Class-based examples | complete | 9c876e0, 4148ab0 | 7 files, 64 tests PASS; 6 syntax checks PASS; fix gate 1 file, 30 tests PASS | Migrated background-tasks, endpoint-demo, endpoint-router-demo, full-demo, 10-chat-showcase, and 15-large-application through unnamed root Mounts; task review approved after one fix round |
 | 7. Public documentation | pending | — | — | — |
 | 8. Final verification | pending | — | — | — |
 
@@ -87,3 +87,9 @@ Task 4: complete (commits 08f198f..c45c155, review clean after controller bounda
 Task 5 audit: `starlette-apples` is the direct Compose-routes canary and remained structurally direct; `declarative-routing` had a disposable outer root but retained its intentionally configured `/api` child Router through Mount; `pages` had a disposable outer root and moved its direct nodes and lifespan into Compose. No migration flattened a Router through `$router->routes`.
 
 Task 5: complete (commits f1b3b7f..1e6ff71, spec compliant; no Critical/Important findings; reviewer ledger-only follow-up completed in tracking commit).
+
+Task 6 inventory: all 14 positive `compose(router => ...)` occurrences under `examples/` were prebuilt-Router preservation cases spanning background-tasks, endpoint-demo, endpoint-router-demo, full-demo, 10-chat-showcase, and 15-large-application code/README material. Each now uses an unnamed `mount('/' => app => ...)`; no example flattens through `$router->routes`.
+
+Task 6: fix round 1/5 (2 addressed, 0 open — canonical Test Client now proves terminal WebSocket miss denial; chat fallback comment names the HTTP catchall Route; commits 9c876e0..4148ab0).
+
+Task 6: complete (commits 69b0e43..4148ab0, review clean after fix round 1).
