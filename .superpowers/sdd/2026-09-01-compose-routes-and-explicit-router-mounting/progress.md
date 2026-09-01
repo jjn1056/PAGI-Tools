@@ -21,7 +21,7 @@ Baseline: `perlbrew exec --with perl-5.42.2@default prove -lr t` — Files=224, 
 | 4. Router frontends | complete | e177809, c45c155 | 5 files, 54 tests PASS | Inspectable/opaque frontend boundaries covered; task review approved with no findings |
 | 5. Declarative examples | complete | 1e6ff71 | 4 files, 43 tests PASS; 3 syntax checks PASS | Apples stayed direct; declarative-routing retained only its configured `/api` Router boundary; Pages folded its disposable root into Compose; task review approved with one ledger-only follow-up completed here |
 | 6. Class-based examples | complete | 9c876e0, 4148ab0 | 7 files, 64 tests PASS; 6 syntax checks PASS; fix gate 1 file, 30 tests PASS | Migrated background-tasks, endpoint-demo, endpoint-router-demo, full-demo, 10-chat-showcase, and 15-large-application through unnamed root Mounts; task review approved after one fix round |
-| 7. Public documentation | pending | — | — | — |
+| 7. Public documentation | complete | 829fdc0, 4107830 | 3 files, 36 tests PASS; 11 POD syntax checks PASS; fix gate 1 file, 10 tests PASS | Routes-only contract, four-way composition comparison, six upgrade recipes, generated README idempotence, and example ownership wording reviewed clean after one fix round |
 | 8. Final verification | pending | — | — | — |
 
 ## Preflight interface scan
@@ -93,3 +93,11 @@ Task 6 inventory: all 14 positive `compose(router => ...)` occurrences under `ex
 Task 6: fix round 1/5 (2 addressed, 0 open — canonical Test Client now proves terminal WebSocket miss denial; chat fallback comment names the HTTP catchall Route; commits 9c876e0..4148ab0).
 
 Task 6: complete (commits 69b0e43..4148ab0, review clean after fix round 1).
+
+Task 7: README generator evidence — `perlbrew exec --with perl-5.42.2@default dzil build --no-tgz --in /private/tmp/pagi-tools-readme-task7-pass1`, followed by the same command targeting `pass2`; both exited 0 and the second pass preserved README SHA-256 `6a580036526b308df7ed87c9b11d8b2f8c01a6d344a7235d15e296810a3be89b`.
+
+Task 7: stale-surface evidence — no live `compose(router => ...)` usage remains in `lib`, generated `README.md`, `Changes`, or `examples`; six `UPGRADING.md` hits are deliberately labeled removed Before forms. The upgrade guide covers direct declarations, immutable Router preservation, App Router snapshot, Endpoint Router snapshot, bare Router deployment, and intentional lossy flattening.
+
+Task 7: fix round 1/5 (1 addressed, 0 open — example READMEs now assign child Router retention to the unnamed root Mount, and the public-doc guard covers both; commits 829fdc0..4107830).
+
+Task 7: complete (commits bf73d42..4107830, review clean after fix round 1).
