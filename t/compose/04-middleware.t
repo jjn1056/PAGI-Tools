@@ -10,7 +10,7 @@ use ComposeTest qw(scope run_scope);
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
 use PAGI::Response::Text ();
-use PAGI::Routing qw(route middleware router);
+use PAGI::Routing qw(route mount middleware router);
 use PAGI::Utils qw(as_app);
 
 {
@@ -61,9 +61,12 @@ sub entry_wrapper {
     };
 }
 
-sub router_with_app {
-    my ($app) = @_;
-    return router(routes => [route('/' => as_app($app))]);
+sub compose_with_router {
+    my ($routing, @options) = @_;
+    return compose(
+        routes => [mount('/' => app => $routing)],
+        @options,
+    );
 }
 
 subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
@@ -102,7 +105,7 @@ subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
         };
     };
     my $app = compose(
-        router => router_with_app(sub {
+        routes => [route('/' => as_app(sub {
             my ($scope, $receive, $send) = @_;
             push @trace, 'target';
             $send->({
@@ -111,7 +114,7 @@ subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
             return $send->({
                 type => 'http.response.body', body => 'ok', more => 0,
             });
-        }),
+        }))],
         middleware => [
             middleware($author_entry->('author outer')),
             middleware($author_entry->('author inner')),
@@ -150,7 +153,7 @@ subtest 'first listed middleware is outermost for HTTP and lifespan' => sub {
         return $send->({ type => 'http.response.body', body => '', more => 0 });
     };
     my $app = compose(
-        router => router_with_app($target),
+        routes => [route('/' => as_app($target))],
         middleware => [
             middleware(tracing_factory('outer', \@trace)),
             middleware(tracing_factory('inner', \@trace)),
@@ -196,8 +199,8 @@ subtest 'Compose middleware sees lifespan while Router middleware sees HTTP only
             };
         })],
     );
-    my $app = compose(
-        router => $routing,
+    my $app = compose_with_router(
+        $routing,
         middleware => [middleware(sub {
             my ($inner) = @_;
             return sub {
@@ -235,7 +238,7 @@ subtest 'application middleware sees HTTP and Router outcomes' => sub {
         };
     };
     my $app = compose(
-        router => router_with_app(sub {
+        routes => [route('/' => as_app(sub {
             my ($scope, $receive, $send) = @_;
             push @target_types, $scope->{type};
             return unless $scope->{type} eq 'http';
@@ -245,7 +248,7 @@ subtest 'application middleware sees HTTP and Router outcomes' => sub {
             return $send->({
                 type => 'http.response.body', body => '', more => 0,
             });
-        }),
+        }))],
         middleware => [middleware($observer)],
     )->to_app;
     run_scope($app, scope(type => 'http'));
@@ -357,7 +360,7 @@ subtest 'a retained Router owns its configured HTTP default inside Compose safet
         routes => [],
         http_default => $pages->not_found,
     );
-    my $events = run_scope(compose(router => $routing)->to_app,
+    my $events = run_scope(compose_with_router($routing)->to_app,
         scope(path => '/missing'));
     is($events->[0]{status}, 404, 'custom Router default retains status 404');
     is($events->[1]{body}, "owned:404:Not Found\n",
@@ -375,12 +378,12 @@ subtest 'ordinary shallow cloning preserves state proof and changes visible scop
         };
     };
     my $app = compose(
-        router => router_with_app(sub {
+        routes => [route('/' => as_app(sub {
             my ($scope, $receive, $send) = @_;
             push @seen, ['target', $scope->{worker}];
             $send->({ type => 'http.response.start', status => 204, headers => [] })->get;
             return $send->({ type => 'http.response.body', body => '', more => 0 });
-        }),
+        }))],
         middleware => [middleware($clone)],
         lifespan => {
             startup => sub {
@@ -432,7 +435,7 @@ for my $case (@tampering) {
         };
     });
     my $app = compose(
-        router => router_with_app(sub { die "request endpoint received lifespan\n" }),
+        routes => [],
         middleware => [$descriptor],
         lifespan => { startup => sub { ++$callback_count } },
     )->to_app;
@@ -459,7 +462,7 @@ subtest 'short-circuit middleware owns lifespan completely' => sub {
         };
     });
     my $app = compose(
-        router => router_with_app(sub { die "request endpoint received lifespan\n" }),
+        routes => [],
         middleware => [$owner],
         lifespan => { startup => sub { ++$callback_count } },
     )->to_app;
@@ -479,7 +482,7 @@ subtest 'middleware exception is not converted into startup.failed' => sub {
         return sub { die "middleware exploded\n" };
     });
     my $app = compose(
-        router => router_with_app(sub { die "request endpoint received lifespan\n" }),
+        routes => [],
         middleware => [$throwing],
         lifespan => { startup => sub { return } },
     )->to_app;
@@ -502,7 +505,7 @@ subtest 'each to_app builds fresh explicit middleware instances' => sub {
         return $inner;
     };
     my $object = ComposeDirectMiddleware->new;
-    my $composition = compose(router => router(routes => []), middleware => [
+    my $composition = compose(routes => [], middleware => [
         middleware($factory), middleware($object),
     ]);
     is($object->wraps, 0, 'described object is not wrapped during construction');
@@ -515,21 +518,21 @@ subtest 'each to_app builds fresh explicit middleware instances' => sub {
     is($object->wraps, 2, 'requests do not rerun direct object wrapping');
 
     my $throwing = compose(
-        router => router(routes => []),
+        routes => [],
         middleware => [middleware(sub { die "factory exploded\n" })],
     );
     like(dies { $throwing->to_app }, qr/factory exploded/,
         'described factory failure aborts to_app synchronously');
 
     my $invalid = compose(
-        router => router(routes => []),
+        routes => [],
         middleware => [middleware(sub { return 'not an app' })],
     );
     like(dies { $invalid->to_app }, qr/must return a PAGI application value/,
         'invalid described wrapper result aborts compilation');
 
     my $async = compose(
-        router => router(routes => []),
+        routes => [],
         middleware => [middleware(sub { return Future->done(sub { }) })],
     );
     like(dies { $async->to_app }, qr/must return a PAGI application value.*Future/,

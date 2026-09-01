@@ -15,11 +15,19 @@ my $lifespan_router = router(routes => [
     route('/' => as_app(sub { die "request endpoint received lifespan\n" })),
 ]);
 
+sub compose_with_router {
+    my ($routing, @options) = @_;
+    return compose(
+        routes => [mount('/' => app => $routing)],
+        @options,
+    );
+}
+
 subtest 'plain and Future-backed callbacks receive the exact state and scope' => sub {
     my $state = {};
     my @seen;
-    my $app = compose(
-        router => $lifespan_router,
+    my $app = compose_with_router(
+        $lifespan_router,
         lifespan => {
             startup => sub {
                 my ($callback_state, $callback_scope) = @_;
@@ -64,8 +72,8 @@ subtest 'configured lifespan fails startup without valid original server state' 
     for my $case (@cases) {
         my ($label, $changes) = @$case;
         my $called = 0;
-        my $app = compose(
-            router => $lifespan_router,
+        my $app = compose_with_router(
+            $lifespan_router,
             lifespan => {
                 startup => sub { ++$called },
                 shutdown => sub { ++$called },
@@ -84,8 +92,8 @@ subtest 'configured lifespan fails startup without valid original server state' 
 
 subtest 'startup failure is reported once and prevents shutdown' => sub {
     my $shutdown = 0;
-    my $app = compose(
-        router => $lifespan_router,
+    my $app = compose_with_router(
+        $lifespan_router,
         lifespan => {
             startup => sub { die "startup exploded\n" },
             shutdown => sub { ++$shutdown },
@@ -102,8 +110,8 @@ subtest 'startup failure is reported once and prevents shutdown' => sub {
 };
 
 subtest 'failed shutdown Future becomes shutdown.failed' => sub {
-    my $app = compose(
-        router => $lifespan_router,
+    my $app = compose_with_router(
+        $lifespan_router,
         lifespan => { shutdown => sub { return Future->fail("shutdown exploded\n") } },
     )->to_app;
     my $events = run_scope($app, scope(type => 'lifespan', state => {}), [
@@ -116,8 +124,8 @@ subtest 'failed shutdown Future becomes shutdown.failed' => sub {
 };
 
 subtest 'receive and send failures propagate without a compensating event' => sub {
-    my $app = compose(
-        router => $lifespan_router,
+    my $app = compose_with_router(
+        $lifespan_router,
         lifespan => { startup => sub { return } },
     )->to_app;
     my ($capture, $events) = capture_send();
@@ -151,8 +159,8 @@ subtest 'receive and send failures propagate without a compensating event' => su
 
 subtest 'callback completion and lifecycle phase are awaited per scope' => sub {
     my %startup_future = (one => Future->new, two => Future->new);
-    my $app = compose(
-        router => $lifespan_router,
+    my $app = compose_with_router(
+        $lifespan_router,
         lifespan => {
             startup => sub {
                 my ($state) = @_;
@@ -190,8 +198,8 @@ subtest 'only the deployed root owns lifespan across Router and Mount boundaries
     my ($root_startup, $root_shutdown) = (0, 0);
     my ($nested_startup, $nested_shutdown, $nested_requests) = (0, 0, 0);
     my (@outer_router_types, @inner_router_types, @plain_router_types);
-    my $nested = compose(
-        router => router(
+    my $nested = compose_with_router(
+        router(
             routes => [route('/*path' => as_app(sub {
             my ($request_scope, $receive, $send) = @_;
             ++$nested_requests;
@@ -246,8 +254,8 @@ subtest 'only the deployed root owns lifespan across Router and Mount boundaries
         })],
     );
     my $state = {};
-    my $app = compose(
-        router => $routing,
+    my $app = compose_with_router(
+        $routing,
         lifespan => {
             startup => sub {
                 my ($callback_state) = @_;
@@ -277,6 +285,7 @@ subtest 'only the deployed root owns lifespan across Router and Mount boundaries
     is($state, { started => 1, stopped => 1 },
         'root callbacks update the server-owned state');
     is(\@outer_router_types, [], 'the outer Router never receives lifespan');
+    is($nested_requests, 0, 'the mounted child endpoint never receives lifespan');
     is(\@inner_router_types, [], 'the mounted inner Router never receives lifespan');
     is(\@plain_router_types, [], 'the mounted plain Router never receives lifespan');
     is([$nested_startup, $nested_shutdown], [0, 0],
@@ -306,7 +315,7 @@ subtest 'a bare Router rejects strict root lifespan while Compose completes it' 
         qr/lifespan.*returned without sending.*startup/s,
         'bare Router is not a strict-lifespan root';
 
-    my $root = compose(router => router(routes => []))->to_app;
+    my $root = compose(routes => [])->to_app;
     my $root_client = PAGI::Test::Client->new(app => $root, lifespan => 1);
     ok(lives { $root_client->start; $root_client->stop },
         'Compose owns a callback-free root lifespan');

@@ -125,8 +125,10 @@ sub route_set {
 sub composition_modes {
     my ($routes) = @_;
     return (
-        ['routes', compose(routes => $routes)->to_app],
-        ['retained Router', compose(router => router(routes => $routes))->to_app],
+        ['direct routes', compose(routes => $routes)->to_app],
+        ['root-mounted Router', compose(routes => [
+            mount('/' => app => router(routes => $routes)),
+        ])->to_app],
     );
 }
 
