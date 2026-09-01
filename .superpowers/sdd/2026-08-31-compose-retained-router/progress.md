@@ -80,3 +80,5 @@ None.
 
 - Task 1: complete (commits `dab35e7..8801391`, review clean; spec compliance
   PASS, task quality PASS, no findings).
+- Task 2: complete (commits `0b460bb..3e5dae3`, review clean; spec compliance
+  PASS, task quality PASS, no findings).
