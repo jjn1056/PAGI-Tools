@@ -16,8 +16,8 @@ Push target: origin/feature/compose-retained-router after authorization
 | 1. Characterize contract | complete | 5fb3bbac3ec0f9473fdf1aeb34318559ebd2cee7 | 3 files, 35 tests | `perlbrew exec --with perl-5.42.2@default prove -lv t/app-router.t t/upgrading-router-frontends.t t/integration-router-application-boundaries.t`: PASS |
 | 2. App Router examples | complete | 8ddb014544be465ebbbd3d9245209b30089b18bc | 4 files, 54 tests | Four focused integration commands: PASS |
 | 3. Endpoint Router example | complete | c954880272f59e8f583287db56c0e08807e8e4ef | 1 file, 35 tests | `perlbrew exec --with perl-5.42.2@default prove -lv t/integration-endpoint-router-demo.t`: PASS; see `task-3-report.md` |
-| 4. Public documentation | in progress | — | — | — |
-| 5. Final verification | pending | — | — | — |
+| 4. Public documentation | complete | e82cf15c5c0c1726db9a37083a2d7bbc684d4274 | 3 files, 36 top-level tests | `perlbrew exec --with perl-5.42.2@default prove -lv t/upgrading-routing-composition.t t/upgrading-router-frontends.t t/00-pod/cookbook-examples.t`: PASS; no-archive Dist::Zilla build regenerated and matched README |
+| 5. Final verification | in progress | — | — | — |
 
 ## Preflight dependency scan
 
@@ -49,6 +49,7 @@ Push target: origin/feature/compose-retained-router after authorization
 - Task 3: complete (commits 2d3cbea..7de261a, review clean).
 - Task 2: complete (implementation commit 8ddb014; four focused integration files pass, review clean).
 - Task 3: complete (implementation commit c954880; focused Endpoint integration passes, review clean).
+- Task 4: complete (implementation commit e82cf15; focused public-document tests and generated README comparison pass, self-review clean).
 
 ## Retained user-facing `to_router` inventory
 
