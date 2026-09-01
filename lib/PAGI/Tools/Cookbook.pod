@@ -64,18 +64,17 @@ guessing:
   use PAGI::Compose qw(compose);
   use PAGI::Routing qw(:routes);
 
-  my $routing = router(
+  compose(
       routes => [
           route('/' => \&MyApp::Routes::Home::home, name => 'home'),
       ],
-  );
+  )->to_app;
 
-  compose(router => $routing)->to_app;
-
-The final expression is the complete native PAGI app. A direct
-C<< $routing->to_app >> already emits the Router's stock/custom 404 and built-in
-405, but has no root ErrorHandler, response guard, or lifespan. Compile once
-for the application instance; do not call C<to_app> inside a request.
+The final expression is the complete native PAGI app. If the same declarations
+are constructed as a separate Router, its direct C<to_app> already emits the
+Router's stock/custom 404 and built-in 405, but has no root ErrorHandler,
+response guard, or lifespan. Compile once for the application instance; do not
+call C<to_app> inside a request.
 
 =head2 Inline, Router, and Application Mounts
 
@@ -425,7 +424,7 @@ negotiated 405 with authoritative C<Allow>:
 
   use PAGI::Compose qw(compose);
   use PAGI::Pages;
-  use PAGI::Routing qw(router);
+  use PAGI::Routing qw(mount router);
 
   my $pages = PAGI::Pages->new;
 
@@ -435,7 +434,9 @@ negotiated 405 with authoritative C<Allow>:
           detail => 'No application route matched.',
       ),
   );
-  my $app = compose(router => $routing)->to_app;
+  my $app = compose(
+      routes => [mount('/' => app => $routing)],
+  )->to_app;
 
 Pages selects HTML, RFC 9457 problem JSON, or text from C<Accept>, adds
 C<Vary: Accept>, and defaults errors to C<Cache-Control: no-store>. Use a
@@ -449,14 +450,14 @@ HEAD to the Router-generated 405 union.
 
 =head2 Compose Safety and Application Error Policy
 
-Compose installs the same root safety graph around either retained Router
-form:
+Compose installs the same root safety graph around the distinct root Router it
+constructs from C<routes>:
 
   outer idempotent application-root HEAD boundary
     automatic ErrorHandler
       response-completion guard
         author middleware, in listed order
-          retained Router
+          Compose root Router
 
 Router 404/405 responses pass through this graph unchanged. Compose's stock
 error response is a negotiated, no-store Pages 500, with a final hardcoded
@@ -472,7 +473,7 @@ above; the outer idempotent HEAD boundary becomes the wire owner, and the guard
 converts pre-start silence into its production-safe 500.
 
   my $app = compose(
-      router => $routing,
+      routes => [mount('/' => app => $routing)],
       middleware => [
           middleware('RequestId'),
           middleware('AccessLog'),
@@ -866,9 +867,10 @@ deployed application root with L<PAGI::Compose>:
 
   use Future::AsyncAwait;
   use PAGI::Compose qw(compose);
+  use PAGI::Routing qw(mount);
 
   my $app = compose(
-      router => $routing,
+      routes => [mount('/' => app => $routing)],
       lifespan => {
         startup => async sub {
           my ($state, $scope) = @_;
@@ -1114,7 +1116,9 @@ L<PAGI::Endpoint::Router> provides an object-oriented approach to routing. You d
   # In app.pl:
   # use MyApp;
   # use PAGI::Compose qw(compose);
-  # compose(router => MyApp->new(repository => $repository)->to_router)->to_app;
+  # use PAGI::Routing qw(mount);
+  # my $snapshot = MyApp->new(repository => $repository)->to_router;
+  # compose(routes => [mount('/' => app => $snapshot)])->to_app;
 
 Handler methods are called with:
 
@@ -1240,12 +1244,12 @@ server-provided state:
 
   use PAGI::Compose qw(compose);
   use MyApp;
-  use PAGI::Routing qw(middleware);
+  use PAGI::Routing qw(middleware mount);
 
   my $endpoint = MyApp->new(repository => $repository);
 
   my $app = compose(
-      router => $endpoint->to_router,
+      routes => [mount('/' => app => $endpoint->to_router)],
       middleware => [middleware($application_logging)],
       lifespan => {
           startup  => async sub ($state, $scope) {
@@ -1419,8 +1423,10 @@ boundary:
   # app.pl
   use MyApp;
   use PAGI::Compose qw(compose);
+  use PAGI::Routing qw(mount);
 
-  compose(router => MyApp->new(repository => $repository)->to_router)->to_app;
+  my $snapshot = MyApp->new(repository => $repository)->to_router;
+  compose(routes => [mount('/' => app => $snapshot)])->to_app;
 
 Now C</api> and C</api/42> are handled by the exact constructed child object.
 The retained snapshot can generate C</api/show> and inspect that child's
@@ -1629,6 +1635,7 @@ state in Compose lifespan state, and every declaration inspectable:
   use PAGI::App::File;
   use PAGI::Compose qw(compose);
   use MyApp;
+  use PAGI::Routing qw(middleware mount);
 
   my $repository = Local::Repository->new;
 
@@ -1657,7 +1664,7 @@ state in Compose lifespan state, and every declaration inspectable:
 
   my $snapshot = $endpoint->to_router;
   compose(
-      router => $snapshot,
+      routes => [mount('/' => app => $snapshot)],
       middleware => [middleware($application_logging)],
       lifespan => {
           startup => async sub {
@@ -1701,8 +1708,9 @@ controller API.
 
 Ordinary PAGI handlers receive the direct Request, WebSocket, or SSE object;
 C<as_app>, Mount C<app>, and Router C<http_default> receive native three-channel
-PAGI applications. Compose accepts route declarations through C<routes>, or
-one immutable Router through C<router>.
+PAGI applications. Compose accepts only route declarations through C<routes>;
+an existing immutable Router is preserved as an explicit Mount application in
+that list.
 Constraints validate without coercion. Logical names use slash
 addresses and relative L<PAGI::Routing::URL> lookup. SSE is a first-class scope, and
 middleware at Router, Mount, Route, and Compose boundaries is pure PAGI
@@ -2215,6 +2223,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
   use PAGI::App::Router;
   use PAGI::Compose qw(compose);
   use PAGI::Response;
+  use PAGI::Routing qw(mount);
   use PAGI::Utils qw(as_app invoke_app);
 
   my $router = PAGI::App::Router->new;
@@ -2246,7 +2255,8 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
           ->retain();
   }));
 
-  compose(router => $router->to_router)->to_app;
+  my $snapshot = $router->to_router;
+  compose(routes => [mount('/' => app => $snapshot)])->to_app;
 
 B<Warning:> C<< ->retain() >> alone silently swallows errors - always add
 C<< ->on_fail() >> first.
@@ -2270,6 +2280,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
   use PAGI::App::Router;
   use PAGI::Compose qw(compose);
   use PAGI::Response;
+  use PAGI::Routing qw(mount);
 
   my $loop = IO::Async::Loop->new;
 
@@ -2308,7 +2319,8 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
       # $f->retain();
   }));
 
-  compose(router => $router->to_router)->to_app;
+  my $snapshot = $router->to_router;
+  compose(routes => [mount('/' => app => $snapshot)])->to_app;
 
 B<Warning:> IO::Async::Function forks child processes. If running with C<--workers N>, each server worker forks its own Function workers. With 4 server workers and 2 Function workers each, you have 12 processes. For high-volume CPU work, consider a dedicated job queue instead.
 

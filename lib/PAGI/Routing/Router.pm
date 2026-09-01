@@ -123,10 +123,12 @@ accessors C<name>, C<path>, C<methods>, and C<constraints> return undef. Router
 is a collection and has no leaf C<endpoint> accessor or retired target/mode
 accessors.
 
-L<PAGI::Compose> can retain this exact Router identity through
-C<< compose(router => $router) >>. Its C<router> accessor returns this object,
-and its routing inspection and reverse-routing accessors delegate here rather
-than rebuilding a temporary Router.
+L<PAGI::Compose> preserves this Router explicitly with
+C<< compose(routes => [mount('/' => app => $router)]) >>. The Mount retains the
+exact Router identity while Compose constructs and owns a distinct outer root
+Router. Compose's C<router> and C<routes> accessors describe that outer root;
+the direct child returned by C<routes> is the Mount. Its Resolver can still
+traverse this inspectable Router application for names and reverse routing.
 
 =head1 METHODS
 
@@ -191,9 +193,10 @@ behavior.
 
 Unlike L<PAGI::Compose>, a bare Router does not own root ErrorHandler,
 response-completion guarding, or lifespan. It declines a lifespan scope; a
-server's strict lifespan mode rejects that decline. Compose adds root lifespan
-around the retained Router but does not add lifecycle behavior or a
-C<lifespan> option to Router itself. See L<PAGI::Routing>,
+server's strict lifespan mode rejects that decline. An explicit root Mount
+places this Router beneath Compose's root lifespan and safety services, but
+does not add lifecycle behavior or a C<lifespan> option to Router itself. See
+L<PAGI::Routing>,
 L<PAGI::Routing::Mount>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, and
 the
 L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.

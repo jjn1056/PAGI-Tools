@@ -324,14 +324,21 @@ __END__
 ErrorHandler is ordinary middleware and uses the same placement rules as every
 pure PAGI wrapper. Application middleware provides whole-application policy:
 
+    use PAGI::Compose qw(compose);
+    use PAGI::Routing qw(middleware mount);
+
     compose(
-        router => $routing,
+        routes => [mount('/' => app => $routing)],
         middleware => [
             middleware('ErrorHandler',
                 handler  => \&site_server_error,
                 on_error => \&report_error),
         ],
     )
+
+The unnamed root Mount preserves the configured Router's middleware, default,
+description, identity, and Resolver. Compose owns a distinct outer root Router
+and the application-wide ErrorHandler placement shown here.
 
 Router middleware provides reusable subsystem policy, while a routing-aware
 Mount middleware list changes only one mounted occurrence:

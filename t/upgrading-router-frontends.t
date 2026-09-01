@@ -1067,6 +1067,10 @@ subtest 'Compose distinguishes inspectable Endpoint snapshots from opaque fronte
     my $inspectable = compose(routes => [
         mount('/' => app => $snapshot),
     ]);
+    isnt(refaddr($inspectable->router), refaddr($snapshot),
+        'Compose owns a distinct outer root Router');
+    is(refaddr($inspectable->routes->[0]->app), refaddr($snapshot),
+        'the direct root Mount retains the exact immutable snapshot');
     ok($inspectable->route_named('/show'),
         'immutable snapshot is inspectable');
 

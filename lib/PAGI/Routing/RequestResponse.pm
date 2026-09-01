@@ -68,7 +68,8 @@ application value: a native CODE or instantiated object with C<to_app>.
 Response and Pages objects are the ordinary results. Use C<request_response>
 explicitly only when such a handler must occupy a native application position
 such as Mount C<app> or Router C<http_default>. Compose instead accepts route
-declarations through C<routes>, or one immutable Router through C<router>.
+declarations only through C<routes>; an immutable Router is preserved as an
+explicit Mount application within that list.
 
 For each invocation the component constructs one Request, calls the handler
 once, normalizes a returned object through C<to_app> once, and invokes the

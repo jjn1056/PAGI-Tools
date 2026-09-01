@@ -111,20 +111,24 @@ Compose owns the application root and lifespan.
 =head1 SYNOPSIS
 
     use PAGI::Compose qw(compose);
-    use PAGI::Routing qw(route middleware);
+    use PAGI::Pages qw(not_found);
+    use PAGI::Routing qw(middleware mount route);
 
     my $app = compose(
-        routes => [route('/' => \&home, name => 'home')],
-        middleware => [middleware('RequestId')],
-        lifespan => {
-            startup  => \&startup,
-            shutdown => \&shutdown,
-        },
+        routes => [
+            route('/' => \&home),
+            mount('/api', routes => \@api_routes),
+        ],
+        http_default => not_found(...),
+        middleware   => [middleware('RequestId')],
+        lifespan     => { startup => \&startup, shutdown => \&shutdown },
+        desc         => 'Application root',
     );
 
-For modular construction, retain an existing immutable Router by identity:
+For modular construction, preserve an existing configured Router behind an
+explicit unnamed root Mount:
 
-    use PAGI::Routing qw(router route middleware);
+    use PAGI::Routing qw(middleware mount route router);
 
     my $routing = router(
         routes       => [route('/' => \&home, name => 'home')],
@@ -134,7 +138,7 @@ For modular construction, retain an existing immutable Router by identity:
     );
 
     my $app = compose(
-        router     => $routing,
+        routes     => [mount('/' => app => $routing)],
         middleware => [middleware('RequestId')],
         lifespan   => { startup => \&startup },
     );
@@ -145,12 +149,13 @@ required.
 =head1 DESCRIPTION
 
 PAGI::Compose is an optional application-root facade around exactly one
-immutable L<PAGI::Routing::Router>. It either constructs that Router once from
-C<routes> or retains the supplied C<router> by identity, then adds
-application-wide pure PAGI middleware, optional startup/shutdown callbacks,
-and mandatory HTTP safety. The constructor returns an immutable, inspectable
-description; C<to_app> is the explicit compilation boundary that returns the
-native PAGI coderef a server runs.
+immutable L<PAGI::Routing::Router> that it constructs from C<routes>. Compose
+owns this distinct root Router, application-wide pure PAGI middleware,
+optional startup/shutdown callbacks, and mandatory HTTP safety. An existing
+configured Router is preserved only as the C<app> of an explicit Mount. The
+constructor returns an immutable, inspectable description; C<to_app> is the
+explicit compilation boundary that returns the native PAGI coderef a server
+runs.
 
 The deliberately narrow name matters. C<PAGI::App> would look like the base
 class for the C<PAGI::App::*> package family, while C<PAGI::Application> would claim
@@ -171,15 +176,14 @@ There is no lowercase C<:all> alias.
 =head1 CONSTRUCTOR
 
 C<compose(%options)> and C<< PAGI::Compose->new(%options) >> are equivalent.
-The accepted top-level keys are C<routes>, C<router>, C<http_default>,
-C<desc>, C<middleware>, and C<lifespan>. Exactly one of C<routes> and
-C<router> is required. An odd option list, an unknown key, or providing
-neither or both forms is an error.
+The accepted top-level keys are C<routes>, C<http_default>, C<desc>,
+C<middleware>, and C<lifespan>. C<routes> is required. An odd option list, an
+unknown key, or a missing C<routes> value is an error.
 
 C<app> and C<router> are no longer Compose options. Put an existing immutable
 Router behind an explicit root Mount instead:
 
-    compose(routes => [mount('/', app => $router)])
+    compose(routes => [mount('/' => app => $router)])
 
 A mutable L<PAGI::App::Router> or L<PAGI::Endpoint::Router> crosses the
 immutable boundary explicitly with C<to_router>. An arbitrary native
@@ -204,16 +208,17 @@ middleware stack.
 
 C<routes> must be an arrayref accepted by L<PAGI::Routing>. An empty arrayref
 is valid and explicit. The list is shallow-copied and structurally validated
-at Compose construction. Compose immediately constructs and retains one
-L<PAGI::Routing::Router>; later C<to_app> calls compile that same description
-rather than reconstructing it. The Router owns matching, route metadata,
-reverse routing, exhausted-match 404, method-mismatch 405 with C<Allow>, and
-protocol-specific miss behavior. Compose neither installs routing metadata nor
-interprets routing outcomes.
+at Compose construction. Compose immediately constructs and owns one distinct
+L<PAGI::Routing::Router>; later C<to_app> calls compile that same root
+description rather than reconstructing it. The root Router owns matching,
+route metadata, reverse routing, exhausted-match 404, method-mismatch 405 with
+C<Allow>, and protocol-specific miss behavior. Compose neither installs
+routing metadata nor interprets routing outcomes.
 
-C<http_default> and C<desc> are optional only with C<routes>. They are passed
-unchanged into that retained Router and are available through the delegated
-Compose accessors. This flattened form handles the common root declaration:
+C<http_default> and C<desc> are optional. They are passed unchanged into the
+root Router and are available through the delegated Compose accessors. This
+form handles a common root declaration without constructing a disposable
+Router first:
 
     compose(
         routes       => \@nodes,
@@ -221,19 +226,41 @@ Compose accessors. This flattened form handles the common root declaration:
         desc         => 'Public routes',
     )
 
-Router middleware is deliberately not flattened. C<middleware> on Compose is
-the outer application-wide boundary. Use C<router> when the Router itself
-needs middleware.
+Compose C<middleware> is the outer application-wide boundary. When a reusable
+Router already owns middleware, C<http_default>, C<desc>, identity, or a
+Resolver, preserve that Router explicitly:
 
-=head2 router
+    compose(routes => [mount('/' => app => $routing)])
 
-    compose(router => $routing)
+The Mount retains the configured Router; Compose still constructs and owns a
+distinct outer root Router. Mutable App and Endpoint frontends cross the
+immutable boundary explicitly with C<to_router> before entering that Mount.
 
-C<router> requires an instantiated L<PAGI::Routing::Router>. Compose performs
-no coercion, snapshotting, cloning, or rebuilding and retains the exact object
-identity. Mutable App and Endpoint frontends must call C<to_router> first.
-C<http_default> and C<desc> conflict with C<router>, even when explicitly
-passed as C<undef>; configure those values on the retained Router instead.
+=head2 composition choices
+
+The four forms have different ownership:
+
+    # New root Router from declarations
+    compose(routes => \@nodes);
+
+    # Preserve an existing Router application
+    compose(routes => [mount('/' => app => $router)]);
+
+    # Deliberately flatten direct child nodes
+    compose(routes => $router->routes);
+
+    # Deploy without Compose root services
+    $router->to_app;
+
+Flattening copies only the Router's direct Route and Mount nodes into the new
+Compose root. It discards the source Router's middleware, C<http_default>,
+C<desc>, identity, and Resolver. The leaves may be shared objects, but the
+source Router is no longer the selected child boundary.
+
+The preserving root Mount consumes no path, and an unnamed Mount adds no
+namespace to slash route names. Once selected, the child Router owns its 404,
+405, and protocol misses. The outer root does not resume scanning, so later
+root siblings cannot win after that Mount.
 
 =head2 middleware
 
@@ -266,7 +293,7 @@ author middleware. Protocol-specific middleware must pass unrelated scope
 types through.
 
 For router-only middleware, construct a Router with its own C<middleware> list
-and pass it through C<router>.
+and preserve it through an explicit root Mount.
 
 =head2 lifespan
 
@@ -282,12 +309,16 @@ callback is an error. The hash is shallow-copied.
 
 =head1 ACCESSORS
 
-C<router> returns the exact retained L<PAGI::Routing::Router> by identity.
-C<routes>, C<http_default>, C<desc>, C<named_routes>, C<route_named>, and
-C<path_for> delegate to that Router and therefore use its one Resolver and
-stable declaration graph. C<routes> and C<named_routes> retain the Router's
-shallow-copy contracts; C<route_named> returns the original named leaf or
-C<undef>; C<path_for> has the forms documented by
+C<router> returns only the distinct root Router constructed and owned by
+Compose. C<routes> returns that root Router's direct children, so a preserved
+child Router appears as its root Mount rather than as flattened leaves.
+C<http_default>, C<desc>, C<named_routes>, C<route_named>, and C<path_for>
+delegate to the root Router and therefore use its Resolver and stable
+declaration graph. Resolver traversal can discover named leaves beneath an
+inspectable Router-valued Mount; this does not make the child the Compose root.
+C<routes> and C<named_routes> retain the Router's shallow-copy contracts;
+C<route_named> returns the original named leaf or C<undef>; C<path_for> has the
+forms documented by
 L<PAGI::Routing::Router/path_for>.
 
 C<middleware> returns a shallow arrayref copy whose entries are the original
@@ -301,13 +332,13 @@ middleware, lifecycle phase, request scope, server state, or response events.
 =head1 COMPILATION AND MIDDLEWARE ORDER
 
 C<to_app> is the second phase: it synchronously calls C<to_app> once on the
-retained Router, then builds fresh
+constructed root Router, then builds fresh
 author middleware wrappers, and fresh root safety wrappers after
 constructor-time description validation, then returns one native PAGI
 coderef. It performs no request or lifecycle I/O. Router component loading, middleware
 construction, and wrapping failures therefore occur at C<to_app>. Calling
-C<to_app> again builds an independent executable graph around the same Router
-identity and recompiles its component objects, although lexical state
+C<to_app> again builds an independent executable graph around the same root
+Router identity and recompiles its component objects, although lexical state
 deliberately captured by user coderefs remains ordinary shared Perl state.
 
 For HTTP, the exact outer-to-inner order is:
@@ -318,7 +349,7 @@ For HTTP, the exact outer-to-inner order is:
         first application middleware
           second application middleware
             Compose dispatcher
-              retained Router
+              Compose root Router
 
 The application-root HEAD boundary is outermost and idempotent with a directly
 compiled Router's own HeadBoundary; the outermost participating boundary owns
@@ -335,9 +366,9 @@ guard. The first author middleware listed remains outermost within that stack:
   first application middleware
     second application middleware
       Compose dispatcher
-        lifespan driver or retained Router
+        lifespan driver or Compose root Router
 
-Middleware scope changes are visible to callbacks and the retained Router;
+Middleware scope changes are visible to callbacks and the root Router;
 receive/send wrappers cover lifecycle events as well as request protocols. A
 middleware that does not call inward owns that scope. Immediate and
 Future-backed Router completion is accepted, and return values
@@ -346,8 +377,8 @@ completion must include response start followed by a terminal body event.
 
 =head1 LIFESPAN OWNERSHIP AND STATE
 
-Compose owns C<lifespan> scopes and never delegates them to its retained
-Router. Only the deployed root owns lifecycle. A Compose application mounted
+Compose owns C<lifespan> scopes and never delegates them to its root Router.
+Only the deployed root owns lifecycle. A Compose application mounted
 below a Router still dispatches request scopes, but Mount does not forward the
 server's root lifespan exchange and its callbacks do not run. Lift required
 initialization into the root composition; this is a documented ownership
@@ -417,7 +448,7 @@ Every compiled Compose root has one unconditional HTTP safety boundary. There
 is no public option to suppress, detect, configure, or disable it, and Compose
 does not inspect author middleware to decide whether to install it.
 
-Routing outcomes belong to the retained Router and pass through Compose unchanged.
+Routing outcomes belong to the root Router and pass through Compose unchanged.
 Compose does not inspect routing metadata, distinguish Router 404/405 from
 other application responses, or turn a silent selected Route or Mount
 application into a routing miss.
@@ -488,21 +519,22 @@ recover if an inner renderer fails.
 
 =head1 RELATIONSHIP TO OTHER PAGI APIS
 
-C<< compose(routes => [...]) >> is a compact deployed root: a functional
-Router plus application middleware, lifecycle, and HTTP safety. It does not
-replace any Router frontend. A directly compiled Router already owns HTTP 404
-and 405 outcomes and its own HeadBoundary, but it does not install Compose's
-ErrorHandler, response guard, or lifespan driver. Wrapping it with
-C<< compose(router => $routing) >> adds the outer idempotent application-root HEAD
-boundary and those root policies. For
-router middleware, C<http_default>, reverse routing, or inspection, retain that
-Router and pass it to Compose. Compose delegates C<routes>, C<http_default>,
-C<desc>, C<named_routes>, C<route_named>, and C<path_for> to that exact object.
+C<< compose(routes => [...]) >> is a compact deployed root: a newly constructed
+functional Router plus application middleware, lifecycle, and HTTP safety. It
+does not replace any Router frontend. A directly compiled Router already owns
+HTTP 404 and 405 outcomes and its own HeadBoundary, but it does not install
+Compose's ErrorHandler, response guard, or lifespan driver. Preserving it with
+C<< compose(routes => [mount('/' => app => $routing)]) >> adds an outer
+Router, an idempotent application-root HEAD boundary, and those root policies.
+For Router middleware, C<http_default>, C<desc>, identity, or Resolver state,
+retain the Router behind that Mount instead of passing C<< $routing->routes >>.
+Compose inspection delegates to its own root Router.
 
 L<PAGI::Routing>, L<PAGI::App::Router>, and L<PAGI::Endpoint::Router> are
 functional, mutable, and method-oriented frontends over one immutable routing
-engine. Compose accepts only the immutable Router boundary; it does not wrap an
-arbitrary native app or general C<to_app> component in this release.
+engine. Compose accepts only C<routes>; an immutable Router crosses that grammar
+as an explicit Mount application. Compose does not wrap an arbitrary native
+app or general C<to_app> component directly in this release.
 Normal compiled handlers receive their direct Request, WebSocket, or SSE
 object. Native applications and every middleware wrapper retain the exact
 C<($scope, $receive, $send)> triplet; Compose does not adapt that boundary.
@@ -528,12 +560,12 @@ and
 L<routing tests|https://github.com/Kludex/starlette/blob/main/tests/test_routing.py>.
 
 PAGI preserves that load-bearing non-cascading lifecycle but keeps its owner on
-Compose. The retained PAGI Router receives HTTP, WebSocket, and SSE, never the
+Compose. The PAGI root Router receives HTTP, WebSocket, and SSE, never the
 root lifespan exchange, and Compose middleware rather than Router middleware
 can observe lifespan. A bare PAGI Router deployment declines lifespan; a
-server's strict mode rejects that decline. Wrap the Router with Compose when
-the root requires startup or shutdown. Compose does not add a C<lifespan>
-option to Router.
+server's strict mode rejects that decline. Mount the Router explicitly beneath
+Compose when the root requires startup or shutdown. Compose does not add a
+C<lifespan> option to Router.
 
 Starlette's multiprotocol Router C<default> was also considered but not copied:
 PAGI Router C<http_default> changes only HTTP NONE and preserves stock

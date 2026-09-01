@@ -214,11 +214,11 @@ metadata recipes.
 =head2 2.2 PAGI::Compose - Application Root
 
 L<PAGI::Compose> is the optional next layer when one deployed root should own
-one retained Router, application-wide middleware, and startup/shutdown
+one routes-built root Router, application-wide middleware, and startup/shutdown
 callbacks:
 
   use PAGI::Compose qw(compose);
-  use PAGI::Routing qw(route middleware);
+  use PAGI::Routing qw(middleware mount route router);
 
   my @nodes = (
       route('/' => \&home, name => 'home'),
@@ -250,9 +250,10 @@ accepted.
 
 C<routes> constructs and retains one immutable Router immediately. It also
 accepts the common Router C<http_default> and C<desc> options. When a separately
-configured immutable Router already exists, pass it through C<router>; Compose
-retains its exact identity and delegates route inspection and reverse routing.
-Deploy other application components directly through C<to_app> instead:
+configured immutable Router already exists, preserve it as the application of
+an unnamed root Mount. The Mount retains its exact identity while Compose owns
+a distinct outer root Router. Deploy other application components directly
+through C<to_app> instead:
 
   my $routing = router(
       routes => \@nodes,
@@ -260,7 +261,7 @@ Deploy other application components directly through C<to_app> instead:
   );
 
   my $app = compose(
-      router => $routing,
+      routes => [mount('/' => app => $routing)],
       middleware => [
           middleware('RequestId'),
       ],
@@ -283,10 +284,12 @@ app that sends nothing is incomplete output and becomes 500, never an implicit
 miss.
 
 C<compose(...)> returns an immutable description. The final C<to_app> compiles
-the retained Router and native three-channel PAGI graph once. Compose is not a
-base class or an arbitrary-application wrapper. Its C<router>, C<routes>,
-C<http_default>, C<desc>, C<named_routes>, C<route_named>, and C<path_for>
-accessors expose or delegate to the one retained Router.
+the root Router and native three-channel PAGI graph once. Compose is not a base
+class or an arbitrary-application wrapper. Its C<router> accessor returns only
+the distinct root Router it constructs. C<routes> returns that root's direct
+children, so the preserved Router above appears as the root Mount rather than
+flattened leaves. C<http_default>, C<desc>, C<named_routes>, C<route_named>, and
+C<path_for> delegate to the root Router.
 
 =head2 2.3 PAGI::App::Router - Mutable Routing
 
@@ -296,7 +299,7 @@ handlers use the same direct protocol contract as C<PAGI::Routing>:
 
   use PAGI::App::Router;
   use PAGI::Compose qw(compose);
-  use PAGI::Routing qw(middleware);
+  use PAGI::Routing qw(middleware mount);
   use PAGI::Response qw(text_response json_response);
   use PAGI::Utils qw(as_app);
 
@@ -328,7 +331,9 @@ handlers use the same direct protocol contract as C<PAGI::Routing>:
   $router->sse('/events' => as_app($native_sse_app));
 
   my $snapshot = $router->to_router;
-  my $app = compose(router => $snapshot)->to_app;
+  my $app = compose(
+      routes => [mount('/' => app => $snapshot)],
+  )->to_app;
 
 The middleware entries above are intentional App Router sugar: the frontend
 immediately materializes class names, synchronous factory coderefs, configured
@@ -1519,10 +1524,11 @@ F<app.pl> may return either a native coderef or an instantiated component object
 with C<to_app>, including a Compose description. A Router is already complete
 for its own 404/405. Cascade is ordinary status-driven application coordination
 and carries no special Router semantics. Wrap an immutable Router with
-C<< compose(router => $routing) >> when it also needs root ErrorHandler,
-response-completion guarding, and lifespan. Cascade and other native
-applications are deployed directly through C<to_app>. The server may compile
-that component object once, or the file may call C<to_app> explicitly.
+C<< compose(routes => [mount('/' => app => $routing)]) >> when it also needs
+root ErrorHandler, response-completion guarding, and lifespan. Cascade and
+other native applications are deployed directly through C<to_app>. The server
+may compile that component object once, or the file may call C<to_app>
+explicitly.
 A C<builder {}> block already returns a native coderef; whether it is complete
 depends on the applications it composes.
 
@@ -1536,8 +1542,8 @@ Router API.
 
 Ordinary handlers receive the direct Request, WebSocket, or SSE object, while
 C<as_app>, Mount C<app>, and Router C<http_default> receive the native three
-channels. Compose accepts route declarations through C<routes>, or one
-immutable Router through C<router>.
+channels. Compose accepts only route declarations through C<routes>; preserve
+an immutable Router through an explicit Mount within that list.
 Constraints validate without coercion. Names use slash logical
 addresses and relative L<PAGI::Routing::URL> lookup. SSE is a first-class scope, and all
 middleware is pure PAGI app-to-app wrapping.

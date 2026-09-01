@@ -136,6 +136,28 @@ The ownership comparison is:
     Route('/*path')   explicit real catchall leaf
     Mount('/x')       selected owner of /x and its complete subtree
 
+At the application root, choose construction, preservation, flattening, or
+direct deployment explicitly:
+
+    # New root Router from declarations
+    compose(routes => \@nodes);
+
+    # Preserve an existing Router application
+    compose(routes => [mount('/' => app => $router)]);
+
+    # Deliberately flatten direct child nodes
+    compose(routes => $router->routes);
+
+    # Deploy without Compose root services
+    $router->to_app;
+
+The preserving Mount retains the exact Router application. Compose constructs
+and owns a distinct outer root Router whose direct child is that Mount. By
+contrast, C<< $router->routes >> copies only direct nodes and discards the
+source Router's middleware, C<http_default>, C<desc>, identity, and Resolver.
+Direct C<to_app> omits Compose's root lifespan, ErrorHandler,
+response-completion guard, application middleware, and outer HEAD boundary.
+
 A terminal mounted Response therefore ignores the rewritten remaining child
 path. That can be useful, but a developer who wants only one complete path
 normally wants Route. Package-name strings are not application values.
@@ -184,6 +206,10 @@ prefix matches, dispatch creates a request-local shallow child scope, merges
 captures, rewrites C<path>/C<root_path>, and then calls mount middleware and
 the child. C<raw_path> remains unchanged. A root mount consumes no prefix and
 leaves C<path>, C<root_path>, and C<raw_path> unchanged.
+
+A root Mount therefore consumes no path. An unnamed Mount adds no namespace to
+slash route names. Once that Mount is selected, its child Router owns its 404,
+405, and protocol misses; later root siblings cannot win.
 
 The selected base application remains the routing boundary after its prefix
 matches. A child Router renders its own NONE as a custom or stock 404 and its

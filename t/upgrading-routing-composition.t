@@ -289,7 +289,7 @@ subtest 'public documentation publishes one final routing model' => sub {
         'lib/PAGI/Pages.pm',
         'lib/PAGI/Response.pm',
     );
-    my $retired_live_api = qr/PAGI::Routing::Trace|pagi\.routing\.trace|PAGI::Middleware::Routing::(?:NotFound|MethodNotAllowed)|mount\('\/[^']*'\s*=>|\bgroup\s*\(/;
+    my $retired_live_api = qr/PAGI::Routing::Trace|pagi\.routing\.trace|PAGI::Middleware::Routing::(?:NotFound|MethodNotAllowed)|mount\('\/[^']*'\s*=>\s*\$|\bgroup\s*\(/;
     my %classified_non_routing_api = (
         'lib/PAGI/Tools/Tutorial.pod' => [
             qr/\$urlmap->mount\('\/(?:api|admin|static)' =>/,
@@ -342,30 +342,60 @@ subtest 'public documentation publishes one final routing model' => sub {
     }
 
     for my $migration (
-        qr/Before:.*?compose\(router => \$routing\).*?After:.*?compose\(routes => \[mount\('\/' => app => \$routing\)\]\)/s,
-        qr/Before:.*?compose\(router => \$builder->to_router\).*?After:.*?compose\(routes => \[mount\('\/' => app => \$builder->to_router\)\]\)/s,
-        qr'Before:.*?app => router\(routes => \\@routes, http_default => \$default\).*?After:.*?routes\s+=> \\@routes,.*?http_default\s+=> \$default's,
-        qr'For arbitrary native applications, Compose has no direct replacement in this\s+release.*?Deploy the native coderef directly.*?root Mount is not an equivalent conversion'is,
+        qr{Fold a small declarative Router.*?Before:.*?compose\(router => \$routing\).*?After:.*?compose\(.*?routes\s+=> \[.*?route\(}s,
+        qr{Preserve a reusable immutable Router.*?Before:.*?compose\(router => \$routing\).*?After:.*?compose\(routes => \[mount\('/' => app => \$routing\)\]\)}s,
+        qr{Preserve a PAGI::App::Router snapshot.*?Before:.*?compose\(router => \$builder->to_router\).*?After:.*?\$snapshot = \$builder->to_router.*?compose\(routes => \[mount\('/' => app => \$snapshot\)\]\)}s,
+        qr{Preserve a PAGI::Endpoint::Router snapshot.*?Before:.*?compose\(router => \$endpoint->to_router\).*?After:.*?\$snapshot = \$endpoint->to_router.*?compose\(routes => \[mount\('/' => app => \$snapshot\)\]\)}s,
+        qr{Deploy a bare Router directly.*?Before:.*?compose\(router => \$routing\)->to_app.*?After:.*?\$routing->to_app}s,
+        qr{Flatten direct child nodes deliberately.*?Before:.*?compose\(router => \$routing\).*?After:.*?compose\(routes => \$routing->routes\)}s,
     ) {
         like($upgrading, $migration,
             'upgrade guide publishes one complete Compose migration recipe');
     }
     like($upgrading,
-        qr/\$routing->routes.*?flatten.*?discard.*?Router-level policy/is,
-        'upgrade guide identifies route-array flattening as policy loss');
+        qr/\$routing->routes.*?flatten.*?discard.*?middleware.*?http_default.*?desc.*?identity.*?Resolver/is,
+        'upgrade guide identifies every discarded Router policy and identity');
+    like($upgrading,
+        qr/API is unreleased.*?no compatibility layer/is,
+        'upgrade guide explains why the removed constructor has no compatibility layer');
 
     my $compose_pod = slurp_file('lib/PAGI/Compose.pm');
     like($compose_pod,
-        qr/use PAGI::Compose qw\(compose\);.*?use PAGI::Routing qw\(route middleware\);.*?routes => \[route\('\/' => \\&home, name => 'home'\)\].*?middleware => \[middleware\('RequestId'\)\].*?startup\s+=> \\&startup.*?shutdown\s+=> \\&shutdown/s,
-        'Compose synopsis leads with the direct routes form');
+        qr/use PAGI::Compose qw\(compose\);.*?routes\s+=> \[.*?route\('\/' => \\&home\).*?mount\('\/api', routes => \\\@api_routes\).*?\].*?http_default => not_found\(\.\.\.\).*?middleware\s+=> \[middleware\('RequestId'\)\].*?lifespan\s+=> \{ startup => \\&startup, shutdown => \\&shutdown \}.*?desc\s+=> 'Application root'/s,
+        'Compose synopsis publishes the canonical routes-only grammar');
     like($compose_pod,
-        qr/accepted top-level keys.*?C<routes>.*?C<router>.*?C<http_default>.*?C<desc>.*?C<middleware>.*?C<lifespan>/s,
-        'Compose documents every constructor key');
+        qr/accepted\s+top-level\s+keys\s+are\s+C<routes>,\s+C<http_default>,\s+C<desc>,\s+C<middleware>,\s+and\s+C<lifespan>/,
+        'Compose documents every routes-only constructor key');
     like($compose_pod,
-        qr/C<router> returns the exact retained.*?C<routes>.*?C<http_default>.*?C<desc>.*?C<named_routes>.*?C<route_named>.*?C<path_for>.*?C<middleware>.*?C<lifespan>/s,
-        'Compose documents retained identity and all delegated accessors');
+        qr/C<router>\s+returns\s+only\s+the\s+distinct\s+root\s+Router\s+constructed\s+and\s+owned\s+by\s+Compose.*?C<routes>\s+returns\s+that\s+root\s+Router's\s+direct\s+children.*?root\s+Mount\s+rather\s+than.*?flattened\s+leaves.*?C<http_default>.*?C<desc>.*?C<named_routes>.*?C<route_named>.*?C<path_for>.*?C<middleware>.*?C<lifespan>/s,
+        'Compose documents root ownership, direct-child inspection, and all accessors');
     unlike($compose_pod, qr/^=head2 app$/m,
         'Compose no longer documents an app constructor key');
+    unlike($compose_pod, qr/^=head2 router$/m,
+        'Compose no longer documents a router constructor key');
+
+    my $four_way = qr{
+        compose\(routes\s*=>\s*\\\@nodes\).*?
+        compose\(routes\s*=>\s*\[mount\('/'\s*=>\s*app\s*=>\s*\$router\)\]\).*?
+        compose\(routes\s*=>\s*\$router->routes\).*?
+        \$router->to_app
+    }six;
+    for my $file ('lib/PAGI/Compose.pm', 'lib/PAGI/Routing/Mount.pm') {
+        like(slurp_file($file), $four_way,
+            "$file publishes the four-way composition comparison");
+    }
+    like($compose_pod,
+        qr/root\s+Mount\s+consumes\s+no\s+path.*?unnamed\s+Mount\s+adds\s+no\s+namespace.*?child\s+Router\s+owns.*?404.*?405.*?protocol\s+misses.*?later\s+root\s+siblings\s+cannot\s+win/is,
+        'Compose documents root Mount matching and outcome ownership');
+
+    my $router_pod = slurp_file('lib/PAGI/Routing/Router.pm');
+    like($router_pod,
+        qr/compose\(routes => \[mount\('\/' => app => \$router\)\]\).*?Mount\s+retains.*?Router\s+identity.*?Compose.*?distinct\s+outer\s+root\s+Router/is,
+        'Router documents explicit preservation beneath a distinct Compose root');
+    my $routing_pod = slurp_file('lib/PAGI/Routing.pm');
+    like($routing_pod,
+        qr/compose\(routes => \[mount\('\/' => app => \$routing\)\]\).*?identity.*?distinct outer root Router/is,
+        'Routing documents explicit preservation beneath a distinct Compose root');
     like($compose_pod,
         qr/Starlette.*?does not subclass.*?self\.router.*?lifespan.*?Router.*?mounted.*?do not receive.*?lifespan.*?bare PAGI Router.*?declines lifespan.*?strict mode.*?rejects/is,
         'Compose documents the accurate Starlette lifespan comparison');
@@ -435,8 +465,8 @@ subtest 'public documentation publishes one final routing model' => sub {
     like($changes, qr/Route matches a complete URL leaf/,
         'release note records the routing composition redesign');
     like($changes,
-        qr/retains.*?Router.*?identity.*?routes.*?router.*?delegat.*?reverse routing.*?arbitrary app.*?http_default.*?desc.*?root-only lifespan/is,
-        'release note records the complete retained-Router Compose change');
+        qr/Compose now accepts only `routes`.*?existing Routers.*?Mount.*?\$router->routes.*?flatten/is,
+        'release note records routes-only Compose and explicit Router preservation');
 
     my @application_docs = (
         'README.md', 'Changes', 'lib/PAGI/Tools.pm',

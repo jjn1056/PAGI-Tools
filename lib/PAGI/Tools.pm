@@ -30,9 +30,10 @@ Callable values keep these four meanings:
 
 A native CODE at a Route is wrapped explicitly with C<PAGI::Utils::as_app>.
 Mount C<app> and Router C<http_default> remain native application positions
-and take a three-channel CODE directly. Compose accepts route declarations
-through C<routes>, or one immutable Router through C<router>; it does not
-accept an arbitrary application.
+and take a three-channel CODE directly. Compose accepts only route declarations
+through C<routes>. Preserve an existing immutable Router as the C<app> of an
+explicit Mount inside that list; Compose does not accept an arbitrary
+application directly.
 
 Raw PAGI is deliberately minimal — an application is just an C<async> sub that
 speaks the protocol directly:
@@ -55,6 +56,7 @@ middleware suite — so the same application reads like this:
     use PAGI::App::Router;
     use PAGI::Compose qw(compose);
     use PAGI::Response qw(json_response);
+    use PAGI::Routing qw(mount);
     use Future::AsyncAwait;
 
     my $router = PAGI::App::Router->new;
@@ -70,7 +72,9 @@ middleware suite — so the same application reads like this:
     })->name('user');
 
     my $routing = $router->to_router; # retain one immutable snapshot
-    my $app = compose(router => $routing)->to_app; # complete deployed app
+    my $app = compose(
+        routes => [mount('/' => app => $routing)],
+    )->to_app; # complete deployed app
 
 For a small conventional landing page or HTTP error, L<PAGI::Pages> builds a
 deferred negotiated HTTP application:
@@ -119,11 +123,11 @@ Use the functional frontend when the declarations are already immutable:
         return json_response({ hello => 'world' });
     }
 
-    my $routing = router(routes => [
-        route('/' => \&home, name => 'home'),
-    ]);
-
-    my $app = compose(router => $routing)->to_app;
+    my $app = compose(
+        routes => [
+            route('/' => \&home, name => 'home'),
+        ],
+    )->to_app;
 
 Every Mount names its target: C<< routes => [...] >> constructs a complete
 child Router, while C<< app => $child >> composes a native application or
@@ -184,13 +188,15 @@ description:
     )->to_app;
 
 L<PAGI::Compose> is an optional application-root composer, not a base class or
-a replacement router. Its C<routes> form constructs and retains one Router;
-its C<router> form retains the supplied immutable Router by identity and
-delegates inspection and reverse routing to it. Configure a Router
-C<http_default> for custom missing-route presentation and ordinary ErrorHandler
-middleware for official application errors. Compose keeps root lifespan and
-its stock error and response-lifecycle boundary outside author middleware as
-the final safety net.
+a replacement router. Its only grammar is C<routes>, from which it constructs
+and owns one distinct root Router. Preserve a configured Router by identity
+with C<< routes => [mount('/' => app => $router)] >>. Compose inspection starts
+at its own root: C<routes> returns that Mount as the direct child, while reverse
+routing traverses the inspectable child without flattening it. Configure a
+Router C<http_default> for custom missing-route presentation and ordinary
+ErrorHandler middleware for official application errors. Compose keeps root
+lifespan and its stock error and response-lifecycle boundary outside author
+middleware as the final safety net.
 
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
@@ -259,8 +265,9 @@ L<PAGI::Endpoint::Router> - immutable functional, mutable imperative, and
 method-oriented frontends over one immutable routing engine
 
 =item * L<PAGI::Compose> - optional immutable application-root composition of
-one retained Router, application middleware, explicit lifecycle callbacks, and
-mandatory HTTP error/response-lifecycle failsafes
+one routes-built root Router, application middleware, explicit lifecycle
+callbacks, and mandatory HTTP error/response-lifecycle failsafes; configured
+Routers enter through explicit Mounts
 
 =item * L<PAGI::Test::Client> and friends - in-process test utilities for
 PAGI applications

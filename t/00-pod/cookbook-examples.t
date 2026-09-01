@@ -183,8 +183,13 @@ subtest 'Cookbook publishes the representative final forms' => sub {
     like($cookbook,
         qr/compose\(\s+routes => \[.*?http_default => not_found\(.*?desc\s+=> 'Starlette apples comparison application'/s,
         'Compose routes form publishes flattened Router options');
+    like($cookbook,
+        qr/compose\(\s*routes\s*=>\s*\[\s*mount\('\/'\s*=>\s*app\s*=>\s*\$routing\)\s*\]/s,
+        'Cookbook preserves a configured Router through an unnamed root Mount');
     unlike($cookbook, qr/compose\(\s*app\s*=>/,
         'Cookbook has no removed Compose app mode');
+    unlike($cookbook, qr/compose\(\s*router\s*=>/,
+        'Cookbook has no removed Compose router mode');
 };
 
 subtest 'representative Cookbook forms construct and dispatch' => sub {
