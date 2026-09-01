@@ -217,9 +217,9 @@ compose(
 );
 ```
 
-Starlette retains a Router inside the Starlette application object and stores
-its lifespan context on that Router. PAGI Compose likewise retains one Router,
-but keeps the root lifespan exchange on Compose so mounted Routers cannot
+Both `Starlette(routes=[...])` and `compose(routes => [...])` construct and own
+their root Router. Starlette stores its lifespan context on that Router; PAGI
+Compose keeps the root lifespan exchange on Compose so mounted Routers cannot
 silently carry lifecycle callbacks that never run.
 
 The static root file, `/welcome` Pages value, CRUD JSON values, and custom root

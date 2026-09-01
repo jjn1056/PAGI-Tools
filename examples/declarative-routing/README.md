@@ -9,26 +9,29 @@ ordinary shape without turning the example into a framework:
   `api` name segment composes the absolute logical address `/api/item`;
 - a numeric path constraint;
 - one pure route middleware factory captured in an explicit inspectable description;
-- distinct root and API Router `http_default` endpoints rendered through
-  `PAGI::Pages`, plus the child Router's authoritative stock 405 and `Allow`;
+- distinct Compose-root and API Router `http_default` endpoints rendered
+  through `PAGI::Pages`, plus the child Router's authoritative stock 405 and
+  `Allow`;
 - absolute slash-addressed `path_for($request, ...)` and request-aware
   `url_for($request, ...)` from `PAGI::Routing::URL` (both return strings and
   perform no protocol I/O); and
-- a final `compose(router => $routing)` expression, so `app.pl` evaluates to an
-  inspectable `PAGI::Compose` object that a conforming server compiles once
-  through its `to_app` method.
+- a final `compose(routes => [...])` expression, so Compose constructs and
+  owns the root Router while `app.pl` evaluates to an inspectable
+  `PAGI::Compose` object that a conforming server compiles once through its
+  `to_app` method.
 
-Each selected Router owns exhaustion at its own boundary. An API constraint
-miss receives `No API route matched`; an unknown root path receives
-`No root route matched`. A method mismatch never invokes `http_default`: the
-API Router renders its negotiated stock Method Not Allowed response with
-`Allow: GET, HEAD`. Compose adds application error, completion, and lifespan
-safety without interpreting those Router outcomes.
+The API Router owns exhaustion at its mount boundary, while Compose owns the
+root boundary. An API constraint miss receives `No API route matched`; an
+unknown root path receives `No root route matched`. A method mismatch never
+invokes `http_default`: the API Router renders its negotiated stock Method Not
+Allowed response with `Allow: GET, HEAD`. Compose adds application error,
+completion, and lifespan safety without interpreting those Router outcomes.
 
 Run it from the distribution root:
 
 ```sh
-pagi-server examples/declarative-routing/app.pl --port 5000
+pagi-server -I examples/declarative-routing/lib \
+  examples/declarative-routing/app.pl --port 5000
 ```
 
 Then try:

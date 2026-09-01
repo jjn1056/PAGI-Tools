@@ -1,7 +1,5 @@
 use strict;
 use warnings;
-use File::Basename qw(dirname);
-use lib dirname(__FILE__) . '/lib';
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(not_found);
@@ -56,8 +54,7 @@ my $api_routing = router(
     http_default => request_response(\&api_not_found),
 );
 
-my $routing = router(
-    desc => 'Declarative routing example',
+compose(
     routes => [
         route('/' => \&MyApp::Routes::Home::home,
             name       => 'home',
@@ -71,6 +68,5 @@ my $routing = router(
         ),
     ],
     http_default => request_response(\&root_not_found),
+    desc => 'Declarative routing example',
 );
-
-compose(router => $routing);
