@@ -110,9 +110,13 @@ compose(routes => [
 ]);
 ```
 
-`route`, `websocket`, and `sse` retain the endpoint objects until dispatch, so
-HTTP methods and connection hooks continue to use their normal endpoint
-lifecycle. There is no intermediate mutable Router or redundant root Mount.
+`route`, `websocket`, and `sse` retain each configured endpoint object for the
+compiled application's lifetime. The same object may serve concurrent work,
+so shared configuration stays on the endpoint while request and connection
+state stays on the protocol object. The HTTP Route snapshots
+`MessageAPI->allowed_methods` once during construction; the Router therefore
+owns method mismatch and its `Allow` union. There is no intermediate mutable
+Router or redundant root Mount.
 
 ## Routes
 

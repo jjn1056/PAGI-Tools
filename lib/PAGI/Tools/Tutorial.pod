@@ -173,15 +173,9 @@ for either form. After a prefix matches, the child owns its full match, 404,
 and 405. Those responses flow through child, Mount-occurrence, and parent
 middleware, but the parent never resumes scanning.
 
-The immutable functional form takes an arrayref of nodes. The callback
-shorthand belongs only to the mutable App/Endpoint builder:
+The structural form always takes an arrayref of nodes:
 
   mount('/reports', routes => [route('/' => \&report)])
-
-  $r->mount('/reports', routes => sub {
-      my ($child) = @_;
-      $child->get('/' => \&report);
-  });
 
 Route and structural-mount names are local segments; slash constructs absolute
 logical addresses such as C</api/user>. Import URL helpers from their Router
@@ -291,94 +285,42 @@ children, so the preserved Router above appears as the root Mount rather than
 flattened leaves. C<http_default>, C<desc>, C<named_routes>, C<route_named>, and
 C<path_for> delegate to the root Router.
 
-=head2 2.3 PAGI::App::Router - Mutable Routing
+=head2 2.3 One Routing API, Five Boundaries
 
-L<PAGI::App::Router> is the mutable frontend for the same immutable routing
-model. Its verb methods append declarations in written order; ordinary
-handlers use the same direct protocol contract as C<PAGI::Routing>:
+L<PAGI::Routing> is the routing-construction API. Its concepts divide work
+rather than provide competing declaration styles:
 
-  use PAGI::App::Router;
-  use PAGI::Compose qw(compose);
-  use PAGI::Routing qw(middleware mount);
-  use PAGI::Response qw(text_response json_response);
-  use PAGI::Utils qw(as_app);
+  Endpoint::HTTP/WebSocket/SSE  optional behavior for one exact route
+  Route                         exact path and HTTP method policy
+  Mount                         prefix ownership and app composition
+  Router                        ordered children and NONE/PARTIAL outcomes
+  Compose                       root lifespan, middleware, and safety
 
-  my $router = PAGI::App::Router->new;
+A small handler is usually a coderef. When HTTP verb dispatch or a connection
+lifecycle earns a class, place a configured L<PAGI::Endpoint::HTTP>,
+L<PAGI::Endpoint::WebSocket>, or L<PAGI::Endpoint::SSE> instance at that exact
+route. When an ordinary application class owns several paths, have a
+C<routing()> method return an immutable Router:
 
-  $router->get('/' => sub {
-      my ($request) = @_;
-      return text_response('Home');
-  })->name('home');
+  package MyApp::People;
+  use PAGI::Routing qw(route router);
 
-  $router->post('/users' => sub {
-      my ($request) = @_;
-      return json_response({ created => 1 }, status => 201);
-  })->name('create_user');
+  sub routing {
+      my ($self) = @_;
+      return router(routes => [
+          route('/' => sub { $self->index(@_) }, name => 'index'),
+          route('/{id}' => sub { $self->show(@_) }, name => 'show'),
+      ]);
+  }
 
-  $router->get('/users/{id}' => [
-      'RequestId',
-      $logging_factory,
-      $configured_auth,
-      middleware('Session', cookie_name => 'sid'),
-  ] => sub {
-      my ($request) = @_;
-      return json_response({ id => $request->path_param('id') });
-  })->name('show_user');
+  mount('/people', app => $people->routing, name => 'people');
 
-  # Native three-channel CODE is an explicit application value.
-  $router->get('/download' => as_app($download_app));
-  $router->websocket('/ws' => as_app($native_ws_app));
-  $router->sse('/events' => as_app($native_sse_app));
-
-  my $app = compose(
-      routes => [mount('/' => app => $router)],
-  )->to_app;
-
-The middleware entries above are intentional App Router sugar: the frontend
-immediately materializes class names, synchronous factory coderefs, configured
-objects with C<wrap>, and explicit C<middleware(...)> descriptions into the
-explicit descriptions required by the immutable core. Factories and C<wrap>
-run while C<to_app> compiles; the native app they return runs per request.
-The App Router already implements C<to_app>, so this direct Mount is ordinary
-application deployment. Each C<to_router> call creates a fresh immutable
-snapshot; use it only when a parent must inspect or discover descendant names,
-or when inspection, reverse routing, and compilation must refer to the same
-retained route identities.
-
-For handlers bound to a configured object, subclass
-L<PAGI::Endpoint::Router>. Its C<routes($builder)> method uses the same verb
-surface but accepts local unqualified method names. Construct nested Endpoint
-objects explicitly and mount C<< app => $child->to_router >> when their names
-must remain discoverable. Mounting C<< app => $child >> is valid opaque
-application composition. Package strings do not load routing behavior.
-
-=head2 2.4 Choosing a Router
-
-The three APIs are declaration frontends at different abstraction boundaries:
-
-  PAGI::Routing          immutable functional declarations   Request handlers
-  PAGI::App::Router      mutable imperative builder          verb methods + Request
-  PAGI::Endpoint::Router class/role-oriented frontend        local method names
-
-All three materialize L<PAGI::Routing::Router> and share Pattern parsing,
-Resolver slash addresses, Compiler matching, route metadata, constraints,
-GET/HEAD behavior, Router-owned HTTP outcomes, first-seen method evidence,
-reverse routing, pure native middleware, and exact written order. The first
-full match wins; declarations are never separated by kind or sorted by mount
-prefix.
-
+The Router is already both an application and an inspectable route tree, so
+the parent can generate C</people/show> URLs without a snapshot conversion.
 The selected Router owns NONE and PARTIAL. NONE invokes its HTTP-only
-C<http_default> or stock Pages 404; PARTIAL emits its compliant Pages 405.
-WebSocket and first-class SSE misses keep their stock protocol behavior.
-Compose remains the application root for lifespan, error handling, and
-response-completion safety.
-
-Choose C<PAGI::Routing> for functional immutable declarations,
-C<PAGI::App::Router> for incremental mutation with closures, and
-C<PAGI::Endpoint::Router> when local methods and ordinary object fields make
-the application boundary clearer. This release intentionally removes the old
-App and Endpoint matcher, handler, naming, middleware, state, and package-load
-contracts. See F<UPGRADING.md> for exercised before-and-after migrations.
+C<http_default> or stock Pages 404; PARTIAL emits a compliant Pages 405 with
+the authoritative C<Allow> field. Compose remains the root owner for lifespan,
+error handling, HEAD handling, and response-completion safety.
 
 =head1 PART 3: HANDLING REQUESTS
 
@@ -618,7 +560,7 @@ can serve concurrent requests.
 Normal Request handlers return application values for Routing to invoke. A
 Response object is the common case:
 
-  $router->get('/health' => sub {
+  route('/health' => sub {
       my ($request) = @_;
       return json_response(
           { ok => \1 },
@@ -888,7 +830,7 @@ the order it runs:
       enable '+MyApp::Middleware::PoweredBy';
       enable 'AccessLog';
       enable 'Runtime';
-      $router;
+      $app_root;
   };
 
 =head3 Why the toolkit version is worth it
@@ -927,33 +869,22 @@ The L<PAGI::Middleware::Builder> DSL lets you compose middleware into your appli
 
 Apply middleware to all routes using the C<builder> function:
 
+  use PAGI::Compose qw(compose);
   use PAGI::Middleware::Builder;
-  use PAGI::App::Router;
-  use PAGI::Utils qw(as_app);
+  use PAGI::Response qw(text_response);
+  use PAGI::Routing qw(route);
 
-  my $router = PAGI::App::Router->new;
-
-  $router->get('/' => as_app(async sub {
-      my ($scope, $receive, $send) = @_;
-      await $send->({
-          type    => 'http.response.start',
-          status  => 200,
-          headers => [['content-type', 'text/plain']],
-      });
-      await $send->({
-          type => 'http.response.body',
-          body => 'Hello World',
-          more => 0,
-      });
-  }));
+  my $routing = compose(routes => [
+      route('/' => sub { return text_response('Hello World') }),
+  ]);
 
   # Wrap with middleware using builder; the block's final value can be
-  # an app coderef, a component, or (as here) the router itself
+  # an app coderef or an instantiated component
   my $app = builder {
       enable 'AccessLog', format => 'combined';
       enable 'CORS', origins => '*';
       enable 'GZip', min_size => 1024;
-      $router;
+      $routing;
   };
 
 Middleware executes in order: AccessLog -> CORS -> GZip -> app.
@@ -968,7 +899,7 @@ Middleware executes in order: AccessLog -> CORS -> GZip -> app.
       enable 'SecurityHeaders';                # Add security headers
       enable 'GZip', min_size => 1024;         # Compress responses
       enable 'ErrorHandler', development => 1;  # Development diagnostics
-      $router;
+      $routing;
   };
 
 =head3 Middleware Instances
@@ -982,7 +913,7 @@ The parentheses are required for the instance form:
   my $app = builder {
       enable 'AccessLog', format => 'tiny';
       enable($gzip);
-      $router;
+      $routing;
   };
 
 =head2 6.3 Essential Middleware Reference
@@ -1206,7 +1137,7 @@ Use it with the builder:
 
   my $app = builder {
       enable '+MyApp::Middleware::Auth', secret => 'secret-key';
-      $router;
+      $app_root;
   };
 
 The leading C<+> tells the builder to use the class name as-is instead of
@@ -1217,7 +1148,7 @@ passing a configured instance (parentheses required):
 
   my $app = builder {
       enable(MyApp::Middleware::Auth->new(secret => 'secret-key'));
-      $router;
+      $app_root;
   };
 
 Or per-route:
@@ -1225,10 +1156,12 @@ Or per-route:
   use PAGI::Response qw(text_response);
 
   my $auth = MyApp::Middleware::Auth->new(secret => 'secret-key');
-  $router->get('/admin' => [$auth] => sub {
+  use PAGI::Routing qw(middleware route);
+
+  route('/admin' => sub {
       my ($request) = @_;
       return text_response('admin');
-  });
+  }, middleware => [middleware($auth)]);
 
 =head3 Middleware Patterns
 
@@ -1309,7 +1242,7 @@ L<PAGI::App::File> serves static files with security, caching, and streaming:
   use PAGI::App::File;
 
   my $static = PAGI::App::File->from_app_path('public');
-  $router->mount('/static', app => $static);
+  mount('/static', app => $static);
 
 Features:
 
@@ -1402,7 +1335,7 @@ L<PAGI::App::Healthcheck> creates health check endpoints:
       },
   );
 
-  $router->mount('/health', app => $health);
+  mount('/health', app => $health);
 
 =head2 7.3 PAGI::App::URLMap - Mount Applications
 
@@ -1451,7 +1384,7 @@ L<PAGI::App::Proxy> forwards requests to backend servers:
       backend => 'http://localhost:8080',
       timeout => 30,
   );
-  $router->mount('/api', app => $proxy);
+  mount('/api', app => $proxy);
 
 =head2 7.6 PAGI::App::WrapPSGI - Use Existing PSGI Apps
 
@@ -1460,7 +1393,7 @@ L<PAGI::App::WrapPSGI> lets you use existing PSGI applications:
   use PAGI::App::WrapPSGI;
 
   my $wrapped = PAGI::App::WrapPSGI->new(psgi_app => $legacy_app);
-  $router->mount('/legacy', app => $wrapped);
+  mount('/legacy', app => $wrapped);
 
 Useful for incremental migration from PSGI to PAGI.
 
@@ -1481,8 +1414,7 @@ C<< PAGI::App::File->new(root => 'public') >>
 These positions accept coderefs or instantiated C<to_app> objects; package
 strings are rejected because an application position does not define whether a
 package should be constructed, called as a class, or treated as a singleton.
-App positions include opaque mounts and explicit C<as_app> leaves in
-L<PAGI::App::Router> and
+App positions include Mount applications and explicit C<as_app> leaves in
 L<PAGI::Routing>, C<mount> and the final block value in
 L<PAGI::Middleware::Builder>'s C<builder {}>, L<PAGI::App::URLMap>
 mounts and its C<default>, L<PAGI::App::Cascade> entries, and the
@@ -1499,20 +1431,16 @@ L<PAGI::Lifespan/wrap>. Put together:
   };
 
 Compilation happens exactly once, when the composition point receives
-the component — never per request. Routing-aware App/Endpoint children are
-deliberately stricter: load their packages normally, construct configured
-objects explicitly, and pass immutable snapshots to
-C<< mount('/prefix', app => $child->to_router) >> when reverse discovery is
-required. Ordinary route targets receive the direct protocol object; native
-coderefs and instantiated component apps belong only behind explicit
-C<as_app> or opaque mount boundaries.
+the component — never per request. For a structurally discoverable child,
+load its package normally and mount the immutable Router returned by its
+C<routing()> method. Ordinary route targets receive the direct protocol
+object; native coderefs and instantiated component apps belong only behind
+explicit C<as_app> or Mount boundaries.
 
 Middleware position is the same idea with a different duck type:
 C<enable> accepts a middleware name (resolved under
 C<PAGI::Middleware::>, with leading C<+> to select an exact package) or a configured instance
-with a C<wrap> method. Builder, App Router, and Endpoint Router retain their
-concise frontend forms. App Router and Endpoint Router immediately materialize
-explicit descriptions for the immutable core. Middleware Builder is a separate
+with a C<wrap> method. Middleware Builder is a separate
 concise composition API: it retains its own middleware records and constructs
 or wraps them during C<to_app>. Core routing middleware arrays contain only
 L<PAGI::Routing::Middleware> descriptions. Factories have the form C<sub { my
@@ -1569,8 +1497,7 @@ deferred until a concrete consumer exists; no placeholder option is shipped.
 
 =item * L<PAGI::Tools::Cookbook> - recipes for common tasks
 
-=item * L<PAGI::Routing>, L<PAGI::Middleware::Builder>,
-L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, L<PAGI::Response>,
+=item * L<PAGI::Routing>, L<PAGI::Middleware::Builder>, L<PAGI::Response>,
 L<PAGI::Pages>, L<PAGI::Request> - individual module documentation
 
 =back

@@ -101,6 +101,7 @@ PAGI::Endpoint::WebSocket - Class-based WebSocket endpoint handler
     package MyApp::Chat;
     use parent 'PAGI::Endpoint::WebSocket';
     use Future::AsyncAwait;
+    use PAGI::Routing qw(websocket);
 
     sub encoding { 'json' }  # or 'text', 'bytes'
 
@@ -120,8 +121,8 @@ PAGI::Endpoint::WebSocket - Class-based WebSocket endpoint handler
         cleanup_user($websocket->scope->{user_id});
     }
 
-    # Use with PAGI server
-    my $app = MyApp::Chat->to_app;
+    # Place one configured object at one exact protocol Route.
+    websocket('/chat' => MyApp::Chat->new(hub => $hub));
 
 =head1 DESCRIPTION
 

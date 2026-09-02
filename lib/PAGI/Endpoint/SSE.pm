@@ -93,6 +93,7 @@ PAGI::Endpoint::SSE - Class-based Server-Sent Events endpoint handler
     package MyApp::Notifications;
     use parent 'PAGI::Endpoint::SSE';
     use Future::AsyncAwait;
+    use PAGI::Routing qw(sse);
 
     sub keepalive_interval { 30 }
 
@@ -111,8 +112,8 @@ PAGI::Endpoint::SSE - Class-based Server-Sent Events endpoint handler
         # Cleanup subscriptions
     }
 
-    # Use with PAGI server
-    my $app = MyApp::Notifications->to_app;
+    # Place one configured object at one exact protocol Route.
+    sse('/events' => MyApp::Notifications->new(bus => $bus));
 
 =head1 DESCRIPTION
 

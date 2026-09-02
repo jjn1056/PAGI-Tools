@@ -173,14 +173,15 @@ PAGI::Lifespan - Wrap a PAGI app with lifecycle management
 =head1 SYNOPSIS
 
     use PAGI::Lifespan;
-    use PAGI::App::Router;
+    use PAGI::Routing qw(route router);
 
-    my $router = PAGI::App::Router->new;
-    $router->get('/' => sub { ... });
+    my $routing = router(routes => [
+        route('/' => sub { ... }),
+    ]);
 
     # Wrap app with lifecycle management
     my $app = PAGI::Lifespan->wrap(
-        $router->to_app,
+        $routing,
         startup => async sub {
             my ($state) = @_;  # State hash injected into every request
             $state->{db} = DBI->connect(...);
@@ -283,6 +284,6 @@ Returns the state hashref.
 
 =head1 SEE ALSO
 
-L<PAGI::App::Router>, L<PAGI::Endpoint::Router>
+L<PAGI::Compose>, L<PAGI::Routing>, L<PAGI::State>
 
 =cut

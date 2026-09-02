@@ -5,7 +5,6 @@ use Future;
 
 use PAGI::Compose qw(compose);
 use PAGI::CSRF qw(csrf);
-use PAGI::Endpoint::Router;
 use PAGI::Middleware::ErrorHandler;
 use PAGI::Pages qw(not_found);
 use PAGI::Request;
@@ -160,13 +159,9 @@ subtest 'ErrorHandler custom renderers return concrete Responses' => sub {
         'the custom Response uses the configured representation');
 };
 
-subtest 'Endpoint exposes explicit Request construction only' => sub {
-    my $endpoint = PAGI::Endpoint::Router->new;
-    my $request = $endpoint->new_request(request_scope(), \&receive_empty);
-
+subtest 'raw callers construct Request explicitly' => sub {
+    my $request = PAGI::Request->new(request_scope(), \&receive_empty);
     isa_ok($request, 'PAGI::Request');
-    ok(!$endpoint->can('new_context'),
-        'removed new_context has no compatibility alias');
 };
 
 subtest 'raw middleware keeps the native three-channel PAGI contract' => sub {

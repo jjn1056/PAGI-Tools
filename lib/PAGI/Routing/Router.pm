@@ -196,9 +196,7 @@ response-completion guarding, or lifespan. It declines a lifespan scope; a
 server's strict lifespan mode rejects that decline. An explicit root Mount
 places this Router beneath Compose's root lifespan and safety services, but
 does not add lifecycle behavior or a C<lifespan> option to Router itself. See
-L<PAGI::Routing>,
-L<PAGI::Routing::Mount>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, and
-the
+L<PAGI::Routing>, L<PAGI::Routing::Mount>, and the
 L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
 
 =cut

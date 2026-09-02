@@ -124,9 +124,9 @@ endpoint must own all three PAGI channels.
     handler result             -> native CODE or instantiated to_app object
 
 The descriptions do no request I/O. C<to_app> is the explicit compilation
-boundary and returns the native PAGI coderef a server runs. The mutable
-L<PAGI::App::Router> and method-oriented L<PAGI::Endpoint::Router> materialize
-this same Router model and use the same Resolver and Compiler.
+boundary and returns the native PAGI coderef a server runs. This is the sole
+routing-construction API in PAGI-Tools; optional Endpoint classes supply
+behavior at one exact leaf rather than another Router grammar.
 
 =head1 IMPORTS
 
@@ -535,11 +535,9 @@ tokenizer is intentionally not a complete Perl regex parser. Put complex
 patterns, especially extended-mode comments, in the explicit
 C<constraints =E<gt> { name =E<gt> qr/.../ }> form.
 
-Inline provider references are specific to this declarative
-L<PAGI::Routing> API. L<PAGI::App::Router> retains its existing
-C<{name:pattern}> grammar, where the C<&Int> text is regex syntax matching a
-literal ampersand spelling. Translate constraints explicitly when moving a
-declaration between the two routers.
+Inline provider references are specific to L<PAGI::Routing>. A leading
+C<&> names a constraint provider and is not a literal regex ampersand; use
+C<[&]> or C<\&> when a regex must match a literal ampersand.
 
 A wildcard is one terminal whole segment:
 
@@ -894,28 +892,22 @@ not synthesize 500 responses; put that middleware at the application policy
 boundary. A compile-time factory/configuration error instead fails C<to_app>
 before an application exists to wrap.
 
-=head1 ROUTER FRONTENDS
+=head1 RESPONSIBILITY BOUNDARIES
 
-  PAGI::Routing          immutable functional declarations   direct protocol objects
-  PAGI::App::Router      mutable imperative builder          verb methods + direct objects
-  PAGI::Endpoint::Router class/role-oriented frontend        local method names
+  Endpoint::HTTP/WebSocket/SSE  optional behavior for one exact route
+  Route                         exact path and HTTP method policy
+  Mount                         prefix ownership and app composition
+  Router                        ordered children and NONE/PARTIAL outcomes
+  Compose                       root lifespan, middleware, and safety
 
-These are three declaration surfaces over one immutable Router, not separate
-matchers. They share Pattern parsing, Resolver slash addresses, Compiler
-matching and dispatch, route metadata, constraints, GET/HEAD qualification and
-wire suppression, Router-owned HTTP outcomes, first-seen method evidence,
-reverse routing, pure native middleware, and exact written declaration order.
+An ordinary package can expose C<routing()> when it owns a reusable subtree;
+that method returns an immutable Router which a parent Mount accepts directly.
+Endpoint subclasses remain useful for HTTP verb dispatch or a WebSocket/SSE
+lifecycle at one leaf. They are not Router frontends.
 
-C<PAGI::Routing> is already immutable. C<PAGI::App::Router> incrementally
-builds declarations whose ordinary handlers receive the same Request,
-WebSocket, or SSE objects and whose native CODE endpoints require explicit
-C<as_app>.
-C<PAGI::Endpoint::Router> binds unqualified local method names to one
-constructed object; its method handlers receive C<($self, $protocol_object)>.
-App and Endpoint C<to_router> calls create fresh immutable
-snapshots, while C<to_app> compiles one retained snapshot. All middleware uses
-the same four compile-time factory/C<wrap> forms and a request-time native app
-phase; there is no response-valued Endpoint middleware chain.
+All middleware uses explicit C<middleware(...)> descriptions at core
+boundaries and a request-time native app phase. Declaration order is the
+literal order of the C<routes> array.
 
 =head1 DELIBERATE DIFFERENCES FROM STARLETTE
 
@@ -951,8 +943,7 @@ future inspection seam without advertising an unshipped schema API.
 L<PAGI::Tools::Cookbook>, L<PAGI::Request>, L<PAGI::WebSocket>, L<PAGI::SSE>,
 L<PAGI::Authority>, L<PAGI::Compose>, L<PAGI::Pages>, L<PAGI::Response>,
 L<PAGI::Middleware::Helpers>, L<PAGI::Routing::Mount>,
-L<PAGI::Routing::Router>, L<PAGI::Routing::URL>, L<PAGI::App::Router>,
-L<PAGI::Endpoint::Router>,
+L<PAGI::Routing::Router>, L<PAGI::Routing::URL>,
 L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>
 
 =cut

@@ -185,23 +185,17 @@ Router behind an explicit root Mount instead:
 
     compose(routes => [mount('/' => app => $router)])
 
-App Router and Endpoint Router frontends already implement to_app and may be
-mounted directly for ordinary application composition. Convert a frontend with
-to_router only when the receiving Router must discover its descendant names or
-when the immutable snapshot itself must be retained or inspected. Compose and
-Mount never call to_router automatically.
+Mount an immutable Router directly when a reusable subtree must preserve its
+middleware, C<http_default>, description, identity, or descendant names:
 
-For ordinary deployment, mount the mutable frontend itself:
+    my $people = MyApp::People->new(repo => $repo)->routing;
+    compose(routes => [
+        mount('/people', app => $people, name => 'people'),
+    ]);
 
-    compose(routes => [mount('/' => app => $builder)])
-    compose(routes => [mount('/' => app => $endpoint)])
-
-When a parent must discover a descendant's names, make that structural
-conversion explicit at the named parent Mount and use the parent for reverse
-generation or inspection:
-
-    $parent->mount('/people', app => $child->to_router)->name('people');
-    $parent->path_for('/people/show', { id => 42 });
+The ordinary component's C<routing> method returns a
+L<PAGI::Routing::Router>; no mutable snapshot or automatic structural
+conversion is involved.
 
 An arbitrary native application has no direct Compose form in this release;
 deploy it directly or use a separately designed application boundary.
@@ -537,8 +531,7 @@ recover if an inner renderer fails.
 =head1 RELATIONSHIP TO OTHER PAGI APIS
 
 C<< compose(routes => [...]) >> is a compact deployed root: a newly constructed
-functional Router plus application middleware, lifecycle, and HTTP safety. It
-does not replace any Router frontend. A directly compiled Router already owns
+Router plus application middleware, lifecycle, and HTTP safety. A directly compiled Router already owns
 HTTP 404 and 405 outcomes and its own HeadBoundary, but it does not install
 Compose's ErrorHandler, response guard, or lifespan driver. Preserving it with
 C<< compose(routes => [mount('/' => app => $routing)]) >> adds an outer
@@ -547,11 +540,10 @@ For Router middleware, C<http_default>, C<desc>, identity, or Resolver state,
 retain the Router behind that Mount instead of passing C<< $routing->routes >>.
 Compose inspection delegates to its own root Router.
 
-L<PAGI::Routing>, L<PAGI::App::Router>, and L<PAGI::Endpoint::Router> are
-functional, mutable, and method-oriented frontends over one immutable routing
-engine. Compose accepts only C<routes>; an immutable Router crosses that grammar
-as an explicit Mount application. Compose does not wrap an arbitrary native
-app or general C<to_app> component directly in this release.
+L<PAGI::Routing> is the routing-construction API. Compose accepts only
+C<routes>; an immutable Router crosses that grammar as an explicit Mount
+application. Compose does not wrap an arbitrary native app or general
+C<to_app> component directly in this release.
 Normal compiled handlers receive their direct Request, WebSocket, or SSE
 object. Native applications and every middleware wrapper retain the exact
 C<($scope, $receive, $send)> triplet; Compose does not adapt that boundary.
@@ -591,8 +583,7 @@ WebSocket and first-class SSE misses.
 =head1 SEE ALSO
 
 L<PAGI::Routing>, L<PAGI::Routing::Router>, L<PAGI::Routing::Mount>,
-L<PAGI::Routing::Middleware>, L<PAGI::App::Router>,
-L<PAGI::Endpoint::Router>, L<PAGI::Pages>, L<PAGI::Lifespan>, L<PAGI::Utils>,
+L<PAGI::Routing::Middleware>, L<PAGI::Pages>, L<PAGI::Lifespan>, L<PAGI::Utils>,
 L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>,
 L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>
 
