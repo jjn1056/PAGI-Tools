@@ -471,6 +471,15 @@ subtest 'HTTP methods use explicit, capability, then safe-default precedence' =>
     is($unsupported_restriction->calls, 1,
         'an unsupported restriction still snapshots the endpoint capability once');
 
+    my $unsupported_scalar = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    like dies {
+        route('/unsupported-scalar' => $unsupported_scalar,
+            methods => 'DELETE')
+    }, qr/methods \[DELETE\] are not advertised by route endpoint allowed_methods/,
+        'an unsupported finite scalar rejects methods absent from the endpoint capability';
+    is($unsupported_scalar->calls, 1,
+        'an unsupported scalar snapshots the endpoint capability once');
+
     my $wildcard_restriction = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
     is(route('/wildcard-restriction' => $wildcard_restriction, methods => '*')->methods,
         '*', 'a scalar wildcard remains unrestricted');
@@ -775,6 +784,24 @@ subtest 'constructors reject invalid declarations' => sub {
         like dies { route "/invalid-capability-$label" => $endpoint },
             $error,
             "$label allowed_methods failure names the endpoint capability";
+    }
+    for my $case (
+        [empty     => [],                   qr/route endpoint allowed_methods returned no methods/],
+        [separator => ['GET POST'],         qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [reference => [{}],                 qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [future    => [Future->done('GET')], qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [wildcard  => ['*'],                qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [mixed     => ['GET', '*'],         qr/route endpoint allowed_methods must return valid HTTP method strings/],
+    ) {
+        my ($label, $returned, $error) = @$case;
+        my $endpoint = Local::MethodEndpoint->new(@$returned);
+        like dies {
+            route "/invalid-restricted-capability-$label" => $endpoint,
+                methods => 'GET'
+        }, $error,
+            "$label allowed_methods failure is preserved through a finite restriction";
+        is $endpoint->calls, 1,
+            "$label finite restriction consults allowed_methods exactly once";
     }
     like dies { mount '/missing' }, qr/mount requires exactly one of app or routes/, 'mount requires one target form';
     like dies { mount '/both', app => $handler, routes => [] }, qr/mount requires exactly one of app or routes/, 'mount rejects app plus routes';
