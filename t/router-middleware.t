@@ -4,11 +4,12 @@ use warnings;
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Response::Text ();
-use PAGI::Routing qw(middleware);
+use PAGI::Routing qw(middleware route router);
 
 async sub request {
     my ($app, %changes) = @_;
@@ -67,6 +68,105 @@ sub factory {
         };
     }
 }
+
+{
+    package Local::BoundController;
+    use Future;
+    use Future::AsyncAwait;
+    use PAGI::Response::Text ();
+    use PAGI::Routing qw(middleware route router);
+    use Scalar::Util qw(refaddr);
+
+    sub new {
+        my ($class) = @_;
+        return bless { trace => [] }, $class;
+    }
+
+    sub routing {
+        my ($self) = @_;
+        return router(routes => [
+            route('/private' => sub { return $self->private(@_) },
+                middleware => [middleware(sub {
+                    my ($inner) = @_;
+                    return $self->require_auth($inner);
+                })],
+            ),
+        ]);
+    }
+
+    sub require_auth {
+        my ($self, $inner) = @_;
+        ++$self->{factory_calls};
+        $self->{factory_receiver} = refaddr($self);
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            ++$self->{wrapper_calls};
+            push @{$self->{trace}}, 'auth before';
+            my $copy = { %$scope, bound_middleware => 'present' };
+            my $wrapped_send = sub {
+                my ($event) = @_;
+                return $send->({ %$event, bound_middleware => 1 });
+            };
+            await Future->wrap($inner->($copy, $receive, $wrapped_send));
+            push @{$self->{trace}}, 'auth after';
+            return;
+        };
+    }
+
+    sub private {
+        my ($self, $request) = @_;
+        $self->{handler_receiver} = refaddr($self);
+        $self->{handler_arity} = scalar @_;
+        $self->{handler_argument} = ref($request);
+        $self->{handler_scope} = $request->scope;
+        push @{$self->{trace}}, 'handler';
+        return PAGI::Response::Text->new('private');
+    }
+}
+
+subtest 'declarative route binds ordinary controller and middleware closures once' => sub {
+    my $controller = Local::BoundController->new;
+    my $routing = $controller->routing;
+    my $identity = refaddr($controller);
+
+    is($controller->{factory_calls}, undef,
+        'declaration does not run the bound middleware factory');
+    my $app = $routing->to_app;
+    is([$controller->{factory_calls}, $controller->{factory_receiver}],
+        [1, $identity],
+        'compilation invokes the middleware method once on the exact object');
+
+    my $original = {
+        type => 'http', method => 'GET', path => '/private', headers => [],
+    };
+    my @events;
+    $app->(
+        $original,
+        sub { return Future->done({
+            type => 'http.request', body => '', more => 0,
+        }) },
+        sub { push @events, $_[0]; return Future->done },
+    )->get;
+
+    is(event_body(\@events), 'private',
+        'the explicitly bound handler response is emitted');
+    is($controller->{trace}, ['auth before', 'handler', 'auth after'],
+        'bound middleware surrounds the bound handler in declared order');
+    is([$controller->{handler_receiver}, $controller->{handler_arity},
+        $controller->{handler_argument}],
+        [$identity, 2, 'PAGI::Request'],
+        'ordinary closure binding supplies exactly the object and Request');
+    is($controller->{handler_scope}{bound_middleware}, 'present',
+        'the bound handler sees the middleware scope clone');
+    ok(!exists $original->{bound_middleware},
+        'the middleware does not mutate the caller-owned scope');
+    is([map { $_->{bound_middleware} } @events], [1, 1],
+        'the middleware wraps every response event');
+
+    request($app, path => '/private')->get;
+    is([$controller->{factory_calls}, $controller->{wrapper_calls}], [1, 2],
+        'the compiled factory is retained while the wrapper runs per request');
+};
 
 subtest 'public route middleware uses native app-to-app onion order' => sub {
     my (@trace, $builds);

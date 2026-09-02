@@ -32,9 +32,24 @@ plan skip_all => "PAGI::Server $PAGI::Server::VERSION does not support the sse.h
 
 plan skip_all => "Server integration tests not supported on Windows" if $^O eq 'MSWin32';
 
-use PAGI::App::Router;
+use PAGI::Endpoint::SSE;
 use PAGI::Response::Text;
+use PAGI::Routing qw(router sse);
 use IO::Socket::INET;
+
+{
+    package Local::DecliningSSEEndpoint;
+    use parent 'PAGI::Endpoint::SSE';
+
+    sub on_connect {
+        my ($self, $sse) = @_;
+        ++$self->{connections};
+        $self->{protocol_class} = ref($sse);
+        return $sse->decline(
+            PAGI::Response::Text->new('Not Found', status => 404),
+        );
+    }
+}
 
 my $loop = IO::Async::Loop->new;
 
@@ -71,19 +86,21 @@ sub sse_get {
 }
 
 subtest 'concrete SSE decline Response returns a real HTTP 404 over the real server' => sub {
-    my $router = PAGI::App::Router->new;
-    $router->sse('/events' => sub {
-        my ($sse) = @_;
-        return $sse->decline(PAGI::Response::Text->new('Not Found', status => 404));
-    });
+    my $endpoint = Local::DecliningSSEEndpoint->new;
+    my $routing = router(routes => [
+        sse('/events' => $endpoint),
+    ]);
 
-    my $server = create_server($router->to_app);
+    my $server = create_server($routing->to_app);
     my ($wire, $eof) = sse_get($server->port, '/events');
 
     like($wire, qr{HTTP/1\.1 404},        'concrete decline Response -> 404, not a crash');
     like($wire, qr/Not Found/,             'decline body delivered');
     unlike($wire, qr{text/event-stream},   'NOT an event stream');
     ok($eof, 'connection closed');
+    is([$endpoint->{connections}, $endpoint->{protocol_class}],
+        [1, 'PAGI::SSE'],
+        'declarative dispatch retains the configured endpoint and direct protocol object');
 
     $server->shutdown->get;
 };

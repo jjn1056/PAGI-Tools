@@ -7,8 +7,70 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Response::Text ();
+use PAGI::Routing qw(mount route router);
+use PAGI::Routing::URL qw(path_for);
+use PAGI::Test::Client ();
 
 sub handler { return sub { return PAGI::Response::Text->new('ok') } }
+
+{
+    package Local::NamedController;
+    use PAGI::Response::Text ();
+    use PAGI::Routing qw(route router);
+    use PAGI::Routing::URL qw(path_for);
+    use Scalar::Util qw(refaddr);
+
+    sub new { return bless { seen => [] }, $_[0] }
+
+    sub routing {
+        my ($self) = @_;
+        return router(routes => [
+            route('/item/{id}' => sub { return $self->show(@_) },
+                name => 'show'),
+        ]);
+    }
+
+    sub show {
+        my ($self, $request) = @_;
+        my $path = path_for($request, 'show');
+        push @{$self->{seen}}, {
+            receiver => refaddr($self),
+            tenant => $request->path_param('tenant'),
+            path => $path,
+        };
+        return PAGI::Response::Text->new($path);
+    }
+}
+
+subtest 'ordinary routing objects retain named sibling placements' => sub {
+    my $controller = Local::NamedController->new;
+    my $identity = refaddr($controller);
+    my $child = $controller->routing;
+    my $routing = router(routes => [
+        mount('/left/{tenant}', app => $child, name => 'left'),
+        mount('/right/{tenant}', app => $child, name => 'right'),
+    ]);
+
+    is([sort keys %{$routing->named_routes}], ['/left/show', '/right/show'],
+        'one immutable child publishes names under both Mount placements');
+    is($routing->path_for('/left/show', { tenant => 'acme', id => 1 }),
+        '/left/acme/item/1', 'left absolute name renders its placement');
+    is($routing->path_for('/right/show', { tenant => 'beta', id => 2 }),
+        '/right/beta/item/2', 'right absolute name renders its placement');
+    is([map { refaddr($_->app) } @{$routing->routes}],
+        [refaddr($child), refaddr($child)],
+        'both Mounts retain the exact caller-owned child Router');
+
+    my $client = PAGI::Test::Client->new(app => $routing->to_app);
+    is($client->get('/left/acme/item/1')->text, '/left/acme/item/1',
+        'relative lookup follows the active left placement');
+    is($client->get('/right/beta/item/2')->text, '/right/beta/item/2',
+        'relative lookup follows the active right placement');
+    is($controller->{seen}, [
+        { receiver => $identity, tenant => 'acme', path => '/left/acme/item/1' },
+        { receiver => $identity, tenant => 'beta', path => '/right/beta/item/2' },
+    ], 'ordinary bound closures keep object identity across both placements');
+};
 
 subtest 'public names are local segments and inspection uses slash addresses' => sub {
     my $router = PAGI::App::Router->new;
