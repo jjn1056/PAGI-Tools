@@ -5,8 +5,8 @@ use Future::AsyncAwait;
 
 use lib 'lib';
 use PAGI::Utils qw(handle_lifespan);
-use PAGI::App::Router;
 use PAGI::Response::Text ();
+use PAGI::Routing qw(route router);
 use PAGI::Test::Client;
 
 subtest 'handle_lifespan runs hooks in order' => sub {
@@ -127,12 +127,12 @@ subtest 'handle_lifespan aggregates nested apps' => sub {
 subtest 'pod-style usage with Test::Client' => sub {
     my @order;
 
-    my $router = PAGI::App::Router->new;
-    $router->get('/' => sub {
-        my ($request) = @_;
-        return PAGI::Response::Text->new('ok');
-    });
-    my $router_app = $router->to_app;
+    my $router_app = router(routes => [
+        route('/' => sub {
+            my ($request) = @_;
+            return PAGI::Response::Text->new('ok');
+        }),
+    ])->to_app;
 
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
@@ -157,12 +157,12 @@ subtest 'pod-style usage with Test::Client' => sub {
 subtest 'handle_lifespan in inner app with outer hooks' => sub {
     my @order;
 
-    my $router = PAGI::App::Router->new;
-    $router->get('/' => sub {
-        my ($request) = @_;
-        return PAGI::Response::Text->new('ok');
-    });
-    my $router_app = $router->to_app;
+    my $router_app = router(routes => [
+        route('/' => sub {
+            my ($request) = @_;
+            return PAGI::Response::Text->new('ok');
+        }),
+    ])->to_app;
 
     my $inner_app = async sub {
         my ($scope, $receive, $send) = @_;

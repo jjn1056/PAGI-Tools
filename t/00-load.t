@@ -22,15 +22,10 @@ my @load_modules = qw(
     PAGI::Middleware
     PAGI::Middleware::Helpers
     PAGI::Middleware::Builder
-    PAGI::App::Router
-    PAGI::App::Router::Builder
-    PAGI::App::Router::Materializer
     PAGI::App::File
     PAGI::App::File::Result
     PAGI::App::WrapPSGI
     PAGI::Endpoint::HTTP
-    PAGI::Endpoint::Router
-    PAGI::Endpoint::Router::Builder
     PAGI::Endpoint::SSE
     PAGI::Endpoint::WebSocket
     PAGI::Request
