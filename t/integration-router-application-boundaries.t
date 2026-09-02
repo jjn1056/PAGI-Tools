@@ -95,12 +95,15 @@ sub source_text {
 
 local $ENV{PAGI_ENV} = 'production';
 
-subtest 'background-task example keeps response-first HTTP dispatch at the Compose root' => sub {
+subtest 'background-task example limits native dispatch to response-first routes' => sub {
     my $file = "$Bin/../examples/background-tasks/app.pl";
     my $source = source_text($file);
     like($source,
-        qr{compose\(routes\s*=>\s*\[.*?route\('/'\s*=>\s*as_app\(async sub}s,
-        'background-task root declares its response-first HTTP route directly in Compose');
+        qr{compose\(routes\s*=>\s*\[.*?route\('/'\s*=>\s*sub\s*\{}s,
+        'background-task root uses an ordinary Request handler in Compose');
+    my $native_routes = () = $source =~ /\bas_app\s*\(/g;
+    is($native_routes, 3,
+        'only routes that perform work after response emission use as_app');
     like($source,
         qr{mount\('/ws'\s*,\s*app\s*=>\s*async sub}s,
         'background-task WebSocket remains a direct native Mount application');
@@ -113,7 +116,7 @@ subtest 'background-task example keeps response-first HTTP dispatch at the Compo
     isa_ok($app, 'PAGI::Compose');
     my $events = run_http($app->to_app, '/');
     like(response_body($events), qr/Background Tasks Demo/,
-        'the root Router dispatches the response-first index through Compose');
+        'the root Router dispatches the ordinary index handler through Compose');
 };
 
 subtest 'shared route fixtures execute declarative Router graphs' => sub {

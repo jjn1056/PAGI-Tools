@@ -143,18 +143,15 @@ sub quick_sync_task {
 #---------------------------------------------------------
 # HTTP Endpoints
 #
-# These are intentionally native PAGI applications because they send the
-# response before starting follow-up work. Ordinary route handlers receive one
-# PAGI::Request and return an unsent PAGI::Response instead.
+# The index is an ordinary Request handler. The task routes are native PAGI
+# applications because they send the response before starting follow-up work.
 #---------------------------------------------------------
 
 compose(routes => [
 
 # Index page
-route('/' => as_app(async sub {
-    my ($scope, $receive, $send) = @_;
-
-    my $response = html_response(<<'HTML');
+route('/' => sub {
+    return html_response(<<'HTML');
 <!DOCTYPE html>
 <html>
 <head><title>Background Tasks Demo</title></head>
@@ -190,8 +187,7 @@ document.getElementById('signup').onsubmit = async (e) => {
 </body>
 </html>
 HTML
-    await invoke_app($response, $scope, $receive, $send);
-})),
+}),
 
 # GOOD: Fire-and-forget async I/O
 route('/async' => as_app(async sub {

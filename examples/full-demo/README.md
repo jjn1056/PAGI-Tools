@@ -101,10 +101,21 @@ ws.onopen = () => ws.send('Hello from browser!');
 ```perl
 # Routing with immutable declarations
 my @routes = (
-    route('/' => as_app(async sub { ... }), name => 'hello'),
-    route('/echo' => as_app(async sub { ... }), methods => ['POST'], name => 'echo'),
-    websocket('/ws/echo' => as_app(async sub { ... })),
-    sse('/events' => as_app(async sub { ... })),
+    route('/' => sub { return text_response('Hello, World!') },
+        name => 'hello'),
+    route('/echo' => async sub {
+        my ($request) = @_;
+        return response(await $request->body);
+    }, methods => ['POST'], name => 'echo'),
+    websocket('/ws/echo' => async sub {
+        my ($ws) = @_;
+        await $ws->accept;
+        await $ws->each_message(async sub { ... });
+    }),
+    sse('/events' => async sub {
+        my ($sse) = @_;
+        await $sse->send_event(...);
+    }),
 );
 
 # Complete application and lifespan callbacks
@@ -117,11 +128,13 @@ compose(
 )->to_app;
 ```
 
-These handlers intentionally demonstrate the protocol channels directly, so
-each native coderef is explicitly marked with `as_app`. An ordinary route
-handler would receive `PAGI::Request` and return a Response. The declarations
-run in exactly the order shown. Compose keeps the same callbacks and state
-identity while its immutable Router owns the 404 and 405 outcomes. See
+The demo uses the ordinary high-level handler contracts: HTTP receives a
+`PAGI::Request` and returns a Response application, while WebSocket and SSE
+receive their protocol objects and use the objects' send and lifecycle methods.
+Raw three-channel applications remain available through `as_app`, but are not
+needed here. The declarations run in exactly the order shown. Compose keeps the
+same callbacks and state identity while its immutable Router owns the 404 and
+405 outcomes. See
 [PAGI::Compose](../../lib/PAGI/Compose.pm) and
 [PAGI::Routing](../../lib/PAGI/Routing.pm) for the complete routing model.
 
@@ -142,10 +155,10 @@ Note: Avoid using `Future::IO->sleep` in lifespan hooks as the event loop
 may not be fully initialized. Use synchronous initialization or the
 `maybe_sleep` helper pattern shown in the example.
 
-Access in handlers via `$scope->{state}`:
+Access in HTTP handlers through the Request's state facade:
 
 ```perl
-my $counter = $scope->{state}{request_counter}++;
+my $counter = $request->state->data->{request_counter}++;
 ```
 
 ## See Also

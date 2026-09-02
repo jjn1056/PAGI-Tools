@@ -2,10 +2,11 @@
 
 Patterns for running work after sending a response.
 
-This example deliberately sends responses before starting follow-up work, so
-its `PAGI::Routing` Route declarations wrap native three-channel applications
-with `as_app`. Ordinary Route handlers instead receive `PAGI::Request`, return
-an application value, and leave invocation to the shared routing compiler.
+The index is an ordinary Route handler: it receives `PAGI::Request`, returns an
+application value, and leaves invocation to the shared routing compiler. The
+three task routes deliberately send their responses before starting follow-up
+work, so only those routes wrap native three-channel applications with
+`as_app`.
 
 The native WebSocket application is a Mount application and is passed directly:
 
@@ -13,10 +14,10 @@ The native WebSocket application is a Mount application and is passed directly:
 mount('/ws', app => async sub { ... });
 ```
 
-The HTTP declarations retain their written order inside Compose. Their Route
-endpoints explicitly use `as_app` because they own the live protocol channels;
-the WebSocket Mount already occupies a native application position and needs no
-wrapper.
+The HTTP declarations retain their written order inside Compose. Only Route
+endpoints that must know response emission has completed use `as_app` and own
+the live protocol channels. The WebSocket Mount already occupies a native
+application position and needs no wrapper.
 
 ## Run
 

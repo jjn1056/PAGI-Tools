@@ -42,8 +42,11 @@ for my $case (@examples) {
                 qr/use PAGI::Routing qw\(route mount\);/,
                 'background tasks imports immutable route declarations');
             like($source,
-                qr/route\('\/'\s*=>\s*as_app\(async sub/s,
-                'background tasks marks its native HTTP root coderef explicitly');
+                qr/route\('\/'\s*=>\s*sub\s*\{/s,
+                'background tasks uses an ordinary Request handler for its index');
+            my $native_routes = () = $source =~ /\bas_app\s*\(/g;
+            is($native_routes, 3,
+                'only response-first background-task routes remain native applications');
             like($source,
                 qr/mount\('\/ws'\s*,\s*app\s*=>\s*async sub/s,
                 'background tasks mounts its native WebSocket application directly');
@@ -57,15 +60,17 @@ for my $case (@examples) {
             like($source,
                 qr/use PAGI::Routing qw\(route websocket sse\);/,
                 'full demo imports immutable route declarations');
+            unlike($source, qr/\bas_app\s*\(/,
+                'full demo demonstrates direct high-level protocol handlers');
             like($source,
-                qr/route\('\/'\s*=>\s*as_app\(async sub/s,
-                'full demo marks its native HTTP root coderef explicitly');
+                qr/route\('\/'\s*=>\s*sub\s*\{/s,
+                'full demo uses an ordinary Request handler for HTTP');
             like($source,
-                qr/websocket\('\/ws\/echo'\s*=>\s*as_app\(async sub/s,
-                'full demo marks its native WebSocket coderef explicitly');
+                qr/websocket\('\/ws\/echo'\s*=>\s*async sub\s*\{/s,
+                'full demo uses a direct WebSocket object handler');
             like($source,
-                qr/sse\('\/events'\s*=>\s*as_app\(async sub/s,
-                'full demo marks its native SSE coderef explicitly');
+                qr/sse\('\/events'\s*=>\s*async sub\s*\{/s,
+                'full demo uses a direct SSE object handler');
         }
         my $stderr = '';
         my $app;
@@ -102,7 +107,7 @@ subtest 'background tasks serves its native root application' => sub {
         'root route preserves its demonstration page');
 };
 
-subtest 'full demo serves its native root application' => sub {
+subtest 'full demo serves its high-level root handler' => sub {
     my $app = $loaded_apps{'full-demo'};
     skip_all 'full demo did not load' unless $app;
 

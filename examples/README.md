@@ -51,7 +51,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 9. `declarative-routing` - immutable `PAGI::Routing` tree with package handlers, a configured child Router mount, route middleware, boundary-specific HTTP defaults, and reverse URLs
 10. `endpoint-demo` - direct HTTP, WebSocket, and SSE endpoint-class leaves under declarative routing
 11. `endpoint-class-demo` - ordinary modular objects returning immutable Router subtrees, with configured exact-leaf endpoint classes
-12. `full-demo` - kitchen-sink demo combining multiple toolkit features
+12. `full-demo` - kitchen-sink demo using direct Request, WebSocket, and SSE handlers plus a streaming Response
 13. `pages` - Compose-rooted `PAGI::Pages` demo covering class/configured/export factories, direct application Routes and Mount, a request-derived application return, native `as_app` plus `invoke_app`, negotiation, and lifespan
 14. `process-streaming` - streams an external command's output through `stream_response`/`pipe_from` with a four-line loop-agnostic `Future::IO` source, real pipe backpressure, and `on_close` cleanup that stops the child when the client disconnects
 15. `sse-close` - direct `PAGI::SSE` application with an explicit close and client-facing sentinel event
