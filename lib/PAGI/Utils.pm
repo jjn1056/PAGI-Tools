@@ -593,9 +593,12 @@ only. They never load package names. Anything else croaks. A middleware object
 (something with C<wrap> but no C<to_app>) gets a middleware-specific croak,
 since middleware belongs in middleware position, not app position.
 
-Native composition points in this distribution (Mount, Compose, Router
-defaults, cascades, and the test client) call this for you, so user code can pass
-native apps and instantiated components directly:
+Routing's native application positions, Mount C<app> and Router
+C<http_default>, call this for you, so user code can pass native apps and
+instantiated components directly. Cascades and the test client likewise
+normalize their application input. Compose is different: it accepts route
+declarations only through C<routes>. Preserve an immutable Router explicitly as
+a Mount C<app> within that list.
 
     mount('/static', app => PAGI::App::File->new(root => $dir));
     mount('/api',    app => MyApp::API->new);

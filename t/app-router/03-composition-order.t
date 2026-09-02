@@ -10,6 +10,7 @@ use lib 'lib';
 use PAGI::App::Router::Builder ();
 use PAGI::Compose qw(compose);
 use PAGI::Response::Text ();
+use PAGI::Routing qw(mount);
 use PAGI::Routing::Router ();
 use PAGI::Test::Client ();
 
@@ -46,7 +47,9 @@ sub client_for {
 sub complete_client_for {
     my ($builder) = @_;
     return PAGI::Test::Client->new(
-        app => compose(app => $builder)->to_app,
+        app => compose(routes => [
+            mount('/' => app => $builder->to_router),
+        ])->to_app,
     );
 }
 

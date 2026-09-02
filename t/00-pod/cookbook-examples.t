@@ -163,6 +163,15 @@ subtest 'Cookbook publishes the representative final forms' => sub {
         qr/\$main_router->mount\('\/api', app => \$api_router->to_router\)/,
         'mutable App Router shows an explicit application Mount');
     like($cookbook,
+        qr/\$r->mount\('\/api', app => \$self->\{api\}\)->name\('api'\);/,
+        'Endpoint recipe mounts an uninspected API frontend directly');
+    like($cookbook,
+        qr/root application deploys this API directly.*?to_router only when a parent must inspect or discover/is,
+        'Endpoint recipe explains when a parent needs a snapshot');
+    unlike($cookbook,
+        qr/\$r->mount\('\/api', app => \$self->\{api\}->to_router\)/,
+        'Endpoint recipe has no unconsumed API snapshot');
+    like($cookbook,
         qr/\$main_router->mount\('\/reports', routes => sub \{/,
         'mutable App Router shows the routes callback Mount shorthand');
     like($cookbook,
@@ -180,6 +189,16 @@ subtest 'Cookbook publishes the representative final forms' => sub {
     like($cookbook,
         qr/outer idempotent application-root HEAD boundary/,
         'Compose publishes its distinct outer HEAD owner');
+    like($cookbook,
+        qr/compose\(\s+routes => \[.*?http_default => not_found\(.*?desc\s+=> 'Starlette apples comparison application'/s,
+        'Compose routes form publishes flattened Router options');
+    like($cookbook,
+        qr/compose\(\s*routes\s*=>\s*\[\s*mount\('\/'\s*=>\s*app\s*=>\s*\$routing\)\s*\]/s,
+        'Cookbook preserves a configured Router through an unnamed root Mount');
+    unlike($cookbook, qr/compose\(\s*app\s*=>/,
+        'Cookbook has no removed Compose app mode');
+    unlike($cookbook, qr/compose\(\s*router\s*=>/,
+        'Cookbook has no removed Compose router mode');
 };
 
 subtest 'representative Cookbook forms construct and dispatch' => sub {
@@ -266,7 +285,7 @@ subtest 'direct Router stays low-level while Compose supplies root safety' => su
     is($direct_warnings, [], 'direct Router emits no root-safety warning');
 
     my ($safe_events, $safe_error) = run_http(
-        compose(app => $router)->to_app,
+        compose(routes => [mount('/' => app => $router)])->to_app,
         path => '/silent', raw_path => '/silent',
     );
     is($safe_error, undef, 'Compose contains selected application silence');

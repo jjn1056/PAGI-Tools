@@ -93,6 +93,11 @@ subtest 'example sources require Perl 5.40 and use signatures' => sub {
     like($root_app,
         qr/http_default\s*=>\s*not_found\(\s*detail\s*=>\s*'No root route matched this path[.]'\s*\)/s,
         'Root declares its source-free not-found application inline');
+    like($root_app,
+        qr/sub\s+routing\(\$class\)\s*\{.*?return\s+router\s*\(/s,
+        'Root routing continues to return its configured Router');
+    unlike($root_app, qr/compose\s*\(\s*app\s*=>/s,
+        'Root no longer uses retired Compose app mode');
 
     like($data, qr/sub new\(\$class\)/, 'Data constructor uses a signature');
     like($root_app, qr/sub routing\(\$class\)/, 'Root routing uses a signature');

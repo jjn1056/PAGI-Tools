@@ -10,7 +10,6 @@ use PAGI::Compose::ResponseGuard ();
 use PAGI::Middleware::ErrorHandler ();
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
-use PAGI::Routing::Router ();
 use PAGI::Utils ();
 
 my $STATE_KEY = "\0PAGI::Compose::Compiler::lifespan_state";
@@ -21,7 +20,7 @@ sub compile {
     croak 'compose description is required'
         unless blessed($description) && $description->isa('PAGI::Compose');
 
-    my $target = $class->_compile_target($description);
+    my $target = $description->router->to_app;
     my $lifespan = $description->lifespan;
     my $dispatcher = async sub {
         my ($scope, $receive, $send) = @_;
@@ -62,15 +61,6 @@ sub compile {
         await Future->wrap($returned);
         return;
     };
-}
-
-sub _compile_target {
-    my ($class, $description) = @_;
-    my $routes = $description->routes;
-    if (defined $routes) {
-        return PAGI::Routing::Router->new(routes => $routes)->to_app;
-    }
-    return PAGI::Utils::to_app($description->app);
 }
 
 sub _prepare_lifespan_scope {

@@ -91,9 +91,10 @@ Routes and one-Request handlers returning applications do not need it.
 
 ## Root and lifespan behavior
 
-The final `compose(...)` expression is an inspectable root application. Compose
-owns startup/shutdown, error handling, and response completion; its enclosed
-Router owns negotiated 404/405 and automatic HEAD behavior.
+The final `compose(routes => [...], lifespan => { ... })` expression is an
+inspectable root application. Compose constructs and owns the root Router,
+startup/shutdown, error handling, and response completion; that root owns
+negotiated 404/405 and automatic HEAD behavior.
 
 A Pages application can also be the root directly, for example
 `PAGI::Pages->welcome`. Pages is intentionally HTTP-only: a server using

@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use PAGI::App::File;
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
+use PAGI::Routing qw(mount);
 use PAGI::Response qw(json_response);
 
 use ChatApp::State qw(
@@ -78,7 +79,9 @@ sub handler {
     $router->get('/api/room/{name}/users' => \&_room_users_handler);
     $router->get('/api/stats' => \&_stats_handler);
 
-    my $api_app = compose(app => $router)->to_app;
+    my $api_app = compose(routes => [
+        mount('/' => app => $router),
+    ])->to_app;
 
     return async sub {
         my ($scope, $receive, $send) = @_;

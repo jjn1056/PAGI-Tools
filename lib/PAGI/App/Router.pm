@@ -35,6 +35,7 @@ PAGI::App::Router - Mutable declarations for the immutable PAGI router
     use PAGI::Compose qw(compose);
     use Future::AsyncAwait;
     use PAGI::Pages ();
+    use PAGI::Routing qw(mount);
 
     my $people = PAGI::App::Router->new;
     $people->get('/{id}' => \&show)->name('show');
@@ -56,8 +57,13 @@ PAGI::App::Router - Mutable declarations for the immutable PAGI router
     })->name('api');
     $r->mount('/people', app => $people->to_router)->name('people');
     $r->mount('/static', app => $static_app);
+    $r->path_for('/people/show', { id => 42 });
 
-    my $app = compose(app => $r)->to_app;
+    my $app = compose(
+        routes => [mount('/' => app => $r)],
+    )->to_app;
+
+This is ordinary application deployment: C<$r> already implements C<to_app>.
 
 =head1 DESCRIPTION
 
@@ -164,13 +170,14 @@ Mount options.
 An immutable L<PAGI::Routing::Router> supplied through C<app> remains
 discoverable for nested reverse names. Other application objects are opaque to
 parent inspection but dispatch normally. To expose names from another mutable
-frontend, take the boundary explicitly:
+frontend, let the parent take the boundary explicitly and use it for discovery:
 
-    $r->mount('/people',
-        app => $people_builder->to_router,
+    $parent->mount('/people',
+        app => $people->to_router,
     )->name('people');
+    $parent->path_for('/people/show', { id => 42 });
 
-Passing C<$people_builder> itself is also a valid opaque application, but the
+Passing C<$people> itself is also a valid opaque application, but the
 parent does not guess that object's declarations or call an arbitrary
 C<routes> method.
 
@@ -246,12 +253,26 @@ Creates exactly one fresh Router snapshot and compiles that retained snapshot.
 Each call builds a fresh middleware and application graph; requests reuse that
 graph and never compile per request.
 
-A direct Router owns normal routing outcomes: HTTP NONE is its custom or stock
+C<to_app> itself materializes and compiles one fresh Router snapshot. A direct Router owns normal routing
+outcomes: HTTP NONE is its custom or stock
 default, PARTIAL is its negotiated 405 with authoritative C<Allow>, and
 protocol misses use stock protocol behavior. Direct compilation deliberately
 does not install lifespan handling, error handling, or a response guard.
-L<PAGI::Compose> supplies those root lifecycle and safety boundaries for a
-deployed application.
+Call C<to_router> when a parent must inspect or discover descendant names, or
+when the immutable snapshot itself must be retained or inspected. For ordinary
+application deployment, mount the frontend directly:
+
+    my $app = compose(
+        routes => [mount('/' => app => $r)],
+    )->to_app;
+
+Calling C<to_router> immediately before an opaque root Mount adds only syntax
+unless the outer root inspects that snapshot. Mounting C<$r> is ordinary
+application composition, but it is an opaque application boundary: Compose
+does not call C<to_router> automatically or expose the frontend's names.
+Compose supplies
+application middleware, root lifespan, ErrorHandler, response-completion
+guarding, and the outer HEAD boundary. It does not add lifespan to the Router.
 
 =head1 INSPECTION AND REVERSE ROUTING
 

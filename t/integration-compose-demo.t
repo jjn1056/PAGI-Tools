@@ -6,6 +6,15 @@ use Scalar::Util qw(blessed);
 use PAGI::Test::Client;
 
 my $app_file = "$Bin/../examples/compose/app.pl";
+my $source = do {
+    open my $fh, '<', $app_file or die "cannot open $app_file: $!\n";
+    local $/;
+    <$fh>;
+};
+unlike($source, qr/compose\s*\(\s*app\s*=>/s,
+    'Compose demo does not use retired Compose app mode');
+like($source, qr/compose\s*\(\s*routes\s*=>/s,
+    'Compose demo declares its direct root with routes');
 my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'Compose example loads cleanly') or diag($load_error);

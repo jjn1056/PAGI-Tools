@@ -32,19 +32,32 @@ perl -Ilib -Iexamples/10-chat-showcase/lib bin/pagi-server \
 
 ## Architecture
 
-The deployed application root is `PAGI::Compose`, while the mutable
-`PAGI::App::Router` remains deliberately in place for this showcase's existing
-HTTP, WebSocket, SSE, and static route declarations:
+The mutable `PAGI::App::Router` is this showcase's declaration-time frontend
+for HTTP, WebSocket, SSE, and static routes. `PAGI::App::Router` already
+implements `to_app`, so Compose mounts both chat frontends directly:
+
+```text
+PAGI::App::Router (chat frontend)
+  -> mount('/', app => $router)
+    -> PAGI::Compose (deployed root)
+
+ChatApp::HTTP's PAGI::App::Router (API frontend)
+  -> mount('/', app => $router)
+    -> compose(routes => [...])->to_app
+    -> internal PAGI::Compose application
+```
+
+At dispatch, those completed boundaries form this graph:
 
 ```text
 PAGI::Compose
   -> application-wide logging middleware
-    -> PAGI::App::Router
-      -> opaque HTTP handler
-        -> PAGI::Compose
-          -> internal API Router
-        -> PAGI::App::File
-      -> WebSocket / SSE handlers
+    -> Compose root Router
+      -> unnamed root Mount
+        -> PAGI::App::Router
+          -> opaque HTTP handler
+            -> internal PAGI::Compose application or PAGI::App::File
+          -> WebSocket / SSE handlers
 ```
 
 Configured startup and shutdown callbacks require server lifespan state
@@ -59,13 +72,13 @@ Compose supplies the response-completion and 500 failsafes; neither layer
 changes the WebSocket or SSE ownership described below.
 
 The WebSocket and SSE targets are existing native PAGI applications, so their
-route declarations use explicit `raw`. The opaque `/` HTTP mount is written
-last as `mount('/', app => $http_handler)`: the shared router preserves
-declaration order, and a matching prefix owns dispatch at that position.
-`ChatApp::HTTP` therefore gives its internal
-API Router a Compose boundary of its own. An unknown `/api/...` path receives
-that child's complete 404 instead of being reinterpreted by the opaque parent
-mount or falling through to static serving.
+route declarations use explicit `as_app`. The final
+`any('/*path' => as_app($http_handler))` Route keeps the static/API fallback
+HTTP-only, so a WebSocket or SSE miss retains the Router's protocol-specific
+outcome instead of reaching the file application. `ChatApp::HTTP` therefore
+gives its internal API Router a Compose boundary of its own. An unknown
+`/api/...` path receives that child's complete 404 instead of falling through
+to static serving.
 
 Inside that HTTP boundary, `/api/...` dispatch runs first. Every other HTTP
 request is delegated to one caller-relative
@@ -74,8 +87,21 @@ streaming, MIME types, ranges, conditional requests, and negotiated errors.
 The example does not duplicate filesystem path filtering or read static files
 into application memory.
 
-The final `compose(...)` expression remains an inspectable object in
-`app.pl`; the server compiles its `to_app` method once when loading it.
+Both chat frontends use the same direct application boundary:
+
+```perl
+compose(routes => [mount('/' => app => $router)]);
+```
+
+The unnamed root Mount consumes no path and keeps each Router's middleware,
+default, and routing outcomes. The outer Compose Router treats each frontend
+as an application boundary and does not inspect its descendant names. Each
+frontend already implements `to_app`: mount it directly for ordinary
+deployment. Use `to_router` only when a parent must discover those names or
+retain an immutable snapshot; neither chat frontend has such a parent-side
+consumer. See
+[PAGI::Compose](../../lib/PAGI/Compose.pm) and
+[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for details.
 
 See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)
 for the status, hidden-file, symlink, and XSendfile migration contract.

@@ -6,6 +6,15 @@ use FindBin qw($Bin);
 use Scalar::Util qw(blessed);
 use lib "$Bin/../lib";
 
+sub source_text {
+    my ($path) = @_;
+    open my $fh, '<', $path or die "cannot open $path: $!\n";
+    local $/;
+    my $source = <$fh>;
+    close $fh or die "cannot close $path: $!\n";
+    return $source;
+}
+
 my @examples = (
     ['09-psgi-bridge',          'CODE'],
     ['full-demo',               'CODE'],
@@ -20,6 +29,14 @@ for my $case (@examples) {
 
     subtest "$directory is executable" => sub {
         my $file = "$Bin/../examples/$directory/app.pl";
+        if ($directory eq 'full-demo') {
+            my $source = source_text($file);
+            like($source,
+                qr{mount\('/'\s*=>\s*app\s*=>\s*\$router\)},
+                'full demo mounts the App Router application directly');
+            unlike($source, qr/\$router->to_router/,
+                'full demo does not materialize an unused snapshot');
+        }
         my $stderr = '';
         my $app;
         my $load_error;

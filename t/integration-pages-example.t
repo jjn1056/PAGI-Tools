@@ -74,6 +74,10 @@ subtest 'class, configured, exported, Route, Mount, raw, and lifespan forms exec
         like($welcome->text, qr/<title>200 Welcome to PAGI<\/title>/,
             'direct application Route negotiates HTML');
 
+        my $unknown = $example_client->get('/definitely-missing');
+        is($unknown->status, 404,
+            'Compose root default handles an unknown page');
+
         my $missing = $example_client->get('/missing',
             headers => { Accept => 'application/problem+json' });
         is($missing->status, 404,

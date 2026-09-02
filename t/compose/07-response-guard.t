@@ -9,6 +9,8 @@ use ComposeTest qw(scope capture_send);
 use PAGI::Compose qw(compose);
 use PAGI::Compose::ResponseGuard;
 use PAGI::Exception::IncompleteResponse;
+use PAGI::Routing qw(route);
+use PAGI::Utils qw(as_app);
 
 sub run_guard {
     my ($inner, $request_scope) = @_;
@@ -229,8 +231,9 @@ subtest 'a body before start is reported even when the app ignored the rejection
     # the exemption overtaking it.
     my $ignores_rejection = sub {
         my ($request_scope, $receive, $send) = @_;
-        $send->({ type => 'http.response.body', body => 'early', more => 0 })
-            ->else_done();          # swallow it, as a careless app would
+        my $else_done = $send->({
+            type => 'http.response.body', body => 'early', more => 0,
+        })->else_done();            # swallow it, as a careless app would
         return Future->done;
     };
 
@@ -370,13 +373,13 @@ subtest 'non-HTTP scopes pass all channels through by identity' => sub {
 
 subtest 'compiled Compose response-guard state is lexical under interleaving' => sub {
     my (%send_for, %done_for);
-    my $app = compose(app => sub {
+    my $app = compose(routes => [route('/{id}' => as_app(sub {
         my ($request_scope, $receive, $send) = @_;
         my $id = $request_scope->{path};
         $send_for{$id} = $send;
         $done_for{$id} = Future->new;
         return $done_for{$id};
-    })->to_app;
+    }))])->to_app;
     my ($transport_one, $events_one) = capture_send();
     my ($transport_two, $events_two) = capture_send();
     my $one = $app->(

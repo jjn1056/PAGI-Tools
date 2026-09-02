@@ -107,7 +107,7 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
     use PAGI::Compose qw(compose);
     use PAGI::Response::JSON ();
     use PAGI::Response::Text ();
-    use PAGI::Routing qw(middleware);
+    use PAGI::Routing qw(middleware mount);
     use PAGI::Utils qw(as_app);
 
     sub new {
@@ -152,7 +152,12 @@ PAGI::Endpoint::Router - Method-oriented frontend for shared PAGI routing
 
     my $endpoint = MyApp::Endpoint->new(repository => $repository);
     my $static = $endpoint->app_path('static');
-    my $app = compose(app => $endpoint->to_router)->to_app;
+    my $app = compose(
+        routes => [mount('/' => app => $endpoint)],
+    )->to_app;
+
+This is ordinary application deployment: C<$endpoint> already implements
+C<to_app>.
 
 =head1 DESCRIPTION
 
@@ -190,11 +195,12 @@ retains that exact object. Each call materializes a fresh immutable
 L<PAGI::Routing::Router> snapshot, so later changes to ordinary object fields
 do not alter an existing snapshot's declaration graph.
 
-Convert a nested Endpoint explicitly when its names must be discoverable
-through the outer Router:
+Convert a nested Endpoint explicitly when the parent must discover its
+descendant names:
 
-    $r->mount('/people', app => $people_endpoint->to_router)
+    $parent->mount('/people', app => $people_endpoint->to_router)
         ->name('people');
+    $parent->path_for('/people/show', { id => 42 });
 
 Each C<to_router> call makes an immutable child snapshot. Mounting an Endpoint
 object directly with C<< app => $endpoint >> is also valid application
@@ -206,12 +212,25 @@ C<to_app>, while the outer reverse resolver does not guess its route names.
 Materializes one fresh snapshot and compiles it through the shared compiler.
 Retain the returned native PAGI routing component for its intended lifetime. A
 class call constructs one Endpoint instance; an object call keeps its receiver.
-Direct C<to_app> is legal low-level compilation. HTTP NONE invokes the
+Direct C<to_app> is legal bare Router compilation. HTTP NONE invokes the
 Router's declared C<http_default>, or its stock negotiated 404 when none was
 declared; HTTP PARTIAL likewise retains the Router's negotiated 405. It never
-completes HTTP exhaustion silently. L<PAGI::Compose> remains an optional
-application-root composer for application middleware, lifespan callbacks, and
-its HTTP safety boundary; it is not required merely to produce Router-owned
+completes HTTP exhaustion silently.
+Call C<to_router> when a parent must inspect or discover descendant names, or
+when the immutable snapshot itself must be retained or inspected. For ordinary
+application deployment, mount the frontend directly:
+
+    my $app = compose(
+        routes => [mount('/' => app => $endpoint)],
+    )->to_app;
+
+Calling C<to_router> immediately before an opaque root Mount adds only syntax
+unless the outer root inspects that snapshot. Mounting C<$endpoint> is ordinary
+application composition, but it is an opaque application boundary: Compose
+does not call C<to_router> automatically or expose the Endpoint's names.
+Compose adds application middleware, root lifespan callbacks, ErrorHandler,
+response-completion guarding, and the outer HEAD boundary. It does not add
+lifespan to the Router, and it is not required merely to produce Router-owned
 404 or 405 responses.
 
 =head1 ROUTE DECLARATIONS

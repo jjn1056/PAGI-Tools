@@ -16,6 +16,7 @@ use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::AccessLog;
 use PAGI::Pages;
+use PAGI::Routing qw(mount);
 use PAGI::Utils qw(invoke_app);
 
 
@@ -215,4 +216,6 @@ $router->mount('/events',
 # Static files as fallback for everything else (no middleware)
 $router->mount('/', app => PAGI::App::File->from_app_path('public'));
 
-compose(app => $router);
+compose(routes => [
+    mount('/' => app => $router),
+]);

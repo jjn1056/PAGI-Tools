@@ -68,7 +68,9 @@ sub routing($class) {
 
 sub to_app($class) {
     return compose(
-        app      => $class->routing,
+        routes => [
+            mount('/' => app => $class->routing),
+        ],
         lifespan => {
             startup  => \&startup,
             shutdown => \&shutdown,

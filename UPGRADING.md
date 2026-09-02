@@ -12,6 +12,174 @@ Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Breaking: Compose accepts only routes
+
+Compose now has one constructor grammar: it always constructs and owns a
+distinct root Router from `routes`. Existing immutable Routers are preserved
+only as the `app` target of an explicit, unnamed root Mount. Compose's `router`
+accessor returns only its constructed root Router, and `routes` returns that
+root's direct children. A preserved Router therefore appears as the Mount, not
+as flattened leaves.
+
+The API is unreleased, so there is no compatibility layer, hidden Mount
+creation, cloning, package loading, or arity inference for the removed
+constructor form.
+
+### Fold a small declarative Router
+
+**Before:** construct a disposable Router and hand it to Compose.
+
+```perl
+my $routing = router(
+    routes       => [route('/' => \&home)],
+    http_default => $default,
+    desc         => 'Application root',
+);
+my $app = compose(router => $routing)->to_app;
+```
+
+**After:** let Compose construct that root directly.
+
+```perl
+my $app = compose(
+    routes       => [route('/' => \&home)],
+    http_default => $default,
+    desc         => 'Application root',
+)->to_app;
+```
+
+Compose `middleware` remains the outer application-wide boundary. Do not move
+Router middleware there while simplifying a reusable subsystem.
+
+### Preserve a reusable immutable Router
+
+**Before:** Compose retained the Router as its own root.
+
+```perl
+compose(router => $routing)
+```
+
+**After:** Compose owns the outer Router and the root Mount retains the exact
+configured child.
+
+```perl
+compose(routes => [mount('/' => app => $routing)])
+```
+
+The root Mount consumes no path, and leaving it unnamed adds no namespace to
+slash route names. Once it is selected, the child Router owns its 404, 405, and
+protocol misses; the outer Router does not resume scanning, so later root
+siblings cannot win. The child keeps its middleware, `http_default`, `desc`,
+identity, and Resolver.
+
+### Deploy App and Endpoint frontends ordinarily
+
+`PAGI::App::Router` and `PAGI::Endpoint::Router` already implement `to_app`,
+so ordinary root Mounts pass those frontend objects directly. `to_router`
+remains the explicit conversion when a parent must discover descendant names or
+retain an immutable snapshot; Compose and Mount perform no hidden conversion.
+
+```perl
+my $app = compose(
+    routes => [mount('/' => app => $builder)],
+)->to_app;
+
+my $endpoint_app = compose(
+    routes => [mount('/' => app => $endpoint)],
+)->to_app;
+```
+
+The direct Mount is an opaque application boundary to the outer Resolver, but
+the frontend's own handlers and Router continue to dispatch normally.
+
+### Preserve a PAGI::App::Router snapshot
+
+**Before: historical removed constructor form.** Materialize the builder inside
+the removed constructor form.
+
+```perl
+compose(router => $builder->to_router)
+```
+
+**After: retain an inspectable snapshot explicitly.** Choose and retain one
+immutable snapshot.
+
+```perl
+my $snapshot = $builder->to_router;
+compose(routes => [mount('/' => app => $snapshot)])
+```
+
+Retaining the snapshot keeps inspection, reverse routing, and compilation on
+one stable immutable graph. This is an inspection choice, not a requirement
+for ordinary deployment. Compose does not call `to_router` for you.
+
+### Preserve a PAGI::Endpoint::Router snapshot
+
+**Before: historical removed constructor form.** Pass a fresh Endpoint snapshot
+through the removed constructor form.
+
+```perl
+compose(router => $endpoint->to_router)
+```
+
+**After: retain an inspectable snapshot explicitly.** Retain the Endpoint
+snapshot as the root Mount application.
+
+```perl
+my $snapshot = $endpoint->to_router;
+compose(routes => [mount('/' => app => $snapshot)])
+```
+
+This keeps the Endpoint object's configured immutable Router inspectable.
+It is not required for ordinary deployment: passing `$endpoint` itself as the
+Mount `app` is deliberately opaque to the outer Resolver.
+
+### Deploy a bare Router directly
+
+**Before:** use Compose only to reach the Router application.
+
+```perl
+my $app = compose(router => $routing)->to_app;
+```
+
+**After:** deploy the Router directly when its own routing outcomes are the
+entire required boundary.
+
+```perl
+my $app = $routing->to_app;
+```
+
+Direct Router deployment still owns HTTP 404/405, protocol misses, routing
+middleware, and its Router HeadBoundary. It does not provide Compose's root
+lifespan, ErrorHandler, response-completion guard, application middleware, or
+outer HEAD boundary. A bare Router declines lifespan; strict server lifespan
+mode rejects that decline.
+
+### Flatten direct child nodes deliberately
+
+**Before:** preserve the configured Router as the Compose root.
+
+```perl
+compose(router => $routing)
+```
+
+**After:** copy only its direct child nodes into a newly constructed root when
+that policy loss is intentional.
+
+```perl
+compose(routes => $routing->routes)
+```
+
+This is flattening, not Router preservation. It discards the source Router's
+middleware, `http_default`, `desc`, identity, and Resolver. The copied Route
+and Mount objects remain ordinary direct children of the new root, but the
+source Router no longer owns their outcomes as a selected child boundary.
+
+For arbitrary native applications, Compose has no direct replacement. Deploy
+the native coderef directly, or call `to_app` once on its component. A root
+Mount is not an equivalent conversion for an arbitrary application: it adds
+Router selection, prefix ownership, routing metadata, and protocol policy.
+
 ## Breaking: use explicit middleware descriptions at core boundaries
 
 The immutable core middleware lists in Route, Mount, Router, and Compose now
@@ -88,7 +256,7 @@ an arity guess:
 ```text
 Route CODE endpoint        -> one Request/WebSocket/SSE argument
 Route to_app object        -> native PAGI application
-Mount/Compose/default CODE -> native PAGI application
+Mount/default CODE         -> native PAGI application
 handler result             -> native CODE or instantiated to_app object
 ```
 
@@ -548,8 +716,8 @@ await invoke_app($application, $scope, $receive, $send);
 ```
 
 A custom one-Request default uses `request_response($handler)`. A Pages
-application needs no adapter at `http_default`, Mount `app`, Compose `app`, or
-a Route. Route and Mount continue to own different path shapes:
+application needs no adapter at `http_default`, Mount `app`, or a Route. Route
+and Mount continue to own different path shapes:
 
 ```text
 Route('/x')       exact complete path leaf
@@ -1349,7 +1517,7 @@ middleware('ErrorHandler',
 The wrapper adapts ErrorHandler's `($request, $error)` callback to its required
 concrete Response. It may inspect `$error` when deliberately choosing safe
 response fields. Source-free Pages values are applications and belong at
-Route, Mount, Router-default, or Compose application boundaries instead.
+Route, Mount, or Router-default application boundaries instead.
 
 To use request negotiation, remove `content_type` and do not install a
 representation-fixing handler. Existing custom handlers remain authoritative
@@ -1531,7 +1699,9 @@ application-root HEAD boundary plus root safety and lifecycle.
 my $routing_app = $routing->to_app;
 
 # Deployed application: adds an outer HEAD owner, ErrorHandler, guard, lifespan.
-my $app = compose(app => $routing)->to_app;
+my $app = compose(
+    routes => [mount('/' => app => $routing)],
+)->to_app;
 ```
 
 The bare Router still lacks the root ErrorHandler, response-completion guard,
@@ -1539,14 +1709,17 @@ and lifespan driver. It also does not turn silence from a selected application o
 Mount target into a miss. Compose reports that silence as incomplete output
 and renders 500 before response start.
 
-For every HTTP target, Compose installs this exact outer-to-inner graph:
+For a preserved child Router, Compose installs this exact outer-to-inner HTTP
+graph:
 
 ```text
 outer idempotent application-root HEAD boundary
   Compose ErrorHandler failsafe
     response-completion guard
       author Compose middleware, in listed order
-        target Router or application
+        Compose root Router
+          unnamed root Mount
+            preserved child Router
 ```
 
 These automatic layers are mandatory and deliberately stock. Compose has no
@@ -1665,7 +1838,7 @@ my $routing = PAGI::App::Cascade->new(
     apps => [$static_app, $api_router->to_app, $site_router->to_app],
 );
 
-my $app = compose(app => $routing)->to_app;
+my $app = $routing->to_app;
 ```
 
 A final Router response passes through unchanged. An arbitrary silent child is
@@ -1783,8 +1956,9 @@ closure builder, or a method-oriented Endpoint, then compile the same immutable
 `PAGI::Routing::Router` model.
 
 ```perl
+use PAGI::Compose qw(compose);
 use PAGI::Response;
-use PAGI::Routing qw(router route);
+use PAGI::Routing qw(mount router route);
 
 my $immutable = router(routes => [
     route('/health' => sub { return PAGI::Response::text_response('ok') }),
@@ -1792,15 +1966,22 @@ my $immutable = router(routes => [
 
 my $builder = PAGI::App::Router->new;
 $builder->get('/health' => sub { return PAGI::Response::text_response('ok') });
-my $builder_snapshot = $builder->to_router;
+my $builder_app = compose(
+    routes => [mount('/' => app => $builder)],
+)->to_app;
 
 my $endpoint = MyApp::Endpoint->new(repository => $repository);
-my $endpoint_snapshot = $endpoint->to_router;
+my $endpoint_app = compose(
+    routes => [mount('/' => app => $endpoint)],
+)->to_app;
 ```
 
 Use `PAGI::Routing` for already-immutable composition, `PAGI::App::Router` for
 incremental closure declarations, and `PAGI::Endpoint::Router` for handlers
-bound to one configured object.
+bound to one configured object. App and Endpoint frontends already implement
+`to_app`, so these ordinary deployments mount them directly. Convert with
+`to_router` only when a parent must discover descendant names or retain an
+immutable snapshot for inspection.
 
 Why: one compiler now gives all three frontends the same matching, middleware,
 metadata, reverse-routing, and Router-owned HTTP outcomes.
@@ -1929,7 +2110,7 @@ outbound buffering, watermarks, and drain callbacks move behind
 ### Pages factories are source-free
 
 `PAGI::Pages` functions and methods return deferred native HTTP applications.
-Pass them directly to Route, Mount, Router defaults, Compose, or `invoke_app`.
+Pass them directly to Route, Mount, Router defaults, or `invoke_app`.
 There is no arity-dependent Pages bridge.
 
 ### Direct protocol ownership is now complete
@@ -2124,12 +2305,14 @@ use MyApp::Endpoint::Admin;
 my $users = MyApp::Endpoint::Users->new(repository => $repository);
 my $admin = MyApp::Endpoint::Admin->new(policy => $policy);
 
-$r->mount('/users', app => $users->to_router)->name('users');
-$r->mount('/admin', app => $admin->to_router)->name('admin');
+$r->mount('/users', app => $users)->name('users');
+$r->mount('/admin', app => $admin)->name('admin');
 ```
 
 Why: explicit loading and construction make configuration, object identity,
 dependency failures, and recursive router graphs visible to the application.
+These are ordinary opaque application mounts; convert with `to_router` only
+when the parent must discover a child's names or inspect a retained snapshot.
 
 ## Declaration order now governs routes and mounts
 
@@ -2280,10 +2463,11 @@ read it through the strict Request State facade.
 ```perl
 use PAGI::Compose qw(compose);
 use PAGI::Response;
+use PAGI::Routing qw(mount);
 use PAGI::State qw(app_state);
 
 my $app = compose(
-    app => $endpoint->to_app,
+    routes => [mount('/' => app => $endpoint)],
     lifespan => {
         startup  => sub { $_[0]{database} = connect_database() },
         shutdown => sub { $_[0]{database}->disconnect },
@@ -2533,8 +2717,8 @@ loading, construction, configuration, and `wrap` behavior:
 middleware('RequestId', header => 'X-Request-ID');
 ```
 
-This distinction applies to Route application values, Mount `app`, Router `http_default`, and
-Compose `app`; `PAGI::Test::Client`'s `app`; `PAGI::Lifespan`'s `app`/`wrap`
+This distinction applies to Route application values, Mount `app`, and Router
+`http_default`; `PAGI::Test::Client`'s `app`; `PAGI::Lifespan`'s `app`/`wrap`
 target; `PAGI::Middleware::Builder`'s final fallback and Mount targets; and
 URLMap/Cascade application entries. A package-name application is rejected
 synchronously rather than guessed.
@@ -2601,15 +2785,27 @@ child `/` leaf without redirecting.
 PAGI follows Starlette's Route/Mount/Router/application topology, not every
 method on Starlette Request. `PAGI::Request` owns HTTP input; imports identify
 the Router or middleware that supplies optional behavior. Ordinary handlers
-receive direct Request, WebSocket, or SSE objects; `as_app`, Mount `app`, Router
-`http_default`, and Compose `app` are native three-channel application
-positions. Constraints validate without coercion. Logical names use slash
+receive direct Request, WebSocket, or SSE objects; `as_app`, Mount `app`, and
+Router `http_default` are native three-channel application positions. Compose
+accepts only `routes`; preserve an immutable Router through an explicit Mount
+inside that list. Constraints validate without coercion. Logical names use slash
 addresses and relative `PAGI::Routing::URL` lookup. SSE is first-class. Middleware is pure
 PAGI app-to-app wrapping at Route, Mount, Router, and Compose boundaries.
 
+Current Starlette does not subclass Router. Its application object owns
+`self.router`, while lifespan handling is stored on Router, so a standalone
+Starlette Router is lifecycle-capable. Mounted Starlette Routers do not receive
+the root lifespan exchange. See Starlette's official
+[application](https://github.com/Kludex/starlette/blob/main/starlette/applications.py),
+[routing](https://github.com/Kludex/starlette/blob/main/starlette/routing.py),
+and [routing-test](https://github.com/Kludex/starlette/blob/main/tests/test_routing.py)
+sources.
+
+PAGI preserves one non-cascading root lifecycle but keeps it on Compose. A bare
+PAGI Router declines lifespan, and strict mode rejects that decline.
 Starlette's single multiprotocol Router `default` was considered and
 deliberately not copied. PAGI's HTTP-only default preserves stock WebSocket
-and SSE misses. Compose, not Router, owns root lifespan.
+and SSE misses.
 OpenAPI and schema support remain deferred until a concrete consumer is
 designed; `schema`,
 `include_in_schema`, registries, and placeholder metadata are not shipped.

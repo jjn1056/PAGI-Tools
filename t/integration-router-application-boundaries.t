@@ -47,6 +47,15 @@ sub response_body {
         grep { ($_->{type} // '') eq 'http.response.body' } @$events;
 }
 
+sub source_text {
+    my ($path) = @_;
+    open my $fh, '<', $path or die "cannot open $path: $!\n";
+    local $/;
+    my $source = <$fh>;
+    close $fh or die "cannot close $path: $!\n";
+    return $source;
+}
+
 {
     package Local::MountedIntegrationApp;
 
@@ -70,16 +79,25 @@ sub response_body {
 
 local $ENV{PAGI_ENV} = 'production';
 
-subtest 'background-task example remains a composable routing object during response migration' => sub {
+subtest 'background-task example keeps response-first HTTP dispatch at the Compose root' => sub {
     my $file = "$Bin/../examples/background-tasks/app.pl";
+    my $source = source_text($file);
+    like($source,
+        qr{mount\('/'\s*=>\s*app\s*=>\s*\$router\)},
+        'background-task root mounts the App Router application directly');
+    unlike($source, qr/\$router->to_router/,
+        'background-task root does not materialize an unused snapshot');
     my $app = do $file;
     my $load_error = $@;
     ok(!$load_error, 'background-task example loads cleanly')
         or diag($load_error);
     isa_ok($app, 'PAGI::Compose');
+    my $events = run_http($app->to_app, '/');
+    like(response_body($events), qr/Background Tasks Demo/,
+        'the root Router dispatches the response-first index through Compose');
 };
 
-subtest 'a mounted object is one compiled application boundary' => sub {
+subtest 'a directly mounted application object compiles once per parent graph' => sub {
     my $component = Local::MountedIntegrationApp->new;
     my $middleware_builds = 0;
     my $mount_middleware = middleware(sub {
@@ -112,7 +130,7 @@ subtest 'request_response is the explicit bridge at application-native positions
     my @cases = (
         ['Router http_default', router(routes => [], http_default => request_response($handler))->to_app],
         ['Mount app', router(routes => [mount('/bridge', app => request_response($handler))])->to_app, '/bridge'],
-        ['Compose app', compose(app => request_response($handler))->to_app],
+        ['Direct native app', request_response($handler)->to_app],
     );
     for my $case (@cases) {
         my ($label, $app, $path) = @$case;

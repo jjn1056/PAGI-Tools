@@ -85,8 +85,8 @@ Use the handler seam to force a fixed representation:
 
 The wrapper may inspect C<$request> or C<$error> when it deliberately chooses
 safe response fields. ErrorHandler requires a concrete Response from this
-custom renderer; source-free Pages application values belong at Route,
-Mount, Router-default, or Compose application boundaries instead. Pages does not
+custom renderer; source-free Pages application values belong at Route, Mount,
+or Router-default application boundaries instead. Pages does not
 consume that callback metadata itself.
 
 =back
@@ -324,14 +324,21 @@ __END__
 ErrorHandler is ordinary middleware and uses the same placement rules as every
 pure PAGI wrapper. Application middleware provides whole-application policy:
 
+    use PAGI::Compose qw(compose);
+    use PAGI::Routing qw(middleware mount);
+
     compose(
-        app => $routing,
+        routes => [mount('/' => app => $routing)],
         middleware => [
             middleware('ErrorHandler',
                 handler  => \&site_server_error,
                 on_error => \&report_error),
         ],
     )
+
+The unnamed root Mount preserves the configured Router's middleware, default,
+description, identity, and Resolver. Compose owns a distinct outer root Router
+and the application-wide ErrorHandler placement shown here.
 
 Router middleware provides reusable subsystem policy, while a routing-aware
 Mount middleware list changes only one mounted occurrence:

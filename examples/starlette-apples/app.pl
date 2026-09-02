@@ -9,7 +9,7 @@ use AppleApp::Model qw(apple_model);
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(file_response json_response);
-use PAGI::Routing qw(route mount router middleware);
+use PAGI::Routing qw(route mount middleware);
 use PAGI::Routing::URL qw(url_for path_for);
 use PAGI::Utils qw(app_path);
 
@@ -107,37 +107,36 @@ async sub delete_apple($request) {
 }
 
 compose(
-    app => router(
-        routes => [
-            route('/' => file_response($manager_file, inline => 1),
-                name => 'home',
-                desc => 'Apple manager SPA',
-            ),
-            route('/welcome' => welcome(),
-                name => 'welcome',
-                desc => 'PAGI welcome page',
-            ),
-            mount('/apples',
-                routes => [
-                    route('/' => \&list_apples,
-                        methods => ['GET'], name => 'list'),
-                    route('/' => \&create_apple,
-                        methods => ['POST'], name => 'create'),
-                    route('/{apple_id:&Int}' => \&read_apple,
-                        methods => ['GET'], name => 'read'),
-                    route('/{apple_id:&Int}' => \&update_apple,
-                        methods => ['PUT'], name => 'update'),
-                    route('/{apple_id:&Int}' => \&delete_apple,
-                        methods => ['DELETE'], name => 'delete'),
-                ],
-                name       => 'apples',
-                middleware => [middleware(\&with_apples_api_header)],
-            ),
-        ],
-        http_default => not_found(
-            detail => 'That page does not exist in the Apple demo.',
+    routes => [
+        route('/' => file_response($manager_file, inline => 1),
+            name => 'home',
+            desc => 'Apple manager SPA',
         ),
+        route('/welcome' => welcome(),
+            name => 'welcome',
+            desc => 'PAGI welcome page',
+        ),
+        mount('/apples',
+            routes => [
+                route('/' => \&list_apples,
+                    methods => ['GET'], name => 'list'),
+                route('/' => \&create_apple,
+                    methods => ['POST'], name => 'create'),
+                route('/{apple_id:&Int}' => \&read_apple,
+                    methods => ['GET'], name => 'read'),
+                route('/{apple_id:&Int}' => \&update_apple,
+                    methods => ['PUT'], name => 'update'),
+                route('/{apple_id:&Int}' => \&delete_apple,
+                    methods => ['DELETE'], name => 'delete'),
+            ],
+            name       => 'apples',
+            middleware => [middleware(\&with_apples_api_header)],
+        ),
+    ],
+    http_default => not_found(
+        detail => 'That page does not exist in the Apple demo.',
     ),
     middleware => [middleware('RequestId')],
     lifespan => { startup => \&startup },
+    desc     => 'Starlette apples comparison application',
 );

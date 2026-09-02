@@ -12,12 +12,15 @@ Callable values keep these four meanings:
 
     Route CODE endpoint        -> one Request/WebSocket/SSE argument
     Route to_app object        -> native PAGI application
-    Mount/Compose/default CODE -> native PAGI application
+    Mount/default CODE         -> native PAGI application
     handler result             -> native CODE or instantiated to_app object
 
 A native CODE at a Route is wrapped explicitly with `PAGI::Utils::as_app`.
-Mount, Compose `app`, and Router `http_default` remain native application
-positions and take a three-channel CODE directly.
+Mount `app` and Router `http_default` remain native application positions
+and take a three-channel CODE directly. Compose accepts only route declarations
+through `routes`. Preserve an existing immutable Router as the `app` of an
+explicit Mount inside that list; Compose does not accept an arbitrary
+application directly.
 
 Raw PAGI is deliberately minimal — an application is just an `async` sub that
 speaks the protocol directly:
@@ -31,7 +34,7 @@ speaks the protocol directly:
             status  => 200,
             headers => [['content-type', 'application/json']],
         });
-        await $send->({ type => 'http.response.body', body => '{"hello":"world"}' });
+        await $send->({ type => 'http.response.body', body => '{"hello":"world"}', more => 0 });
     };
 
 PAGI-Tools adds the ergonomics — requests, response values, routing, a
@@ -40,6 +43,7 @@ middleware suite — so the same application reads like this:
     use PAGI::App::Router;
     use PAGI::Compose qw(compose);
     use PAGI::Response qw(json_response);
+    use PAGI::Routing qw(mount);
     use Future::AsyncAwait;
 
     my $router = PAGI::App::Router->new;
@@ -54,8 +58,14 @@ middleware suite — so the same application reads like this:
         return json_response({ id => $request->path_param('id') });
     })->name('user');
 
-    my $routing = $router->to_router; # retain one immutable snapshot
-    my $app = compose(app => $routing)->to_app; # complete deployed app
+    my $app = compose(
+        routes => [mount('/' => app => $router)],
+    )->to_app; # complete deployed app
+
+An App Router already implements `to_app`, so mount it directly for ordinary
+application deployment. Convert it with `to_router` only when a parent must
+inspect or discover descendant names, or when the immutable snapshot itself
+must be retained.
 
 For a small conventional landing page or HTTP error, [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) builds a
 deferred negotiated HTTP application:
@@ -104,11 +114,11 @@ Use the functional frontend when the declarations are already immutable:
         return json_response({ hello => 'world' });
     }
 
-    my $routing = router(routes => [
-        route('/' => \&home, name => 'home'),
-    ]);
-
-    my $app = compose(app => $routing)->to_app;
+    my $app = compose(
+        routes => [
+            route('/' => \&home, name => 'home'),
+        ],
+    )->to_app;
 
 Every Mount names its target: `routes => [...]` constructs a complete
 child Router, while `app => $child` composes a native application or
@@ -169,11 +179,15 @@ description:
     )->to_app;
 
 [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) is an optional application-root composer, not a base class or
-a replacement router. Build an explicit router and pass it through `app` when
-router-specific configuration or inspection is needed. Configure a Router
-`http_default` for custom missing-route presentation and ordinary ErrorHandler
-middleware for official application errors. Compose keeps its stock error and
-response-lifecycle boundary outside author middleware as the final safety net.
+a replacement router. Its only grammar is `routes`, from which it constructs
+and owns one distinct root Router. Preserve a configured Router by identity
+with `routes => [mount('/' => app => $router)]`. Compose inspection starts
+at its own root: `routes` returns that Mount as the direct child, while reverse
+routing traverses the inspectable child without flattening it. Configure a
+Router `http_default` for custom missing-route presentation and ordinary
+ErrorHandler middleware for official application errors. Compose keeps root
+lifespan and its stock error and response-lifecycle boundary outside author
+middleware as the final safety net.
 
 Declarative mount prefixes accept both the exact prefix and its slash form
 without redirecting, a deliberate difference from Starlette's default mount
@@ -192,11 +206,14 @@ The Starlette influence is conceptual, not API identity. PAGI distinguishes
 direct protocol handlers from native three-channel application positions, validates
 constraints without coercion, uses slash logical names and relative lookup,
 treats SSE as a first-class scope, and exposes an HTTP-only `http_default`.
-Starlette's single multiprotocol Router `default` was considered and not
-copied, so PAGI retains its stock WebSocket and SSE miss behavior. PAGI
-middleware is pure app-to-app wrapping; Compose, rather than Router, owns root
-lifespan. OpenAPI and schema generation remain deferred until a concrete
-consumer is designed.
+Current Starlette owns `self.router` without subclassing Router and stores
+lifespan handling on Router, making a standalone Starlette Router
+lifecycle-capable. Mounted Starlette Routers do not receive lifespan. PAGI
+preserves one non-cascading root lifecycle but keeps it on Compose; a bare PAGI
+Router declines lifespan and strict mode rejects it. Starlette's single
+multiprotocol Router `default` was considered and not copied, so PAGI retains
+its stock WebSocket and SSE miss behavior. OpenAPI and schema generation remain
+deferred until a concrete consumer is designed.
 
 Run it with any PAGI server (such as `pagi-server` from the `PAGI-Server`
 distribution), or mount it inside a larger PAGI application.
@@ -230,8 +247,9 @@ and HTTP error applications
 [PAGI::Endpoint::Router](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ARouter) - immutable functional, mutable imperative, and
 method-oriented frontends over one immutable routing engine
 - [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) - optional immutable application-root composition of
-one request target, application middleware, explicit lifecycle callbacks, and
-mandatory HTTP routing/error failsafes
+one routes-built root Router, application middleware, explicit lifecycle
+callbacks, and mandatory HTTP error/response-lifecycle failsafes; configured
+Routers enter through explicit Mounts
 - [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and friends - in-process test utilities for
 PAGI applications
 - [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils) - composition, lifespan, and lexical path helpers,

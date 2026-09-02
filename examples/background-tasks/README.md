@@ -7,12 +7,19 @@ its App Router declarations wrap native three-channel applications with
 `as_app`. Ordinary App handlers instead receive `PAGI::Request`, return an
 application value, and leave invocation to the shared routing compiler.
 
-The final Router is deployed through `compose(app => $router)`. Direct
-`$router->to_app` remains useful as a low-level routing component, and the
-Router itself emits complete stock or configured 404 and 405 responses,
-including negotiated bodies and `Allow`. Compose supplies lifecycle,
-application-error, and response-completion safety around that routing
-component; it does not reinterpret the Router's fallback outcomes.
+`PAGI::App::Router` already implements `to_app`, so Compose mounts the
+background-task frontend directly:
+
+```perl
+compose(routes => [mount('/' => app => $router)]);
+```
+
+The unnamed root Mount consumes no path and keeps the Router's middleware,
+default, and routing outcomes. The outer Compose Router treats the frontend as
+an application boundary and does not inspect its descendant names. The frontend
+already implements `to_app`: mount it directly for ordinary deployment. Use
+`to_router` only when a parent must discover those names or retain an immutable
+snapshot; this application has no such parent-side consumer.
 
 ## Run
 

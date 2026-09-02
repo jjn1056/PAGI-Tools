@@ -2,6 +2,22 @@
 
 0.002003 - UNRELEASED
 
+  [Compose routes-only root]
+  - App Router and Endpoint Router objects already implement `to_app`, so
+    ordinary root Mounts now pass those frontend objects directly. `to_router`
+    remains the explicit conversion when a parent must discover descendant
+    names or retain an immutable snapshot; Compose and Mount perform no hidden
+    conversion.
+  - BREAKING: Compose now accepts only `routes` and always constructs and owns
+    a distinct root Router. Existing Routers are composed through an explicit
+    Mount; an unnamed root Mount consumes no path, adds no route-name namespace,
+    and preserves the child Router's middleware, default, description,
+    identity, Resolver, and owned outcomes. Passing `$router->routes` is
+    deliberate flattening: it copies direct nodes into the new root and
+    discards those Router-level policies and identity. Direct Router `to_app`
+    remains available without Compose root lifespan, ErrorHandler,
+    response-completion guard, application middleware, or outer HEAD boundary.
+
   [Buffering middleware]
   - NEW: PAGI::Middleware::BufferedResponse, two helpers for the
     buffer-and-re-emit pattern. Four middleware had each hand-rolled it and
@@ -149,9 +165,11 @@
     accepted WebSocket/SSE sessions remain live protocol loops, not HTTP
     Response applications.
   - BREAKING: Route CODE endpoints receive one Request, WebSocket, or SSE;
-    Route application objects own the native PAGI triplet. Mount, Compose, and
-    Router defaults retain the native CODE contract. HTTP handler results are
-    native CODE or instantiated `to_app` objects. Native Route CODE uses
+    Route application objects own the native PAGI triplet. Mount `app` and
+    Router `http_default` retain the native CODE contract. Compose accepts only
+    route declarations through `routes`; existing immutable Routers enter as
+    explicit Mount applications. HTTP handler results are native CODE or
+    instantiated `to_app` objects. Native Route CODE uses
     `as_app`; GET plus automatic HEAD is the default, while scalar
     `methods => '*'` is unrestricted. Object `allowed_methods` is snapshotted
     once at Route construction, so routed Endpoint::HTTP objects contribute
@@ -416,11 +434,12 @@
   - All immutable declarative middleware lists now accept the additive
     bare-factory shorthand; the chat showcase uses it at its Compose application root.
   - New PAGI::Compose is an optional immutable application-root description
-    combining either declarative routes or one existing PAGI component with
-    application-wide pure event middleware and explicit startup/shutdown
-    callbacks. It owns lifespan without delegating it, requires server-provided
-    state when callbacks are configured, normalizes immediate/Future callback
-    completion, and adds an outer idempotent application-root HEAD boundary.
+    combining declarative routes with application-wide pure event middleware
+    and explicit startup/shutdown callbacks. It constructs its own root Router;
+    configured Routers are preserved beneath explicit Mounts. It owns lifespan
+    without delegating it, requires server-provided state when callbacks are
+    configured, normalizes immediate/Future callback completion, and adds an
+    outer idempotent application-root HEAD boundary.
     A directly compiled Router keeps its own HEAD boundary; the shared marker
     leaves the outermost participant as wire owner so all middleware sees the
     complete representation before suppression.

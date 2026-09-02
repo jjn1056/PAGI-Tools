@@ -65,6 +65,11 @@ for my $case (@cases) {
             like($response->text, $case->{title}, 'index comes from the public root');
 
             if ($case->{name} eq 'endpoint demo') {
+                like($source,
+                    qr{mount\('/'\s*=>\s*app\s*=>\s*\$router\)},
+                    'endpoint demo mounts the App Router application directly');
+                unlike($source, qr/\$router->to_router/,
+                    'endpoint demo does not materialize an unused snapshot');
                 unlike($source,
                     qr/\$ctx\b|PAGI::Context|->request|->websocket|->sse/,
                     'endpoint callbacks do not reach through a Context object');

@@ -37,7 +37,7 @@ Callable meaning depends on its structural position:
 
   Route CODE endpoint        -> one Request/WebSocket/SSE argument
   Route to_app object        -> native PAGI application
-  Mount/Compose/default CODE -> native PAGI application
+  Mount/default CODE         -> native PAGI application
   handler result             -> native CODE or instantiated to_app object
 
 =head2 A Declarative Route Tree with Package Handlers
@@ -64,18 +64,17 @@ guessing:
   use PAGI::Compose qw(compose);
   use PAGI::Routing qw(:routes);
 
-  my $routing = router(
+  compose(
       routes => [
           route('/' => \&MyApp::Routes::Home::home, name => 'home'),
       ],
-  );
+  )->to_app;
 
-  compose(app => $routing)->to_app;
-
-The final expression is the complete native PAGI app. A direct
-C<< $routing->to_app >> already emits the Router's stock/custom 404 and built-in
-405, but has no root ErrorHandler, response guard, or lifespan. Compile once
-for the application instance; do not call C<to_app> inside a request.
+The final expression is the complete native PAGI app. If the same declarations
+are constructed as a separate Router, its direct C<to_app> already emits the
+Router's stock/custom 404 and built-in 405, but has no root ErrorHandler,
+response guard, or lifespan. Compile once for the application instance; do not
+call C<to_app> inside a request.
 
 =head2 Inline, Router, and Application Mounts
 
@@ -201,7 +200,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   use PAGI::Compose qw(compose);
   use PAGI::Pages qw(welcome not_found);
   use PAGI::Response qw(file_response json_response);
-  use PAGI::Routing qw(route mount router middleware);
+  use PAGI::Routing qw(route mount middleware);
   use PAGI::Routing::URL qw(url_for path_for);
   use PAGI::Utils qw(app_path);
 
@@ -299,39 +298,38 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   }
 
   compose(
-      app => router(
-          routes => [
-              route('/' => file_response($manager_file, inline => 1),
-                  name => 'home',
-                  desc => 'Apple manager SPA',
-              ),
-              route('/welcome' => welcome(),
-                  name => 'welcome',
-                  desc => 'PAGI welcome page',
-              ),
-              mount('/apples',
-                  routes => [
-                      route('/' => \&list_apples,
-                          methods => ['GET'], name => 'list'),
-                      route('/' => \&create_apple,
-                          methods => ['POST'], name => 'create'),
-                      route('/{apple_id:&Int}' => \&read_apple,
-                          methods => ['GET'], name => 'read'),
-                      route('/{apple_id:&Int}' => \&update_apple,
-                          methods => ['PUT'], name => 'update'),
-                      route('/{apple_id:&Int}' => \&delete_apple,
-                          methods => ['DELETE'], name => 'delete'),
-                  ],
-                  name       => 'apples',
-                  middleware => [middleware(\&with_apples_api_header)],
-              ),
-          ],
-          http_default => not_found(
-              detail => 'That page does not exist in the Apple demo.',
+      routes => [
+          route('/' => file_response($manager_file, inline => 1),
+              name => 'home',
+              desc => 'Apple manager SPA',
           ),
+          route('/welcome' => welcome(),
+              name => 'welcome',
+              desc => 'PAGI welcome page',
+          ),
+          mount('/apples',
+              routes => [
+                  route('/' => \&list_apples,
+                      methods => ['GET'], name => 'list'),
+                  route('/' => \&create_apple,
+                      methods => ['POST'], name => 'create'),
+                  route('/{apple_id:&Int}' => \&read_apple,
+                      methods => ['GET'], name => 'read'),
+                  route('/{apple_id:&Int}' => \&update_apple,
+                      methods => ['PUT'], name => 'update'),
+                  route('/{apple_id:&Int}' => \&delete_apple,
+                      methods => ['DELETE'], name => 'delete'),
+              ],
+              name       => 'apples',
+              middleware => [middleware(\&with_apples_api_header)],
+          ),
+      ],
+      http_default => not_found(
+          detail => 'That page does not exist in the Apple demo.',
       ),
       middleware => [middleware('RequestId')],
       lifespan => { startup => \&startup },
+      desc     => 'Starlette apples comparison application',
   );
 C</apples> and C</apples/> reach the child C</> leaves. The selected child owns
 C<PATCH /apples> and its C<Allow: GET, HEAD, POST>. Constraint C<Int> validates
@@ -426,7 +424,7 @@ negotiated 405 with authoritative C<Allow>:
 
   use PAGI::Compose qw(compose);
   use PAGI::Pages;
-  use PAGI::Routing qw(router);
+  use PAGI::Routing qw(mount router);
 
   my $pages = PAGI::Pages->new;
 
@@ -436,7 +434,9 @@ negotiated 405 with authoritative C<Allow>:
           detail => 'No application route matched.',
       ),
   );
-  my $app = compose(app => $routing)->to_app;
+  my $app = compose(
+      routes => [mount('/' => app => $routing)],
+  )->to_app;
 
 Pages selects HTML, RFC 9457 problem JSON, or text from C<Accept>, adds
 C<Vary: Accept>, and defaults errors to C<Cache-Control: no-store>. Use a
@@ -450,13 +450,14 @@ HEAD to the Router-generated 405 union.
 
 =head2 Compose Safety and Application Error Policy
 
-Compose installs the same root safety graph for every HTTP target:
+Compose installs the same root safety graph around the distinct root Router it
+constructs from C<routes>:
 
   outer idempotent application-root HEAD boundary
     automatic ErrorHandler
       response-completion guard
         author middleware, in listed order
-          target
+          Compose root Router
 
 Router 404/405 responses pass through this graph unchanged. Compose's stock
 error response is a negotiated, no-store Pages 500, with a final hardcoded
@@ -472,7 +473,7 @@ above; the outer idempotent HEAD boundary becomes the wire owner, and the guard
 converts pre-start silence into its production-safe 500.
 
   my $app = compose(
-      app => $routing,
+      routes => [mount('/' => app => $routing)],
       middleware => [
           middleware('RequestId'),
           middleware('AccessLog'),
@@ -866,9 +867,10 @@ deployed application root with L<PAGI::Compose>:
 
   use Future::AsyncAwait;
   use PAGI::Compose qw(compose);
+  use PAGI::Routing qw(mount);
 
   my $app = compose(
-      app => $routing,
+      routes => [mount('/' => app => $routing)],
       lifespan => {
         startup => async sub {
           my ($state, $scope) = @_;
@@ -1114,7 +1116,14 @@ L<PAGI::Endpoint::Router> provides an object-oriented approach to routing. You d
   # In app.pl:
   # use MyApp;
   # use PAGI::Compose qw(compose);
-  # compose(app => MyApp->new(repository => $repository))->to_app;
+  # use PAGI::Routing qw(mount);
+  # my $endpoint = MyApp->new(repository => $repository);
+  # compose(routes => [mount('/' => app => $endpoint)])->to_app;
+
+An Endpoint Router already implements C<to_app>, so this root Mount is ordinary
+application deployment. Use C<to_router> only when a parent must inspect or
+discover a child's routes, or when retaining an immutable snapshot is itself
+the goal.
 
 Handler methods are called with:
 
@@ -1240,12 +1249,12 @@ server-provided state:
 
   use PAGI::Compose qw(compose);
   use MyApp;
-  use PAGI::Routing qw(middleware);
+  use PAGI::Routing qw(middleware mount);
 
   my $endpoint = MyApp->new(repository => $repository);
 
   my $app = compose(
-      app => $endpoint,
+      routes => [mount('/' => app => $endpoint)],
       middleware => [middleware($application_logging)],
       lifespan => {
           startup  => async sub ($state, $scope) {
@@ -1279,11 +1288,13 @@ is specifically required or when composing a hand-built native application:
       shutdown => async sub ($state) {
           $state->{db}->disconnect if $state->{db};
       },
-      app      => compose(app => $endpoint)->to_app,
+      app      => $endpoint->to_app,
   )->to_app;
 
-Here the low-level wrapper owns lifecycle hooks while the nested Router owns
-its mandatory 404 and 405 outcomes and Compose owns HTTP completion safety.
+Here the low-level wrapper owns lifecycle hooks while the Endpoint's bare
+Router app owns its mandatory 404 and 405 outcomes. No Compose root is present,
+so application error handling and response-completion safety remain the
+low-level deployment's responsibility.
 
 =head3 Route-Level Middleware and Local Adapters
 
@@ -1404,7 +1415,7 @@ boundary:
       my ($self, $r) = @_;
 
       $r->get('/' => 'home')->name('home');
-      $r->mount('/api', app => $self->{api}->to_router)->name('api');
+      $r->mount('/api', app => $self->{api})->name('api');
   }
 
   async sub home {
@@ -1417,19 +1428,22 @@ boundary:
   # app.pl
   use MyApp;
   use PAGI::Compose qw(compose);
+  use PAGI::Routing qw(mount);
 
-  compose(app => MyApp->new(repository => $repository))->to_app;
+  my $endpoint = MyApp->new(repository => $repository);
+  compose(routes => [mount('/' => app => $endpoint)])->to_app;
 
 Now C</api> and C</api/42> are handled by the exact constructed child object.
-The retained snapshot can generate C</api/show> and inspect that child's
-metadata. Reusing the same child object at sibling placements reuses one child
-Router identity within the snapshot while each mount keeps its own path and
-local name.
+The root application deploys this API directly as an opaque application
+boundary. Use to_router only when a parent must inspect or discover descendant
+names. Reusing the same child object at sibling placements retains that exact
+configured object while each mount keeps its own path and local name.
 
 =head3 Complete Example
 
 This root keeps Endpoint configuration in ordinary object fields, request
-state in Compose lifespan state, and every declaration inspectable:
+state in Compose lifespan state, and named child declarations inspectable
+within its own Router:
 
   # lib/MyApp/People.pm
   package MyApp::People;
@@ -1627,6 +1641,7 @@ state in Compose lifespan state, and every declaration inspectable:
   use PAGI::App::File;
   use PAGI::Compose qw(compose);
   use MyApp;
+  use PAGI::Routing qw(middleware mount);
 
   my $repository = Local::Repository->new;
 
@@ -1653,9 +1668,8 @@ state in Compose lifespan state, and every declaration inspectable:
       access_factory => $access_factory,
   );
 
-  my $snapshot = $endpoint->to_router;
   compose(
-      app => $snapshot,
+      routes => [mount('/' => app => $endpoint)],
       middleware => [middleware($application_logging)],
       lifespan => {
           startup => async sub {
@@ -1698,15 +1712,23 @@ capabilities separate also lets a higher-level framework retain its own URL or
 controller API.
 
 Ordinary PAGI handlers receive the direct Request, WebSocket, or SSE object;
-C<as_app>, Mount C<app>, Router C<http_default>, and Compose C<app> receive native three-channel PAGI
-applications. Constraints validate without coercion. Logical names use slash
+C<as_app>, Mount C<app>, and Router C<http_default> receive native three-channel
+PAGI applications. Compose accepts only route declarations through C<routes>;
+an existing immutable Router is preserved as an explicit Mount application in
+that list.
+Constraints validate without coercion. Logical names use slash
 addresses and relative L<PAGI::Routing::URL> lookup. SSE is a first-class scope, and
 middleware at Router, Mount, Route, and Compose boundaries is pure PAGI
 app-to-app wrapping.
 
+Current Starlette owns C<self.router> without subclassing Router and stores
+lifespan handling on that Router. A standalone Starlette Router is therefore
+lifecycle-capable, while mounted Starlette Routers do not receive lifespan.
+PAGI preserves one non-cascading root lifecycle but keeps it on Compose. A bare
+PAGI Router declines lifespan, and strict mode rejects that decline.
 Starlette's single multiprotocol Router C<default> was considered and
 deliberately not copied. PAGI's C<http_default> handles only HTTP NONE, leaving
-stock WebSocket and SSE misses intact. Compose, not Router, owns root lifespan.
+stock WebSocket and SSE misses intact.
 OpenAPI/schema generation and C<include_in_schema> remain deferred; the
 inspectable immutable tree is a future seam, not a shipped schema API.
 
@@ -2206,6 +2228,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
   use PAGI::App::Router;
   use PAGI::Compose qw(compose);
   use PAGI::Response;
+  use PAGI::Routing qw(mount);
   use PAGI::Utils qw(as_app invoke_app);
 
   my $router = PAGI::App::Router->new;
@@ -2237,7 +2260,7 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
           ->retain();
   }));
 
-  compose(app => $router)->to_app;
+  compose(routes => [mount('/' => app => $router)])->to_app;
 
 B<Warning:> C<< ->retain() >> alone silently swallows errors - always add
 C<< ->on_fail() >> first.
@@ -2261,6 +2284,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
   use PAGI::App::Router;
   use PAGI::Compose qw(compose);
   use PAGI::Response;
+  use PAGI::Routing qw(mount);
 
   my $loop = IO::Async::Loop->new;
 
@@ -2299,7 +2323,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
       # $f->retain();
   }));
 
-  compose(app => $router)->to_app;
+  compose(routes => [mount('/' => app => $router)])->to_app;
 
 B<Warning:> IO::Async::Function forks child processes. If running with C<--workers N>, each server worker forks its own Function workers. With 4 server workers and 2 Function workers each, you have 12 processes. For high-volume CPU work, consider a dedicated job queue instead.
 

@@ -83,7 +83,7 @@ handlers receive their direct protocol objects:
 
   Route CODE endpoint        -> one Request/WebSocket/SSE argument
   Route to_app object        -> native PAGI application
-  Mount/Compose/default CODE -> native PAGI application
+  Mount/default CODE         -> native PAGI application
   handler result             -> native CODE or instantiated to_app object
 
   use Future::AsyncAwait;
@@ -214,13 +214,14 @@ metadata recipes.
 =head2 2.2 PAGI::Compose - Application Root
 
 L<PAGI::Compose> is the optional next layer when one deployed root should own
-the route target, application-wide middleware, and startup/shutdown callbacks:
+one routes-built root Router, application-wide middleware, and startup/shutdown
+callbacks:
 
   use PAGI::Compose qw(compose);
-  use PAGI::Routing qw(router route middleware);
+  use PAGI::Routing qw(middleware mount route router);
 
   my @nodes = (
-      route('/' => \&home),
+      route('/' => \&home, name => 'home'),
   );
 
   my $app = compose(
@@ -247,8 +248,12 @@ so a server without lifespan-state support receives a clear startup failure
 whenever callbacks are configured. Plain and Future-backed callbacks are both
 accepted.
 
-C<routes> is the compact form. When a separately configured Router or another
-application component already exists, pass it through C<app> instead:
+C<routes> constructs and retains one immutable Router immediately. It also
+accepts the common Router C<http_default> and C<desc> options. When a separately
+configured immutable Router already exists, preserve it as the application of
+an unnamed root Mount. The Mount retains its exact identity while Compose owns
+a distinct outer root Router. Deploy other application components directly
+through C<to_app> instead:
 
   my $routing = router(
       routes => \@nodes,
@@ -256,7 +261,7 @@ application component already exists, pass it through C<app> instead:
   );
 
   my $app = compose(
-      app => $routing,
+      routes => [mount('/' => app => $routing)],
       middleware => [
           middleware('RequestId'),
       ],
@@ -279,8 +284,12 @@ app that sends nothing is incomplete output and becomes 500, never an implicit
 miss.
 
 C<compose(...)> returns an immutable description. The final C<to_app> compiles
-the native three-channel PAGI coderef once. Compose is not a base class and it
-does not duplicate Router callback APIs or reverse-routing methods.
+the root Router and native three-channel PAGI graph once. Compose is not a base
+class or an arbitrary-application wrapper. Its C<router> accessor returns only
+the distinct root Router it constructs. C<routes> returns that root's direct
+children, so the preserved Router above appears as the root Mount rather than
+flattened leaves. C<http_default>, C<desc>, C<named_routes>, C<route_named>, and
+C<path_for> delegate to the root Router.
 
 =head2 2.3 PAGI::App::Router - Mutable Routing
 
@@ -290,7 +299,7 @@ handlers use the same direct protocol contract as C<PAGI::Routing>:
 
   use PAGI::App::Router;
   use PAGI::Compose qw(compose);
-  use PAGI::Routing qw(middleware);
+  use PAGI::Routing qw(middleware mount);
   use PAGI::Response qw(text_response json_response);
   use PAGI::Utils qw(as_app);
 
@@ -321,17 +330,20 @@ handlers use the same direct protocol contract as C<PAGI::Routing>:
   $router->websocket('/ws' => as_app($native_ws_app));
   $router->sse('/events' => as_app($native_sse_app));
 
-  my $snapshot = $router->to_router;
-  my $app = compose(app => $snapshot)->to_app;
+  my $app = compose(
+      routes => [mount('/' => app => $router)],
+  )->to_app;
 
 The middleware entries above are intentional App Router sugar: the frontend
 immediately materializes class names, synchronous factory coderefs, configured
 objects with C<wrap>, and explicit C<middleware(...)> descriptions into the
 explicit descriptions required by the immutable core. Factories and C<wrap>
 run while C<to_app> compiles; the native app they return runs per request.
-Each C<to_router> call creates a fresh immutable snapshot, so retain one when
-inspection, reverse routing, and compilation must refer to the same route
-identities.
+The App Router already implements C<to_app>, so this direct Mount is ordinary
+application deployment. Each C<to_router> call creates a fresh immutable
+snapshot; use it only when a parent must inspect or discover descendant names,
+or when inspection, reverse routing, and compilation must refer to the same
+retained route identities.
 
 For handlers bound to a configured object, subclass
 L<PAGI::Endpoint::Router>. Its C<routes($builder)> method uses the same verb
@@ -1402,7 +1414,7 @@ L<PAGI::App::URLMap> routes requests to different apps based on URL prefix:
   $urlmap->mount('/api' => $api_app);
   $urlmap->mount('/admin' => $admin_app);
   $urlmap->mount('/static' => $static);
-  compose(app => $urlmap)->to_app;
+  $urlmap->to_app;
 
 Each selected mount and C<default> is opaque. A Router child is nevertheless a
 complete application for its own 404 and 405 outcomes. URLMap does not inspect
@@ -1421,7 +1433,7 @@ explicit non-final statuses in C<catch>, while silence is always an error:
       catch => [404, 405],
   );
 
-  my $app = compose(app => $routing)->to_app;
+  my $app = $routing->to_app;
 
 A non-caught response streams after its start event. A caught response is
 suppressed and awaited through its terminal body before the next child runs.
@@ -1512,10 +1524,12 @@ composition time with a message pointing at the right position.
 F<app.pl> may return either a native coderef or an instantiated component object
 with C<to_app>, including a Compose description. A Router is already complete
 for its own 404/405. Cascade is ordinary status-driven application coordination
-and carries no special Router semantics. Wrap either with
-C<< compose(app => $application) >> when the deployed application also needs
-root ErrorHandler, response-completion guarding, and lifespan. The server may
-compile that component object once, or the file may call C<to_app> explicitly.
+and carries no special Router semantics. Wrap an immutable Router with
+C<< compose(routes => [mount('/' => app => $routing)]) >> when it also needs
+root ErrorHandler, response-completion guarding, and lifespan. Cascade and
+other native applications are deployed directly through C<to_app>. The server
+may compile that component object once, or the file may call C<to_app>
+explicitly.
 A C<builder {}> block already returns a native coderef; whether it is complete
 depends on the applications it composes.
 
@@ -1527,16 +1541,22 @@ the Router or middleware that supplies optional behavior. This keeps optional
 capability ownership visible and lets a higher-level framework use its own
 Router API.
 
-Ordinary handlers receive the direct Request, WebSocket, or SSE object, while C<as_app>, Mount
-C<app>, Router C<http_default>, and Compose C<app> receive the native three
-channels. Constraints validate without coercion. Names use slash logical
+Ordinary handlers receive the direct Request, WebSocket, or SSE object, while
+C<as_app>, Mount C<app>, and Router C<http_default> receive the native three
+channels. Compose accepts only route declarations through C<routes>; preserve
+an immutable Router through an explicit Mount within that list.
+Constraints validate without coercion. Names use slash logical
 addresses and relative L<PAGI::Routing::URL> lookup. SSE is a first-class scope, and all
 middleware is pure PAGI app-to-app wrapping.
 
-Starlette's single multiprotocol Router C<default> was considered and
-deliberately not copied. PAGI C<http_default> affects only HTTP NONE, leaving
-the stock WebSocket and SSE miss paths intact. Compose, not Router, owns the
-root lifespan. OpenAPI/schema generation and C<include_in_schema> remain
+Current Starlette owns C<self.router> without subclassing Router. Its Router
+stores lifespan handling, so a standalone Starlette Router is lifecycle-
+capable, while mounted Routers do not receive the root lifespan exchange. PAGI
+preserves that one non-cascading lifecycle but keeps it on Compose. A bare PAGI
+Router declines lifespan, and strict mode rejects the decline. Starlette's
+single multiprotocol Router C<default> was considered and deliberately not
+copied. PAGI C<http_default> affects only HTTP NONE, leaving the stock WebSocket
+and SSE miss paths intact. OpenAPI/schema generation and C<include_in_schema> remain
 deferred until a concrete consumer exists; no placeholder option is shipped.
 
 =head1 SEE ALSO

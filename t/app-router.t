@@ -3,11 +3,15 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Response::Text ();
+use PAGI::Routing qw(mount);
+use PAGI::Routing::URL qw(path_for);
+use PAGI::Utils qw(as_app);
 
 sub channels {
     my @events;
@@ -63,6 +67,71 @@ sub handler {
     };
 }
 
+subtest 'Compose preserves an explicit App Router snapshot through Mount' => sub {
+    my $builder = PAGI::App::Router->new;
+    $builder->get('/' => handler('home'))->name('home');
+
+    like(dies { compose(router => $builder) },
+        qr/no longer accepts 'router'.*mount/s,
+        'Compose rejects the retired Router constructor mode');
+
+    my $routing = $builder->to_router;
+    my $root_mount = mount('/' => app => $routing);
+    my $root = compose(routes => [$root_mount]);
+
+    isnt(refaddr($root->router), refaddr($routing),
+        'Compose owns a distinct root Router');
+    is(refaddr($root->routes->[0]->app), refaddr($routing),
+        'root Mount retains the immutable snapshot');
+    is($root->path_for('/home'), '/',
+        'outer Resolver discovers snapshot names');
+};
+
+subtest 'Compose mounts an App Router frontend directly for ordinary deployment' => sub {
+    my $default = PAGI::Response::Text->new(
+        'frontend missing', status => 404,
+    );
+    my $builder = PAGI::App::Router->new(http_default => $default);
+    $builder->get('/target' => sub {
+        my ($request) = @_;
+        return PAGI::Response::Text->new(path_for($request, 'target'));
+    })->name('target');
+
+    my $composition = compose(routes => [
+        mount('/' => app => $builder),
+    ]);
+
+    is($composition->route_named('/target'), undef,
+        'the outer Resolver does not inspect a frontend application');
+    my $app = $composition->to_app;
+    is(response_body(run_scope($app, path => '/target')), '/target',
+        'the selected frontend installs its own resolver for local links');
+    is(response_body(run_scope($app, path => '/missing')), 'frontend missing',
+        'the selected frontend retains its own HTTP default');
+    my $wrong = run_scope($app, method => 'POST', path => '/target');
+    is([$wrong->[0]{status}, response_header($wrong, 'Allow')],
+        [405, 'GET, HEAD'],
+        'the selected frontend retains Router-owned 405 and Allow');
+};
+
+subtest 'App Router to_app stays a bare Router compilation' => sub {
+    my $builder = PAGI::App::Router->new;
+    $builder->get('/only' => handler('only'));
+    my $app = $builder->to_app;
+
+    is(run_scope($app, path => '/missing')->[0]{status}, 404,
+        'bare App Router compilation keeps the Router 404');
+    is(run_scope($app, method => 'POST', path => '/only')->[0]{status}, 405,
+        'bare App Router compilation keeps the Router 405');
+    is(run_scope($app, type => 'lifespan'), [],
+        'bare App Router compilation does not drive lifespan');
+
+    my $silent = PAGI::App::Router->new;
+    $silent->get('/silent' => as_app(sub { return Future->done }));
+    is(run_scope($silent->to_app, path => '/silent'), [],
+        'bare App Router compilation has no Compose response-completion guard');
+};
+
 subtest 'ordinary HTTP routing uses Request handlers and shared path grammar' => sub {
     my @calls;
     my $router = PAGI::App::Router->new;
@@ -70,7 +139,9 @@ subtest 'ordinary HTTP routing uses Request handlers and shared path grammar' =>
     $router->get('/users/{id}' => handler('show', \@calls));
     $router->post('/users' => handler('create', \@calls));
     $router->get('/files/*path' => handler('file', \@calls));
-    my $app = compose(app => $router)->to_app;
+    my $app = compose(routes => [
+        mount('/' => app => $router->to_router),
+    ])->to_app;
 
     is(response_body(run_scope($app, path => '/users')), 'list',
         'a static route dispatches');
@@ -108,7 +179,9 @@ subtest 'literal paths and constraints use the shared Pattern implementation' =>
     $router->get('/people/{name:[A-Za-z]+}' => handler('name', \@calls));
     $router->get('/posts/{slug}' => handler('post', \@calls))
         ->constraints(slug => qr/\A[a-z0-9-]+\z/);
-    my $app = compose(app => $router)->to_app;
+    my $app = compose(routes => [
+        mount('/' => app => $router->to_router),
+    ])->to_app;
 
     is(response_body(run_scope($app, path => '/api/v1.0/report[2024]')), 'literal',
         'regex metacharacters remain literal path text');
@@ -140,7 +213,9 @@ subtest 'any and generic route declarations replace the old method option' => su
     my $router = PAGI::App::Router->new;
     $router->any('/health' => handler('health'));
     $router->route('/resource' => handler('resource'), methods => ['GET', 'POST']);
-    my $app = compose(app => $router)->to_app;
+    my $app = compose(routes => [
+        mount('/' => app => $router->to_router),
+    ])->to_app;
 
     for my $method (qw(GET POST PUT DELETE PATCH HEAD OPTIONS)) {
         is(run_scope($app, method => $method, path => '/health')->[0]{status}, 200,

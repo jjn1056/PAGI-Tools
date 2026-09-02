@@ -96,14 +96,23 @@ explicit `app =>` positions, with Mount middleware declared by name. The `/`
 static-file mount is last because the shared routing engine preserves written
 order and a matched mount prefix owns dispatch immediately.
 
-Only the root Router is wrapped in `compose(app => $router)`. The returned
-Compose description is accepted directly by conforming servers and test
-clients; it is not compiled merely to make `app.pl` load. The HTTP,
-WebSocket, and SSE Endpoint applications remain opaque at their existing mount
-boundaries; the root Compose supplies the deployed application's outer safety
-boundary without changing their protocol ownership. If one selected opaque
-HTTP child were to complete silently, the outer response guard would treat it
-as incomplete output (500), not as a trusted routing 404.
+`PAGI::App::Router` already implements `to_app`, so Compose mounts the
+endpoint-demo frontend directly:
+
+```perl
+compose(routes => [mount('/' => app => $router)]);
+```
+
+The unnamed root Mount consumes no path and keeps the Router's middleware,
+default, and routing outcomes. The outer Compose Router treats the frontend as
+an application boundary and does not inspect its descendant names. The frontend
+already implements `to_app`: mount it directly for ordinary deployment. Use
+`to_router` only when a parent must discover those names or retain an immutable
+snapshot; this application has no such parent-side consumer. The
+HTTP, WebSocket, and SSE applications remain opaque at their existing mounts;
+see
+[PAGI::Compose](../../lib/PAGI/Compose.pm) and
+[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the boundary model.
 
 ```perl
 $router->mount('/', app => PAGI::App::File->from_app_path('public'));

@@ -46,8 +46,9 @@ lib/MyApp/
 - `MyApp::Root`, `MyApp::Person`, and `MyApp::Person::Blogs` each expose a
   `routing()` method that returns an immutable `PAGI::Routing::Router`
   description.
-- `MyApp::Root` is the one Compose boundary. Its `to_app()` returns the
-  composition of `MyApp::Root->routing` with startup and shutdown callbacks.
+- `MyApp::Root` is the one Compose boundary. Its `to_app()` puts the reusable
+  immutable Router from `MyApp::Root->routing` behind an unnamed root
+  `mount('/' => app => ...)`, alongside the startup and shutdown callbacks.
 - Root mounts Person with `app =>` and name `person`; Person mounts Blogs with
   `app =>` and name `blog`. The application values are immutable Router
   objects, so these mounts form one inspectable reverse-routing graph.
@@ -69,6 +70,13 @@ lib/MyApp/
   page reaches it through a generated `path_for('/pagi')` link, demonstrating an
   ordinary Pages application returned from a selected Request handler without
   replacing the application's branded or domain-specific missing pages.
+
+`MyApp::Root->routing` returns an immutable Router while Compose constructs its
+own application root. The unnamed root Mount consumes no path and adds no
+route-name namespace, preserving the Root middleware, defaults, and reverse
+resolver; passing `$routing->routes` would flatten and discard those policies.
+See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
+[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the full boundary model.
 
 ## Named address map
 

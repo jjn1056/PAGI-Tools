@@ -8,7 +8,7 @@ use Fcntl qw(F_GETFL F_SETFL O_NONBLOCK);
 use PAGI::Compose  qw(compose);
 use PAGI::Pages    qw(not_found);
 use PAGI::Response qw(stream_response text_response);
-use PAGI::Routing  qw(route router);
+use PAGI::Routing  qw(route);
 
 # ---------------------------------------------------------------------------
 # A pull source over a child process's stdout.
@@ -95,19 +95,17 @@ sub index_page ($request) {
 }
 
 compose(
-    app => router(
-        routes => [
-            route('/' => \&index_page,
-                methods => ['GET'],
-                name    => 'index',
-                desc    => 'List the available reports',
-            ),
-            route('/reports/{name}' => \&run_report,
-                methods => ['GET'],
-                name    => 'report',
-                desc    => 'Stream one report command as it runs',
-            ),
-        ],
-        http_default => not_found(detail => 'No such page.'),
-    ),
+    routes => [
+        route('/' => \&index_page,
+            methods => ['GET'],
+            name    => 'index',
+            desc    => 'List the available reports',
+        ),
+        route('/reports/{name}' => \&run_report,
+            methods => ['GET'],
+            name    => 'report',
+            desc    => 'Stream one report command as it runs',
+        ),
+    ],
+    http_default => not_found(detail => 'No such page.'),
 );

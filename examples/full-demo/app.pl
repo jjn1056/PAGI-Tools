@@ -4,6 +4,7 @@ use warnings;
 use Future::AsyncAwait;
 use PAGI::App::Router;
 use PAGI::Compose qw(compose);
+use PAGI::Routing qw(mount);
 use PAGI::Utils qw(as_app);
 
 # Safe sleep that works even without Future::IO backend
@@ -208,7 +209,9 @@ $router->sse('/events' => as_app(async sub {
 # ============================================================================
 
 compose(
-    app => $router,
+    routes => [
+        mount('/' => app => $router),
+    ],
     lifespan => {
         startup => async sub {
             my ($state) = @_;

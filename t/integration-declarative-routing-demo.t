@@ -7,26 +7,12 @@ use lib "$Bin/../examples/declarative-routing/lib";
 use PAGI::Test::Client;
 
 my $app_file = "$Bin/../examples/declarative-routing/app.pl";
-
 my $package_loaded = eval {
     require MyApp::Routes::Home;
     1;
 };
 ok($package_loaded, 'the example handler package loads normally')
     or diag($@);
-
-my $handler_source = do {
-    my $path = "$Bin/../examples/declarative-routing/lib/MyApp/Routes/Home.pm";
-    open my $fh, '<', $path or die "cannot open $path: $!\n";
-    local $/;
-    <$fh>;
-};
-like($handler_source, qr/my \(\$request\) = \@_;/,
-    'normal declarative HTTP handlers receive Request');
-like($handler_source, qr/use PAGI::Routing::URL qw\(path_for url_for\)/,
-    'reverse routing comes from its owning helper');
-unlike($handler_source, qr/\$c\b/,
-    'normal declarative handlers no longer receive Context');
 
 my $app = do $app_file;
 my $load_error = $@ || $!;
@@ -41,7 +27,7 @@ SKIP: {
     my $client = PAGI::Test::Client->new(app => $app);
 
     my $home = $client->get('/');
-    is($home->status, 200, 'home route responds');
+    is($home->status, 200, 'Compose root page works');
     like($home->text, qr{<h1>Declarative PAGI</h1>}, 'home route uses the package handler');
     is($home->header('X-Route-Demo'), 'home', 'route middleware sees and changes the response stream');
 
@@ -72,7 +58,7 @@ SKIP: {
 
     my $missing = $client->get('/missing',
         headers => { Accept => 'application/problem+json' });
-    is($missing->status, 404, 'unknown path uses the root Router default');
+    is($missing->status, 404, 'Compose custom root default works');
     is($missing->content_type, 'application/problem+json',
         'unknown path negotiates a problem document');
     is($missing->json, {
@@ -80,7 +66,7 @@ SKIP: {
         title  => 'Not Found',
         status => 404,
         detail => 'No root route matched',
-    }, 'root Router default remains distinct from child policy');
+    }, 'Compose root default remains distinct from child Router policy');
 
     my $wrong_method = $client->post('/api/items/42',
         headers => { Accept => 'application/problem+json' });

@@ -100,7 +100,12 @@ Compose owns the application root and lifespan.
         ],
     );
 
-    my $app = compose(app => $routing)->to_app;
+    my $app = compose(
+        routes => [mount('/' => app => $routing)],
+    )->to_app;
+
+The root Mount preserves C<$routing> by identity, including its middleware and
+Resolver, while Compose constructs and owns a distinct outer root Router.
 
 =head1 DESCRIPTION
 
@@ -115,7 +120,7 @@ endpoint must own all three PAGI channels.
 
     Route CODE endpoint        -> one Request/WebSocket/SSE argument
     Route to_app object        -> native PAGI application
-    Mount/Compose/default CODE -> native PAGI application
+    Mount/default CODE         -> native PAGI application
     handler result             -> native CODE or instantiated to_app object
 
 The descriptions do no request I/O. C<to_app> is the explicit compilation
@@ -177,7 +182,7 @@ names and unblessed references are invalid.
 
 =item * C<< request_response($handler) >> from L<PAGI::Utils> is the explicit
 adapter for placing a one-Request handler in a native application position such
-as C<http_default>, Mount C<app>, or Compose C<app>. It never infers coderef
+as C<http_default> or Mount C<app>. It never infers coderef
 arity.
 
 =item * C<< websocket('/x' =E<gt> $code) >> and
@@ -570,10 +575,11 @@ selected handler's 404.
 
 Direct C<< $routing->to_app >> is safe for Router outcomes, but remains a
 low-level deployed root: it has no root ErrorHandler, response-completion guard,
-or lifespan driver. Use C<< compose(app => $routing)->to_app >> when those
-application boundaries are required. If a selected native target sends
-nothing, Compose treats that as incomplete output and renders 500 rather than
-inventing a routing 404.
+or lifespan driver. Use
+C<< compose(routes => [mount('/' => app => $routing)])->to_app >> when those
+application boundaries are required and the configured Router must be
+preserved. If a selected native target sends nothing, Compose treats that as
+incomplete output and renders 500 rather than inventing a routing 404.
 
 L<PAGI::Pages> supplies source-free deferred negotiated applications that can
 occupy Route and native application positions directly:
@@ -618,7 +624,9 @@ After a non-root mount prefix matches, the child scope receives the remainder
 in C<path>, the actual decoded prefix appended to C<root_path>, and merged
 captures in C<path_params>; C<raw_path> remains the original wire path. An
 exact prefix produces child path C</>. A root Mount consumes no prefix and
-leaves C<path>, C<root_path>, and C<raw_path> unchanged.
+leaves C<path>, C<root_path>, and C<raw_path> unchanged. An unnamed Mount adds
+no logical namespace. Its selected child owns every outcome, so a later sibling
+in the parent Router cannot win.
 
 The decoded C<root_path> and consumed prefix are joined with exactly one slash
 at their boundary; existing internal slashes are not normalized.
@@ -769,6 +777,12 @@ resolves from the Router root. Router base applications are traversed.
 Collection accessors return shallow copies. C<desc> is a human note with no
 matching or schema behavior.
 
+Passing C<< $routing->routes >> to Compose deliberately flattens only those
+direct children into a new root Router. It does not preserve C<$routing>'s
+middleware, C<http_default>, C<desc>, identity, or Resolver. Put the Router
+behind C<< mount('/' => app => $routing) >> when those belong to the deployed
+application.
+
 =head1 MATCHED-ROUTE SCOPE CONVENTION
 
 The compiled router reserves C<pagi.routing> and leaves the older
@@ -859,11 +873,19 @@ downstream top-level additions.
 Unmatched SSE routes emit an SSE HTTP-decline 404. Unmatched WebSockets use the
 HTTP-denial extension when advertised and otherwise close before acceptance.
 Routing itself ignores lifespan scopes. At the deployed application root, use
-L<PAGI::Compose> to combine the routing object, application middleware, and
-startup/shutdown callbacks. L<PAGI::Lifespan> remains the lower-level wrapper
-for native applications and its existing hook-registration behavior. Do not
-put two independent lifespan consumers around one root. Missing and unknown
-scope types croak before router middleware or channel I/O.
+L<PAGI::Compose> with the Router behind an explicit root Mount to combine that
+routing application, application middleware, and startup/shutdown callbacks.
+L<PAGI::Lifespan> remains the lower-level wrapper for native applications and
+its existing hook-registration behavior. Do not put two independent lifespan
+consumers around one root. Missing and unknown scope types croak before router
+middleware or channel I/O.
+
+The Mount retains the immutable child Router by identity. Compose constructs a
+distinct outer root Router and delegates inspection and reverse routing to that
+outer root; its Resolver traverses the child while the unnamed Mount adds no
+namespace. Compose consumes lifespan before invoking its root Router. A bare
+Router therefore declines lifespan, and strict server lifespan mode rejects
+the decline.
 
 Construction and compilation errors are reported early where possible.
 Request-time dispatch, constraint, application, and middleware exceptions
@@ -900,11 +922,12 @@ phase; there is no response-valued Endpoint middleware chain.
 Starlette supplied the useful Route/Mount/Router vocabulary, but PAGI does not
 claim API identity. Ordinary PAGI route handlers receive one direct Request,
 WebSocket, or SSE object; C<as_app($code)> marks a native Route CODE, while
-Mount C<app>, Router C<http_default>, and Compose C<app> are native three-
-channel application positions. Package strings
-are not coerced in those positions. Middleware strings remain supported
-because middleware descriptors define an explicit loading, construction,
-configuration, and C<wrap> contract.
+Mount C<app> and Router C<http_default> are native three-channel application
+positions. Compose instead accepts route declarations through C<routes>, or
+an existing immutable Router as the application of an explicit Mount inside
+that C<routes> list. Package strings are not coerced in those positions.
+Middleware strings remain supported because middleware descriptors define an
+explicit loading, construction, configuration, and C<wrap> contract.
 
 PAGI constraints validate a decoded scalar without coercing it. Logical names
 use slash addresses with scope-bound L<PAGI::Routing::URL> lookup rather than
@@ -912,10 +935,13 @@ Starlette's colon mount namespace. SSE is a first-class routed scope.
 Middleware is pure PAGI app-to-app wrapping at Router, Mount, Route, and
 Compose boundaries.
 
-Starlette's single multiprotocol Router C<default> was considered and
-deliberately not copied. PAGI's C<http_default> handles only HTTP NONE, leaving
-stock WebSocket and SSE miss behavior intact. Router ignores lifespan;
-L<PAGI::Compose> owns the one deployed root lifecycle. OpenAPI generation,
+Current Starlette owns C<self.router> rather than subclassing Router. Starlette
+stores lifespan on Router, which makes a standalone Router lifecycle-capable,
+but mounted Routers do not receive the root lifespan exchange. PAGI preserves
+one non-cascading root lifecycle while keeping it on Compose. Starlette's
+single multiprotocol Router C<default> was considered and deliberately not
+copied. PAGI's C<http_default> handles only HTTP NONE, leaving stock WebSocket
+and SSE miss behavior intact. OpenAPI generation,
 C<schema>, C<include_in_schema>, and arbitrary route metadata remain deferred
 until a concrete consumer is designed; the immutable route tree preserves the
 future inspection seam without advertising an unshipped schema API.
