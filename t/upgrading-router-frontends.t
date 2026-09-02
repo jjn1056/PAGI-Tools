@@ -23,12 +23,24 @@ sub markdown_section {
     die "section not found: $heading" if $start < 0;
     my @lines = split /\n/, substr($source, $start + length($heading));
     my @body;
+    my $in_fence = 0;
     for my $line (@lines) {
-        my ($next_marks) = $line =~ /\A(#+)\s/;
+        $in_fence = !$in_fence if $line =~ /\A```/;
+        my ($next_marks) = $in_fence ? () : $line =~ /\A(#+)\s/;
         last if defined($next_marks) && length($next_marks) <= $heading_level;
         push @body, $line;
     }
     return join "\n", @body;
+}
+
+sub fenced_code_after {
+    my ($source, $marker) = @_;
+    my $start = index $source, $marker;
+    die "marker not found: $marker" if $start < 0;
+    my $tail = substr $source, $start + length($marker);
+    my ($code) = $tail =~ /```perl\n(.*?)```/s;
+    die "Perl block not found after: $marker" unless defined $code;
+    return $code;
 }
 
 subtest 'upgrade guide publishes the declarative-only topology' => sub {
@@ -39,6 +51,21 @@ subtest 'upgrade guide publishes the declarative-only topology' => sub {
         'the five-layer responsibility model is explicit';
     like $upgrading, qr/no compatibility (?:layer|classes?)/i,
         'the guide states that no compatibility layer exists';
+};
+
+subtest 'guide-wide current guidance does not preserve removed frontends' => sub {
+    my $middleware = markdown_section(
+        $upgrading, '## Breaking: use explicit middleware descriptions at core boundaries');
+    like $middleware,
+        qr/PAGI::Middleware::Builder.*?runtime behavior.*?unchanged/is,
+        'unchanged behavior is limited to Middleware Builder';
+    unlike $upgrading,
+        qr/router frontend syntaxes.*?runtime behavior are unchanged/is,
+        'guide never claims removed router frontends are unchanged';
+    unlike $upgrading, qr/Router\/Endpoint::Router frontend rewrite/i,
+        'guide calls the final frontend change a removal, not a rewrite';
+    like $upgrading, qr/Router frontend removal/i,
+        'guide directs readers to the frontend removal';
 };
 
 subtest 'App Router migration is complete' => sub {
@@ -114,6 +141,12 @@ subtest 'Endpoint Router migration snippets own their helper imports' => sub {
     ok defined $after_code, 'replacement code block can be extracted';
     eval $after_code;
     is $@, '', 'replacement packages compile independently as published';
+
+    my $leaf = fenced_code_after(
+        $upgrading, 'For one resource with meaningful HTTP verb dispatch');
+    eval $leaf
+        . "die 'expected exact Route' unless \$person_route->isa('PAGI::Routing::Route');\n";
+    is $@, '', 'exact-leaf migration example executes as published';
 };
 
 subtest 'live public POD recommends only declarative routing' => sub {

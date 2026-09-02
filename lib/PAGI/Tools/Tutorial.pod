@@ -303,7 +303,20 @@ route. When an ordinary application class owns several paths, have a
 C<routing()> method return an immutable Router:
 
   package MyApp::People;
+  use PAGI::Response qw(text_response);
   use PAGI::Routing qw(route router);
+
+  sub new {
+      my ($class) = @_;
+      return bless {}, $class;
+  }
+
+  sub index { return text_response('People') }
+
+  sub show {
+      my ($self, $request) = @_;
+      return text_response('Person ' . $request->path_param('id'));
+  }
 
   sub routing {
       my ($self) = @_;
@@ -313,7 +326,13 @@ C<routing()> method return an immutable Router:
       ]);
   }
 
-  mount('/people', app => $people->routing, name => 'people');
+  package MyApp::Root;
+  use PAGI::Routing qw(mount);
+
+  my $people = MyApp::People->new;
+  my $people_mount = mount(
+      '/people', app => $people->routing, name => 'people',
+  );
 
 The Router is already both an application and an inspectable route tree, so
 the parent can generate C</people/show> URLs without a snapshot conversion.

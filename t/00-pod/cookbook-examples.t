@@ -69,6 +69,35 @@ sub first_code_block {
     return join("\n", @block) . "\n";
 }
 
+sub code_block_containing {
+    my ($source, $heading, $needle) = @_;
+    my $section = pod_section($source, $heading);
+    my @lines = split /\n/, $section;
+    my @blocks;
+    my @block;
+    for my $line (@lines) {
+        if ($line =~ /^  /) {
+            push @block, length($line) ? substr($line, 2) : '';
+        }
+        elsif ($line eq '' && @block) {
+            push @block, '';
+        }
+        elsif (@block) {
+            pop @block while @block && $block[-1] eq '';
+            push @blocks, join("\n", @block) . "\n";
+            @block = ();
+        }
+    }
+    if (@block) {
+        pop @block while @block && $block[-1] eq '';
+        push @blocks, join("\n", @block) . "\n";
+    }
+    my ($match) = grep { index($_, $needle) >= 0 } @blocks;
+    die "code block containing '$needle' not found after $heading"
+        unless defined $match;
+    return $match;
+}
+
 sub perl_script_runs {
     my ($label, $source) = @_;
     my ($handle, $path) = tempfile(SUFFIX => '.pl');
@@ -86,6 +115,7 @@ sub perl_script_runs {
 }
 
 my $cookbook = slurp_file('lib/PAGI/Tools/Cookbook.pod');
+my $tutorial = slurp_file('lib/PAGI/Tools/Tutorial.pod');
 
 subtest 'canonical apples block stays synchronized with the runnable example' => sub {
     my $example = slurp_file('examples/starlette-apples/app.pl');
@@ -118,7 +148,11 @@ subtest 'published standalone recipes compile and construct their values' => sub
         '=head2 Class-Based Exact Leaves and Ordinary Assemblers');
     perl_script_runs(
         'class-based exact leaves',
-        $exact . "die 'expected Compose' unless ref(\$app) eq 'PAGI::Compose';\n",
+        $exact
+            . "die 'expected Compose' unless ref(\$app) eq 'PAGI::Compose';\n"
+            . "use PAGI::Test::Client;\n"
+            . "my \$response = PAGI::Test::Client->new(app => \$app)->get('/api/messages');\n"
+            . "die 'expected useful message response' unless \$response->status == 200 && \$response->json->[0]{text} eq 'hello';\n",
     );
     my $rate_limit = first_code_block($cookbook,
         '=head2 In-Loop WebSocket Rate Limiting');
@@ -133,6 +167,19 @@ subtest 'published standalone recipes compile and construct their values' => sub
         $xsendfile
             . "die 'expected Router' unless ref(\$router) eq 'PAGI::Routing::Router';\n"
             . "die 'expected wrapped application' unless ref(\$app) eq 'CODE';\n",
+    );
+};
+
+subtest 'Tutorial routing object example executes exactly as published' => sub {
+    my $source = code_block_containing(
+        $tutorial,
+        '=head2 2.3 One Routing API, Five Boundaries',
+        'package MyApp::People;',
+    );
+    perl_script_runs(
+        'Tutorial routing object',
+        $source
+            . "die 'expected mounted people Router' unless \$people_mount->kind eq 'mount';\n",
     );
 };
 

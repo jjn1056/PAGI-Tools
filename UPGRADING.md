@@ -171,9 +171,9 @@ sub audit_factory {
 
 `PAGI::Middleware::Builder` is a separate concise composition API: it retains
 its own middleware records and
-constructs or wraps them during `to_app`. The router frontend syntaxes and all
-three frontends' runtime behavior are unchanged. Builder's exact-package
-declaration changes from `^` to the same leading-`+` convention:
+constructs or wraps them during `to_app`. Its runtime behavior is unchanged by
+the core-boundary description rule. Builder's exact-package declaration
+changes from `^` to the same leading-`+` convention:
 
 ```perl
 # Before: exact package through Middleware Builder
@@ -1158,7 +1158,7 @@ rest are covered only here.
   and rejects a body sent before response start as a failed `Future` from
   `send` (was a synchronous `die`).
 - Also see the dedicated sections below for the Pages/NotFound/Redirect
-  migration, the Router/Endpoint::Router frontend rewrite, and the rooted
+  migration, the Router frontend removal, and the rooted
   file-serving contract -- all `[BREAKING]` in this same release.
 
 ## Rooted file-serving security contract
@@ -2063,6 +2063,18 @@ For one resource with meaningful HTTP verb dispatch, use an exact leaf class
 rather than rebuilding a Router frontend:
 
 ```perl
+package MyApp::PeopleRepository;
+
+sub new {
+    my ($class, %args) = @_;
+    return bless \%args, $class;
+}
+
+sub find {
+    my ($self, $id) = @_;
+    return $self->{people}{$id};
+}
+
 package MyApp::Person;
 use parent 'PAGI::Endpoint::HTTP';
 use PAGI::Response qw(json_response);
@@ -2079,7 +2091,14 @@ sub get {
     );
 }
 
-route('/people/{id}' => MyApp::Person->new(repo => $repo),
+package MyApp::Routes;
+use PAGI::Routing qw(route);
+
+my $repo = MyApp::PeopleRepository->new(
+    people => { 42 => { id => 42, name => 'Ada' } },
+);
+
+my $person_route = route('/people/{id}' => MyApp::Person->new(repo => $repo),
     name => 'show',
 );
 ```

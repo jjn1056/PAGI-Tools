@@ -906,6 +906,18 @@ scope directly:
 Use classes where protocol behavior earns one, not to introduce another
 Router grammar. This complete shape keeps topology declarative:
 
+  package Example::Store;
+
+  sub new {
+      my ($class, @messages) = @_;
+      return bless { messages => \@messages }, $class;
+  }
+
+  sub all {
+      my ($self) = @_;
+      return $self->{messages};
+  }
+
   package MessageAPI;
   use parent 'PAGI::Endpoint::HTTP';
   use PAGI::Response qw(json_response);
@@ -987,7 +999,9 @@ Router grammar. This complete shape keeps topology declarative:
 
   package main;
   my $app = MyApp::Root->new(services => {
-      store => bless({}, 'Example::Store'),
+      store => Example::Store->new(
+          { id => 1, text => 'hello' },
+      ),
       hub   => bless({}, 'Example::Hub'),
       bus   => bless({}, 'Example::Bus'),
   })->application;
