@@ -83,10 +83,13 @@ subtest 'background-task example keeps response-first HTTP dispatch at the Compo
     my $file = "$Bin/../examples/background-tasks/app.pl";
     my $source = source_text($file);
     like($source,
-        qr{mount\('/'\s*=>\s*app\s*=>\s*\$router\)},
-        'background-task root mounts the App Router application directly');
-    unlike($source, qr/\$router->to_router/,
-        'background-task root does not materialize an unused snapshot');
+        qr{compose\(routes\s*=>\s*\[.*?route\('/'\s*=>\s*as_app\(async sub}s,
+        'background-task root declares its response-first HTTP route directly in Compose');
+    like($source,
+        qr{mount\('/ws'\s*,\s*app\s*=>\s*async sub}s,
+        'background-task WebSocket remains a direct native Mount application');
+    unlike($source, qr/PAGI::App::Router|\$router->(?:get|post|websocket|sse|mount)\b|->to_router/,
+        'background-task example has no mutable frontend or snapshot conversion');
     my $app = do $file;
     my $load_error = $@;
     ok(!$load_error, 'background-task example loads cleanly')

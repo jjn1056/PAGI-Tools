@@ -447,37 +447,46 @@ subtest 'public documentation publishes one final routing model' => sub {
         qr/to_router.*?parent.*?(?:inspect|discover).*?descendant/is,
         'Endpoint Router reserves to_router for structural discovery');
 
-    for my $file (
-        'examples/background-tasks/README.md',
-        'examples/endpoint-demo/README.md',
-        'examples/full-demo/README.md',
-        'examples/10-chat-showcase/README.md',
-    ) {
-        my $source = slurp_file($file);
-        unlike($source, qr/\$router->routes/,
-            "$file never teaches routes on the mutable frontend");
-        like($source,
-            qr{mount\('/'\s*=>\s*app\s*=>\s*\$router\)},
-            "$file mounts its frontend application directly");
-        unlike($source, qr/\$router->to_router/,
-            "$file has no unconsumed root snapshot conversion");
-        like($source,
-            qr/already implements.*?to_app.*?directly.*?to_router.*?(?:inspect|discover|snapshot)/is,
-            "$file explains direct application mounting and explicit inspection");
-    }
+    my $background_readme = slurp_file('examples/background-tasks/README.md');
+    unlike($background_readme, qr/PAGI::App::Router|->to_router/,
+        'background-task README does not teach a mutable frontend or snapshot');
+    like($background_readme,
+        qr/PAGI::Routing.*?Route declarations.*?native three-channel applications.*?as_app/is,
+        'background-task README explains explicit native Route adaptation');
+    like($background_readme,
+        qr{mount\('/ws', app => async sub \{ \.\.\. \}\)},
+        'background-task README shows the direct native WebSocket Mount');
+    like($background_readme,
+        qr/Mount already occupies a native application position and needs no\s+wrapper/s,
+        'background-task README distinguishes its direct native Mount boundary');
 
-    my $endpoint_readme = slurp_file('examples/endpoint-router-demo/README.md');
-    like($endpoint_readme,
-        qr{mount\('/'\s*=>\s*app\s*=>\s*\$main\)},
-        'Endpoint Router README mounts Main directly at the root');
-    like($endpoint_readme,
-        qr{app\s*=>\s*\$self->\{api\}->to_router.*?descendant names remain discoverable}s,
-        'Endpoint Router README retains the API snapshot for parent discovery');
-    like($endpoint_readme,
-        qr{app\s*=>\s*\$self->\{events\}->to_router.*?Events object}s,
-        'Endpoint Router README retains the Events snapshot for parent discovery');
-    is(() = $endpoint_readme =~ /->to_router/g, 2,
-        'Endpoint Router README keeps only the two nested discovery snapshots');
+    my $full_demo_readme = slurp_file('examples/full-demo/README.md');
+    unlike($full_demo_readme, qr/PAGI::App::Router|->to_router/,
+        'full-demo README does not teach a mutable frontend or snapshot');
+    like($full_demo_readme,
+        qr{my \@routes = \(.*?route\('/' => as_app\(async sub \{ \.\.\. \}\), name => 'hello'\),.*?websocket\('/ws/echo' => as_app\(async sub \{ \.\.\. \}\)\),.*?sse\('/events' => as_app\(async sub \{ \.\.\. \}\)\),.*?\)}s,
+        'full-demo README preserves ordered direct HTTP, WebSocket, and SSE declarations');
+    like($full_demo_readme,
+        qr{routes => \\\@routes.*?lifespan}s,
+        'full-demo README keeps the direct route list inside the Compose lifespan boundary');
+
+    my $endpoint_demo_readme = slurp_file('examples/endpoint-demo/README.md');
+    unlike($endpoint_demo_readme, qr/PAGI::App::Router|->to_router/,
+        'endpoint-demo README does not teach a mutable frontend or snapshot');
+    like($endpoint_demo_readme,
+        qr{route\('/api/messages'.*?websocket\('/ws/echo'.*?sse\('/events'.*?mount\('/' => app => PAGI::App::File->from_app_path\('public'\)\)}s,
+        'endpoint-demo README keeps direct endpoint leaves before its static fallback Mount');
+
+    my $chat_readme = slurp_file('examples/10-chat-showcase/README.md');
+    unlike($chat_readme, qr/PAGI::App::Router|->to_router/,
+        'chat README does not teach a mutable frontend or snapshot');
+    like($chat_readme,
+        qr{compose\(routes => \[.*?websocket\('/ws/chat' => as_app\(\$ws_handler\)\),.*?sse\('/events' => as_app\(\$sse_handler\)\),.*?route\('/\*path' => as_app\(\$http_handler\), methods => '\*'\),.*?\]\)}s,
+        'chat README keeps its direct protocol leaves in the Compose root');
+
+    my $examples_readme = slurp_file('examples/README.md');
+    unlike($examples_readme, qr/endpoint-router-demo/,
+        'example inventory does not list the retired Endpoint Router demo');
 
     for my $file (
         'lib/PAGI/Tools/Tutorial.pod',
