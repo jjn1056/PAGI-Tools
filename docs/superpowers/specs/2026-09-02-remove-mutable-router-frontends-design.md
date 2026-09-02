@@ -1,6 +1,6 @@
 # Remove the Mutable Router Frontends Design
 
-**Status:** Draft for review; implementation not started
+**Status:** Approved; implementation not started
 
 **Date:** 2026-09-02
 
@@ -210,20 +210,21 @@ For an instantiated HTTP application endpoint that implements
 
 1. Without explicit Route `methods`, call `allowed_methods` once in list
    context at Route construction and snapshot its normalized result.
-2. With an explicit methods array, call `allowed_methods` once and treat that
-   array as a restriction of the snapshotted endpoint capability. Every
-   declared method must be advertised by `allowed_methods`; otherwise Route
-   construction croaks with a diagnostic naming both the explicit methods
-   option and the endpoint capability.
+2. With a finite explicit methods value, whether a single method string or an
+   arrayref, call `allowed_methods` once and treat the explicit value as a
+   restriction of the snapshotted endpoint capability. Every declared method
+   must be advertised by `allowed_methods`; otherwise Route construction
+   croaks with a diagnostic naming both the explicit methods option and the
+   endpoint capability.
 3. Scalar `methods => '*'` is the explicit escape hatch. It bypasses Router
    method qualification and lets the endpoint own all dispatch and 405
    outcomes.
 4. WebSocket and SSE routes never consult `allowed_methods`.
 
 An HTTP handler coderef or application object without this capability retains
-the ordinary Route rules: explicit methods are accepted as declared, and an
-omitted methods option defaults to GET plus automatic HEAD. Empty or malformed
-capability results remain construction errors and must identify
+the ordinary Route rules: finite explicit methods are accepted as declared,
+and an omitted methods option defaults to GET plus automatic HEAD. Empty or
+malformed capability results remain construction errors and must identify
 `allowed_methods` rather than blaming an option the author did not supply.
 
 This avoids contradictory claims such as a Route advertising POST while its
@@ -659,8 +660,8 @@ Tests must prove:
 Tests must prove:
 
 - absent Route methods snapshot `allowed_methods` once;
-- an explicit array may narrow the advertised capability;
-- an explicit array containing unsupported methods croaks during construction;
+- an explicit method string or arrayref may narrow the advertised capability;
+- either finite form containing unsupported methods croaks during construction;
 - scalar `methods => '*'` delegates unrestricted method ownership;
 - Router PARTIAL outcomes retain the complete first-seen `Allow` union; and
 - WebSocket/SSE routes ignore HTTP method capabilities.
@@ -775,8 +776,8 @@ into a new class.
 
 Without construction-time validation, Route and `Endpoint::HTTP` can claim
 different method sets and produce two different 405 paths. Section 5.2 makes
-explicit arrays restrictions and reserves `'*'` as the deliberate endpoint-
-owned escape hatch.
+finite explicit method strings and arrays restrictions and reserves `'*'` as
+the deliberate endpoint-owned escape hatch.
 
 ### 15.5 Filesystem-origin behavior
 
