@@ -18,7 +18,7 @@ my @cases = (
         name  => 'endpoint demo',
         file  => "$Bin/../examples/endpoint-demo/app.pl",
         title => qr/PAGI Endpoint Demo/,
-        shape => qr{mount\('/'\s*,\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\s*\)},
+        shape => qr{mount\('/'\s*=>\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\s*,?\s*\)},
         class => 'PAGI::Compose',
     },
     {
@@ -66,10 +66,10 @@ for my $case (@cases) {
 
             if ($case->{name} eq 'endpoint demo') {
                 like($source,
-                    qr{mount\('/'\s*=>\s*app\s*=>\s*\$router\)},
-                    'endpoint demo mounts the App Router application directly');
-                unlike($source, qr/\$router->to_router/,
-                    'endpoint demo does not materialize an unused snapshot');
+                    qr{mount\('/'\s*=>\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\s*,?\s*\)},
+                    'endpoint demo mounts its static fallback directly');
+                unlike($source, qr/PAGI::App::Router|->to_app\b/,
+                    'endpoint demo has no mutable Router or manual endpoint application');
                 unlike($source,
                     qr/\$ctx\b|PAGI::Context|->request|->websocket|->sse/,
                     'endpoint callbacks do not reach through a Context object');
