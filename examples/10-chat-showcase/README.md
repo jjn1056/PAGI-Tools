@@ -32,32 +32,30 @@ perl -Ilib -Iexamples/10-chat-showcase/lib bin/pagi-server \
 
 ## Architecture
 
-The mutable `PAGI::App::Router` is this showcase's declaration-time frontend
-for HTTP, WebSocket, SSE, and static routes. `PAGI::App::Router` already
-implements `to_app`, so Compose mounts both chat frontends directly:
+The application uses immutable declarative `PAGI::Routing` nodes. The root
+Compose owns direct HTTP, WebSocket, and SSE leaves, while `ChatApp::HTTP`
+uses a nested Compose for its API routes:
 
 ```text
-PAGI::App::Router (chat frontend)
-  -> mount('/', app => $router)
-    -> PAGI::Compose (deployed root)
+PAGI::Compose (deployed root)
+  -> websocket('/ws/chat' => as_app($ws_handler))
+  -> sse('/events' => as_app($sse_handler))
+  -> route('/*path' => as_app($http_handler), methods => '*')
 
-ChatApp::HTTP's PAGI::App::Router (API frontend)
-  -> mount('/', app => $router)
-    -> compose(routes => [...])->to_app
-    -> internal PAGI::Compose application
+ChatApp::HTTP
+  -> compose(routes => [route('/api/...'), ...])->to_app
+  -> internal PAGI::Compose application
 ```
 
-At dispatch, those completed boundaries form this graph:
+At dispatch, those direct declarations form this graph:
 
 ```text
 PAGI::Compose
   -> application-wide logging middleware
     -> Compose root Router
-      -> unnamed root Mount
-        -> PAGI::App::Router
-          -> opaque HTTP handler
-            -> internal PAGI::Compose application or PAGI::App::File
-          -> WebSocket / SSE handlers
+      -> direct WebSocket / SSE native handlers
+      -> direct HTTP fallback handler
+        -> internal PAGI::Compose application or PAGI::App::File
 ```
 
 Configured startup and shutdown callbacks require server lifespan state
@@ -67,16 +65,16 @@ request dispatch. The Compose root explicitly describes that factory as
 `middleware => [middleware(\&with_logging)]`; core middleware lists contain
 only inspectable immutable descriptions.
 
-The selected Router supplies negotiated HTTP 404 and 405 outcomes. Root
-Compose supplies the response-completion and 500 failsafes; neither layer
-changes the WebSocket or SSE ownership described below.
+The root Router supplies negotiated HTTP 404 and 405 outcomes. Root Compose
+supplies the response-completion and 500 failsafes; neither layer changes the
+WebSocket or SSE ownership described below.
 
 The WebSocket and SSE targets are existing native PAGI applications, so their
 route declarations use explicit `as_app`. The final
-`any('/*path' => as_app($http_handler))` Route keeps the static/API fallback
+`route('/*path' => as_app($http_handler), methods => '*')` Route keeps the static/API fallback
 HTTP-only, so a WebSocket or SSE miss retains the Router's protocol-specific
 outcome instead of reaching the file application. `ChatApp::HTTP` therefore
-gives its internal API Router a Compose boundary of its own. An unknown
+gives its internal API routes a Compose boundary of their own. An unknown
 `/api/...` path receives that child's complete 404 instead of falling through
 to static serving.
 
@@ -87,21 +85,21 @@ streaming, MIME types, ranges, conditional requests, and negotiated errors.
 The example does not duplicate filesystem path filtering or read static files
 into application memory.
 
-Both chat frontends use the same direct application boundary:
+The native protocol handlers are intentionally adapted at their direct Route
+leaves:
 
 ```perl
-compose(routes => [mount('/' => app => $router)]);
+compose(routes => [
+    websocket('/ws/chat' => as_app($ws_handler)),
+    sse('/events' => as_app($sse_handler)),
+    route('/*path' => as_app($http_handler), methods => '*'),
+]);
 ```
 
-The unnamed root Mount consumes no path and keeps each Router's middleware,
-default, and routing outcomes. The outer Compose Router treats each frontend
-as an application boundary and does not inspect its descendant names. Each
-frontend already implements `to_app`: mount it directly for ordinary
-deployment. Use `to_router` only when a parent must discover those names or
-retain an immutable snapshot; neither chat frontend has such a parent-side
-consumer. See
-[PAGI::Compose](../../lib/PAGI/Compose.pm) and
-[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for details.
+`as_app` preserves each native handler's three-channel contract. The root
+Router selects the matching direct leaf and does not fall through after a
+protocol miss. See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
+[PAGI::Routing](../../lib/PAGI/Routing.pm) for details.
 
 See the [rooted file-serving upgrade guide](../../UPGRADING.md#rooted-file-serving-security-contract)
 for the status, hidden-file, symlink, and XSendfile migration contract.

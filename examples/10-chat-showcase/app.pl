@@ -21,9 +21,8 @@ use Future::AsyncAwait;
 use File::Basename qw(dirname);
 use lib dirname(__FILE__) . '/lib';
 
-use PAGI::App::Router;
 use PAGI::Compose qw(compose);
-use PAGI::Routing qw(middleware mount);
+use PAGI::Routing qw(middleware route sse websocket);
 use PAGI::Utils qw(as_app);
 
 use ChatApp::State qw(get_stats);
@@ -72,17 +71,15 @@ sub with_logging {
     };
 }
 
-# Route by protocol and path with PAGI::App::Router. WebSocket and SSE
-# endpoints are first-class routes; the final HTTP catch-all Route sends
-# static files and the REST API to ChatApp::HTTP.
-my $router = PAGI::App::Router->new;
-$router->websocket('/ws/chat' => as_app($ws_handler));
-$router->sse('/events' => as_app($sse_handler));
-$router->any('/*path' => as_app($http_handler));
+# Route by protocol and path with declarative PAGI::Routing nodes. WebSocket
+# and SSE endpoints are first-class routes; the final HTTP catch-all Route
+# sends static files and the REST API to ChatApp::HTTP.
 
 compose(
     routes => [
-        mount('/' => app => $router),
+        websocket('/ws/chat' => as_app($ws_handler)),
+        sse('/events' => as_app($sse_handler)),
+        route('/*path' => as_app($http_handler), methods => '*'),
     ],
     middleware => [middleware(\&with_logging)],
     lifespan => {

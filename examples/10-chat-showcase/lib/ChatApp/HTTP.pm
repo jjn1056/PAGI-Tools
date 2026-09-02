@@ -6,9 +6,8 @@ use warnings;
 use Future;
 use Future::AsyncAwait;
 use PAGI::App::File;
-use PAGI::App::Router;
 use PAGI::Compose qw(compose);
-use PAGI::Routing qw(mount);
+use PAGI::Routing qw(route);
 use PAGI::Response qw(json_response);
 
 use ChatApp::State qw(
@@ -71,16 +70,12 @@ sub _stats_handler {
 }
 
 sub handler {
-    my $router = PAGI::App::Router->new;
-
     # API routes
-    $router->get('/api/rooms' => \&_rooms_handler);
-    $router->get('/api/room/{name}/history' => \&_room_history_handler);
-    $router->get('/api/room/{name}/users' => \&_room_users_handler);
-    $router->get('/api/stats' => \&_stats_handler);
-
     my $api_app = compose(routes => [
-        mount('/' => app => $router),
+        route('/api/rooms' => \&_rooms_handler),
+        route('/api/room/{name}/history' => \&_room_history_handler),
+        route('/api/room/{name}/users' => \&_room_users_handler),
+        route('/api/stats' => \&_stats_handler),
     ])->to_app;
 
     return async sub {
@@ -108,8 +103,8 @@ ChatApp::HTTP - HTTP request handler for the chat application
 # DESCRIPTION
 
 Handles HTTP requests including static file serving and API endpoints.
-Uses the mutable PAGI::App::Router verb-method builder for API routing and
-shared Pattern capture. Every non-API request is delegated to one
+Uses declarative PAGI::Routing nodes for API routing and shared Pattern
+capture. Every non-API request is delegated to one
 PAGI::App::File rooted at the component's public directory.
 
 ## API Endpoints
@@ -121,4 +116,4 @@ PAGI::App::File rooted at the component's public directory.
 
 # SEE ALSO
 
-PAGI::App::Router
+PAGI::Routing
