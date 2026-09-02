@@ -191,7 +191,7 @@ subtest 'known mounts compose nested names without copying them' => sub {
     is(refaddr($first), refaddr($main->route_named('/api/users/show')),
         'a retained Router preserves leaf identity');
     is(refaddr($main->route_named('/api/users/show')),
-        refaddr($main->route_named('/api/users/show')),
+        refaddr($users->route_named('/show')),
         'immutable child Routers retain caller-owned leaf identity');
 };
 
