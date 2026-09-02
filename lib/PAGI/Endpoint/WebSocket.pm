@@ -6,6 +6,7 @@ use warnings;
 use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
+use Scalar::Util qw(blessed);
 use PAGI::Utils::Scope ();
 use PAGI::WebSocket;
 
@@ -13,7 +14,8 @@ use PAGI::WebSocket;
 sub encoding { 'text' }
 
 sub to_app {
-    my ($class) = @_;
+    my ($invocant) = @_;
+    my $endpoint = blessed($invocant) ? $invocant : $invocant->new;
 
     return async sub {
         my ($scope, $receive, $send) = @_;
@@ -24,7 +26,6 @@ sub to_app {
         PAGI::Utils::Scope::_compatible_cached_scope_object(
             $scope, 'pagi.websocket', 'PAGI::WebSocket',
         );
-        my $endpoint = $class->new;
         my $websocket = PAGI::WebSocket->new($scope, $receive, $send);
 
         await Future->wrap($endpoint->handle($websocket));
@@ -127,6 +128,13 @@ PAGI::Endpoint::WebSocket - Class-based WebSocket endpoint handler
 PAGI::Endpoint::WebSocket provides a Starlette-inspired class-based
 approach to handling WebSocket connections with lifecycle hooks.
 
+C<to_app> constructs a class receiver once immediately, or retains an
+instance receiver exactly as supplied. Configuration and long-lived
+dependencies may therefore live on the endpoint object. Each
+C<PAGI::WebSocket> protocol object and all connection-local state must stay
+local to C<handle>, because one endpoint instance can serve concurrent
+connections.
+
 =head1 LIFECYCLE METHODS
 
 =head2 on_connect
@@ -212,7 +220,12 @@ This follows the same pattern as L<Starlette's WebSocketEndpoint|https://www.sta
 
     my $app = MyEndpoint->to_app;
 
-Returns a PAGI-compatible async coderef.
+    my $endpoint = MyEndpoint->new(hub => $hub);
+    my $app = $endpoint->to_app;
+
+Returns a PAGI-compatible async coderef. Calling it on a class constructs one
+endpoint immediately; calling it on an instance retains that exact instance
+for every connection.
 
 =head1 SEE ALSO
 

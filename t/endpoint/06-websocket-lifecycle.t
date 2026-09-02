@@ -61,6 +61,24 @@ package EchoEndpoint {
     sub on_receive { push @received, $_[2] }
 }
 
+{
+    package Local::ConfiguredWebSocket;
+    use parent 'PAGI::Endpoint::WebSocket';
+    our $NEW_CALLS = 0;
+    our @SEEN_IDS;
+
+    sub new {
+        my ($class, @args) = @_;
+        $NEW_CALLS++;
+        return PAGI::Endpoint::WebSocket::new($class, @args);
+    }
+
+    sub on_connect {
+        push @SEEN_IDS, Scalar::Util::refaddr($_[0]);
+        return $_[1]->accept;
+    }
+}
+
 subtest 'lifecycle via to_app' => sub {
     @EchoEndpoint::log = ();
     ($EchoEndpoint::seen_connect, $EchoEndpoint::seen_receive,
@@ -102,6 +120,29 @@ subtest 'lifecycle via to_app' => sub {
 
     # Check accept was sent
     ok((grep { ($_->{type} // '') eq 'websocket.accept' } @sent), 'accept sent');
+};
+
+subtest 'configured endpoint to_app retains the exact object across connections' => sub {
+    $Local::ConfiguredWebSocket::NEW_CALLS = 0;
+    @Local::ConfiguredWebSocket::SEEN_IDS = ();
+
+    my $hub = {};
+    my $configured = Local::ConfiguredWebSocket->new(hub => $hub);
+    my $app = $configured->to_app;
+
+    for my $connection (1, 2) {
+        $app->(
+            { type => 'websocket', path => "/chat/$connection", headers => [] },
+            sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+            sub { Future->done },
+        )->get;
+    }
+
+    is $Local::ConfiguredWebSocket::NEW_CALLS, 1,
+        'configured object was not reconstructed';
+    is \@Local::ConfiguredWebSocket::SEEN_IDS,
+        [refaddr($configured), refaddr($configured)],
+        'connections use the exact configured object';
 };
 
 subtest 'immediate on_connect and on_receive results are normalized' => sub {

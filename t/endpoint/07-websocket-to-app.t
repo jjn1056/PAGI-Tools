@@ -9,6 +9,7 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::Endpoint::WebSocket;
 use PAGI::WebSocket;
+use PAGI::Routing qw(router websocket);
 
 {
     package Local::WrongWebSocketCache;
@@ -59,32 +60,33 @@ subtest 'app creates a WebSocket wrapper and calls handle' => sub {
     is($sent[0]{type}, 'websocket.accept', 'accepted connection');
 };
 
-subtest 'one compiled app constructs a fresh endpoint for each connection' => sub {
+subtest 'websocket route accepts a configured endpoint object' => sub {
     {
-        package FreshWebSocketEndpoint;
+        package RoutedConfiguredWebSocketEndpoint;
         use parent 'PAGI::Endpoint::WebSocket';
-        our @instances;
+        our @hubs;
+
         sub on_connect {
-            push @instances, $_[0];
+            push @hubs, $_[0]->{hub};
             return $_[1]->accept;
         }
     }
 
-    @FreshWebSocketEndpoint::instances = ();
-    my $app = FreshWebSocketEndpoint->to_app;
-    for my $connection (1, 2) {
-        $app->(
-            { type => 'websocket', path => "/ws/$connection", headers => [] },
-            sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
-            sub { Future->done },
-        )->get;
-    }
+    @RoutedConfiguredWebSocketEndpoint::hubs = ();
+    my $hub = {};
+    my $configured = RoutedConfiguredWebSocketEndpoint->new(hub => $hub);
+    my $app = router(routes => [
+        websocket('/chat' => $configured),
+    ])->to_app;
 
-    is(scalar @FreshWebSocketEndpoint::instances, 2,
-        'both connections reached their endpoint instance');
-    isnt(refaddr($FreshWebSocketEndpoint::instances[0]),
-        refaddr($FreshWebSocketEndpoint::instances[1]),
-        'the compiled app does not retain endpoint state between connections');
+    $app->(
+        { type => 'websocket', path => '/chat', headers => [] },
+        sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+        sub { Future->done },
+    )->get;
+
+    is \@RoutedConfiguredWebSocketEndpoint::hubs, [$hub],
+        'websocket route uses the configured endpoint object';
 };
 
 subtest 'app reuses only a compatible exact-scope WebSocket cache' => sub {
