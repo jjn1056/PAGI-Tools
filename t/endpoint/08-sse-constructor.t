@@ -52,6 +52,39 @@ subtest 'subclass can override keepalive' => sub {
     is(LiveEndpoint->keepalive_interval, 30, 'custom keepalive_interval');
 };
 
+subtest 'class to_app constructs its endpoint immediately and only once' => sub {
+    {
+        package Local::ConstructionCountingSSE;
+        use parent 'PAGI::Endpoint::SSE';
+        our $NEW_CALLS = 0;
+
+        sub new {
+            my ($class, @args) = @_;
+            $NEW_CALLS++;
+            return PAGI::Endpoint::SSE::new($class, @args);
+        }
+
+        sub on_connect { return $_[1]->start }
+    }
+
+    $Local::ConstructionCountingSSE::NEW_CALLS = 0;
+    my $app = Local::ConstructionCountingSSE->to_app;
+
+    is $Local::ConstructionCountingSSE::NEW_CALLS, 1,
+        'class to_app constructs the endpoint immediately';
+
+    for my $connection (1, 2) {
+        $app->(
+            { type => 'sse', path => "/events/$connection", headers => [] },
+            sub { Future->done({ type => 'sse.disconnect' }) },
+            sub { Future->done },
+        )->get;
+    }
+
+    is $Local::ConstructionCountingSSE::NEW_CALLS, 1,
+        'connections do not construct additional endpoint objects';
+};
+
 subtest 'app reuses only a compatible exact-scope SSE cache' => sub {
     {
         package CacheAwareEndpoint;

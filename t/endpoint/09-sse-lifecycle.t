@@ -8,6 +8,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::Endpoint::SSE;
+use PAGI::Routing qw(router sse);
 
 package MetricsEndpoint {
     use parent 'PAGI::Endpoint::SSE';
@@ -29,6 +30,24 @@ package MetricsEndpoint {
         my ($self, $sse) = @_;
         $seen_disconnect = $sse;
         push @log, 'disconnect';
+    }
+}
+
+{
+    package Local::ConfiguredSSE;
+    use parent 'PAGI::Endpoint::SSE';
+    our $NEW_CALLS = 0;
+    our @SEEN_IDS;
+
+    sub new {
+        my ($class, @args) = @_;
+        $NEW_CALLS++;
+        return PAGI::Endpoint::SSE::new($class, @args);
+    }
+
+    sub on_connect {
+        push @SEEN_IDS, Scalar::Util::refaddr($_[0]);
+        return $_[1]->start;
     }
 }
 
@@ -57,6 +76,29 @@ subtest 'lifecycle via to_app' => sub {
         'connect and disconnect receive the exact same stream');
     is(refaddr($MetricsEndpoint::seen_connect->scope), refaddr($scope),
         'the direct stream owns the selected scope');
+};
+
+subtest 'configured endpoint to_app retains the exact object across connections' => sub {
+    $Local::ConfiguredSSE::NEW_CALLS = 0;
+    @Local::ConfiguredSSE::SEEN_IDS = ();
+
+    my $hub = {};
+    my $configured = Local::ConfiguredSSE->new(hub => $hub);
+    my $app = $configured->to_app;
+
+    for my $connection (1, 2) {
+        $app->(
+            { type => 'sse', path => "/events/$connection", headers => [] },
+            sub { Future->done({ type => 'sse.disconnect' }) },
+            sub { Future->done },
+        )->get;
+    }
+
+    is $Local::ConfiguredSSE::NEW_CALLS, 1,
+        'configured object was not reconstructed';
+    is \@Local::ConfiguredSSE::SEEN_IDS,
+        [refaddr($configured), refaddr($configured)],
+        'connections use the exact configured object';
 };
 
 subtest 'events are sent' => sub {
@@ -91,32 +133,33 @@ subtest 'default lifecycle starts the stream without an on_connect hook' => sub 
         'the default lifecycle starts one stream');
 };
 
-subtest 'one compiled app constructs a fresh endpoint for each connection' => sub {
+subtest 'sse route accepts a configured endpoint object' => sub {
     {
-        package FreshSSEEndpoint;
+        package RoutedConfiguredSSE;
         use parent 'PAGI::Endpoint::SSE';
-        our @instances;
+        our @hubs;
+
         sub on_connect {
-            push @instances, $_[0];
+            push @hubs, $_[0]->{hub};
             return $_[1]->start;
         }
     }
 
-    @FreshSSEEndpoint::instances = ();
-    my $app = FreshSSEEndpoint->to_app;
-    for my $connection (1, 2) {
-        $app->(
-            { type => 'sse', path => "/events/$connection", headers => [] },
-            sub { Future->done({ type => 'sse.disconnect' }) },
-            sub { Future->done },
-        )->get;
-    }
+    @RoutedConfiguredSSE::hubs = ();
+    my $hub = {};
+    my $configured = RoutedConfiguredSSE->new(hub => $hub);
+    my $app = router(routes => [
+        sse('/events' => $configured),
+    ])->to_app;
 
-    is(scalar @FreshSSEEndpoint::instances, 2,
-        'both connections reached their endpoint instance');
-    isnt(refaddr($FreshSSEEndpoint::instances[0]),
-        refaddr($FreshSSEEndpoint::instances[1]),
-        'the compiled app does not retain endpoint state between connections');
+    $app->(
+        { type => 'sse', path => '/events', headers => [] },
+        sub { Future->done({ type => 'sse.disconnect' }) },
+        sub { Future->done },
+    )->get;
+
+    is \@RoutedConfiguredSSE::hubs, [$hub],
+        'sse route uses the configured endpoint object';
 };
 
 subtest 'immediate on_connect results are normalized' => sub {
