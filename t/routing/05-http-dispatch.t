@@ -7,7 +7,6 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
-use PAGI::App::Router;
 use PAGI::Response;
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route middleware);
@@ -778,33 +777,29 @@ subtest 'partial decisions preserve first-seen method order without sharing arra
     );
 };
 
-subtest 'PAGI::App::Router emits first-seen authoritative Allow order' => sub {
+subtest 'declarative Router emits first-seen authoritative Allow order' => sub {
     my @cases = (
         [
             'POST declared before GET',
-            sub {
-                my ($router) = @_;
-                $router->post('/ordered' => sub { return Future->done });
-                $router->get('/ordered' => sub { return Future->done });
-            },
+            [
+                route('/ordered' => sub { return Future->done }, methods => 'POST'),
+                route('/ordered' => sub { return Future->done }, methods => 'GET'),
+            ],
             [qw(POST GET HEAD)],
         ],
         [
             'GET declared before POST',
-            sub {
-                my ($router) = @_;
-                $router->get('/ordered' => sub { return Future->done });
-                $router->post('/ordered' => sub { return Future->done });
-            },
+            [
+                route('/ordered' => sub { return Future->done }, methods => 'GET'),
+                route('/ordered' => sub { return Future->done }, methods => 'POST'),
+            ],
             [qw(GET HEAD POST)],
         ],
     );
 
     for my $case (@cases) {
-        my ($label, $declare, $want) = @$case;
-        my $router = PAGI::App::Router->new;
-        $declare->($router);
-        my $app = $router->to_app;
+        my ($label, $routes, $want) = @$case;
+        my $app = router(routes => $routes)->to_app;
         my ($receive, $send, $events) = channels();
         $app->(
             scope(method => 'TRACE', path => '/ordered'),

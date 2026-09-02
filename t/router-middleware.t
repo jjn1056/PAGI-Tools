@@ -7,9 +7,8 @@ use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
 use lib 'lib';
-use PAGI::App::Router;
 use PAGI::Response::Text ();
-use PAGI::Routing qw(middleware route router);
+use PAGI::Routing qw(middleware mount route router sse websocket);
 
 async sub request {
     my ($app, %changes) = @_;
@@ -168,21 +167,22 @@ subtest 'declarative route binds ordinary controller and middleware closures onc
         'the compiled factory is retained while the wrapper runs per request');
 };
 
-subtest 'public route middleware uses native app-to-app onion order' => sub {
+subtest 'declarative route middleware uses native app-to-app onion order' => sub {
     my (@trace, $builds);
     $builds = 0;
-    my $router = PAGI::App::Router->new;
-    $router->get('/' => [
-        factory('outer', \@trace, \$builds),
-        factory('inner', \@trace, \$builds),
-    ] => sub {
-        my ($request) = @_;
-        push @trace, 'handler ' . ref($request);
-        return PAGI::Response::Text->new('home');
-    });
+    my $routing = router(routes => [
+        route('/' => sub {
+            my ($request) = @_;
+            push @trace, 'handler ' . ref($request);
+            return PAGI::Response::Text->new('home');
+        }, middleware => [
+            middleware(factory('outer', \@trace, \$builds)),
+            middleware(factory('inner', \@trace, \$builds)),
+        ]),
+    ]);
 
-    is($builds, 0, 'declaration normalizes without wrapping');
-    my $app = $router->to_app;
+    is($builds, 0, 'declaration retains descriptions without wrapping');
+    my $app = $routing->to_app;
     is($builds, 2, 'both factories run at compilation');
     my $events = request($app)->get;
     is(event_body($events), 'home', 'the Request handler response is emitted');
@@ -196,25 +196,26 @@ subtest 'public route middleware uses native app-to-app onion order' => sub {
     is($builds, 2, 'a retained app never rebuilds middleware per request');
 };
 
-subtest 'object and explicit description forms compose on the public route' => sub {
+subtest 'object and factory descriptions compose on a declarative route' => sub {
     my (@trace, $object_builds, $factory_builds);
     my $object = Local::ObjectMiddleware->new(
         'object', \@trace, \$object_builds,
     );
-    my $description = middleware(
+    my $object_description = middleware($object);
+    my $factory_description = middleware(
         factory('description', \@trace, \$factory_builds),
     );
-    my $router = PAGI::App::Router->new;
-    $router->get('/' => [$object, $description] => sub {
-        push @trace, 'handler';
-        return PAGI::Response::Text->new('mixed');
-    });
+    my $routing = router(routes => [
+        route('/' => sub {
+            push @trace, 'handler';
+            return PAGI::Response::Text->new('mixed');
+        }, middleware => [$object_description, $factory_description]),
+    ]);
 
-    my $snapshot = $router->to_router;
-    is([map { ref($_) } @{$snapshot->routes->[0]->middleware}], [
+    is([map { ref($_) } @{$routing->routes->[0]->middleware}], [
         'PAGI::Routing::Middleware', 'PAGI::Routing::Middleware',
-    ], 'both entries normalize to immutable descriptions');
-    my $events = request($router->to_app)->get;
+    ], 'both explicit entries remain immutable descriptions');
+    my $events = request($routing->to_app)->get;
     is(event_body($events), 'mixed', 'mixed middleware forms preserve response flow');
     is(\@trace, [
         'object before', 'description before', 'handler',
@@ -225,15 +226,16 @@ subtest 'object and explicit description forms compose on the public route' => s
 };
 
 subtest 'class-name middleware is accepted and resolved at compilation' => sub {
-    my $router = PAGI::App::Router->new;
-    $router->get('/' => ['RequestId'] => sub {
-        my ($request) = @_;
-        return PAGI::Response::Text->new(
-            defined $request->scope->{request_id} ? 'has id' : 'missing id',
-        );
-    });
+    my $routing = router(routes => [
+        route('/' => sub {
+            my ($request) = @_;
+            return PAGI::Response::Text->new(
+                defined $request->scope->{request_id} ? 'has id' : 'missing id',
+            );
+        }, middleware => [middleware('RequestId')]),
+    ]);
 
-    my $events = request($router->to_app)->get;
+    my $events = request($routing->to_app)->get;
     is(event_body($events), 'has id', 'short class name resolves through shared middleware');
     my ($request_id) = map { $_->[1] }
         grep { lc($_->[0]) eq 'x-request-id' } @{$events->[0]{headers}};
@@ -252,13 +254,14 @@ subtest 'middleware can short circuit or wrap native channels' => sub {
             return Future->done;
         };
     };
-    my $router = PAGI::App::Router->new;
-    $router->get('/denied' => [$auth] => sub {
-        ++$handler_calls;
-        return PAGI::Response::Text->new('must not run');
-    });
+    my $routing = router(routes => [
+        route('/denied' => sub {
+            ++$handler_calls;
+            return PAGI::Response::Text->new('must not run');
+        }, middleware => [middleware($auth)]),
+    ]);
 
-    my $denied = request($router->to_app, path => '/denied')->get;
+    my $denied = request($routing->to_app, path => '/denied')->get;
     is([$denied->[0]{status}, event_body($denied), $handler_calls],
         [401, 'denied', 0], 'native middleware may own the response');
 
@@ -284,12 +287,13 @@ subtest 'middleware can short circuit or wrap native channels' => sub {
             return $inner->($scope, $wrapped_receive, $wrapped_send);
         };
     };
-    my $channels = PAGI::App::Router->new;
-    $channels->get('/channels' => [$inject] => async sub {
-        my ($request) = @_;
-        my $body = await $request->body;
-        return PAGI::Response::Text->new($body);
-    });
+    my $channels = router(routes => [
+        route('/channels' => async sub {
+            my ($request) = @_;
+            my $body = await $request->body;
+            return PAGI::Response::Text->new($body);
+        }, middleware => [middleware($inject)]),
+    ]);
     my $events = request($channels->to_app, path => '/channels')->get;
     is(event_body($events), 'synthetic', 'wrapped receive reaches the Request body');
     my ($wrapped) = map { $_->[1] }
@@ -297,26 +301,30 @@ subtest 'middleware can short circuit or wrap native channels' => sub {
     is($wrapped, 'yes', 'wrapped send changes the emitted Response');
 };
 
-subtest 'callback Mount, Router app, and route middleware stack once' => sub {
+subtest 'nested Mount, Router, and route middleware stack once' => sub {
     my (@trace, $builds);
-    my $child = PAGI::App::Router->new(
-        middleware => [factory('child router', \@trace, \$builds)],
+    my $child = router(
+        middleware => [middleware(factory('child router', \@trace, \$builds))],
+        routes => [
+            route('/data' => sub {
+                push @trace, 'handler';
+                return PAGI::Response::Text->new('data');
+            }, middleware => [middleware(factory('route', \@trace, \$builds))]),
+        ],
     );
-    $child->get('/data' => [factory('route', \@trace, \$builds)] => sub {
-        push @trace, 'handler';
-        return PAGI::Response::Text->new('data');
-    });
-
-    my $root = PAGI::App::Router->new(
-        middleware => [factory('root router', \@trace, \$builds)],
+    my $root = router(
+        middleware => [middleware(factory('root router', \@trace, \$builds))],
+        routes => [
+            mount('/api', routes => [
+                mount('/v1', app => $child, name => 'v1',
+                    middleware => [middleware(factory(
+                        'known mount', \@trace, \$builds,
+                    ))]),
+            ], middleware => [middleware(factory(
+                'callback Mount', \@trace, \$builds,
+            ))]),
+        ],
     );
-    $root->mount('/api', routes => sub {
-        my ($api) = @_;
-        $api->mount('/v1',
-            app => $child->to_router,
-            middleware => [factory('known mount', \@trace, \$builds)],
-        )->name('v1');
-    }, middleware => [factory('callback Mount', \@trace, \$builds)]);
 
     my $events = request($root->to_app, path => '/api/v1/data')->get;
     is(event_body($events), 'data', 'nested public middleware graph responds');
@@ -332,16 +340,17 @@ subtest 'callback Mount, Router app, and route middleware stack once' => sub {
 subtest 'route middleware is uniform for normal WebSocket and SSE handlers' => sub {
     my @trace;
     my $mw = factory('protocol', \@trace);
-    my $router = PAGI::App::Router->new;
-    $router->websocket('/ws' => [$mw] => sub {
-        push @trace, 'handler ' . ref($_[0]);
-        return Future->done;
-    });
-    $router->sse('/events' => [$mw] => sub {
-        push @trace, 'handler ' . ref($_[0]);
-        return Future->done;
-    });
-    my $app = $router->to_app;
+    my $routing = router(routes => [
+        websocket('/ws' => sub {
+            push @trace, 'handler ' . ref($_[0]);
+            return Future->done;
+        }, middleware => [middleware($mw)]),
+        sse('/events' => sub {
+            push @trace, 'handler ' . ref($_[0]);
+            return Future->done;
+        }, middleware => [middleware($mw)]),
+    ]);
+    my $app = $routing->to_app;
 
     request($app, type => 'websocket', method => undef, path => '/ws')->get;
     request($app, type => 'sse', method => undef, path => '/events')->get;
@@ -351,14 +360,13 @@ subtest 'route middleware is uniform for normal WebSocket and SSE handlers' => s
     ], 'protocol middleware wraps the shared direct-object adapter');
 };
 
-subtest 'invalid entries fail during public declaration normalization' => sub {
-    my $router = PAGI::App::Router->new;
-    like(dies { $router->get('/hash' => [{}] => sub { }) },
+subtest 'declarative routes reject bare middleware entries' => sub {
+    like(dies { route('/hash' => sub { }, middleware => [{}]) },
         qr/middleware entry 0 must be/, 'hashref entry is rejected');
     my $object = bless {}, 'Local::NoWrap';
-    like(dies { $router->get('/object' => [$object] => sub { }) },
+    like(dies { route('/object' => sub { }, middleware => [$object]) },
         qr/middleware entry 0 must be/, 'object without wrap is rejected');
-    like(dies { $router->get('/empty' => [''] => sub { }) },
+    like(dies { route('/empty' => sub { }, middleware => ['']) },
         qr/middleware entry 0 must be/, 'empty class name is rejected');
 };
 
