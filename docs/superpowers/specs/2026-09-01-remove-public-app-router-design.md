@@ -2,12 +2,14 @@
 
 **Status:** Draft for review; implementation not started
 
-**Date:** 2026-09-01
+**Date:** 2026-09-01; revised 2026-09-02 after the Endpoint Router review
 
 **Supersedes:** All public `PAGI::App::Router` guidance in the current routing,
 Compose, frontend-mounting, and application-valued-endpoint designs. The
-immutable declarative Router and `PAGI::Endpoint::Router` designs remain in
-force.
+immutable declarative Router design remains in force. `PAGI::Endpoint::Router`
+is now a condemned transitional frontend: this campaign keeps it working with
+the smallest practical bridge, but does not preserve it as a long-term public
+alternative.
 
 ## 1. Decision
 
@@ -49,15 +51,16 @@ spellings:
 $app->path_for('/people/show', { id => 42 });  # /people/42
 ```
 
-Keep `PAGI::Endpoint::Router` as the class/method-oriented alternative. Do not
-redesign it in this campaign. Make only the minimum internal change required
-for Endpoint Router to continue using the existing private declaration builder
-after the public App Router package is removed.
+Do not combine this removal with the larger `PAGI::Endpoint::Router` removal.
+Make only the minimum internal change required for Endpoint Router to continue
+using the existing private declaration builder after the public App Router
+package is removed. Do not promote, redesign, or expand that bridge.
 
 The existing private packages `PAGI::App::Router::Builder` and
-`PAGI::App::Router::Materializer` remain temporarily as Endpoint Router
-implementation details. Renaming or redesigning that internal machinery is a
-separate Endpoint Router project.
+`PAGI::App::Router::Materializer` remain temporarily only because Endpoint
+Router still depends on them. Both are condemned with Endpoint Router and are
+removed in the later Endpoint campaign. Their temporary survival is a
+sequencing decision, not an endorsement of their design.
 
 ## 2. Why removal is better than another composition rule
 
@@ -96,14 +99,19 @@ frontend avoids that rule entirely. A declarative child is already a
 `PAGI::Routing::Router`, so one value supplies execution, inspection, reverse
 routing, and immutable identity.
 
-The resulting public model is smaller:
+The intended public model is smaller:
 
 - `Route` owns one exact leaf;
 - `Mount` composes one application under a prefix;
 - `Router` owns one ordered routing collection and its outcomes;
 - `Compose` owns root services and lifespan;
-- `PAGI::Routing` is the functional construction API; and
-- `PAGI::Endpoint::Router` is the optional class/method construction API.
+- `PAGI::Routing` is the routing construction API; and
+- `PAGI::Endpoint::HTTP`, `PAGI::Endpoint::WebSocket`, and
+  `PAGI::Endpoint::SSE` may provide class-based behavior for individual route
+  leaves once their instance lifecycle has been aligned in the next campaign.
+
+Endpoint Router remains loadable during this one transitional campaign, but it
+is not part of that final model.
 
 This is closer to the Starlette model that inspired the declarative work and
 is easier for users, documentation, and code-generating tools to learn.
@@ -120,7 +128,21 @@ The public `PAGI::App::Router` package itself contributes only a thin subclass
 over the private Builder: it adds `named_routes`, `route_named`, and `path_for`
 delegation plus public documentation. The substantial Builder and Materializer
 code is also used by Endpoint Router and therefore cannot simply be deleted in
-this campaign.
+this campaign. That dependency is temporary. The Endpoint facade calls the App
+Builder's private `_add_route_from` and `_mount_from` seams and its
+public-looking `http_default`, `name`, `desc`, and `constraints` methods. Those
+exact seams must survive the bridge; unrelated App-frontend conveniences need
+not be treated as retained public value.
+
+The Endpoint family also has a confirmed defect that this campaign must not
+hide or accidentally build upon. `PAGI::Endpoint::HTTP->to_app` retains a
+configured instance or constructs one class instance at compilation. The
+WebSocket and SSE variants instead call `new` inside the request application.
+An instantiated WebSocket or SSE endpoint therefore builds successfully but
+dies on the first connection with `Attempt to bless into a reference`, while a
+class endpoint constructs once per connection. This blocks the later Endpoint
+replacement design, but it does not block removing the independent public App
+Router frontend. Section 16 fixes the sequence.
 
 The affected examples are straightforward declarations, not applications that
 depend on runtime route mutation. Converting them to `route`, `websocket`,
@@ -137,21 +159,26 @@ it.
 1. Remove `PAGI::App::Router` as a public, loadable PAGI-Tools class.
 2. Establish immutable declarative routing as the sole function/closure-based
    Router API.
-3. Preserve Endpoint Router behavior without redesigning its public contract.
+3. Keep Endpoint Router operational through a minimal, explicitly temporary
+   private bridge without redesigning its public contract.
 4. Convert every maintained App Router example to declarative construction.
 5. Preserve HTTP, WebSocket, SSE, middleware, URL generation, constraints,
    defaults, declaration order, and lifespan behavior in converted examples.
 6. Remove public documentation that presents three routing frontends.
 7. Give users a concrete upgrade path from verb methods and chained modifiers
    to declarative options.
-8. Remove obsolete public tests while retaining coverage for private machinery
-   that Endpoint Router still consumes.
+8. Remove obsolete public tests while retaining only the focused coverage
+   needed to prove the temporary Endpoint bridge was not broken.
 
 ## 5. Non-goals
 
 This campaign does not:
 
 - redesign, remove, or substantially clean up `PAGI::Endpoint::Router`;
+- repair `PAGI::Endpoint::WebSocket` or `PAGI::Endpoint::SSE` instance
+  lifecycle;
+- settle the explicit Route `methods` versus Endpoint `allowed_methods`
+  contract;
 - rename `PAGI::App::Router::Builder` or
   `PAGI::App::Router::Materializer`;
 - add a replacement mutable Router class;
@@ -163,7 +190,8 @@ This campaign does not:
 - change Compose's root ownership or lifespan behavior;
 - provide a deprecation period or compatibility stub;
 - modify PAGI::Nano or any sibling repository; or
-- preserve App Router merely as an undocumented or internal alias.
+- preserve App Router merely as an undocumented or internal alias; or
+- establish the temporary Builder or Materializer as supported internal APIs.
 
 ## 6. Public surface after removal
 
@@ -226,9 +254,11 @@ my $app = compose(
 Because `$api` is already immutable, the parent can discover `/api/show`
 without conversion.
 
-### 6.2 Class-oriented applications
+### 6.2 Transitional Endpoint Router applications
 
-`PAGI::Endpoint::Router` remains the class-oriented choice:
+`PAGI::Endpoint::Router` remains loadable only so this campaign does not mix
+two router removals. Existing Endpoint applications retain their current
+syntax temporarily:
 
 ```perl
 package MyApp::People;
@@ -240,9 +270,14 @@ sub routes {
 }
 ```
 
+Do not present this as the recommended class-oriented choice in newly written
+front-page or tutorial material. New class-based behavior belongs in the
+route-level `PAGI::Endpoint::HTTP`, `PAGI::Endpoint::WebSocket`, and
+`PAGI::Endpoint::SSE` family after the configured-instance blocker is repaired.
+
 This campaign does not make nested Endpoint children direct structural
-providers. Existing Endpoint `to_router` composition remains as-is until the
-Endpoint Router design is reviewed separately.
+providers. Existing Endpoint `to_router` composition remains unchanged until
+the separate Endpoint removal campaign converts it to declarative Routers.
 
 ### 6.3 Raw PAGI applications
 
@@ -414,7 +449,7 @@ my $app = compose(
 
 Do not flatten a configured reusable Router merely to shorten the conversion.
 
-## 8. Endpoint Router preservation
+## 8. Temporary Endpoint Router bridge
 
 `PAGI::Endpoint::Router::_materialize_with` currently constructs a public
 `PAGI::App::Router` and passes it through the private Endpoint facade. Replace
@@ -427,24 +462,32 @@ pass it to PAGI::Endpoint::Router::Builder
 materialize through the existing root-local Materializer
 ```
 
-No Endpoint Router user syntax or runtime semantics change. In particular:
+The bridge depends on these App Builder seams and they must be named explicitly
+so a cleanup does not remove half of the contract:
 
-- class and instance `to_router`/`to_app` behavior remains;
-- local method binding remains;
-- route middleware helpers remain;
-- callback child routes remain;
-- Endpoint snapshot identity and cycle handling remain;
-- HTTP, WebSocket, and SSE handlers remain; and
-- existing nested Endpoint `to_router` examples remain until that separate
-  design is revisited.
+- construction and `_materialize_with`;
+- private `_add_route_from` and `_mount_from`, called by the Endpoint facade;
+- `http_default`;
+- `name`;
+- `desc`; and
+- `constraints`.
 
-Update private POD that currently says the Endpoint facade receives an "App
-Router" so it instead describes an internal ordered declaration builder. Do
-not advertise either private package as a replacement public API.
+App Builder's own verb methods and other App-Router-facing conveniences are not
+therefore declared valuable to Endpoint. Do not trim them speculatively in this
+campaign when doing so would expand the diff; equally, do not create or rewrite
+tests merely to preserve them as a future contract.
 
-The internal namespace is imperfect but deliberate for this campaign. Moving
-it while Endpoint Router itself is under reconsideration would create churn
-without improving the public API.
+No Endpoint Router user syntax or runtime semantics change. Existing class and
+instance materialization, local method binding, route middleware helpers,
+callback children, snapshots, HTTP/WebSocket/SSE handlers, and nested
+`to_router` examples remain untouched except where the removed public App
+Router constructor must be replaced.
+
+Update private POD only enough to say that the Endpoint facade receives a
+temporary internal ordered declaration builder. Both private packages are
+unsupported, condemned implementation details scheduled for deletion with
+Endpoint Router. Do not market, rename, generalize, or extensively redocument
+them.
 
 ## 9. Files and public documentation
 
@@ -483,13 +526,19 @@ Update all current public guidance, including:
 - `Changes`.
 
 The front page must no longer say there are three public routing frontends. It
-must present the declarative and Endpoint styles without implying every app
-needs a Router wrapper:
+must present declarative routing as the sole routing construction API without
+implying every application needs a Router wrapper:
 
 ```text
 PAGI::Routing          immutable functional declarations
-PAGI::Endpoint::Router optional class/method frontend
 ```
+
+Existing Endpoint Router-specific documentation may remain for this
+transitional release only where removing it would force the later Endpoint
+migration into this campaign. It must not be newly elevated in overview prose,
+and any text touched by this campaign must not describe it as the intended
+long-term alternative. Likewise, do not advertise configured WebSocket or SSE
+endpoint objects as replacements before campaign B makes that use valid.
 
 ### 9.3 Upgrade guide
 
@@ -526,8 +575,10 @@ For each migrated Cookbook recipe:
 - `compose(...)` is the returned application object unless the recipe
   deliberately demonstrates bare Router deployment;
 - prose describes the declarative shape shown directly above it;
-- internal links point to `PAGI::Routing`, Route, Mount, Router, or Endpoint
-  Router rather than the removed class; and
+- internal links point to `PAGI::Routing`, Route, Mount, Router, or the
+  relevant route-level Endpoint class rather than the removed class; Endpoint
+  Router links may remain only in recipes that this campaign deliberately does
+  not migrate; and
 - extracted code continues to compile or pass the repository's existing
   Cookbook example test strategy.
 
@@ -582,24 +633,24 @@ including public constructor, public inspection delegation, and public POD
 expectations. Do not retain negative tests that accidentally keep the removed
 module loadable.
 
-### 11.2 Retain private Endpoint machinery coverage
+### 11.2 Retain focused temporary Endpoint bridge coverage
 
-The private Builder and Materializer still require coverage for:
+Do not create a preservation campaign for the condemned Builder and
+Materializer. Keep existing tests unchanged when they still pass and adapt only
+the coverage that necessarily refers to the removed public class. Focused
+bridge coverage must prove that Endpoint Router can still:
 
-- exact declaration order;
-- route and mount record construction;
-- modifier validation;
-- middleware normalization used by Endpoint Router;
-- immutable snapshot isolation;
-- shared descendant identity;
-- cycle detection and rollback;
-- declaration-package preservation; and
-- Endpoint callback children.
+- materialize a class or configured instance;
+- preserve declaration order;
+- construct representative Route and Mount nodes;
+- apply `http_default`, `name`, `desc`, and `constraints` through the surviving
+  App Builder seams; and
+- produce a working immutable Router snapshot.
 
-Tests may load the private packages directly, but their names and comments
-must call them internal Endpoint support rather than a public frontend. Rename
-test descriptions where practical; wholesale internal test-file relocation is
-not required.
+Existing deeper identity, rollback, callback, and cycle tests may remain until
+the Endpoint removal campaign deletes their subject. Do not rewrite or expand
+them merely to canonize the temporary machinery, and do not move these private
+packages into a new namespace.
 
 ### 11.3 Convert shared behavioral fixtures
 
@@ -618,18 +669,19 @@ Tests must prove:
    behavior.
 3. Named nested immutable Routers remain discoverable through Mount.
 4. Converted examples load and their focused integrations pass.
-5. Endpoint Router class and instance construction still work.
-6. Endpoint Router handlers, middleware, callback children, URL generation,
-   WebSocket, and SSE remain green.
-7. The private Builder/Materializer still produce fresh immutable Endpoint
-   snapshots and reject cycles.
-8. No live public POD or maintained example recommends the removed class.
-9. Historical Before blocks in `UPGRADING.md` are clearly labelled and are the
+5. The focused Endpoint bridge test proves class and configured Endpoint
+   Router instance materialization, declaration order, representative
+   Route/Mount output, the four surviving modifiers, and a usable immutable
+   snapshot.
+6. Existing Endpoint suites remain green without being expanded into a new
+   long-term contract for Builder or Materializer.
+7. No live public POD or maintained example recommends the removed class.
+8. Historical Before blocks in `UPGRADING.md` are clearly labelled and are the
    only allowed public textual examples.
-10. Generated README content matches its source POD.
-11. Cookbook and Tutorial regression tests require the final declarative code
+9. Generated README content matches its source POD.
+10. Cookbook and Tutorial regression tests require the final declarative code
     forms, not merely the absence of the removed package name.
-12. Public POD cross-links contain no dead `PAGI::App::Router` target.
+11. Public POD cross-links contain no dead `PAGI::App::Router` target.
 
 Run focused suites during migration, the complete suite once at the final
 candidate HEAD, and one distribution build without rerunning the suite through
@@ -704,19 +756,22 @@ Non-GET routes require `methods => [...]`, and strict middleware requires
 and direct alignment with the immutable Router model. Do not add verb helpers
 inside this removal campaign to hide the difference.
 
-### 14.2 Endpoint still contains mutable machinery
+### 14.2 Endpoint temporarily retains condemned mutable machinery
 
-Yes. The goal is to remove duplicate public surface, not pretend mutation no
-longer exists internally. Endpoint Router needs an ordered declaration builder
-for its method-oriented DSL. That implementation remains private and may be
-redesigned later with Endpoint itself.
+Yes. This is a sequencing compromise, not a claim that Endpoint Router needs
+or should keep the machinery. Removing it here would combine a narrow public
+frontend deletion with a substantially larger Endpoint migration touching its
+API, protocol endpoint lifecycle, examples, documentation, and thousands of
+lines of tests. Keep the bridge small, avoid improvements, and delete it in the
+separate Endpoint campaign.
 
 ### 14.3 Private modules remain under `PAGI::App::Router::*`
 
 This namespace is inelegant after removing the parent package. Renaming it now
-would mix public API removal with an Endpoint internal rewrite. Clear private
-POD and absence from public docs are sufficient temporarily. A later Endpoint
-project may move or eliminate it.
+would create churn in code already scheduled for deletion. Minimal private POD
+and absence from public recommendations are sufficient temporarily. The later
+Endpoint project removes these packages rather than finding them a permanent
+home.
 
 ### 14.4 Removing examples could hide feature coverage
 
@@ -758,13 +813,90 @@ cost without protecting a supported contract.
 Rejected for this campaign. That would substitute a second declarative grammar
 while the existing `route(..., methods => ...)` contract is adequate.
 
-### 15.5 Remove Endpoint Router too
+### 15.5 Remove Endpoint Router in this same campaign
 
-Rejected. Endpoint supplies a genuinely different class/method-oriented style
-and has useful examples. Its quality and internal shape will be evaluated in a
-separate project.
+Rejected as sequencing, not as direction. Endpoint Router is also scheduled
+for removal, but combining it here would block the well-understood App Router
+deletion behind a larger redesign and migration. The route-level Endpoint
+classes first need a separate configured-instance repair, and existing
+Endpoint Router applications then need deliberate conversion to declarative
+Routers. Section 16 records the ordered campaigns.
 
-## 16. Stop conditions
+## 16. Ordered follow-up campaigns
+
+This design is the first of three separately specified, planned, tracked, and
+reviewed campaigns. Do not merge their scopes merely because later deletion
+makes some temporary code uninteresting.
+
+### 16.1 Campaign A: remove public App Router
+
+Execute this specification first. Remove the public frontend, convert its
+applications and documentation to declarative routing, and retain only the
+minimal Endpoint bridge in section 8. Do not fix Endpoint protocol classes or
+migrate Endpoint Router applications here.
+
+### 16.2 Campaign B: repair retained route-level Endpoint classes
+
+Before presenting route-level endpoint objects as the Endpoint Router
+replacement, write and execute a separate design that aligns
+`PAGI::Endpoint::HTTP`, `PAGI::Endpoint::WebSocket`, and
+`PAGI::Endpoint::SSE`:
+
+- a class `to_app` call constructs exactly one instance at application
+  compilation;
+- an instance `to_app` call retains that exact configured instance;
+- no endpoint constructs once per request or connection;
+- all three document that the retained instance is shared and must not hold
+  request- or connection-local state;
+- configured WebSocket and SSE objects work both directly and as declarative
+  route targets; and
+- focused tests reproduce and close the current connection-time `Attempt to
+  bless into a reference` failures.
+
+That campaign must also settle the two HTTP 405 ownership paths. Without
+explicit Route `methods`, snapshot the endpoint's `allowed_methods` capability.
+An explicit methods array is a restriction and must not advertise a method the
+endpoint does not support; contradictory declarations should fail during Route
+construction. Scalar `methods => '*'` is the explicit escape hatch by which
+the endpoint owns all method dispatch and method failures. Standalone and
+mounted Endpoint applications continue to own their internal 405 behavior.
+
+### 16.3 Campaign C: remove Endpoint Router and mutable materialization
+
+After campaign B establishes working route-level class endpoints, write and
+execute a separate Endpoint removal design that:
+
+- removes `PAGI::Endpoint::Router` and
+  `PAGI::Endpoint::Router::Builder`;
+- removes the remaining `PAGI::App::Router::Builder` and
+  `PAGI::App::Router::Materializer` packages;
+- converts Endpoint Router examples and tests to declarative Routers,
+  route-level Endpoint objects, or explicit closures;
+- removes string method targets, `middleware_as`, `app_as`, `new_request`, and
+  `to_router` with the obsolete frontend;
+- moves no helper merely for compatibility; a helper survives only if the new
+  design demonstrates value independent of Endpoint Router;
+- updates the Cookbook, Tutorial, overview documentation, upgrading guide,
+  examples, tests, load lists, and distribution contents; and
+- leaves application-root classes to ordinary application code or a future
+  higher-level framework rather than inventing one in PAGI-Tools.
+
+When replacing Endpoint's `app_path`, call the exported
+`PAGI::Utils::app_path` directly in the module that owns the assets. Its origin
+is the importing/calling package, unlike Endpoint's class-derived helper, so a
+test must cover the documented placement and an inherited base-class wrapper
+must not be assumed equivalent.
+
+Inline provider examples in that campaign must import their providers in the
+declaration package, for example:
+
+```perl
+use Type::Standard qw(Int);
+
+route('/people/{person_id:&Int}' => $endpoint);
+```
+
+## 17. Stop conditions
 
 Pause and revisit the design if implementation requires:
 
@@ -772,6 +904,7 @@ Pause and revisit the design if implementation requires:
 - adding a compatibility class or hidden mutable Router alias;
 - adding method-specific declarative constructors;
 - redesigning Endpoint Router's public API;
+- repairing route-level Endpoint lifecycle or 405 policy in this campaign;
 - rewriting examples beyond their routing construction;
 - weakening strict declarative middleware descriptions;
 - flattening configured Routers and losing outcome or middleware boundaries;
@@ -781,21 +914,26 @@ Pause and revisit the design if implementation requires:
 These indicate the removal has expanded beyond eliminating one redundant
 public frontend.
 
-## 17. Work map for implementation
+## 18. Work map for implementation
 
 - **Repository:** `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools`
 - **Ticket:** none
 - **Working branch:** `feature/remove-public-app-router`
 - **Spec base:** `b9cd32528a053190e9c560098f4323c78d7999bb`, the merge commit
   for PR #27
-- **Owned changes:** public App Router removal; minimal Endpoint internal
-  construction adjustment; declarative conversion of maintained examples;
-  tests; POD; generated README; Changes; and upgrade guidance
+- **Owned changes:** public App Router removal; minimal condemned Endpoint
+  bridge adjustment; declarative conversion of maintained App Router examples;
+  focused bridge verification; POD; generated README; Changes; and upgrade
+  guidance
 - **Deployment boundary:** unreleased PAGI-Tools distribution
 - **Push target:** a new remote `feature/remove-public-app-router` branch and
   pull request, only after authorization; PR #27 is merged and closed
+- **Required PAGI-Tools follow-ups:** separately spec and execute route-level
+  Endpoint instance repair, then Endpoint Router and mutable materializer
+  removal, in that order
 - **External follow-up:** migrate PAGI::Nano after PAGI-Tools settles
 - **Out of scope:** PAGI specification, PAGI::Server, PAGI::Nano, sibling
-  repositories, and Endpoint Router redesign
+  repositories, route-level Endpoint lifecycle repair, and Endpoint Router
+  removal
 
 Reconfirm the map before implementation and again before any push.
