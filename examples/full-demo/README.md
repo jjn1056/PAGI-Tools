@@ -99,16 +99,17 @@ ws.onopen = () => ws.send('Hello from browser!');
 ## Code Structure
 
 ```perl
-# Routing with PAGI::App::Router
-my $router = PAGI::App::Router->new;
-$router->get('/' => as_app(async sub { ... }))->name('hello');
-$router->post('/echo' => as_app(async sub { ... }))->name('echo');
-$router->websocket('/ws/echo' => as_app(async sub { ... }));
-$router->sse('/events' => as_app(async sub { ... }));
+# Routing with immutable declarations
+my @routes = (
+    route('/' => as_app(async sub { ... }), name => 'hello'),
+    route('/echo' => as_app(async sub { ... }), methods => ['POST'], name => 'echo'),
+    websocket('/ws/echo' => as_app(async sub { ... })),
+    sse('/events' => as_app(async sub { ... })),
+);
 
-# Complete application boundary and lifespan callbacks
+# Complete application and lifespan callbacks
 compose(
-    routes => [mount('/' => app => $router)],
+    routes => \@routes,
     lifespan => {
         startup  => async sub { ... },
         shutdown => async sub { ... },
@@ -117,20 +118,12 @@ compose(
 ```
 
 These handlers intentionally demonstrate the protocol channels directly, so
-each native coderef is explicitly marked with `as_app`. An ordinary App Router handler would receive
-`PAGI::Request` and return a Response. The declarations run in exactly the
-order shown. `PAGI::App::Router` already implements `to_app`, so Compose
-mounts the full-demo frontend directly. The unnamed root Mount consumes no path
-and keeps the Router's middleware, default, and routing outcomes. The outer
-Compose Router treats the frontend as an application boundary and does not
-inspect its descendant names. The frontend already implements `to_app`: mount
-it directly for ordinary deployment. Use `to_router` only when a parent must
-discover those names or retain an immutable snapshot; this application has no
-such parent-side consumer. Compose keeps the same callbacks and state identity
-while the mounted Router owns its 404 and 405 outcomes. See
+each native coderef is explicitly marked with `as_app`. An ordinary route
+handler would receive `PAGI::Request` and return a Response. The declarations
+run in exactly the order shown. Compose keeps the same callbacks and state
+identity while its immutable Router owns the 404 and 405 outcomes. See
 [PAGI::Compose](../../lib/PAGI/Compose.pm) and
-[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the complete
-boundary model.
+[PAGI::Routing](../../lib/PAGI/Routing.pm) for the complete routing model.
 
 ## Lifespan State
 
@@ -157,6 +150,6 @@ my $counter = $scope->{state}{request_counter}++;
 
 ## See Also
 
-- [PAGI::App::Router](../../lib/PAGI/App/Router.pm) - Full router documentation
+- [PAGI::Routing](../../lib/PAGI/Routing.pm) - Immutable routing documentation
 - [PAGI::Compose](../../lib/PAGI/Compose.pm) - Application boundaries and lifespan callbacks
 - [examples/](../) - Other example applications

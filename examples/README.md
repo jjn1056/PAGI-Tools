@@ -4,19 +4,16 @@ This directory contains example applications built on the PAGI toolkit — the
 higher-level components (Endpoint, Middleware, Apps, Request/Response,
 etc.) that live in this distribution.
 
-Routing examples use three frontends over one immutable engine:
-`PAGI::Routing` for functional declarations, `PAGI::App::Router` for a mutable
-verb-method builder, and `PAGI::Endpoint::Router` for local methods on a
-configured object. They share path Patterns, written declaration order,
-metadata, Router-owned HTTP outcomes, and reverse routing. Native
-three-channel route endpoints are always wrapped with `as_app`. Deployed Router examples
-let the selected Router own complete negotiated 404/405 outcomes and use
-Compose for lifespan, application-error, and response-completion safeguards;
-direct `to_app` remains the lower-level routing-component spelling. Runnable
-examples normally return their Compose or Router object directly because
-conforming servers accept components with `to_app`; examples compile
-explicitly only when they need the resulting native coderef at another
-application boundary.
+Routing examples use immutable `PAGI::Routing` declarations and explicit
+configured Router boundaries where a subtree owns its own paths and HTTP
+outcomes. They share path Patterns, written declaration order, metadata,
+Router-owned HTTP outcomes, and reverse routing. Native three-channel Route
+endpoints are always wrapped with `as_app`; native Mount applications are
+passed directly. Compose supplies lifespan, application-error, and
+response-completion safeguards around its declared routes. Runnable examples
+normally return their Compose or Router object directly because conforming
+servers accept components with `to_app`; examples compile explicitly only when
+they need the resulting native coderef at another application boundary.
 
 ## Requirements
 
@@ -44,7 +41,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 ## Example List
 
 1. `09-psgi-bridge` - wraps a PSGI app for PAGI use (via `PAGI::App::WrapPSGI`)
-2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging; a mutable HTTP/WebSocket/SSE declaration frontend crosses through `to_router` into the immutable Router retained by an unnamed root Mount beneath Compose's distinct outer Router
+2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging and direct immutable HTTP/WebSocket/SSE declarations
 3. `13-contact-form` - form parsing and file uploads
 4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
 5. `15-large-application` - Perl 5.40+ Compose-rooted modular HTML application with named Person/Blogs Router application mounts, cross-component links, boundary-specific Router defaults, an opaque static-file mount, lifespan data, and a deferred-work ledger
@@ -53,17 +50,16 @@ raw PAGI protocol details that belong alongside the server implementation.
 8. `compose` - optional application root combining declarative routes, request-ID middleware, server-owned lifecycle state, automatic HEAD, and verified shutdown
 9. `declarative-routing` - immutable `PAGI::Routing` tree with package handlers, a configured child Router mount, route middleware, boundary-specific HTTP defaults, and reverse URLs
 10. `endpoint-demo` - high-level HTTP endpoint with `PAGI::Endpoint::HTTP`
-11. `endpoint-router-demo` - composing Endpoint routes with callback children, explicit discoverable child Routers, `app_as`, and `http_default`
-12. `full-demo` - kitchen-sink demo combining multiple toolkit features
-13. `pages` - Compose-rooted `PAGI::Pages` demo covering class/configured/export factories, direct application Routes and Mount, a request-derived application return, native `as_app` plus `invoke_app`, negotiation, and lifespan
-14. `process-streaming` - streams an external command's output through `stream_response`/`pipe_from` with a four-line loop-agnostic `Future::IO` source, real pipe backpressure, and `on_close` cleanup that stops the child when the client disconnects
-15. `sse-close` - direct `PAGI::SSE` application with an explicit close and client-facing sentinel event
-16. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
-17. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Router-owned routing outcomes
-18. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
-19. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::WebSocket`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
-20. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
-21. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
+11. `full-demo` - kitchen-sink demo combining multiple toolkit features
+12. `pages` - Compose-rooted `PAGI::Pages` demo covering class/configured/export factories, direct application Routes and Mount, a request-derived application return, native `as_app` plus `invoke_app`, negotiation, and lifespan
+13. `process-streaming` - streams an external command's output through `stream_response`/`pipe_from` with a four-line loop-agnostic `Future::IO` source, real pipe backpressure, and `on_close` cleanup that stops the child when the client disconnects
+14. `sse-close` - direct `PAGI::SSE` application with an explicit close and client-facing sentinel event
+15. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
+16. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Router-owned routing outcomes
+17. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
+18. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::WebSocket`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
+19. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
+20. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
 
 **Note on `websocket-chat-v2/public`:** the v2 example carries ordinary copies
 of the shared chat frontend assets so it remains runnable from CPAN tarballs,

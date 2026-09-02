@@ -3,23 +3,20 @@
 Patterns for running work after sending a response.
 
 This example deliberately sends responses before starting follow-up work, so
-its App Router declarations wrap native three-channel applications with
-`as_app`. Ordinary App handlers instead receive `PAGI::Request`, return an
-application value, and leave invocation to the shared routing compiler.
+its `PAGI::Routing` Route declarations wrap native three-channel applications
+with `as_app`. Ordinary Route handlers instead receive `PAGI::Request`, return
+an application value, and leave invocation to the shared routing compiler.
 
-`PAGI::App::Router` already implements `to_app`, so Compose mounts the
-background-task frontend directly:
+The native WebSocket application is a Mount application and is passed directly:
 
 ```perl
-compose(routes => [mount('/' => app => $router)]);
+mount('/ws', app => async sub { ... });
 ```
 
-The unnamed root Mount consumes no path and keeps the Router's middleware,
-default, and routing outcomes. The outer Compose Router treats the frontend as
-an application boundary and does not inspect its descendant names. The frontend
-already implements `to_app`: mount it directly for ordinary deployment. Use
-`to_router` only when a parent must discover those names or retain an immutable
-snapshot; this application has no such parent-side consumer.
+The HTTP declarations retain their written order inside Compose. Their Route
+endpoints explicitly use `as_app` because they own the live protocol channels;
+the WebSocket Mount already occupies a native application position and needs no
+wrapper.
 
 ## Run
 
