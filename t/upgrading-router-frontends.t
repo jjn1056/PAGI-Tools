@@ -13,6 +13,23 @@ sub slurp_file {
 }
 
 my $upgrading = slurp_file('UPGRADING.md');
+my $routing = slurp_file('lib/PAGI/Routing.pm');
+
+sub markdown_section {
+    my ($source, $heading) = @_;
+    my ($marks) = $heading =~ /\A(#+)/;
+    my $heading_level = length $marks;
+    my $start = index $source, $heading;
+    die "section not found: $heading" if $start < 0;
+    my @lines = split /\n/, substr($source, $start + length($heading));
+    my @body;
+    for my $line (@lines) {
+        my ($next_marks) = $line =~ /\A(#+)\s/;
+        last if defined($next_marks) && length($next_marks) <= $heading_level;
+        push @body, $line;
+    }
+    return join "\n", @body;
+}
 
 subtest 'upgrade guide publishes the declarative-only topology' => sub {
     like $upgrading, qr/## Breaking: remove the mutable Router frontends/,
@@ -50,18 +67,53 @@ subtest 'Endpoint Router migration is complete' => sub {
 };
 
 subtest 'endpoint lifecycle and method policy are explicit' => sub {
-    like $upgrading,
-        qr/configured WebSocket and SSE.*?same (?:object|instance).*?concurrent/is,
+    my $lifecycle = markdown_section(
+        $upgrading, '### Configured WebSocket and SSE endpoint lifecycle');
+    my $methods = markdown_section(
+        $upgrading, '### HTTP endpoint method capability');
+
+    like $lifecycle,
+        qr/same object.*?concurrent/is,
         'configured protocol endpoint lifetime is documented';
-    like $upgrading,
-        qr/allowed_methods.*?once.*?Route construction/is,
-        'one-time method capability snapshot is documented';
-    like $upgrading,
-        qr/methods\s*=>\s*'\*'.*?(?:bypass|endpoint owns)/is,
+    like $methods, qr/consults `allowed_methods` exactly.*?once.*?finite/is,
+        'finite explicit methods consult one capability snapshot';
+    like $methods, qr/finite.*?method.*?must be a restriction/is,
+        'finite explicit methods must restrict the capability snapshot';
+    like $methods,
+        qr/only.*?scalar.*?methods\s*=>\s*'\*'.*?bypass/is,
         'unrestricted method escape hatch is documented';
-    like $upgrading,
-        qr/OPTIONS.*?Allow.*?Router/is,
+    like $methods,
+        qr/Router.*?(?:OPTIONS.*?Allow|Allow.*?OPTIONS)/is,
         'Router method-outcome ownership is documented';
+
+    my ($route_docs) = $routing =~
+        /=head2 route, websocket, sse\n(.*?)\n=head2 mount\n/s;
+    ok defined $route_docs, 'the labelled Routing leaf section is present';
+    like $route_docs,
+        qr/explicit finite.*?consults.*?C<allowed_methods>.*?once.*?restriction/is,
+        'Routing leaf docs state the same finite capability rule';
+    like $route_docs,
+        qr/Only scalar.*?methods => '\*'.*?bypasses/is,
+        'Routing leaf docs reserve capability bypass for scalar star';
+};
+
+subtest 'Endpoint Router migration snippets own their helper imports' => sub {
+    my $before = markdown_section(
+        $upgrading, '### Migrate Endpoint Router classes');
+    my ($removed, $after) = $before =~
+        /(\*\*Before:.*?)(\*\*After:.*)\z/s;
+    ok defined($removed) && defined($after),
+        'labelled Endpoint Router Before and After snippets are present';
+    like $removed, qr/use PAGI::Utils qw\(as_app\)/,
+        'removed package imports as_app where its example calls it';
+    like $after, qr/use PAGI::Routing qw\([^)]*\broute\b[^)]*\)/,
+        'replacement package imports route where its example calls it';
+    like $after, qr/use PAGI::Utils qw\([^)]*\bas_app\b[^)]*\)/,
+        'replacement package imports as_app where its example calls it';
+    my ($after_code) = $after =~ /```perl\n(.*?)```/s;
+    ok defined $after_code, 'replacement code block can be extracted';
+    eval $after_code;
+    is $@, '', 'replacement packages compile independently as published';
 };
 
 subtest 'live public POD recommends only declarative routing' => sub {
@@ -80,7 +132,7 @@ subtest 'live public POD recommends only declarative routing' => sub {
     for my $file (@files) {
         my $source = slurp_file($file);
         unlike $source,
-            qr/PAGI::(?:App|Endpoint)::Router|->to_router|middleware_as|app_as/,
+            qr/PAGI::(?:App|Endpoint)::Router|\b(?:App|Endpoint) Router\b|->to_router|middleware_as|app_as/,
             "$file has no removed frontend recommendation";
     }
 };

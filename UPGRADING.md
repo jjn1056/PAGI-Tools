@@ -229,10 +229,14 @@ route('/relay' => as_app($native_app), methods => '*');
 
 HTTP method resolution is ordered:
 
-1. Explicit `methods` wins and the endpoint capability is not consulted.
-2. Otherwise, an application object with `allowed_methods` supplies a list-
-   context snapshot taken once when the immutable Route is constructed.
-3. Otherwise, the Route uses GET plus automatic HEAD.
+1. Only scalar `methods => '*'` bypasses the endpoint capability and makes the
+   Route unrestricted.
+2. An explicit finite `methods` value is normalized. If the application object
+   implements `allowed_methods`, Route consults it once and the finite set must
+   be a restriction of that advertised snapshot.
+3. Without explicit methods, an application object's `allowed_methods`
+   supplies the construction-time snapshot; otherwise Route uses GET plus
+   automatic HEAD.
 
 Each fresh immutable Route construction takes one fresh capability snapshot;
 retaining that Route retains the resulting method policy.
@@ -741,8 +745,9 @@ The Context class family has been removed without a compatibility layer. There
 is no replacement Context base class, factory hook, type map, or generic event
 dispatcher. Normal callbacks receive the object that owns their protocol;
 for this campaign, the callback-signature change applies to class Endpoint
-frontends. Ordinary declarative and App Router callbacks already received the
-direct protocol object and remain unchanged. Raw applications and every
+frontends. At that stage, ordinary declarative callbacks and callbacks in the
+now-removed App Router already received the direct protocol object and remained
+unchanged. Raw applications and every
 middleware wrapper keep the native `($scope, $receive, $send)` contract
 unchanged.
 
@@ -1978,6 +1983,7 @@ binding.**
 ```perl
 package MyApp::API;
 use parent 'PAGI::Endpoint::Router';
+use PAGI::Utils qw(as_app);
 
 sub routes {
     my ($self, $r) = @_;
@@ -1998,6 +2004,8 @@ my $root = $endpoint->app_path('public');
 
 ```perl
 package MyApp::API;
+use strict;
+use warnings;
 use PAGI::Request;
 use PAGI::Routing qw(middleware mount route router);
 use PAGI::Utils qw(app_path as_app);
@@ -2034,7 +2042,15 @@ sub public_root {
     return app_path('public');
 }
 
-my $request = PAGI::Request->new($scope, $receive);
+package MyApp::Native;
+use strict;
+use warnings;
+use PAGI::Request;
+
+sub request_from_channels {
+    my ($scope, $receive) = @_;
+    return PAGI::Request->new($scope, $receive);
+}
 ```
 
 Closures make local method binding ordinary Perl. Use a direct
@@ -2095,12 +2111,12 @@ behavior.
 ### HTTP endpoint method capability
 
 An object endpoint that implements `allowed_methods` publishes its method
-capability to its containing Route. Without an explicit `methods` option, the
-Route calls `allowed_methods` once during Route construction and snapshots the
-normalized result. GET adds HEAD, and `PAGI::Endpoint::HTTP` also advertises
-OPTIONS.
+capability to its containing Route. Route consults `allowed_methods` exactly
+once during construction whether methods are omitted or explicitly finite,
+and snapshots the normalized result. GET adds HEAD, and
+`PAGI::Endpoint::HTTP` also advertises OPTIONS.
 
-A finite method string or arrayref narrows that capability:
+A finite method string or arrayref must be a restriction of that capability:
 
 ```perl
 route('/messages' => $endpoint, methods => 'GET');
@@ -2112,7 +2128,7 @@ not advertise. The Router owns method mismatch, the first-seen `Allow` union,
 and OPTIONS dispatch at that Route boundary. A mounted or standalone endpoint
 still owns its own 405 and OPTIONS behavior.
 
-Use scalar `methods => '*'` as the explicit bypass:
+Only scalar `methods => '*'` bypasses the capability:
 
 ```perl
 route('/delegated' => $endpoint, methods => '*');

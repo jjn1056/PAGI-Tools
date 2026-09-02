@@ -261,14 +261,16 @@ root.
     sse('/path' => as_app($native), %options)
 
 All leaves accept C<name>, C<desc>, C<middleware>, and C<constraints>.
-C<methods> is HTTP-only: one token, an arrayref, or the explicit string C<*>;
-an explicit value wins. Otherwise an application object's C<allowed_methods>
-is called once in list context during immutable Route construction; otherwise
-the default is GET plus automatic HEAD. Only scalar C<< methods => '*' >> is
-unrestricted. GET supplies HEAD, duplicates are removed, and method tokens are
-canonicalized. WebSocket and SSE routes reject C<methods>, never consult
-C<allowed_methods>, and use the same inline and explicit path constraints as
-HTTP routes.
+C<methods> is HTTP-only: one token, an arrayref, or the explicit string C<*>.
+For an application object, an explicit finite method set still consults
+C<allowed_methods> once during immutable Route construction and must be a
+restriction of its normalized snapshot. Without explicit
+methods, the snapshot is used directly; an endpoint without the capability
+defaults to GET plus automatic HEAD. Only scalar C<< methods => '*' >> bypasses
+the capability and makes the Route unrestricted. GET supplies HEAD, duplicates
+are removed, and method tokens are canonicalized. WebSocket and SSE routes
+reject C<methods>, never consult C<allowed_methods>, and use the same inline
+and explicit path constraints as HTTP routes.
 
 An Endpoint::HTTP object's advertised verbs, GET-derived HEAD, and OPTIONS
 therefore participate in Router FULL/PARTIAL selection. Router owns an

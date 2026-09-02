@@ -157,10 +157,11 @@ C<< mount('/files', app =E<gt> $file_app) >> owns a protocol-capable prefix,
 receives the implicit remainder in child C<path>, and extends C<root_path>.
 Without explicit methods, C<as_app($native)> contributes GET plus automatic
 HEAD. Use the scalar C<methods =E<gt> '*'> for unrestricted delegation.
-For an object endpoint, an explicit Route declaration wins; otherwise Route
-takes one construction-time C<allowed_methods> snapshot. The Router owns
-method mismatch, the first-seen C<Allow> union, and selection. An Endpoint::HTTP
-object still owns its advertised OPTIONS behavior once selected.
+For an object endpoint, a finite explicit method declaration still consults
+C<allowed_methods> once and must be a restriction of that snapshot. Only the
+scalar C<< methods => '*' >> bypasses the capability. The Router owns method
+mismatch, the first-seen C<Allow> union, and selection. An Endpoint::HTTP object
+still owns its advertised OPTIONS behavior once selected.
 
 Mounts are declaration-ordered owners. Put a narrow mount before a broad one.
 C<mount('/api')> accepts both C</api> and C</api/> directly and passes child
@@ -916,6 +917,7 @@ Router grammar. This complete shape keeps topology declarative:
 
   package ChatEndpoint;
   use parent 'PAGI::Endpoint::WebSocket';
+  use Future::AsyncAwait;
 
   async sub on_connect {
       my ($self, $websocket) = @_;
@@ -925,6 +927,7 @@ Router grammar. This complete shape keeps topology declarative:
 
   package EventEndpoint;
   use parent 'PAGI::Endpoint::SSE';
+  use Future::AsyncAwait;
 
   async sub on_connect {
       my ($self, $sse) = @_;
@@ -933,6 +936,11 @@ Router grammar. This complete shape keeps topology declarative:
 
   package MyApp::API;
   use PAGI::Routing qw(route router sse websocket);
+
+  sub new {
+      my ($class, %args) = @_;
+      return bless \%args, $class;
+  }
 
   sub routing {
       my ($self) = @_;
@@ -950,9 +958,18 @@ Router grammar. This complete shape keeps topology declarative:
   }
 
   package MyApp::Root;
+  use PAGI::App::File;
   use PAGI::Compose qw(compose);
+  use PAGI::Pages qw(welcome);
   use PAGI::Routing qw(mount route);
   use PAGI::Utils qw(app_path);
+
+  sub new {
+      my ($class, %args) = @_;
+      return bless \%args, $class;
+  }
+
+  sub home { return welcome() }
 
   sub public_root { return app_path('public') }
 
@@ -968,12 +985,19 @@ Router grammar. This complete shape keeps topology declarative:
       ]);
   }
 
+  package main;
+  my $app = MyApp::Root->new(services => {
+      store => bless({}, 'Example::Store'),
+      hub   => bless({}, 'Example::Hub'),
+      bus   => bless({}, 'Example::Bus'),
+  })->application;
+
 Each configured Endpoint object is resolved once and may serve concurrent
 work. Keep shared services and configuration on C<$self>; keep request and
 connection state on the Request, WebSocket, or SSE object. HTTP
-C<allowed_methods> is snapshotted once when the Route is built. A finite
-C<methods> declaration may narrow that capability. Scalar
-C<< methods => '*' >> bypasses it and lets the Endpoint own method dispatch.
+C<allowed_methods> is consulted once when the Route is built. A finite
+C<methods> declaration must be a restriction of that snapshot. Only scalar
+C<< methods => '*' >> bypasses the capability and lets the Endpoint own method dispatch.
 The Router otherwise owns OPTIONS participation, PARTIAL, and the final
 C<Allow> union.
 
@@ -1265,10 +1289,12 @@ Enforce the limit where the real receive loop already lives instead -- a
 token bucket checked against each incoming message, with a real, awaited
 C<< $ws->close >> when the budget is blown:
 
+  use Future::AsyncAwait;
+  use PAGI::Routing qw(websocket);
   use PAGI::WebSocket;
   use Time::HiRes qw(time);
 
-  websocket('/chat' => async sub {
+  my $chat_route = websocket('/chat' => async sub {
       my ($ws) = @_;
       await $ws->accept;
 
@@ -1871,13 +1897,20 @@ handle Range requests more efficiently using its native sendfile.
 
 For more control (authentication, logging, custom headers):
 
+  use strict;
+  use warnings;
   use Future;
   use Future::AsyncAwait;
+  use PAGI::Middleware::Builder;
   use PAGI::Pages;
   use PAGI::Request;
-  use PAGI::Routing qw(route);
+  use PAGI::Routing qw(route router);
   use PAGI::Utils qw(as_app invoke_app path_from_root);
 
+  sub authenticate;
+  sub can_download;
+
+  my $router = router(routes => [
   route('/download/{filename}' => as_app(async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
@@ -1920,7 +1953,8 @@ For more control (authentication, logging, custom headers):
       return await Future->wrap($send->({
           type => 'http.response.body', file => $filepath, more => 0,
       }));
-  }));
+  })),
+  ]);
 
   my $app = builder {
       enable 'XSendfile',

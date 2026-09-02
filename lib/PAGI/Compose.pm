@@ -243,9 +243,10 @@ Resolver, preserve that Router explicitly:
     compose(routes => [mount('/' => app => $routing)])
 
 The Mount retains the configured Router; Compose still constructs and owns a
-distinct outer root Router. App Router and Endpoint Router frontends are
-ordinary application objects at this boundary; mount them directly unless the
-outer Router must inspect a retained immutable snapshot.
+distinct outer root Router. An ordinary component can expose a C<routing>
+method that returns an immutable Router; mount that Router directly to retain
+its boundary, or pass its C<routes> list deliberately when flattening is the
+intended policy.
 
 =head2 composition choices
 
