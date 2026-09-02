@@ -450,11 +450,32 @@ subtest 'HTTP methods use explicit, capability, then safe-default precedence' =>
         'capability methods are an immutable construction-time snapshot');
     is($capable->calls, 1, 'snapshot access does not consult capability again');
 
-    my $explicit = Local::MethodEndpoint->new(qw(GET POST));
-    is(route('/explicit' => $explicit, methods => ['patch'])->methods,
-        ['PATCH'], 'explicit methods win over endpoint capability');
-    is($explicit->calls, 0,
-        'explicit methods avoid the capability call entirely');
+    my $scalar_restriction = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    is(route('/explicit-scalar' => $scalar_restriction, methods => 'GET')->methods,
+        [qw(GET HEAD)], 'a scalar restriction narrows an advertised capability');
+    is($scalar_restriction->calls, 1,
+        'a finite scalar restriction snapshots the endpoint capability once');
+
+    my $array_restriction = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    is(route('/explicit-array' => $array_restriction, methods => ['POST'])->methods,
+        ['POST'], 'an array restriction narrows an advertised capability');
+    is($array_restriction->calls, 1,
+        'a finite array restriction snapshots the endpoint capability once');
+
+    my $unsupported_restriction = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    like dies {
+        route('/unsupported-restriction' => $unsupported_restriction,
+            methods => ['DELETE'])
+    }, qr/methods \[DELETE\] are not advertised by route endpoint allowed_methods/,
+        'a finite restriction rejects methods absent from the endpoint capability';
+    is($unsupported_restriction->calls, 1,
+        'an unsupported restriction still snapshots the endpoint capability once');
+
+    my $wildcard_restriction = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    is(route('/wildcard-restriction' => $wildcard_restriction, methods => '*')->methods,
+        '*', 'a scalar wildcard remains unrestricted');
+    is($wildcard_restriction->calls, 0,
+        'a scalar wildcard never consults the endpoint capability');
 
     my $response = PAGI::Response::Text->new('file');
     is(route('/file' => $response)->methods, [qw(GET HEAD)],

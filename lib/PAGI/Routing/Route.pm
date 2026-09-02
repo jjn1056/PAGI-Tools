@@ -83,13 +83,14 @@ sub _build {
     if ($kind eq 'route') {
         if (exists $opts->{methods}) {
             $methods = _normalize_methods($opts->{methods}, 'methods');
+            if (ref($methods) eq 'ARRAY'
+                && ref($endpoint) ne 'CODE' && $endpoint->can('allowed_methods')) {
+                my $advertised = _endpoint_allowed_methods($endpoint);
+                $methods = _validate_method_restriction($methods, $advertised);
+            }
         }
         elsif (ref($endpoint) ne 'CODE' && $endpoint->can('allowed_methods')) {
-            my @capability_methods = $endpoint->allowed_methods;
-            $methods = _normalize_methods(
-                \@capability_methods,
-                'route endpoint allowed_methods',
-            );
+            $methods = _endpoint_allowed_methods($endpoint);
         }
         else {
             $methods = _normalize_methods('GET');
@@ -111,6 +112,21 @@ sub _build {
         methods     => $methods,
         middleware  => $middleware,
     }, $class;
+}
+
+sub _endpoint_allowed_methods {
+    my ($endpoint) = @_;
+    my @advertised = $endpoint->allowed_methods;
+    return _normalize_methods(\@advertised, 'route endpoint allowed_methods');
+}
+
+sub _validate_method_restriction {
+    my ($explicit, $advertised) = @_;
+    my %advertised = map { $_ => 1 } @$advertised;
+    my @unsupported = grep { !$advertised{$_} } @$explicit;
+    croak "methods [@unsupported] are not advertised by route endpoint allowed_methods"
+        if @unsupported;
+    return $explicit;
 }
 
 sub _validate_text {
@@ -245,10 +261,11 @@ and GET-supplied automatic HEAD. A coderef is a Request handler unless the
 C<as_app> wrapper explicitly gives it the native triplet contract. Package-
 name strings are not application values.
 
-Explicit HTTP C<methods> wins. Otherwise an application object's
-C<allowed_methods> capability is called once in list context at construction;
-otherwise the Route defaults to GET plus automatic HEAD. Only scalar
-C<< methods => '*' >> is unrestricted. WebSocket and SSE Routes do not accept
+Finite explicit HTTP C<methods> must be advertised by an application's
+C<allowed_methods> capability, when it has one; that capability is called once
+in list context at construction. Otherwise the Route defaults to GET plus
+automatic HEAD. Only scalar C<< methods => '*' >> is unrestricted and bypasses
+the capability. WebSocket and SSE Routes do not accept
 C<methods> and never consult C<allowed_methods>. A routed Endpoint::HTTP object
 therefore contributes its advertised verbs and OPTIONS to Router selection;
 the Router owns unsupported-method 405 and C<Allow> outcomes.
