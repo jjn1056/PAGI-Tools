@@ -466,10 +466,10 @@
     first-seen method evidence, synchronous constraints, reverse URLs,
     request-local matched-route frames, inspection, and an executable example.
   - Application positions accept coderefs or app objects and
-    reject package strings. This includes Route endpoints, `app`,
-    `http_default`, Test
+    reject package strings. This includes Route endpoints, `app`, Test
     Client `app`, Lifespan `app`/`wrap`, Middleware Builder mount/fallback,
-    URLMap, and Cascade targets. Middleware class strings remain accepted
+    URLMap, and Cascade targets. `http_default` is a Request-handler-or-app-
+    object position. Middleware class strings remain accepted
     because middleware descriptors define their loading/construction/wrap
     contract. PAGI follows Starlette's Route/Mount/Router/application topology
     rather than copying every Starlette Request method. It deliberately differs

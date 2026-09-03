@@ -287,9 +287,10 @@ wrapper or method was defined.
 
 Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions. An
-optional C<http_default> declares an HTTP application; construction validates
-it but does not compile it. A directly compiled Router owns normal routing
-outcomes. HTTP NONE invokes C<http_default>, or the stock 404 when it is absent.
+optional C<http_default> accepts a one-Request handler coderef or an app
+object; construction validates it but does not compile it. A directly compiled
+Router owns normal routing outcomes. HTTP NONE invokes C<http_default>, or the
+stock 404 when it is absent.
 HTTP PARTIAL emits the built-in 405 with one authoritative C<Allow> union. Both
 stock misses use L<PAGI::Pages> content negotiation and return a concrete HTML,
 Text, or Problem response according to C<Accept>; they are not unconditionally
