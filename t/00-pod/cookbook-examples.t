@@ -170,6 +170,18 @@ subtest 'published standalone recipes compile and construct their values' => sub
     );
 };
 
+subtest 'Streaming Response Extension NDJSON recipe executes as published' => sub {
+    my $recipe = first_code_block($cookbook,
+        '=head2 Streaming Response Extension: NDJSON');
+    perl_script_runs(
+        'streaming response extension NDJSON recipe',
+        $recipe
+            . "use PAGI::Test::Client;\n"
+            . "my \$captured = PAGI::Test::Client->new(app => \$response->to_app)->get('/');\n"
+            . "die 'expected two newline-terminated JSON records' unless \$captured->content eq qq|{\\\"id\\\":1}\\n{\\\"id\\\":2}\\n|;\n",
+    );
+};
+
 subtest 'Tutorial routing object example executes exactly as published' => sub {
     my $source = code_block_containing(
         $tutorial,

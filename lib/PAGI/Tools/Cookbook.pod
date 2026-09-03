@@ -2190,6 +2190,79 @@ settlement never proves client delivery. C<is_closed>, C<is_disconnected>, and
 C<disconnect_reason> describe that Writer invocation, not the reusable Stream
 value.
 
+=head2 Streaming Response Extension: NDJSON
+
+There are two proven shapes for semantic response extensions. A buffered
+semantic subclass normalizes its input at construction and delegates the
+resulting response to L<PAGI::Response::JSON>. A streaming semantic subclass
+adapts its producer's Writer-facing API, then delegates the response itself to
+L<PAGI::Response::Stream>.
+
+The following miniature shows the anatomy of that public seam. It is not a
+second NDJSON implementation to copy: the shipped L<PAGI::Response::NDJSON>
+provides the complete validation, diagnostics, method surface, and tests. The
+format Writer below calls only the generic Writer's public C<write>,
+C<on_close>, and C<is_disconnected> methods.
+
+  use v5.40;
+  use strict;
+  use warnings;
+  use Future::AsyncAwait;
+
+  package MyApp::RecordWriter;
+  use JSON::MaybeXS ();
+
+  my $JSON = JSON::MaybeXS->new(utf8 => 1);
+
+  sub new {
+      my ($class, $writer) = @_;
+      return bless { writer => $writer }, $class;
+  }
+
+  sub write_record {
+      my ($self, $value) = @_;
+      return $self->{writer}->write($JSON->encode($value) . "\n");
+  }
+
+  sub on_close {
+      my ($self, $callback) = @_;
+      $self->{writer}->on_close($callback);
+      return $self;
+  }
+
+  sub is_disconnected {
+      return $_[0]{writer}->is_disconnected;
+  }
+
+  package MyApp::RecordStream;
+  use parent 'PAGI::Response::Stream';
+
+  sub default_content_type { 'application/x-ndjson' }
+
+  sub new {
+      my ($class, $producer, @response_options) = @_;
+      die 'producer must be a coderef' unless ref($producer) eq 'CODE';
+
+      my $adapted = sub {
+          my ($writer) = @_;
+          return $producer->(MyApp::RecordWriter->new($writer));
+      };
+      return $class->SUPER::new($adapted, @response_options);
+  }
+
+  package main;
+
+  my $response = MyApp::RecordStream->new(async sub {
+      my ($writer) = @_;
+      await $writer->write_record({ id => 1 });
+      await $writer->write_record({ id => 2 });
+  });
+
+An application response extension owns format validation and producer
+adaptation. Stream owns response start, close, cancellation, disconnect, send
+settlement, and cleanup. If an extension needs a private Stream or Writer
+method, it has crossed the supported seam.
+
 =head2 Test Response is a captured-wire decoder
 
 L<PAGI::Test::Response> is deliberately a different class. The test client
