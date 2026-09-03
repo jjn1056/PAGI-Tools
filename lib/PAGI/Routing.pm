@@ -366,8 +366,12 @@ Positional targets and C<router> are not accepted.
     middleware($configured_object)
     middleware($class, %config)
 
-Creates an explicit middleware description for use in a routing object's
-C<middleware> array. Core lists contain descriptions only:
+Creates a L<PAGI::Routing::Middleware> description for use in a Router,
+Route, Mount, or Compose C<middleware> array. Despite its name, this helper
+does not wrap or invoke an application immediately. It records what should be
+built later when C<to_app> compiles the application.
+
+Core lists contain these descriptions only:
 
     Form                              Meaning
     --------------------------------  ---------------------------------
@@ -387,6 +391,52 @@ C<+> selects an exact fully qualified class. Configuration is captured for
 deferred class construction or passed to the synchronous factory; a configured
 object accepts no additional description configuration. The C<middleware>
 accessors on routers, routes, and mounts expose descriptions only.
+
+The explicit description solves three practical problems. It keeps a target
+and its configuration together as one list entry, lets route trees remain
+inert until C<to_app>, and gives introspection one consistent object rather
+than a mixture of strings, coderefs, and configured objects. For example, this
+declaration records the class and its constructor arguments without loading or
+constructing the class yet:
+
+    my $request_id = middleware(
+        'RequestId',
+        header => 'X-Request-ID',
+    );
+
+    my $routing = router(
+        routes     => [route('/' => \&home)],
+        middleware => [$request_id],
+    );
+
+The same distinction applies to factory coderefs. If a variable contains a
+raw app-to-app factory, describe it at the point of use:
+
+    my $logging_factory = sub {
+        my ($inner) = @_;
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            warn "$scope->{method} $scope->{path}\n";
+            return await $inner->($scope, $receive, $send);
+        };
+    };
+
+    route('/one' => \&one,
+        middleware => [middleware($logging_factory)]);
+
+If the variable already contains the result of C<middleware(...)>, put that
+description directly in each list:
+
+    my $logging = middleware($logging_factory);
+
+    route('/one' => \&one, middleware => [$logging]);
+    route('/two' => \&two, middleware => [$logging]);
+
+Do not call C<middleware($logging)> again: C<$logging> is already a
+description, not a configured runtime middleware object. Reusing a description
+does not share a compiled wrapper. Each placement invokes the recorded factory
+when that application graph is compiled. A closure or configured object may
+still share state deliberately because the caller supplied that same value.
 
 At C<to_app>, a factory receives C<($inner_app, %config)> and C<wrap> receives
 C<($inner_app)>. Each may return a native CODE or an app object.
