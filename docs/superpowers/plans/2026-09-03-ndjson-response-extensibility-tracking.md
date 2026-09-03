@@ -1,0 +1,30 @@
+# NDJSON Response Extensibility Execution Tracking
+
+**Plan:** `docs/superpowers/plans/2026-09-03-ndjson-response-extensibility.md`
+
+**Starting HEAD:** `0bc9293ac417821027272960221865f442cedb87`
+
+| Task | Status | Implementation SHA | Review/fix SHAs | Focused verification and actual counts | Full-suite/build evidence | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | complete | `694f1bbdc91befd166667d13a7378b90e28a92fc` | clean task review | PASS — `prove -l t/response/05-ndjson.t t/response/03-stream.t t/response-writer.t`: 3 files, 39 tests; NDJSON syntax checks OK; private-name audit empty; `git diff --check` clean | deferred to Task 5 | spec PASS; quality PASS |
+| 2 | pending | — | — | — | deferred to Task 5 | — |
+| 3 | pending | — | — | — | deferred to Task 5 | — |
+| 4 | pending | — | — | — | deferred to Task 5 | — |
+| 5 | pending | — | — | — | final gate | — |
+
+## Deviations and rulings
+
+| ID | Status | Conflicting plan/spec text | Evidence and rationale | Affected tasks | Ruling |
+| --- | --- | --- | --- | --- | --- |
+| `DEV-001` | ruled | Plan says commit `.superpowers/sdd/...`; SDD skill says the workspace is disposable scratch | The execution ledger cannot contain its own final commit SHA and the skill deletes its workspace after review | Tasks 1–5 | Keep scratch progress in the SDD workspace and mirror completed task evidence here after every task. |
+| `DEV-002` | ruled | Plan calls `28fd101` the base while execution starts after plan commit `0bc9293` | `28fd101` is the approved spec/runtime base; `0bc9293` contains only the approved plan | Tasks 1 and 5 | Use `0bc9293` as starting HEAD and retain `28fd101` as the runtime/spec comparison point. |
+
+Ruling: `DEV-001` — preserve a committed audit record without violating the disposable SDD workspace contract — cost if wrong: bookkeeping duplication, no runtime effect.
+
+Ruling: `DEV-002` — start after the plan commit while retaining the spec commit as runtime baseline — cost if wrong: a documentation-only commit appears in the review range.
+
+## Baseline verification
+
+`perl-5.42.2@default`: `prove -l t/response/03-stream.t t/response-writer.t t/00-load.t t/00-pod/cookbook-examples.t t/integration-starlette-apples.t`
+
+Result: PASS — 5 files, 103 tests.
