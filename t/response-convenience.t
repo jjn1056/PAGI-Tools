@@ -8,8 +8,8 @@ use PAGI::Response qw(
 subtest 'facade exports are opt-in and map to fixed first-party classes' => sub {
     is([sort @PAGI::Response::EXPORT_OK], [sort qw(
         response text_response html_response json_response problem_response
-        redirect_response empty_response file_response stream_response
-    )], ':all contains exactly the nine fixed facade names');
+        redirect_response empty_response file_response stream_response ndjson_response
+    )], ':all contains exactly the ten fixed facade names');
     is([sort @{$PAGI::Response::EXPORT_TAGS{all}}], [sort @PAGI::Response::EXPORT_OK],
         ':all tag maps to every and only facade factory');
     my $default = eval q{
