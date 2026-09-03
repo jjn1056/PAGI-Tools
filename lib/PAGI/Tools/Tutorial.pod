@@ -512,10 +512,12 @@ lazily in the request scope.
 
 C<app_state> is deliberately not named C<state>: under C<use v5.40>, a call
 spelled C<state (...)> parses as Perl's C<state> declarator instead of calling an
-imported function. C<< $request->state >> is the method form. It returns a
-strict L<PAGI::State> facade when state exists; C<get> catches missing-key
-typos and C<data> is the explicit escape hatch for code that requires a real
-HashRef.
+imported function. C<< $request->state >>, C<< $websocket->state >>, and
+C<< $sse->state >> are equivalent direct forms: each returns the same strict
+L<PAGI::State> facade when state exists and C<undef> when it does not.
+C<< app_state($scope) >> remains the raw-PAGI/protocol-neutral spelling.
+C<get> catches missing-key typos and C<data> is the explicit escape hatch for
+code that requires a real HashRef.
 
 The temporary C<< $state->{key} >> bridge warns once per callsite. Set
 C<PAGI_SILENCE_STATE_HASHREF_WARNING> to exactly C<1> only while migrating.

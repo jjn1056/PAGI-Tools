@@ -2,6 +2,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Scalar::Util qw(refaddr);
 
 use PAGI::Compose qw(compose);
 use PAGI::CSRF qw(csrf);
@@ -11,11 +12,13 @@ use PAGI::Request;
 use PAGI::Response qw(json_response problem_response);
 use PAGI::Routing qw(route);
 use PAGI::Routing::URL qw(path_for url_for);
+use PAGI::SSE;
 use PAGI::Session qw(session);
 use PAGI::Stash qw(stash);
 use PAGI::State qw(app_state);
 use PAGI::Test::Client;
 use PAGI::Transport qw(transport);
+use PAGI::WebSocket;
 
 {
     package Local::UpgradeConnection;
@@ -43,6 +46,22 @@ sub request_scope {
         server       => ['testserver', 80],
     };
 }
+
+sub protocol_scope {
+    my ($type, %args) = @_;
+    return {
+        type         => $type,
+        path         => '/',
+        raw_path     => '/',
+        query_string => '',
+        scheme       => $type eq 'websocket' ? 'ws' : 'http',
+        headers      => [],
+        server       => ['testserver', 80],
+        %args,
+    };
+}
+
+sub send_empty { return Future->done }
 
 subtest 'normal HTTP handlers receive Request and return Response values' => sub {
     my $seen_request;
@@ -117,6 +136,61 @@ subtest 'Request construction is strict and state has an explicit HashRef escape
     $scope->{'pagi.connection'}{connected} = 0;
     is($request->is_disconnected, 1,
         'a supplied disconnected capability reports true');
+};
+
+subtest 'WebSocket and SSE state use Request\'s strict optional contract' => sub {
+    my $websocket_backing = { db => 'WebSocket fixture-db' };
+    my $websocket = PAGI::WebSocket->new(
+        protocol_scope(websocket => state => $websocket_backing),
+        \&receive_empty,
+        \&send_empty,
+    );
+
+    # Before: raw hashref or fabricated empty hashref
+    # my $db = $websocket->state->{db};
+
+    # After: the same strict optional contract as Request
+    my $websocket_state = $websocket->state
+        or die 'lifespan state required';
+    my $websocket_db = $websocket_state->get('db');
+
+    isa_ok($websocket_state, 'PAGI::State');
+    is($websocket_db, 'WebSocket fixture-db',
+        'WebSocket facade reads application state');
+    is(
+        refaddr($websocket_state->data), refaddr($websocket_backing),
+        'WebSocket data returns the exact backing hashref',
+    );
+    my $websocket_without_state = PAGI::WebSocket->new(
+        protocol_scope('websocket'),
+        \&receive_empty,
+        \&send_empty,
+    );
+    is($websocket_without_state->state, undef,
+        'WebSocket returns undef without state');
+
+    my $sse_backing = { db => 'SSE fixture-db' };
+    my $sse = PAGI::SSE->new(
+        protocol_scope(sse => state => $sse_backing),
+        \&receive_empty,
+        \&send_empty,
+    );
+    my $sse_state = $sse->state
+        or die 'lifespan state required';
+
+    isa_ok($sse_state, 'PAGI::State');
+    is($sse_state->get('db'), 'SSE fixture-db',
+        'SSE facade reads application state');
+    is(
+        refaddr($sse_state->data), refaddr($sse_backing),
+        'SSE data returns the exact backing hashref',
+    );
+    my $sse_without_state = PAGI::SSE->new(
+        protocol_scope('sse'),
+        \&receive_empty,
+        \&send_empty,
+    );
+    is($sse_without_state->state, undef, 'SSE returns undef without state');
 };
 
 subtest 'optional capabilities come from their owning helpers' => sub {

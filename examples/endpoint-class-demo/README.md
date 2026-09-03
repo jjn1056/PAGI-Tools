@@ -135,10 +135,15 @@ Because `MyApp::Main` lives under `lib/MyApp/Main.pm`, `app_path('public')`
 resolves from the example's module-layout application root. The helper returns
 the path string; `PAGI::App::File` owns file serving.
 
-Compose startup creates the resource and metrics hashes. Handlers read them
-through `app_state($request)` or `app_state($protocol)`, and shutdown marks the
-mock resource closed. The assembler and endpoint objects neither receive nor
-mirror mutable lifespan state.
+Compose startup creates the resource and metrics hashes, and shutdown marks the
+mock resource closed. Lifespan callbacks receive those mutable hashrefs because
+they initialize and clean up application state. Request-time handlers can use
+either equivalent spelling: `app_state($request)` is the functional,
+protocol-neutral helper form, while `$request->state`, `$websocket->state`, and
+`$sse->state` are direct forms with the same `PAGI::State`-or-`undef` contract.
+The WebSocket and SSE endpoint classes demonstrate the direct methods; the HTTP
+handlers deliberately retain `app_state($request)`. The assembler and endpoint
+objects neither receive nor mirror mutable lifespan state.
 
 ## Running
 

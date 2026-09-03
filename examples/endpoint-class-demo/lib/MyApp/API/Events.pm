@@ -3,11 +3,9 @@ use parent 'PAGI::Endpoint::SSE';
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use PAGI::State qw(app_state);
-
 async sub on_connect {
     my ($self, $sse) = @_;
-    my $state = app_state($sse)
+    my $state = $sse->state
         or die 'endpoint-class-demo requires Compose lifespan state';
     await $sse->send_event(
         event => 'ready',

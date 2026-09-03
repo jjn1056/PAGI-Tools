@@ -455,6 +455,42 @@ HEAD Route when that work should be avoided. File retains its deliberate
 `protocol_response_capability` opt-out because WebSocket denial and SSE decline
 cannot translate PAGI `file` or `fh` body events.
 
+## Breaking: direct WebSocket and SSE `state` matches Request
+
+`PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE` now share one strict
+application-state contract. Each direct `state` method returns `PAGI::State` or
+`undef`; a present non-hashref state croaks. Lifespan is intentionally the
+exception: startup/shutdown callbacks and `PAGI::Lifespan->state` retain the
+mutable raw hashref because that is the application-state initialization
+boundary.
+
+**Before (legacy WebSocket/SSE behavior):** direct protocol methods exposed a
+raw hashref or fabricated an empty hashref.
+
+```perl
+my $db = $websocket->state->{db};
+```
+
+**After (shipped):** check optional state and use the same strict facade as an
+HTTP Request.
+
+```perl
+my $state = $websocket->state
+    or die 'lifespan state required';
+my $db = $state->get('db');
+
+my $sse_state = $sse->state
+    or die 'lifespan state required';
+my $sse_db = $sse_state->get('db');
+```
+
+The existing temporary `%{}` overload still permits legacy hash dereference
+syntax and warns during migration, but it is not transparent hashref identity:
+`ref($protocol->state) eq 'HASH'` is false. Code with an exact HashRef
+requirement—such as a type constraint, serializer, cloning library, or strict
+`ref` test—must use `$protocol->state->data` after checking that state is
+present.
+
 ## Breaking: choose a concrete Response class
 
 `PAGI::Response` is now the byte-oriented base of a concrete class family.

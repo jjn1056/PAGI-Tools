@@ -201,10 +201,10 @@ injects application state into the scope for all requests.
 
 =head2 State Flow
 
-The C<startup> and C<shutdown> callbacks receive a C<$state> hashref
-as their first argument. Populate this with database connections,
-caches, configuration, etc. This is similar to how Starlette's
-lifespan context manager yields state to C<request.state>.
+The C<startup> and C<shutdown> callbacks receive a mutable C<$state> hashref
+as their first argument. Lifespan owns application-state initialization, so
+these callbacks populate and clean up database connections, caches,
+configuration, and similar shared resources.
 
     startup => async sub {
         my ($state) = @_;
@@ -220,11 +220,17 @@ For every request, this state is injected into the scope as
 C<$scope-E<gt>{state}>. The exact incoming scope hashref is updated and passed
 to the wrapped application. An existing C<state> value remains authoritative;
 otherwise the injected state is visible to the caller that supplied the scope.
-This makes it accessible via:
+Request-time consumers use the read-oriented L<PAGI::State> facade instead of
+the mutable lifecycle hashref:
 
-    $req->state->{db}    # In HTTP handlers
-    $ws->state->{db}     # In WebSocket handlers
-    $sse->state->{db}    # In SSE handlers
+    my $db = $req->state->get('db');    # In HTTP handlers
+    my $db = $ws->state->get('db');     # In WebSocket handlers
+    my $db = $sse->state->get('db');    # In SSE handlers
+
+C<PAGI::Request>, C<PAGI::WebSocket>, and C<PAGI::SSE> expose
+C<PAGI::State|undef>: check for C<undef> when lifespan state is optional.
+The raw C<$state> hashref remains the lifecycle interface and is also returned
+by L</state> because lifespan is the mutation-owning boundary.
 
 =head2 Hook Aggregation
 
@@ -280,7 +286,9 @@ Returns the wrapped PAGI application coderef.
 
     my $state = $lifespan->state;
 
-Returns the state hashref.
+Returns the mutable raw state hashref. This is the lifecycle initialization
+boundary; request-time consumers use L<PAGI::State> through their
+Request/WebSocket/SSE object instead.
 
 =head1 SEE ALSO
 

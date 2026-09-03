@@ -2,6 +2,13 @@
 
 0.002003 - UNRELEASED
 
+  [Protocol application state]
+  - BREAKING/consistency: PAGI::Request, ::WebSocket, and ::SSE now share the
+    strict `PAGI::State|undef` direct state contract; absent state is undef and
+    malformed state croaks. Lifespan startup/shutdown callbacks and
+    PAGI::Lifespan->state intentionally retain the mutable raw hashref because
+    lifecycle owns application-state initialization.
+
   [Declarative-only routing]
   - BREAKING: Removed the unreleased PAGI::App::Router and
     PAGI::Endpoint::Router mutable frontends, both Builder packages, and the

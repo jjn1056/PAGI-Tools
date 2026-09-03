@@ -22,6 +22,9 @@ PAGI::State - Strict read-oriented access to application state
     use PAGI::State qw(app_state);
 
     my $state = app_state($scope);
+    my $state = app_state($request);
+    my $state = app_state($ws);          # PAGI::WebSocket
+    my $state = app_state($event_stream); # PAGI::SSE
     my $db = $state->get('db');
     my $optional = $state->get('optional', undef);
 
@@ -38,9 +41,12 @@ L</data> when an integration requires it.
 
     my $state = app_state($scope);
     my $state = app_state($request);
+    my $state = app_state($ws);           # PAGI::WebSocket
+    my $state = app_state($event_stream); # PAGI::SSE
 
 Constructs a state facade from an unblessed scope hashref or an object with a
-C<scope> method. This function is an opt-in named export and is also available
+C<scope> method, including L<PAGI::Request>, L<PAGI::WebSocket>, and
+L<PAGI::SSE>. This function is an opt-in named export and is also available
 through the uppercase C<:ALL> tag. Nothing is exported by default.
 
 =cut
@@ -163,6 +169,6 @@ real hashref is required.
 
 =head1 SEE ALSO
 
-L<PAGI::Request>, L<PAGI::Stash>
+L<PAGI::Request>, L<PAGI::WebSocket>, L<PAGI::SSE>, L<PAGI::Stash>
 
 =cut
