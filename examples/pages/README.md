@@ -3,8 +3,8 @@
 This runnable example places source-free `PAGI::Pages` applications behind one
 `PAGI::Compose` root. It demonstrates class, configured-object, and exported
 factories; direct Route placement; Request-derived application returns; a
-direct application Mount; explicit native Route delegation; negotiated
-representations; and lifespan startup/shutdown.
+direct application Mount; negotiated representations; and lifespan
+startup/shutdown.
 
 Run it from the PAGI-Tools checkout:
 
@@ -19,7 +19,6 @@ curl -i -H 'Accept: text/html' http://localhost:5000/
 curl -i -H 'Accept: application/problem+json' http://localhost:5000/missing
 curl -i http://localhost:5000/configured
 curl -i -H 'Accept: text/plain' http://localhost:5000/terminal/anything
-curl -i http://localhost:5000/raw
 curl -i http://localhost:5000/old
 ```
 
@@ -71,23 +70,6 @@ mount('/terminal', app => gone(
     detail => 'This mounted subtree is gone',
 ));
 ```
-
-The `/raw` leaf deliberately owns all three PAGI channels. Native CODE at a
-Route is marked with `as_app_object`, and raw triplet delegation to the Pages value is
-performed by `invoke_app`:
-
-```perl
-route('/raw' => as_app_object(async sub {
-    my ($scope, $receive, $send) = @_;
-    await invoke_app(
-        not_found(as => 'text'),
-        $scope, $receive, $send,
-    );
-}));
-```
-
-`invoke_app` belongs at that existing native boundary. Direct application
-Routes and one-Request handlers returning applications do not need it.
 
 ## Root and lifespan behavior
 

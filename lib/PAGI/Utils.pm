@@ -637,9 +637,57 @@ receive one Request, WebSocket, or SSE object and do not need this wrapper.
 
 =head2 invoke_app
 
+    use Future::AsyncAwait;
+    use PAGI::Pages ();
     use PAGI::Utils qw(invoke_app);
 
-    await invoke_app($value, $scope, $receive, $send);
+    return await invoke_app(
+        PAGI::Pages->welcome,
+        $scope,
+        $receive,
+        $send,
+    );
+
+C<invoke_app> is a convenience for native three-argument PAGI code that needs
+to execute an application value. The example above is equivalent to:
+
+    my $app = PAGI::Pages->welcome->to_app;
+
+    return await Future->wrap(
+        $app->($scope, $receive, $send)
+    );
+
+This is useful in a native PAGI application or middleware that wants to emit a
+L<PAGI::Response>, a L<PAGI::Pages> result, or another app object without
+open-coding the C<to_app> and immediate-or-Future handling:
+
+    sub require_auth ($app) {
+        return async sub ($scope, $receive, $send) {
+            unless (authorized($scope)) {
+                return await invoke_app(
+                    PAGI::Pages->unauthorized(
+                        detail => 'Please sign in',
+                    ),
+                    $scope,
+                    $receive,
+                    $send,
+                );
+            }
+
+            return await Future->wrap(
+                $app->($scope, $receive, $send)
+            );
+        };
+    }
+
+A normal one-argument Request handler does not need C<invoke_app>. It returns
+the application value and lets the Route adapter execute it:
+
+    sub handler ($request) {
+        return PAGI::Pages->not_found(
+            detail => 'No such page',
+        );
+    }
 
 Normalizes C<$value> through C<to_app>, invokes it with the exact supplied
 triplet, and awaits immediate or Future-backed completion. It installs no HEAD,
