@@ -194,7 +194,7 @@
   - BREAKING: PAGI::Middleware::Lint no longer keeps its own copy of
     send-sequencing state; it delegates event-order legality (duplicate
     http.response.start, body before start, sends after completion,
-    illegal trailers, and so on) to the shared PAGI::SendValidation core
+    illegal trailers, and so on) to the shared PAGI::Utils::_SendValidation core
     also used by PAGI::Test::Client. Lint's previous hand-written warnings
     for these cases ("http.response.start sent multiple times",
     "http.response.body sent after response finished (more=0)") are gone;
@@ -322,7 +322,7 @@
     as the supported auth-gate pattern.
   - [BUGFIX] Every PAGI::Endpoint::SSE endpoint using `keepalive_interval`
     was broken against any server enforcing the SSE send-sequencing rules
-    (both the reference server's `EventValidator` and PAGI::SendValidation
+    (both the reference server's `EventValidator` and PAGI::Utils::_SendValidation
     reject `sse.keepalive` sent before `sse.start`), because `handle()`
     configures the keepalive before `on_connect`/`start` ever runs --
     silently tolerated by older, non-validating servers, but a hard failure
@@ -505,7 +505,7 @@
     one rewritten pair, and invalidates the request-header cache. Its proxy
     trust and HTTP-only gates are unchanged; this release does not extend these
     middleware behaviors to other protocols.
-  - New Features: new internal PAGI::SendValidation validates send-sequencing
+  - New Features: new internal PAGI::Utils::_SendValidation validates send-sequencing
     for HTTP, WebSocket, SSE, and lifespan scopes (unknown/missing event
     types, illegal ordering, undeclared extensions), mirroring the reference
     server's PAGI::Server::EventValidator categories and intent. This is
@@ -534,7 +534,7 @@
     already sent to the wire. A stray warning documents the post-completion
     exception. An exception before the response is complete keeps the
     existing 500 + server_error behavior.
-  - PAGI::SendValidation's websocket rules gained the
+  - PAGI::Utils::_SendValidation's websocket rules gained the
     C<websocket.http.response> denial extension (C<websocket.http.response.start>
     / C<.body>), mirroring the reference server's C<denial>/C<denial_complete>
     states: recognized as a legal denial before C<websocket.accept>, illegal
@@ -567,7 +567,7 @@
     C<websocket.http.response.*> extension denial is now recognized the
     same way.
   - PAGI::Test::SSE's C<$send> is likewise now strict via
-    L<PAGI::SendValidation>'s sse rules, and now recognizes an
+    L<PAGI::Utils::_SendValidation>'s sse rules, and now recognizes an
     app-initiated C<sse.close> (previously ignored: the app could send it
     and nothing happened).
   - BREAKING: PAGI::Test::SSE's decline (C<sse.http.response.start> /
@@ -591,7 +591,7 @@
     key: C<{}> for C<http> and C<sse> (this mock has no transport to flush, so
     C<http.fullflush> stays genuinely unadvertised and unreachable through it),
     and C<{ 'websocket.http.response' => {} }> for C<websocket> -- the SAME
-    shared hashref now threaded into L<PAGI::SendValidation> too, replacing
+    shared hashref now threaded into L<PAGI::Utils::_SendValidation> too, replacing
     PAGI::Test::WebSocket's previously independently-hardcoded advertisement
     of that extension (single source of truth; see
     L<PAGI::Test::Client/SCOPE EXTENSIONS>).

@@ -1,14 +1,14 @@
 use strict;
 use warnings;
 use Test2::V0;
-use PAGI::SendValidation;
+use PAGI::Utils::_SendValidation;
 
 # ==========================================================================
 # HTTP
 # ==========================================================================
 
 subtest 'http: legal happy path (no trailers) advances to complete' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     is $sv->started, 0, 'not started before any send';
     is $sv->check({ type => 'http.response.start', status => 200 }), undef, 'start is legal';
     is $sv->started, 1, 'started after start';
@@ -21,7 +21,7 @@ subtest 'http: legal happy path (no trailers) advances to complete' => sub {
 };
 
 subtest 'http: legal happy path with declared trailers' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     is $sv->check({ type => 'http.response.start', status => 200, trailers => 1 }), undef, 'start declaring trailers';
     is $sv->trailers_declared, 1, 'trailers_declared true';
     ok $sv->finalize, 'finalize illegal before body sent';
@@ -36,7 +36,7 @@ subtest 'http: legal happy path with declared trailers' => sub {
 };
 
 subtest 'http: missing type (verbatim probed class)' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     my $err = $sv->check({ status => 200 });
     ok $err, 'missing type is illegal';
     is $err->category, 'malformed', 'category malformed (not unknown_type: no type to even evaluate)';
@@ -45,7 +45,7 @@ subtest 'http: missing type (verbatim probed class)' => sub {
 };
 
 subtest 'http: unrecognized event type http.response.bogus (verbatim probed class)' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     my $err = $sv->check({ type => 'http.response.bogus' });
     ok $err, 'bogus type is illegal';
     is $err->category, 'unknown_type', 'category unknown_type';
@@ -53,7 +53,7 @@ subtest 'http: unrecognized event type http.response.bogus (verbatim probed clas
 };
 
 subtest 'http: duplicate http.response.start (verbatim probed class)' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     is $sv->check({ type => 'http.response.start', status => 200 }), undef, 'first start legal';
     my $err = $sv->check({ type => 'http.response.start', status => 200 });
     ok $err, 'duplicate start is illegal';
@@ -62,7 +62,7 @@ subtest 'http: duplicate http.response.start (verbatim probed class)' => sub {
 };
 
 subtest 'http: body before start' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     my $err = $sv->check({ type => 'http.response.body', body => 'x' });
     ok $err, 'body before start is illegal';
     is $err->category, 'sequence', 'category sequence';
@@ -70,7 +70,7 @@ subtest 'http: body before start' => sub {
 };
 
 subtest 'http: body after terminal, more=>0 (verbatim probed class)' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     $sv->check({ type => 'http.response.start', status => 200 });
     is $sv->check({ type => 'http.response.body', body => 'x', more => 0 }), undef, 'terminal chunk legal';
     my $err = $sv->check({ type => 'http.response.body', body => 'y' });
@@ -79,14 +79,14 @@ subtest 'http: body after terminal, more=>0 (verbatim probed class)' => sub {
 };
 
 subtest 'http: body after terminal via file/fh' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     $sv->check({ type => 'http.response.start', status => 200 });
     is $sv->check({ type => 'http.response.body', file => '/tmp/x' }), undef, 'file body is terminal';
     is $sv->complete, 1, 'complete after file body';
 };
 
 subtest 'http: undeclared trailers (verbatim probed class)' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     $sv->check({ type => 'http.response.start', status => 200 }); # no trailers=>1
     $sv->check({ type => 'http.response.body', body => 'x' }); # terminal, no trailers declared -> complete
     my $err = $sv->check({ type => 'http.response.trailers', headers => [] });
@@ -95,7 +95,7 @@ subtest 'http: undeclared trailers (verbatim probed class)' => sub {
 };
 
 subtest 'http: trailers before terminal body' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     $sv->check({ type => 'http.response.start', status => 200, trailers => 1 });
     my $err = $sv->check({ type => 'http.response.trailers', headers => [] });
     ok $err, 'trailers before terminal body is illegal';
@@ -103,7 +103,7 @@ subtest 'http: trailers before terminal body' => sub {
 };
 
 subtest 'http: any event after trailers sent' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     $sv->check({ type => 'http.response.start', status => 200, trailers => 1 });
     $sv->check({ type => 'http.response.body', body => 'x' });
     $sv->check({ type => 'http.response.trailers', headers => [] });
@@ -117,7 +117,7 @@ subtest 'http: any event after trailers sent' => sub {
 };
 
 subtest 'http: extension event rejected when not declared' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     $sv->check({ type => 'http.response.start', status => 200 });
     my $err = $sv->check({ type => 'http.fullflush' });
     ok $err, 'undeclared extension event is illegal';
@@ -125,7 +125,7 @@ subtest 'http: extension event rejected when not declared' => sub {
 };
 
 subtest 'http: extension event legal when declared' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http', extensions => { fullflush => 1 });
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http', extensions => { fullflush => 1 });
     $sv->check({ type => 'http.response.start', status => 200 });
     is $sv->check({ type => 'http.fullflush' }), undef, 'declared extension event legal';
     is $sv->complete, 0, 'fullflush does not advance state';
@@ -136,7 +136,7 @@ subtest 'http: extension event legal when declared' => sub {
 # ==========================================================================
 
 subtest 'websocket: legal happy path' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'websocket');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
     ok $sv->finalize, 'finalize illegal before accept/close';
     is $sv->check({ type => 'websocket.accept' }), undef, 'accept legal';
     is $sv->check({ type => 'websocket.send', text => 'hi' }), undef, 'send legal after accept';
@@ -146,7 +146,7 @@ subtest 'websocket: legal happy path' => sub {
 };
 
 subtest 'websocket: send before accept' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'websocket');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
     my $err = $sv->check({ type => 'websocket.send', text => 'hi' });
     ok $err, 'send before accept is illegal';
     is $err->category, 'sequence', 'category sequence';
@@ -154,7 +154,7 @@ subtest 'websocket: send before accept' => sub {
 };
 
 subtest 'websocket: close before accept is a legal denial and marks closed' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'websocket');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
     is $sv->check({ type => 'websocket.close' }), undef, 'close-before-accept is legal';
     is $sv->closed, 1, 'closed true (denial)';
     my $err = $sv->check({ type => 'websocket.accept' });
@@ -163,7 +163,7 @@ subtest 'websocket: close before accept is a legal denial and marks closed' => s
 };
 
 subtest 'websocket: send after app-sent close' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'websocket');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
     $sv->check({ type => 'websocket.accept' });
     $sv->check({ type => 'websocket.close' });
     my $err = $sv->check({ type => 'websocket.send', text => 'too late' });
@@ -172,7 +172,7 @@ subtest 'websocket: send after app-sent close' => sub {
 };
 
 subtest 'websocket: http.response.* denial rejected without the extension declared' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'websocket');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
     my $err = $sv->check({ type => 'websocket.http.response.start', status => 401 });
     ok $err, 'undeclared extension denial start is illegal';
     is $err->category, 'extension', 'category extension';
@@ -182,7 +182,7 @@ subtest 'websocket: http.response.* denial rejected without the extension declar
 };
 
 subtest 'websocket: http.response.* legal happy denial path when declared' => sub {
-    my $sv = PAGI::SendValidation->new(
+    my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
     );
     ok $sv->finalize, 'finalize illegal before accept/close/denial';
@@ -198,7 +198,7 @@ subtest 'websocket: http.response.* legal happy denial path when declared' => su
 };
 
 subtest 'websocket: http.response.* denial after accept is illegal' => sub {
-    my $sv = PAGI::SendValidation->new(
+    my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
     );
     $sv->check({ type => 'websocket.accept' });
@@ -208,7 +208,7 @@ subtest 'websocket: http.response.* denial after accept is illegal' => sub {
 };
 
 subtest 'websocket: non-body event after denial started is illegal' => sub {
-    my $sv = PAGI::SendValidation->new(
+    my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
     );
     $sv->check({ type => 'websocket.http.response.start', status => 401 });
@@ -218,7 +218,7 @@ subtest 'websocket: non-body event after denial started is illegal' => sub {
 };
 
 subtest 'websocket: any event after a completed denial is illegal' => sub {
-    my $sv = PAGI::SendValidation->new(
+    my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
     );
     $sv->check({ type => 'websocket.http.response.start', status => 401 });
@@ -236,7 +236,7 @@ subtest 'websocket: any event after a completed denial is illegal' => sub {
 # ==========================================================================
 
 subtest 'sse: legal happy stream path' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     ok $sv->finalize, 'finalize illegal before start';
     is $sv->check({ type => 'sse.start' }), undef, 'start legal';
     is $sv->check({ type => 'sse.send', data => 'x' }), undef, 'send legal';
@@ -246,7 +246,7 @@ subtest 'sse: legal happy stream path' => sub {
 };
 
 subtest 'sse: legal happy decline path' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     is $sv->check({ type => 'sse.http.response.start', status => 404 }), undef, 'decline start legal';
     is $sv->check({ type => 'sse.http.response.body', body => 'x' }), undef, 'decline terminal body legal';
     is $sv->complete, 1, 'complete after decline';
@@ -254,7 +254,7 @@ subtest 'sse: legal happy decline path' => sub {
 };
 
 subtest 'sse: sse.start twice' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     $sv->check({ type => 'sse.start' });
     my $err = $sv->check({ type => 'sse.start' });
     ok $err, 'duplicate sse.start is illegal';
@@ -262,7 +262,7 @@ subtest 'sse: sse.start twice' => sub {
 };
 
 subtest 'sse: decline events after sse.start' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     $sv->check({ type => 'sse.start' });
     my $err = $sv->check({ type => 'sse.http.response.start', status => 404 });
     ok $err, 'decline after sse.start is illegal';
@@ -270,7 +270,7 @@ subtest 'sse: decline events after sse.start' => sub {
 };
 
 subtest 'sse: stream events after a completed decline' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     $sv->check({ type => 'sse.http.response.start', status => 404 });
     $sv->check({ type => 'sse.http.response.body', body => 'x' });
     is $sv->complete, 1, 'decline complete';
@@ -283,7 +283,7 @@ subtest 'sse: stream events after a completed decline' => sub {
 };
 
 subtest 'sse: no-advance-on-error' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     $sv->check({ type => 'sse.start' });
     my $err = $sv->check({ type => 'sse.start' }); # duplicate, illegal
     ok $err, 'duplicate rejected';
@@ -295,7 +295,7 @@ subtest 'sse: no-advance-on-error' => sub {
 # ==========================================================================
 
 subtest 'lifespan: results in the wrong phase' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'lifespan');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'lifespan');
     my $err = $sv->check({ type => 'lifespan.shutdown.complete' });
     ok $err, 'shutdown result while in startup phase is illegal';
     is $err->category, 'sequence', 'category sequence';
@@ -311,14 +311,14 @@ subtest 'lifespan: results in the wrong phase' => sub {
 };
 
 subtest 'lifespan: no-advance-on-error' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'lifespan');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'lifespan');
     my $err = $sv->check({ type => 'lifespan.shutdown.complete' });
     ok $err, 'wrong-phase result rejected';
     is $sv->check({ type => 'lifespan.startup.complete' }), undef, 'legal event after rejection still works';
 };
 
 subtest 'lifespan: unrecognized/missing type' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'lifespan');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'lifespan');
     my $err = $sv->check({ type => 'lifespan.bogus' });
     ok $err, 'bogus lifespan type is illegal';
     is $err->category, 'unknown_type', 'category unknown_type (a real, just wrong, type string)';
@@ -332,15 +332,15 @@ subtest 'lifespan: unrecognized/missing type' => sub {
 # ==========================================================================
 
 subtest 'Error object has message and category accessors' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     my $err = $sv->check({ type => 'http.response.bogus' });
-    isa_ok $err, ['PAGI::SendValidation::Error'];
+    isa_ok $err, ['PAGI::Utils::_SendValidation::Error'];
     ok defined($err->message) && length($err->message), 'message is a non-empty string';
     ok defined($err->category) && length($err->category), 'category is a non-empty string';
 };
 
 subtest 'check never dies on garbage input' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http');
     my $err = eval { $sv->check(undef) };
     ok !$@, 'undef event does not die' or diag $@;
     ok $err, 'undef event is illegal';
@@ -352,19 +352,19 @@ subtest 'check never dies on garbage input' => sub {
 };
 
 subtest 'websocket/sse: missing type is malformed, not unknown_type' => sub {
-    my $ws = PAGI::SendValidation->new(scope_type => 'websocket');
+    my $ws = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
     my $err = $ws->check({});
     ok $err, 'websocket missing type is illegal';
     is $err->category, 'malformed', 'websocket missing type category malformed';
 
-    my $sse = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sse = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     $err = $sse->check({});
     ok $err, 'sse missing type is illegal';
     is $err->category, 'malformed', 'sse missing type category malformed';
 };
 
 subtest 'sse http.fullflush requires the fullflush extension' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     $sv->check({ type => 'sse.start' });
     my $err = $sv->check({ type => 'http.fullflush' });
     ok $err, 'undeclared fullflush in sse scope is illegal';
@@ -372,7 +372,7 @@ subtest 'sse http.fullflush requires the fullflush extension' => sub {
 };
 
 subtest 'sse http.fullflush legal while streaming, keeps streaming state' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse', extensions => { fullflush => 1 });
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse', extensions => { fullflush => 1 });
     $sv->check({ type => 'sse.start' });
     is $sv->check({ type => 'http.fullflush' }), undef, 'declared fullflush legal while streaming';
     is $sv->check({ type => 'sse.send', data => 'still streaming' }), undef, 'stream still legal afterward (state unchanged)';
@@ -383,7 +383,7 @@ subtest 'lifespan rejects a second result for the same phase' => sub {
                    ['lifespan.startup.complete', 'lifespan.startup.failed'],
                    ['lifespan.startup.failed', 'lifespan.startup.complete']) {
         my ($first, $second) = @$pair;
-        my $sv = PAGI::SendValidation->new(scope_type => 'lifespan');
+        my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'lifespan');
         is $sv->check({ type => $first }), undef, "$first legal as the first startup result";
         my $err = $sv->check({ type => $second });
         ok $err, "$second rejected as a second startup-phase result";
@@ -392,7 +392,7 @@ subtest 'lifespan rejects a second result for the same phase' => sub {
 };
 
 subtest 'enter_phase resets the result_sent flag for the new phase' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'lifespan');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'lifespan');
     is $sv->check({ type => 'lifespan.startup.complete' }), undef, 'startup result sent';
     $sv->enter_phase('shutdown');
     is $sv->check({ type => 'lifespan.shutdown.complete' }), undef, 'shutdown result legal: fresh phase, flag reset';
@@ -402,18 +402,18 @@ subtest 'enter_phase resets the result_sent flag for the new phase' => sub {
 };
 
 subtest 'new() rejects a non-hashref extensions argument' => sub {
-    like dies { PAGI::SendValidation->new(scope_type => 'http', extensions => 'nope') },
+    like dies { PAGI::Utils::_SendValidation->new(scope_type => 'http', extensions => 'nope') },
         qr/extensions/i, 'croaks naming extensions';
 };
 
 subtest 'an Error with an empty message is still boolean-true' => sub {
-    my $err = PAGI::SendValidation::Error->new(category => 'sequence', message => '');
+    my $err = PAGI::Utils::_SendValidation::Error->new(category => 'sequence', message => '');
     ok $err, 'Error with empty message is truthy';
     if ($err) { pass 'truthy in an if() as well' } else { fail 'truthy in an if() as well' }
 };
 
 subtest 'http.fullflush legal in awaiting_trailers state' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'http', extensions => { fullflush => 1 });
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http', extensions => { fullflush => 1 });
     $sv->check({ type => 'http.response.start', status => 200, trailers => 1 });
     $sv->check({ type => 'http.response.body', body => 'x' }); # terminal -> awaiting_trailers
     is $sv->check({ type => 'http.fullflush' }), undef, 'fullflush legal while awaiting declared trailers';
@@ -421,11 +421,11 @@ subtest 'http.fullflush legal in awaiting_trailers state' => sub {
 };
 
 subtest 'sse.comment legal while streaming, rejected after a completed decline' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     $sv->check({ type => 'sse.start' });
     is $sv->check({ type => 'sse.comment', comment => 'hi' }), undef, 'sse.comment legal while streaming';
 
-    my $sv2 = PAGI::SendValidation->new(scope_type => 'sse');
+    my $sv2 = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     $sv2->check({ type => 'sse.http.response.start', status => 404 });
     $sv2->check({ type => 'sse.http.response.body', body => 'x' });
     my $err = $sv2->check({ type => 'sse.comment', comment => 'too late' });
@@ -434,7 +434,7 @@ subtest 'sse.comment legal while streaming, rejected after a completed decline' 
 };
 
 subtest 'websocket.keepalive treatment across connecting/accepted/closed' => sub {
-    my $sv = PAGI::SendValidation->new(scope_type => 'websocket');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
     my $err = $sv->check({ type => 'websocket.keepalive', interval => 1 });
     ok $err, 'keepalive before accept is illegal';
     is $err->category, 'sequence', 'category sequence';

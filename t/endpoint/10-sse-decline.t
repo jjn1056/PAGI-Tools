@@ -60,7 +60,7 @@ package DeclineThenTryToStream {
 }
 
 subtest 'handle() does not call run() (and therefore never sends sse.start) after a decline' => sub {
-    # Under PAGI::SendValidation (wired into PAGI::Test::SSE), a stray
+    # Under PAGI::Utils::_SendValidation (wired into PAGI::Test::SSE), a stray
     # sse.start sent after a completed decline fails the send outright --
     # so if handle()'s guard were missing, this would die instead of
     # returning a clean 403.

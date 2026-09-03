@@ -56,7 +56,7 @@ my @load_modules = qw(
     PAGI::Utils
     PAGI::Utils::AppObject
     PAGI::Utils::Scope
-    PAGI::SendValidation
+    PAGI::Utils::_SendValidation
     PAGI::Test::Client
     PAGI::Test::Response
 );

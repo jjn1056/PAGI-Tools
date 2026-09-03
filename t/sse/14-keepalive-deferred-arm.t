@@ -10,7 +10,7 @@ use PAGI::Response::Text;
 use PAGI::SSE;
 
 # DEVIATION D-1 (signed off by John 2026-08-25): sse.keepalive sent before
-# sse.start is illegal (both PAGI::SendValidation and the reference server's
+# sse.start is illegal (both PAGI::Utils::_SendValidation and the reference server's
 # EventValidator reject it from the pre-start state). keepalive() called
 # before the stream has started must RECORD the desired interval/comment
 # instead of sending; start() then arms the recorded keepalive immediately

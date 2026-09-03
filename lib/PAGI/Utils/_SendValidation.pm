@@ -1,4 +1,4 @@
-package PAGI::SendValidation;
+package PAGI::Utils::_SendValidation;
 
 use strict;
 use warnings;
@@ -6,13 +6,13 @@ use Carp qw(croak);
 
 =head1 NAME
 
-PAGI::SendValidation - Shared send-sequencing validation core
+PAGI::Utils::_SendValidation - Private send-sequencing validation core
 
 =head1 SYNOPSIS
 
-    use PAGI::SendValidation;
+    use PAGI::Utils::_SendValidation;
 
-    my $sv = PAGI::SendValidation->new(
+    my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'http',
         extensions => { fullflush => 1 },
     );
@@ -27,11 +27,15 @@ PAGI::SendValidation - Shared send-sequencing validation core
 
 =head1 DESCRIPTION
 
-C<PAGI::SendValidation> is a small, dependency-free, protocol-agnostic
+C<PAGI::Utils::_SendValidation> is a small, dependency-free, protocol-agnostic
 send-sequencing validator for PAGI applications. It tracks the legal order
 of events an application sends for one HTTP, WebSocket, SSE, or lifespan
 scope and rejects events that arrive out of order, are unrecognized, or use
 an extension the scope did not advertise.
+
+This package and its nested C<::Error> class are private implementation
+details. Application code must not depend on their names or interfaces; both
+may change without a compatibility layer.
 
 It is toolkit-internal infrastructure: it exists so every send path in
 PAGI::Tools that needs to enforce the PAGI spec's send-sequencing rules
@@ -51,7 +55,7 @@ legal given what has already been sent.
 
 =head2 new
 
-    my $sv = PAGI::SendValidation->new(
+    my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'http' | 'websocket' | 'sse' | 'lifespan',
         extensions => \%advertised,   # optional, default {}
     );
@@ -75,11 +79,11 @@ my %INITIAL_STATE = (
 sub new {
     my ($class, %args) = @_;
 
-    croak "PAGI::SendValidation->new: 'scope_type' is required"
+    croak "PAGI::Utils::_SendValidation->new: 'scope_type' is required"
         unless defined $args{scope_type};
-    croak "PAGI::SendValidation->new: unknown scope_type '$args{scope_type}'"
+    croak "PAGI::Utils::_SendValidation->new: unknown scope_type '$args{scope_type}'"
         unless $args{scope_type} eq 'lifespan' || exists $INITIAL_STATE{$args{scope_type}};
-    croak "PAGI::SendValidation->new: 'extensions' must be a hash reference"
+    croak "PAGI::Utils::_SendValidation->new: 'extensions' must be a hash reference"
         if defined $args{extensions} && ref $args{extensions} ne 'HASH';
 
     return bless {
@@ -102,7 +106,7 @@ Validates C<$event> (a plain hash reference in PAGI wire form) against the
 scope's send-sequencing rules. Returns C<undef> when the event is legal --
 and, on that same success path, advances the validator's internal state so
 the B<next> call to C<check> sees the new state. Returns a
-L<PAGI::SendValidation::Error> object when the event is illegal.
+L<PAGI::Utils::_SendValidation::Error> object when the event is illegal.
 
 B<No-advance-on-error contract:> an illegal event never mutates internal
 state. Calling C<check> again with the same or a different, legal event
@@ -116,7 +120,7 @@ Error object, never an exception.
     my $err = $sv->finalize;
 
 Returns C<undef> if the scope has reached a legal terminal state (nothing
-more needs to be sent). Returns a L<PAGI::SendValidation::Error> naming what
+more needs to be sent). Returns a L<PAGI::Utils::_SendValidation::Error> naming what
 is still missing otherwise (for example, "awaiting a terminal body chunk"
 or "awaiting declared http.response.trailers" for HTTP). Calling
 C<finalize> does not itself change any state; it may be called at any
@@ -140,9 +144,9 @@ matching phase is current. The validator starts in the C<startup> phase.
 sub enter_phase {
     my ($self, $phase) = @_;
 
-    croak "PAGI::SendValidation->enter_phase: only valid for scope_type 'lifespan'"
+    croak "PAGI::Utils::_SendValidation->enter_phase: only valid for scope_type 'lifespan'"
         unless $self->{scope_type} eq 'lifespan';
-    croak "PAGI::SendValidation->enter_phase: unknown phase '" . (defined $phase ? $phase : 'undef') . "'"
+    croak "PAGI::Utils::_SendValidation->enter_phase: unknown phase '" . (defined $phase ? $phase : 'undef') . "'"
         unless defined $phase && ($phase eq 'startup' || $phase eq 'shutdown');
 
     $self->{phase}       = $phase;
@@ -311,7 +315,7 @@ sub trailers_declared { return $_[0]->{trailers_declared} ? 1 : 0 }
 
 sub _error {
     my ($self, $category, $message) = @_;
-    return PAGI::SendValidation::Error->new(category => $category, message => $message);
+    return PAGI::Utils::_SendValidation::Error->new(category => $category, message => $message);
 }
 
 sub check {
@@ -573,7 +577,7 @@ sub _check_lifespan {
     return undef;
 }
 
-package PAGI::SendValidation::Error;
+package PAGI::Utils::_SendValidation::Error;
 
 use strict;
 use warnings;
@@ -584,11 +588,11 @@ use overload
 
 =head1 NAME
 
-PAGI::SendValidation::Error - Illegal-send diagnostic returned by PAGI::SendValidation
+PAGI::Utils::_SendValidation::Error - Illegal-send diagnostic returned by PAGI::Utils::_SendValidation
 
 =head1 DESCRIPTION
 
-A plain, throwable-free diagnostic value: C<PAGI::SendValidation::check> and
+A plain, throwable-free diagnostic value: C<PAGI::Utils::_SendValidation::check> and
 C<finalize> return one of these instead of dying when an event is illegal or
 a scope has not reached a legal terminal state. It stringifies to its
 C<message>, so C<warn $err> and C<diag $err> work directly.
@@ -597,13 +601,13 @@ C<message>, so C<warn $err> and C<diag $err> work directly.
 
 =head2 new
 
-    my $err = PAGI::SendValidation::Error->new(
+    my $err = PAGI::Utils::_SendValidation::Error->new(
         category => $category,
         message  => $message,
     );
 
 Both C<category> and C<message> are stored as given; this class does not
-validate them itself (only C<PAGI::SendValidation> constructs these).
+validate them itself (only C<PAGI::Utils::_SendValidation> constructs these).
 
 =head1 ACCESSORS
 

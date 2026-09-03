@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use PAGI::SendValidation;
+use PAGI::Utils::_SendValidation;
 use PAGI::Utils qw(request_ended_abnormally);
 
 =head1 NAME
@@ -33,7 +33,7 @@ before a request ever reaches a real server.
 =head2 Division of labor
 
 Send-sequencing legality (is this event legal given what has already been
-sent?) is delegated entirely to the shared L<PAGI::SendValidation> core --
+sent?) is delegated entirely to the shared L<PAGI::Utils::_SendValidation> core --
 the same validator L<PAGI::Test::Client> uses. Lint does not keep its own
 copy of that state machine. A conforming PAGI server enforces sequencing
 unconditionally, on every request, whether or not Lint is in the stack; a
@@ -121,11 +121,11 @@ sub wrap {
 
         # Shared send-sequencing core -- only wired up for scope types it
         # models a self-contained state machine for without external
-        # driving (see PAGI::SendValidation). Lifespan needs enter_phase
+        # driving (see PAGI::Utils::_SendValidation). Lifespan needs enter_phase
         # calls synced to the real driver, which a wrapping middleware
         # doesn't have visibility into, so it is left unwired here.
         my $sv = (($scope->{type} // '') eq 'http')
-            ? PAGI::SendValidation->new(scope_type => 'http', extensions => $scope->{extensions})
+            ? PAGI::Utils::_SendValidation->new(scope_type => 'http', extensions => $scope->{extensions})
             : undef;
 
         my $in_flight = 0;
@@ -325,7 +325,7 @@ sub _lint_connection_headers {
     }
 }
 
-# Turns a PAGI::SendValidation::Error into application-side guidance: which
+# Turns a PAGI::Utils::_SendValidation::Error into application-side guidance: which
 # rule, and what to change. The core's bare message is Lint's baseline
 # value-add over the server -- restating it verbatim would add nothing.
 sub _context_for_send_error {
@@ -462,7 +462,7 @@ __END__
 
 =item * Send-sequencing legality (event order, duplicates, sends after
 completion, trailers legality) is enforced by the shared
-L<PAGI::SendValidation> core -- see L</Division of labor>. This is where
+L<PAGI::Utils::_SendValidation> core -- see L</Division of labor>. This is where
 C<http.response.body>'s C<more> key is actually interpreted: absent,
 false, or a C<file>/C<fh> body all mark a chunk terminal, and a further
 body event after that is rejected.
@@ -519,7 +519,7 @@ L<PAGI::Middleware> - Base class for middleware
 
 L<PAGI::Middleware::Debug> - Development debug panel
 
-L<PAGI::SendValidation> - The shared send-sequencing core this middleware
+L<PAGI::Utils::_SendValidation> - The shared send-sequencing core this middleware
 consumes; read its C<RULES> section for exactly what is and isn't legal.
 
 =cut

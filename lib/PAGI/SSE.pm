@@ -275,7 +275,7 @@ async sub start {
 # Server handles the timer; this is loop-agnostic
 #
 # DEFERRED ARM: sse.keepalive is illegal before sse.start (both
-# PAGI::SendValidation and the reference server's EventValidator reject it
+# PAGI::Utils::_SendValidation and the reference server's EventValidator reject it
 # from the pre-start state -- see DEVIATION D-1). Calling this before the
 # stream has started does not send anything; it records the interval/comment
 # and start() arms it (sends the real event) immediately afterward, where
@@ -1365,7 +1365,7 @@ is no live connection left for the server to time a ping against, so the
 call returns C<$self> without sending anything.
 
 B<DEFERRED ARM:> C<sse.keepalive> is illegal before C<sse.start> -- both
-L<PAGI::SendValidation> and the reference server's C<EventValidator> reject
+L<PAGI::Utils::_SendValidation> and the reference server's C<EventValidator> reject
 it from the pre-start state. Calling C<keepalive> before L</start> does
 B<not> send anything: it records the interval/comment, and C<start> arms
 the recording (sends the real event) immediately afterward, where it is

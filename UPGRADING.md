@@ -1073,7 +1073,7 @@ returned without reaching a legal terminal state hard-died with a generic
 reports it.
 
 **After (shipped):** every `PAGI::Test::*` `$send` now fails the returned
-`Future` for an illegal event, mirroring the shared `PAGI::SendValidation`
+`Future` for an illegal event, mirroring the shared `PAGI::Utils::_SendValidation`
 core also used by the development `Lint` middleware. An app that returns
 without reaching a legal terminal state is now reported as an abnormal
 `server_error` disconnect with a warning, not a hard die; an app that never
@@ -1131,7 +1131,7 @@ rest are covered only here.
 
 - **Development middleware.** `PAGI::Middleware::Lint` no longer keeps its
   own copy of send-sequencing state -- it delegates to the shared
-  `PAGI::SendValidation` core. In strict mode a shared-core violation now
+  `PAGI::Utils::_SendValidation` core. In strict mode a shared-core violation now
   rejects the event outright instead of warning and forwarding it.
 - **Removed middleware and apps.** `PAGI::Middleware::WebSocket::RateLimit`,
   `PAGI::App::SSE::Pubsub`, `PAGI::App::WebSocket::Broadcast`, and

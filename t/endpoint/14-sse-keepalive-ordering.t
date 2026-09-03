@@ -12,7 +12,7 @@ use PAGI::Test::Client;
 
 # DEVIATION D-1 (signed off by John 2026-08-25): Endpoint::SSE::handle arms
 # keepalive (Endpoint/SSE.pm:27-30) BEFORE on_connect/start, while the
-# PAGI::SSE object is pre-start. Both PAGI::SendValidation and the reference
+# PAGI::SSE object is pre-start. Both PAGI::Utils::_SendValidation and the reference
 # server's EventValidator reject sse.keepalive sent before sse.start -- so
 # every keepalive_interval > 0 endpoint fails every request against a strict
 # server. Fixed by deferred-arm: keepalive() called pre-start records the

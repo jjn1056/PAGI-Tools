@@ -6,7 +6,7 @@ use Future::AsyncAwait;
 use Future;
 use Carp qw(croak);
 
-use PAGI::SendValidation;
+use PAGI::Utils::_SendValidation;
 
 
 sub new {
@@ -36,7 +36,7 @@ sub _start {
     # hardcoded list. PAGI::Test::Client always sets this (currently to {}:
     # the mock implements no sse extensions); the // {} guards direct
     # construction of this class with a scope that omits the key.
-    my $sv = PAGI::SendValidation->new(
+    my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'sse',
         extensions => $self->{scope}{extensions} // {},
     );
@@ -60,7 +60,7 @@ sub _start {
     };
 
     # Create send coderef for the app. Strict: illegal events (per
-    # PAGI::SendValidation's sse rules) fail the returned Future -- a
+    # PAGI::Utils::_SendValidation's sse rules) fail the returned Future -- a
     # canonical test double must not accept what a real server would
     # reject -- and are never appended to the client's readable stream.
     my $send = async sub {
@@ -252,13 +252,13 @@ the server. See L<PAGI::Test::Client/sse>.
 =head1 SEND STRICTNESS
 
 The C<$send> coderef given to your app is strict: it validates every event
-against the PAGI sse send-sequencing rules via L<PAGI::SendValidation> and
+against the PAGI sse send-sequencing rules via L<PAGI::Utils::_SendValidation> and
 fails the returned Future (the app's C<await $send-E<gt>(...)> dies) for
 anything a real server would reject -- a duplicate C<sse.start>, a decline
 event after C<sse.start>, any stream event after a decline has started, or
 any event once a decline is complete. A rejected event is never appended
 to the client's readable stream. There is no lenient mode -- see
-L<PAGI::SendValidation/RULES> for the exact sse rule set.
+L<PAGI::Utils::_SendValidation/RULES> for the exact sse rule set.
 
 C<sse.close> is recognized as legal for the app to send proactively (it
 ends the stream from the server side; no C<sse.disconnect> is delivered
