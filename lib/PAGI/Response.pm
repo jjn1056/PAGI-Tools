@@ -159,8 +159,11 @@ L<PAGI::Spec::Www/"Decline SSE - send event">.
 
 =head1 SUBCLASSING
 
-Finite application subclasses override only C<default_content_type> and
-C<render($value)>, returning encoded bytes:
+Buffered application subclasses have two supported extension seams.
+
+Override C<render($value)> when the subclass introduces a different encoding
+or representation. It must return encoded bytes. Override
+C<default_content_type> when that representation has a different media type:
 
     package MyApp::CSVResponse;
     use parent 'PAGI::Response';
@@ -171,9 +174,43 @@ C<render($value)>, returning encoded bytes:
         return encode_rows_as_utf8($rows);
     }
 
-Constructor dispatch preserves subclass identity. Delivery internals used by
-File and Stream are not a public subclass seam. A delivery subclass that emits
-something outside ordinary body events must override
+Override C<new> when the subclass specializes the semantic input while
+retaining an existing representation. Validate and normalize that input at
+construction, then delegate the completed value and the untouched response
+option list to C<SUPER::new>. For example, a company collection class can
+inherit JSON encoding while constructing its standard envelope first:
+
+    package MyCompany::CollectionResponse;
+    use parent 'PAGI::Response::JSON';
+
+    sub new {
+        my ($class, $source, @response_options) = @_;
+        die 'collection source must be a hashref'
+            unless ref($source) eq 'HASH';
+        die 'items must be an arrayref'
+            unless ref($source->{items}) eq 'ARRAY';
+
+        my $document = {
+            data => $source->{items},
+            meta => { count => scalar @{$source->{items}} },
+        };
+
+        return $class->SUPER::new($document, @response_options);
+    }
+
+Keeping C<@response_options> as a list lets the base constructor retain its
+unknown-, duplicate-, and malformed-option checks. Application subclasses
+must not call private Response parsing or emission methods. See
+L<PAGI::Tools::Cookbook/Company Collection JSON Response> for a complete
+factory and Route example.
+
+Constructor dispatch through C<SUPER::new> preserves subclass identity. A
+class may combine construction-time normalization with a new C<render> method
+when it genuinely owns both concerns, but validation and document assembly
+should not be hidden inside an encoder.
+
+Delivery internals used by File and Stream are not a public subclass seam. A
+delivery subclass that emits something outside ordinary body events must override
 C<protocol_response_capability> and opt out unless a matching future token is
 defined.
 

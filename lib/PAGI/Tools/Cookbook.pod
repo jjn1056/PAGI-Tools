@@ -1087,6 +1087,119 @@ stock WebSocket and SSE misses intact.
 OpenAPI/schema generation and C<include_in_schema> remain deferred; the
 inspectable immutable tree is a future seam, not a shipped schema API.
 
+=head1 RESPONSE EXTENSIBILITY
+
+Buffered response subclasses can introduce either a representation or a
+semantic document type. Override C<render> for a new encoding. Override
+C<new>, normalize the source value, and delegate to C<SUPER::new> when the
+wire representation already exists but the application needs a stronger
+document contract.
+
+=head2 Company Collection JSON Response
+
+Suppose every collection API at a company uses C<data>, C<meta>, and optional
+C<links> members. This is semantic JSON policy, not a new JSON encoder. Build
+and validate the envelope in the subclass constructor, then let
+L<PAGI::Response::JSON> perform JSON encoding:
+
+  package MyCompany::Response::Collection;
+  use v5.40;
+
+  use Carp qw(croak);
+  use Exporter qw(import);
+  use parent 'PAGI::Response::JSON';
+
+  our @EXPORT_OK = qw(collection_response);
+
+  sub collection_response (@args) {
+      return __PACKAGE__->new(@args);
+  }
+
+  sub new ($class, $source, @response_options) {
+      croak 'collection response requires a hashref'
+          unless ref($source) eq 'HASH';
+
+      my $items = $source->{items};
+      croak 'collection response items must be an arrayref'
+          unless ref($items) eq 'ARRAY';
+
+      my $meta = $source->{meta} // {};
+      croak 'collection response meta must be a hashref'
+          unless ref($meta) eq 'HASH';
+
+      my $document = {
+          data => $items,
+          meta => {
+              %$meta,
+              count => scalar @$items,
+          },
+      };
+
+      if (exists $source->{links}) {
+          croak 'collection response links must be a hashref'
+              unless ref($source->{links}) eq 'HASH';
+          $document->{links} = $source->{links};
+      }
+
+      return $class->SUPER::new(
+          $document,
+          @response_options,
+      );
+  }
+
+  1;
+
+C<new> owns the collection contract: invalid source values fail immediately,
+and every constructed instance already contains the completed envelope.
+Inherited C<render> has one job--encode that document as JSON. The inherited
+C<to_app>, status, headers, cookies, content type, buffered delivery, and
+C<body-events-v1> capability require no registration or reimplementation.
+
+The exported factory is optional application-level shorthand with a fixed
+mapping to the company class:
+
+  use MyCompany::Response::Collection qw(collection_response);
+  use PAGI::Routing qw(route router);
+
+  sub list_people ($request) {
+      my $people = load_people();
+
+      return collection_response(
+          {
+              items => $people,
+              meta  => {
+                  total => scalar @$people,
+                  page  => 1,
+              },
+              links => {
+                  self => $request->path,
+              },
+          },
+          headers => [
+              'X-Collection-Version' => '1',
+          ],
+      );
+  }
+
+  my $routing = router(routes => [
+      route('/people' => \&list_people, name => 'people'),
+  ]);
+
+The handler returns an ordinary Response app object. Route needs no knowledge
+of the company subclass and invokes it through the inherited C<to_app>
+contract.
+
+Pass C<@response_options> to C<SUPER::new> unchanged. Converting them to a
+hash in the subclass would silently discard duplicate options before the base
+constructor could diagnose them. If a specialization needs its own constructor
+options, give the semantic source a documented shape, as C<items>, C<meta>,
+and C<links> do above, rather than intercepting the base response option list.
+
+If the only requirement is a convenience function that wraps data in a hash,
+a local factory returning C<json_response(...)> may be enough. Use a subclass
+when the document shape, validation, media type, or further extension is an
+application-level type worth naming.
+
 =head1 RESPONSE DELIVERY RECIPES
 
 =head2 Relay a Request Body with Backpressure
