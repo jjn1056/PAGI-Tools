@@ -7,7 +7,7 @@
 | Task | Status | Implementation SHA | Review/fix SHAs | Focused verification and actual counts | Full-suite/build evidence | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | complete | `694f1bbdc91befd166667d13a7378b90e28a92fc` | clean task review | PASS — `prove -l t/response/05-ndjson.t t/response/03-stream.t t/response-writer.t`: 3 files, 39 tests; NDJSON syntax checks OK; private-name audit empty; `git diff --check` clean | deferred to Task 5 | spec PASS; quality PASS |
-| 2 | pending | — | — | — | deferred to Task 5 | — |
+| 2 | complete | `11c8880276e2b195a539437512befc82fc1e7e2f` | clean task review | PASS — `prove -lv t/response/05-ndjson.t t/00-load.t`: 2 files, 77 tests; parent export probe exits 0; `git diff --check` clean | deferred to Task 5 | spec PASS; quality PASS |
 | 3 | pending | — | — | — | deferred to Task 5 | — |
 | 4 | pending | — | — | — | deferred to Task 5 | — |
 | 5 | pending | — | — | — | final gate | — |
