@@ -45,23 +45,22 @@ HTTP default without flattening that boundary.
 The API's `routing` method returns a configured `PAGI::Routing::Router`:
 
 ```perl
+my $demo_token_middleware = middleware(sub {
+    my ($inner) = @_;
+    return $self->require_demo_token($inner);
+});
+
 return router(
     http_default => not_found(
         detail => 'No API endpoint route matched'),
     routes => [
         route('/index' => sub { return $self->index(@_) },
             name => 'index',
-            middleware => [middleware(sub {
-                my ($inner) = @_;
-                return $self->require_demo_token($inner);
-            })]),
+            middleware => [$demo_token_middleware]),
         route('/show/{user_id:&Int}' =>
             MyApp::API::User->new(users => $self->{users}),
             name => 'show',
-            middleware => [middleware(sub {
-                my ($inner) = @_;
-                return $self->require_demo_token($inner);
-            })]),
+            middleware => [$demo_token_middleware]),
         mount('/tools', routes => [
             route('/status' => sub { return $self->status(@_) },
                 name => 'status'),
@@ -72,6 +71,38 @@ return router(
     ],
 );
 ```
+
+Here `$demo_token_middleware` is already the immutable description returned
+by `middleware(...)`, so each route places that descriptor directly in its
+`middleware` list:
+
+```perl
+my $demo_token_middleware = middleware(sub {
+    my ($inner) = @_;
+    return $self->require_demo_token($inner);
+});
+
+route('/one' => \&one, middleware => [$demo_token_middleware]);
+route('/two' => \&two, middleware => [$demo_token_middleware]);
+```
+
+If a variable instead holds the undecorated middleware factory coderef, wrap
+it when constructing the list:
+
+```perl
+my $require_demo_token = sub {
+    my ($inner) = @_;
+    return $self->require_demo_token($inner);
+};
+
+route('/one' => \&one,
+    middleware => [middleware($require_demo_token)]);
+```
+
+In short, use `[$descriptor]` for a value already returned by
+`middleware(...)`; use `[middleware($factory)]` when the value is still a
+factory coderef. Reusing a descriptor does not reuse a compiled wrapper:
+each application compilation invokes its factory for each placement.
 
 The declarations form these canonical logical addresses:
 

@@ -27,23 +27,22 @@ sub Int { return qr/\A\d+\z/ }
 sub routing {
     my ($self) = @_;
 
+    my $demo_token_middleware = middleware(sub {
+        my ($inner) = @_;
+        return $self->require_demo_token($inner);
+    });
+
     return router(
         http_default => not_found(
             detail => 'No API endpoint route matched'),
         routes => [
             route('/index' => sub { return $self->index(@_) },
                 name => 'index',
-                middleware => [middleware(sub {
-                    my ($inner) = @_;
-                    return $self->require_demo_token($inner);
-                })]),
+                middleware => [$demo_token_middleware]),
             route('/show/{user_id:&Int}' =>
                 MyApp::API::User->new(users => $self->{users}),
                 name => 'show',
-                middleware => [middleware(sub {
-                    my ($inner) = @_;
-                    return $self->require_demo_token($inner);
-                })]),
+                middleware => [$demo_token_middleware]),
             mount('/tools', routes => [
                 route('/status' => sub { return $self->status(@_) },
                     name => 'status'),
