@@ -128,7 +128,7 @@ sub run_blocking_task {
 #
 # For very fast synchronous operations that just need to
 # run after the response is sent. Since we use async/await,
-# code after `await $res->json(...)` already runs after the
+# code after `await invoke_app(...)` already runs after the
 # response is sent. Just call your sync function directly.
 #
 # Must be FAST (<10ms) - blocking calls block ALL requests!
