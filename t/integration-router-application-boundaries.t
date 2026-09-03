@@ -10,6 +10,7 @@ use PAGI::Response::Text ();
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(router route mount middleware request_response);
 use PAGI::Routing::URL qw(path_for);
+use PAGI::Utils qw(as_app_object);
 use TestRoutes::Admin ();
 use TestRoutes::Users ();
 
@@ -87,6 +88,33 @@ sub source_text {
             });
             await $send->({
                 type => 'http.response.body', body => 'mounted integration', more => 0,
+            });
+        };
+    }
+}
+
+{
+    package Local::DefaultIntegrationApp;
+
+    sub new { return bless { compilations => 0, invocations => [] }, $_[0] }
+    sub compilations { $_[0]{compilations} }
+    sub invocations { return [ @{$_[0]{invocations}} ] }
+    sub to_app {
+        my ($self) = @_;
+        my $generation = ++$self->{compilations};
+        return async sub {
+            my ($scope, $receive, $send) = @_;
+            push @{$self->{invocations}}, {
+                generation => $generation,
+                scope      => $scope,
+                receive    => $receive,
+                send       => $send,
+            };
+            await $send->({
+                type => 'http.response.start', status => 404, headers => [],
+            });
+            await $send->({
+                type => 'http.response.body', body => 'object default', more => 0,
             });
         };
     }
@@ -190,7 +218,7 @@ subtest 'a configured immutable child Router retains its Mount boundary contract
     my $child = router(
         desc => 'Configured child',
         middleware => [$tracing->('child Router')],
-        http_default => async sub {
+        http_default => as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             ++$default_calls;
             push @trace, 'child default';
@@ -202,7 +230,7 @@ subtest 'a configured immutable child Router retains its Mount boundary contract
             await Future->wrap($send->({
                 type => 'http.response.body', body => 'child missing', more => 0,
             }));
-        },
+        }),
         routes => [
             route('/items/{id:\d+}' => sub {
                 my ($request) = @_;
@@ -289,17 +317,42 @@ subtest 'a configured immutable child Router retains its Mount boundary contract
         'FULL, PARTIAL, and NONE never resume parent sibling scanning');
 };
 
-subtest 'request_response is the explicit bridge at application-native positions' => sub {
+subtest 'Router HTTP default app objects compile per graph and receive native calls' => sub {
+    my $default = Local::DefaultIntegrationApp->new;
+    my $routing = router(routes => [], http_default => $default);
+    my $app_one = $routing->to_app;
+
+    is($default->compilations, 1,
+        'the default object compiles once for the first Router graph');
+    is(response_body(run_http($app_one, '/first')), 'object default',
+        'the default object owns the first HTTP miss');
+    is(response_body(run_http($app_one, '/second')), 'object default',
+        'the default object owns the second HTTP miss');
+    is($default->compilations, 1,
+        'multiple misses reuse the default object compilation');
+    is([map {
+        [$_->{generation}, $_->{scope}{type}, $_->{scope}{path}, ref($_->{receive}), ref($_->{send})]
+    } @{$default->invocations}], [
+        [1, 'http', '/first', 'CODE', 'CODE'],
+        [1, 'http', '/second', 'CODE', 'CODE'],
+    ], 'default object receives each native Router triplet');
+
+    $routing->to_app;
+    is($default->compilations, 2,
+        'a second Router compilation recompiles the default object once');
+};
+
+subtest 'Router defaults use request handlers and native positions use request_response' => sub {
     my $handler = sub { return PAGI::Response::Text->new('bridged') };
     my @cases = (
-        ['Router http_default', router(routes => [], http_default => request_response($handler))->to_app],
-        ['Mount app', router(routes => [mount('/bridge', app => request_response($handler))])->to_app, '/bridge'],
-        ['Direct native app', request_response($handler)->to_app],
+        ['Router http_default handler', router(routes => [], http_default => $handler)->to_app],
+        ['Mount app adapter', router(routes => [mount('/bridge', app => request_response($handler))])->to_app, '/bridge'],
+        ['Direct native app adapter', request_response($handler)->to_app],
     );
     for my $case (@cases) {
         my ($label, $app, $path) = @$case;
         is(response_body(run_http($app, $path // '/')), 'bridged',
-            "$label accepts the explicit Request handler adapter");
+            "$label accepts the Request handler");
     }
 };
 

@@ -594,16 +594,22 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
     is($router->routes, [$leaf], 'router routes');
     is($router->http_default, undef, 'Router omits an HTTP default by default');
     my $default = sub { };
+    my $native_default = as_app_object($default);
     my $component_default = TestRoutingApp->new($default);
     local $TestRoutingApp::CALLS = 0;
     my $with_default = router(routes => [], http_default => $default);
     my $with_component_default = router(
         routes => [], http_default => $component_default,
     );
+    my $with_native_default = router(
+        routes => [], http_default => $native_default,
+    );
     is(refaddr($with_default->http_default), refaddr($default),
         'Router retains HTTP default coderef identity without compilation');
     is(refaddr($with_component_default->http_default), refaddr($component_default),
         'Router retains HTTP default component identity without compilation');
+    is(refaddr($with_native_default->http_default), refaddr($native_default),
+        'Router accepts and retains an explicit native HTTP default by identity');
     is($TestRoutingApp::CALLS, 0,
         'Router construction does not compile its declared HTTP default');
     is($router->middleware, [$router_middleware], 'router middleware preserves descriptor');
@@ -765,13 +771,13 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/separator' => $handler, methods => 'GET POST' }, qr/methods must be a method string, arrayref, or '\*'/, 'methods reject separators';
     like dies { websocket '/socket' => $handler, methods => 'GET' }, qr/WebSocket routes do not accept methods/, 'WebSocket rejects methods';
     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
-    like dies { route '/not-code' => 'not a handler' }, qr/route endpoint must be a native coderef or app object/, 'route rejects package strings';
-    like dies { route '/not-component' => [] }, qr/route endpoint must be a native coderef or app object/, 'route rejects unblessed component lookalikes';
+    like dies { route '/not-code' => 'not a handler' }, qr/route endpoint must be a request handler coderef or app object/, 'route rejects package strings';
+    like dies { route '/not-component' => [] }, qr/route endpoint must be a request handler coderef or app object/, 'route rejects unblessed component lookalikes';
     ok(lives { route '/component' => PAGI::Response::Text->new('component') },
         'normal route accepts an app object');
     my $broken_component = bless {}, 'BrokenRouteComponent';
     like dies { route '/broken-component' => $broken_component },
-        qr/route endpoint must be a native coderef or app object/,
+        qr/route endpoint must be a request handler coderef or app object/,
         'route rejects an instantiated object without to_app';
     for my $case (
         [empty     => [],                 qr/route endpoint allowed_methods returned no methods/],
@@ -835,9 +841,9 @@ subtest 'constructors reject invalid declarations' => sub {
             "removed Router option '$removed' is rejected without compatibility";
     }
     for my $invalid (
-        [undef, qr/router http_default must be a native coderef or app object/],
-        [[], qr/router http_default must be a native coderef or app object/],
-        [bless({}, 'RouterDefaultWithoutToApp'), qr/router http_default must be a native coderef or app object/],
+        [undef, qr/router http_default must be a request handler coderef or app object/],
+        [[], qr/router http_default must be a request handler coderef or app object/],
+        [bless({}, 'RouterDefaultWithoutToApp'), qr/router http_default must be a request handler coderef or app object/],
     ) {
         my ($value, $pattern) = @$invalid;
         like dies { router(routes => [], http_default => $value) }, $pattern,

@@ -85,6 +85,24 @@ subtest 'routes mode dispatches HTTP WebSocket and SSE' => sub {
     ], 'SSE route receives its direct protocol object');
 };
 
+subtest 'Compose bare HTTP defaults receive one Request object' => sub {
+    my @arguments;
+    my $app = compose(
+        routes => [],
+        http_default => sub {
+            push @arguments, @_;
+            return PAGI::Response::Text->new('Compose default');
+        },
+    )->to_app;
+
+    is(response_body(run_scope($app, scope(path => '/missing'))), 'Compose default',
+        'the bare Compose default owns an HTTP miss');
+    is(scalar @arguments, 1,
+        'the bare Compose default receives one argument');
+    ok($arguments[0]->isa('PAGI::Request'),
+        'the bare Compose default receives the request handler object');
+};
+
 subtest 'Compose retains an explicit unnamed root Router Mount' => sub {
     my @order;
     my @seen_scope;

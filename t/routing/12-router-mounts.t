@@ -166,7 +166,7 @@ sub snapshot_frame {
 subtest 'a Router Mount transfers child HTTP outcome ownership' => sub {
     my (@parent_calls, @child_defaults);
     my $child = router(
-        http_default => async sub {
+        http_default => as_app_object(async sub {
             my ($request_scope, $receive, $send) = @_;
             push @child_defaults, $request_scope->{path};
             await Future->wrap($send->({
@@ -176,7 +176,7 @@ subtest 'a Router Mount transfers child HTTP outcome ownership' => sub {
             await Future->wrap($send->({
                 type => 'http.response.body', body => 'child missing', more => 0,
             }));
-        },
+        }),
         routes => [
             route('/item' => sub { return PAGI::Response::Text->new('child GET') },
                 methods => 'GET'),
@@ -250,7 +250,7 @@ subtest 'mounted Router middleware order, metadata, compilation freshness, and i
         };
     });
     my $child = router(
-        http_default => async sub {
+        http_default => as_app_object(async sub {
             my ($request_scope, $receive, $send) = @_;
             await Future->wrap($send->({
                 type => 'http.response.start', status => 404, headers => [],
@@ -258,7 +258,7 @@ subtest 'mounted Router middleware order, metadata, compilation freshness, and i
             await Future->wrap($send->({
                 type => 'http.response.body', body => 'missing', more => 0,
             }));
-        },
+        }),
         middleware => [
             tracing_middleware('child Router', \@trace),
             $stateful,
@@ -380,7 +380,7 @@ subtest 'mounted Router middleware order, metadata, compilation freshness, and i
 subtest 'reused child Router has occurrence-local outcome middleware' => sub {
     my @calls;
     my $child = router(
-        http_default => async sub {
+        http_default => as_app_object(async sub {
             my ($request_scope, $receive, $send) = @_;
             await Future->wrap($send->({
                 type => 'http.response.start', status => 404, headers => [],
@@ -388,7 +388,7 @@ subtest 'reused child Router has occurrence-local outcome middleware' => sub {
             await Future->wrap($send->({
                 type => 'http.response.body', body => 'child missing', more => 0,
             }));
-        },
+        }),
         routes => [
             route('/item' => sub { return PAGI::Response::Text->new('item') }, methods => 'GET'),
         ],

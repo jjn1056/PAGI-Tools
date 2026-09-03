@@ -351,15 +351,17 @@ async sub invoke_app {
 }
 
 sub _validate_app_value {
-    my ($value, $label) = @_;
+    my ($value, $label, $coderef_role) = @_;
     $label = 'application' unless defined $label && length $label;
+    $coderef_role = 'native coderef'
+        unless defined $coderef_role && length $coderef_role;
 
     if (blessed($value) && $value->can('wrap') && !$value->can('to_app')) {
         croak "$label middleware object is not an app";
     }
 
     my $separator = $label =~ /:\z/ ? ' ' : ' must be ';
-    croak "$label${separator}a native coderef or app object "
+    croak "$label${separator}a $coderef_role or app object "
         . '(an instantiated object with to_app)'
         unless defined $value
             && (ref($value) eq 'CODE'

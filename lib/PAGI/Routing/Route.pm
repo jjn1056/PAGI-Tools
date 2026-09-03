@@ -59,8 +59,13 @@ sub _build {
     my ($class, $declaration_package, $kind, $path, $endpoint, $opts) = @_;
 
     croak 'route path must be a string' unless defined $path && !ref($path);
+    my %coderef_role = (
+        route     => 'request handler coderef',
+        websocket => 'WebSocket handler coderef',
+        sse       => 'SSE handler coderef',
+    );
     PAGI::Utils::_validate_app_value(
-        $endpoint, 'route endpoint',
+        $endpoint, 'route endpoint', $coderef_role{$kind},
     );
 
     _validate_text('desc', $opts->{desc}, 0) if exists $opts->{desc};

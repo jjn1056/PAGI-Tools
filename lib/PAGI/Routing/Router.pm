@@ -28,7 +28,7 @@ sub new {
     PAGI::Routing::Route::_validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     my $http_default = exists $opts{http_default}
         ? PAGI::Utils::_validate_app_value(
-            $opts{http_default}, 'router http_default',
+            $opts{http_default}, 'router http_default', 'request handler coderef',
         )
         : undef;
     my @routes = @$routes;
@@ -80,11 +80,11 @@ PAGI::Routing::Router - Immutable declarative router description
 
 Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions.
-Construction accepts C<routes>, C<middleware>, C<desc>, and an optional native
-C<http_default>. A CODE default is a native three-channel application; an
-app object is normalized as one. A source-free Pages
-application works directly, while a custom one-Request default uses
-L<PAGI::Routing/request_response>. The Router validates direct nodes, middleware descriptors,
+Construction accepts C<routes>, C<middleware>, C<desc>, and an optional
+C<http_default>. A CODE default is a one-Request handler; an app object is
+normalized as a native application. A source-free Pages application works
+directly. To use an explicit native default, wrap it with
+L<PAGI::Utils/as_app_object>. The Router validates direct nodes, middleware descriptors,
 descriptions, canonical slash addresses, and child Router ancestry. A Router
 description remains placement-free: mounting it never writes a parent path or
 local name onto the child. This is compile-time configuration only; the object

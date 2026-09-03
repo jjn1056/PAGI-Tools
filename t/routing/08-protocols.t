@@ -226,18 +226,18 @@ subtest 'protocol endpoint shape selects one-argument handlers or native applica
 
 subtest 'protocol endpoints reject package names and unblessed references' => sub {
     for my $case (
-        [websocket => \&websocket],
-        [sse       => \&sse],
+        [websocket => \&websocket, qr/route endpoint must be a WebSocket handler coderef or app object/],
+        [sse       => \&sse, qr/route endpoint must be a SSE handler coderef or app object/],
     ) {
-        my ($kind, $constructor) = @$case;
+        my ($kind, $constructor, $error) = @$case;
         like(
             dies { $constructor->("/$kind-package" => 'Local::ProtocolApplication') },
-            qr/route endpoint must be a native coderef or app object/,
+            $error,
             "$kind rejects a package-name endpoint",
         );
         like(
             dies { $constructor->("/$kind-unblessed" => {}) },
-            qr/route endpoint must be a native coderef or app object/,
+            $error,
             "$kind rejects an unblessed endpoint",
         );
     }
@@ -1026,7 +1026,7 @@ subtest 'HTTP selection ignores WebSocket and SSE leaves without warnings' => su
 subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcomes' => sub {
     my @http_default_calls;
     my $app = router(
-        http_default => async sub {
+        http_default => as_app_object(async sub {
             my ($request_scope, $receive, $send) = @_;
             push @http_default_calls, $request_scope->{type} // 'http';
             await Future->wrap($send->({
@@ -1036,7 +1036,7 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
                 type => 'http.response.body', body => 'custom HTTP missing',
                 more => 0,
             }));
-        },
+        }),
         routes => [],
     )->to_app;
 

@@ -474,7 +474,7 @@ subtest 'Router-generated HEAD outcomes preserve GET-equivalent metadata and sup
         'the one outer HEAD boundary suppresses the generated 405 body');
 
     my $file_app = router(
-        http_default => async sub {
+        http_default => as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             await Future->wrap($send->({
                 type => 'http.response.start', status => 404,
@@ -489,7 +489,7 @@ subtest 'Router-generated HEAD outcomes preserve GET-equivalent metadata and sup
                 type => 'http.response.trailers',
                 headers => [['x-fallback', 'complete']],
             }));
-        },
+        }),
         routes => [],
     )->to_app;
     my $file = run_app($file_app, method => 'HEAD', path => '/missing');
