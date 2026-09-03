@@ -8,7 +8,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | complete | `694f1bbdc91befd166667d13a7378b90e28a92fc` | clean task review | PASS — `prove -l t/response/05-ndjson.t t/response/03-stream.t t/response-writer.t`: 3 files, 39 tests; NDJSON syntax checks OK; private-name audit empty; `git diff --check` clean | deferred to Task 5 | spec PASS; quality PASS |
 | 2 | complete | `11c8880276e2b195a539437512befc82fc1e7e2f` | clean task review | PASS — `prove -lv t/response/05-ndjson.t t/00-load.t`: 2 files, 77 tests; parent export probe exits 0; `git diff --check` clean | deferred to Task 5 | spec PASS; quality PASS |
-| 3 | complete | `ce3ff86d9f6b941af32d95f11e894f67b307f6e8` | implementation clean; audit-row fix review pending | PASS — `prove -lv t/00-pod/cookbook-examples.t t/response/05-ndjson.t`: 2 files, 21 tests; published recipe executes and captures two LF-terminated JSON records; `git diff --check` clean | deferred to Task 5 | spec PASS; quality PASS |
+| 3 | complete | `ce3ff86d9f6b941af32d95f11e894f67b307f6e8` | `b8f32a4`; fix re-review clean | PASS — `prove -lv t/00-pod/cookbook-examples.t t/response/05-ndjson.t`: 2 files, 21 tests; published recipe executes and captures two LF-terminated JSON records; `git diff --check` clean | deferred to Task 5 | spec PASS; quality PASS |
 | 4 | pending | — | — | — | deferred to Task 5 | — |
 | 5 | pending | — | — | — | final gate | — |
 
