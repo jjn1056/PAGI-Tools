@@ -85,20 +85,21 @@ mutable snapshot step.
 
 Callable meaning is determined by its position:
 
-    Route CODE endpoint        -> one Request/WebSocket/SSE argument
-    Route app object           -> native PAGI application
-    Mount/default CODE         -> native PAGI application
-    handler result             -> native CODE or app object
+    Route endpoint / http_default CODE  -> one Request handler
+    Route endpoint / http_default object -> app object via to_app
+    Mount app CODE                       -> native PAGI application
+    Mount app object                     -> app object via to_app
 
 An **app object** is an instantiated object with a `to_app` method. Route
 accepts either a one-argument Request/WebSocket/SSE handler or an app object.
 
-A native three-channel coderef used at a Route must be marked with
-["as\_app\_object" in PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils#as_app_object). Mount `app` and Router `http_default` already are
-native application positions, so their CODE values take the three channels
-directly. The wrapper is a narrow escape hatch for special protocol handling
-or an existing native PAGI coderef; ordinary Route handlers use their direct
-Request, WebSocket, or SSE object.
+A native three-channel coderef used at a Route or `http_default` must be
+marked with ["as\_app\_object" in PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils#as_app_object).
+Mount `app` CODE is already a native application position. A bare
+`http_default` CODE receives one Request; use `request_response($handler)`
+only when adapting that handler into Mount `app`. The wrapper is a narrow
+escape hatch for special protocol handling or an existing native PAGI coderef;
+ordinary Route handlers use their direct Request, WebSocket, or SSE object.
 
 For HTTP app objects that implement `allowed_methods`, Route calls
 that capability once at construction and snapshots the normalized methods.

@@ -127,10 +127,10 @@ L<PAGI::WebSocket> or L<PAGI::SSE> and use that object's protocol methods.
 Wrap a native Route CODE explicitly with L<PAGI::Utils/as_app_object> when the
 endpoint must own all three PAGI channels.
 
-    Route CODE endpoint     -> one Request/WebSocket/SSE argument
-    Route app object        -> native PAGI application
-    Mount/default CODE      -> native PAGI application
-    handler result          -> native CODE or app object
+    Route endpoint / http_default CODE  -> one Request handler
+    Route endpoint / http_default object -> app object via to_app
+    Mount app CODE                       -> native PAGI application
+    Mount app object                     -> app object via to_app
 
 The descriptions do no request I/O. C<to_app> is the explicit compilation
 boundary and returns the native PAGI coderef a server runs. This is the sole
@@ -171,16 +171,50 @@ or load Builder without functions:
 Coderef meaning comes only from its argument position. The router does not
 inspect signatures or evaluate package-method strings.
 
-    Form                              Evaluation                  Result
-    --------------------------------  --------------------------  -------------------------
-    route('/x' => $code)              request time: ($request)    PAGI application value
-    route('/x' => $component)         request time: native app     native completion
-    websocket('/x' => $code)          request time: ($websocket)  inert; completion awaited
-    sse('/x' => $code)                request time: ($sse)        inert; completion awaited
-    route('/x' => as_app_object($code))      request time: native app     native completion
-    mount('/x', app => $code)         request time: native app     native completion
-    middleware => [middleware(...)]   declaration time             description list only
-    middleware($entry, %config)       declaration time             middleware description
+    Position                            Meaning
+    ----------------------------------  --------------------------------
+    Route endpoint / http_default CODE  one Request handler
+    Route endpoint / http_default object app object via to_app
+    Mount app CODE                       native PAGI application
+    Mount app object                     app object via to_app
+
+The usual HTTP default is a source-free Pages application:
+
+    use PAGI::Pages qw(not_found);
+
+    router(
+        routes       => \@routes,
+        http_default => not_found(detail => 'No route matched.'),
+    );
+
+When the response depends on the Request, use a bare one-Request handler:
+
+    use PAGI::Response qw(problem_response);
+
+    router(
+        routes => \@routes,
+        http_default => sub ($request) {
+            return problem_response({
+                title  => 'Not Found',
+                status => 404,
+                detail => "No route matched " . $request->path,
+            });
+        },
+    );
+
+Only an advanced native default needs C<as_app_object>:
+
+    use Future::AsyncAwait;
+    use PAGI::Utils qw(as_app_object);
+
+    router(
+        routes => \@routes,
+        http_default => as_app_object(async sub ($scope, $receive, $send) {
+            return await $send->({
+                type => 'http.response.start', status => 404, headers => [],
+            });
+        }),
+    );
 
 =over 4
 
@@ -193,10 +227,10 @@ compiled once per Router compilation and remains inside
 the normal route middleware, matching, method, and HEAD boundaries. Package
 names and unblessed references are invalid.
 
-=item * C<< request_response($handler) >> is the explicit
-adapter for placing a one-Request handler in a native application position such
-as C<http_default> or Mount C<app>. It never infers coderef
-arity.
+=item * C<< request_response($handler) >> remains the explicit adapter for
+placing a one-Request handler in Mount C<app>. Ordinary C<http_default> use
+does not need it: a bare CODE there already receives one Request. It never
+infers coderef arity.
 
 =item * C<< websocket('/x' =E<gt> $code) >> and
 C<< sse('/x' =E<gt> $code) >> receive one direct L<PAGI::WebSocket> or
@@ -610,7 +644,8 @@ occupy Route and native application positions directly:
 The first form is one exact, method-aware route. The second Mount owns the
 complete C</gone> subtree and Pages negotiates from the rewritten child scope.
 Choose C<route> or C<mount> for that routing boundary deliberately. A custom
-one-Request default or Mount app uses C<request_response>.
+one-Request default is bare CODE; use C<request_response> only to adapt a
+one-Request handler into Mount C<app>.
 
 C<not_found> is not a catch-all route. A final C<< route('/*path' =E<gt> ...) >>
 is a normal route with captures, middleware, and method matching. A GET-only
@@ -929,10 +964,10 @@ literal order of the C<routes> array.
 =head1 DELIBERATE DIFFERENCES FROM STARLETTE
 
 Starlette supplied the useful Route/Mount/Router vocabulary, but PAGI does not
-claim API identity. Ordinary PAGI route handlers receive one direct Request,
-WebSocket, or SSE object; C<as_app_object($code)> marks a native Route CODE, while
-Mount C<app> and Router C<http_default> are native three-channel application
-positions. Compose instead accepts route declarations through C<routes>, or
+claim API identity. Ordinary PAGI route and C<http_default> handlers receive
+one direct Request; C<as_app_object($code)> marks a native Route or
+C<http_default> CODE, while Mount C<app> CODE is a native three-channel
+application position. Compose instead accepts route declarations through C<routes>, or
 an existing immutable Router as the application of an explicit Mount inside
 that C<routes> list. Package strings are not coerced in those positions.
 Middleware strings remain supported because middleware descriptors define an

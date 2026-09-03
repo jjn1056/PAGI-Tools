@@ -1488,10 +1488,13 @@ the Router or middleware that supplies optional behavior. This keeps optional
 capability ownership visible and lets a higher-level framework use its own
 Router API.
 
-Ordinary handlers receive the direct Request, WebSocket, or SSE object, while
-C<as_app_object>, Mount C<app>, and Router C<http_default> receive the native three
-channels. Compose accepts only route declarations through C<routes>; preserve
-an immutable Router through an explicit Mount within that list.
+Ordinary Route and C<http_default> handlers receive the direct Request, while
+C<as_app_object> marks a native Route or C<http_default> CODE and Mount
+C<app> CODE receives the native three channels. C<request_response> remains
+for adapting a one-Request handler into Mount C<app>, not ordinary
+C<http_default> use. Compose accepts only route declarations through
+C<routes>; preserve an immutable Router through an explicit Mount within that
+list.
 Constraints validate without coercion. Names use slash logical
 addresses and relative L<PAGI::Routing::URL> lookup. SSE is a first-class scope, and all
 middleware is pure PAGI app-to-app wrapping.

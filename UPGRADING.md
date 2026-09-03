@@ -117,6 +117,48 @@ the native coderef directly, or call `to_app` once on its component. A root
 Mount is not an equivalent conversion for an arbitrary application: it adds
 Router selection, prefix ownership, routing metadata, and protocol policy.
 
+## Breaking: `http_default` CODE receives one Request
+
+`http_default` now follows the same handler-vs-app positional rule as a Route
+endpoint. With `Future::AsyncAwait` and `PAGI::Utils qw(as_app_object)`
+imported, migrate a native default as follows:
+
+```perl
+# Before: bare CODE was native
+my $before = router(
+    routes => [],
+    http_default => async sub ($scope, $receive, $send) {
+        return await $send->({
+            type => 'http.response.start', status => 404, headers => [],
+        });
+    },
+);
+
+# After: bare CODE is a Request handler
+my $after = router(
+    routes => [],
+    http_default => sub ($request) {
+        return MyApp::NotFoundResponse->new(path => $request->path);
+    },
+);
+
+# Native escape hatch
+my $native = router(
+    routes => [],
+    http_default => as_app_object(
+        async sub ($scope, $receive, $send) {
+            return await $send->({
+                type => 'http.response.start', status => 404, headers => [],
+            });
+        },
+    ),
+);
+```
+
+Use a source-free Pages object directly when no Request data is needed. Keep
+`request_response($handler)` for adapting a one-Request handler into Mount
+`app`, not ordinary `http_default` use.
+
 ## Breaking: use explicit middleware descriptions at core boundaries
 
 The immutable core middleware lists in Route, Mount, Router, and Compose now
@@ -189,10 +231,10 @@ There are now four callable boundaries. The distinction is structural, not
 an arity guess:
 
 ```text
-Route CODE endpoint        -> one Request/WebSocket/SSE argument
-Route app object           -> native PAGI application
-Mount/default CODE         -> native PAGI application
-handler result             -> native CODE or app object
+Route endpoint / http_default CODE  -> one Request handler
+Route endpoint / http_default object -> app object via to_app
+Mount app CODE                       -> native PAGI application
+Mount app object                     -> app object via to_app
 ```
 
 A PAGI application value is either a native
@@ -350,8 +392,8 @@ my $routing = router(
 );
 ```
 
-For a custom one-Request default rather than a Pages application, adapt it
-explicitly with `request_response(\&custom_not_found)` from `PAGI::Routing`.
+For a custom one-Request default rather than a Pages application, pass the
+handler directly as `http_default => \&custom_not_found`.
 Pages exports nothing by default. `:common` excludes collision-prone `status`
 and `redirect`; import those individually or use the deliberately broad
 `:all` bundle. A deliberate same-named import can replace a local function.
@@ -653,10 +695,10 @@ my $application = PAGI::Pages->not_found(as => 'text');
 await invoke_app($application, $scope, $receive, $send);
 ```
 
-A custom one-Request default uses `request_response($handler)` from
-`PAGI::Routing`. A Pages
-application needs no adapter at `http_default`, Mount `app`, or a Route. Route
-and Mount continue to own different path shapes:
+A custom one-Request default is bare `http_default => $handler`. A Pages
+application needs no adapter at `http_default`, Mount `app`, or a Route.
+`request_response($handler)` remains for adapting that handler into Mount
+`app`. Route and Mount continue to own different path shapes:
 
 ```text
 Route('/x')       exact complete path leaf
@@ -726,10 +768,11 @@ value boundaries:
 - If Thunderhorse accepts ordinary Perl return values, its own controller layer
   must select/serialize them into an explicit Response class. PAGI-Tools does
   not infer a response type from return shape.
-- Native app positions take native CODE or app objects.
-  Adapt a one-Request default with `PAGI::Routing`'s
-  `request_response($handler)`; do not infer
-  coderef arity or pass package-name strings as applications.
+- Mount `app` CODE is native; Route endpoints and `http_default` CODE receive
+  one Request. Use `as_app_object` for an advanced native `http_default`, and
+  `PAGI::Routing`'s `request_response($handler)` only when adapting a
+  one-Request handler into Mount `app`; do not infer coderef arity or pass
+  package-name strings as applications.
 - Helper ownership follows Request/protocol/native scope. Never make Response a
   scope source or cache a per-request Response accumulator.
 - Use `ref($response)`/`isa` for representation policy, `is_buffered` for memory
@@ -1975,8 +2018,9 @@ use PAGI::Utils qw(as_app_object);
 route('/native' => as_app_object($native), methods => '*');
 ```
 
-Mount `app` and Router `http_default` are already native application
-positions and do not need `as_app_object`.
+Mount `app` CODE is already a native application position. Router
+`http_default` CODE is a one-Request handler; wrap an advanced native default
+with `as_app_object`.
 
 ### Migrate Endpoint Router classes
 

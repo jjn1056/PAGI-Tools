@@ -62,14 +62,22 @@ PAGI::Routing::RequestResponse - Adapt one Request handler to a PAGI application
 
 =head1 DESCRIPTION
 
-Route uses this component for every bare HTTP CODE endpoint. The handler
+Callable position selects one of these contracts:
+
+    Position                            Meaning
+    ----------------------------------  --------------------------------
+    Route endpoint / http_default CODE  one Request handler
+    Route endpoint / http_default object app object via to_app
+    Mount app CODE                       native PAGI application
+    Mount app object                     app object via to_app
+
+This component adapts a one-Request handler into Mount C<app>. The handler
 receives exactly one L<PAGI::Request> and returns an immediate or Future-backed
-application value: a native CODE or app object.
-Response and Pages objects are the ordinary results. Use C<request_response>
-explicitly only when such a handler must occupy a native application position
-such as Mount C<app> or Router C<http_default>. Compose instead accepts route
-declarations only through C<routes>; an immutable Router is preserved as an
-explicit Mount application within that list.
+application value: a native CODE or app object. Response and Pages objects are
+the ordinary results. Do not use C<request_response> for ordinary
+C<http_default> use: a bare CODE there already receives one Request. Compose
+instead accepts route declarations only through C<routes>; an immutable Router
+is preserved as an explicit Mount application within that list.
 
 For each invocation the component constructs one Request, calls the handler
 once, normalizes a returned object through C<to_app> once, and invokes the

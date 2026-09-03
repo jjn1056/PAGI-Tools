@@ -202,10 +202,12 @@ deploy it directly or use a separately designed application boundary.
 
 Callable meaning is positional and deliberate:
 
-  Route CODE endpoint        -> one Request/WebSocket/SSE argument
-  Route app object        -> native PAGI application
-  Mount/default CODE         -> native PAGI application
-  handler result             -> native CODE or app object
+  Position                            Meaning
+  ----------------------------------  --------------------------------
+  Route endpoint / http_default CODE  one Request handler
+  Route endpoint / http_default object app object via to_app
+  Mount app CODE                       native PAGI application
+  Mount app object                     app object via to_app
 
 Middleware descriptions are a separate construction-time contract: Compose
 constructs configured class targets, invokes factory targets with the inner
@@ -235,6 +237,28 @@ Router first:
         http_default => $not_found,
         desc         => 'Public routes',
     )
+
+Put a source-free Pages application directly in C<http_default> for the usual
+custom 404. When the result depends on the request, pass a bare one-Request
+handler instead:
+
+    use PAGI::Response qw(problem_response);
+
+    compose(
+        routes => \@nodes,
+        http_default => sub ($request) {
+            return problem_response({
+                title  => 'Not Found',
+                status => 404,
+                detail => 'No route matched ' . $request->path,
+            });
+        },
+    )
+
+An advanced native C<http_default> CODE must be marked with
+C<as_app_object>. C<request_response> remains appropriate for adapting a
+one-Request handler into Mount C<app>, but not for ordinary C<http_default>
+use.
 
 Compose C<middleware> is the outer application-wide boundary. When a reusable
 Router already owns middleware, C<http_default>, C<desc>, identity, or a

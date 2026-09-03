@@ -3,7 +3,7 @@ use warnings;
 use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(not_found);
-use PAGI::Routing qw(:routes :middleware request_response);
+use PAGI::Routing qw(:routes :middleware);
 use PAGI::Middleware::Helpers qw(wrap_send);
 use MyApp::Routes::Home ();
 
@@ -50,7 +50,7 @@ my $api_routing = router(
         ),
     ],
     desc => 'Example JSON API',
-    http_default => request_response(\&api_not_found),
+    http_default => \&api_not_found,
 );
 
 compose(
@@ -66,6 +66,6 @@ compose(
             desc => 'Example JSON API',
         ),
     ],
-    http_default => request_response(\&root_not_found),
+    http_default => \&root_not_found,
     desc => 'Declarative routing example',
 );

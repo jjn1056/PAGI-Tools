@@ -33,6 +33,14 @@
     remains available without Compose root lifespan, ErrorHandler,
     response-completion guard, application middleware, or outer HEAD boundary.
 
+  [HTTP default grammar]
+  - BREAKING: Bare Router and Compose `http_default` CODE now receives one
+    Request, matching ordinary HTTP Route endpoints. Use a Pages or other app
+    object directly for a source-free default, `as_app_object` for an advanced
+    native default, and `request_response` only when adapting a one-Request
+    handler into Mount `app`. This unreleased consistency correction preserves
+    Router-owned NONE/404 versus PARTIAL/405 outcomes.
+
   [Buffering middleware]
   - NEW: PAGI::Middleware::BufferedResponse, two helpers for the
     buffer-and-re-emit pattern. Four middleware had each hand-rolled it and
@@ -179,9 +187,9 @@
     accepted WebSocket/SSE sessions remain live protocol loops, not HTTP
     Response applications.
   - BREAKING: Route CODE endpoints receive one Request, WebSocket, or SSE;
-    Route app objects own the native PAGI triplet. Mount `app` and
-    Router `http_default` retain the native CODE contract. Compose accepts only
-    route declarations through `routes`; existing immutable Routers enter as
+    Route app objects own the native PAGI triplet. Mount `app` CODE retains the
+    native contract, while Router `http_default` CODE receives one Request.
+    Compose accepts only route declarations through `routes`; existing immutable Routers enter as
     explicit Mount applications. HTTP handler results are native CODE or app
     objects. Native Route CODE uses
     `as_app_object`; GET plus automatic HEAD is the default, while scalar
@@ -368,7 +376,7 @@
     recorded in unreleased 0.002003 and lands before the next CPAN release with
     no compatibility layer.
   - HTTP Router exhaustion is now a complete outcome. NONE invokes the
-    Router's native `http_default` or stock negotiated Pages 404; PARTIAL emits
+    Router's `http_default` or stock negotiated Pages 404; PARTIAL emits
     the built-in negotiated 405 with one authoritative first-seen `Allow`
     union. The default is HTTP-only and never replaces WebSocket/SSE misses,
     selected exceptions, handler-returned 404s, or PARTIAL. The immutable,

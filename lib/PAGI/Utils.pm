@@ -601,12 +601,13 @@ load package names. Anything else croaks. A middleware object
 (something with C<wrap> but no C<to_app>) gets a middleware-specific croak,
 since middleware belongs in middleware position, not app position.
 
-Routing's native application positions, Mount C<app> and Router
-C<http_default>, call this for you, so user code can pass native apps and
-app objects directly. Cascades and the test client likewise
-normalize their application input. Compose is different: it accepts route
-declarations only through C<routes>. Preserve an immutable Router explicitly as
-a Mount C<app> within that list.
+Mount C<app> is Routing's native application position, so it calls this for
+native apps and app objects directly. Router C<http_default> bare CODE is a
+one-Request handler; wrap an advanced native default with
+C<as_app_object>. Cascades and the test client likewise normalize their
+application input. Compose is different: it accepts route declarations only
+through C<routes>. Preserve an immutable Router explicitly as a Mount C<app>
+within that list.
 
     mount('/static', app => PAGI::App::File->new(root => $dir));
     mount('/api',    app => MyApp::API->new);

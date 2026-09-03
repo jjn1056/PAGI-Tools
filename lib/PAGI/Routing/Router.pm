@@ -81,10 +81,21 @@ PAGI::Routing::Router - Immutable declarative router description
 Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions.
 Construction accepts C<routes>, C<middleware>, C<desc>, and an optional
-C<http_default>. A CODE default is a one-Request handler; an app object is
-normalized as a native application. A source-free Pages application works
-directly. To use an explicit native default, wrap it with
-L<PAGI::Utils/as_app_object>. The Router validates direct nodes, middleware descriptors,
+C<http_default>. Its positional grammar is:
+
+    Position                            Meaning
+    ----------------------------------  --------------------------------
+    Route endpoint / http_default CODE  one Request handler
+    Route endpoint / http_default object app object via to_app
+    Mount app CODE                       native PAGI application
+    Mount app object                     app object via to_app
+
+A source-free Pages application is the direct ordinary default. A bare CODE
+default receives one Request and can return a request-dependent Response. To
+use an advanced explicit native default, wrap it with
+L<PAGI::Utils/as_app_object>. C<request_response> remains for adapting a
+one-Request handler into Mount C<app>, not ordinary C<http_default> use. The
+Router validates direct nodes, middleware descriptors,
 descriptions, canonical slash addresses, and child Router ancestry. A Router
 description remains placement-free: mounting it never writes a parent path or
 local name onto the child. This is compile-time configuration only; the object
