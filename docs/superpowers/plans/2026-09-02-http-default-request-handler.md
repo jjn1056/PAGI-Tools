@@ -285,8 +285,12 @@ Do not wrap this app object in a closure, `request_response`, or `as_app_object`
 - [ ] **Step 5: Rewrite live API documentation around the positional rule.** Update Routing, Router, RequestResponse, Compose, and Cookbook POD with one consistent table:
 
 ```text
-Route endpoint / http_default CODE  -> one Request handler
-Route endpoint / http_default object -> app object via to_app
+HTTP Route endpoint / http_default CODE  -> one Request handler
+HTTP Route endpoint / http_default object -> app object via to_app
+WebSocket Route endpoint CODE             -> one WebSocket handler
+WebSocket Route endpoint object           -> app object via to_app
+SSE Route endpoint CODE                   -> one SSE handler
+SSE Route endpoint object                 -> app object via to_app
 Mount app CODE                       -> native PAGI application
 Mount app object                     -> app object via to_app
 ```

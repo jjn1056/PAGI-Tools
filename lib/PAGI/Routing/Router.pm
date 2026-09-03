@@ -85,8 +85,12 @@ C<http_default>. Its positional grammar is:
 
     Position                            Meaning
     ----------------------------------  --------------------------------
-    Route endpoint / http_default CODE  one Request handler
-    Route endpoint / http_default object app object via to_app
+    HTTP Route endpoint / http_default CODE  one Request handler
+    HTTP Route endpoint / http_default object app object via to_app
+    WebSocket Route endpoint CODE             one WebSocket handler
+    WebSocket Route endpoint object           app object via to_app
+    SSE Route endpoint CODE                   one SSE handler
+    SSE Route endpoint object                 app object via to_app
     Mount app CODE                       native PAGI application
     Mount app object                     app object via to_app
 
@@ -128,8 +132,9 @@ reused in completed sibling branches.
 C<middleware> returns a fresh arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
 identity. C<desc> returns the declaration value. C<http_default> returns the
-declared HTTP application unchanged, or undef when it was omitted. It is
-validated at construction but not compiled there. Inapplicable node metadata
+exact declared value unchanged (a one-Request handler or app object), or undef
+when it was omitted. It is validated at construction but not compiled there.
+Inapplicable node metadata
 accessors C<name>, C<path>, C<methods>, and C<constraints> return undef. Router
 is a collection and has no leaf C<endpoint> accessor or retired target/mode
 accessors.

@@ -127,8 +127,12 @@ L<PAGI::WebSocket> or L<PAGI::SSE> and use that object's protocol methods.
 Wrap a native Route CODE explicitly with L<PAGI::Utils/as_app_object> when the
 endpoint must own all three PAGI channels.
 
-    Route endpoint / http_default CODE  -> one Request handler
-    Route endpoint / http_default object -> app object via to_app
+    HTTP Route endpoint / http_default CODE  -> one Request handler
+    HTTP Route endpoint / http_default object -> app object via to_app
+    WebSocket Route endpoint CODE             -> one WebSocket handler
+    WebSocket Route endpoint object           -> app object via to_app
+    SSE Route endpoint CODE                   -> one SSE handler
+    SSE Route endpoint object                 -> app object via to_app
     Mount app CODE                       -> native PAGI application
     Mount app object                     -> app object via to_app
 
@@ -173,8 +177,12 @@ inspect signatures or evaluate package-method strings.
 
     Position                            Meaning
     ----------------------------------  --------------------------------
-    Route endpoint / http_default CODE  one Request handler
-    Route endpoint / http_default object app object via to_app
+    HTTP Route endpoint / http_default CODE  one Request handler
+    HTTP Route endpoint / http_default object app object via to_app
+    WebSocket Route endpoint CODE             one WebSocket handler
+    WebSocket Route endpoint object           app object via to_app
+    SSE Route endpoint CODE                   one SSE handler
+    SSE Route endpoint object                 app object via to_app
     Mount app CODE                       native PAGI application
     Mount app object                     app object via to_app
 
