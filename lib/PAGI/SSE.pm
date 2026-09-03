@@ -129,9 +129,18 @@ sub server       { shift->{scope}{server} }
 
 
 # Application state (injected by PAGI::Lifespan, read-only)
+sub has_state {
+    my $self = shift;
+    return 0 unless exists $self->{scope}{state};
+    croak 'PAGI::SSE state must be a hashref'
+        unless ref($self->{scope}{state}) eq 'HASH';
+    return 1;
+}
+
 sub state {
     my $self = shift;
-    return $self->{scope}{state} // {};
+    require PAGI::State;
+    return PAGI::State->new($self);
 }
 
 # Path parameter accessors - captured from URL path by router
