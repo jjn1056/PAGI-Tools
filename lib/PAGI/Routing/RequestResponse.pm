@@ -35,7 +35,7 @@ sub to_app {
         my $returned = await Future->wrap($handler_result);
         PAGI::Utils::_validate_app_value(
             $returned,
-            'request endpoint must return a PAGI application:',
+            'request handler must return a PAGI application:',
         );
         return await invoke_app($returned, $scope, $receive, $send);
     };

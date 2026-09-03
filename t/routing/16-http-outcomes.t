@@ -148,6 +148,79 @@ subtest 'Router renders direct NONE and PARTIAL outcomes with negotiated Pages r
         'PARTIAL text representation retains Pages status semantics');
 };
 
+subtest 'bare HTTP defaults are Request handlers whose results are applications' => sub {
+    my @seen;
+    my $app = router(
+        routes => [],
+        http_default => sub {
+            push @seen, [scalar(@_), $_[0]];
+            return PAGI::Response::Text->new('request default');
+        },
+    )->to_app;
+
+    my $first = run_app($app, path => '/missing', raw_path => '/missing');
+    my $second = run_app($app, path => '/again', raw_path => '/again');
+    is(response_body($first), 'request default',
+        'the first HTTP NONE invokes the Response result');
+    is(response_body($second), 'request default',
+        'the second HTTP NONE invokes the Response result');
+    is([map { $_->[0] } @seen], [1, 1],
+        'the default handler runs once with one argument for each miss');
+    isa_ok($_->[1], 'PAGI::Request') for @seen;
+
+    my $future_default = router(
+        routes => [],
+        http_default => async sub {
+            my ($request) = @_;
+            return PAGI::Response::Text->new('future default ' . $request->path);
+        },
+    )->to_app;
+    is(response_body(run_app(
+        $future_default, path => '/future', raw_path => '/future',
+    )), 'future default /future',
+        'a Future-backed Response result is invoked for HTTP NONE');
+
+    my ($native_request, @native_triplets);
+    my $native_default = router(
+        routes => [],
+        http_default => sub {
+            $native_request = $_[0];
+            return async sub {
+                push @native_triplets, [@_];
+                await Future->wrap(PAGI::Response::Text->new('native default')->to_app->(@_));
+                return;
+            };
+        },
+    )->to_app;
+    my $native_scope = scope(path => '/native', raw_path => '/native');
+    my $native_receive = sub { return receive() };
+    my @native_events;
+    my $native_send = sub { push @native_events, $_[0]; return Future->done };
+    Future->wrap($native_default->(
+        $native_scope, $native_receive, $native_send,
+    ))->get;
+    is(response_body(\@native_events), 'native default',
+        'a native CODE result is invoked for HTTP NONE');
+    is(refaddr($native_triplets[0][0]), refaddr($native_request->raw),
+        'the native CODE result receives the handler Request routing scope');
+
+    my $invalid_default = router(
+        routes => [],
+        http_default => sub { return undef },
+    )->to_app;
+    my @invalid_events;
+    like(dies {
+        Future->wrap($invalid_default->(
+            scope(path => '/invalid', raw_path => '/invalid'),
+            sub { return receive() },
+            sub { push @invalid_events, $_[0]; return Future->done },
+        ))->get;
+    }, qr/request handler must return a PAGI application: a native coderef or app object/,
+        'an invalid handler result gets the generalized diagnostic');
+    is(\@invalid_events, [],
+        'an invalid handler result emits no response event');
+};
+
 subtest 'stock outcomes await start and body send failures without retry' => sub {
     my $app = router(routes => [
         route('/items' => \&text_handler, methods => 'GET'),

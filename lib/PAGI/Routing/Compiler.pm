@@ -122,7 +122,7 @@ sub _compile_router_body {
     $location_prefix = [] unless $enter_child;
 
     my $http_default = defined $router->http_default
-        ? PAGI::Utils::to_app($router->http_default)
+        ? $class->_compile_http_endpoint($router->http_default)
         : PAGI::Utils::to_app(PAGI::Pages->not_found);
 
     my $dispatcher = $class->_compile_dispatcher(
@@ -358,9 +358,7 @@ sub _compile_http_leaf {
     my ($class, $route) = @_;
 
     my $endpoint = $route->endpoint;
-    my $compiled = ref($endpoint) eq 'CODE'
-        ? PAGI::Routing::RequestResponse->new(handler => $endpoint)->to_app
-        : PAGI::Utils::to_app($endpoint);
+    my $compiled = $class->_compile_http_endpoint($endpoint);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         my $returned = $compiled->($scope, $receive, $send);
@@ -372,6 +370,14 @@ sub _compile_http_leaf {
         $route->middleware,
         $app,
     );
+}
+
+sub _compile_http_endpoint {
+    my ($class, $value) = @_;
+
+    return ref($value) eq 'CODE'
+        ? PAGI::Routing::RequestResponse->new(handler => $value)->to_app
+        : PAGI::Utils::to_app($value);
 }
 
 sub _select_http {
