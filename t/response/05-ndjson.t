@@ -24,6 +24,11 @@ use PAGI::Test::ConnectionState;
 }
 
 {
+    package T::NDJSONConcreteImport;
+    use PAGI::Response::NDJSON qw(ndjson_response);
+}
+
+{
     package T::NDJSONTransport;
 
     sub new {
@@ -101,6 +106,27 @@ is(PAGI::Response::NDJSON->new(sub { })->protocol_response_capability,
 ok(T::ResponseAllImport->can('ndjson_response'),
     ':all imports the NDJSON response factory');
 
+subtest 'the concrete NDJSON module exports its factory and retains content-type overrides' => sub {
+    my $concrete_factory = T::NDJSONConcreteImport->can('ndjson_response');
+    ok($concrete_factory, 'concrete module imports its NDJSON response factory into the caller package');
+    my $response = $concrete_factory->(
+        sub { },
+        content_type => 'application/vnd.pagi.audit+ndjson',
+    );
+    isa_ok($response, 'PAGI::Response::NDJSON');
+    is($response->content_type, 'application/vnd.pagi.audit+ndjson',
+        'explicit content type overrides the NDJSON default');
+
+    my @events;
+    $response->to_app->(
+        http_scope(), receive(), sub { push @events, $_[0]; Future->done },
+    )->get;
+    is($events[0]{headers}, array {
+        item ['Content-Type' => 'application/vnd.pagi.audit+ndjson'];
+        end;
+    }, 'response start preserves the explicit content type');
+};
+
 subtest 'NDJSON construction writes one JSON record per item' => sub {
     my @events;
     my @writers;
@@ -141,7 +167,7 @@ subtest 'NDJSON records are unflagged UTF-8 bytes with exactly one LF' => sub {
     my @values = (
         { name => 'Ada', active => \1 },
         [1, 'two'],
-        "line\nbreak",
+        "line\r\nbreak",
         4.5,
         \1,
         undef,
@@ -172,7 +198,7 @@ subtest 'NDJSON records are unflagged UTF-8 bytes with exactly one LF' => sub {
     is($decoded[0]{name}, 'Ada', 'object record is semantically decodable');
     ok($decoded[0]{active}, 'object boolean is semantically decodable');
     is($decoded[1], [1, 'two'], 'array record is semantically decodable');
-    is($decoded[2], "line\nbreak", 'string record is semantically decodable');
+    is($decoded[2], "line\r\nbreak", 'CR and LF in a string round-trip semantically');
     is($decoded[3], 4.5, 'number record is semantically decodable');
     ok($decoded[4], 'top-level boolean is semantically decodable');
     is($decoded[5], undef, 'undef encodes as JSON null rather than EOF');
