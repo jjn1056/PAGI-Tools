@@ -68,6 +68,7 @@ Record each focused command, actual file/assertion counts, and commit SHA before
 **Files:**
 - Modify: `t/routing/16-http-outcomes.t`
 - Modify: `t/routing/05-http-dispatch.t`
+- Modify: `t/routing/17-request-response.t`
 - Modify: `lib/PAGI/Routing/Compiler.pm`
 - Modify: `lib/PAGI/Routing/RequestResponse.pm`
 
@@ -193,7 +194,7 @@ sub _validate_app_value {
 }
 ```
 
-Call it from `PAGI::Routing::Router` and `PAGI::Routing::Route` with `request handler coderef`. Leave Mount, `to_app`, RequestResponse return values, Endpoint returns, and Test Client application coercion on the default `native coderef` wording.
+Call it from `PAGI::Routing::Router` with `request handler coderef`. In `PAGI::Routing::Route`, select `request handler coderef`, `WebSocket handler coderef`, or `SSE handler coderef` from the node kind so diagnostics describe the actual one-object handler contract. Leave Mount, `to_app`, RequestResponse return values, Endpoint returns, and Test Client application coercion on the default `native coderef` wording.
 
 - [ ] **Step 5: Explicitly migrate native test defaults.** Every existing test default that directly performs three-channel emission must become:
 
