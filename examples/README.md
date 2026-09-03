@@ -56,7 +56,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 14. `process-streaming` - streams an external command's output through `stream_response`/`pipe_from` with a four-line loop-agnostic `Future::IO` source, real pipe backpressure, and `on_close` cleanup that stops the child when the client disconnects
 15. `sse-close` - direct `PAGI::SSE` application with an explicit close and client-facing sentinel event
 16. `sse-dashboard` - server-sent events dashboard with `PAGI::Endpoint::SSE`
-17. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints and Router-owned routing outcomes
+17. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints, Router-owned routing outcomes, and a PAGI-only NDJSON export canary
 18. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
 19. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::WebSocket`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
 20. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`

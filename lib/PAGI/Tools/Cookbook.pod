@@ -236,7 +236,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   use AppleApp::Model qw(apple_model);
   use PAGI::Compose qw(compose);
   use PAGI::Pages qw(welcome not_found);
-  use PAGI::Response qw(file_response json_response);
+  use PAGI::Response qw(file_response json_response ndjson_response);
   use PAGI::Routing qw(route mount middleware);
   use PAGI::Routing::URL qw(url_for path_for);
   use PAGI::Utils qw(app_path);
@@ -269,6 +269,17 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
               }
           } @{$apples->all}
       ]);
+  }
+
+  async sub export_apples($request) {
+      my $items = apples($request)->all;
+
+      return ndjson_response(async sub ($writer) {
+          for my $apple (@$items) {
+              last if $writer->is_disconnected;
+              await $writer->write_item($apple);
+          }
+      });
   }
 
   async sub read_apple($request) {
@@ -350,6 +361,8 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
                       methods => ['GET'], name => 'list'),
                   route('/' => \&create_apple,
                       methods => ['POST'], name => 'create'),
+                  route('/export' => \&export_apples,
+                      methods => ['GET'], name => 'export'),
                   route('/{apple_id:&Int}' => \&read_apple,
                       methods => ['GET'], name => 'read'),
                   route('/{apple_id:&Int}' => \&update_apple,
@@ -368,7 +381,9 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
       lifespan => { startup => \&startup },
       desc     => 'Starlette apples comparison application',
   );
-C</apples> and C</apples/> reach the child C</> leaves. The selected child owns
+C</apples> and C</apples/> reach the child C</> leaves. C</apples/export> is a
+PAGI-only NDJSON export canary, deliberately absent from the Starlette
+comparison. The selected child owns
 C<PATCH /apples> and its C<Allow: GET, HEAD, POST>. Constraint C<Int> validates
 the decoded capture but does not coerce it.
 
