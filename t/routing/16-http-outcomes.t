@@ -180,7 +180,7 @@ subtest 'bare HTTP defaults are Request handlers whose results are applications'
     )), 'future default /future',
         'a Future-backed Response result is invoked for HTTP NONE');
 
-    my ($native_request, @native_triplets);
+    my ($native_request, $adapter_receive, $adapter_send, @native_triplets);
     my $native_default = router(
         routes => [],
         http_default => sub {
@@ -196,13 +196,26 @@ subtest 'bare HTTP defaults are Request handlers whose results are applications'
     my $native_receive = sub { return receive() };
     my @native_events;
     my $native_send = sub { push @native_events, $_[0]; return Future->done };
-    Future->wrap($native_default->(
-        $native_scope, $native_receive, $native_send,
-    ))->get;
+    my $original_invoke_app = \&PAGI::Routing::RequestResponse::invoke_app;
+    {
+        no warnings 'redefine';
+        local *PAGI::Routing::RequestResponse::invoke_app = sub {
+            my ($value, $request_scope, $receive, $send) = @_;
+            ($adapter_receive, $adapter_send) = ($receive, $send);
+            return $original_invoke_app->(@_);
+        };
+        Future->wrap($native_default->(
+            $native_scope, $native_receive, $native_send,
+        ))->get;
+    }
     is(response_body(\@native_events), 'native default',
         'a native CODE result is invoked for HTTP NONE');
     is(refaddr($native_triplets[0][0]), refaddr($native_request->raw),
         'the native CODE result receives the handler Request routing scope');
+    is(refaddr($native_triplets[0][1]), refaddr($adapter_receive),
+        'the native CODE result receives the handler Request receive callback');
+    is(refaddr($native_triplets[0][2]), refaddr($adapter_send),
+        'the native CODE result receives the handler Request send callback');
 
     my $invalid_default = router(
         routes => [],
