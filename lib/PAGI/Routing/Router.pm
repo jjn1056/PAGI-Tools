@@ -84,7 +84,7 @@ Construction accepts C<routes>, C<middleware>, C<desc>, and an optional native
 C<http_default>. A CODE default is a native three-channel application; an
 app object is normalized as one. A source-free Pages
 application works directly, while a custom one-Request default uses
-L<PAGI::Utils/request_response>. The Router validates direct nodes, middleware descriptors,
+L<PAGI::Routing/request_response>. The Router validates direct nodes, middleware descriptors,
 descriptions, canonical slash addresses, and child Router ancestry. A Router
 description remains placement-free: mounting it never writes a parent path or
 local name onto the child. This is compile-time configuration only; the object

@@ -188,6 +188,10 @@
     `methods => '*'` is unrestricted. Object `allowed_methods` is snapshotted
     once at Route construction, so routed Endpoint::HTTP objects contribute
     verbs and OPTIONS while Router owns unsupported-method 405/Allow outcomes.
+  - CHANGE: `request_response` now belongs to `PAGI::Routing`, beside the
+    `PAGI::Routing::RequestResponse` app object and the Route contract it
+    adapts. It is an explicit export and part of `:ALL`, but not `:routes`;
+    `PAGI::Utils` no longer exports or defines it.
     Response and Pages applications retain their exact configured objects;
     Request headers and Lifespan request scopes likewise retain their exact
     request-owned identities rather than promising defensive copies.

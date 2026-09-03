@@ -53,7 +53,7 @@ PAGI::Routing::RequestResponse - Adapt one Request handler to a PAGI application
 
 =head1 SYNOPSIS
 
-    use PAGI::Utils qw(request_response);
+    use PAGI::Routing qw(request_response);
 
     my $application = request_response(sub {
         my ($request) = @_;
@@ -81,7 +81,7 @@ unchanged HTTP scope and remaining receive stream; body events already consumed
 through Request are not replayed. No lifespan startup or shutdown is replayed.
 The returned app's routes, constraints, reverse names, and schema metadata are
 opaque to the outer Router, and a nested app may apply another method/routing
-policy or emit invalid events. Static or expensive components belong directly
+policy or emit invalid events. Static or expensive app objects belong directly
 in Route or another native application position.
 
 Immediate synchronous handlers run inline. C<Future-E<gt>wrap> normalizes the
@@ -90,7 +90,7 @@ loop.
 
 =head1 SEE ALSO
 
-L<PAGI::Routing>, L<PAGI::Routing::Route>, L<PAGI::Utils>,
-L<PAGI::Response>, and L<PAGI::Pages>.
+L<PAGI::Routing>, L<PAGI::Routing::Route>, L<PAGI::Response>, and
+L<PAGI::Pages>.
 
 =cut

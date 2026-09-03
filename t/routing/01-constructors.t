@@ -9,7 +9,7 @@ use overload ();
 use lib 'lib';
 use PAGI::Routing qw(:ALL);
 use PAGI::Response::Text ();
-use PAGI::Utils qw(as_app_object request_response);
+use PAGI::Utils qw(as_app_object);
 
 {
     package NoImports;
@@ -171,7 +171,7 @@ use PAGI::Utils qw(as_app_object request_response);
 }
 
 subtest 'exports are opt-in and tag-specific' => sub {
-    for my $name (qw(router route websocket sse mount middleware)) {
+    for my $name (qw(router route websocket sse mount middleware request_response)) {
         ok(!NoImports->can($name), "no default $name export");
         ok(AllImports->can($name), "ALL exports $name");
     }
@@ -179,12 +179,14 @@ subtest 'exports are opt-in and tag-specific' => sub {
         ok(RouteImports->can($name), "routes tag exports $name");
     }
     ok(!RouteImports->can('middleware'), 'routes tag excludes middleware');
+    ok(!RouteImports->can('request_response'),
+        'routes tag excludes the request adapter');
     ok(MiddlewareImports->can('middleware'), 'middleware tag exports middleware');
     ok(!MiddlewareImports->can('route'), 'middleware tag excludes route');
     ok(!PAGI::Routing->can('request_app'),
-        'Routing no longer contains the Request-to-Response adapter');
+        'the removed request_app spelling remains unavailable');
     ok(defined &request_response,
-        'request_response is imported from PAGI::Utils instead');
+        'request_response is imported from PAGI::Routing');
     my ($error, $stderr);
     {
         local *STDERR;
@@ -866,7 +868,7 @@ subtest 'constructors reject invalid declarations' => sub {
     is(mount('/desc-dot', routes => [], desc => 'person/show')->desc, 'person/show', 'mount descriptions retain ordinary text validation');
     like dies { request_response('not a handler') },
         qr/request_response handler must be a coderef/,
-        'Utils request_response validates its handler at construction';
+        'Routing request_response validates its handler at construction';
 };
 
 done_testing;

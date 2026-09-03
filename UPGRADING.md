@@ -351,7 +351,7 @@ my $routing = router(
 ```
 
 For a custom one-Request default rather than a Pages application, adapt it
-explicitly with `request_response(\&custom_not_found)` from `PAGI::Utils`.
+explicitly with `request_response(\&custom_not_found)` from `PAGI::Routing`.
 Pages exports nothing by default. `:common` excludes collision-prone `status`
 and `redirect`; import those individually or use the deliberately broad
 `:all` bundle. A deliberate same-named import can replace a local function.
@@ -653,7 +653,8 @@ my $application = PAGI::Pages->not_found(as => 'text');
 await invoke_app($application, $scope, $receive, $send);
 ```
 
-A custom one-Request default uses `request_response($handler)`. A Pages
+A custom one-Request default uses `request_response($handler)` from
+`PAGI::Routing`. A Pages
 application needs no adapter at `http_default`, Mount `app`, or a Route. Route
 and Mount continue to own different path shapes:
 
@@ -726,7 +727,8 @@ value boundaries:
   must select/serialize them into an explicit Response class. PAGI-Tools does
   not infer a response type from return shape.
 - Native app positions take native CODE or app objects.
-  Adapt a one-Request default with `request_response($handler)`; do not infer
+  Adapt a one-Request default with `PAGI::Routing`'s
+  `request_response($handler)`; do not infer
   coderef arity or pass package-name strings as applications.
 - Helper ownership follows Request/protocol/native scope. Never make Response a
   scope source or cache a per-request Response accumulator.

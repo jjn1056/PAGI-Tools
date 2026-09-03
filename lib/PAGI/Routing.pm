@@ -2,9 +2,10 @@ package PAGI::Routing;
 
 use strict;
 use warnings;
+use Carp qw(croak);
 use Exporter 'import';
 
-our @EXPORT_OK = qw(router route websocket sse mount middleware);
+our @EXPORT_OK = qw(router route websocket sse mount middleware request_response);
 our %EXPORT_TAGS = (
     routes     => [qw(router route websocket sse mount)],
     middleware => [qw(middleware)],
@@ -43,6 +44,13 @@ sub mount {
 sub middleware {
     require PAGI::Routing::Middleware;
     return PAGI::Routing::Middleware->new(@_);
+}
+
+sub request_response {
+    croak 'request_response handler must be a coderef'
+        unless @_ == 1 && ref($_[0]) eq 'CODE';
+    require PAGI::Routing::RequestResponse;
+    return PAGI::Routing::RequestResponse->new(handler => $_[0]);
 }
 
 1;
@@ -139,7 +147,11 @@ Nothing is exported by default.
 
 =item * C<:middleware> exports only C<middleware>.
 
-=item * Uppercase C<:ALL> exports all constructors. Lowercase C<:all> is invalid.
+=item * C<request_response> is an explicit opt-in export. It is not included
+in C<:routes> because it adapts a handler into an app object rather than
+constructing a route-tree node.
+
+=item * Uppercase C<:ALL> exports all public functions. Lowercase C<:all> is invalid.
 
 =back
 
@@ -181,7 +193,7 @@ compiled once per Router compilation and remains inside
 the normal route middleware, matching, method, and HEAD boundaries. Package
 names and unblessed references are invalid.
 
-=item * C<< request_response($handler) >> from L<PAGI::Utils> is the explicit
+=item * C<< request_response($handler) >> is the explicit
 adapter for placing a one-Request handler in a native application position such
 as C<http_default> or Mount C<app>. It never infers coderef
 arity.
@@ -598,7 +610,7 @@ occupy Route and native application positions directly:
 The first form is one exact, method-aware route. The second Mount owns the
 complete C</gone> subtree and Pages negotiates from the rewritten child scope.
 Choose C<route> or C<mount> for that routing boundary deliberately. A custom
-one-Request default or Mount app uses L<PAGI::Utils/request_response>.
+one-Request default or Mount app uses C<request_response>.
 
 C<not_found> is not a catch-all route. A final C<< route('/*path' =E<gt> ...) >>
 is a normal route with captures, middleware, and method matching. A GET-only

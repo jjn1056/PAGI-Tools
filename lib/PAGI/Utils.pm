@@ -22,7 +22,7 @@ my @PATH_EXPORTS = qw(
 );
 
 our @EXPORT_OK = (
-    qw(handle_lifespan to_app as_app_object request_response invoke_app
+    qw(handle_lifespan to_app as_app_object invoke_app
        request_ended_abnormally),
     @ENV_EXPORTS,
     @PATH_EXPORTS,
@@ -343,13 +343,6 @@ sub as_app_object {
     croak 'as_app_object() requires exactly one native coderef or app object';
 }
 
-sub request_response {
-    croak 'request_response handler must be a coderef'
-        unless @_ == 1 && ref($_[0]) eq 'CODE';
-    require PAGI::Routing::RequestResponse;
-    return PAGI::Routing::RequestResponse->new(handler => $_[0]);
-}
-
 async sub invoke_app {
     my ($value, $scope, $receive, $send) = @_;
     my $app = to_app($value);
@@ -638,28 +631,6 @@ This is a narrow Route escape hatch. Use it when an endpoint genuinely needs
 to own C<($scope, $receive, $send)> -- for example, special protocol handling
 -- or when adapting an existing native PAGI coderef. Ordinary Route coderefs
 receive one Request, WebSocket, or SSE object and do not need this wrapper.
-
-=head2 request_response
-
-    use PAGI::Utils qw(request_response);
-
-    router(
-        routes       => \@routes,
-        http_default => request_response(\&custom_not_found),
-    );
-
-Adapts one Request handler to a native HTTP app object. Route does
-this automatically for bare CODE endpoints; use the helper only when a
-one-Request handler must occupy a native application position. Each invocation
-constructs one Request, awaits the immediate or Future-backed result, and
-invokes the returned native CODE or app object against the
-original triplet. Returned objects are normalized per handler invocation, not
-cached across requests.
-
-Advanced returned applications receive the unchanged scope and remaining body
-stream. Already consumed body events are not replayed; no lifespan is replayed;
-and the returned app's routes, reverse names, and schema metadata remain opaque
-to the outer Router.
 
 =head2 invoke_app
 

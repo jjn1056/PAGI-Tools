@@ -9,6 +9,7 @@ use Scalar::Util qw(blessed refaddr);
 use PAGI::Pages ();
 use PAGI::Routing::HeadBoundary ();
 use PAGI::Routing::Middleware ();
+use PAGI::Routing::RequestResponse ();
 use PAGI::Routing::Resolver ();
 use PAGI::SSE;
 use PAGI::Utils ();
@@ -358,7 +359,7 @@ sub _compile_http_leaf {
 
     my $endpoint = $route->endpoint;
     my $compiled = ref($endpoint) eq 'CODE'
-        ? PAGI::Utils::request_response($endpoint)->to_app
+        ? PAGI::Routing::RequestResponse->new(handler => $endpoint)->to_app
         : PAGI::Utils::to_app($endpoint);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;

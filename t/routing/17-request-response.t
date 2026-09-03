@@ -5,8 +5,8 @@ use Test2::V0;
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
+use PAGI::Routing qw(request_response);
 use PAGI::Routing::RequestResponse;
-use PAGI::Utils qw(request_response);
 
 {
     package Local::ReturnedApp;
@@ -31,22 +31,22 @@ sub recorder {
     return (sub { push @events, $_[0]; return Future->done }, \@events);
 }
 
-subtest 'constructor and utility create the public RequestResponse component' => sub {
+subtest 'constructor and routing factory create the public RequestResponse app object' => sub {
     my $handler = sub { return sub { return } };
 
     my $from_constructor = PAGI::Routing::RequestResponse->new(
         handler => $handler,
     );
-    my $from_utility = request_response($handler);
+    my $from_factory = request_response($handler);
 
     is(ref($from_constructor), 'PAGI::Routing::RequestResponse',
-        'constructor returns the exact public component class');
-    is(ref($from_utility), 'PAGI::Routing::RequestResponse',
-        'utility returns the exact public component class');
-    ref_ok($from_constructor->to_app, 'CODE', 'component compiles to native CODE');
+        'constructor returns the exact public app-object class');
+    is(ref($from_factory), 'PAGI::Routing::RequestResponse',
+        'routing factory returns the exact public app-object class');
+    ref_ok($from_constructor->to_app, 'CODE', 'app object compiles to native CODE');
 };
 
-subtest 'constructor and utility require exactly one handler CODE' => sub {
+subtest 'constructor and routing factory require exactly one handler CODE' => sub {
     like(dies { PAGI::Routing::RequestResponse->new },
         qr/request_response handler must be a coderef/,
         'constructor rejects a missing handler');
@@ -55,10 +55,10 @@ subtest 'constructor and utility require exactly one handler CODE' => sub {
         'constructor rejects a scalar handler');
     like(dies { request_response() },
         qr/request_response handler must be a coderef/,
-        'utility rejects a missing handler');
+        'routing factory rejects a missing handler');
     like(dies { request_response(sub { }, 'extra') },
         qr/request_response handler must be a coderef/,
-        'utility rejects extra arguments');
+        'routing factory rejects extra arguments');
 };
 
 subtest 'non-HTTP scope is rejected before the handler runs' => sub {

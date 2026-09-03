@@ -150,15 +150,16 @@ subtest 'normal HTTP leaves receive one exact Request and await one response emi
 subtest 'CODE endpoints compile once through RequestResponse for each Router compilation' => sub {
     my $handler = sub { return PAGI::Response::Text->new('compiled handler') };
     my ($components, $component_apps) = (0, 0);
-    my $original = \&PAGI::Utils::request_response;
+    my $original = \&PAGI::Routing::RequestResponse::new;
     my $router = router(routes => [route('/compiled' => $handler)]);
     my ($first, $second);
 
     {
         no warnings 'redefine';
-        local *PAGI::Utils::request_response = sub {
-            my ($candidate) = @_;
-            my $component = $original->($candidate);
+        local *PAGI::Routing::RequestResponse::new = sub {
+            my ($class, %args) = @_;
+            my $component = $original->($class, %args);
+            my $candidate = $args{handler};
             return $component unless refaddr($candidate) == refaddr($handler);
             ++$components;
             return Local::CountingRequestResponse->new(

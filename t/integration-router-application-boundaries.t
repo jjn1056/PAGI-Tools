@@ -8,9 +8,8 @@ use Future::AsyncAwait;
 use PAGI::Response ();
 use PAGI::Response::Text ();
 use PAGI::Compose qw(compose);
-use PAGI::Routing qw(router route mount middleware);
+use PAGI::Routing qw(router route mount middleware request_response);
 use PAGI::Routing::URL qw(path_for);
-use PAGI::Utils qw(request_response);
 use TestRoutes::Admin ();
 use TestRoutes::Users ();
 

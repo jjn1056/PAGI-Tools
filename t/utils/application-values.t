@@ -4,7 +4,7 @@ use warnings;
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
-use PAGI::Utils qw(as_app_object invoke_app request_response to_app);
+use PAGI::Utils qw(as_app_object invoke_app to_app);
 
 {
     package Local::CountedApp;
@@ -72,20 +72,6 @@ subtest 'as_app_object returns an existing app object unchanged with a warning' 
         'the redundant conversion is reported');
     is($Local::CountedApp::TO_APP_CALLS, 0,
         'the defensive pass-through does not compile the object');
-};
-
-subtest 'request_response is opt-in and included in the all export bundle' => sub {
-    my $utility = 'PAGI::Utils';
-    ok($utility->can('request_response'),
-        'request_response is available as an explicit utility');
-
-    {
-        package Local::AllRequestResponseImport;
-        use PAGI::Utils qw(:all);
-    }
-
-    ok(Local::AllRequestResponseImport->can('request_response'),
-        'request_response is included in :all');
 };
 
 subtest 'as_app_object keeps its wrapped CODE opaque to caller mutation' => sub {
