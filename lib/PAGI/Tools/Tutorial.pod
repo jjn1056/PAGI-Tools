@@ -81,10 +81,10 @@ L<PAGI::Request> and return immediate or Future-backed application values,
 commonly L<PAGI::Response> or L<PAGI::Pages::Application>. WebSocket and SSE
 handlers receive their direct protocol objects:
 
-  Route CODE endpoint        -> one Request/WebSocket/SSE argument
-  Route app object        -> native PAGI application
-  Mount/default CODE         -> native PAGI application
-  handler result             -> native CODE or app object
+  Route endpoint / http_default CODE  -> one Request handler
+  Route endpoint / http_default object -> app object via to_app
+  Mount app CODE                       -> native PAGI application
+  Mount app object                     -> app object via to_app
 
   use Future::AsyncAwait;
   use PAGI::Routing qw(:routes);

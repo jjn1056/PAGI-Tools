@@ -1659,9 +1659,10 @@ my $api = router(
 );
 ```
 
-The default is a native app coderef or app object. It runs
-only for HTTP NONE—not PARTIAL, WebSocket, SSE, selected exceptions, or a
-handler-returned 404. GET contributes HEAD to the generated 405 union.
+The default is a request handler coderef or app object. A native CODE requires
+`as_app_object`. It runs only for HTTP NONE—not PARTIAL, WebSocket, SSE,
+selected exceptions, or a handler-returned 404. GET contributes HEAD to the
+generated 405 union.
 
 ### Distinguish direct Router safety from the application root
 
