@@ -57,6 +57,12 @@ A request-body source can be relayed without raw PAGI:
         die 'upload was truncated' if $input->truncated;
     });
 
+A semantic format subclass may wrap its producer and the public generic Writer
+before delegating to C<SUPER::new>. That wrapper may narrow or translate the
+producer API, as L<PAGI::Response::NDJSON> does, but must not override Stream's
+private lifecycle methods. Stream owns lifecycle, disconnect handling, terminal
+delivery, and cleanup; a semantic format owns only its producer adaptation.
+
 =cut
 
 sub new {

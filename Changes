@@ -2,6 +2,12 @@
 
 0.002003 - UNRELEASED
 
+  [NDJSON response]
+  - NEW: PAGI::Response::NDJSON and the exported ndjson_response factory stream
+    UTF-8 JSON records framed by LF through a specialized Writer. Each awaited
+    write preserves send-Future backpressure; the public Stream extension proof
+    keeps generic Writer delivery and lifecycle ownership intact.
+
   [Protocol application state]
   - BREAKING/consistency: PAGI::Request, ::WebSocket, and ::SSE now share the
     strict `PAGI::State|undef` direct state contract; absent state is undef and

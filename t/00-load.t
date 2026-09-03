@@ -47,6 +47,8 @@ my @load_modules = qw(
     PAGI::Response::File::Plan
     PAGI::Response::Stream
     PAGI::Response::Writer
+    PAGI::Response::NDJSON
+    PAGI::Response::NDJSON::Writer
     PAGI::Pages
     PAGI::Session
     PAGI::Stash
