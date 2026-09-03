@@ -196,7 +196,7 @@ application followed by its stored configuration and must return an application
 value immediately. A configured object is reused by identity and receives
 C<< ->wrap($inner_app) >>. A class name is loaded, instantiated with the
 stored configuration, and then wrapped. Factory and C<wrap> results may be a
-native coderef or an instantiated object with C<to_app>; compilation always
+native coderef or an app object; compilation always
 returns native code.
 
 Names beginning with C<PAGI::Middleware::> are already fully qualified. Simple

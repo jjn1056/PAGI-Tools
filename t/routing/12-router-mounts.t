@@ -10,7 +10,7 @@ use Scalar::Util qw(refaddr);
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::URL qw(path_for);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub scope {
     my (%changes) = @_;
@@ -493,7 +493,7 @@ subtest 'mounted application runtime boundaries retain root frames and decoded p
         root_path => '/proxy')), 'service',
         'a separately compiled child Router completes through its Mount');
     is($component->compilations, 1,
-        'the separately compiled application object is coerced once');
+        'the separately compiled app object is coerced once');
     is(\@service_seen, [{
         frame_roots => ['/proxy', '/proxy/service', '/proxy/service'],
         scope_root => '/proxy/service/spaces/blue',
@@ -543,7 +543,7 @@ subtest 'mounted Routers share the one outer HEAD edge and root Mounts consume n
                 push @seen_scopes, snapshot_frame($request->scope);
                 return PAGI::Response::Text->new('representation');
             }),
-            route('/file' => as_app(async sub {
+            route('/file' => as_app_object(async sub {
                 my ($request_scope, $receive, $send) = @_;
                 await $send->({
                     type => 'http.response.start', status => 200,

@@ -73,11 +73,11 @@ mount('/terminal', app => gone(
 ```
 
 The `/raw` leaf deliberately owns all three PAGI channels. Native CODE at a
-Route is marked with `as_app`, and raw triplet delegation to the Pages value is
+Route is marked with `as_app_object`, and raw triplet delegation to the Pages value is
 performed by `invoke_app`:
 
 ```perl
-route('/raw' => as_app(async sub {
+route('/raw' => as_app_object(async sub {
     my ($scope, $receive, $send) = @_;
     await invoke_app(
         not_found(as => 'text'),

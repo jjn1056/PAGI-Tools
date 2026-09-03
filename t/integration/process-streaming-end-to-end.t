@@ -43,7 +43,7 @@ like($source, qr/compose\s*\(\s*routes\s*=>/s,
 my $app = do $app_file;
 die "cannot load $app_file: " . ($@ || $!) unless defined $app;
 # The example ends in compose(...), which yields an application-provider
-# object; PAGI::Server accepts a coderef or an instantiated to_app object.
+# object; PAGI::Server accepts a native coderef or app object.
 die "unexpected application value from $app_file"
     unless ref($app) eq 'CODE'
         || (Scalar::Util::blessed($app) && $app->can('to_app'));

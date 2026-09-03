@@ -462,7 +462,7 @@ __END__
     my $files = PAGI::App::File->from_app_path('static');
     my $app   = PAGI::App::File->from_app_path('static')->to_app;
 
-Returns a C<PAGI::App::File> component object rooted at the application path
+Returns a C<PAGI::App::File> app object rooted at the application path
 formed from its logical path components. It is a class-only constructor and
 preserves subclasses, so C<< MyApp::Files->from_app_path('static') >> returns a
 C<MyApp::Files> object. With no path components it selects the application

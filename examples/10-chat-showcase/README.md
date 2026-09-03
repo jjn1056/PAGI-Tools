@@ -38,9 +38,9 @@ uses a nested Compose for its API routes:
 
 ```text
 PAGI::Compose (deployed root)
-  -> websocket('/ws/chat' => as_app($ws_handler))
-  -> sse('/events' => as_app($sse_handler))
-  -> route('/*path' => as_app($http_handler), methods => '*')
+  -> websocket('/ws/chat' => as_app_object($ws_handler))
+  -> sse('/events' => as_app_object($sse_handler))
+  -> route('/*path' => as_app_object($http_handler), methods => '*')
 
 ChatApp::HTTP
   -> compose(routes => [route('/api/...'), ...])->to_app
@@ -70,8 +70,8 @@ supplies the response-completion and 500 failsafes; neither layer changes the
 WebSocket or SSE ownership described below.
 
 The WebSocket and SSE targets are existing native PAGI applications, so their
-route declarations use explicit `as_app`. The final
-`route('/*path' => as_app($http_handler), methods => '*')` Route keeps the static/API fallback
+route declarations use explicit `as_app_object`. The final
+`route('/*path' => as_app_object($http_handler), methods => '*')` Route keeps the static/API fallback
 HTTP-only, so a WebSocket or SSE miss retains the Router's protocol-specific
 outcome instead of reaching the file application. `ChatApp::HTTP` therefore
 gives its internal API routes a Compose boundary of their own. An unknown
@@ -90,13 +90,13 @@ leaves:
 
 ```perl
 compose(routes => [
-    websocket('/ws/chat' => as_app($ws_handler)),
-    sse('/events' => as_app($sse_handler)),
-    route('/*path' => as_app($http_handler), methods => '*'),
+    websocket('/ws/chat' => as_app_object($ws_handler)),
+    sse('/events' => as_app_object($sse_handler)),
+    route('/*path' => as_app_object($http_handler), methods => '*'),
 ]);
 ```
 
-`as_app` preserves each native handler's three-channel contract. The root
+`as_app_object` preserves each native handler's three-channel contract. The root
 Router selects the matching direct leaf and does not fall through after a
 protocol miss. See [PAGI::Compose](../../lib/PAGI/Compose.pm) and
 [PAGI::Routing](../../lib/PAGI/Routing.pm) for details.

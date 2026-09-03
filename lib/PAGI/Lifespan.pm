@@ -258,7 +258,7 @@ Both C<startup> and C<shutdown> callbacks receive the shared state
 hashref as their first argument.
 
 The C<app> argument accepts the two native application forms supported by
-L<PAGI::Utils/to_app>: a coderef or an instantiated component object with a
+L<PAGI::Utils/to_app>: a coderef or an app object with a
 C<to_app> method. Package-name strings are rejected; load and construct the
 component explicitly. The coercion happens once at construction time.
 
@@ -267,7 +267,7 @@ component explicitly. The coercion happens once at construction time.
     my $app = PAGI::Lifespan->wrap($inner_app, startup => ..., shutdown => ...);
 
 Class method shortcut that creates a wrapper and returns the app coderef. The
-first argument accepts a coderef or instantiated C<to_app> object and rejects
+first argument accepts a coderef or app object and rejects
 package-name strings, just like C<new(app =E<gt> ...)>.
 
 =head2 to_app

@@ -114,7 +114,7 @@ subtest 'class, configured, exported, Route, Mount, raw, and lifespan forms exec
 
         my $raw = $example_client->get('/raw');
         is($raw->status, 404,
-            'as_app native Route delegates the Pages application');
+            'as_app_object native Route delegates the Pages application');
         is($raw->header('X-Demo'), 'Raw application value',
             'raw triplet invoke_app delegation retains configured headers');
     });

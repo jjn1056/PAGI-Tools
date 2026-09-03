@@ -11,7 +11,7 @@ use PAGI::Response;
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route middleware);
 use PAGI::Routing::Compiler;
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub HttpProvider { return qr/accepted/ }
 
@@ -369,7 +369,7 @@ subtest 'one unchanged component isolates overlapping native invocations' => sub
         'each overlapped invocation completes with its own response state');
 };
 
-subtest 'CODE endpoints remain handlers while as_app marks native CODE' => sub {
+subtest 'CODE endpoints remain handlers while as_app_object marks native CODE' => sub {
     my $ordinary = route('/ordinary' => sub {
         return PAGI::Response::Text->new(ref($_[0]));
     })->to_app;
@@ -390,11 +390,11 @@ subtest 'CODE endpoints remain handlers while as_app marks native CODE' => sub {
             type => 'http.response.body', body => '', more => 0,
         });
     };
-    my $native_app = route('/native' => as_app($native))->to_app;
+    my $native_app = route('/native' => as_app_object($native))->to_app;
     ($receive, $send, $events) = channels();
     $native_app->(scope(path => '/native'), $receive, $send)->get;
     is($events->[0]{status}, 204,
-        'as_app is the explicit native-coderef spelling');
+        'as_app_object is the explicit native-coderef spelling');
 };
 
 subtest 'native object HTTP leaves compile once and retain ownership of all channels' => sub {
@@ -453,7 +453,7 @@ subtest 'provider constraints select handler and native HTTP leaves before invoc
         route('/normal/rejected' => sub {
             return PAGI::Response::Text->new('continued');
         }),
-        route('/native/{id:&HttpProvider}' => as_app(sub {
+        route('/native/{id:&HttpProvider}' => as_app_object(sub {
             my ($request_scope, $receive, $send) = @_;
             push @native, $request_scope->{path_params}{id};
             $send->({
@@ -502,7 +502,7 @@ subtest 'invalid normal returns retain the shared diagnostic' => sub {
         my ($receive, $send, $events) = channels();
         like(
             dies { $app->(scope(path => '/bad'), $receive, $send)->get },
-            qr/request endpoint must return a PAGI application: a coderef or instantiated object with to_app/,
+            qr/request endpoint must return a PAGI application: a native coderef or app object/,
             "$label return is rejected",
         );
         is($events, [], "$label return emits no response events");

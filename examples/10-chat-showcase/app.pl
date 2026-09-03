@@ -23,7 +23,7 @@ use lib dirname(__FILE__) . '/lib';
 
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(middleware route sse websocket);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 use ChatApp::State qw(get_stats);
 use ChatApp::HTTP;
@@ -77,9 +77,9 @@ sub with_logging {
 
 compose(
     routes => [
-        websocket('/ws/chat' => as_app($ws_handler)),
-        sse('/events' => as_app($sse_handler)),
-        route('/*path' => as_app($http_handler), methods => '*'),
+        websocket('/ws/chat' => as_app_object($ws_handler)),
+        sse('/events' => as_app_object($sse_handler)),
+        route('/*path' => as_app_object($http_handler), methods => '*'),
     ],
     middleware => [middleware(\&with_logging)],
     lifespan => {

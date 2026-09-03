@@ -112,16 +112,17 @@ Resolver, while Compose constructs and owns a distinct outer root Router.
 This module is the immutable functional frontend for PAGI's shared routing
 engine. Constructor functions build an immutable, inspectable route tree.
 Normal HTTP handler coderefs receive one L<PAGI::Request> and return an
-application value; instantiated objects with C<to_app> are native application
-endpoints. Normal WebSocket and SSE handlers receive one
+application value. An B<app object> is an instantiated object with a C<to_app>
+method; Route accepts one as a native application endpoint. Normal WebSocket
+and SSE handlers receive one
 L<PAGI::WebSocket> or L<PAGI::SSE> and use that object's protocol methods.
-Wrap a native Route CODE explicitly with L<PAGI::Utils/as_app> when the
+Wrap a native Route CODE explicitly with L<PAGI::Utils/as_app_object> when the
 endpoint must own all three PAGI channels.
 
-    Route CODE endpoint        -> one Request/WebSocket/SSE argument
-    Route to_app object        -> native PAGI application
-    Mount/default CODE         -> native PAGI application
-    handler result             -> native CODE or instantiated to_app object
+    Route CODE endpoint     -> one Request/WebSocket/SSE argument
+    Route app object        -> native PAGI application
+    Mount/default CODE      -> native PAGI application
+    handler result          -> native CODE or app object
 
 The descriptions do no request I/O. C<to_app> is the explicit compilation
 boundary and returns the native PAGI coderef a server runs. This is the sole
@@ -164,7 +165,7 @@ inspect signatures or evaluate package-method strings.
     route('/x' => $component)         request time: native app     native completion
     websocket('/x' => $code)          request time: ($websocket)  inert; completion awaited
     sse('/x' => $code)                request time: ($sse)        inert; completion awaited
-    route('/x' => as_app($code))      request time: native app     native completion
+    route('/x' => as_app_object($code))      request time: native app     native completion
     mount('/x', app => $code)         request time: native app     native completion
     middleware => [middleware(...)]   declaration time             description list only
     middleware($entry, %config)       declaration time             middleware description
@@ -175,8 +176,8 @@ inspect signatures or evaluate package-method strings.
 C<($request)> and must return an application value, immediately or through a
 Future. Response and Pages objects are the ordinary values.
 
-=item * C<< route('/x' =E<gt> $component) >> accepts an instantiated object
-with C<to_app>. It is compiled once per Router compilation and remains inside
+=item * C<< route('/x' =E<gt> $component) >> accepts an app object. It is
+compiled once per Router compilation and remains inside
 the normal route middleware, matching, method, and HEAD boundaries. Package
 names and unblessed references are invalid.
 
@@ -190,9 +191,11 @@ C<< sse('/x' =E<gt> $code) >> receive one direct L<PAGI::WebSocket> or
 L<PAGI::SSE>. Their immediate or Future completion is awaited and the resolved
 value is inert.
 
-=item * C<< route('/x' =E<gt> as_app($code)) >>, and the corresponding
+=item * C<< route('/x' =E<gt> as_app_object($code)) >>, and the corresponding
 C<websocket> and C<sse> forms, are native PAGI application endpoints. They
-receive C<($scope, $receive, $send)> and own protocol events.
+receive C<($scope, $receive, $send)> and own protocol events. This is a narrow
+escape hatch for special protocol handling or an existing native PAGI coderef,
+not the ordinary handler form.
 
 =item * C<< mount('/x', app =E<gt> $code) >> is a native PAGI application or
 component accepted by L<PAGI::Utils/to_app>. It receives a rewritten child
@@ -207,7 +210,7 @@ or performing protocol I/O.
 =item * Compilation at C<to_app> resolves each description. A factory receives
 C<($inner_app, %config)> and an object receives C<< ->wrap($inner_app) >>; a
 class is loaded, constructed, and wrapped. Factories and C<wrap> may return a
-native CODE or an object with C<to_app>. The resulting native app runs at
+native CODE or an app object. The resulting native app runs at
 request time and returns the protocol completion.
 
 =back
@@ -251,18 +254,18 @@ root.
 =head2 route, websocket, sse
 
     route('/path' => $handler, %options)
-    route('/path' => as_app($native), %options)
+    route('/path' => as_app_object($native), %options)
     route('/path' => $application_object, %options)
 
     websocket('/path' => $handler, %options)
-    websocket('/path' => as_app($native), %options)
+    websocket('/path' => as_app_object($native), %options)
 
     sse('/path' => $handler, %options)
-    sse('/path' => as_app($native), %options)
+    sse('/path' => as_app_object($native), %options)
 
 All leaves accept C<name>, C<desc>, C<middleware>, and C<constraints>.
 C<methods> is HTTP-only: one token, an arrayref, or the explicit string C<*>.
-For an application object, an explicit finite method set still consults
+For an app object, an explicit finite method set still consults
 C<allowed_methods> once during immutable Route construction and must be a
 restriction of its normalized snapshot. Without explicit
 methods, the snapshot is used directly; an endpoint without the capability
@@ -290,7 +293,7 @@ The two mutually exclusive forms are:
     '/x', routes => [...]   new child Router application  optional local segment
 
 All accept C<desc>, C<constraints>, and C<middleware>. C<app> accepts a native
-application coderef or instantiated object with C<to_app>. C<routes> creates a
+application coderef or app object. C<routes> creates a
 real L<PAGI::Routing::Router> application and stores it as the Mount's C<app>.
 Names are nonempty scalar logical segments: they may not contain C</> or
 equal C<.> or C<..>. A dot in C<v1.1> is literal, not hierarchy.
@@ -331,7 +334,7 @@ object accepts no additional description configuration. The C<middleware>
 accessors on routers, routes, and mounts expose descriptions only.
 
 At C<to_app>, a factory receives C<($inner_app, %config)> and C<wrap> receives
-C<($inner_app)>. Each may return a native CODE or an object with C<to_app>.
+C<($inner_app)>. Each may return a native CODE or an app object.
 The resulting native app runs at request time and returns the protocol
 completion.
 
@@ -361,7 +364,7 @@ At request time a normal HTTP handler returns a native CODE or instantiated
 C<to_app> object, immediately or through a Future. Routing validates and
 invokes that application once against the original triplet. The handler
 receives neither C<$receive> nor C<$send>; return a Response or Pages
-application for the ordinary case. Use C<as_app> at declaration time when an
+application for the ordinary case. Use C<as_app_object> at declaration time when an
 endpoint itself must call C<$receive> or C<$send> and own event emission.
 
 Returning an arbitrary application is advanced delegation. It receives the
@@ -612,7 +615,7 @@ PARTIAL, and NONE: child 404 and 405 responses flow outward through child,
 occurrence, and enclosing Router middleware, while the parent neither resumes
 sibling scanning nor unions method evidence. An application Route is different:
 
-    route('/files/*path' => as_app($app))
+    route('/files/*path' => as_app_object($app))
     mount('/files', app => $app)
 
 The Route is one HTTP leaf: it participates in methods, automatic HEAD,
@@ -915,7 +918,7 @@ literal order of the C<routes> array.
 
 Starlette supplied the useful Route/Mount/Router vocabulary, but PAGI does not
 claim API identity. Ordinary PAGI route handlers receive one direct Request,
-WebSocket, or SSE object; C<as_app($code)> marks a native Route CODE, while
+WebSocket, or SSE object; C<as_app_object($code)> marks a native Route CODE, while
 Mount C<app> and Router C<http_default> are native three-channel application
 positions. Compose instead accepts route declarations through C<routes>, or
 an existing immutable Router as the application of an explicit Mount inside

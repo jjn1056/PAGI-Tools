@@ -9,7 +9,7 @@ use overload ();
 use lib 'lib';
 use PAGI::Routing qw(:ALL);
 use PAGI::Response::Text ();
-use PAGI::Utils qw(as_app request_response);
+use PAGI::Utils qw(as_app_object request_response);
 
 {
     package NoImports;
@@ -90,7 +90,7 @@ use PAGI::Utils qw(as_app request_response);
 
     sub http { return route('/http/{id:&Owned}' => sub { }) }
     sub native_http {
-        return route('/native/{id:&Owned}' => PAGI::Utils::as_app(sub { }));
+        return route('/native/{id:&Owned}' => PAGI::Utils::as_app_object(sub { }));
     }
     sub socket { return websocket('/socket/{id:&Owned}' => sub { }) }
     sub events { return sse('/events/{id:&Owned}' => sub { }) }
@@ -330,7 +330,7 @@ subtest 'route descriptions preserve endpoint identity and normalize HTTP method
 
 subtest 'application-valued and protocol-specific route descriptions' => sub {
     my $app = sub { return 'native app' };
-    my $native = as_app($app);
+    my $native = as_app_object($app);
     my $native_route = route '/native' => $native, desc => 'native app';
     is($native_route->kind, 'route', 'native HTTP route kind');
     is(refaddr($native_route->endpoint), refaddr($native),
@@ -356,7 +356,7 @@ subtest 'application-valued and protocol-specific route descriptions' => sub {
     };
     my $websocket = websocket '/socket/{regex}/{code}/{object}' => sub { },
         constraints => $ws_constraints;
-    my $native_websocket_endpoint = as_app($app);
+    my $native_websocket_endpoint = as_app_object($app);
     my $native_websocket = websocket '/native-socket' => $native_websocket_endpoint;
     my $sse_regex = qr/sse/;
     my $sse_code = sub { return $_[0] eq 'stream' };
@@ -368,7 +368,7 @@ subtest 'application-valued and protocol-specific route descriptions' => sub {
     };
     my $sse = sse '/events/{regex}/{code}/{object}' => sub { },
         constraints => $sse_constraints;
-    my $native_sse_endpoint = as_app($app);
+    my $native_sse_endpoint = as_app_object($app);
     my $native_sse = sse '/native-events' => $native_sse_endpoint;
     is($websocket->kind, 'websocket', 'WebSocket kind');
     is($sse->kind, 'sse', 'SSE kind');
@@ -488,8 +488,8 @@ subtest 'HTTP methods use explicit, capability, then safe-default precedence' =>
 
     my $response = PAGI::Response::Text->new('file');
     is(route('/file' => $response)->methods, [qw(GET HEAD)],
-        'ordinary application objects use the safe default');
-    my $native = as_app(sub { });
+        'ordinary app objects use the safe default');
+    my $native = as_app_object(sub { });
     is(route('/relay' => $native, methods => '*')->methods, '*',
         'only explicit scalar wildcard enables unrestricted dispatch');
 
@@ -763,13 +763,13 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/separator' => $handler, methods => 'GET POST' }, qr/methods must be a method string, arrayref, or '\*'/, 'methods reject separators';
     like dies { websocket '/socket' => $handler, methods => 'GET' }, qr/WebSocket routes do not accept methods/, 'WebSocket rejects methods';
     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
-    like dies { route '/not-code' => 'not a handler' }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects package strings';
-    like dies { route '/not-component' => [] }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects unblessed component lookalikes';
+    like dies { route '/not-code' => 'not a handler' }, qr/route endpoint must be a native coderef or app object/, 'route rejects package strings';
+    like dies { route '/not-component' => [] }, qr/route endpoint must be a native coderef or app object/, 'route rejects unblessed component lookalikes';
     ok(lives { route '/component' => PAGI::Response::Text->new('component') },
-        'normal route accepts an instantiated to_app component');
+        'normal route accepts an app object');
     my $broken_component = bless {}, 'BrokenRouteComponent';
     like dies { route '/broken-component' => $broken_component },
-        qr/route endpoint must be a coderef or instantiated object with to_app/,
+        qr/route endpoint must be a native coderef or app object/,
         'route rejects an instantiated object without to_app';
     for my $case (
         [empty     => [],                 qr/route endpoint allowed_methods returned no methods/],
@@ -812,8 +812,8 @@ subtest 'constructors reject invalid declarations' => sub {
             qr/unknown mount option '\Q$key\E'/,
             "mount rejects removed '$key' option";
     }
-    like dies { mount '/undefined-app', app => undef }, qr/mount app must be a coderef or instantiated object with to_app/, 'mount validates app through the strict app validator';
-    like dies { mount '/bad-app', app => [] }, qr/mount app must be a coderef or instantiated object with to_app/, 'mount rejects non-app values';
+    like dies { mount '/undefined-app', app => undef }, qr/mount app must be a native coderef or app object/, 'mount validates app through the strict app validator';
+    like dies { mount '/bad-app', app => [] }, qr/mount app must be a native coderef or app object/, 'mount rejects non-app values';
     ok(lives { mount '/valid-name', app => $handler, name => 'x' },
         'named application mounts are accepted');
     like dies { mount('/old-namespace', routes => [], namespace => 'old') }, qr/unknown mount option 'namespace'/, 'legacy namespace option is rejected';
@@ -833,9 +833,9 @@ subtest 'constructors reject invalid declarations' => sub {
             "removed Router option '$removed' is rejected without compatibility";
     }
     for my $invalid (
-        [undef, qr/router http_default must be a coderef or instantiated object with to_app/],
-        [[], qr/router http_default must be a coderef or instantiated object with to_app/],
-        [bless({}, 'RouterDefaultWithoutToApp'), qr/router http_default must be a coderef or instantiated object with to_app/],
+        [undef, qr/router http_default must be a native coderef or app object/],
+        [[], qr/router http_default must be a native coderef or app object/],
+        [bless({}, 'RouterDefaultWithoutToApp'), qr/router http_default must be a native coderef or app object/],
     ) {
         my ($value, $pattern) = @$invalid;
         like dies { router(routes => [], http_default => $value) }, $pattern,

@@ -131,12 +131,12 @@ subtest 'Endpoint Router migration snippets own their helper imports' => sub {
         /(\*\*Before:.*?)(\*\*After:.*)\z/s;
     ok defined($removed) && defined($after),
         'labelled Endpoint Router Before and After snippets are present';
-    like $removed, qr/use PAGI::Utils qw\(as_app\)/,
-        'removed package imports as_app where its example calls it';
+    like $removed, qr/use PAGI::Utils qw\(as_app_object\)/,
+        'removed package imports as_app_object where its example calls it';
     like $after, qr/use PAGI::Routing qw\([^)]*\broute\b[^)]*\)/,
         'replacement package imports route where its example calls it';
-    like $after, qr/use PAGI::Utils qw\([^)]*\bas_app\b[^)]*\)/,
-        'replacement package imports as_app where its example calls it';
+    like $after, qr/use PAGI::Utils qw\([^)]*\bas_app_object\b[^)]*\)/,
+        'replacement package imports as_app_object where its example calls it';
     my ($after_code) = $after =~ /```perl\n(.*?)```/s;
     ok defined $after_code, 'replacement code block can be extracted';
     eval $after_code;

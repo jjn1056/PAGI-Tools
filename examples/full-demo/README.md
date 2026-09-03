@@ -131,7 +131,7 @@ compose(
 The demo uses the ordinary high-level handler contracts: HTTP receives a
 `PAGI::Request` and returns a Response application, while WebSocket and SSE
 receive their protocol objects and use the objects' send and lifecycle methods.
-Raw three-channel applications remain available through `as_app`, but are not
+Raw three-channel applications remain available through `as_app_object`, but are not
 needed here. The declarations run in exactly the order shown. Compose keeps the
 same callbacks and state identity while its immutable Router owns the 404 and
 405 outcomes. See

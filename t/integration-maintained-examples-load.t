@@ -44,7 +44,7 @@ for my $case (@examples) {
             like($source,
                 qr/route\('\/'\s*=>\s*sub\s*\{/s,
                 'background tasks uses an ordinary Request handler for its index');
-            my $native_routes = () = $source =~ /\bas_app\s*\(/g;
+            my $native_routes = () = $source =~ /\bas_app_object\s*\(/g;
             is($native_routes, 3,
                 'only response-first background-task routes remain native applications');
             like($source,
@@ -60,7 +60,7 @@ for my $case (@examples) {
             like($source,
                 qr/use PAGI::Routing qw\(route websocket sse\);/,
                 'full demo imports immutable route declarations');
-            unlike($source, qr/\bas_app\s*\(/,
+            unlike($source, qr/\bas_app_object\s*\(/,
                 'full demo demonstrates direct high-level protocol handlers');
             like($source,
                 qr/route\('\/'\s*=>\s*sub\s*\{/s,

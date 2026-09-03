@@ -82,7 +82,7 @@ Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions.
 Construction accepts C<routes>, C<middleware>, C<desc>, and an optional native
 C<http_default>. A CODE default is a native three-channel application; an
-instantiated C<to_app> object is normalized as one. A source-free Pages
+app object is normalized as one. A source-free Pages
 application works directly, while a custom one-Request default uses
 L<PAGI::Utils/request_response>. The Router validates direct nodes, middleware descriptors,
 descriptions, canonical slash addresses, and child Router ancestry. A Router
@@ -183,7 +183,7 @@ HTTP exhaustion is a complete Router outcome. NONE invokes C<http_default> when
 configured and otherwise emits the stock concrete 404 response.
 PARTIAL emits the Router's compliant 405 with an authoritative C<Allow> header.
 Resolved Route methods include explicit declarations, one construction-time
-C<allowed_methods> snapshot from an application object, or the GET plus
+C<allowed_methods> snapshot from an app object, or the GET plus
 automatic HEAD default. Scalar C<< methods => '*' >> is unrestricted.
 Selected child Router outcomes remain owned by that child. L<PAGI::Compose>
 remains useful at an application root for middleware, lifespan, error handling,

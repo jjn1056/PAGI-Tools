@@ -33,13 +33,13 @@ for my $case (
 }
 
 like($app_source,
-    qr/websocket\('\/ws\/chat'\s*=>\s*as_app\(\$ws_handler\)\)/,
+    qr/websocket\('\/ws\/chat'\s*=>\s*as_app_object\(\$ws_handler\)\)/,
     'chat root declares the WebSocket native triplet endpoint directly');
 like($app_source,
-    qr/sse\('\/events'\s*=>\s*as_app\(\$sse_handler\)\)/,
+    qr/sse\('\/events'\s*=>\s*as_app_object\(\$sse_handler\)\)/,
     'chat root declares the SSE native triplet endpoint directly');
 like($app_source,
-    qr/route\('\/\*path'\s*=>\s*as_app\(\$http_handler\),\s*methods\s*=>\s*'\*'\)/,
+    qr/route\('\/\*path'\s*=>\s*as_app_object\(\$http_handler\),\s*methods\s*=>\s*'\*'\)/,
     'chat root declares the HTTP fallback native triplet endpoint directly');
 unlike($app_source,
     qr/mount\('\/'\s*=>\s*app\s*=>/,

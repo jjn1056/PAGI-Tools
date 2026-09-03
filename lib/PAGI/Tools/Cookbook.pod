@@ -33,9 +33,9 @@ small runnable declarative app, see F<examples/declarative-routing>.
 Callable meaning depends on its structural position:
 
   Route CODE endpoint        -> one Request/WebSocket/SSE argument
-  Route to_app object        -> native PAGI application
+  Route app object        -> native PAGI application
   Mount/default CODE         -> native PAGI application
-  handler result             -> native CODE or instantiated to_app object
+  handler result             -> native CODE or app object
 
 =head2 A Declarative Route Tree with Package Handlers
 
@@ -148,14 +148,14 @@ controls reverse-routing hierarchy, not dispatch mode.
 
 A native Route leaf is different again:
 
-  use PAGI::Utils qw(as_app);
-  route('/files/*path' => as_app($file_endpoint), methods => ['GET'])
+  use PAGI::Utils qw(as_app_object);
+  route('/files/*path' => as_app_object($file_endpoint), methods => ['GET'])
 
 That is one exact/wildcard HTTP leaf. It participates in methods, automatic
 HEAD, partial matching, and names, and receives the original routed path. A
 C<< mount('/files', app =E<gt> $file_app) >> owns a protocol-capable prefix,
 receives the implicit remainder in child C<path>, and extends C<root_path>.
-Without explicit methods, C<as_app($native)> contributes GET plus automatic
+Without explicit methods, C<as_app_object($native)> contributes GET plus automatic
 HEAD. Use the scalar C<methods =E<gt> '*'> for unrestricted delegation.
 For an object endpoint, a finite explicit method declaration still consults
 C<allowed_methods> once and must be a restriction of that snapshot. Only the
@@ -669,9 +669,9 @@ the single emission:
 
 A native application endpoint owns every event and receives all channels:
 
-  use PAGI::Utils qw(as_app);
+  use PAGI::Utils qw(as_app_object);
 
-  route('/native' => as_app(async sub {
+  route('/native' => as_app_object(async sub {
       my ($scope, $receive, $send) = @_;
       await $send->({
           type => 'http.response.start', status => 200, headers => [],
@@ -684,7 +684,7 @@ A native application endpoint owns every event and receives all channels:
 Do not emit inside a normal handler. Return the Response, or choose an
 explicit application value for manual event ownership.
 
-A handler may return any native CODE or instantiated C<to_app> object. That is
+A handler may return any native CODE or app object. That is
 dynamic delegation, not a nested Mount: the returned app receives the current
 scope unchanged and only the remaining receive stream. Consumed body events
 are not replayed, no separate lifespan is run, and its routes, names,
@@ -710,8 +710,8 @@ awaited:
       await $sse->run;
   });
 
-Use C<< websocket('/native' =E<gt> as_app($app)) >> or
-C<< sse('/native' =E<gt> as_app($app)) >> when a native application must own those
+Use C<< websocket('/native' =E<gt> as_app_object($app)) >> or
+C<< sse('/native' =E<gt> as_app_object($app)) >> when a native application must own those
 protocol events. Their resolved return values are inert.
 
 =head2 Names, Reverse URLs, and Inspection
@@ -1027,7 +1027,7 @@ capabilities separate also lets a higher-level framework retain its own URL or
 controller API.
 
 Ordinary PAGI handlers receive the direct Request, WebSocket, or SSE object;
-C<as_app>, Mount C<app>, and Router C<http_default> receive native three-channel
+C<as_app_object>, Mount C<app>, and Router C<http_default> receive native three-channel
 PAGI applications. Compose accepts only route declarations through C<routes>;
 an existing immutable Router is preserved as an explicit Mount application in
 that list.
@@ -1148,53 +1148,42 @@ that hashref with a convenient (and typo-catching) API.
 
   use strict;
   use warnings;
-  use Future::AsyncAwait;
   use PAGI::Middleware::Builder;
-  use PAGI::Session;
-  use PAGI::Response;
+  use PAGI::Session qw(session);
+  use PAGI::Response qw(text_response);
   use PAGI::Routing qw(route router);
-  use PAGI::Utils qw(as_app invoke_app);
 
   my @routes;
 
-  push @routes, route('/login' => as_app(async sub {
-      my ($scope, $receive, $send) = @_;
+  push @routes, route('/login' => sub {
+      my ($request) = @_;
 
       # Set session data
-      my $session = PAGI::Session->new($scope);
-      $session->set(user_id  => 123);
+      my $session = session($request);
+      $session->set(user_id => 123);
       $session->set(username => 'alice');
 
-      await invoke_app(
-          PAGI::Response::text_response('Logged in!'),
-          $scope, $receive, $send,
-      );
-  }));
+      return text_response('Logged in!');
+  });
 
-  push @routes, route('/profile' => as_app(async sub {
-      my ($scope, $receive, $send) = @_;
+  push @routes, route('/profile' => sub {
+      my ($request) = @_;
 
       # Read session data (the second arg is a default for optional keys)
-      my $session = PAGI::Session->new($scope);
+      my $session = session($request);
       my $username = $session->get('username', 'Guest');
 
-      await invoke_app(
-          PAGI::Response::text_response("Hello, $username!"),
-          $scope, $receive, $send,
-      );
-  }));
+      return text_response("Hello, $username!");
+  });
 
-  push @routes, route('/logout' => as_app(async sub {
-      my ($scope, $receive, $send) = @_;
+  push @routes, route('/logout' => sub {
+      my ($request) = @_;
 
       # Clear session data
-      PAGI::Session->new($scope)->clear;
+      session($request)->clear;
 
-      await invoke_app(
-          PAGI::Response::text_response('Logged out!'),
-          $scope, $receive, $send,
-      );
-  }));
+      return text_response('Logged out!');
+  });
 
   my $routing = router(routes => \@routes);
 
@@ -1211,21 +1200,16 @@ that hashref with a convenient (and typo-catching) API.
 
   use strict;
   use warnings;
-  use Future::AsyncAwait;
   use PAGI::Middleware::Builder;
-  use PAGI::Response;
+  use PAGI::Response qw(text_response);
   use PAGI::Routing qw(route router);
-  use PAGI::Utils qw(as_app invoke_app);
 
   my $routing = router(routes => [
 
-  route('/' => as_app(async sub {
-      my ($scope, $receive, $send) = @_;
-      await invoke_app(
-          PAGI::Response::text_response('Protected content'),
-          $scope, $receive, $send,
-      );
-  })),
+  route('/' => sub {
+      my ($request) = @_;
+      return text_response('Protected content');
+  }),
   ]);
 
   # Protect every route with Basic Auth
@@ -1243,26 +1227,21 @@ that hashref with a convenient (and typo-catching) API.
 
   use strict;
   use warnings;
-  use Future::AsyncAwait;
   use PAGI::Middleware::Builder;
-  use PAGI::Response;
+  use PAGI::Response qw(json_response);
   use PAGI::Routing qw(route router);
-  use PAGI::Utils qw(as_app invoke_app);
 
   my $routing = router(routes => [
 
-  route('/api/me' => as_app(async sub {
-      my ($scope, $receive, $send) = @_;
+  route('/api/me' => sub {
+      my ($request) = @_;
 
       # Claims from the validated token: the middleware stores
       # { type => 'bearer', token => ..., claims => ... } under 'pagi.auth'
-      my $claims = $scope->{'pagi.auth'}{claims};
+      my $claims = $request->scope->{'pagi.auth'}{claims};
 
-      await invoke_app(
-          PAGI::Response::json_response({ user => $claims }),
-          $scope, $receive, $send,
-      );
-  })),
+      return json_response({ user => $claims });
+  }),
   ]);
 
   # Verify Bearer tokens with a custom validator (returns claims or undef).
@@ -1548,9 +1527,8 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
   use Future::AsyncAwait;
   use Future::IO;
   use PAGI::Compose qw(compose);
-  use PAGI::Response;
+  use PAGI::Response qw(json_response);
   use PAGI::Routing qw(route);
-  use PAGI::Utils qw(as_app invoke_app);
 
   # Simulated async email service
   async sub send_welcome_email {
@@ -1561,24 +1539,18 @@ use C<< ->on_fail() >> to handle errors, then C<< ->retain() >> to prevent
   }
 
   my $app = compose(routes => [
-  route('/signup' => as_app(async sub {
-      my ($scope, $receive, $send) = @_;
+  route('/signup' => sub {
+      my ($request) = @_;
 
-      # Respond immediately -- the client does not wait for the email
-      await invoke_app(
-          PAGI::Response::json_response(
-              { status => 'created' }, status => 201,
-          ),
-          $scope, $receive, $send,
-      );
-
-      # Fire-and-forget: scheduled now, runs on later event-loop ticks
-      # (after this handler returns). Always add on_fail() before retain()
+      # Fire-and-forget: scheduled now, without making the client wait.
+      # Always add on_fail() before retain()
       # to avoid silently swallowing errors.
       send_welcome_email('user@example.com')
           ->on_fail(sub { warn "Email send failed: @_" })
           ->retain();
-  }), methods => ['POST']),
+
+      return json_response({ status => 'created' }, status => 201);
+  }, methods => ['POST']),
   ])->to_app;
 
 B<Warning:> C<< ->retain() >> alone silently swallows errors - always add
@@ -1601,7 +1573,7 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
   use IO::Async::Function;
   use IO::Async::Loop;
   use PAGI::Compose qw(compose);
-  use PAGI::Response;
+  use PAGI::Response qw(json_response);
   use PAGI::Routing qw(route);
 
   my $loop = IO::Async::Loop->new;
@@ -1619,26 +1591,20 @@ For blocking or CPU-intensive work, use L<IO::Async::Function> to run in a child
   $loop->add($pdf_worker);
 
   my $app = compose(routes => [
-  route('/generate-pdf' => as_app(async sub {
-      my ($scope, $receive, $send) = @_;
+  route('/generate-pdf' => async sub {
+      my ($request) = @_;
 
       # Option A: Wait for result (blocks this request only)
       my $result = await $pdf_worker->call(args => ['report']);
-      await invoke_app(
-          PAGI::Response::json_response({ result => $result }),
-          $scope, $receive, $send,
-      );
+      return json_response({ result => $result });
 
-      # Option B: emit immediately, generate in the background
-      # await invoke_app(
-      #     PAGI::Response::json_response({ status => 'processing' }),
-      #     $scope, $receive, $send,
-      # );
+      # Option B: start the work, then return immediately
       # my $f = $pdf_worker->call(args => ['report']);
       # $f->on_done(sub { warn "PDF ready: $_[0]\n" });
       # $f->on_fail(sub { warn "PDF failed: $_[0]\n" });
       # $f->retain();
-  }), methods => ['POST']),
+      # return json_response({ status => 'processing' }, status => 202);
+  }, methods => ['POST']),
   ])->to_app;
 
 B<Warning:> IO::Async::Function forks child processes. If running with C<--workers N>, each server worker forks its own Function workers. With 4 server workers and 2 Function workers each, you have 12 processes. For high-volume CPU work, consider a dedicated job queue instead.
@@ -1919,13 +1885,13 @@ For more control (authentication, logging, custom headers):
   use PAGI::Pages;
   use PAGI::Request;
   use PAGI::Routing qw(route router);
-  use PAGI::Utils qw(as_app invoke_app path_from_root);
+  use PAGI::Utils qw(as_app_object invoke_app path_from_root);
 
   sub authenticate;
   sub can_download;
 
   my $router = router(routes => [
-  route('/download/{filename}' => as_app(async sub {
+  route('/download/{filename}' => as_app_object(async sub {
       my ($scope, $receive, $send) = @_;
       my $req = PAGI::Request->new($scope, $receive);
 

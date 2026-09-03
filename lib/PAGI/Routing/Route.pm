@@ -229,13 +229,15 @@ PAGI::Routing::Route - Immutable declarative route description
 
 =head1 DESCRIPTION
 
-A route represents an HTTP, WebSocket, or SSE leaf. Its C<name>, when supplied,
+A route represents an HTTP, WebSocket, or SSE leaf and accepts either a
+one-argument protocol handler or an app object. An B<app object> is an
+instantiated object with a C<to_app> method. Its C<name>, when supplied,
 is one local logical address segment: it is nonempty, contains no slash, and
 is not C<.> or C<..>; dots are literal characters. A CODE endpoint is a
 coderef handler: HTTP receives one L<PAGI::Request>, WebSocket receives one
-L<PAGI::WebSocket>, and SSE receives one L<PAGI::SSE>. An instantiated object
-with C<to_app> is a native application endpoint, compiled once through
-L<PAGI::Utils/to_app>. Wrap a native coderef with L<PAGI::Utils/as_app>.
+L<PAGI::WebSocket>, and SSE receives one L<PAGI::SSE>. An app object is a
+native application endpoint, compiled once through
+L<PAGI::Utils/to_app>. Wrap a native coderef with L<PAGI::Utils/as_app_object>.
 Route endpoints never load package names; middleware positions retain their separate explicit
 class-loading contract. Its path pattern is compiled during construction, and
 constructor validation performs no request I/O. The description never stores
@@ -258,7 +260,7 @@ Target shape never changes that rule. A Response or another instantiated
 C<to_app> component is still an exact, method-aware Route endpoint with normal
 constraints, middleware, naming, FULL/PARTIAL scanning, 405/Allow behavior,
 and GET-supplied automatic HEAD. A coderef is a Request handler unless the
-C<as_app> wrapper explicitly gives it the native triplet contract. Package-
+C<as_app_object> wrapper explicitly gives it the native triplet contract. Package-
 name strings are not application values.
 
 Finite explicit HTTP C<methods> must be advertised by an application's

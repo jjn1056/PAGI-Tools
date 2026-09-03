@@ -64,7 +64,7 @@ PAGI::Routing::RequestResponse - Adapt one Request handler to a PAGI application
 
 Route uses this component for every bare HTTP CODE endpoint. The handler
 receives exactly one L<PAGI::Request> and returns an immediate or Future-backed
-application value: a native CODE or instantiated object with C<to_app>.
+application value: a native CODE or app object.
 Response and Pages objects are the ordinary results. Use C<request_response>
 explicitly only when such a handler must occupy a native application position
 such as Mount C<app> or Router C<http_default>. Compose instead accepts route

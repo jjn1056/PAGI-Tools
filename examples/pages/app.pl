@@ -6,7 +6,7 @@ use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome redirect not_found gone);
 use PAGI::Routing qw(route mount);
-use PAGI::Utils qw(as_app invoke_app);
+use PAGI::Utils qw(as_app_object invoke_app);
 
 my $configured_pages = PAGI::Pages->new(
     as      => 'auto',
@@ -32,7 +32,7 @@ compose(
                 headers => ['X-Demo' => 'Request application value'],
             );
         }),
-        route('/raw' => as_app(async sub {
+        route('/raw' => as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             await invoke_app(
                 not_found(

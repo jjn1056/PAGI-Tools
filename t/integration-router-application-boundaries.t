@@ -101,9 +101,9 @@ subtest 'background-task example limits native dispatch to response-first routes
     like($source,
         qr{compose\(routes\s*=>\s*\[.*?route\('/'\s*=>\s*sub\s*\{}s,
         'background-task root uses an ordinary Request handler in Compose');
-    my $native_routes = () = $source =~ /\bas_app\s*\(/g;
+    my $native_routes = () = $source =~ /\bas_app_object\s*\(/g;
     is($native_routes, 3,
-        'only routes that perform work after response emission use as_app');
+        'only routes that perform work after response emission use as_app_object');
     like($source,
         qr{mount\('/ws'\s*,\s*app\s*=>\s*async sub}s,
         'background-task WebSocket remains a direct native Mount application');
@@ -133,7 +133,7 @@ subtest 'shared route fixtures execute declarative Router graphs' => sub {
         'the Router fixture dispatches through the immutable compiler');
 };
 
-subtest 'a directly mounted application object compiles once per parent graph' => sub {
+subtest 'a directly mounted app object compiles once per parent graph' => sub {
     my $component = Local::MountedIntegrationApp->new;
     my $middleware_builds = 0;
     my $mount_middleware = middleware(sub {

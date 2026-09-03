@@ -136,7 +136,7 @@ subtest 'invalid and undefined handler results fail before application invocatio
         my ($label, $value) = @$case;
         my $app = request_response(sub { return $value })->to_app;
         like(dies { $app->(scope("/$label"), quiet_receive(), sub { ++$started; Future->done })->get },
-            qr/request endpoint must return a PAGI application: a coderef or instantiated object with to_app/,
+            qr/request endpoint must return a PAGI application: a native coderef or app object/,
             "$label result gets the Request endpoint diagnostic");
     }
     is($started, 0, 'invalid values never start an application response');

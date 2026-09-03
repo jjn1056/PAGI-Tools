@@ -9,7 +9,7 @@ use PAGI::Test::Client;
 use PAGI::Response::Text;
 use TestApps::Component;
 
-subtest 'client coerces component objects' => sub {
+subtest 'client coerces app objects' => sub {
     my $client = PAGI::Test::Client->new(
         app => TestApps::Component->new(body => 'from-component'),
     );
@@ -21,7 +21,7 @@ subtest 'client coerces component objects' => sub {
 subtest 'client rejects package strings in its native app position' => sub {
     like(
         dies { PAGI::Test::Client->new(app => 'TestApps::Component') },
-        qr/application must be a coderef or instantiated object with to_app/,
+        qr/application must be a native coderef or app object/,
         'package string croaks with explicit construction guidance',
     );
 };

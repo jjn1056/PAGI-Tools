@@ -6,7 +6,7 @@ The index is an ordinary Route handler: it receives `PAGI::Request`, returns an
 application value, and leaves invocation to the shared routing compiler. The
 three task routes deliberately send their responses before starting follow-up
 work, so only those routes wrap native three-channel applications with
-`as_app`.
+`as_app_object`.
 
 The native WebSocket application is a Mount application and is passed directly:
 
@@ -15,7 +15,7 @@ mount('/ws', app => async sub { ... });
 ```
 
 The HTTP declarations retain their written order inside Compose. Only Route
-endpoints that must know response emission has completed use `as_app` and own
+endpoints that must know response emission has completed use `as_app_object` and own
 the live protocol channels. The WebSocket Mount already occupies a native
 application position and needs no wrapper.
 

@@ -13,7 +13,7 @@ use PAGI::Exception::IncompleteResponse;
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route mount);
 use PAGI::Test::Client;
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub run_request {
     my ($app, $request_scope) = @_;
@@ -189,7 +189,7 @@ subtest 'selected silent targets become production-safe 500 through Test Client'
         [
             'selected raw route',
             compose(routes => [
-                route('/silent' => as_app(sub { return })),
+                route('/silent' => as_app_object(sub { return })),
             ])->to_app,
             scope(path => '/silent'),
         ],
@@ -224,10 +224,10 @@ subtest 'thrown and failed-Future targets become one Test Client 500' => sub {
     local $ENV{PAGI_ENV} = 'production';
     my @cases = (
         ['database-like throw', compose(routes => [
-            route('/explode' => as_app(sub { die "DB connection lost\n" })),
+            route('/explode' => as_app_object(sub { die "DB connection lost\n" })),
         ])->to_app, scope(path => '/explode'), qr/DB connection lost/],
         ['database-like failed Future', compose(routes => [
-            route('/fail' => as_app(sub {
+            route('/fail' => as_app_object(sub {
                 return Future->fail("DB transaction failed\n");
             })),
         ])->to_app, scope(path => '/fail'), qr/DB transaction failed/],
@@ -259,7 +259,7 @@ subtest 'Compose leaves routing metadata to the retained Router' => sub {
     $incoming_scope->{'pagi.routing'} = $routing_metadata;
     my $seen_metadata;
     my $app = compose(
-        routes => [route('/complete' => as_app(sub {
+        routes => [route('/complete' => as_app_object(sub {
             my ($request_scope, $receive, $send) = @_;
             $seen_metadata = $request_scope->{'pagi.routing'};
             $send->({ type => 'http.response.start', status => 204, headers => [] })->get;
@@ -295,7 +295,7 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
     is($route_warnings, [], 'ordinary Router 404 does not warn');
 
     my $throwing = compose(routes => [
-        route('/explode' => as_app(sub { die "native application failed\n" })),
+        route('/explode' => as_app_object(sub { die "native application failed\n" })),
     ])->to_app;
     my ($throw_events, $throw_warnings, $throw_error)
         = run_request($throwing, scope(path => '/explode'));
@@ -311,7 +311,7 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
     like($throw_warnings->[1], qr/Invalid PAGI_ENV 'invalid-compose-environment'/,
         'the resolver failure is reported second');
 
-    my $complete = compose(routes => [route('/complete' => as_app(sub {
+    my $complete = compose(routes => [route('/complete' => as_app_object(sub {
         my ($request_scope, $receive, $send) = @_;
         $send->({ type => 'http.response.start', status => 200, headers => [] })->get;
         return $send->({ type => 'http.response.body', body => 'complete', more => 0 });
@@ -326,7 +326,7 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
 
 subtest 'post-start incomplete response is reported and rethrown without replacement' => sub {
     local $ENV{PAGI_ENV} = 'production';
-    my $app = compose(routes => [route('/incomplete' => as_app(sub {
+    my $app = compose(routes => [route('/incomplete' => as_app_object(sub {
         my ($request_scope, $receive, $send) = @_;
         return $send->({
             type => 'http.response.start', status => 200, headers => [],
@@ -366,7 +366,7 @@ subtest 'body before start becomes one clean automatic 500 response' => sub {
     my $invalid = {
         type => 'http.response.body', body => 'must not reach the wire', more => 0,
     };
-    my $app = compose(routes => [route('/invalid' => as_app(sub {
+    my $app = compose(routes => [route('/invalid' => as_app_object(sub {
         my ($request_scope, $receive, $send) = @_;
         return $send->($invalid);
     }))])->to_app;

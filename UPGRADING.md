@@ -190,13 +190,14 @@ an arity guess:
 
 ```text
 Route CODE endpoint        -> one Request/WebSocket/SSE argument
-Route to_app object        -> native PAGI application
+Route app object           -> native PAGI application
 Mount/default CODE         -> native PAGI application
-handler result             -> native CODE or instantiated to_app object
+handler result             -> native CODE or app object
 ```
 
 A PAGI application value is either a native
-`($scope, $receive, $send)` coderef or an instantiated object with `to_app`.
+`($scope, $receive, $send)` coderef or an app object—an instantiated object
+with `to_app`.
 Package names, unblessed references, callable overloads without `to_app`, and
 Response-like duck types are not application values.
 
@@ -209,32 +210,32 @@ route('/native', raw => $native_app);
 ```
 
 **After (shipped):** a bare Route CODE is always a one-argument handler. Wrap
-a native CODE with `as_app`; pass an instantiated application object directly.
+a native CODE with `as_app_object`; pass an app object directly.
 
 ```perl
 use PAGI::Routing qw(route);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
-route('/native' => as_app($native_app));
+route('/native' => as_app_object($native_app));
 route('/items'  => MyApp::ItemsEndpoint->new);
 ```
 
-`as_app($native_app)` without an explicit method declaration defaults to GET
+`as_app_object($native_app)` without an explicit method declaration defaults to GET
 plus automatic HEAD. Unrestricted native delegation is deliberate and uses
 the scalar wildcard, not an array containing `'*'`:
 
 ```perl
-route('/relay' => as_app($native_app), methods => '*');
+route('/relay' => as_app_object($native_app), methods => '*');
 ```
 
 HTTP method resolution is ordered:
 
 1. Only scalar `methods => '*'` bypasses the endpoint capability and makes the
    Route unrestricted.
-2. An explicit finite `methods` value is normalized. If the application object
+2. An explicit finite `methods` value is normalized. If the app object
    implements `allowed_methods`, Route consults it once and the finite set must
    be a restriction of that advertised snapshot.
-3. Without explicit methods, an application object's `allowed_methods`
+3. Without explicit methods, an app object's `allowed_methods`
    supplies the construction-time snapshot; otherwise Route uses GET plus
    automatic HEAD.
 
@@ -724,7 +725,7 @@ value boundaries:
 - If Thunderhorse accepts ordinary Perl return values, its own controller layer
   must select/serialize them into an explicit Response class. PAGI-Tools does
   not infer a response type from return shape.
-- Native app positions take native CODE or instantiated `to_app` objects.
+- Native app positions take native CODE or app objects.
   Adapt a one-Request default with `request_response($handler)`; do not infer
   coderef arity or pass package-name strings as applications.
 - Helper ownership follows Request/protocol/native scope. Never make Response a
@@ -1613,7 +1614,7 @@ my $api = router(
 );
 ```
 
-The default is a native app coderef or instantiated `to_app` object. It runs
+The default is a native app coderef or app object. It runs
 only for HTTP NONE—not PARTIAL, WebSocket, SSE, selected exceptions, or a
 handler-returned 404. GET contributes HEAD to the generated 405 union.
 
@@ -1716,7 +1717,7 @@ mount(
 ```
 
 **After (shipped, intentionally opaque):** pass a native app coderef or another
-instantiated component through the same `app` option.
+app object through the same `app` option.
 
 ```perl
 mount('/legacy', app => $legacy_app)
@@ -1968,12 +1969,12 @@ generation remain owned by the immutable Router.
 A native three-channel coderef at an exact Route remains explicit:
 
 ```perl
-use PAGI::Utils qw(as_app);
-route('/native' => as_app($native), methods => '*');
+use PAGI::Utils qw(as_app_object);
+route('/native' => as_app_object($native), methods => '*');
 ```
 
 Mount `app` and Router `http_default` are already native application
-positions and do not need `as_app`.
+positions and do not need `as_app_object`.
 
 ### Migrate Endpoint Router classes
 
@@ -1983,7 +1984,7 @@ binding.**
 ```perl
 package MyApp::API;
 use parent 'PAGI::Endpoint::Router';
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub routes {
     my ($self, $r) = @_;
@@ -1991,7 +1992,7 @@ sub routes {
     $r->get('/people/{id}' => [
         $self->middleware_as('require_auth'),
     ] => 'show_person')->name('show');
-    $r->get('/download' => as_app($self->app_as('download')));
+    $r->get('/download' => as_app_object($self->app_as('download')));
     $r->mount('/child', app => $self->{child}->to_router)
         ->name('child');
 }
@@ -2008,7 +2009,7 @@ use strict;
 use warnings;
 use PAGI::Request;
 use PAGI::Routing qw(middleware mount route router);
-use PAGI::Utils qw(app_path as_app);
+use PAGI::Utils qw(app_path as_app_object);
 
 sub routing {
     my ($self) = @_;
@@ -2027,7 +2028,7 @@ sub routing {
             })],
         ),
 
-        route('/download' => as_app(sub {
+        route('/download' => as_app_object(sub {
             return $self->download(@_);
         })),
 

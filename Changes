@@ -6,7 +6,7 @@
   - BREAKING: Removed the unreleased PAGI::App::Router and
     PAGI::Endpoint::Router mutable frontends, both Builder packages, and the
     App Router Materializer. PAGI::Routing is now the sole routing-construction
-    API. Ordinary application objects may return an immutable Router from a
+    API. Ordinary app objects may return an immutable Router from a
     routing method; PAGI::Endpoint::HTTP, ::WebSocket, and ::SSE remain
     optional exact-leaf behavior classes. No compatibility modules or aliases
     are provided; UPGRADING.md contains complete Before/After migrations.
@@ -179,12 +179,12 @@
     accepted WebSocket/SSE sessions remain live protocol loops, not HTTP
     Response applications.
   - BREAKING: Route CODE endpoints receive one Request, WebSocket, or SSE;
-    Route application objects own the native PAGI triplet. Mount `app` and
+    Route app objects own the native PAGI triplet. Mount `app` and
     Router `http_default` retain the native CODE contract. Compose accepts only
     route declarations through `routes`; existing immutable Routers enter as
-    explicit Mount applications. HTTP handler results are native CODE or
-    instantiated `to_app` objects. Native Route CODE uses
-    `as_app`; GET plus automatic HEAD is the default, while scalar
+    explicit Mount applications. HTTP handler results are native CODE or app
+    objects. Native Route CODE uses
+    `as_app_object`; GET plus automatic HEAD is the default, while scalar
     `methods => '*'` is unrestricted. Object `allowed_methods` is snapshotted
     once at Route construction, so routed Endpoint::HTTP objects contribute
     verbs and OPTIONS while Router owns unsupported-method 405/Allow outcomes.
@@ -428,7 +428,7 @@
     signatures, and demonstrates `Types::Standard::Int` providers. Type::Tiny
     is a test/example prerequisite only, not a PAGI::Tools runtime dependency.
   - Every PAGI::Routing Mount has exactly one named target: `app` or `routes`.
-    `app` retains a native coderef or instantiated component; immutable Router
+    `app` retains a native coderef or app object; immutable Router
     apps remain inspectable, while other apps are opaque. `routes` constructs a
     complete child Router. Named and unnamed Mounts share the same model;
     `Mount->router`, `target`, and `is_raw` are removed. Exact prefixes and
@@ -448,12 +448,12 @@
   - New PAGI::Routing provides the sole immutable, declaration-ordered route
     tree. Normal HTTP handlers receive one
     PAGI::Request and return application values; native CODE Routes use
-    `as_app` and retain native channel ownership. The release includes inline and application mounts,
+    `as_app_object` and retain native channel ownership. The release includes inline and application mounts,
     route/mount/router pure event middleware, direct PAGI::WebSocket and PAGI::SSE
     handlers, automatic HEAD wire suppression, Router-owned HTTP outcomes,
     first-seen method evidence, synchronous constraints, reverse URLs,
     request-local matched-route frames, inspection, and an executable example.
-  - Application positions accept coderefs or instantiated `to_app` objects and
+  - Application positions accept coderefs or app objects and
     reject package strings. This includes Route endpoints, `app`,
     `http_default`, Test
     Client `app`, Lifespan `app`/`wrap`, Middleware Builder mount/fallback,
@@ -791,7 +791,7 @@
     registered.
   - PAGI::Response: charset follows the body — text/html/send gain
     "; charset=utf-8", json() stays bare application/json.
-  - PAGI::Utils::to_app coerces coderefs, component objects, and class names; every
+  - PAGI::Utils::to_app coerces coderefs, app objects, and class names; every
     composition point accepts anything it accepts.
   - builder's enable() accepts configured middleware instances.
   - PAGI::App::Router: coderef route middleware can transform the channel.

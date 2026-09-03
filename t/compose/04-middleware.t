@@ -11,7 +11,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Pages;
 use PAGI::Response::Text ();
 use PAGI::Routing qw(route mount middleware router);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 {
     package ComposeDirectMiddleware;
@@ -105,7 +105,7 @@ subtest 'HTTP enters the exact root safety and declared wrapper order' => sub {
         };
     };
     my $app = compose(
-        routes => [route('/' => as_app(sub {
+        routes => [route('/' => as_app_object(sub {
             my ($scope, $receive, $send) = @_;
             push @trace, 'target';
             $send->({
@@ -153,7 +153,7 @@ subtest 'first listed middleware is outermost for HTTP and lifespan' => sub {
         return $send->({ type => 'http.response.body', body => '', more => 0 });
     };
     my $app = compose(
-        routes => [route('/' => as_app($target))],
+        routes => [route('/' => as_app_object($target))],
         middleware => [
             middleware(tracing_factory('outer', \@trace)),
             middleware(tracing_factory('inner', \@trace)),
@@ -184,7 +184,7 @@ subtest 'first listed middleware is outermost for HTTP and lifespan' => sub {
 subtest 'Compose middleware sees lifespan while Router middleware sees HTTP only' => sub {
     my (@compose_types, @router_types, @order);
     my $routing = router(
-        routes => [route('/' => as_app(sub {
+        routes => [route('/' => as_app_object(sub {
             my ($scope, $receive, $send) = @_;
             $send->({ type => 'http.response.start', status => 204, headers => [] })->get;
             return $send->({ type => 'http.response.body', body => '', more => 0 });
@@ -238,7 +238,7 @@ subtest 'application middleware sees HTTP and Router outcomes' => sub {
         };
     };
     my $app = compose(
-        routes => [route('/' => as_app(sub {
+        routes => [route('/' => as_app_object(sub {
             my ($scope, $receive, $send) = @_;
             push @target_types, $scope->{type};
             return unless $scope->{type} eq 'http';
@@ -378,7 +378,7 @@ subtest 'ordinary shallow cloning preserves state proof and changes visible scop
         };
     };
     my $app = compose(
-        routes => [route('/' => as_app(sub {
+        routes => [route('/' => as_app_object(sub {
             my ($scope, $receive, $send) = @_;
             push @seen, ['target', $scope->{worker}];
             $send->({ type => 'http.response.start', status => 204, headers => [] })->get;

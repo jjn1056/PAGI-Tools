@@ -10,7 +10,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Compose::ResponseGuard;
 use PAGI::Exception::IncompleteResponse;
 use PAGI::Routing qw(route);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub run_guard {
     my ($inner, $request_scope) = @_;
@@ -373,7 +373,7 @@ subtest 'non-HTTP scopes pass all channels through by identity' => sub {
 
 subtest 'compiled Compose response-guard state is lexical under interleaving' => sub {
     my (%send_for, %done_for);
-    my $app = compose(routes => [route('/{id}' => as_app(sub {
+    my $app = compose(routes => [route('/{id}' => as_app_object(sub {
         my ($request_scope, $receive, $send) = @_;
         my $id = $request_scope->{path};
         $send_for{$id} = $send;

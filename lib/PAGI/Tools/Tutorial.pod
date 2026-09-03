@@ -82,9 +82,9 @@ commonly L<PAGI::Response> or L<PAGI::Pages::Application>. WebSocket and SSE
 handlers receive their direct protocol objects:
 
   Route CODE endpoint        -> one Request/WebSocket/SSE argument
-  Route to_app object        -> native PAGI application
+  Route app object        -> native PAGI application
   Mount/default CODE         -> native PAGI application
-  handler result             -> native CODE or instantiated to_app object
+  handler result             -> native CODE or app object
 
   use Future::AsyncAwait;
   use PAGI::Routing qw(:routes);
@@ -167,7 +167,7 @@ target:
   mount('/static', app => $static_app)
 
 C<routes> constructs a complete child Router application. C<app> retains a
-native application or instantiated component; an immutable Router remains
+native application or app object; an immutable Router remains
 inspectable while other applications are opaque. A local C<name> is optional
 for either form. After a prefix matches, the child owns its full match, 404,
 and 405. Those responses flow through child, Mount-occurrence, and parent
@@ -200,7 +200,7 @@ as C<< middleware =E<gt> [middleware($factory)] >>. Use
 C<middleware($class, %config)> for deferred class construction,
 C<middleware($factory, %config)> for a configured synchronous factory, and
 C<middleware($object)> for an already configured C<wrap> object. Native
-three-channel CODE endpoints remain explicit with C<as_app>. See L<PAGI::Routing> for
+three-channel CODE endpoints remain explicit with C<as_app_object>. See L<PAGI::Routing> for
 the complete lifecycle and
 L<PAGI::Tools::Cookbook> for mounted, application, protocol, reverse-routing, and
 metadata recipes.
@@ -246,7 +246,7 @@ C<routes> constructs and retains one immutable Router immediately. It also
 accepts the common Router C<http_default> and C<desc> options. When a separately
 configured immutable Router already exists, preserve it as the application of
 an unnamed root Mount. The Mount retains its exact identity while Compose owns
-a distinct outer root Router. Deploy other application components directly
+a distinct outer root Router. Deploy other app objects directly
 through C<to_app> instead:
 
   my $routing = router(
@@ -898,7 +898,7 @@ Apply middleware to all routes using the C<builder> function:
   ]);
 
   # Wrap with middleware using builder; the block's final value can be
-  # an app coderef or an instantiated component
+  # a native app coderef or app object
   my $app = builder {
       enable 'AccessLog', format => 'combined';
       enable 'CORS', origins => '*';
@@ -1424,16 +1424,16 @@ Application positions accept two explicit native forms:
 
 =item * An B<async coderef> — the protocol-level form, used unchanged
 
-=item * A B<component object> — anything with a C<to_app> method,
+=item * An B<app object> — an instantiated object with a C<to_app> method,
 compiled once at composition time:
 C<< PAGI::App::File->new(root => 'public') >>
 
 =back
 
-These positions accept coderefs or instantiated C<to_app> objects; package
+These positions accept coderefs or app objects; package
 strings are rejected because an application position does not define whether a
 package should be constructed, called as a class, or treated as a singleton.
-App positions include Mount applications and explicit C<as_app> leaves in
+App positions include Mount applications and explicit C<as_app_object> leaves in
 L<PAGI::Routing>, C<mount> and the final block value in
 L<PAGI::Middleware::Builder>'s C<builder {}>, L<PAGI::App::URLMap>
 mounts and its C<default>, L<PAGI::App::Cascade> entries, and the
@@ -1453,8 +1453,8 @@ Compilation happens exactly once, when the composition point receives
 the component — never per request. For a structurally discoverable child,
 load its package normally and mount the immutable Router returned by its
 C<routing()> method. Ordinary route targets receive the direct protocol
-object; native coderefs and instantiated component apps belong only behind
-explicit C<as_app> or Mount boundaries.
+object; native coderefs and app objects belong only behind
+explicit C<as_app_object> or Mount boundaries.
 
 Middleware position is the same idea with a different duck type:
 C<enable> accepts a middleware name (resolved under
@@ -1468,14 +1468,14 @@ L<PAGI::Routing::Middleware> descriptions. Factories have the form C<sub { my
 Passing middleware where an app belongs (or vice versa) croaks at
 composition time with a message pointing at the right position.
 
-F<app.pl> may return either a native coderef or an instantiated component object
+F<app.pl> may return either a native coderef or an app object
 with C<to_app>, including a Compose description. A Router is already complete
 for its own 404/405. Cascade is ordinary status-driven application coordination
 and carries no special Router semantics. Wrap an immutable Router with
 C<< compose(routes => [mount('/' => app => $routing)]) >> when it also needs
 root ErrorHandler, response-completion guarding, and lifespan. Cascade and
 other native applications are deployed directly through C<to_app>. The server
-may compile that component object once, or the file may call C<to_app>
+may compile that app object once, or the file may call C<to_app>
 explicitly.
 A C<builder {}> block already returns a native coderef; whether it is complete
 depends on the applications it composes.
@@ -1489,7 +1489,7 @@ capability ownership visible and lets a higher-level framework use its own
 Router API.
 
 Ordinary handlers receive the direct Request, WebSocket, or SSE object, while
-C<as_app>, Mount C<app>, and Router C<http_default> receive the native three
+C<as_app_object>, Mount C<app>, and Router C<http_default> receive the native three
 channels. Compose accepts only route declarations through C<routes>; preserve
 an immutable Router through an explicit Mount within that list.
 Constraints validate without coercion. Names use slash logical

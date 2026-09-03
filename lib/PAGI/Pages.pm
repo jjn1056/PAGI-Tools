@@ -1197,7 +1197,7 @@ import those individually when wanted. C<:all> includes every opt-in factory.
 An explicit import still can replace a same-named local function, so qualified
 class or configured-instance calls are the collision-free shared-package form.
 
-Exported functions return application objects that can be placed directly:
+Exported functions return app objects that can be placed directly:
 
     route('/missing' => not_found());
     mount('/missing', app => not_found());

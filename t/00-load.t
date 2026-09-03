@@ -54,6 +54,7 @@ my @load_modules = qw(
     PAGI::SSE
     PAGI::Lifespan
     PAGI::Utils
+    PAGI::Utils::AppObject
     PAGI::Utils::Scope
     PAGI::SendValidation
     PAGI::Test::Client

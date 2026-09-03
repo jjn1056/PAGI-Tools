@@ -1014,15 +1014,15 @@ C<denial_complete> states), so it is genuinely advertised.
 
 The PAGI application to test. This native application position accepts the two
 forms supported by L<PAGI::Utils/to_app>: a coderef or an instantiated
-component object with a C<to_app> method:
+app object with a C<to_app> method:
 
     # Coderef (existing style)
     my $client = PAGI::Test::Client->new(app => $coderef);
 
-    # Component object
+    # App object
     my $client = PAGI::Test::Client->new(app => MyApp::Main->new(%opts));
 
-    # Terminal Response object (also an instantiated to_app component)
+    # Terminal Response object (also an app object)
     use PAGI::Response::Text ();
     my $client = PAGI::Test::Client->new(
         app => PAGI::Response::Text->new('ready'),

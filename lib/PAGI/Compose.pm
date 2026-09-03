@@ -203,9 +203,9 @@ deploy it directly or use a separately designed application boundary.
 Callable meaning is positional and deliberate:
 
   Route CODE endpoint        -> one Request/WebSocket/SSE argument
-  Route to_app object        -> native PAGI application
+  Route app object        -> native PAGI application
   Mount/default CODE         -> native PAGI application
-  handler result             -> native CODE or instantiated to_app object
+  handler result             -> native CODE or app object
 
 Middleware descriptions are a separate construction-time contract: Compose
 constructs configured class targets, invokes factory targets with the inner
@@ -350,7 +350,7 @@ constructor-time description validation, then returns one native PAGI
 coderef. It performs no request or lifecycle I/O. Router component loading, middleware
 construction, and wrapping failures therefore occur at C<to_app>. Calling
 C<to_app> again builds an independent executable graph around the same root
-Router identity and recompiles its component objects, although lexical state
+Router identity and recompiles its app objects, although lexical state
 deliberately captured by user coderefs remains ordinary shared Perl state.
 
 For HTTP, the exact outer-to-inner order is:
@@ -556,7 +556,7 @@ native applications or their existing hook-registration behavior.
 =head1 STARLETTE COMPARISON
 
 The influence is architectural, not source or API identity. Current Starlette
-does not subclass C<Router>. Its application object owns C<self.router>,
+does not subclass C<Router>. Its app object owns C<self.router>,
 delegates routing inspection, and wraps that Router with application
 middleware. See the
 L<official Starlette application source|https://github.com/Kludex/starlette/blob/main/starlette/applications.py>.

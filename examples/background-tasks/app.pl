@@ -33,7 +33,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Routing qw(route mount);
 use PAGI::Response qw(html_response json_response);
 use PAGI::Request;
-use PAGI::Utils qw(as_app invoke_app);
+use PAGI::Utils qw(as_app_object invoke_app);
 
 #---------------------------------------------------------
 # PATTERN 1: Async I/O (Non-Blocking)
@@ -190,7 +190,7 @@ HTML
 }),
 
 # GOOD: Fire-and-forget async I/O
-route('/async' => as_app(async sub {
+route('/async' => as_app_object(async sub {
     my ($scope, $receive, $send) = @_;
 
     # Response goes out immediately
@@ -209,7 +209,7 @@ route('/async' => as_app(async sub {
 })),
 
 # GOOD: CPU-bound work in subprocess
-route('/blocking' => as_app(async sub {
+route('/blocking' => as_app_object(async sub {
     my ($scope, $receive, $send) = @_;
 
     # Response goes out immediately
@@ -225,7 +225,7 @@ route('/blocking' => as_app(async sub {
 })),
 
 # Real-world example: User signup with background tasks
-route('/signup' => as_app(async sub {
+route('/signup' => as_app_object(async sub {
     my ($scope, $receive, $send) = @_;
     my $req = PAGI::Request->new($scope, $receive);
 

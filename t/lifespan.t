@@ -288,7 +288,7 @@ subtest 'Lifespan->wrap coerces its app argument' => sub {
     require TestApps::Component;
 
     my $app = PAGI::Lifespan->wrap(
-        TestApps::Component->new(body => 'lifespan-wrapped'),   # a component object, not a coderef
+        TestApps::Component->new(body => 'lifespan-wrapped'),   # an app object, not a coderef
         startup => async sub { 1 },
     );
     is ref($app), 'CODE', 'wrap returns a PAGI app coderef';

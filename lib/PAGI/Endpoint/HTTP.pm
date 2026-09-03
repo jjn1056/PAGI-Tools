@@ -187,8 +187,8 @@ Each receives:
 =back
 
 Use C<$request> for request data and return an application value, such as a
-L<PAGI::Response>, a Pages application, C<as_app>-wrapped native coderef, or
-another instantiated object with C<to_app>.
+L<PAGI::Response>, a Pages application, C<as_app_object>-wrapped native coderef, or
+another app object.
 
 B<Handler contract:> Every HTTP handler MUST return an application value
 (immediately or through a Future). Returning nothing or a scalar/hash value
