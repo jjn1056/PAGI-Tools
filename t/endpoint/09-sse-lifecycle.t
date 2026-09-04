@@ -8,6 +8,7 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::Endpoint::SSE;
+use PAGI::Routing qw(router sse);
 
 package MetricsEndpoint {
     use parent 'PAGI::Endpoint::SSE';
@@ -29,6 +30,43 @@ package MetricsEndpoint {
         my ($self, $sse) = @_;
         $seen_disconnect = $sse;
         push @log, 'disconnect';
+    }
+}
+
+{
+    package Local::ConfiguredSSE;
+    use parent 'PAGI::Endpoint::SSE';
+    our $NEW_CALLS = 0;
+    our @SEEN_IDS;
+
+    sub new {
+        my ($class, @args) = @_;
+        $NEW_CALLS++;
+        return PAGI::Endpoint::SSE::new($class, @args);
+    }
+
+    sub on_connect {
+        push @SEEN_IDS, Scalar::Util::refaddr($_[0]);
+        return $_[1]->start;
+    }
+}
+
+{
+    package Local::OverlappingConfiguredSSE;
+    use parent 'PAGI::Endpoint::SSE';
+
+    our (%GATES, @RECEIVER_IDS, @PROTOCOL_IDS, @SCOPE_IDS);
+
+    async sub on_connect {
+        my ($self, $sse) = @_;
+        my $path = $sse->scope->{path};
+
+        push @RECEIVER_IDS, Scalar::Util::refaddr($self);
+        push @PROTOCOL_IDS, Scalar::Util::refaddr($sse);
+        push @SCOPE_IDS, Scalar::Util::refaddr($sse->scope);
+
+        await $GATES{$path};
+        await $sse->start;
     }
 }
 
@@ -57,6 +95,74 @@ subtest 'lifecycle via to_app' => sub {
         'connect and disconnect receive the exact same stream');
     is(refaddr($MetricsEndpoint::seen_connect->scope), refaddr($scope),
         'the direct stream owns the selected scope');
+};
+
+subtest 'configured endpoint to_app retains the exact object across connections' => sub {
+    $Local::ConfiguredSSE::NEW_CALLS = 0;
+    @Local::ConfiguredSSE::SEEN_IDS = ();
+
+    my $hub = {};
+    my $configured = Local::ConfiguredSSE->new(hub => $hub);
+    my $app = $configured->to_app;
+
+    for my $connection (1, 2) {
+        $app->(
+            { type => 'sse', path => "/events/$connection", headers => [] },
+            sub { Future->done({ type => 'sse.disconnect' }) },
+            sub { Future->done },
+        )->get;
+    }
+
+    is $Local::ConfiguredSSE::NEW_CALLS, 1,
+        'configured object was not reconstructed';
+    is \@Local::ConfiguredSSE::SEEN_IDS,
+        [refaddr($configured), refaddr($configured)],
+        'connections use the exact configured object';
+};
+
+subtest 'overlapping streams retain the endpoint and isolate stream objects' => sub {
+    my $first_gate = Future->new;
+    my $second_gate = Future->new;
+    %Local::OverlappingConfiguredSSE::GATES = (
+        '/events/first'  => $first_gate,
+        '/events/second' => $second_gate,
+    );
+    @Local::OverlappingConfiguredSSE::RECEIVER_IDS = ();
+    @Local::OverlappingConfiguredSSE::PROTOCOL_IDS = ();
+    @Local::OverlappingConfiguredSSE::SCOPE_IDS = ();
+
+    my $endpoint = Local::OverlappingConfiguredSSE->new(bus => {});
+    my $app = $endpoint->to_app;
+    my $first_scope = {
+        type => 'sse', path => '/events/first', headers => [],
+    };
+    my $second_scope = {
+        type => 'sse', path => '/events/second', headers => [],
+    };
+    my $receive = sub { Future->done({ type => 'sse.disconnect' }) };
+
+    my $first = $app->($first_scope, $receive, sub { Future->done });
+    ok(!$first->is_ready, 'the first stream is held inside on_connect');
+    is scalar(@Local::OverlappingConfiguredSSE::RECEIVER_IDS), 1,
+        'the first stream entered the endpoint before the second began';
+
+    my $second = $app->($second_scope, $receive, sub { Future->done });
+    ok(!$second->is_ready,
+        'the second stream overlaps the first inside on_connect');
+    is \@Local::OverlappingConfiguredSSE::RECEIVER_IDS,
+        [refaddr($endpoint), refaddr($endpoint)],
+        'both in-flight streams use the exact configured endpoint';
+    isnt $Local::OverlappingConfiguredSSE::PROTOCOL_IDS[0],
+        $Local::OverlappingConfiguredSSE::PROTOCOL_IDS[1],
+        'overlapping streams receive distinct SSE objects';
+    is \@Local::OverlappingConfiguredSSE::SCOPE_IDS,
+        [refaddr($first_scope), refaddr($second_scope)],
+        'each SSE object retains its own exact stream scope';
+
+    $first_gate->done;
+    $second_gate->done;
+    is $first->get, undef, 'the released first stream completes cleanly';
+    is $second->get, undef, 'the released second stream completes cleanly';
 };
 
 subtest 'events are sent' => sub {
@@ -91,32 +197,33 @@ subtest 'default lifecycle starts the stream without an on_connect hook' => sub 
         'the default lifecycle starts one stream');
 };
 
-subtest 'one compiled app constructs a fresh endpoint for each connection' => sub {
+subtest 'sse route accepts a configured endpoint object' => sub {
     {
-        package FreshSSEEndpoint;
+        package RoutedConfiguredSSE;
         use parent 'PAGI::Endpoint::SSE';
-        our @instances;
+        our @hubs;
+
         sub on_connect {
-            push @instances, $_[0];
+            push @hubs, $_[0]->{hub};
             return $_[1]->start;
         }
     }
 
-    @FreshSSEEndpoint::instances = ();
-    my $app = FreshSSEEndpoint->to_app;
-    for my $connection (1, 2) {
-        $app->(
-            { type => 'sse', path => "/events/$connection", headers => [] },
-            sub { Future->done({ type => 'sse.disconnect' }) },
-            sub { Future->done },
-        )->get;
-    }
+    @RoutedConfiguredSSE::hubs = ();
+    my $hub = {};
+    my $configured = RoutedConfiguredSSE->new(hub => $hub);
+    my $app = router(routes => [
+        sse('/events' => $configured),
+    ])->to_app;
 
-    is(scalar @FreshSSEEndpoint::instances, 2,
-        'both connections reached their endpoint instance');
-    isnt(refaddr($FreshSSEEndpoint::instances[0]),
-        refaddr($FreshSSEEndpoint::instances[1]),
-        'the compiled app does not retain endpoint state between connections');
+    $app->(
+        { type => 'sse', path => '/events', headers => [] },
+        sub { Future->done({ type => 'sse.disconnect' }) },
+        sub { Future->done },
+    )->get;
+
+    is \@RoutedConfiguredSSE::hubs, [$hub],
+        'sse route uses the configured endpoint object';
 };
 
 subtest 'immediate on_connect results are normalized' => sub {

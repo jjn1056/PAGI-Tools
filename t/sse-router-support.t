@@ -5,7 +5,7 @@ use Future::AsyncAwait;
 
 use PAGI::SSE;
 use PAGI::Stash;
-use PAGI::App::Router;
+use PAGI::Routing qw(router sse);
 
 my @sent;
 my $send = sub {
@@ -78,14 +78,15 @@ subtest 'param returns undef when no route params in scope' => sub {
     is($sse->path_params, {}, 'params returns empty hash when no params');
 };
 
-subtest 'App Router supplies captures to an ordinary SSE object handler' => sub {
+subtest 'Router supplies captures to an ordinary SSE object handler' => sub {
     my @seen;
-    my $router = PAGI::App::Router->new;
-    $router->sse('/events/{channel}' => sub {
-        my ($sse) = @_;
-        push @seen, [ref($sse), scalar @_, $sse->path_params];
-        return Future->done;
-    });
+    my $router = router(routes => [
+        sse('/events/{channel}' => sub {
+            my ($sse) = @_;
+            push @seen, [ref($sse), scalar @_, $sse->path_params];
+            return Future->done;
+        }),
+    ]);
 
     $router->to_app->(
         { type => 'sse', path => '/events/news', headers => [] },

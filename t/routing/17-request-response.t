@@ -5,8 +5,15 @@ use Test2::V0;
 use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
+use PAGI::Routing qw(request_response);
 use PAGI::Routing::RequestResponse;
-use PAGI::Utils qw(request_response);
+
+{
+    package Local::CompanyRequest;
+    use parent 'PAGI::Request';
+
+    sub company_name { 'Example Corp' }
+}
 
 {
     package Local::ReturnedApp;
@@ -31,22 +38,59 @@ sub recorder {
     return (sub { push @events, $_[0]; return Future->done }, \@events);
 }
 
-subtest 'constructor and utility create the public RequestResponse component' => sub {
+subtest 'constructor and routing factory create the public RequestResponse app object' => sub {
     my $handler = sub { return sub { return } };
 
     my $from_constructor = PAGI::Routing::RequestResponse->new(
         handler => $handler,
     );
-    my $from_utility = request_response($handler);
+    my $from_factory = request_response($handler);
 
     is(ref($from_constructor), 'PAGI::Routing::RequestResponse',
-        'constructor returns the exact public component class');
-    is(ref($from_utility), 'PAGI::Routing::RequestResponse',
-        'utility returns the exact public component class');
-    ref_ok($from_constructor->to_app, 'CODE', 'component compiles to native CODE');
+        'constructor returns the exact public app-object class');
+    is(ref($from_factory), 'PAGI::Routing::RequestResponse',
+        'routing factory returns the exact public app-object class');
+    ref_ok($from_constructor->to_app, 'CODE', 'app object compiles to native CODE');
 };
 
-subtest 'constructor and utility require exactly one handler CODE' => sub {
+subtest 'request_factory supplies a Request subclass from the exact request boundary' => sub {
+    my (@factory_calls, @handler_requests, @app_calls);
+    my $factory = sub {
+        my ($scope, $receive) = @_;
+        push @factory_calls, [@_];
+        return Local::CompanyRequest->new($scope, $receive);
+    };
+    my $component = request_response(
+        sub {
+            my ($request) = @_;
+            push @handler_requests, $request;
+            return sub {
+                push @app_calls, [@_];
+                return 'custom request complete';
+            };
+        },
+        request_factory => $factory,
+    );
+    my $app = $component->to_app;
+    my $scope = scope('/company');
+    my $receive = quiet_receive();
+    my ($send) = recorder();
+
+    is($app->($scope, $receive, $send)->get, 'custom request complete',
+        'handler result remains the invoked application');
+    is(scalar @factory_calls, 1, 'request factory runs exactly once');
+    is($factory_calls[0], [$scope, $receive],
+        'request factory receives exactly the original scope and receive');
+    is(scalar @handler_requests, 1, 'handler runs exactly once');
+    isa_ok($handler_requests[0], ['Local::CompanyRequest'],
+        'handler receives the custom Request subclass');
+    is($handler_requests[0]->company_name, 'Example Corp',
+        'custom Request behavior is available to the handler');
+    is($app_calls[0], [$scope, $receive, $send],
+        'returned application retains the exact original triplet');
+};
+
+subtest 'constructor and routing factory require exactly one handler CODE' => sub {
     like(dies { PAGI::Routing::RequestResponse->new },
         qr/request_response handler must be a coderef/,
         'constructor rejects a missing handler');
@@ -55,10 +99,36 @@ subtest 'constructor and utility require exactly one handler CODE' => sub {
         'constructor rejects a scalar handler');
     like(dies { request_response() },
         qr/request_response handler must be a coderef/,
-        'utility rejects a missing handler');
+        'routing factory rejects a missing handler');
     like(dies { request_response(sub { }, 'extra') },
-        qr/request_response handler must be a coderef/,
-        'utility rejects extra arguments');
+        qr{request_response option list must be key/value pairs},
+        'routing factory rejects an odd option list');
+    like(dies {
+        PAGI::Routing::RequestResponse->new(
+            handler => sub { }, request_factory => 'not code',
+        );
+    }, qr/request_response request_factory must be a coderef/,
+        'constructor rejects a non-coderef request factory');
+    like(dies { request_response(sub { }, unknown => sub { }) },
+        qr/unknown request_response option 'unknown'/,
+        'routing factory rejects an unknown option');
+};
+
+subtest 'request_factory must return a Request instance or subclass' => sub {
+    my $handler_called = 0;
+    my $app = request_response(
+        sub {
+            ++$handler_called;
+            return sub { return };
+        },
+        request_factory => sub { return bless {}, 'Local::NotARequest' },
+    )->to_app;
+
+    like(dies {
+        $app->(scope('/invalid-factory'), quiet_receive(), sub { Future->done })->get;
+    }, qr/request_response request_factory must return a PAGI::Request instance or subclass/,
+        'invalid request object gets the factory-boundary diagnostic');
+    is($handler_called, 0, 'handler does not run with an invalid request object');
 };
 
 subtest 'non-HTTP scope is rejected before the handler runs' => sub {
@@ -136,8 +206,8 @@ subtest 'invalid and undefined handler results fail before application invocatio
         my ($label, $value) = @$case;
         my $app = request_response(sub { return $value })->to_app;
         like(dies { $app->(scope("/$label"), quiet_receive(), sub { ++$started; Future->done })->get },
-            qr/request endpoint must return a PAGI application: a coderef or instantiated object with to_app/,
-            "$label result gets the Request endpoint diagnostic");
+            qr/request handler must return a PAGI application: a native coderef or app object/,
+            "$label result gets the Request handler diagnostic");
     }
     is($started, 0, 'invalid values never start an application response');
 };

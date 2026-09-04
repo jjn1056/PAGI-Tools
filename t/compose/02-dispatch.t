@@ -12,7 +12,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Pages ();
 use PAGI::Response::Text ();
 use PAGI::Routing qw(mount route websocket sse router middleware);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub recording_middleware {
     my ($label, $seen) = @_;
@@ -83,6 +83,24 @@ subtest 'routes mode dispatches HTTP WebSocket and SSE' => sub {
         { type => 'sse.send', data => 'ready' },
         { type => 'sse.close' },
     ], 'SSE route receives its direct protocol object');
+};
+
+subtest 'Compose bare HTTP defaults receive one Request object' => sub {
+    my @arguments;
+    my $app = compose(
+        routes => [],
+        http_default => sub {
+            push @arguments, @_;
+            return PAGI::Response::Text->new('Compose default');
+        },
+    )->to_app;
+
+    is(response_body(run_scope($app, scope(path => '/missing'))), 'Compose default',
+        'the bare Compose default owns an HTTP miss');
+    is(scalar @arguments, 1,
+        'the bare Compose default receives one argument');
+    ok($arguments[0]->isa('PAGI::Request'),
+        'the bare Compose default receives the request handler object');
 };
 
 subtest 'Compose retains an explicit unnamed root Router Mount' => sub {
@@ -225,7 +243,7 @@ subtest 'retained Router compiles fresh per Compose to_app without public to_app
 subtest 'selected native immediate and Future-backed completion remain normalized' => sub {
     my $immediate_calls = 0;
     my $immediate = compose(routes => [
-        route('/immediate' => as_app(sub {
+        route('/immediate' => as_app_object(sub {
             my ($scope, $receive, $send) = @_;
             ++$immediate_calls;
             $send->({
@@ -245,7 +263,7 @@ subtest 'selected native immediate and Future-backed completion remain normalize
 
     my $pending = Future->new;
     my $future_app = compose(routes => [
-        route('/future' => as_app(sub {
+        route('/future' => as_app_object(sub {
             my ($scope, $receive, $send) = @_;
             $send->({
                 type => 'http.response.start', status => 204, headers => [],

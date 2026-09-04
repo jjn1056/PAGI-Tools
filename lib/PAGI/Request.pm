@@ -778,9 +778,9 @@ without UTF-8 decoding.
 
 =head1 PATH PARAMETERS
 
-Path parameters are captured from the URL path by a router (e.g., L<PAGI::App::Router>)
-and stored in C<< $scope->{path_params} >>. This is a router-agnostic interface -
-any router can populate this field.
+Path parameters are captured from the URL path by a router (for example,
+L<PAGI::Routing>) and stored in C<< $scope->{path_params} >>. This is a
+router-agnostic interface; any router can populate this field.
 
 =head2 path_params
 

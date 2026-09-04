@@ -503,6 +503,14 @@ that want strict access use `app_state($websocket)` or
 `app_state($sse)`. Harmonizing the direct WebSocket/SSE convenience methods can be considered with
 `LATER-CONTEXT`; it is not allowed to delay direct protocol handler arguments.
 
+#### 2026-09-03 follow-up resolution
+
+The historical deferral above remains accurate for this original phase. The
+follow-up [Protocol State Facade Harmonization Implementation Plan](../plans/2026-09-03-protocol-state-facade-harmonization.md)
+resolves it: direct `PAGI::WebSocket->state` and `PAGI::SSE->state` now match
+`PAGI::Request->state` as `PAGI::State|undef`, while lifecycle initialization
+continues to own the mutable raw hashref.
+
 ## 10. Shared scope-source contract
 
 ### 10.1 Accepted sources

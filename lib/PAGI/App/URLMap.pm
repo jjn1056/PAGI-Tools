@@ -108,7 +108,7 @@ Longest prefix match wins. The mounted app sees an adjusted path
 with the prefix removed.
 
 Mount targets and C<default> accept anything L<PAGI::Utils/to_app> accepts:
-a coderef or an instantiated component object with a C<to_app> method.
+a coderef or an app object with a C<to_app> method.
 Package-name strings are rejected.
 Mounted apps receive a scope with C<path> stripped of the prefix and
 C<root_path> extended with it, per the PAGI specification.
@@ -139,7 +139,7 @@ URLMap has no Pages configuration surface.
 
 =over 4
 
-=item * C<default> - Coderef or instantiated component object with a C<to_app>
+=item * C<default> - Coderef or app object with a C<to_app>
 method to use when no prefix matches. Package-name strings are rejected.
 
 =back

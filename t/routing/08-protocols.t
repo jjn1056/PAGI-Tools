@@ -12,7 +12,7 @@ use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::SSE;
 use PAGI::WebSocket;
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub ProtocolProvider { return qr/accepted/ }
 
@@ -131,7 +131,7 @@ subtest 'protocol endpoint shape selects one-argument handlers or native applica
             push @anonymous_sse_calls, [@_];
             return $anonymous_completion;
         }),
-        websocket('/adapted' => as_app(sub {
+        websocket('/adapted' => as_app_object(sub {
             push @native_calls, [@_];
             return 'immediate native completion';
         }), middleware => [$capture_native_triplet]),
@@ -175,13 +175,13 @@ subtest 'protocol endpoint shape selects one-argument handlers or native applica
         'a handler Future completion is awaited and remains inert');
 
     run_scope($app, scope(type => 'websocket', path => '/adapted'));
-    is(scalar @native_calls, 1, 'as_app invokes the wrapped native CODE once');
+    is(scalar @native_calls, 1, 'as_app_object invokes the wrapped native CODE once');
     is(scalar @{$native_calls[0]}, 3,
-        'as_app gives the wrapped CODE the native triplet');
+        'as_app_object gives the wrapped CODE the native triplet');
     is(
         [map { refaddr($_) } @{$native_calls[0]}],
         [map { refaddr($_) } @{$selected_native_triplets[0]}],
-        'as_app receives the exact selected scope, receive, and send values',
+        'as_app_object receives the exact selected scope, receive, and send values',
     );
 
     my $object_running = $app->(
@@ -226,18 +226,18 @@ subtest 'protocol endpoint shape selects one-argument handlers or native applica
 
 subtest 'protocol endpoints reject package names and unblessed references' => sub {
     for my $case (
-        [websocket => \&websocket],
-        [sse       => \&sse],
+        [websocket => \&websocket, qr/route endpoint must be a WebSocket handler coderef or app object/],
+        [sse       => \&sse, qr/route endpoint must be a SSE handler coderef or app object/],
     ) {
-        my ($kind, $constructor) = @$case;
+        my ($kind, $constructor, $error) = @$case;
         like(
             dies { $constructor->("/$kind-package" => 'Local::ProtocolApplication') },
-            qr/route endpoint must be a coderef or instantiated object with to_app/,
+            $error,
             "$kind rejects a package-name endpoint",
         );
         like(
             dies { $constructor->("/$kind-unblessed" => {}) },
-            qr/route endpoint must be a coderef or instantiated object with to_app/,
+            $error,
             "$kind rejects an unblessed endpoint",
         );
     }
@@ -650,7 +650,7 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
     }
 };
 
-subtest 'as_app HTTP, WebSocket, and SSE leaves own their exact matched channels' => sub {
+subtest 'as_app_object HTTP, WebSocket, and SSE leaves own their exact matched channels' => sub {
     my @seen;
     my $native = sub {
         my ($label, $event) = @_;
@@ -669,13 +669,13 @@ subtest 'as_app HTTP, WebSocket, and SSE leaves own their exact matched channels
         };
     };
     my $app = router(routes => [
-        route('/native-http/{id}' => as_app($native->('http', {
+        route('/native-http/{id}' => as_app_object($native->('http', {
             type => 'http.response.start', status => 204, headers => [],
         }))),
-        websocket('/native-ws/{id}' => as_app($native->('websocket', {
+        websocket('/native-ws/{id}' => as_app_object($native->('websocket', {
             type => 'websocket.close', code => 1001, reason => 'native',
         }))),
-        sse('/native-sse/{id}' => as_app($native->('sse', {
+        sse('/native-sse/{id}' => as_app_object($native->('sse', {
             type => 'sse.close',
         }))),
     ])->to_app;
@@ -711,14 +711,14 @@ subtest 'as_app HTTP, WebSocket, and SSE leaves own their exact matched channels
             ['websocket', 3, 'websocket', { id => '2' }],
             ['sse', 3, 'sse', { id => '3' }],
         ],
-        'as_app leaves receive exactly three native values and matched child scopes',
+        'as_app_object leaves receive exactly three native values and matched child scopes',
     );
     is($event_sets[0], [{ type => 'http.response.start', status => 204, headers => [] }],
-        'as_app HTTP leaf owns HTTP emission');
+        'as_app_object HTTP leaf owns HTTP emission');
     is($event_sets[1], [{ type => 'websocket.close', code => 1001, reason => 'native' }],
-        'as_app WebSocket leaf owns WebSocket emission');
+        'as_app_object WebSocket leaf owns WebSocket emission');
     is($event_sets[2], [{ type => 'sse.close' }],
-        'as_app SSE leaf owns SSE emission and its Future result is inert');
+        'as_app_object SSE leaf owns SSE emission and its Future result is inert');
 };
 
 subtest 'handler and native protocols apply inline providers and explicit constraints before invocation' => sub {
@@ -728,7 +728,7 @@ subtest 'handler and native protocols apply inline providers and explicit constr
             push @normal_ws, $_[0]->path_param('id');
             await $_[0]->close(1000, 'normal provider');
         }),
-        websocket('/predicate-ws/{id}' => as_app(sub {
+        websocket('/predicate-ws/{id}' => as_app_object(sub {
             my ($request_scope, $receive, $send) = @_;
             push @native_ws, $request_scope->{path_params}{id};
             $send->({
@@ -742,7 +742,7 @@ subtest 'handler and native protocols apply inline providers and explicit constr
             await $_[0]->close;
         }, name => 'predicate-sse',
             constraints => { id => sub { return $_[0] eq 'accepted' } }),
-        sse('/provider-sse/{id:&ProtocolProvider}' => as_app(sub {
+        sse('/provider-sse/{id:&ProtocolProvider}' => as_app_object(sub {
             my ($request_scope, $receive, $send) = @_;
             push @native_sse, $request_scope->{path_params}{id};
             $send->({ type => 'sse.close' })->get;
@@ -808,7 +808,7 @@ subtest 'protocol adapters await pending completion and propagate failures' => s
     is(\@normal_events, [], 'normal resolved value is not interpreted as an event');
 
     my $native_completion = Future->new;
-    my $native_app = sse('/wait' => as_app(sub {
+    my $native_app = sse('/wait' => as_app_object(sub {
         return $native_completion;
     }))->to_app;
     my $native_running = $native_app->(
@@ -1026,7 +1026,7 @@ subtest 'HTTP selection ignores WebSocket and SSE leaves without warnings' => su
 subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcomes' => sub {
     my @http_default_calls;
     my $app = router(
-        http_default => async sub {
+        http_default => as_app_object(async sub {
             my ($request_scope, $receive, $send) = @_;
             push @http_default_calls, $request_scope->{type} // 'http';
             await Future->wrap($send->({
@@ -1036,7 +1036,7 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
                 type => 'http.response.body', body => 'custom HTTP missing',
                 more => 0,
             }));
-        },
+        }),
         routes => [],
     )->to_app;
 

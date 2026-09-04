@@ -22,15 +22,10 @@ my @load_modules = qw(
     PAGI::Middleware
     PAGI::Middleware::Helpers
     PAGI::Middleware::Builder
-    PAGI::App::Router
-    PAGI::App::Router::Builder
-    PAGI::App::Router::Materializer
     PAGI::App::File
     PAGI::App::File::Result
     PAGI::App::WrapPSGI
     PAGI::Endpoint::HTTP
-    PAGI::Endpoint::Router
-    PAGI::Endpoint::Router::Builder
     PAGI::Endpoint::SSE
     PAGI::Endpoint::WebSocket
     PAGI::Request
@@ -52,6 +47,8 @@ my @load_modules = qw(
     PAGI::Response::File::Plan
     PAGI::Response::Stream
     PAGI::Response::Writer
+    PAGI::Response::NDJSON
+    PAGI::Response::NDJSON::Writer
     PAGI::Pages
     PAGI::Session
     PAGI::Stash
@@ -59,8 +56,9 @@ my @load_modules = qw(
     PAGI::SSE
     PAGI::Lifespan
     PAGI::Utils
+    PAGI::Utils::AppObject
     PAGI::Utils::Scope
-    PAGI::SendValidation
+    PAGI::Utils::_SendValidation
     PAGI::Test::Client
     PAGI::Test::Response
 );

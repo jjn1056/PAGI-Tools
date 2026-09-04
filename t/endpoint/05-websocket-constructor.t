@@ -49,4 +49,37 @@ subtest 'subclass can override encoding' => sub {
     is(JSONEndpoint->encoding, 'json', 'custom encoding');
 };
 
+subtest 'class to_app constructs its endpoint immediately and only once' => sub {
+    {
+        package Local::ConstructionCountingWebSocket;
+        use parent 'PAGI::Endpoint::WebSocket';
+        our $NEW_CALLS = 0;
+
+        sub new {
+            my ($class, @args) = @_;
+            $NEW_CALLS++;
+            return PAGI::Endpoint::WebSocket::new($class, @args);
+        }
+
+        sub on_connect { return $_[1]->accept }
+    }
+
+    $Local::ConstructionCountingWebSocket::NEW_CALLS = 0;
+    my $app = Local::ConstructionCountingWebSocket->to_app;
+
+    is $Local::ConstructionCountingWebSocket::NEW_CALLS, 1,
+        'class to_app constructs the endpoint immediately';
+
+    for my $connection (1, 2) {
+        $app->(
+            { type => 'websocket', path => "/ws/$connection", headers => [] },
+            sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+            sub { Future->done },
+        )->get;
+    }
+
+    is $Local::ConstructionCountingWebSocket::NEW_CALLS, 1,
+        'connections do not construct additional endpoint objects';
+};
+
 done_testing;

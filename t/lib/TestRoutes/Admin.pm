@@ -3,22 +3,17 @@ package TestRoutes::Admin;
 use strict;
 use warnings;
 use PAGI::Response::Text ();
-use PAGI::App::Router;
+use PAGI::Routing qw(route router);
 
 sub to_app {
-    my $r = PAGI::App::Router->new;
-
-    $r->get('/' => sub {
-        my ($request) = @_;
-        return PAGI::Response::Text->new('admin_dashboard');
-    });
-
-    $r->get('/settings' => sub {
-        my ($request) = @_;
-        return PAGI::Response::Text->new('admin_settings');
-    });
-
-    return $r->to_app;
+    return router(routes => [
+        route('/' => sub {
+            return PAGI::Response::Text->new('admin_dashboard');
+        }),
+        route('/settings' => sub {
+            return PAGI::Response::Text->new('admin_settings');
+        }),
+    ])->to_app;
 }
 
 1;

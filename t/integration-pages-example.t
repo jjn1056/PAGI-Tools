@@ -56,7 +56,7 @@ ok(!$load_error, 'the complete Pages example loads cleanly')
     or diag($load_error);
 isa_ok($example, 'PAGI::Compose');
 
-subtest 'class, configured, exported, Route, Mount, raw, and lifespan forms execute' => sub {
+subtest 'class, configured, exported, Route, Mount, and lifespan forms execute' => sub {
     plan skip_all => 'Pages example did not load'
         unless ref($example) eq 'PAGI::Compose';
 
@@ -112,11 +112,6 @@ subtest 'class, configured, exported, Route, Mount, raw, and lifespan forms exec
         is($request->header('X-Demo'), 'Request application value',
             'returned application retains configured headers');
 
-        my $raw = $example_client->get('/raw');
-        is($raw->status, 404,
-            'as_app native Route delegates the Pages application');
-        is($raw->header('X-Demo'), 'Raw application value',
-            'raw triplet invoke_app delegation retains configured headers');
     });
 
     is($state->{pages_example}, 'stopped',

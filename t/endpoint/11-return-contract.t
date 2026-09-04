@@ -8,7 +8,7 @@ use PAGI::Response;
 use PAGI::Response::JSON ();
 use PAGI::Response::Text ();
 use PAGI::Pages ();
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 { package T::Ep; use parent 'PAGI::Endpoint::HTTP'; use Future::AsyncAwait;
   async sub get { my ($self, $request) = @_; return PAGI::Response::JSON->new({ hi => 1 }) } }
@@ -63,7 +63,7 @@ subtest 'handler returning a non-application croaks before invocation' => sub {
         my ($label, $endpoint) = @$case;
         like(dies { $endpoint->dispatch(PAGI::Request->new(
             { type => 'http', method => 'GET' }, sub { Future->done },
-        ))->get }, qr/PAGI application|coderef or instantiated object with to_app/,
+        ))->get }, qr/PAGI application|native coderef or app object/,
             "$label is rejected at the Endpoint boundary");
     }
 };
@@ -74,7 +74,7 @@ subtest 'dispatch retains immediate and Future application values exactly' => su
     );
     my $response = PAGI::Response::Text->new('exact response');
     my $pages = PAGI::Pages->not_found;
-    my $native = as_app(sub { return Future->done });
+    my $native = as_app_object(sub { return Future->done });
     my $object = T::EndpointToAppOnly->new;
 
     for my $case (
@@ -82,13 +82,13 @@ subtest 'dispatch retains immediate and Future application values exactly' => su
         ['Future response', T::FutureValue->new(value => $response), $response],
         ['pages', T::Value->new(value => $pages), $pages],
         ['native app', T::Value->new(value => $native), $native],
-        ['to_app object', T::Value->new(value => $object), $object],
+        ['app object', T::Value->new(value => $object), $object],
     ) {
         my ($label, $endpoint, $expected) = @$case;
         is($endpoint->dispatch($request)->get, $expected,
             "$label retains its exact application instance");
     }
-    is($object->{builds}, 0, 'dispatch validates without compiling a to_app object');
+    is($object->{builds}, 0, 'dispatch validates without compiling an app object');
 };
 
 subtest 'to_app invokes the returned application value' => sub {
@@ -122,7 +122,7 @@ subtest 'respond-only objects remain invalid application values' => sub {
                 { type => 'http', method => 'GET' }, sub { Future->done },
             ),
         )->get;
-    }, qr/PAGI application|coderef or instantiated object with to_app/,
+    }, qr/PAGI application|native coderef or app object/,
         'respond is not an application-value escape hatch');
 };
 

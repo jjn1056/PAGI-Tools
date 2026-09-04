@@ -11,7 +11,7 @@ use PAGI::Response;
 use PAGI::Response::Text ();
 use PAGI::Response::Stream ();
 use PAGI::Routing qw(router route mount middleware);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub scope {
     my (%changes) = @_;
@@ -249,7 +249,7 @@ subtest 'the outer HEAD boundary lets router middleware observe the full represe
         });
     };
     my $app = router(
-        routes => [route('/buffered' => as_app($raw))],
+        routes => [route('/buffered' => as_app_object($raw))],
         middleware => [middleware('ContentLength')],
     )->to_app;
 
@@ -307,7 +307,7 @@ subtest 'one outer HEAD owner covers separately compiled child routers' => sub {
     for my $case (@cases) {
         my ($label, $build_parent, $request_path, $child_path) = @$case;
         my $child = router(routes => [
-            route($child_path => as_app(async sub {
+            route($child_path => as_app_object(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type    => 'http.response.start',
@@ -343,7 +343,7 @@ subtest 'HEAD streaming suppression waits for an explicit terminal body' => sub 
         headers => [['x-stream' => 'explicit']],
     };
     my $app = router(routes => [
-        route('/stream' => as_app(async sub {
+        route('/stream' => as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->($start);
             await $send->({ type => 'http.response.body', body => 'one', more => 1 });
@@ -370,7 +370,7 @@ subtest 'HEAD streaming suppression treats absent more as terminal' => sub {
         headers => [['x-stream' => 'implicit']],
     };
     my $app = router(routes => [
-        route('/stream' => as_app(async sub {
+        route('/stream' => as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->($start);
             await $send->({ type => 'http.response.body', body => 'one', more => 1 });
@@ -392,7 +392,7 @@ subtest 'HEAD suppression consumes terminal sendfile descriptors before transpor
     my $file_open_attempts = 0;
     my @events;
     my $app = router(routes => [
-        route('/file' => as_app(async sub {
+        route('/file' => as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({
                 type    => 'http.response.start',
@@ -474,7 +474,7 @@ subtest 'Router-generated HEAD outcomes preserve GET-equivalent metadata and sup
         'the one outer HEAD boundary suppresses the generated 405 body');
 
     my $file_app = router(
-        http_default => async sub {
+        http_default => as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             await Future->wrap($send->({
                 type => 'http.response.start', status => 404,
@@ -489,7 +489,7 @@ subtest 'Router-generated HEAD outcomes preserve GET-equivalent metadata and sup
                 type => 'http.response.trailers',
                 headers => [['x-fallback', 'complete']],
             }));
-        },
+        }),
         routes => [],
     )->to_app;
     my $file = run_app($file_app, method => 'HEAD', path => '/missing');
@@ -504,7 +504,7 @@ subtest 'Router-generated HEAD outcomes preserve GET-equivalent metadata and sup
 
 subtest 'GET events remain byte-for-byte unchanged' => sub {
     my $app = router(routes => [
-        route('/unchanged' => as_app(async sub {
+        route('/unchanged' => as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({
                 type    => 'http.response.start',
@@ -534,7 +534,7 @@ subtest 'GET events remain byte-for-byte unchanged' => sub {
 subtest 'HEAD forwards unrelated response events unchanged' => sub {
     my $diagnostic = { type => 'http.response.diagnostic', detail => 'malformed app evidence' };
     my $app = router(routes => [
-        route('/diagnostic' => as_app(async sub {
+        route('/diagnostic' => as_app_object(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({ type => 'http.response.start', status => 200, headers => [] });
             await $send->($diagnostic);
@@ -581,7 +581,7 @@ subtest 'the outer HEAD boundary covers application and inline mounts' => sub {
 
     my $streamed = router(routes => [
         mount('/stream', routes => [
-            route('/events' => as_app(async sub {
+            route('/events' => as_app_object(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type    => 'http.response.start',

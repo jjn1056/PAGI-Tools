@@ -2,10 +2,9 @@
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use PAGI::App::Router;
 use PAGI::Compose qw(compose);
-use PAGI::Routing qw(mount);
-use PAGI::Utils qw(as_app);
+use PAGI::Response qw(response stream_response text_response);
+use PAGI::Routing qw(route websocket sse);
 
 # Safe sleep that works even without Future::IO backend
 my $HAS_FUTURE_IO = eval { require Future::IO; 1 };
@@ -14,87 +13,35 @@ sub maybe_sleep {
     return $HAS_FUTURE_IO ? Future::IO->sleep($seconds) : Future->done;
 }
 
-# Watch for SSE disconnect in background
-async sub watch_sse_disconnect {
-    my ($receive) = @_;
-    while (1) {
-        my $event = await $receive->();
-        return $event if $event->{type} eq 'sse.disconnect';
-    }
-}
-
-# Create the router
-my $router = PAGI::App::Router->new;
+# Declare routes in source order
+my @routes = (
 
 # ============================================================================
 # HTTP Routes
 # ============================================================================
 
 # Hello World endpoint
-$router->get('/' => as_app(async sub {
-    my ($scope, $receive, $send) = @_;
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => 200,
-        headers => [['content-type', 'text/plain']],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => 'Hello, World!',
-        more => 0,
-    });
-}))->name('hello');
+route('/' => sub {
+    return text_response('Hello, World!');
+}, name => 'hello'),
 
 # POST Echo - echoes back the request body
-$router->post('/echo' => as_app(async sub {
-    my ($scope, $receive, $send) = @_;
+route('/echo' => async sub {
+    my ($request) = @_;
+    my $body = await $request->body;
 
-    # Find content-type from request headers (array of pairs)
-    my $content_type = 'application/octet-stream';
-    for my $header (@{$scope->{headers} // []}) {
-        if (lc($header->[0]) eq 'content-type') {
-            $content_type = $header->[1];
-            last;
-        }
-    }
-
-    # Collect the request body
-    my $body = '';
-    while (1) {
-        my $event = await $receive->();
-        last if $event->{type} ne 'http.request';
-        $body .= $event->{body} // '';
-        last unless $event->{more};
-    }
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => 200,
-        headers => [
-            ['content-type', $content_type],
-            ['x-echoed-length', length($body)],
-        ],
-    });
-    await $send->({
-        type => 'http.response.body',
-        body => $body,
-        more => 0,
-    });
-}))->name('echo');
+    return response(
+        $body,
+        content_type => $request->header('content-type')
+            // 'application/octet-stream',
+        headers => ['X-Echoed-Length' => length($body)],
+    );
+}, methods => ['POST'], name => 'echo'),
 
 # HTTP Streaming - sends chunks with delays
-$router->get('/stream' => as_app(async sub {
-    my ($scope, $receive, $send) = @_;
-
-    # Access shared state from lifespan
-    my $counter = $scope->{state}{request_counter}++;
-
-    await $send->({
-        type    => 'http.response.start',
-        status  => 200,
-        headers => [['content-type', 'text/plain']],
-    });
+route('/stream' => sub {
+    my ($request) = @_;
+    my $counter = $request->state->data->{request_counter}++;
 
     my @chunks = (
         "Stream started (request #$counter)\n",
@@ -104,71 +51,44 @@ $router->get('/stream' => as_app(async sub {
         "Stream complete!\n",
     );
 
-    for my $i (0 .. $#chunks) {
-        my $more = ($i < $#chunks) ? 1 : 0;
-        await $send->({
-            type => 'http.response.body',
-            body => $chunks[$i],
-            more => $more,
-        });
-        await maybe_sleep(0.5) if $more;
-    }
-}))->name('http_stream');
+    return stream_response(
+        async sub {
+            my ($writer) = @_;
+            for my $i (0 .. $#chunks) {
+                await $writer->write($chunks[$i]);
+                await maybe_sleep(0.5) if $i < $#chunks;
+            }
+        },
+        content_type => 'text/plain; charset=utf-8',
+    );
+}, name => 'http_stream'),
 
 # ============================================================================
 # WebSocket Route
 # ============================================================================
 
-$router->websocket('/ws/echo' => as_app(async sub {
-    my ($scope, $receive, $send) = @_;
-
-    # Wait for connect event
-    my $event = await $receive->();
-    return unless $event->{type} eq 'websocket.connect';
-
-    # Accept the connection
-    await $send->({ type => 'websocket.accept' });
-
-    # Echo loop
-    while (1) {
-        my $frame = await $receive->();
-
-        if ($frame->{type} eq 'websocket.receive') {
-            if (defined $frame->{text}) {
-                await $send->({
-                    type => 'websocket.send',
-                    text => "Echo: $frame->{text}",
-                });
-            }
-            elsif (defined $frame->{bytes}) {
-                await $send->({
-                    type  => 'websocket.send',
-                    bytes => $frame->{bytes},
-                });
-            }
+websocket('/ws/echo' => async sub {
+    my ($ws) = @_;
+    await $ws->accept;
+    await $ws->each_message(async sub {
+        my ($frame) = @_;
+        if (defined $frame->{text}) {
+            await $ws->send_text("Echo: $frame->{text}");
         }
-        elsif ($frame->{type} eq 'websocket.disconnect') {
-            last;
+        elsif (defined $frame->{bytes}) {
+            await $ws->send_bytes($frame->{bytes});
         }
-    }
-}))->name('ws_echo');
+    });
+}, name => 'ws_echo'),
 
 # ============================================================================
 # SSE Route
 # ============================================================================
 
-$router->sse('/events' => as_app(async sub {
-    my ($scope, $receive, $send) = @_;
-
-    # Start SSE stream
-    await $send->({
-        type    => 'sse.start',
-        status  => 200,
-        headers => [['content-type', 'text/event-stream']],
-    });
-
-    # Watch for disconnect in background
-    my $disconnect = watch_sse_disconnect($receive);
+sse('/events' => async sub {
+    my ($sse) = @_;
+    await $sse->start;
+    my $disconnect = $sse->run;
 
     # Send events
     my $count = 0;
@@ -176,42 +96,33 @@ $router->sse('/events' => as_app(async sub {
         last if $disconnect->is_ready;
 
         $count++;
-        await $send->({
-            type  => 'sse.send',
+        await $sse->send_event(
             event => 'tick',
             id    => $count,
             data  => "Event #$count at " . time(),
-        });
+        );
 
         await maybe_sleep(1);
     }
 
     # Final event
     unless ($disconnect->is_ready) {
-        await $send->({
-            type  => 'sse.send',
+        await $sse->send_event(
             event => 'done',
             data  => 'Stream complete',
-        });
+        );
+        await $sse->close;
     }
-
-    # Never cancel the live protocol receive: $disconnect is built directly
-    # from awaiting $receive->() in a loop, so cancelling it here would
-    # cancel the SSE scope's own receive call, not some internal detail of
-    # ours. If the stream finished on its own (never actually disconnected),
-    # just retain the still-pending watcher instead -- it resolves on its
-    # own whenever the transport eventually reports the real disconnect.
-    $disconnect->retain unless $disconnect->is_ready;
-}))->name('sse_events');
+    await $disconnect unless $disconnect->is_ready;
+}, name => 'sse_events'),
+);
 
 # ============================================================================
 # Main Application with Lifespan
 # ============================================================================
 
 compose(
-    routes => [
-        mount('/' => app => $router),
-    ],
+    routes => \@routes,
     lifespan => {
         startup => async sub {
             my ($state) = @_;

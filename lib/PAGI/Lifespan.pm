@@ -173,14 +173,15 @@ PAGI::Lifespan - Wrap a PAGI app with lifecycle management
 =head1 SYNOPSIS
 
     use PAGI::Lifespan;
-    use PAGI::App::Router;
+    use PAGI::Routing qw(route router);
 
-    my $router = PAGI::App::Router->new;
-    $router->get('/' => sub { ... });
+    my $routing = router(routes => [
+        route('/' => sub { ... }),
+    ]);
 
     # Wrap app with lifecycle management
     my $app = PAGI::Lifespan->wrap(
-        $router->to_app,
+        $routing,
         startup => async sub {
             my ($state) = @_;  # State hash injected into every request
             $state->{db} = DBI->connect(...);
@@ -200,10 +201,10 @@ injects application state into the scope for all requests.
 
 =head2 State Flow
 
-The C<startup> and C<shutdown> callbacks receive a C<$state> hashref
-as their first argument. Populate this with database connections,
-caches, configuration, etc. This is similar to how Starlette's
-lifespan context manager yields state to C<request.state>.
+The C<startup> and C<shutdown> callbacks receive a mutable C<$state> hashref
+as their first argument. Lifespan owns application-state initialization, so
+these callbacks populate and clean up database connections, caches,
+configuration, and similar shared resources.
 
     startup => async sub {
         my ($state) = @_;
@@ -219,11 +220,17 @@ For every request, this state is injected into the scope as
 C<$scope-E<gt>{state}>. The exact incoming scope hashref is updated and passed
 to the wrapped application. An existing C<state> value remains authoritative;
 otherwise the injected state is visible to the caller that supplied the scope.
-This makes it accessible via:
+Request-time consumers use the read-oriented L<PAGI::State> facade instead of
+the mutable lifecycle hashref:
 
-    $req->state->{db}    # In HTTP handlers
-    $ws->state->{db}     # In WebSocket handlers
-    $sse->state->{db}    # In SSE handlers
+    my $db = $req->state->get('db');    # In HTTP handlers
+    my $db = $ws->state->get('db');     # In WebSocket handlers
+    my $db = $sse->state->get('db');    # In SSE handlers
+
+C<PAGI::Request>, C<PAGI::WebSocket>, and C<PAGI::SSE> expose
+C<PAGI::State|undef>: check for C<undef> when lifespan state is optional.
+The raw C<$state> hashref remains the lifecycle interface and is also returned
+by L</state> because lifespan is the mutation-owning boundary.
 
 =head2 Hook Aggregation
 
@@ -257,7 +264,7 @@ Both C<startup> and C<shutdown> callbacks receive the shared state
 hashref as their first argument.
 
 The C<app> argument accepts the two native application forms supported by
-L<PAGI::Utils/to_app>: a coderef or an instantiated component object with a
+L<PAGI::Utils/to_app>: a coderef or an app object with a
 C<to_app> method. Package-name strings are rejected; load and construct the
 component explicitly. The coercion happens once at construction time.
 
@@ -266,7 +273,7 @@ component explicitly. The coercion happens once at construction time.
     my $app = PAGI::Lifespan->wrap($inner_app, startup => ..., shutdown => ...);
 
 Class method shortcut that creates a wrapper and returns the app coderef. The
-first argument accepts a coderef or instantiated C<to_app> object and rejects
+first argument accepts a coderef or app object and rejects
 package-name strings, just like C<new(app =E<gt> ...)>.
 
 =head2 to_app
@@ -279,10 +286,12 @@ Returns the wrapped PAGI application coderef.
 
     my $state = $lifespan->state;
 
-Returns the state hashref.
+Returns the mutable raw state hashref. This is the lifecycle initialization
+boundary; request-time consumers use L<PAGI::State> through their
+Request/WebSocket/SSE object instead.
 
 =head1 SEE ALSO
 
-L<PAGI::App::Router>, L<PAGI::Endpoint::Router>
+L<PAGI::Compose>, L<PAGI::Routing>, L<PAGI::State>
 
 =cut

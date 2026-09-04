@@ -19,11 +19,11 @@ my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'Compose example loads cleanly') or diag($load_error);
 ok(blessed($app) && $app->can('to_app'),
-    'example returns an instantiated PAGI application component');
+    'example returns a PAGI app object');
 my $compiled = blessed($app) && $app->can('to_app')
     ? $app->to_app
     : undef;
-is(ref($compiled), 'CODE', 'the application component compiles to one PAGI app');
+is(ref($compiled), 'CODE', 'the app object compiles to one PAGI app');
 
 SKIP: {
     skip 'example did not compile', 8 unless ref($compiled) eq 'CODE';

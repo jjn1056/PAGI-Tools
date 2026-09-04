@@ -98,6 +98,7 @@ PAGI::Endpoint::HTTP - Class-based HTTP endpoint handler
     use Future::AsyncAwait;
     use PAGI::Response::Empty ();
     use PAGI::Response::JSON ();
+    use PAGI::Routing qw(route);
 
     async sub get {
         my ($self, $request) = @_;
@@ -119,8 +120,8 @@ PAGI::Endpoint::HTTP - Class-based HTTP endpoint handler
         return PAGI::Response::Empty->new(status => 204);
     }
 
-    # Use with PAGI server
-    my $app = MyApp::UserAPI->to_app;
+    # Place one configured object at one exact Route.
+    route('/users/{id}' => MyApp::UserAPI->new(repo => $repo));
 
 =head1 DESCRIPTION
 
@@ -143,6 +144,11 @@ Route construction, including GET-derived HEAD and OPTIONS. The Router then
 owns unsupported-method 405 and the authoritative C<Allow> union; a matched
 OPTIONS reaches this Endpoint. Mounted, standalone, or deliberately broader
 Route placement retains the Endpoint's own method outcomes.
+
+A finite Route C<methods> string or arrayref is validated as a restriction of
+that same one-time capability snapshot. Use scalar C<< methods => '*' >> only
+when the Endpoint should bypass Router method qualification and own all method
+dispatch and 405 responses itself.
 
 =head2 Features
 
@@ -181,8 +187,8 @@ Each receives:
 =back
 
 Use C<$request> for request data and return an application value, such as a
-L<PAGI::Response>, a Pages application, C<as_app>-wrapped native coderef, or
-another instantiated object with C<to_app>.
+L<PAGI::Response>, a Pages application, C<as_app_object>-wrapped native coderef, or
+another app object.
 
 B<Handler contract:> Every HTTP handler MUST return an application value
 (immediately or through a Future). Returning nothing or a scalar/hash value

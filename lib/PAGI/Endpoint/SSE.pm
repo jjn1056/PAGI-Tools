@@ -6,6 +6,7 @@ use warnings;
 use Future;
 use Future::AsyncAwait;
 use Carp qw(croak);
+use Scalar::Util qw(blessed);
 use PAGI::SSE;
 use PAGI::Utils::Scope ();
 
@@ -60,7 +61,8 @@ async sub handle {
 }
 
 sub to_app {
-    my ($class) = @_;
+    my ($invocant) = @_;
+    my $endpoint = blessed($invocant) ? $invocant : $invocant->new;
 
     return async sub {
         my ($scope, $receive, $send) = @_;
@@ -71,7 +73,6 @@ sub to_app {
         PAGI::Utils::Scope::_compatible_cached_scope_object(
             $scope, 'pagi.sse', 'PAGI::SSE',
         );
-        my $endpoint = $class->new;
         my $sse = PAGI::SSE->new($scope, $receive, $send);
 
         await $endpoint->handle($sse);
@@ -92,6 +93,7 @@ PAGI::Endpoint::SSE - Class-based Server-Sent Events endpoint handler
     package MyApp::Notifications;
     use parent 'PAGI::Endpoint::SSE';
     use Future::AsyncAwait;
+    use PAGI::Routing qw(sse);
 
     sub keepalive_interval { 30 }
 
@@ -110,13 +112,19 @@ PAGI::Endpoint::SSE - Class-based Server-Sent Events endpoint handler
         # Cleanup subscriptions
     }
 
-    # Use with PAGI server
-    my $app = MyApp::Notifications->to_app;
+    # Place one configured object at one exact protocol Route.
+    sse('/events' => MyApp::Notifications->new(bus => $bus));
 
 =head1 DESCRIPTION
 
 PAGI::Endpoint::SSE provides a class-based approach to handling
 Server-Sent Events connections with lifecycle hooks.
+
+C<to_app> constructs a class receiver once immediately, or retains an
+instance receiver exactly as supplied. Configuration and long-lived
+dependencies may therefore live on the endpoint object. Each C<PAGI::SSE>
+protocol object and all connection-local state must stay local to C<handle>,
+because one endpoint instance can serve concurrent connections.
 
 =head1 LIFECYCLE METHODS
 
@@ -185,7 +193,12 @@ is silently dropped rather than sent (see L<PAGI::SSE/decline>).
 
     my $app = MyEndpoint->to_app;
 
-Returns a PAGI-compatible async coderef.
+    my $endpoint = MyEndpoint->new(hub => $hub);
+    my $app = $endpoint->to_app;
+
+Returns a PAGI-compatible async coderef. Calling it on a class constructs one
+endpoint immediately; calling it on an instance retains that exact instance
+for every connection.
 
 =head1 RECIPES
 

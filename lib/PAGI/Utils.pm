@@ -10,7 +10,7 @@ use File::Basename qw(basename dirname);
 use File::Spec;
 use Scalar::Util qw(blessed);
 use PAGI::Lifespan;
-use PAGI::Utils::_App;
+use PAGI::Utils::AppObject;
 
 my @PAGI_ENVIRONMENTS = qw(development test staging production);
 my %VALID_PAGI_ENV = map { $_ => 1 } @PAGI_ENVIRONMENTS;
@@ -22,7 +22,7 @@ my @PATH_EXPORTS = qw(
 );
 
 our @EXPORT_OK = (
-    qw(handle_lifespan to_app as_app request_response invoke_app
+    qw(handle_lifespan to_app as_app_object invoke_app
        request_ended_abnormally),
     @ENV_EXPORTS,
     @PATH_EXPORTS,
@@ -328,18 +328,19 @@ sub to_app {
     return $app;
 }
 
-sub as_app {
-    croak 'as_app() requires exactly one native coderef'
-        unless @_ == 1 && ref($_[0]) eq 'CODE';
-    my ($code) = @_;
-    return PAGI::Utils::_App->new($code);
-}
-
-sub request_response {
-    croak 'request_response handler must be a coderef'
-        unless @_ == 1 && ref($_[0]) eq 'CODE';
-    require PAGI::Routing::RequestResponse;
-    return PAGI::Routing::RequestResponse->new(handler => $_[0]);
+sub as_app_object {
+    croak 'as_app_object() requires exactly one native coderef or app object'
+        unless @_ == 1;
+    my ($value) = @_;
+    return PAGI::Utils::AppObject->new($value)
+        if ref($value) eq 'CODE';
+    if (blessed($value) && $value->can('to_app')) {
+        Carp::carp(
+            'as_app_object() received an app object; returning it unchanged'
+        );
+        return $value;
+    }
+    croak 'as_app_object() requires exactly one native coderef or app object';
 }
 
 async sub invoke_app {
@@ -350,15 +351,18 @@ async sub invoke_app {
 }
 
 sub _validate_app_value {
-    my ($value, $label) = @_;
+    my ($value, $label, $coderef_role) = @_;
     $label = 'application' unless defined $label && length $label;
+    $coderef_role = 'native coderef'
+        unless defined $coderef_role && length $coderef_role;
 
     if (blessed($value) && $value->can('wrap') && !$value->can('to_app')) {
         croak "$label middleware object is not an app";
     }
 
     my $separator = $label =~ /:\z/ ? ' ' : ' must be ';
-    croak "$label${separator}a coderef or instantiated object with to_app"
+    croak "$label${separator}a $coderef_role or app object "
+        . '(an instantiated object with to_app)'
         unless defined $value
             && (ref($value) eq 'CODE'
                 || (blessed($value) && $value->can('to_app')));
@@ -578,74 +582,112 @@ happened to observe.
 
     my $app = to_app($thing);
 
-Coerce C<$thing> into a PAGI application (an async coderef). Accepts:
+Coerce C<$thing> into a native PAGI application coderef. An B<app object> is
+an instantiated object with a C<to_app> method that returns such a coderef.
+This is the common term used throughout PAGI-Tools for that object form.
+
+C<to_app> accepts:
 
 =over 4
 
 =item * a coderef - returned unchanged
 
-=item * an object with a C<to_app> method - compiled by calling it
+=item * an app object - compiled by calling its C<to_app> method
 
 =back
 
-Application positions accept native coderefs and instantiated component objects
-only. They never load package names. Anything else croaks. A middleware object
+Application positions accept native coderefs and app objects only. They never
+load package names. Anything else croaks. A middleware object
 (something with C<wrap> but no C<to_app>) gets a middleware-specific croak,
 since middleware belongs in middleware position, not app position.
 
-Routing's native application positions, Mount C<app> and Router
-C<http_default>, call this for you, so user code can pass native apps and
-instantiated components directly. Cascades and the test client likewise
-normalize their application input. Compose is different: it accepts route
-declarations only through C<routes>. Preserve an immutable Router explicitly as
-a Mount C<app> within that list.
+Mount C<app> is Routing's native application position, so it calls this for
+native apps and app objects directly. Router C<http_default> bare CODE is a
+one-Request handler; wrap an advanced native default with
+C<as_app_object>. Cascades and the test client likewise normalize their
+application input. Compose is different: it accepts route declarations only
+through C<routes>. Preserve an immutable Router explicitly as a Mount C<app>
+within that list.
 
     mount('/static', app => PAGI::App::File->new(root => $dir));
     mount('/api',    app => MyApp::API->new);
 
-A Route is the exceptional adapter boundary: a bare CODE is a one-argument
-Request, WebSocket, or SSE handler, while an instantiated C<to_app> object is
-a native application endpoint.
+A Route is the exceptional adapter boundary: it accepts either a one-argument
+Request, WebSocket, or SSE handler or an app object. A bare CODE is the handler;
+the app object is a native application endpoint.
 
-=head2 as_app
+=head2 as_app_object
 
-    use PAGI::Utils qw(as_app);
+    use PAGI::Utils qw(as_app_object);
 
-    route('/native' => as_app($native));
-    route('/relay' => as_app($native), methods => '*');
+    route('/native' => as_app_object($native));
+    route('/relay' => as_app_object($native), methods => '*');
 
-Returns an opaque application object whose C<to_app> returns the exact supplied
-coderef. It does not inspect arity, alter Future behavior, capture a scope, or
-add protocol policy. At an HTTP Route, no explicit methods means GET plus
-automatic HEAD; scalar C<< methods => '*' >> is unrestricted.
+Given a native application coderef, returns a
+L<PAGI::Utils::AppObject> whose C<to_app> returns that exact coderef. Given an
+existing app object, warns and returns that same object unchanged. It does not
+inspect arity, alter Future behavior, capture a scope, or add protocol policy.
+At an HTTP Route, no explicit methods means GET plus automatic HEAD; scalar
+C<< methods => '*' >> is unrestricted.
 
-=head2 request_response
-
-    use PAGI::Utils qw(request_response);
-
-    router(
-        routes       => \@routes,
-        http_default => request_response(\&custom_not_found),
-    );
-
-Adapts one Request handler to a native HTTP application component. Route does
-this automatically for bare CODE endpoints; use the helper only when a
-one-Request handler must occupy a native application position. Each invocation
-constructs one Request, awaits the immediate or Future-backed result, and
-invokes the returned native CODE or instantiated C<to_app> object against the
-original triplet. Returned objects are normalized per handler invocation, not
-cached across requests.
-
-Advanced returned applications receive the unchanged scope and remaining body
-stream. Already consumed body events are not replayed; no lifespan is replayed;
-and the returned app's routes, reverse names, and schema metadata remain opaque
-to the outer Router.
+This is a narrow Route escape hatch. Use it when an endpoint genuinely needs
+to own C<($scope, $receive, $send)> -- for example, special protocol handling
+-- or when adapting an existing native PAGI coderef. Ordinary Route coderefs
+receive one Request, WebSocket, or SSE object and do not need this wrapper.
 
 =head2 invoke_app
 
+    use Future::AsyncAwait;
+    use PAGI::Pages ();
     use PAGI::Utils qw(invoke_app);
 
-    await invoke_app($value, $scope, $receive, $send);
+    return await invoke_app(
+        PAGI::Pages->welcome,
+        $scope,
+        $receive,
+        $send,
+    );
+
+C<invoke_app> is a convenience for native three-argument PAGI code that needs
+to execute an application value. The example above is equivalent to:
+
+    my $app = PAGI::Pages->welcome->to_app;
+
+    return await Future->wrap(
+        $app->($scope, $receive, $send)
+    );
+
+This is useful in a native PAGI application or middleware that wants to emit a
+L<PAGI::Response>, a L<PAGI::Pages> result, or another app object without
+open-coding the C<to_app> and immediate-or-Future handling:
+
+    sub require_auth ($app) {
+        return async sub ($scope, $receive, $send) {
+            unless (authorized($scope)) {
+                return await invoke_app(
+                    PAGI::Pages->unauthorized(
+                        detail => 'Please sign in',
+                    ),
+                    $scope,
+                    $receive,
+                    $send,
+                );
+            }
+
+            return await Future->wrap(
+                $app->($scope, $receive, $send)
+            );
+        };
+    }
+
+A normal one-argument Request handler does not need C<invoke_app>. It returns
+the application value and lets the Route adapter execute it:
+
+    sub handler ($request) {
+        return PAGI::Pages->not_found(
+            detail => 'No such page',
+        );
+    }
 
 Normalizes C<$value> through C<to_app>, invokes it with the exact supplied
 triplet, and awaits immediate or Future-backed completion. It installs no HEAD,

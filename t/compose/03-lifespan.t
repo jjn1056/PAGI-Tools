@@ -9,10 +9,10 @@ use ComposeTest qw(scope run_scope capture_send channel);
 use PAGI::Compose qw(compose);
 use PAGI::Routing qw(mount middleware route router);
 use PAGI::Test::Client;
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 my $lifespan_router = router(routes => [
-    route('/' => as_app(sub { die "request endpoint received lifespan\n" })),
+    route('/' => as_app_object(sub { die "request endpoint received lifespan\n" })),
 ]);
 
 sub compose_with_router {
@@ -200,7 +200,7 @@ subtest 'only the deployed root owns lifespan across Router and Mount boundaries
     my (@outer_router_types, @inner_router_types, @plain_router_types);
     my $nested = compose_with_router(
         router(
-            routes => [route('/*path' => as_app(sub {
+            routes => [route('/*path' => as_app_object(sub {
             my ($request_scope, $receive, $send) = @_;
             ++$nested_requests;
             $send->({
@@ -225,7 +225,7 @@ subtest 'only the deployed root owns lifespan across Router and Mount boundaries
         },
     );
     my $plain = router(
-        routes => [route('/*path' => as_app(sub {
+        routes => [route('/*path' => as_app_object(sub {
             my ($request_scope, $receive, $send) = @_;
             $send->({ type => 'http.response.start', status => 204, headers => [] })->get;
             return $send->({ type => 'http.response.body', body => '', more => 0 });

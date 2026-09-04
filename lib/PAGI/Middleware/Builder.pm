@@ -69,8 +69,7 @@ our $_current_builder;
 Create a composed application using the DSL. The block should
 call enable(), enable_if(), mount(), and return the final app.
 The final value of the block is the fallback application and is coerced via
-L<PAGI::Utils/to_app>. Return a native coderef or an instantiated component
-object directly:
+L<PAGI::Utils/to_app>. Return a native coderef or app object directly:
 
     use PAGI::Pages qw(not_found);
 
@@ -142,7 +141,7 @@ sub enable_if (&$;@) {
 Mount an application at a path prefix. Requests matching the
 prefix are routed to the mounted app with adjusted paths. The app
 argument accepts the two native application forms supported by
-L<PAGI::Utils/to_app>: a coderef or an instantiated component object with
+L<PAGI::Utils/to_app>: a coderef or an app object with
 C<to_app>. Package-name strings are rejected; load and construct mounted
 applications explicitly. Middleware class strings remain valid only in
 C<enable> and C<enable_if> middleware positions.
@@ -243,7 +242,7 @@ sub add_middleware_if {
 
 Add a path-based mount point (OO interface).
 
-The target must be a native coderef or an instantiated C<to_app> object.
+The target must be a native coderef or an app object.
 Package-name strings are rejected synchronously.
 
 =cut
@@ -266,7 +265,7 @@ sub add_mount {
     my $app = $builder->to_app($inner_app);
 
 Build the composed application. C<$inner_app> is the fallback when no Builder
-mount matches. It accepts a native coderef or instantiated component object
+mount matches. It accepts a native coderef or app object
 with C<to_app>; package-name strings are rejected synchronously. This means
 C<builder { ...; $router }> and
 C<builder { ...; not_found(detail =E<gt> 'No matching route') }> work without

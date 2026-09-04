@@ -12,11 +12,10 @@ use Future::AsyncAwait;
 use Time::HiRes qw(time);
 
 use PAGI::App::File;
-use PAGI::App::Router;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::AccessLog;
 use PAGI::Pages;
-use PAGI::Routing qw(mount);
+use PAGI::Routing qw(middleware mount route sse websocket);
 use PAGI::Utils qw(invoke_app);
 
 
@@ -189,33 +188,19 @@ my $require_json = sub {
 };
 
 #---------------------------------------------------------
-# Main Router - Unified routing for all protocols
+# Main Routes - Unified routing for all protocols
 #---------------------------------------------------------
-my $router = PAGI::App::Router->new;
 
-# Mount API endpoint with middleware:
+# API endpoint with middleware:
 # - $access_log: logs each request (PAGI::Middleware instance)
 # - $require_json: validates Content-Type for POST (coderef middleware)
-$router->mount('/api/messages',
-    app        => MessageAPI->to_app,
-    middleware => [$access_log, $require_json],
-);
-
-# WebSocket with timing middleware
-$router->mount('/ws/echo',
-    app        => EchoWS->to_app,
-    middleware => [$access_log, $timing],
-);
-
-# SSE with timing middleware
-$router->mount('/events',
-    app        => MessageEvents->to_app,
-    middleware => [$timing],
-);
-
-# Static files as fallback for everything else (no middleware)
-$router->mount('/', app => PAGI::App::File->from_app_path('public'));
-
 compose(routes => [
-    mount('/' => app => $router),
+    route('/api/messages' => MessageAPI->new,
+        middleware => [middleware($access_log), middleware($require_json)]),
+    websocket('/ws/echo' => EchoWS->new,
+        middleware => [middleware($access_log), middleware($timing)]),
+    sse('/events' => MessageEvents->new,
+        middleware => [middleware($timing)]),
+    # Static files as the final fallback for everything else (no middleware).
+    mount('/' => app => PAGI::App::File->from_app_path('public')),
 ]);

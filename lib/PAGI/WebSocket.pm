@@ -60,9 +60,18 @@ sub server       { shift->{scope}{server} }
 
 
 # Application state (injected by PAGI::Lifespan, read-only)
+sub has_state {
+    my $self = shift;
+    return 0 unless exists $self->{scope}{state};
+    croak 'PAGI::WebSocket state must be a hashref'
+        unless ref($self->{scope}{state}) eq 'HASH';
+    return 1;
+}
+
 sub state {
     my $self = shift;
-    return $self->{scope}{state} // {};
+    require PAGI::State;
+    return PAGI::State->new($self);
 }
 
 # Path parameter accessors - captured from URL path by router
@@ -968,14 +977,31 @@ See L<PAGI::Stash> for per-connection shared state:
 
 =head2 state
 
-    my $db = $ws->state->{db};
-    my $config = $ws->state->{config};
+    my $state = $websocket->state
+        or die 'application requires lifespan state';
+    my $db = $state->get('db');
 
-Application state hashref injected by PAGI::Lifespan. Read-only access
-to shared application state. Returns empty hashref if not set.
+Returns C<PAGI::State|undef> for application state injected by
+L<PAGI::Lifespan>. Absent state returns C<undef>; present state must be a
+hashref or this method croaks. The facade is read-oriented and catches
+missing top-level keys through C<get>.
 
-Note: This is separate from L<PAGI::Stash> (per-connection data) and
-C<connection_state> (internal WebSocket state).
+Repeated calls have equivalent behavior over the same backing state, but do
+not promise facade object identity. C<< $state->data >> is the explicit escape
+hatch when an integration genuinely requires the raw hashref.
+
+Application state is distinct from L<PAGI::Stash>, which holds mutable
+per-connection data, and from C<connection_state>, which reports this
+WebSocket's protocol lifecycle.
+
+=head2 has_state
+
+    if ($websocket->has_state) {
+        ...
+    }
+
+Returns true when lifespan application state is present and a hashref. Returns
+false only when it is absent; malformed present state croaks.
 
 =head2 path_param
 

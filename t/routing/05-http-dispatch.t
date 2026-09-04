@@ -7,12 +7,11 @@ use Future;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
-use PAGI::App::Router;
 use PAGI::Response;
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route middleware);
 use PAGI::Routing::Compiler;
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub HttpProvider { return qr/accepted/ }
 
@@ -151,15 +150,16 @@ subtest 'normal HTTP leaves receive one exact Request and await one response emi
 subtest 'CODE endpoints compile once through RequestResponse for each Router compilation' => sub {
     my $handler = sub { return PAGI::Response::Text->new('compiled handler') };
     my ($components, $component_apps) = (0, 0);
-    my $original = \&PAGI::Utils::request_response;
+    my $original = \&PAGI::Routing::RequestResponse::new;
     my $router = router(routes => [route('/compiled' => $handler)]);
     my ($first, $second);
 
     {
         no warnings 'redefine';
-        local *PAGI::Utils::request_response = sub {
-            my ($candidate) = @_;
-            my $component = $original->($candidate);
+        local *PAGI::Routing::RequestResponse::new = sub {
+            my ($class, %args) = @_;
+            my $component = $original->($class, %args);
+            my $candidate = $args{handler};
             return $component unless refaddr($candidate) == refaddr($handler);
             ++$components;
             return Local::CountingRequestResponse->new(
@@ -370,7 +370,7 @@ subtest 'one unchanged component isolates overlapping native invocations' => sub
         'each overlapped invocation completes with its own response state');
 };
 
-subtest 'CODE endpoints remain handlers while as_app marks native CODE' => sub {
+subtest 'CODE endpoints remain handlers while as_app_object marks native CODE' => sub {
     my $ordinary = route('/ordinary' => sub {
         return PAGI::Response::Text->new(ref($_[0]));
     })->to_app;
@@ -391,11 +391,11 @@ subtest 'CODE endpoints remain handlers while as_app marks native CODE' => sub {
             type => 'http.response.body', body => '', more => 0,
         });
     };
-    my $native_app = route('/native' => as_app($native))->to_app;
+    my $native_app = route('/native' => as_app_object($native))->to_app;
     ($receive, $send, $events) = channels();
     $native_app->(scope(path => '/native'), $receive, $send)->get;
     is($events->[0]{status}, 204,
-        'as_app is the explicit native-coderef spelling');
+        'as_app_object is the explicit native-coderef spelling');
 };
 
 subtest 'native object HTTP leaves compile once and retain ownership of all channels' => sub {
@@ -454,7 +454,7 @@ subtest 'provider constraints select handler and native HTTP leaves before invoc
         route('/normal/rejected' => sub {
             return PAGI::Response::Text->new('continued');
         }),
-        route('/native/{id:&HttpProvider}' => as_app(sub {
+        route('/native/{id:&HttpProvider}' => as_app_object(sub {
             my ($request_scope, $receive, $send) = @_;
             push @native, $request_scope->{path_params}{id};
             $send->({
@@ -503,7 +503,7 @@ subtest 'invalid normal returns retain the shared diagnostic' => sub {
         my ($receive, $send, $events) = channels();
         like(
             dies { $app->(scope(path => '/bad'), $receive, $send)->get },
-            qr/request endpoint must return a PAGI application: a coderef or instantiated object with to_app/,
+            qr/request handler must return a PAGI application: a native coderef or app object/,
             "$label return is rejected",
         );
         is($events, [], "$label return emits no response events");
@@ -778,33 +778,29 @@ subtest 'partial decisions preserve first-seen method order without sharing arra
     );
 };
 
-subtest 'PAGI::App::Router emits first-seen authoritative Allow order' => sub {
+subtest 'declarative Router emits first-seen authoritative Allow order' => sub {
     my @cases = (
         [
             'POST declared before GET',
-            sub {
-                my ($router) = @_;
-                $router->post('/ordered' => sub { return Future->done });
-                $router->get('/ordered' => sub { return Future->done });
-            },
+            [
+                route('/ordered' => sub { return Future->done }, methods => 'POST'),
+                route('/ordered' => sub { return Future->done }, methods => 'GET'),
+            ],
             [qw(POST GET HEAD)],
         ],
         [
             'GET declared before POST',
-            sub {
-                my ($router) = @_;
-                $router->get('/ordered' => sub { return Future->done });
-                $router->post('/ordered' => sub { return Future->done });
-            },
+            [
+                route('/ordered' => sub { return Future->done }, methods => 'GET'),
+                route('/ordered' => sub { return Future->done }, methods => 'POST'),
+            ],
             [qw(GET HEAD POST)],
         ],
     );
 
     for my $case (@cases) {
-        my ($label, $declare, $want) = @$case;
-        my $router = PAGI::App::Router->new;
-        $declare->($router);
-        my $app = $router->to_app;
+        my ($label, $routes, $want) = @$case;
+        my $app = router(routes => $routes)->to_app;
         my ($receive, $send, $events) = channels();
         $app->(
             scope(method => 'TRACE', path => '/ordered'),

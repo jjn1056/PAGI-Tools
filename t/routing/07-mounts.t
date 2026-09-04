@@ -9,7 +9,7 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route mount middleware);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 our $MOUNT_PROVIDER_CALLS = 0;
 sub MountProvider { ++$MOUNT_PROVIDER_CALLS; return qr/accepted/ }
@@ -228,7 +228,7 @@ subtest 'trailing declarations, dynamic prefixes, and nested mounts use actual c
         mount('/tenants/{tenant}',
             routes => [
                 mount('/api/{version}', routes => [
-                    route('/users/{id}' => as_app(async sub {
+                    route('/users/{id}' => as_app_object(async sub {
                         push @seen, $_[0];
                         await response_app('nested')->(@_);
                     })),
@@ -666,7 +666,7 @@ subtest 'two mount occurrences compile independent wrapper-local state' => sub {
             return $inner->($child_scope, $receive, $send);
         };
     });
-    my $shared_leaf = route('/state' => as_app(async sub {
+    my $shared_leaf = route('/state' => as_app_object(async sub {
         my ($request_scope, $receive, $send) = @_;
         my $body = join ':',
             $request_scope->{'task7.wrapper'},

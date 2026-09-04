@@ -85,44 +85,6 @@ sub _require_descriptors {
     return \@descriptions;
 }
 
-sub _normalize_frontend_entries {
-    my ($class, $entries, $error_prefix) = @_;
-    $error_prefix = 'middleware' unless defined $error_prefix;
-
-    croak "$error_prefix must be an arrayref"
-        unless ref($entries) eq 'ARRAY';
-
-    my @normalized;
-    for my $index (0 .. $#$entries) {
-        my $entry = $entries->[$index];
-        if (ref($entry) eq 'CODE') {
-            push @normalized, $class->new($entry);
-        }
-        elsif (blessed($entry) && $entry->isa($class)) {
-            push @normalized, $entry;
-        }
-        elsif (blessed($entry) && $entry->can('wrap')) {
-            push @normalized, $class->new($entry);
-        }
-        elsif (!ref($entry) && defined($entry) && length($entry)) {
-            my $description = eval { $class->new($entry) };
-            if ($@) {
-                my $error = $@;
-                chomp $error;
-                croak "$error_prefix entry $index must be a middleware class name, "
-                    . "coderef factory, object with wrap, or middleware description: $error";
-            }
-            push @normalized, $description;
-        }
-        else {
-            croak "$error_prefix entry $index must be a middleware class name, "
-                . 'coderef factory, object with wrap, or middleware description';
-        }
-    }
-
-    return \@normalized;
-}
-
 sub _wrap_descriptors {
     my ($class, $descriptors, $inner_app) = @_;
 
@@ -234,7 +196,7 @@ application followed by its stored configuration and must return an application
 value immediately. A configured object is reused by identity and receives
 C<< ->wrap($inner_app) >>. A class name is loaded, instantiated with the
 stored configuration, and then wrapped. Factory and C<wrap> results may be a
-native coderef or an instantiated object with C<to_app>; compilation always
+native coderef or an app object; compilation always
 returns native code.
 
 Names beginning with C<PAGI::Middleware::> are already fully qualified. Simple

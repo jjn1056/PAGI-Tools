@@ -6,7 +6,7 @@ use Future::AsyncAwait;
 use Future;
 use Carp qw(croak);
 
-use PAGI::SendValidation;
+use PAGI::Utils::_SendValidation;
 
 
 sub new {
@@ -38,7 +38,7 @@ sub _start {
     # this to { 'websocket.http.response' => {} }; the // {} guards direct
     # construction of this class (bypassing Test::Client) with a scope that
     # omits the key.
-    my $sv = PAGI::SendValidation->new(
+    my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'websocket',
         extensions => $self->{scope}{extensions} // {},
     );
@@ -76,7 +76,7 @@ sub _start {
     };
 
     # Create send coderef for the app. Strict: illegal events (per
-    # PAGI::SendValidation's websocket rules) fail the returned Future --
+    # PAGI::Utils::_SendValidation's websocket rules) fail the returned Future --
     # a canonical test double must not accept what a real server would
     # reject -- and are never appended to the client's readable stream.
     my $send = async sub {
@@ -343,13 +343,13 @@ fully emulate transport timing or network buffering.
 
 The C<$send> coderef given to your app is strict: it validates every event
 against the PAGI websocket send-sequencing rules via
-L<PAGI::SendValidation> and fails the returned Future (the app's C<await
+L<PAGI::Utils::_SendValidation> and fails the returned Future (the app's C<await
 $send-E<gt>(...)> dies) for anything a real server would reject -- a
 C<websocket.send>/C<websocket.keepalive> before C<websocket.accept>, any
 event once C<websocket.close> has been sent, a second C<websocket.accept>,
 or a C<websocket.http.response.*> event out of place. A rejected event is
 never appended to the client's readable stream. There is no lenient mode --
-see L<PAGI::SendValidation/RULES> for the exact websocket rule set.
+see L<PAGI::Utils::_SendValidation/RULES> for the exact websocket rule set.
 
 C<websocket.close> before C<websocket.accept> is a legal portable denial
 (no croak; the connection object reports the closed state -- see

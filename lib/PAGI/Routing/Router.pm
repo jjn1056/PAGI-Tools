@@ -28,7 +28,7 @@ sub new {
     PAGI::Routing::Route::_validate_text('desc', $opts{desc}, 0) if exists $opts{desc};
     my $http_default = exists $opts{http_default}
         ? PAGI::Utils::_validate_app_value(
-            $opts{http_default}, 'router http_default',
+            $opts{http_default}, 'router http_default', 'request handler coderef',
         )
         : undef;
     my @routes = @$routes;
@@ -80,11 +80,26 @@ PAGI::Routing::Router - Immutable declarative router description
 
 Routes describe endpoint leaves, Mount describes one prefixed application, and
 Router describes an ordered collection of Route and Mount descriptions.
-Construction accepts C<routes>, C<middleware>, C<desc>, and an optional native
-C<http_default>. A CODE default is a native three-channel application; an
-instantiated C<to_app> object is normalized as one. A source-free Pages
-application works directly, while a custom one-Request default uses
-L<PAGI::Utils/request_response>. The Router validates direct nodes, middleware descriptors,
+Construction accepts C<routes>, C<middleware>, C<desc>, and an optional
+C<http_default>. Its positional grammar is:
+
+    Position                            Meaning
+    ----------------------------------  --------------------------------
+    HTTP Route endpoint / http_default CODE  one Request handler
+    HTTP Route endpoint / http_default object app object via to_app
+    WebSocket Route endpoint CODE             one WebSocket handler
+    WebSocket Route endpoint object           app object via to_app
+    SSE Route endpoint CODE                   one SSE handler
+    SSE Route endpoint object                 app object via to_app
+    Mount app CODE                       native PAGI application
+    Mount app object                     app object via to_app
+
+A source-free Pages application is the direct ordinary default. A bare CODE
+default receives one Request and can return a request-dependent Response. To
+use an advanced explicit native default, wrap it with
+L<PAGI::Utils/as_app_object>. C<request_response> remains for adapting a
+one-Request handler into Mount C<app>, not ordinary C<http_default> use. The
+Router validates direct nodes, middleware descriptors,
 descriptions, canonical slash addresses, and child Router ancestry. A Router
 description remains placement-free: mounting it never writes a parent path or
 local name onto the child. This is compile-time configuration only; the object
@@ -117,8 +132,9 @@ reused in completed sibling branches.
 C<middleware> returns a fresh arrayref of normalized
 C<PAGI::Routing::Middleware> descriptions; explicit descriptions retain their
 identity. C<desc> returns the declaration value. C<http_default> returns the
-declared HTTP application unchanged, or undef when it was omitted. It is
-validated at construction but not compiled there. Inapplicable node metadata
+exact declared value unchanged (a one-Request handler or app object), or undef
+when it was omitted. It is validated at construction but not compiled there.
+Inapplicable node metadata
 accessors C<name>, C<path>, C<methods>, and C<constraints> return undef. Router
 is a collection and has no leaf C<endpoint> accessor or retired target/mode
 accessors.
@@ -183,7 +199,7 @@ HTTP exhaustion is a complete Router outcome. NONE invokes C<http_default> when
 configured and otherwise emits the stock concrete 404 response.
 PARTIAL emits the Router's compliant 405 with an authoritative C<Allow> header.
 Resolved Route methods include explicit declarations, one construction-time
-C<allowed_methods> snapshot from an application object, or the GET plus
+C<allowed_methods> snapshot from an app object, or the GET plus
 automatic HEAD default. Scalar C<< methods => '*' >> is unrestricted.
 Selected child Router outcomes remain owned by that child. L<PAGI::Compose>
 remains useful at an application root for middleware, lifespan, error handling,
@@ -196,9 +212,7 @@ response-completion guarding, or lifespan. It declines a lifespan scope; a
 server's strict lifespan mode rejects that decline. An explicit root Mount
 places this Router beneath Compose's root lifespan and safety services, but
 does not add lifecycle behavior or a C<lifespan> option to Router itself. See
-L<PAGI::Routing>,
-L<PAGI::Routing::Mount>, L<PAGI::App::Router>, L<PAGI::Endpoint::Router>, and
-the
+L<PAGI::Routing>, L<PAGI::Routing::Mount>, and the
 L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
 
 =cut

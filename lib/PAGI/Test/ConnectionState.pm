@@ -47,7 +47,7 @@ sub disconnect_reason { return $_[0]->{_reason} }
 
 True (C<1>) once this request's HTTP response has reached its legal terminal
 state (the terminal body chunk, or trailers if declared -- the same instant
-L<PAGI::SendValidation/complete> reports true for the scope); false (C<0>)
+L<PAGI::Utils::_SendValidation/complete> reports true for the scope); false (C<0>)
 before that (streaming, or not yet started). Per L<PAGI::Spec::Www>'s
 "Connection State" section, C<undef> is not a per-request progress value --
 it signals a fixed B<capability>: "C<undef> if the server does not track

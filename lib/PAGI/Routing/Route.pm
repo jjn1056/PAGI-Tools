@@ -59,8 +59,13 @@ sub _build {
     my ($class, $declaration_package, $kind, $path, $endpoint, $opts) = @_;
 
     croak 'route path must be a string' unless defined $path && !ref($path);
+    my %coderef_role = (
+        route     => 'request handler coderef',
+        websocket => 'WebSocket handler coderef',
+        sse       => 'SSE handler coderef',
+    );
     PAGI::Utils::_validate_app_value(
-        $endpoint, 'route endpoint',
+        $endpoint, 'route endpoint', $coderef_role{$kind},
     );
 
     _validate_text('desc', $opts->{desc}, 0) if exists $opts->{desc};
@@ -83,13 +88,14 @@ sub _build {
     if ($kind eq 'route') {
         if (exists $opts->{methods}) {
             $methods = _normalize_methods($opts->{methods}, 'methods');
+            if (ref($methods) eq 'ARRAY'
+                && ref($endpoint) ne 'CODE' && $endpoint->can('allowed_methods')) {
+                my $advertised = _endpoint_allowed_methods($endpoint);
+                $methods = _validate_method_restriction($methods, $advertised);
+            }
         }
         elsif (ref($endpoint) ne 'CODE' && $endpoint->can('allowed_methods')) {
-            my @capability_methods = $endpoint->allowed_methods;
-            $methods = _normalize_methods(
-                \@capability_methods,
-                'route endpoint allowed_methods',
-            );
+            $methods = _endpoint_allowed_methods($endpoint);
         }
         else {
             $methods = _normalize_methods('GET');
@@ -111,6 +117,21 @@ sub _build {
         methods     => $methods,
         middleware  => $middleware,
     }, $class;
+}
+
+sub _endpoint_allowed_methods {
+    my ($endpoint) = @_;
+    my @advertised = $endpoint->allowed_methods;
+    return _normalize_methods(\@advertised, 'route endpoint allowed_methods');
+}
+
+sub _validate_method_restriction {
+    my ($explicit, $advertised) = @_;
+    my %advertised = map { $_ => 1 } @$advertised;
+    my @unsupported = grep { !$advertised{$_} } @$explicit;
+    croak "methods [@unsupported] are not advertised by route endpoint allowed_methods"
+        if @unsupported;
+    return $explicit;
 }
 
 sub _validate_text {
@@ -213,13 +234,15 @@ PAGI::Routing::Route - Immutable declarative route description
 
 =head1 DESCRIPTION
 
-A route represents an HTTP, WebSocket, or SSE leaf. Its C<name>, when supplied,
+A route represents an HTTP, WebSocket, or SSE leaf and accepts either a
+one-argument protocol handler or an app object. An B<app object> is an
+instantiated object with a C<to_app> method. Its C<name>, when supplied,
 is one local logical address segment: it is nonempty, contains no slash, and
 is not C<.> or C<..>; dots are literal characters. A CODE endpoint is a
 coderef handler: HTTP receives one L<PAGI::Request>, WebSocket receives one
-L<PAGI::WebSocket>, and SSE receives one L<PAGI::SSE>. An instantiated object
-with C<to_app> is a native application endpoint, compiled once through
-L<PAGI::Utils/to_app>. Wrap a native coderef with L<PAGI::Utils/as_app>.
+L<PAGI::WebSocket>, and SSE receives one L<PAGI::SSE>. An app object is a
+native application endpoint, compiled once through
+L<PAGI::Utils/to_app>. Wrap a native coderef with L<PAGI::Utils/as_app_object>.
 Route endpoints never load package names; middleware positions retain their separate explicit
 class-loading contract. Its path pattern is compiled during construction, and
 constructor validation performs no request I/O. The description never stores
@@ -242,13 +265,14 @@ Target shape never changes that rule. A Response or another instantiated
 C<to_app> component is still an exact, method-aware Route endpoint with normal
 constraints, middleware, naming, FULL/PARTIAL scanning, 405/Allow behavior,
 and GET-supplied automatic HEAD. A coderef is a Request handler unless the
-C<as_app> wrapper explicitly gives it the native triplet contract. Package-
+C<as_app_object> wrapper explicitly gives it the native triplet contract. Package-
 name strings are not application values.
 
-Explicit HTTP C<methods> wins. Otherwise an application object's
-C<allowed_methods> capability is called once in list context at construction;
-otherwise the Route defaults to GET plus automatic HEAD. Only scalar
-C<< methods => '*' >> is unrestricted. WebSocket and SSE Routes do not accept
+Finite explicit HTTP C<methods> must be advertised by an application's
+C<allowed_methods> capability, when it has one; that capability is called once
+in list context at construction. Otherwise the Route defaults to GET plus
+automatic HEAD. Only scalar C<< methods => '*' >> is unrestricted and bypasses
+the capability. WebSocket and SSE Routes do not accept
 C<methods> and never consult C<allowed_methods>. A routed Endpoint::HTTP object
 therefore contributes its advertised verbs and OPTIONS to Router selection;
 the Router owns unsupported-method 405 and C<Allow> outcomes.

@@ -280,7 +280,7 @@ subtest 'URLMap sets spec root_path key (not script_name)' => sub {
     is $coercion_calls[0]{root_path}, '/outer/api', 'root_path appends to existing (nested mounts)';
 };
 
-subtest 'URLMap accepts instantiated components and rejects package apps' => sub {
+subtest 'URLMap accepts app objects and rejects package apps' => sub {
     require TestApps::Component;
 
     my $map = PAGI::App::URLMap->new(
@@ -295,12 +295,12 @@ subtest 'URLMap accepts instantiated components and rejects package apps' => sub
 
     $app->({ type => 'http', method => 'GET', path => '/c/x' },
         sub { Future->done }, $send)->get;
-    is $sent[1]{body}, 'mounted', 'component object mounted directly';
+    is $sent[1]{body}, 'mounted', 'app object mounted directly';
 
     @sent = ();
     $app->({ type => 'http', method => 'GET', path => '/s/x' },
         sub { Future->done }, $send)->get;
-    is $sent[1]{body}, 'second', 'a second component object mounted directly';
+    is $sent[1]{body}, 'second', 'a second app object mounted directly';
 
     @sent = ();
     $app->({ type => 'http', method => 'GET', path => '/nomatch' },
@@ -309,12 +309,12 @@ subtest 'URLMap accepts instantiated components and rejects package apps' => sub
 
     like(
         dies { PAGI::App::URLMap->new->mount('/bad' => 'TestApps::Component') },
-        qr/to_app\(\) application must be a coderef or instantiated object with to_app/,
+        qr/to_app\(\) application must be a native coderef or app object/,
         'a mount package string is rejected without loading',
     );
     like(
         dies { PAGI::App::URLMap->new(default => 'TestApps::Component') },
-        qr/to_app\(\) application must be a coderef or instantiated object with to_app/,
+        qr/to_app\(\) application must be a native coderef or app object/,
         'a default package string is rejected',
     );
 };
@@ -336,7 +336,7 @@ subtest 'Cascade preserves app coercion and catch options' => sub {
         sub { Future->done }, $send)->get;
 
     is $sent[0]{status}, 200, 'fell through the 404 component';
-    is $sent[1]{body}, 'object', 'coderef and component object are coerced';
+    is $sent[1]{body}, 'object', 'coderef and app object are coerced';
 
     @sent = ();
     PAGI::App::Cascade->new(
@@ -362,17 +362,17 @@ subtest 'Cascade preserves app coercion and catch options' => sub {
 
     like(
         dies { PAGI::App::Cascade->new(apps => [[]]) },
-        qr/to_app\(\) application must be a coderef or instantiated object with to_app/,
+        qr/to_app\(\) application must be a native coderef or app object/,
         'constructor invalid shape uses the shared app diagnostic',
     );
     like(
         dies { PAGI::App::Cascade->new->add({}) },
-        qr/to_app\(\) application must be a coderef or instantiated object with to_app/,
+        qr/to_app\(\) application must be a native coderef or app object/,
         'add invalid shape uses the shared app diagnostic',
     );
     like(
         dies { PAGI::App::Cascade->new(apps => ['TestApps::Component']) },
-        qr/to_app\(\) application must be a coderef or instantiated object with to_app/,
+        qr/to_app\(\) application must be a native coderef or app object/,
         'Cascade never treats a package string as an app',
     );
 };

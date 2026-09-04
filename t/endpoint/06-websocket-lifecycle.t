@@ -61,6 +61,43 @@ package EchoEndpoint {
     sub on_receive { push @received, $_[2] }
 }
 
+{
+    package Local::ConfiguredWebSocket;
+    use parent 'PAGI::Endpoint::WebSocket';
+    our $NEW_CALLS = 0;
+    our @SEEN_IDS;
+
+    sub new {
+        my ($class, @args) = @_;
+        $NEW_CALLS++;
+        return PAGI::Endpoint::WebSocket::new($class, @args);
+    }
+
+    sub on_connect {
+        push @SEEN_IDS, Scalar::Util::refaddr($_[0]);
+        return $_[1]->accept;
+    }
+}
+
+{
+    package Local::OverlappingConfiguredWebSocket;
+    use parent 'PAGI::Endpoint::WebSocket';
+
+    our (%GATES, @RECEIVER_IDS, @PROTOCOL_IDS, @SCOPE_IDS);
+
+    async sub on_connect {
+        my ($self, $websocket) = @_;
+        my $path = $websocket->scope->{path};
+
+        push @RECEIVER_IDS, Scalar::Util::refaddr($self);
+        push @PROTOCOL_IDS, Scalar::Util::refaddr($websocket);
+        push @SCOPE_IDS, Scalar::Util::refaddr($websocket->scope);
+
+        await $GATES{$path};
+        await $websocket->accept;
+    }
+}
+
 subtest 'lifecycle via to_app' => sub {
     @EchoEndpoint::log = ();
     ($EchoEndpoint::seen_connect, $EchoEndpoint::seen_receive,
@@ -102,6 +139,78 @@ subtest 'lifecycle via to_app' => sub {
 
     # Check accept was sent
     ok((grep { ($_->{type} // '') eq 'websocket.accept' } @sent), 'accept sent');
+};
+
+subtest 'configured endpoint to_app retains the exact object across connections' => sub {
+    $Local::ConfiguredWebSocket::NEW_CALLS = 0;
+    @Local::ConfiguredWebSocket::SEEN_IDS = ();
+
+    my $hub = {};
+    my $configured = Local::ConfiguredWebSocket->new(hub => $hub);
+    my $app = $configured->to_app;
+
+    for my $connection (1, 2) {
+        $app->(
+            { type => 'websocket', path => "/chat/$connection", headers => [] },
+            sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+            sub { Future->done },
+        )->get;
+    }
+
+    is $Local::ConfiguredWebSocket::NEW_CALLS, 1,
+        'configured object was not reconstructed';
+    is \@Local::ConfiguredWebSocket::SEEN_IDS,
+        [refaddr($configured), refaddr($configured)],
+        'connections use the exact configured object';
+};
+
+subtest 'overlapping connections retain the endpoint and isolate connection objects' => sub {
+    my $first_gate = Future->new;
+    my $second_gate = Future->new;
+    %Local::OverlappingConfiguredWebSocket::GATES = (
+        '/chat/first'  => $first_gate,
+        '/chat/second' => $second_gate,
+    );
+    @Local::OverlappingConfiguredWebSocket::RECEIVER_IDS = ();
+    @Local::OverlappingConfiguredWebSocket::PROTOCOL_IDS = ();
+    @Local::OverlappingConfiguredWebSocket::SCOPE_IDS = ();
+
+    my $endpoint = Local::OverlappingConfiguredWebSocket->new(hub => {});
+    my $app = $endpoint->to_app;
+    my $first_scope = {
+        type => 'websocket', path => '/chat/first', headers => [],
+    };
+    my $second_scope = {
+        type => 'websocket', path => '/chat/second', headers => [],
+    };
+    my $receive = sub {
+        return Future->done({
+            type => 'websocket.disconnect', code => 1000,
+        });
+    };
+
+    my $first = $app->($first_scope, $receive, sub { Future->done });
+    ok(!$first->is_ready, 'the first connection is held inside on_connect');
+    is scalar(@Local::OverlappingConfiguredWebSocket::RECEIVER_IDS), 1,
+        'the first connection entered the endpoint before the second began';
+
+    my $second = $app->($second_scope, $receive, sub { Future->done });
+    ok(!$second->is_ready,
+        'the second connection overlaps the first inside on_connect');
+    is \@Local::OverlappingConfiguredWebSocket::RECEIVER_IDS,
+        [refaddr($endpoint), refaddr($endpoint)],
+        'both in-flight connections use the exact configured endpoint';
+    isnt $Local::OverlappingConfiguredWebSocket::PROTOCOL_IDS[0],
+        $Local::OverlappingConfiguredWebSocket::PROTOCOL_IDS[1],
+        'overlapping connections receive distinct WebSocket objects';
+    is \@Local::OverlappingConfiguredWebSocket::SCOPE_IDS,
+        [refaddr($first_scope), refaddr($second_scope)],
+        'each WebSocket retains its own exact connection scope';
+
+    $first_gate->done;
+    $second_gate->done;
+    is $first->get, undef, 'the released first connection completes cleanly';
+    is $second->get, undef, 'the released second connection completes cleanly';
 };
 
 subtest 'immediate on_connect and on_receive results are normalized' => sub {

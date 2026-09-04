@@ -2,12 +2,40 @@
 
 0.002003 - UNRELEASED
 
+  [NDJSON response]
+  - NEW: PAGI::Response::NDJSON and the exported ndjson_response factory stream
+    UTF-8 JSON records framed by LF through a specialized Writer. Each awaited
+    write preserves send-Future backpressure; the public Stream extension proof
+    keeps generic Writer delivery and lifecycle ownership intact.
+
+  [Protocol application state]
+  - BREAKING/consistency: PAGI::Request, ::WebSocket, and ::SSE now share the
+    strict `PAGI::State|undef` direct state contract; absent state is undef and
+    malformed state croaks. Lifespan startup/shutdown callbacks and
+    PAGI::Lifespan->state intentionally retain the mutable raw hashref because
+    lifecycle owns application-state initialization.
+
+  [Declarative-only routing]
+  - BREAKING: Removed the unreleased PAGI::App::Router and
+    PAGI::Endpoint::Router mutable frontends, both Builder packages, and the
+    App Router Materializer. PAGI::Routing is now the sole routing-construction
+    API. Ordinary app objects may return an immutable Router from a
+    routing method; PAGI::Endpoint::HTTP, ::WebSocket, and ::SSE remain
+    optional exact-leaf behavior classes. No compatibility modules or aliases
+    are provided; UPGRADING.md contains complete Before/After migrations.
+  - FIX: Configured WebSocket and SSE Endpoint instances are retained exactly
+    once per compiled application instead of being reconstructed per
+    connection (and failing when construction was attempted through an
+    object). Endpoint objects may hold configuration and long-lived services;
+    connection-local state remains on the protocol object.
+  - CHANGE: Route snapshots an HTTP endpoint object's allowed_methods once at
+    construction. Finite explicit methods must narrow that capability, Router
+    owns PARTIAL and the authoritative Allow union including OPTIONS, and
+    scalar methods => '*' is the explicit endpoint-owned bypass.
+
   [Compose routes-only root]
-  - App Router and Endpoint Router objects already implement `to_app`, so
-    ordinary root Mounts now pass those frontend objects directly. `to_router`
-    remains the explicit conversion when a parent must discover descendant
-    names or retain an immutable snapshot; Compose and Mount perform no hidden
-    conversion.
+  - Ordinary components that own a reusable subtree now return an immutable
+    Router from a routing method and pass that Router directly to Mount.
   - BREAKING: Compose now accepts only `routes` and always constructs and owns
     a distinct root Router. Existing Routers are composed through an explicit
     Mount; an unnamed root Mount consumes no path, adds no route-name namespace,
@@ -17,6 +45,18 @@
     discards those Router-level policies and identity. Direct Router `to_app`
     remains available without Compose root lifespan, ErrorHandler,
     response-completion guard, application middleware, or outer HEAD boundary.
+
+  [HTTP default grammar]
+  - BREAKING: Bare Router and Compose `http_default` CODE now receives one
+    Request, matching ordinary HTTP Route endpoints. Use a Pages or other app
+    object directly for a source-free default, `as_app_object` for an advanced
+    native default, and `request_response` only when adapting a one-Request
+    handler into Mount `app`. This unreleased consistency correction preserves
+    Router-owned NONE/404 versus PARTIAL/405 outcomes.
+  - NEW: `request_response` accepts an optional synchronous `request_factory`
+    that constructs a `PAGI::Request` subclass from the exact scope/receive
+    pair. Projects can use it to publish custom Route helpers while returning
+    ordinary immutable Route nodes.
 
   [Buffering middleware]
   - NEW: PAGI::Middleware::BufferedResponse, two helpers for the
@@ -127,9 +167,8 @@
     names resolve beneath `PAGI::Middleware::`; a leading `+` selects an exact
     package (replacing the retired `^` spelling). Descriptions pass named
     configuration to coderef factories and normalize application-valued
-    factory and `wrap` results through `to_app`. The higher-level App Router,
-    Endpoint Router, and Middleware Builder retain their concise frontend
-    forms and their existing runtime behavior.
+    factory and `wrap` results through `to_app`. Middleware Builder retains its
+    separate concise composition syntax.
   - Clarified that concise middleware normalization is deterministic dispatch
     across disjoint Perl value shapes; the strict core descriptor requirement
     provides one inspectable representation rather than resolving callable
@@ -165,22 +204,26 @@
     accepted WebSocket/SSE sessions remain live protocol loops, not HTTP
     Response applications.
   - BREAKING: Route CODE endpoints receive one Request, WebSocket, or SSE;
-    Route application objects own the native PAGI triplet. Mount `app` and
-    Router `http_default` retain the native CODE contract. Compose accepts only
-    route declarations through `routes`; existing immutable Routers enter as
-    explicit Mount applications. HTTP handler results are native CODE or
-    instantiated `to_app` objects. Native Route CODE uses
-    `as_app`; GET plus automatic HEAD is the default, while scalar
+    Route app objects own the native PAGI triplet. Mount `app` CODE retains the
+    native contract, while Router `http_default` CODE receives one Request.
+    Compose accepts only route declarations through `routes`; existing immutable Routers enter as
+    explicit Mount applications. HTTP handler results are native CODE or app
+    objects. Native Route CODE uses
+    `as_app_object`; GET plus automatic HEAD is the default, while scalar
     `methods => '*'` is unrestricted. Object `allowed_methods` is snapshotted
     once at Route construction, so routed Endpoint::HTTP objects contribute
     verbs and OPTIONS while Router owns unsupported-method 405/Allow outcomes.
+  - CHANGE: `request_response` now belongs to `PAGI::Routing`, beside the
+    `PAGI::Routing::RequestResponse` app object and the Route contract it
+    adapts. It is an explicit export and part of `:ALL`, but not `:routes`;
+    `PAGI::Utils` no longer exports or defines it.
     Response and Pages applications retain their exact configured objects;
     Request headers and Lifespan request scopes likewise retain their exact
     request-owned identities rather than promising defensive copies.
   - BREAKING: PAGI::Middleware::Lint no longer keeps its own copy of
     send-sequencing state; it delegates event-order legality (duplicate
     http.response.start, body before start, sends after completion,
-    illegal trailers, and so on) to the shared PAGI::SendValidation core
+    illegal trailers, and so on) to the shared PAGI::Utils::_SendValidation core
     also used by PAGI::Test::Client. Lint's previous hand-written warnings
     for these cases ("http.response.start sent multiple times",
     "http.response.body sent after response finished (more=0)") are gone;
@@ -308,7 +351,7 @@
     as the supported auth-gate pattern.
   - [BUGFIX] Every PAGI::Endpoint::SSE endpoint using `keepalive_interval`
     was broken against any server enforcing the SSE send-sequencing rules
-    (both the reference server's `EventValidator` and PAGI::SendValidation
+    (both the reference server's `EventValidator` and PAGI::Utils::_SendValidation
     reject `sse.keepalive` sent before `sse.start`), because `handle()`
     configures the keepalive before `on_connect`/`start` ever runs --
     silently tolerated by older, non-validating servers, but a hard failure
@@ -350,7 +393,7 @@
     recorded in unreleased 0.002003 and lands before the next CPAN release with
     no compatibility layer.
   - HTTP Router exhaustion is now a complete outcome. NONE invokes the
-    Router's native `http_default` or stock negotiated Pages 404; PARTIAL emits
+    Router's `http_default` or stock negotiated Pages 404; PARTIAL emits
     the built-in negotiated 405 with one authoritative first-seen `Allow`
     union. The default is HTTP-only and never replaces WebSocket/SSE misses,
     selected exceptions, handler-returned 404s, or PARTIAL. The immutable,
@@ -399,18 +442,6 @@
     delegate non-API HTTP requests to one caller-relative PAGI::App::File;
     Cookbook and Tutorial custom download recipes validate lexical paths,
     authorization, and request-derived response headers separately.
-  - BREAKING: PAGI::App::Router and PAGI::Endpoint::Router are now mutable and
-    method-oriented frontends over the immutable PAGI::Routing engine. The old
-    App matcher, native-by-default route handlers, route-first/mount-fallback
-    ordering, dotted names, package-string loading, Endpoint private state and
-    context override, and response-valued middleware chain are removed without
-    a compatibility mode. See UPGRADING.md for exercised before-and-after
-    migrations to direct protocol handlers, explicit application Routes, local names and slash
-    addresses, explicit constructed child objects, retained snapshots, and
-    universal native middleware. `group`, positional Mount targets, and
-    `router =>` are removed. Functional `mount(..., routes => [...])` takes a
-    structural node array; mutable `mount(..., routes => sub { ... })` builds a
-    real child Router, and Endpoint `app_as` exposes local native methods.
   - PAGI::Routing inline paths now accept zero-argument constraint providers
     such as `{id:&Int}`. Providers use exact declaration-package or qualified
     CODE-slot lookup, run once per source occurrence during construction, and
@@ -426,7 +457,7 @@
     signatures, and demonstrates `Types::Standard::Int` providers. Type::Tiny
     is a test/example prerequisite only, not a PAGI::Tools runtime dependency.
   - Every PAGI::Routing Mount has exactly one named target: `app` or `routes`.
-    `app` retains a native coderef or instantiated component; immutable Router
+    `app` retains a native coderef or app object; immutable Router
     apps remain inspectable, while other apps are opaque. `routes` constructs a
     complete child Router. Named and unnamed Mounts share the same model;
     `Mount->router`, `target`, and `is_raw` are removed. Exact prefixes and
@@ -443,18 +474,19 @@
     A directly compiled Router keeps its own HEAD boundary; the shared marker
     leaves the outermost participant as wire owner so all middleware sees the
     complete representation before suppression.
-  - New PAGI::Routing provides the immutable, declaration-ordered route tree
-    shared by all three public frontends. Normal HTTP handlers receive one
+  - New PAGI::Routing provides the sole immutable, declaration-ordered route
+    tree. Normal HTTP handlers receive one
     PAGI::Request and return application values; native CODE Routes use
-    `as_app` and retain native channel ownership. The release includes inline and application mounts,
+    `as_app_object` and retain native channel ownership. The release includes inline and application mounts,
     route/mount/router pure event middleware, direct PAGI::WebSocket and PAGI::SSE
     handlers, automatic HEAD wire suppression, Router-owned HTTP outcomes,
     first-seen method evidence, synchronous constraints, reverse URLs,
     request-local matched-route frames, inspection, and an executable example.
-    PAGI::App::Router and PAGI::Endpoint::Router materialize the same model.
-  - Application positions accept coderefs or instantiated `to_app` objects and
-    reject package strings. This includes Route endpoints, `app`,
-    `http_default`, Test
+  - HTTP Route endpoint and `http_default` are handler positions: CODE is a
+    one-Request handler, while an app object is compiled through `to_app`.
+    WebSocket and SSE Route endpoints likewise accept their direct protocol
+    CODE handlers or app objects. True/native app positions accept native CODE
+    or app objects and reject package strings. This includes `app`, Test
     Client `app`, Lifespan `app`/`wrap`, Middleware Builder mount/fallback,
     URLMap, and Cascade targets. Middleware class strings remain accepted
     because middleware descriptors define their loading/construction/wrap
@@ -489,9 +521,6 @@
     uses PAGI::Transport. Router URL, Stash, Session, CSRF, and the removed
     outgoing response shortcuts do not transfer to Request, and the former
     `PAGI::Request->response` bridge is removed.
-  - PAGI::Endpoint::Router replaces `new_context` with the explicit HTTP-only
-    `new_request($scope, $receive)` helper; compiled dispatch constructs direct
-    protocol objects independently of that override seam.
   - New PAGI::Authority centralizes strict validation and scope-derived authority
     formatting. The HTTP Request authority accessor now returns only a
     single structurally valid Host field (including an explicit port), returns
@@ -507,7 +536,7 @@
     one rewritten pair, and invalidates the request-header cache. Its proxy
     trust and HTTP-only gates are unchanged; this release does not extend these
     middleware behaviors to other protocols.
-  - New Features: new internal PAGI::SendValidation validates send-sequencing
+  - New Features: new internal PAGI::Utils::_SendValidation validates send-sequencing
     for HTTP, WebSocket, SSE, and lifespan scopes (unknown/missing event
     types, illegal ordering, undeclared extensions), mirroring the reference
     server's PAGI::Server::EventValidator categories and intent. This is
@@ -536,7 +565,7 @@
     already sent to the wire. A stray warning documents the post-completion
     exception. An exception before the response is complete keeps the
     existing 500 + server_error behavior.
-  - PAGI::SendValidation's websocket rules gained the
+  - PAGI::Utils::_SendValidation's websocket rules gained the
     C<websocket.http.response> denial extension (C<websocket.http.response.start>
     / C<.body>), mirroring the reference server's C<denial>/C<denial_complete>
     states: recognized as a legal denial before C<websocket.accept>, illegal
@@ -569,7 +598,7 @@
     C<websocket.http.response.*> extension denial is now recognized the
     same way.
   - PAGI::Test::SSE's C<$send> is likewise now strict via
-    L<PAGI::SendValidation>'s sse rules, and now recognizes an
+    L<PAGI::Utils::_SendValidation>'s sse rules, and now recognizes an
     app-initiated C<sse.close> (previously ignored: the app could send it
     and nothing happened).
   - BREAKING: PAGI::Test::SSE's decline (C<sse.http.response.start> /
@@ -593,7 +622,7 @@
     key: C<{}> for C<http> and C<sse> (this mock has no transport to flush, so
     C<http.fullflush> stays genuinely unadvertised and unreachable through it),
     and C<{ 'websocket.http.response' => {} }> for C<websocket> -- the SAME
-    shared hashref now threaded into L<PAGI::SendValidation> too, replacing
+    shared hashref now threaded into L<PAGI::Utils::_SendValidation> too, replacing
     PAGI::Test::WebSocket's previously independently-hardcoded advertisement
     of that extension (single source of truth; see
     L<PAGI::Test::Client/SCOPE EXTENSIONS>).
@@ -793,7 +822,7 @@
     registered.
   - PAGI::Response: charset follows the body — text/html/send gain
     "; charset=utf-8", json() stays bare application/json.
-  - PAGI::Utils::to_app coerces coderefs, component objects, and class names; every
+  - PAGI::Utils::to_app coerces coderefs, app objects, and class names; every
     composition point accepts anything it accepts.
   - builder's enable() accepts configured middleware instances.
   - PAGI::App::Router: coderef route middleware can transform the channel.

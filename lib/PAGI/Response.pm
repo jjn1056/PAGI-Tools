@@ -35,6 +35,7 @@ representation or delivery behavior:
     PAGI::Response::Empty             empty_response
     PAGI::Response::File              file_response
     PAGI::Response::Stream            stream_response
+    PAGI::Response::NDJSON            ndjson_response
 
 Use either explicit class construction or the matching optional export:
 
@@ -43,7 +44,7 @@ Use either explicit class construction or the matching optional export:
     my $one = PAGI::Response::JSON->new({ ok => \1 });
     my $two = json_response({ ok => \1 });
 
-C<PAGI::Response> exports nothing by default. C<:all> exports all nine
+C<PAGI::Response> exports nothing by default. C<:all> exports all ten
 factories. Each concrete subclass may export only its own factory. Factory
 functions have fixed class mappings; they do not inspect the caller or choose
 an application subclass.
@@ -52,15 +53,17 @@ an application subclass.
 
 The base, Text, HTML, JSON, Problem, Redirect, and Empty classes hold their
 complete encoded bytes in memory. JSON and Problem serialize one finite Perl
-value; they do not turn iterators into incremental JSON. File keeps a selected
-path and sends a PAGI C<file> event after request-time preflight. Stream runs a
-fresh producer per invocation and awaits each body send. Choose File or Stream
-explicitly when the complete body should not be buffered.
+value; they do not turn iterators into incremental JSON. NDJSON streams one
+encoded value per awaited write through its specialized Writer; it does not
+buffer a whole sequence. File keeps a selected path and sends a PAGI C<file>
+event after request-time preflight. Stream runs a fresh producer per invocation
+and awaits each body send. Choose File or Stream explicitly when the complete
+body should not be buffered.
 
 The base class accepts one defined, unblessed, unflagged byte scalar and never
 guesses an encoding. Unicode belongs to Text or HTML; structured data belongs
-to JSON or Problem. For another charset, encode explicitly and provide the
-matching Content-Type.
+to JSON or Problem. Use L<PAGI::Response::NDJSON> for a JSON-value stream. For
+another charset, encode explicitly and provide the matching Content-Type.
 
 =head1 SYNOPSIS
 
@@ -159,8 +162,11 @@ L<PAGI::Spec::Www/"Decline SSE - send event">.
 
 =head1 SUBCLASSING
 
-Finite application subclasses override only C<default_content_type> and
-C<render($value)>, returning encoded bytes:
+Buffered application subclasses have two supported extension seams.
+
+Override C<render($value)> when the subclass introduces a different encoding
+or representation. It must return encoded bytes. Override
+C<default_content_type> when that representation has a different media type:
 
     package MyApp::CSVResponse;
     use parent 'PAGI::Response';
@@ -171,9 +177,45 @@ C<render($value)>, returning encoded bytes:
         return encode_rows_as_utf8($rows);
     }
 
-Constructor dispatch preserves subclass identity. Delivery internals used by
-File and Stream are not a public subclass seam. A delivery subclass that emits
-something outside ordinary body events must override
+Override C<new> when the subclass specializes the semantic input while
+retaining an existing representation. Validate and normalize that input at
+construction, then delegate the completed value and the untouched response
+option list to C<SUPER::new>. For example, a company collection class can
+inherit JSON encoding while constructing its standard envelope first:
+
+    package MyCompany::CollectionResponse;
+    use parent 'PAGI::Response::JSON';
+
+    sub new {
+        my ($class, $source, @response_options) = @_;
+        die 'collection source must be a hashref'
+            unless ref($source) eq 'HASH';
+        die 'items must be an arrayref'
+            unless ref($source->{items}) eq 'ARRAY';
+
+        my $document = {
+            data => $source->{items},
+            meta => { count => scalar @{$source->{items}} },
+        };
+
+        return $class->SUPER::new($document, @response_options);
+    }
+
+Keeping C<@response_options> as a list lets the base constructor retain its
+unknown-, duplicate-, and malformed-option checks. Application subclasses
+must not call private Response parsing or emission methods. See
+L<PAGI::Tools::Cookbook/Company Collection JSON Response> for a complete
+factory and Route example.
+See L<PAGI::Tools::Cookbook/"Streaming Response Extension: NDJSON"> for the
+public Stream-extension proof.
+
+Constructor dispatch through C<SUPER::new> preserves subclass identity. A
+class may combine construction-time normalization with a new C<render> method
+when it genuinely owns both concerns, but validation and document assembly
+should not be hidden inside an encoder.
+
+Delivery internals used by File and Stream are not a public subclass seam. A
+delivery subclass that emits something outside ordinary body events must override
 C<protocol_response_capability> and opt out unless a matching future token is
 defined.
 
@@ -190,6 +232,17 @@ defined.
 Constructs a reusable L<PAGI::Response::Stream>. The callback receives a fresh
 per-invocation L<PAGI::Response::Writer>; await every write Future to preserve
 backpressure.
+
+=head2 ndjson_response
+
+    my $response = ndjson_response(async sub ($writer) {
+        await $writer->write_item({ id => 1 });
+    });
+
+Constructs a reusable L<PAGI::Response::NDJSON>. It streams each value through
+the specialized Writer as UTF-8 JSON followed by one LF. Buffered
+C<json_response> serializes one finite Perl value; it is not an incremental
+JSON sequence. See L<PAGI::Response::NDJSON> for framing and lifecycle details.
 
 =head2 file_response
 
@@ -212,7 +265,7 @@ application.
 my %KNOWN_OPTIONS = map { $_ => 1 } qw(status content_type headers);
 our @EXPORT_OK = qw(
     response text_response html_response json_response problem_response
-    redirect_response empty_response file_response stream_response
+    redirect_response empty_response file_response stream_response ndjson_response
 );
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 
@@ -258,6 +311,11 @@ sub file_response {
 sub stream_response {
     require PAGI::Response::Stream;
     return PAGI::Response::Stream->new(@_);
+}
+
+sub ndjson_response {
+    require PAGI::Response::NDJSON;
+    return PAGI::Response::NDJSON->new(@_);
 }
 
 sub new {

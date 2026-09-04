@@ -12,7 +12,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Response::Empty ();
 use PAGI::Response::Text ();
 use PAGI::Routing qw(route mount middleware router);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
 sub response_header {
     my ($events, $name) = @_;
@@ -97,7 +97,7 @@ subtest 'application middleware derives HEAD headers from the full body' => sub 
         await $send->({ type => 'http.response.body', body => 'representation', more => 0 });
     };
     my $app = compose(
-        routes => [route('/' => as_app($raw))],
+        routes => [route('/' => as_app_object($raw))],
         middleware => [middleware($observer), middleware('ContentLength')],
     )->to_app;
     my $get = run_scope($app, scope(method => 'GET'));
@@ -115,7 +115,7 @@ subtest 'application middleware derives HEAD headers from the full body' => sub 
 subtest 'Router middleware derives identical GET and HEAD representation metadata' => sub {
     my $routing = router(
         routes => [
-            route('/representation' => as_app(async sub {
+            route('/representation' => as_app_object(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type => 'http.response.start', status => 200, headers => [],
@@ -164,7 +164,7 @@ subtest 'Router outcomes and root errors retain derived headers under HEAD' => s
         ],
         [
             'root ErrorHandler',
-            compose(routes => [route('/' => as_app(sub { die "HEAD error\n" }))])->to_app,
+            compose(routes => [route('/' => as_app_object(sub { die "HEAD error\n" }))])->to_app,
             scope(method => 'GET'),
             scope(method => 'HEAD'),
         ],
@@ -192,7 +192,7 @@ subtest 'Router outcomes and root errors retain derived headers under HEAD' => s
 subtest 'sendfile length is available before HEAD wire suppression' => sub {
     my $routing = router(
         routes => [
-            route('/file' => as_app(async sub {
+            route('/file' => as_app_object(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({
                     type => 'http.response.start', status => 200, headers => [],
@@ -246,7 +246,7 @@ subtest 'an explicit HEAD route can avoid its expensive GET sibling' => sub {
 subtest 'Compose HEAD boundary is idempotent with a Router direct boundary' => sub {
     my $child = router(
         routes => [
-            route('/item' => as_app(async sub {
+            route('/item' => as_app_object(async sub {
                 my ($scope, $receive, $send) = @_;
                 await $send->({ type => 'http.response.start', status => 200, headers => [] });
                 await $send->({
@@ -273,7 +273,7 @@ subtest 'byte stream file terminal trailers and late bodies are suppressed' => s
         type => 'http.response.start', status => 206,
         headers => [['content-length', 37]],
     };
-    my $app = compose(routes => [route('/' => as_app(async sub {
+    my $app = compose(routes => [route('/' => as_app_object(async sub {
         my ($scope, $receive, $send) = @_;
         await $send->($start);
         await $send->({ type => 'http.response.body', body => 'one', more => 1 });
@@ -296,7 +296,7 @@ subtest 'byte stream file terminal trailers and late bodies are suppressed' => s
 };
 
 subtest 'absent more is a terminal body event' => sub {
-    my $app = compose(routes => [route('/' => as_app(async sub {
+    my $app = compose(routes => [route('/' => as_app_object(async sub {
         my ($scope, $receive, $send) = @_;
         await $send->({ type => 'http.response.start', status => 200, headers => [] });
         await $send->({ type => 'http.response.body', body => 'terminal' });
@@ -310,7 +310,7 @@ subtest 'absent more is a terminal body event' => sub {
 subtest 'explicit PAGI::Middleware::Head still rewrites method to GET' => sub {
     my @methods;
     my $app = compose(
-        routes => [route('/' => as_app(sub {
+        routes => [route('/' => as_app_object(sub {
             my ($scope, $receive, $send) = @_;
             push @methods, $scope->{method};
             $send->({ type => 'http.response.start', status => 200, headers => [] })->get;
@@ -327,7 +327,7 @@ subtest 'explicit PAGI::Middleware::Head still rewrites method to GET' => sub {
 
 subtest 'HEAD terminal state is request-local under interleaving' => sub {
     my (%send_for, %done_for);
-    my $composition = compose(routes => [route('/*path' => as_app(sub {
+    my $composition = compose(routes => [route('/*path' => as_app_object(sub {
         my ($scope, $receive, $send) = @_;
         my $id = $scope->{path};
         $send_for{$id} = $send;
@@ -363,7 +363,7 @@ subtest 'HEAD terminal state is request-local under interleaving' => sub {
 };
 
 subtest 'separate compiled apps own independent HEAD boundaries' => sub {
-    my $composition = compose(routes => [route('/' => as_app(sub {
+    my $composition = compose(routes => [route('/' => as_app_object(sub {
         my ($scope, $receive, $send) = @_;
         $send->({ type => 'http.response.start', status => 200, headers => [] })->get;
         return $send->({ type => 'http.response.body', body => 'representation' });

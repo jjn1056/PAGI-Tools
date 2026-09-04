@@ -185,33 +185,33 @@ Router behind an explicit root Mount instead:
 
     compose(routes => [mount('/' => app => $router)])
 
-App Router and Endpoint Router frontends already implement to_app and may be
-mounted directly for ordinary application composition. Convert a frontend with
-to_router only when the receiving Router must discover its descendant names or
-when the immutable snapshot itself must be retained or inspected. Compose and
-Mount never call to_router automatically.
+Mount an immutable Router directly when a reusable subtree must preserve its
+middleware, C<http_default>, description, identity, or descendant names:
 
-For ordinary deployment, mount the mutable frontend itself:
+    my $people = MyApp::People->new(repo => $repo)->routing;
+    compose(routes => [
+        mount('/people', app => $people, name => 'people'),
+    ]);
 
-    compose(routes => [mount('/' => app => $builder)])
-    compose(routes => [mount('/' => app => $endpoint)])
-
-When a parent must discover a descendant's names, make that structural
-conversion explicit at the named parent Mount and use the parent for reverse
-generation or inspection:
-
-    $parent->mount('/people', app => $child->to_router)->name('people');
-    $parent->path_for('/people/show', { id => 42 });
+The ordinary component's C<routing> method returns a
+L<PAGI::Routing::Router>; no mutable snapshot or automatic structural
+conversion is involved.
 
 An arbitrary native application has no direct Compose form in this release;
 deploy it directly or use a separately designed application boundary.
 
 Callable meaning is positional and deliberate:
 
-  Route CODE endpoint        -> one Request/WebSocket/SSE argument
-  Route to_app object        -> native PAGI application
-  Mount/default CODE         -> native PAGI application
-  handler result             -> native CODE or instantiated to_app object
+  Position                            Meaning
+  ----------------------------------  --------------------------------
+  HTTP Route endpoint / http_default CODE  one Request handler
+  HTTP Route endpoint / http_default object app object via to_app
+  WebSocket Route endpoint CODE             one WebSocket handler
+  WebSocket Route endpoint object           app object via to_app
+  SSE Route endpoint CODE                   one SSE handler
+  SSE Route endpoint object                 app object via to_app
+  Mount app CODE                       native PAGI application
+  Mount app object                     app object via to_app
 
 Middleware descriptions are a separate construction-time contract: Compose
 constructs configured class targets, invokes factory targets with the inner
@@ -242,6 +242,28 @@ Router first:
         desc         => 'Public routes',
     )
 
+Put a source-free Pages application directly in C<http_default> for the usual
+custom 404. When the result depends on the request, pass a bare one-Request
+handler instead:
+
+    use PAGI::Response qw(problem_response);
+
+    compose(
+        routes => \@nodes,
+        http_default => sub ($request) {
+            return problem_response({
+                title  => 'Not Found',
+                status => 404,
+                detail => 'No route matched ' . $request->path,
+            });
+        },
+    )
+
+An advanced native C<http_default> CODE must be marked with
+C<as_app_object>. C<request_response> remains appropriate for adapting a
+one-Request handler into Mount C<app>, but not for ordinary C<http_default>
+use.
+
 Compose C<middleware> is the outer application-wide boundary. When a reusable
 Router already owns middleware, C<http_default>, C<desc>, identity, or a
 Resolver, preserve that Router explicitly:
@@ -249,9 +271,10 @@ Resolver, preserve that Router explicitly:
     compose(routes => [mount('/' => app => $routing)])
 
 The Mount retains the configured Router; Compose still constructs and owns a
-distinct outer root Router. App Router and Endpoint Router frontends are
-ordinary application objects at this boundary; mount them directly unless the
-outer Router must inspect a retained immutable snapshot.
+distinct outer root Router. An ordinary component can expose a C<routing>
+method that returns an immutable Router; mount that Router directly to retain
+its boundary, or pass its C<routes> list deliberately when flattening is the
+intended policy.
 
 =head2 composition choices
 
@@ -355,7 +378,7 @@ constructor-time description validation, then returns one native PAGI
 coderef. It performs no request or lifecycle I/O. Router component loading, middleware
 construction, and wrapping failures therefore occur at C<to_app>. Calling
 C<to_app> again builds an independent executable graph around the same root
-Router identity and recompiles its component objects, although lexical state
+Router identity and recompiles its app objects, although lexical state
 deliberately captured by user coderefs remains ordinary shared Perl state.
 
 For HTTP, the exact outer-to-inner order is:
@@ -537,8 +560,7 @@ recover if an inner renderer fails.
 =head1 RELATIONSHIP TO OTHER PAGI APIS
 
 C<< compose(routes => [...]) >> is a compact deployed root: a newly constructed
-functional Router plus application middleware, lifecycle, and HTTP safety. It
-does not replace any Router frontend. A directly compiled Router already owns
+Router plus application middleware, lifecycle, and HTTP safety. A directly compiled Router already owns
 HTTP 404 and 405 outcomes and its own HeadBoundary, but it does not install
 Compose's ErrorHandler, response guard, or lifespan driver. Preserving it with
 C<< compose(routes => [mount('/' => app => $routing)]) >> adds an outer
@@ -547,11 +569,10 @@ For Router middleware, C<http_default>, C<desc>, identity, or Resolver state,
 retain the Router behind that Mount instead of passing C<< $routing->routes >>.
 Compose inspection delegates to its own root Router.
 
-L<PAGI::Routing>, L<PAGI::App::Router>, and L<PAGI::Endpoint::Router> are
-functional, mutable, and method-oriented frontends over one immutable routing
-engine. Compose accepts only C<routes>; an immutable Router crosses that grammar
-as an explicit Mount application. Compose does not wrap an arbitrary native
-app or general C<to_app> component directly in this release.
+L<PAGI::Routing> is the routing-construction API. Compose accepts only
+C<routes>; an immutable Router crosses that grammar as an explicit Mount
+application. Compose does not wrap an arbitrary native app or general
+C<to_app> component directly in this release.
 Normal compiled handlers receive their direct Request, WebSocket, or SSE
 object. Native applications and every middleware wrapper retain the exact
 C<($scope, $receive, $send)> triplet; Compose does not adapt that boundary.
@@ -563,7 +584,7 @@ native applications or their existing hook-registration behavior.
 =head1 STARLETTE COMPARISON
 
 The influence is architectural, not source or API identity. Current Starlette
-does not subclass C<Router>. Its application object owns C<self.router>,
+does not subclass C<Router>. Its app object owns C<self.router>,
 delegates routing inspection, and wraps that Router with application
 middleware. See the
 L<official Starlette application source|https://github.com/Kludex/starlette/blob/main/starlette/applications.py>.
@@ -591,8 +612,7 @@ WebSocket and first-class SSE misses.
 =head1 SEE ALSO
 
 L<PAGI::Routing>, L<PAGI::Routing::Router>, L<PAGI::Routing::Mount>,
-L<PAGI::Routing::Middleware>, L<PAGI::App::Router>,
-L<PAGI::Endpoint::Router>, L<PAGI::Pages>, L<PAGI::Lifespan>, L<PAGI::Utils>,
+L<PAGI::Routing::Middleware>, L<PAGI::Pages>, L<PAGI::Lifespan>, L<PAGI::Utils>,
 L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>,
 L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>
 

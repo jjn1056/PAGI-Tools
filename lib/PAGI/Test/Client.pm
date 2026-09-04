@@ -5,14 +5,14 @@ use warnings;
 use Future::AsyncAwait;
 use Carp qw(croak);
 
-use PAGI::SendValidation;
+use PAGI::Utils::_SendValidation;
 use PAGI::Test::ConnectionState;
 use PAGI::Test::Response;
 use PAGI::Utils ();
 
 # Extension sets this mock genuinely implements, one per scope type. Each is
 # the single source of truth threaded into BOTH that scope's advertised
-# `extensions` key AND the PAGI::SendValidation instance guarding that
+# `extensions` key AND the PAGI::Utils::_SendValidation instance guarding that
 # scope's sends -- never two independently-hardcoded lists that can drift.
 # http/sse: empty. http.fullflush's real contract is "block until bytes are
 # flushed to the transport" -- this mock has no transport to flush (everything
@@ -117,13 +117,13 @@ sub _request {
     };
 
     # Build send (captures response). Strict: illegal events (per
-    # PAGI::SendValidation's http rules) fail the returned Future -- a
+    # PAGI::Utils::_SendValidation's http rules) fail the returned Future -- a
     # canonical test client must not accept what a real server would reject.
     # extensions is the SAME hashref advertised on the scope above (see
     # %HTTP_EXTENSIONS) -- one source of truth, not two lists that can drift.
     # Validated events are handed to PAGI::Test::Response's one captured-wire
     # decoder.
-    my $sv = PAGI::SendValidation->new(scope_type => 'http', extensions => $scope->{extensions});
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'http', extensions => $scope->{extensions});
     my $response = PAGI::Test::Response->new(events => []);
     my $send = async sub {
         my ($event) = @_;
@@ -544,11 +544,11 @@ sub start {
         return await $pending_future;
     };
 
-    # Strict: illegal events (per PAGI::SendValidation's lifespan rules) fail
+    # Strict: illegal events (per PAGI::Utils::_SendValidation's lifespan rules) fail
     # the returned Future -- a result reported for the wrong phase (e.g. a
     # shutdown result sent while still in startup) is a real bug in the app
     # under test, not something this canonical test client should tolerate.
-    my $sv = PAGI::SendValidation->new(scope_type => 'lifespan');
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'lifespan');
 
     # Resolves when the app signals startup: done on lifespan.startup.complete,
     # failed (with the app's message) on lifespan.startup.failed. $shutdown is
@@ -911,14 +911,14 @@ against L<PAGI::Server>.
 
 The C<$send> coderef given to your app during an HTTP request is strict: it
 validates every event against the PAGI http send-sequencing rules via
-L<PAGI::SendValidation> and fails the returned Future (the app's C<await
+L<PAGI::Utils::_SendValidation> and fails the returned Future (the app's C<await
 $send->(...)> dies) for anything a real server would reject -- an
 unrecognized or missing event C<type> (C<malformed>/C<unknown_type>), an
 out-of-order event such as a duplicate C<http.response.start> or a body
 chunk before it (C<sequence>), or undeclared C<http.response.trailers>
 (C<sequence>). A rejected event is never appended to the assembled
 response. There is no lenient mode -- a canonical test client must not
-accept what the server would fail; see L<PAGI::SendValidation/RULES> for
+accept what the server would fail; see L<PAGI::Utils::_SendValidation/RULES> for
 the exact http rule set.
 
 An app that returns without reaching a legal terminal state (no terminal
@@ -975,8 +975,8 @@ header having been stripped above).
 =head1 SCOPE EXTENSIONS
 
 Every scope's C<extensions> key advertises exactly the extension set this
-mock genuinely implements -- never more than L<PAGI::SendValidation> (see
-L<PAGI::SendValidation/RULES>) is wired to accept for that scope, since the
+mock genuinely implements -- never more than L<PAGI::Utils::_SendValidation> (see
+L<PAGI::Utils::_SendValidation/RULES>) is wired to accept for that scope, since the
 two are the same shared data structure (see the module source's
 C<%HTTP_EXTENSIONS> / C<%WEBSOCKET_EXTENSIONS> / C<%SSE_EXTENSIONS>), not two
 independently-maintained lists that could drift:
@@ -1014,15 +1014,15 @@ C<denial_complete> states), so it is genuinely advertised.
 
 The PAGI application to test. This native application position accepts the two
 forms supported by L<PAGI::Utils/to_app>: a coderef or an instantiated
-component object with a C<to_app> method:
+app object with a C<to_app> method:
 
     # Coderef (existing style)
     my $client = PAGI::Test::Client->new(app => $coderef);
 
-    # Component object
+    # App object
     my $client = PAGI::Test::Client->new(app => MyApp::Main->new(%opts));
 
-    # Terminal Response object (also an instantiated to_app component)
+    # Terminal Response object (also an app object)
     use PAGI::Response::Text ();
     my $client = PAGI::Test::Client->new(
         app => PAGI::Response::Text->new('ready'),
@@ -1331,7 +1331,7 @@ The lifespan C<$send> coderef is strict, like the http path (see L</SEND
 STRICTNESS (http)> above): a result event reported for the wrong phase (for
 example the app sending C<lifespan.shutdown.complete> while still in the
 startup phase) fails the app's C<await $send-E<gt>(...)> instead of being
-silently accepted; see L<PAGI::SendValidation/RULES> ("lifespan") for the
+silently accepted; see L<PAGI::Utils::_SendValidation/RULES> ("lifespan") for the
 exact rule set.
 
 =head2 stop

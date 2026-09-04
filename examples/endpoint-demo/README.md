@@ -91,32 +91,32 @@ return await invoke_app($response, $scope, $receive, $send);
 Successful endpoint payloads remain application-owned JSON. `PAGI::Pages`
 handles only the generic HTTP failure.
 
-The three Endpoint applications are compiled native PAGI components at their
-explicit `app =>` positions, with Mount middleware declared by name. The `/`
-static-file mount is last because the shared routing engine preserves written
-order and a matched mount prefix owns dispatch immediately.
-
-`PAGI::App::Router` already implements `to_app`, so Compose mounts the
-endpoint-demo frontend directly:
+The three endpoint objects are direct Compose route leaves. Their middleware is
+wrapped explicitly with `middleware`, and the `/` static-file mount remains
+last because the shared routing engine preserves written order and a matched
+mount prefix owns dispatch immediately:
 
 ```perl
-compose(routes => [mount('/' => app => $router)]);
+use PAGI::Routing qw(middleware mount route sse websocket);
+
+compose(routes => [
+    route('/api/messages' => MessageAPI->new,
+        middleware => [middleware($access_log), middleware($require_json)]),
+    websocket('/ws/echo' => EchoWS->new,
+        middleware => [middleware($access_log), middleware($timing)]),
+    sse('/events' => MessageEvents->new,
+        middleware => [middleware($timing)]),
+    mount('/' => app => PAGI::App::File->from_app_path('public')),
+]);
 ```
 
-The unnamed root Mount consumes no path and keeps the Router's middleware,
-default, and routing outcomes. The outer Compose Router treats the frontend as
-an application boundary and does not inspect its descendant names. The frontend
-already implements `to_app`: mount it directly for ordinary deployment. Use
-`to_router` only when a parent must discover those names or retain an immutable
-snapshot; this application has no such parent-side consumer. The
-HTTP, WebSocket, and SSE applications remain opaque at their existing mounts;
-see
-[PAGI::Compose](../../lib/PAGI/Compose.pm) and
-[PAGI::Routing::Mount](../../lib/PAGI/Routing/Mount.pm) for the boundary model.
-
-```perl
-$router->mount('/', app => PAGI::App::File->from_app_path('public'));
-```
+`route`, `websocket`, and `sse` retain each configured endpoint object for the
+compiled application's lifetime. The same object may serve concurrent work,
+so shared configuration stays on the endpoint while request and connection
+state stays on the protocol object. The HTTP Route snapshots
+`MessageAPI->allowed_methods` once during construction; the Router therefore
+owns method mismatch and its `Allow` union. There is no intermediate mutable
+Router or redundant root Mount.
 
 ## Routes
 

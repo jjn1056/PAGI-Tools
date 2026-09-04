@@ -15,291 +15,181 @@ __END__
 
 PAGI::Tools - Application toolkit for the PAGI specification
 
-Route matches a complete URL leaf. Mount composes an application under a
-prefix. Router selects and owns routing outcomes. Middleware wraps behavior.
-Compose owns the application root and lifespan.
-
 =head1 SYNOPSIS
 
-Callable values keep these four meanings:
+PAGI itself is deliberately small: a native application is an async coderef
+that receives C<($scope, $receive, $send)>. PAGI-Tools supplies Request and
+Response classes, declarative routing, middleware, lifecycle composition, and
+in-process testing without hiding that protocol boundary.
 
-    Route CODE endpoint        -> one Request/WebSocket/SSE argument
-    Route to_app object        -> native PAGI application
-    Mount/default CODE         -> native PAGI application
-    handler result             -> native CODE or instantiated to_app object
-
-A native CODE at a Route is wrapped explicitly with C<PAGI::Utils::as_app>.
-Mount C<app> and Router C<http_default> remain native application positions
-and take a three-channel CODE directly. Compose accepts only route declarations
-through C<routes>. Preserve an existing immutable Router as the C<app> of an
-explicit Mount inside that list; Compose does not accept an arbitrary
-application directly.
-
-Raw PAGI is deliberately minimal — an application is just an C<async> sub that
-speaks the protocol directly:
+For an ordinary HTTP application:
 
     use Future::AsyncAwait;
-
-    my $app = async sub {
-        my ($scope, $receive, $send) = @_;
-        await $send->({
-            type    => 'http.response.start',
-            status  => 200,
-            headers => [['content-type', 'application/json']],
-        });
-        await $send->({ type => 'http.response.body', body => '{"hello":"world"}', more => 0 });
-    };
-
-PAGI-Tools adds the ergonomics — requests, response values, routing, a
-middleware suite — so the same application reads like this:
-
-    use PAGI::App::Router;
     use PAGI::Compose qw(compose);
     use PAGI::Response qw(json_response);
-    use PAGI::Routing qw(mount);
-    use Future::AsyncAwait;
-
-    my $router = PAGI::App::Router->new;
-
-    $router->get('/' => async sub {
-        my ($request) = @_;
-        return json_response({ hello => 'world' });
-    })->name('home');
-
-    $router->get('/users/{id}' => async sub {
-        my ($request) = @_;
-        return json_response({ id => $request->path_param('id') });
-    })->name('user');
-
-    my $app = compose(
-        routes => [mount('/' => app => $router)],
-    )->to_app; # complete deployed app
-
-An App Router already implements C<to_app>, so mount it directly for ordinary
-application deployment. Convert it with C<to_router> only when a parent must
-inspect or discover descendant names, or when the immutable snapshot itself
-must be retained.
-
-For a small conventional landing page or HTTP error, L<PAGI::Pages> builds a
-deferred negotiated HTTP application:
-
-    use PAGI::Pages qw(not_found welcome);
-
-    my $landing = welcome();
-    my $missing = not_found(detail => 'No such page');
-
-Factories take options only; negotiation uses the later invocation scope. The
-returned object can be placed directly at an exact Route or as Router
-C<http_default>.
-
-For a conventional static tree, use the rooted file component rather than
-constructing paths or reading files in a handler:
-
-    use PAGI::App::File;
-
-    my $static = PAGI::App::File->from_app_path('public')->to_app;
-
-Its request-path construction is lexical and performs no I/O; the PAGI server
-opens the resulting C<file> event. Configured symlinks extend administrator
-authority, so keep the root dedicated and non-attacker-writable and enforce
-appropriate filesystem ownership and permissions. These are deployment best
-practices, not physical confinement enforced by the component. Custom access
-control remains a separate application decision. See
-L<PAGI::Tools::Cookbook> for the authenticated XSendfile recipe and the
-L<rooted file-serving upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#rooted-file-serving-security-contract>
-for the intentionally changed statuses, hidden-file policy, and mapping rules.
-
-Routing has three public frontends over that same immutable snapshot and
-compiler:
-
-    PAGI::Routing          immutable functional declarations   Request handlers
-    PAGI::App::Router      mutable imperative builder          verb methods + Request
-    PAGI::Endpoint::Router class/role-oriented frontend        local method names
-
-Use the functional frontend when the declarations are already immutable:
-
-    use PAGI::Routing qw(:routes);
-    use PAGI::Compose qw(compose);
-    use PAGI::Response qw(json_response);
+    use PAGI::Routing qw(mount route router);
 
     async sub home {
         my ($request) = @_;
         return json_response({ hello => 'world' });
     }
 
+    async sub user {
+        my ($request) = @_;
+        return json_response({ id => $request->path_param('id') });
+    }
+
+    my $people = router(
+        routes => [
+            route('/{id}' => \&user, name => 'show'),
+        ],
+        desc => 'People routes',
+    );
+
     my $app = compose(
         routes => [
             route('/' => \&home, name => 'home'),
+            mount('/people', app => $people, name => 'people'),
         ],
-    )->to_app;
+    );
 
-Every Mount names its target: C<< routes => [...] >> constructs a complete
-child Router, while C<< app => $child >> composes a native application or
-instantiated component. An immutable Router in C<app> remains inspectable;
-other applications are opaque. Named routes compose into slash addresses such as
-C</person/show>; L<PAGI::Routing::URL> can generate request-relative links from
-the active placement, with compact or named path/query/fragment arguments. Its helpers
-return strings or croak, perform no protocol I/O, and do not replace normal
-authorization checks.
+Pass C<$app> to a PAGI server, or call C<< $app->to_app >> when an explicit
+native coderef is required.
 
-Response classes make representation and delivery cost explicit. Base, Text,
-HTML, JSON, Problem, Redirect, and Empty are finite buffered values; File sends
-one already selected path; Stream produces chunks with awaited send-Future
-backpressure. Route and Mount retain separate ownership:
+=head1 THE APPLICATION TOPOLOGY
 
-    Route('/x')       exact complete path leaf
-    Route('/*path')   explicit real catchall leaf
-    Mount('/x')       selected owner of /x and its complete subtree
+PAGI-Tools has one routing-construction API, L<PAGI::Routing>. Its layers have
+separate jobs:
 
-The three frontends share Pattern parsing, Resolver names, Compiler dispatch,
-route metadata, constraints, GET/HEAD behavior, Router-owned 404/405 outcomes,
-first-seen method unions, written declaration order, and reverse
-routing. Ordinary HTTP handlers receive L<PAGI::Request> and return an
-application value, normally a Response or Pages object; WebSocket and SSE
-handlers receive their direct protocol objects. Native CODE ownership at a
-Route is always explicit with C<as_app>. Without explicit C<methods>, that
-Route uses GET plus automatic HEAD; unrestricted delegation uses scalar
-C<< methods => '*' >>. A bare Router sends its own
-negotiated 404 and compliant 405 and installs its own HeadBoundary, but it
-deliberately has no root ErrorHandler, response-completion guard, or lifespan
-driver. Compose adds an outer idempotent application-root HEAD boundary and
-supplies those deployed application policies.
-See the
-L<router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>
-for the intentionally breaking migration from the previous App and Endpoint
-contracts.
+    Endpoint::HTTP/WebSocket/SSE  optional behavior for one exact route
+    Route                         exact path and HTTP method policy
+    Mount                         prefix ownership and app composition
+    Router                        ordered children and NONE/PARTIAL outcomes
+    Compose                       root lifespan, middleware, and safety
 
-For a small deployed root, the optional composer can put routes,
-application-wide middleware, and lifecycle callbacks in one immutable
-description:
+A C<Route> matches one complete leaf. A C<Mount> selects and owns a prefix,
+rewrites the child path, and delegates to one application. A C<Router> scans
+its children in declaration order and owns exhausted-match 404 and
+method-mismatch 405 outcomes. C<Compose> constructs the deployed root Router
+and surrounds it with application middleware, lifespan, error handling, HEAD
+handling, and response-completion safety.
 
-    use PAGI::Compose qw(compose);
-    use PAGI::Routing qw(route middleware);
+The route-level L<PAGI::Endpoint::HTTP>, L<PAGI::Endpoint::WebSocket>, and
+L<PAGI::Endpoint::SSE> classes are optional behavior helpers for a single
+leaf. They do not construct or own route trees. An ordinary class that owns a
+reusable subtree can return an immutable Router:
 
-    my $app = compose(
-        routes => [route('/' => \&home)],
-        middleware => [middleware('RequestId')],
-        lifespan => {
-            startup => sub {
-                my ($state, $scope) = @_;
-                $state->{ready} = 1;
-            },
-            shutdown => sub {
-                my ($state, $scope) = @_;
-                delete $state->{ready};
-            },
-        },
-    )->to_app;
+    package MyApp::People;
+    use PAGI::Routing qw(route router);
 
-L<PAGI::Compose> is an optional application-root composer, not a base class or
-a replacement router. Its only grammar is C<routes>, from which it constructs
-and owns one distinct root Router. Preserve a configured Router by identity
-with C<< routes => [mount('/' => app => $router)] >>. Compose inspection starts
-at its own root: C<routes> returns that Mount as the direct child, while reverse
-routing traverses the inspectable child without flattening it. Configure a
-Router C<http_default> for custom missing-route presentation and ordinary
-ErrorHandler middleware for official application errors. Compose keeps root
-lifespan and its stock error and response-lifecycle boundary outside author
-middleware as the final safety net.
+    sub routing {
+        my ($self) = @_;
+        return router(routes => [
+            route('/' => sub { $self->index(@_) }, name => 'index'),
+            route('/{id}' => sub { $self->show(@_) }, name => 'show'),
+        ]);
+    }
 
-Declarative mount prefixes accept both the exact prefix and its slash form
-without redirecting, a deliberate difference from Starlette's default mount
-behavior. Its request-aware URLs consume normalized scope data; the shipped
-ReverseProxy and TrustedHosts middleware still process HTTP only, so
-WebSocket/SSE deployments must normalize and validate those scopes outside
-routing.
+The parent mounts C<< $people->routing >> directly. This keeps route names
+inspectable for C<path_for> and C<url_for> without another frontend or a
+mutable snapshot step.
 
-PAGI follows Starlette's Route/Mount/Router/application topology, not every
-method on Starlette Request. L<PAGI::Request> owns HTTP input; imports identify
-the Router or middleware that supplies optional behavior. This keeps URL,
-Session, Stash, CSRF, State, and Transport ownership visible and lets another
-framework use its own Router without teaching Request that framework's API.
+=head1 ROUTE AND APPLICATION VALUES
 
-The Starlette influence is conceptual, not API identity. PAGI distinguishes
-direct protocol handlers from native three-channel application positions, validates
-constraints without coercion, uses slash logical names and relative lookup,
-treats SSE as a first-class scope, and exposes an HTTP-only C<http_default>.
-Current Starlette owns C<self.router> without subclassing Router and stores
-lifespan handling on Router, making a standalone Starlette Router
-lifecycle-capable. Mounted Starlette Routers do not receive lifespan. PAGI
-preserves one non-cascading root lifecycle but keeps it on Compose; a bare PAGI
-Router declines lifespan and strict mode rejects it. Starlette's single
-multiprotocol Router C<default> was considered and not copied, so PAGI retains
-its stock WebSocket and SSE miss behavior. OpenAPI and schema generation remain
-deferred until a concrete consumer is designed.
+Callable meaning is determined by its position:
 
-Run it with any PAGI server (such as C<pagi-server> from the C<PAGI-Server>
-distribution), or mount it inside a larger PAGI application.
+    HTTP Route endpoint / http_default CODE  -> one Request handler
+    HTTP Route endpoint / http_default object -> app object via to_app
+    WebSocket Route endpoint CODE             -> one WebSocket handler
+    WebSocket Route endpoint object           -> app object via to_app
+    SSE Route endpoint CODE                   -> one SSE handler
+    SSE Route endpoint object                 -> app object via to_app
+    Mount app CODE                       -> native PAGI application
+    Mount app object                     -> app object via to_app
+
+An B<app object> is an instantiated object with a C<to_app> method. Route
+therefore accepts either a one-argument Request/WebSocket/SSE handler or an app
+object.
+
+A native three-channel coderef used at a Route or C<http_default> must be
+marked with L<PAGI::Utils/as_app_object>. Mount C<app> CODE is already a native
+application position. A bare C<http_default> CODE receives one Request; use
+C<request_response($handler)> only when adapting that handler into Mount
+C<app>. The wrapper is a narrow escape hatch for special protocol handling or
+an existing native PAGI coderef; ordinary Route handlers use their direct
+Request, WebSocket, or SSE object.
+
+For HTTP app objects that implement C<allowed_methods>, Route calls
+that capability once at construction and snapshots the normalized methods.
+A finite C<methods> option must be a restriction of that capability. The
+Router then owns PARTIAL matching, automatic HEAD, OPTIONS participation, and
+the authoritative C<Allow> union. Scalar C<< methods => '*' >> bypasses Route
+method qualification and leaves method dispatch and 405 handling to the
+endpoint. WebSocket and SSE routes never inspect this HTTP capability.
+
+Configured Endpoint objects are retained exactly once per compiled
+application. The same instance may serve concurrent requests or connections,
+so keep only configuration and long-lived services on it. Request,
+WebSocket, SSE, writer, and other connection-local state belongs to the
+protocol object created for each invocation.
+
+=head1 ROOTED STATIC FILES
+
+Use L<PAGI::App::File> rather than constructing a filesystem path from a URL
+capture:
+
+    use PAGI::App::File;
+    use PAGI::Routing qw(mount);
+
+    mount('/static', app => PAGI::App::File->from_app_path('static'));
+
+The similarly named L<PAGI::Utils/app_path> returns a path string. Import and
+call it directly from the module that owns the asset directory:
+
+    package MyApp::Root;
+    use PAGI::Utils qw(app_path);
+
+    sub public_root { return app_path('public') }
+
+Do not hide that caller-sensitive lookup behind an inherited base-class
+wrapper. Construct the serving application separately with the returned path.
 
 =head1 DESCRIPTION
 
-L<PAGI> — the Perl Asynchronous Gateway Interface — is deliberately small: an
-application is just an C<async> sub that speaks a simple event protocol over
-C<$scope>, C<$receive>, and C<$send>. That minimalism is a virtue, but building
-applications directly against the raw protocol can get verbose.
-
-PAGI-Tools is the application-side toolkit that smooths this over. It collects
-the ergonomics an author reaches for again and again, so you can build real
-PAGI applications without hand-emitting protocol events:
+PAGI-Tools collects application-side tools that are useful without requiring
+a larger framework:
 
 =over 4
 
+=item * L<PAGI::Request>, L<PAGI::Response>, L<PAGI::WebSocket>, and L<PAGI::SSE>
+
+=item * L<PAGI::Routing> and L<PAGI::Routing::URL>
+
+=item * L<PAGI::Compose> and L<PAGI::Lifespan>
+
 =item * L<PAGI::Middleware> and the C<PAGI::Middleware::*> suite
 
-=item * C<PAGI::App::*> - ready-made apps (rooted static files, the mutable router
-frontend, proxies,
-WebSocket chat/echo, PSGI bridging)
+=item * L<PAGI::App::File>, proxies, health checks, and other ready-made applications
 
-=item * L<PAGI::Endpoint::HTTP>, L<PAGI::Endpoint::Router>,
-L<PAGI::Endpoint::SSE>, L<PAGI::Endpoint::WebSocket> - high-level endpoint
-framework
+=item * L<PAGI::Pages> for conventional negotiated HTTP applications
 
-=item * L<PAGI::Request> and L<PAGI::Response> - HTTP input and detached output
-values; WebSocket and SSE handlers receive their direct protocol objects
+=item * L<PAGI::State>, L<PAGI::Stash>, L<PAGI::Session>, L<PAGI::CSRF>, and L<PAGI::Transport>
 
-=item * L<PAGI::State>, L<PAGI::Stash>, L<PAGI::Session>, L<PAGI::CSRF>,
-L<PAGI::Transport>, and L<PAGI::Routing::URL> - explicitly imported optional
-scope capabilities
-
-=item * L<PAGI::Pages> - deferred negotiated conventional welcome, redirect,
-and HTTP error applications
-
-=item * L<PAGI::Routing>, L<PAGI::App::Router>, and
-L<PAGI::Endpoint::Router> - immutable functional, mutable imperative, and
-method-oriented frontends over one immutable routing engine
-
-=item * L<PAGI::Compose> - optional immutable application-root composition of
-one routes-built root Router, application middleware, explicit lifecycle
-callbacks, and mandatory HTTP error/response-lifecycle failsafes; configured
-Routers enter through explicit Mounts
-
-=item * L<PAGI::Test::Client> and friends - in-process test utilities for
-PAGI applications
-
-=item * L<PAGI::Utils> - composition, lifespan, and lexical path helpers,
-including explicit component-to-application coercion
+=item * L<PAGI::Test::Client> and related in-process testing tools
 
 =back
 
-It is the author's hope that these tools serve two audiences: people
-I<exploring> PAGI, who get going with far less friction than the raw protocol
-asks for; and framework authors, who get a I<ready-made base> to build
-higher-order frameworks on top of, rather than starting from C<$scope>,
-C<$receive>, and C<$send> every time.
-
-The reference server lives in the C<PAGI-Server> distribution; the
-protocol specification lives in the C<PAGI> distribution.
+The toolkit stays below application conventions and dependency assembly.
+Higher-level frameworks can add those policies without maintaining another
+core Router grammar.
 
 =head1 SEE ALSO
 
-L<PAGI::Tutorial> (the protocol tutorial, in the C<PAGI> distribution),
-L<PAGI::Tools::Tutorial> (this distribution's helpers guide),
-L<PAGI::Tools::Cookbook> (this distribution's recipes), L<PAGI::Compose>,
-L<PAGI::Routing>, L<PAGI::Pages>, L<PAGI::Response>, L<PAGI::App::Router>,
-L<PAGI::Endpoint::Router>, L<PAGI::App::File>, L<PAGI::Utils>, L<PAGI::Spec>,
+L<PAGI::Tutorial>, L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>,
+L<PAGI::Compose>, L<PAGI::Routing>, L<PAGI::Pages>, L<PAGI::Response>,
+L<PAGI::App::File>, L<PAGI::Utils>, L<PAGI::Spec>,
 L<router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>,
-L<PAGI::Server::Runner> - runs PAGI applications from the command line
-(ships with the PAGI-Server distribution)
+L<PAGI::Server::Runner>
 
 =head1 AUTHOR
 
@@ -307,7 +197,7 @@ John Napiorkowski <jjnapiork@cpan.org>
 
 =head1 LICENSE
 
-This library is free software; you may redistribute it and/or modify it
-under the same terms as the Artistic License 2.0.
+This library is free software; you may redistribute it and/or modify it under
+the same terms as the Artistic License 2.0.
 
 =cut

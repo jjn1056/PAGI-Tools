@@ -72,8 +72,10 @@ dependency-free apple manager from [`public/index.html`](public/index.html),
 keeps the shared `PAGI::Pages` Welcome page at `/welcome`, and mounts an apples
 Router under `/apples`.
 
+`/apples/export` is an intentional PAGI extension: it demonstrates an NDJSON
+export and has no counterpart in the original Starlette sample above.
+
 ```perl
-#!/usr/bin/env perl
 use v5.40;
 
 use Future::AsyncAwait;
@@ -83,7 +85,7 @@ use AppleApp::Middleware qw(with_apples_api_header);
 use AppleApp::Model qw(apple_model);
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
-use PAGI::Response qw(file_response json_response);
+use PAGI::Response qw(file_response json_response ndjson_response);
 use PAGI::Routing qw(route mount middleware);
 use PAGI::Routing::URL qw(url_for path_for);
 use PAGI::Utils qw(app_path);
@@ -116,6 +118,17 @@ async sub list_apples($request) {
             }
         } @{$apples->all}
     ]);
+}
+
+async sub export_apples($request) {
+    my $items = apples($request)->all;
+
+    return ndjson_response(async sub ($writer) {
+        for my $apple (@$items) {
+            last if $writer->is_disconnected;
+            await $writer->write_item($apple);
+        }
+    });
 }
 
 async sub read_apple($request) {
@@ -197,6 +210,8 @@ compose(
                     methods => ['GET'], name => 'list'),
                 route('/' => \&create_apple,
                     methods => ['POST'], name => 'create'),
+                route('/export' => \&export_apples,
+                    methods => ['GET'], name => 'export'),
                 route('/{apple_id:&Int}' => \&read_apple,
                     methods => ['GET'], name => 'read'),
                 route('/{apple_id:&Int}' => \&update_apple,
@@ -294,6 +309,7 @@ List and read apples:
 ```bash
 curl -i http://127.0.0.1:5000/apples
 curl -i http://127.0.0.1:5000/apples/1
+curl -i http://127.0.0.1:5000/apples/export
 ```
 
 Create, update, and delete an apple. In a freshly started process, the new

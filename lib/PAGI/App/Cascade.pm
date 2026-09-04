@@ -232,7 +232,7 @@ listed in C<catch>; parent route scanning never resumes.
 
 =item * C<apps> - Arrayref of apps to try in order.
 Entries in C<apps> (and arguments to C<add>) accept anything
-L<PAGI::Utils/to_app> accepts: a coderef or an instantiated component object
+L<PAGI::Utils/to_app> accepts: a coderef or an app object
 with a C<to_app> method. Package-name strings are rejected.
 
 =item * C<catch> - Arrayref of explicit HTTP response status codes to catch on

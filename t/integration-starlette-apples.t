@@ -33,6 +33,8 @@ subtest 'README preserves the comparison and current executable source' => sub {
     my $app_source = _slurp($app_file);
     my ($python) = $readme =~ /```python\n(.*?)```/s;
     my ($perl) = $readme =~ /```perl\n(.*?)```/s;
+    $app_source =~ s/\A#![^\n]*\n//;
+    $perl =~ s/\A#![^\n]*\n//;
 
     is(
         sha256_hex($python // ''),
@@ -50,6 +52,12 @@ subtest 'README preserves the comparison and current executable source' => sub {
         'apples has no retired Compose app mode');
     unlike($app_source, qr/compose\s*\(\s*router\s*=>\s*router\s*\(/s,
         'apples does not construct a redundant nested Router expression');
+    like($app_source,
+        qr/async\s+sub\s+export_apples\s*\(\$request\)\s*\{.*?return\s+ndjson_response\s*\(/s,
+        'export is an ordinary Request handler returning an NDJSON Response');
+    like($app_source,
+        qr/route\('\/export'\s*=>\s*\\&export_apples,\s*methods\s*=>\s*\['GET'\],\s*name\s*=>\s*'export'\).*?route\('\/\{apple_id:&Int\}'/s,
+        'export is a named GET Route before the typed apple Route');
 };
 
 subtest 'Moose model owns fixture and CRUD behavior' => sub {
@@ -163,6 +171,33 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
         'global RequestId middleware identifies the apples response');
     is($list->header('X-Apples-API'), '1',
         'apples middleware marks the mounted API response');
+
+    my $export = $client->get('/apples/export');
+    is($export->status, 200, 'apples export responds');
+    is($export->content_type, 'application/x-ndjson',
+        'apples export declares NDJSON');
+    my $export_body = $export->content;
+    like($export_body, qr/\n\z/, 'apples export has a final LF delimiter');
+    my @export_lines = split /\n/, $export_body, -1;
+    pop @export_lines;
+    is(scalar @export_lines, 2, 'apples export contains exactly two records');
+    ok(!(grep { $_ eq '' } @export_lines),
+        'apples export contains no blank interior line');
+    my $records = [map { JSON::PP::decode_json($_) } @export_lines];
+    is($records, [
+        { id => 1, name => 'Gala',       color => 'Red/Yellow' },
+        { id => 2, name => 'Honeycrisp', color => 'Rosy Red' },
+    ], 'apples export preserves the fixture records');
+    ok(defined($export->header('X-Request-ID')),
+        'global RequestId middleware identifies the apples export');
+    is($export->header('X-Apples-API'), '1',
+        'apples middleware marks the NDJSON export');
+
+    my $export_head = $client->head('/apples/export');
+    is($export_head->status, 200, 'HEAD apples export responds');
+    is($export_head->content, '', 'HEAD apples export suppresses the wire body');
+    is($export_head->content_type, 'application/x-ndjson',
+        'HEAD apples export retains the NDJSON media type');
 
     my $slash_list = $client->get('/apples/');
     is($slash_list->status, 200,

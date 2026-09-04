@@ -33,6 +33,16 @@ chunks.
 
 B<Every write must be awaited before another starts.>
 
+The public writer families intentionally have different responsibilities:
+
+    $writer->write($bytes)       generic encoded-byte chunk
+    $writer->pipe_from($source)  generic next_chunk byte source
+    $writer->write_item($value)  NDJSON Writer: one encoded record
+
+C<write_item> belongs only to L<PAGI::Response::NDJSON::Writer>; generic Writer
+does not parse items or gain that method. Generic Writer owns byte delivery and
+backpressure.
+
 =cut
 
 sub _new {

@@ -129,9 +129,18 @@ sub server       { shift->{scope}{server} }
 
 
 # Application state (injected by PAGI::Lifespan, read-only)
+sub has_state {
+    my $self = shift;
+    return 0 unless exists $self->{scope}{state};
+    croak 'PAGI::SSE state must be a hashref'
+        unless ref($self->{scope}{state}) eq 'HASH';
+    return 1;
+}
+
 sub state {
     my $self = shift;
-    return $self->{scope}{state} // {};
+    require PAGI::State;
+    return PAGI::State->new($self);
 }
 
 # Path parameter accessors - captured from URL path by router
@@ -275,7 +284,7 @@ async sub start {
 # Server handles the timer; this is loop-agnostic
 #
 # DEFERRED ARM: sse.keepalive is illegal before sse.start (both
-# PAGI::SendValidation and the reference server's EventValidator reject it
+# PAGI::Utils::_SendValidation and the reference server's EventValidator reject it
 # from the pre-start state -- see DEVIATION D-1). Calling this before the
 # stream has started does not send anything; it records the interval/comment
 # and start() arms it (sends the real event) immediately afterward, where
@@ -1101,12 +1110,31 @@ Shortcut for C<< query_param($name, raw => 1) >>.
 
 =head2 state
 
-    my $state = $sse->state;
-    my $db = $sse->state->{db};
+    my $state = $sse->state
+        or die 'application requires lifespan state';
+    my $db = $state->get('db');
 
-Returns the application state hashref injected by PAGI::Lifespan.
-This contains worker-level shared state like database connections
-and configuration. Returns empty hashref if no state was injected.
+Returns C<PAGI::State|undef> for application state injected by
+L<PAGI::Lifespan>. Absent state returns C<undef>; present state must be a
+hashref or this method croaks. The facade is read-oriented and catches
+missing top-level keys through C<get>.
+
+Repeated calls have equivalent behavior over the same backing state, but do
+not promise facade object identity. C<< $state->data >> is the explicit escape
+hatch when an integration genuinely requires the raw hashref.
+
+Application state is distinct from L<PAGI::Stash>, which holds mutable
+per-connection data, and from C<connection_state>, which reports this SSE
+stream's protocol lifecycle.
+
+=head2 has_state
+
+    if ($sse->has_state) {
+        ...
+    }
+
+Returns true when lifespan application state is present and a hashref. Returns
+false only when it is absent; malformed present state croaks.
 
 =head1 LIFECYCLE METHODS
 
@@ -1365,7 +1393,7 @@ is no live connection left for the server to time a ping against, so the
 call returns C<$self> without sending anything.
 
 B<DEFERRED ARM:> C<sse.keepalive> is illegal before C<sse.start> -- both
-L<PAGI::SendValidation> and the reference server's C<EventValidator> reject
+L<PAGI::Utils::_SendValidation> and the reference server's C<EventValidator> reject
 it from the pre-start state. Calling C<keepalive> before L</start> does
 B<not> send anything: it records the interval/comment, and C<start> arms
 the recording (sends the real event) immediately afterward, where it is

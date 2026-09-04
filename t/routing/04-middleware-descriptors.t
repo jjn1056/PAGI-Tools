@@ -8,11 +8,6 @@ use Scalar::Util qw(refaddr);
 use PAGI::Routing qw(middleware);
 use PAGI::Routing::Middleware;
 
-{
-    package DescriptorMiddlewareSubclass;
-    our @ISA = ('PAGI::Routing::Middleware');
-}
-
 sub tracing_factory {
     my ($name, $builds) = @_;
     return sub {
@@ -57,81 +52,6 @@ CLASS_SOURCE
         return \$source;
     };
 }
-
-subtest 'frontend lists normalize bare factories to descriptions' => sub {
-    my $factory = sub { return $_[0] };
-    my $explicit = middleware('Configured', enabled => 1);
-    my $subclass = DescriptorMiddlewareSubclass->new(sub { return $_[0] });
-    my $input = [$factory, $explicit, $factory, $subclass];
-
-    my $normalized = PAGI::Routing::Middleware->_normalize_frontend_entries(
-        $input,
-        'middleware',
-    );
-
-    isnt(refaddr($normalized), refaddr($input), 'top-level input array is copied');
-    isa_ok($normalized->[0], 'PAGI::Routing::Middleware');
-    isa_ok($normalized->[2], 'PAGI::Routing::Middleware');
-    is(refaddr($normalized->[0]->factory), refaddr($factory),
-        'first generated description retains factory identity');
-    is(refaddr($normalized->[2]->factory), refaddr($factory),
-        'repeated occurrence retains the same factory identity');
-    isnt(refaddr($normalized->[0]), refaddr($normalized->[2]),
-        'repeated occurrences receive distinct descriptions');
-    is(refaddr($normalized->[1]), refaddr($explicit),
-        'explicit base description is preserved by identity');
-    is(refaddr($normalized->[3]), refaddr($subclass),
-        'explicit subclass description is preserved by identity');
-
-    push @$input, middleware('LateMutation');
-    is(scalar @$normalized, 4, 'later input mutation is invisible');
-};
-
-subtest 'frontend normalization accepts all four entry forms and rejects invalid entries' => sub {
-    is(
-        PAGI::Routing::Middleware->_normalize_frontend_entries([], 'middleware'),
-        [],
-        'empty list normalizes to a fresh empty list',
-    );
-    like(
-        dies {
-            PAGI::Routing::Middleware->_normalize_frontend_entries({}, 'compose middleware')
-        },
-        qr/compose middleware must be an arrayref/,
-        'caller prefix is retained for a non-array value',
-    );
-
-    my $factory = sub { return $_[0] };
-    my $configured = bless {}, 'DescriptorConfiguredObject';
-    my $explicit = middleware('Configured');
-    my $normalized = PAGI::Routing::Middleware->_normalize_frontend_entries(
-        ['GZip', $factory, $configured, $explicit],
-        'middleware',
-    );
-    is($normalized->[0]->factory, 'GZip', 'direct class name becomes a description');
-    is(refaddr($normalized->[1]->factory), refaddr($factory),
-        'direct factory retains identity');
-    is(refaddr($normalized->[2]->factory), refaddr($configured),
-        'direct wrapping object retains identity');
-    is(refaddr($normalized->[3]), refaddr($explicit),
-        'explicit description retains identity');
-
-    my $object_without_wrap = bless {}, 'DescriptorNoWrap';
-    for my $invalid (42, [], {}, \do { my $value = 'reference' }, '',
-            'not-a-package', $object_without_wrap,
-            { header => 'X-Request-ID' }) {
-        like(
-            dies {
-                PAGI::Routing::Middleware->_normalize_frontend_entries(
-                    [$invalid],
-                    'middleware',
-                )
-            },
-            qr/middleware entry 0 must be a middleware class name/,
-            'invalid direct entry reports its list index',
-        );
-    }
-};
 
 subtest 'the production fold keeps the first descriptor outermost' => sub {
     my @builds;

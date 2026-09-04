@@ -9,7 +9,7 @@ use overload ();
 use lib 'lib';
 use PAGI::Routing qw(:ALL);
 use PAGI::Response::Text ();
-use PAGI::Utils qw(as_app request_response);
+use PAGI::Utils qw(as_app_object);
 
 {
     package NoImports;
@@ -90,7 +90,7 @@ use PAGI::Utils qw(as_app request_response);
 
     sub http { return route('/http/{id:&Owned}' => sub { }) }
     sub native_http {
-        return route('/native/{id:&Owned}' => PAGI::Utils::as_app(sub { }));
+        return route('/native/{id:&Owned}' => PAGI::Utils::as_app_object(sub { }));
     }
     sub socket { return websocket('/socket/{id:&Owned}' => sub { }) }
     sub events { return sse('/events/{id:&Owned}' => sub { }) }
@@ -171,7 +171,7 @@ use PAGI::Utils qw(as_app request_response);
 }
 
 subtest 'exports are opt-in and tag-specific' => sub {
-    for my $name (qw(router route websocket sse mount middleware)) {
+    for my $name (qw(router route websocket sse mount middleware request_response)) {
         ok(!NoImports->can($name), "no default $name export");
         ok(AllImports->can($name), "ALL exports $name");
     }
@@ -179,12 +179,14 @@ subtest 'exports are opt-in and tag-specific' => sub {
         ok(RouteImports->can($name), "routes tag exports $name");
     }
     ok(!RouteImports->can('middleware'), 'routes tag excludes middleware');
+    ok(!RouteImports->can('request_response'),
+        'routes tag excludes the request adapter');
     ok(MiddlewareImports->can('middleware'), 'middleware tag exports middleware');
     ok(!MiddlewareImports->can('route'), 'middleware tag excludes route');
     ok(!PAGI::Routing->can('request_app'),
-        'Routing no longer contains the Request-to-Response adapter');
+        'the removed request_app spelling remains unavailable');
     ok(defined &request_response,
-        'request_response is imported from PAGI::Utils instead');
+        'request_response is imported from PAGI::Routing');
     my ($error, $stderr);
     {
         local *STDERR;
@@ -330,7 +332,7 @@ subtest 'route descriptions preserve endpoint identity and normalize HTTP method
 
 subtest 'application-valued and protocol-specific route descriptions' => sub {
     my $app = sub { return 'native app' };
-    my $native = as_app($app);
+    my $native = as_app_object($app);
     my $native_route = route '/native' => $native, desc => 'native app';
     is($native_route->kind, 'route', 'native HTTP route kind');
     is(refaddr($native_route->endpoint), refaddr($native),
@@ -356,7 +358,7 @@ subtest 'application-valued and protocol-specific route descriptions' => sub {
     };
     my $websocket = websocket '/socket/{regex}/{code}/{object}' => sub { },
         constraints => $ws_constraints;
-    my $native_websocket_endpoint = as_app($app);
+    my $native_websocket_endpoint = as_app_object($app);
     my $native_websocket = websocket '/native-socket' => $native_websocket_endpoint;
     my $sse_regex = qr/sse/;
     my $sse_code = sub { return $_[0] eq 'stream' };
@@ -368,7 +370,7 @@ subtest 'application-valued and protocol-specific route descriptions' => sub {
     };
     my $sse = sse '/events/{regex}/{code}/{object}' => sub { },
         constraints => $sse_constraints;
-    my $native_sse_endpoint = as_app($app);
+    my $native_sse_endpoint = as_app_object($app);
     my $native_sse = sse '/native-events' => $native_sse_endpoint;
     is($websocket->kind, 'websocket', 'WebSocket kind');
     is($sse->kind, 'sse', 'SSE kind');
@@ -450,16 +452,46 @@ subtest 'HTTP methods use explicit, capability, then safe-default precedence' =>
         'capability methods are an immutable construction-time snapshot');
     is($capable->calls, 1, 'snapshot access does not consult capability again');
 
-    my $explicit = Local::MethodEndpoint->new(qw(GET POST));
-    is(route('/explicit' => $explicit, methods => ['patch'])->methods,
-        ['PATCH'], 'explicit methods win over endpoint capability');
-    is($explicit->calls, 0,
-        'explicit methods avoid the capability call entirely');
+    my $scalar_restriction = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    is(route('/explicit-scalar' => $scalar_restriction, methods => 'GET')->methods,
+        [qw(GET HEAD)], 'a scalar restriction narrows an advertised capability');
+    is($scalar_restriction->calls, 1,
+        'a finite scalar restriction snapshots the endpoint capability once');
+
+    my $array_restriction = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    is(route('/explicit-array' => $array_restriction, methods => ['POST'])->methods,
+        ['POST'], 'an array restriction narrows an advertised capability');
+    is($array_restriction->calls, 1,
+        'a finite array restriction snapshots the endpoint capability once');
+
+    my $unsupported_restriction = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    like dies {
+        route('/unsupported-restriction' => $unsupported_restriction,
+            methods => ['DELETE'])
+    }, qr/methods \[DELETE\] are not advertised by route endpoint allowed_methods/,
+        'a finite restriction rejects methods absent from the endpoint capability';
+    is($unsupported_restriction->calls, 1,
+        'an unsupported restriction still snapshots the endpoint capability once');
+
+    my $unsupported_scalar = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    like dies {
+        route('/unsupported-scalar' => $unsupported_scalar,
+            methods => 'DELETE')
+    }, qr/methods \[DELETE\] are not advertised by route endpoint allowed_methods/,
+        'an unsupported finite scalar rejects methods absent from the endpoint capability';
+    is($unsupported_scalar->calls, 1,
+        'an unsupported scalar snapshots the endpoint capability once');
+
+    my $wildcard_restriction = Local::MethodEndpoint->new(qw(GET POST OPTIONS));
+    is(route('/wildcard-restriction' => $wildcard_restriction, methods => '*')->methods,
+        '*', 'a scalar wildcard remains unrestricted');
+    is($wildcard_restriction->calls, 0,
+        'a scalar wildcard never consults the endpoint capability');
 
     my $response = PAGI::Response::Text->new('file');
     is(route('/file' => $response)->methods, [qw(GET HEAD)],
-        'ordinary application objects use the safe default');
-    my $native = as_app(sub { });
+        'ordinary app objects use the safe default');
+    my $native = as_app_object(sub { });
     is(route('/relay' => $native, methods => '*')->methods, '*',
         'only explicit scalar wildcard enables unrestricted dispatch');
 
@@ -562,16 +594,22 @@ subtest 'Mount retains one base app and Router retains declared HTTP defaults' =
     is($router->routes, [$leaf], 'router routes');
     is($router->http_default, undef, 'Router omits an HTTP default by default');
     my $default = sub { };
+    my $native_default = as_app_object($default);
     my $component_default = TestRoutingApp->new($default);
     local $TestRoutingApp::CALLS = 0;
     my $with_default = router(routes => [], http_default => $default);
     my $with_component_default = router(
         routes => [], http_default => $component_default,
     );
+    my $with_native_default = router(
+        routes => [], http_default => $native_default,
+    );
     is(refaddr($with_default->http_default), refaddr($default),
         'Router retains HTTP default coderef identity without compilation');
     is(refaddr($with_component_default->http_default), refaddr($component_default),
         'Router retains HTTP default component identity without compilation');
+    is(refaddr($with_native_default->http_default), refaddr($native_default),
+        'Router accepts and retains an explicit native HTTP default by identity');
     is($TestRoutingApp::CALLS, 0,
         'Router construction does not compile its declared HTTP default');
     is($router->middleware, [$router_middleware], 'router middleware preserves descriptor');
@@ -733,13 +771,13 @@ subtest 'constructors reject invalid declarations' => sub {
     like dies { route '/separator' => $handler, methods => 'GET POST' }, qr/methods must be a method string, arrayref, or '\*'/, 'methods reject separators';
     like dies { websocket '/socket' => $handler, methods => 'GET' }, qr/WebSocket routes do not accept methods/, 'WebSocket rejects methods';
     like dies { sse '/events' => $handler, methods => 'GET' }, qr/SSE routes do not accept methods/, 'SSE rejects methods';
-    like dies { route '/not-code' => 'not a handler' }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects package strings';
-    like dies { route '/not-component' => [] }, qr/route endpoint must be a coderef or instantiated object with to_app/, 'route rejects unblessed component lookalikes';
+    like dies { route '/not-code' => 'not a handler' }, qr/route endpoint must be a request handler coderef or app object/, 'route rejects package strings';
+    like dies { route '/not-component' => [] }, qr/route endpoint must be a request handler coderef or app object/, 'route rejects unblessed component lookalikes';
     ok(lives { route '/component' => PAGI::Response::Text->new('component') },
-        'normal route accepts an instantiated to_app component');
+        'normal route accepts an app object');
     my $broken_component = bless {}, 'BrokenRouteComponent';
     like dies { route '/broken-component' => $broken_component },
-        qr/route endpoint must be a coderef or instantiated object with to_app/,
+        qr/route endpoint must be a request handler coderef or app object/,
         'route rejects an instantiated object without to_app';
     for my $case (
         [empty     => [],                 qr/route endpoint allowed_methods returned no methods/],
@@ -755,6 +793,24 @@ subtest 'constructors reject invalid declarations' => sub {
             $error,
             "$label allowed_methods failure names the endpoint capability";
     }
+    for my $case (
+        [empty     => [],                   qr/route endpoint allowed_methods returned no methods/],
+        [separator => ['GET POST'],         qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [reference => [{}],                 qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [future    => [Future->done('GET')], qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [wildcard  => ['*'],                qr/route endpoint allowed_methods must return valid HTTP method strings/],
+        [mixed     => ['GET', '*'],         qr/route endpoint allowed_methods must return valid HTTP method strings/],
+    ) {
+        my ($label, $returned, $error) = @$case;
+        my $endpoint = Local::MethodEndpoint->new(@$returned);
+        like dies {
+            route "/invalid-restricted-capability-$label" => $endpoint,
+                methods => 'GET'
+        }, $error,
+            "$label allowed_methods failure is preserved through a finite restriction";
+        is $endpoint->calls, 1,
+            "$label finite restriction consults allowed_methods exactly once";
+    }
     like dies { mount '/missing' }, qr/mount requires exactly one of app or routes/, 'mount requires one target form';
     like dies { mount '/both', app => $handler, routes => [] }, qr/mount requires exactly one of app or routes/, 'mount rejects app plus routes';
     like dies { mount '/positional' => $handler }, qr/mount option list must be key\/value pairs/, 'mount rejects positional targets';
@@ -764,8 +820,8 @@ subtest 'constructors reject invalid declarations' => sub {
             qr/unknown mount option '\Q$key\E'/,
             "mount rejects removed '$key' option";
     }
-    like dies { mount '/undefined-app', app => undef }, qr/mount app must be a coderef or instantiated object with to_app/, 'mount validates app through the strict app validator';
-    like dies { mount '/bad-app', app => [] }, qr/mount app must be a coderef or instantiated object with to_app/, 'mount rejects non-app values';
+    like dies { mount '/undefined-app', app => undef }, qr/mount app must be a native coderef or app object/, 'mount validates app through the strict app validator';
+    like dies { mount '/bad-app', app => [] }, qr/mount app must be a native coderef or app object/, 'mount rejects non-app values';
     ok(lives { mount '/valid-name', app => $handler, name => 'x' },
         'named application mounts are accepted');
     like dies { mount('/old-namespace', routes => [], namespace => 'old') }, qr/unknown mount option 'namespace'/, 'legacy namespace option is rejected';
@@ -785,9 +841,9 @@ subtest 'constructors reject invalid declarations' => sub {
             "removed Router option '$removed' is rejected without compatibility";
     }
     for my $invalid (
-        [undef, qr/router http_default must be a coderef or instantiated object with to_app/],
-        [[], qr/router http_default must be a coderef or instantiated object with to_app/],
-        [bless({}, 'RouterDefaultWithoutToApp'), qr/router http_default must be a coderef or instantiated object with to_app/],
+        [undef, qr/router http_default must be a request handler coderef or app object/],
+        [[], qr/router http_default must be a request handler coderef or app object/],
+        [bless({}, 'RouterDefaultWithoutToApp'), qr/router http_default must be a request handler coderef or app object/],
     ) {
         my ($value, $pattern) = @$invalid;
         like dies { router(routes => [], http_default => $value) }, $pattern,
@@ -818,7 +874,7 @@ subtest 'constructors reject invalid declarations' => sub {
     is(mount('/desc-dot', routes => [], desc => 'person/show')->desc, 'person/show', 'mount descriptions retain ordinary text validation');
     like dies { request_response('not a handler') },
         qr/request_response handler must be a coderef/,
-        'Utils request_response validates its handler at construction';
+        'Routing request_response validates its handler at construction';
 };
 
 done_testing;

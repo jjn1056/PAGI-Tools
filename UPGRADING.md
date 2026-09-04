@@ -2,11 +2,10 @@
 
 This guide is the standalone handoff for existing applications moving to the
 current PAGI::Tools release. It covers the shipped routing-composition and
-application-error boundaries, the rooted file-serving security contract, and the
-earlier unification of the
-`PAGI::App::Router` and `PAGI::Endpoint::Router` frontends. Contracts shown in
-Before examples have been removed. There is no compatibility mode and there
-are no compatibility aliases.
+application-error boundaries, the rooted file-serving security contract, and
+the removal of the two mutable Router frontends. Contracts shown in clearly
+labelled Before examples have been removed. There is no compatibility mode and
+there are no compatibility aliases.
 
 Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
@@ -72,68 +71,6 @@ protocol misses; the outer Router does not resume scanning, so later root
 siblings cannot win. The child keeps its middleware, `http_default`, `desc`,
 identity, and Resolver.
 
-### Deploy App and Endpoint frontends ordinarily
-
-`PAGI::App::Router` and `PAGI::Endpoint::Router` already implement `to_app`,
-so ordinary root Mounts pass those frontend objects directly. `to_router`
-remains the explicit conversion when a parent must discover descendant names or
-retain an immutable snapshot; Compose and Mount perform no hidden conversion.
-
-```perl
-my $app = compose(
-    routes => [mount('/' => app => $builder)],
-)->to_app;
-
-my $endpoint_app = compose(
-    routes => [mount('/' => app => $endpoint)],
-)->to_app;
-```
-
-The direct Mount is an opaque application boundary to the outer Resolver, but
-the frontend's own handlers and Router continue to dispatch normally.
-
-### Preserve a PAGI::App::Router snapshot
-
-**Before: historical removed constructor form.** Materialize the builder inside
-the removed constructor form.
-
-```perl
-compose(router => $builder->to_router)
-```
-
-**After: retain an inspectable snapshot explicitly.** Choose and retain one
-immutable snapshot.
-
-```perl
-my $snapshot = $builder->to_router;
-compose(routes => [mount('/' => app => $snapshot)])
-```
-
-Retaining the snapshot keeps inspection, reverse routing, and compilation on
-one stable immutable graph. This is an inspection choice, not a requirement
-for ordinary deployment. Compose does not call `to_router` for you.
-
-### Preserve a PAGI::Endpoint::Router snapshot
-
-**Before: historical removed constructor form.** Pass a fresh Endpoint snapshot
-through the removed constructor form.
-
-```perl
-compose(router => $endpoint->to_router)
-```
-
-**After: retain an inspectable snapshot explicitly.** Retain the Endpoint
-snapshot as the root Mount application.
-
-```perl
-my $snapshot = $endpoint->to_router;
-compose(routes => [mount('/' => app => $snapshot)])
-```
-
-This keeps the Endpoint object's configured immutable Router inspectable.
-It is not required for ordinary deployment: passing `$endpoint` itself as the
-Mount `app` is deliberately opaque to the outer Resolver.
-
 ### Deploy a bare Router directly
 
 **Before:** use Compose only to reach the Router application.
@@ -179,6 +116,48 @@ For arbitrary native applications, Compose has no direct replacement. Deploy
 the native coderef directly, or call `to_app` once on its component. A root
 Mount is not an equivalent conversion for an arbitrary application: it adds
 Router selection, prefix ownership, routing metadata, and protocol policy.
+
+## Breaking: `http_default` CODE receives one Request
+
+`http_default` now follows the same handler-vs-app positional rule as a Route
+endpoint. With `Future::AsyncAwait` and `PAGI::Utils qw(as_app_object)`
+imported, migrate a native default as follows:
+
+```perl
+# Before: bare CODE was native
+my $before = router(
+    routes => [],
+    http_default => async sub ($scope, $receive, $send) {
+        return await $send->({
+            type => 'http.response.start', status => 404, headers => [],
+        });
+    },
+);
+
+# After: bare CODE is a Request handler
+my $after = router(
+    routes => [],
+    http_default => sub ($request) {
+        return MyApp::NotFoundResponse->new(path => $request->path);
+    },
+);
+
+# Native escape hatch
+my $native = router(
+    routes => [],
+    http_default => as_app_object(
+        async sub ($scope, $receive, $send) {
+            return await $send->({
+                type => 'http.response.start', status => 404, headers => [],
+            });
+        },
+    ),
+);
+```
+
+Use a source-free Pages object directly when no Request data is needed. Keep
+`request_response($handler)` for adapting a one-Request handler into Mount
+`app`, not ordinary `http_default` use.
 
 ## Breaking: use explicit middleware descriptions at core boundaries
 
@@ -232,13 +211,11 @@ sub audit_factory {
 }
 ```
 
-`PAGI::App::Router` and `PAGI::Endpoint::Router` remain higher-level
-frontends and may retain their concise middleware forms; they materialize
-explicit descriptions for the immutable core. `PAGI::Middleware::Builder` is
-a separate concise composition API: it retains its own middleware records and
-constructs or wraps them during `to_app`. The router frontend syntaxes and all
-three frontends' runtime behavior are unchanged. Builder's exact-package
-declaration changes from `^` to the same leading-`+` convention:
+`PAGI::Middleware::Builder` is a separate concise composition API: it retains
+its own middleware records and
+constructs or wraps them during `to_app`. Its runtime behavior is unchanged by
+the core-boundary description rule. Builder's exact-package declaration
+changes from `^` to the same leading-`+` convention:
 
 ```perl
 # Before: exact package through Middleware Builder
@@ -254,14 +231,19 @@ There are now four callable boundaries. The distinction is structural, not
 an arity guess:
 
 ```text
-Route CODE endpoint        -> one Request/WebSocket/SSE argument
-Route to_app object        -> native PAGI application
-Mount/default CODE         -> native PAGI application
-handler result             -> native CODE or instantiated to_app object
+HTTP Route endpoint / http_default CODE  -> one Request handler
+HTTP Route endpoint / http_default object -> app object via to_app
+WebSocket Route endpoint CODE             -> one WebSocket handler
+WebSocket Route endpoint object           -> app object via to_app
+SSE Route endpoint CODE                   -> one SSE handler
+SSE Route endpoint object                 -> app object via to_app
+Mount app CODE                       -> native PAGI application
+Mount app object                     -> app object via to_app
 ```
 
 A PAGI application value is either a native
-`($scope, $receive, $send)` coderef or an instantiated object with `to_app`.
+`($scope, $receive, $send)` coderef or an app object—an instantiated object
+with `to_app`.
 Package names, unblessed references, callable overloads without `to_app`, and
 Response-like duck types are not application values.
 
@@ -274,35 +256,37 @@ route('/native', raw => $native_app);
 ```
 
 **After (shipped):** a bare Route CODE is always a one-argument handler. Wrap
-a native CODE with `as_app`; pass an instantiated application object directly.
+a native CODE with `as_app_object`; pass an app object directly.
 
 ```perl
 use PAGI::Routing qw(route);
-use PAGI::Utils qw(as_app);
+use PAGI::Utils qw(as_app_object);
 
-route('/native' => as_app($native_app));
+route('/native' => as_app_object($native_app));
 route('/items'  => MyApp::ItemsEndpoint->new);
 ```
 
-`as_app($native_app)` without an explicit method declaration defaults to GET
+`as_app_object($native_app)` without an explicit method declaration defaults to GET
 plus automatic HEAD. Unrestricted native delegation is deliberate and uses
 the scalar wildcard, not an array containing `'*'`:
 
 ```perl
-route('/relay' => as_app($native_app), methods => '*');
+route('/relay' => as_app_object($native_app), methods => '*');
 ```
 
 HTTP method resolution is ordered:
 
-1. Explicit `methods` wins and the endpoint capability is not consulted.
-2. Otherwise, an application object with `allowed_methods` supplies a list-
-   context snapshot taken once when the immutable Route is constructed.
-3. Otherwise, the Route uses GET plus automatic HEAD.
+1. Only scalar `methods => '*'` bypasses the endpoint capability and makes the
+   Route unrestricted.
+2. An explicit finite `methods` value is normalized. If the app object
+   implements `allowed_methods`, Route consults it once and the finite set must
+   be a restriction of that advertised snapshot.
+3. Without explicit methods, an app object's `allowed_methods`
+   supplies the construction-time snapshot; otherwise Route uses GET plus
+   automatic HEAD.
 
-Mutable App Router and Endpoint declarations retain the application object
-without consulting `allowed_methods`. Each fresh `to_router` call constructs
-fresh immutable Routes and therefore takes one fresh capability snapshot;
-retaining that immutable Router retains the resulting method policy.
+Each fresh immutable Route construction takes one fresh capability snapshot;
+retaining that Route retains the resulting method policy.
 
 The capability must return a nonempty synchronous list of valid method
 tokens. Normalization removes duplicates, canonicalizes case, adds HEAD for
@@ -412,8 +396,8 @@ my $routing = router(
 );
 ```
 
-For a custom one-Request default rather than a Pages application, adapt it
-explicitly with `request_response(\&custom_not_found)` from `PAGI::Utils`.
+For a custom one-Request default rather than a Pages application, pass the
+handler directly as `http_default => \&custom_not_found`.
 Pages exports nothing by default. `:common` excludes collision-prone `status`
 and `redirect`; import those individually or use the deliberately broad
 `:all` bundle. A deliberate same-named import can replace a local function.
@@ -470,6 +454,42 @@ suppresses body events, which can be expensive. Declare an earlier lightweight
 HEAD Route when that work should be avoided. File retains its deliberate
 `protocol_response_capability` opt-out because WebSocket denial and SSE decline
 cannot translate PAGI `file` or `fh` body events.
+
+## Breaking: direct WebSocket and SSE `state` matches Request
+
+`PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE` now share one strict
+application-state contract. Each direct `state` method returns `PAGI::State` or
+`undef`; a present non-hashref state croaks. Lifespan is intentionally the
+exception: startup/shutdown callbacks and `PAGI::Lifespan->state` retain the
+mutable raw hashref because that is the application-state initialization
+boundary.
+
+**Before (legacy WebSocket/SSE behavior):** direct protocol methods exposed a
+raw hashref or fabricated an empty hashref.
+
+```perl
+my $db = $websocket->state->{db};
+```
+
+**After (shipped):** check optional state and use the same strict facade as an
+HTTP Request.
+
+```perl
+my $state = $websocket->state
+    or die 'lifespan state required';
+my $db = $state->get('db');
+
+my $sse_state = $sse->state
+    or die 'lifespan state required';
+my $sse_db = $sse_state->get('db');
+```
+
+The existing temporary `%{}` overload still permits legacy hash dereference
+syntax and warns during migration, but it is not transparent hashref identity:
+`ref($protocol->state) eq 'HASH'` is false. Code with an exact HashRef
+requirement—such as a type constraint, serializer, cloning library, or strict
+`ref` test—must use `$protocol->state->data` after checking that state is
+present.
 
 ## Breaking: choose a concrete Response class
 
@@ -715,9 +735,10 @@ my $application = PAGI::Pages->not_found(as => 'text');
 await invoke_app($application, $scope, $receive, $send);
 ```
 
-A custom one-Request default uses `request_response($handler)`. A Pages
-application needs no adapter at `http_default`, Mount `app`, or a Route. Route
-and Mount continue to own different path shapes:
+A custom one-Request default is bare `http_default => $handler`. A Pages
+application needs no adapter at `http_default`, Mount `app`, or a Route.
+`request_response($handler)` remains for adapting that handler into Mount
+`app`. Route and Mount continue to own different path shapes:
 
 ```text
 Route('/x')       exact complete path leaf
@@ -787,9 +808,11 @@ value boundaries:
 - If Thunderhorse accepts ordinary Perl return values, its own controller layer
   must select/serialize them into an explicit Response class. PAGI-Tools does
   not infer a response type from return shape.
-- Native app positions take native CODE or instantiated `to_app` objects.
-  Adapt a one-Request default with `request_response($handler)`; do not infer
-  coderef arity or pass package-name strings as applications.
+- Mount `app` CODE is native; Route endpoints and `http_default` CODE receive
+  one Request. Use `as_app_object` for an advanced native `http_default`, and
+  `PAGI::Routing`'s `request_response($handler)` only when adapting a
+  one-Request handler into Mount `app`; do not infer coderef arity or pass
+  package-name strings as applications.
 - Helper ownership follows Request/protocol/native scope. Never make Response a
   scope source or cache a per-request Response accumulator.
 - Use `ref($response)`/`isa` for representation policy, `is_buffered` for memory
@@ -808,8 +831,9 @@ The Context class family has been removed without a compatibility layer. There
 is no replacement Context base class, factory hook, type map, or generic event
 dispatcher. Normal callbacks receive the object that owns their protocol;
 for this campaign, the callback-signature change applies to class Endpoint
-frontends. Ordinary declarative and App Router callbacks already received the
-direct protocol object and remain unchanged. Raw applications and every
+frontends. At that stage, ordinary declarative callbacks and callbacks in the
+now-removed App Router already received the direct protocol object and remained
+unchanged. Raw applications and every
 middleware wrapper keep the native `($scope, $receive, $send)` contract
 unchanged.
 
@@ -854,14 +878,13 @@ async sub on_connect {
 sub on_disconnect { my ($self, $sse) = @_; ... }
 ```
 
-Ordinary declarative and App Router callbacks are not a Context-removal
-migration. At the campaign base they already used these signatures, which
-remain current:
+Ordinary declarative callbacks are not a Context-removal migration. They use
+these signatures:
 
 ```perl
-$router->get('/'       => sub { my ($request)   = @_; ... });
-$router->websocket('/' => sub { my ($websocket) = @_; ... });
-$router->sse('/'       => sub { my ($sse)       = @_; ... });
+route('/'     => sub { my ($request)   = @_; ... });
+websocket('/' => sub { my ($websocket) = @_; ... });
+sse('/'       => sub { my ($sse)       = @_; ... });
 ```
 
 Endpoint `on_disconnect` hooks remain deliberately synchronous. Do not return a
@@ -1135,7 +1158,7 @@ returned without reaching a legal terminal state hard-died with a generic
 reports it.
 
 **After (shipped):** every `PAGI::Test::*` `$send` now fails the returned
-`Future` for an illegal event, mirroring the shared `PAGI::SendValidation`
+`Future` for an illegal event, mirroring the shared `PAGI::Utils::_SendValidation`
 core also used by the development `Lint` middleware. An app that returns
 without reaching a legal terminal state is now reported as an abnormal
 `server_error` disconnect with a warning, not a hard die; an app that never
@@ -1193,7 +1216,7 @@ rest are covered only here.
 
 - **Development middleware.** `PAGI::Middleware::Lint` no longer keeps its
   own copy of send-sequencing state -- it delegates to the shared
-  `PAGI::SendValidation` core. In strict mode a shared-core violation now
+  `PAGI::Utils::_SendValidation` core. In strict mode a shared-core violation now
   rejects the event outright instead of warning and forwarding it.
 - **Removed middleware and apps.** `PAGI::Middleware::WebSocket::RateLimit`,
   `PAGI::App::SSE::Pubsub`, `PAGI::App::WebSocket::Broadcast`, and
@@ -1221,7 +1244,7 @@ rest are covered only here.
   and rejects a body sent before response start as a failed `Future` from
   `send` (was a synchronous `die`).
 - Also see the dedicated sections below for the Pages/NotFound/Redirect
-  migration, the Router/Endpoint::Router frontend rewrite, and the rooted
+  migration, the Router frontend removal, and the rooted
   file-serving contract -- all `[BREAKING]` in this same release.
 
 ## Rooted file-serving security contract
@@ -1664,8 +1687,7 @@ my $app = $routing->to_app;
 ```
 
 Those removed names are rejected as unknown Router options. They are not
-ignored, warned about, or retained as aliases. The removal applies equally to
-the immutable, App, and Endpoint Router frontends.
+ignored, warned about, or retained as aliases.
 
 Use a different `http_default` when one reusable subsystem owns different 404
 presentation:
@@ -1677,9 +1699,10 @@ my $api = router(
 );
 ```
 
-The default is a native app coderef or instantiated `to_app` object. It runs
-only for HTTP NONE—not PARTIAL, WebSocket, SSE, selected exceptions, or a
-handler-returned 404. GET contributes HEAD to the generated 405 union.
+The default is a request handler coderef or app object. A native CODE requires
+`as_app_object`. It runs only for HTTP NONE—not PARTIAL, WebSocket, SSE,
+selected exceptions, or a handler-returned 404. GET contributes HEAD to the
+generated 405 union.
 
 ### Distinguish direct Router safety from the application root
 
@@ -1780,7 +1803,7 @@ mount(
 ```
 
 **After (shipped, intentionally opaque):** pass a native app coderef or another
-instantiated component through the same `app` option.
+app object through the same `app` option.
 
 ```perl
 mount('/legacy', app => $legacy_app)
@@ -1790,10 +1813,8 @@ An opaque Mount hides child names but still owns its selected output. Silence
 is an application lifecycle error, not a signal to resume the parent. Raw
 route targets remain exact method-aware leaves rather than prefix mounts.
 
-`routes => [...]` and mutable `routes => sub { my ($child) = @_; ... }` are
-exact shorthand for a real child Router application. The callback runs once
-during declaration, receives a fresh child builder, and ignores its return
-value. Both `/legacy` and `/legacy/` normalize to child path `/`.
+`routes => [...]` is shorthand for a real child Router application. Both
+`/legacy` and `/legacy/` normalize to child path `/`.
 
 ### Complete Router children placed in URLMap
 
@@ -1938,874 +1959,304 @@ Router's `http_default` or stock 404, and HTTP PARTIAL uses the built-in 405.
 The `pagi.routing` scope value is reserved for selected reverse-routing
 metadata; it is not a status or decline channel.
 
-## Choose a frontend: three descriptions, one engine
+## Breaking: remove the mutable Router frontends
 
-**Before (removed):** the App frontend owned the matcher while the Endpoint
-frontend added a separate handler, middleware, Context, and state adaptation
-layer around it.
+PAGI-Tools now has one routing-construction API: `PAGI::Routing`. The
+unreleased `PAGI::App::Router` and `PAGI::Endpoint::Router` packages, their
+Builders, and the App Router Materializer have been removed. There is no
+compatibility layer and there are no forwarding classes or aliases.
 
-```perl
-my $app_router = PAGI::App::Router->new;
-my $app = $app_router->to_app;
+The final responsibility model is:
 
-my $endpoint_app = MyApp::Endpoint->to_app;
+```text
+Endpoint::HTTP/WebSocket/SSE  optional behavior for one exact route
+Route                         exact path and HTTP method policy
+Mount                         prefix ownership and app composition
+Router                        ordered children and NONE/PARTIAL outcomes
+Compose                       root lifespan, middleware, and safety
 ```
 
-**After (shipped):** choose an immutable functional description, a mutable
-closure builder, or a method-oriented Endpoint, then compile the same immutable
-`PAGI::Routing::Router` model.
+### Migrate App Router declarations
+
+**Before: removed `PAGI::App::Router` frontend.**
 
 ```perl
-use PAGI::Compose qw(compose);
-use PAGI::Response;
-use PAGI::Routing qw(mount router route);
+use PAGI::App::Router;
 
-my $immutable = router(routes => [
-    route('/health' => sub { return PAGI::Response::text_response('ok') }),
-]);
+my $child = PAGI::App::Router->new(desc => 'API');
+$child->get('/users/{id}' => \&show)
+    ->name('show')
+    ->desc('Show one user')
+    ->constraints(id => qr/\A\d+\z/);
 
-my $builder = PAGI::App::Router->new;
-$builder->get('/health' => sub { return PAGI::Response::text_response('ok') });
-my $builder_app = compose(
-    routes => [mount('/' => app => $builder)],
-)->to_app;
+my $routes = PAGI::App::Router->new(
+    http_default => $not_found_app,
+);
+$routes->get('/' => [\&audit] => \&home)->name('home');
+$routes->post('/users' => \&create)->name('create');
+$routes->websocket('/chat' => \&chat)->name('chat');
+$routes->sse('/events' => \&events)->name('events');
+$routes->mount('/api', app => $child->to_router)
+    ->name('api')
+    ->desc('API boundary');
 
-my $endpoint = MyApp::Endpoint->new(repository => $repository);
-my $endpoint_app = compose(
-    routes => [mount('/' => app => $endpoint)],
-)->to_app;
+my $path = $routes->to_router->path_for(
+    '/api/show', { id => 42 },
+);
 ```
 
-Use `PAGI::Routing` for already-immutable composition, `PAGI::App::Router` for
-incremental closure declarations, and `PAGI::Endpoint::Router` for handlers
-bound to one configured object. App and Endpoint frontends already implement
-`to_app`, so these ordinary deployments mount them directly. Convert with
-`to_router` only when a parent must discover descendant names or retain an
-immutable snapshot for inspection.
-
-Why: one compiler now gives all three frontends the same matching, middleware,
-metadata, reverse-routing, and Router-owned HTTP outcomes.
-
-## Router handlers now receive direct protocol objects
-
-**Before (removed):** an ordinary App route target was a native PAGI
-application and owned all three channels.
+**After: one immutable `PAGI::Routing` tree.**
 
 ```perl
-$r->get('/people' => sub {
-    my ($scope, $receive, $send) = @_;
-    return send_people_response($scope, $receive, $send);
-});
+use PAGI::Routing qw(middleware mount route router sse websocket);
+
+my $child = router(
+    desc => 'API',
+    routes => [
+        route('/users/{id}' => \&show,
+            name        => 'show',
+            desc        => 'Show one user',
+            constraints => { id => qr/\A\d+\z/ },
+        ),
+    ],
+);
+
+my $routing = router(
+    http_default => $not_found_app,
+    routes => [
+        route('/' => \&home,
+            name       => 'home',
+            middleware => [middleware(\&audit)],
+        ),
+        route('/users' => \&create,
+            methods => ['POST'],
+            name    => 'create',
+        ),
+        websocket('/chat' => \&chat, name => 'chat'),
+        sse('/events' => \&events, name => 'events'),
+        mount('/api',
+            app  => $child,
+            name => 'api',
+            desc => 'API boundary',
+        ),
+    ],
+);
+
+my $path = $routing->path_for('/api/show', { id => 42 });
 ```
 
-**After (shipped):** an ordinary HTTP handler receives one strict
-`PAGI::Request` and returns an application value, immediately or through a
-`Future`. Response objects are the common case; native CODE and other
-instantiated `to_app` objects are also valid. WebSocket and SSE handlers receive
-`PAGI::WebSocket` and `PAGI::SSE` respectively.
+Verb methods become an explicit `methods` option; omitted HTTP methods still
+mean GET plus automatic HEAD. Modifiers move into the constructor. Middleware
+uses explicit `middleware(...)` descriptions. Mounts take either `app` or an
+arrayref in `routes`. WebSocket and SSE remain first-class route nodes.
+`http_default`, descriptions, declaration order, names, and nested URL
+generation remain owned by the immutable Router.
+
+A native three-channel coderef at an exact Route remains explicit:
 
 ```perl
-use PAGI::Response;
-
-$r->get('/people' => sub {
-    my ($request) = @_;
-    return PAGI::Response::json_response($repository->all_people);
-});
+use PAGI::Utils qw(as_app_object);
+route('/native' => as_app_object($native), methods => '*');
 ```
 
-Why: the shared compiler can validate and emit HTTP responses consistently
-without rebuilding the all-purpose Context object around intrinsic HTTP input,
-Router behavior, middleware data, and response construction.
+Mount `app` CODE is already a native application position. Router
+`http_default` CODE is a one-Request handler; wrap an advanced native default
+with `as_app_object`.
 
-`PAGI::Request->new($scope, $receive)` now requires an unblessed HTTP scope
-with an explicit scalar `type => 'http'` and a receive coderef. It does not
-accept WebSocket/SSE scopes or metadata-only construction. Normal Router
-dispatch constructs Request directly; native applications may construct it when
-they opt into the HTTP input API.
+### Migrate Endpoint Router classes
 
-### Import optional capabilities from their owners
-
-Router and middleware facilities are no longer presented as intrinsic Request
-methods:
+**Before: removed `PAGI::Endpoint::Router` frontend and string method
+binding.**
 
 ```perl
-# Before
-my $path = $c->path_for('show', { person_id => 42 });
-my $url  = $c->url_for('show', query => { tab => 'posts' });
-my $db   = $c->state->{db};
-my $user = $c->session->get('user');
-$c->stash->set(result => $result);
-return $c->text('Forbidden', status => 403)
-    unless $c->csrf_verify($submitted);
-```
+package MyApp::API;
+use parent 'PAGI::Endpoint::Router';
+use PAGI::Utils qw(as_app_object);
 
-The replacement names the owner of each capability:
-
-```perl
-use PAGI::CSRF qw(csrf);
-use PAGI::Pages;
-use PAGI::Routing::URL qw(path_for url_for);
-use PAGI::Session qw(session);
-use PAGI::Stash qw(stash);
-use PAGI::State qw(app_state);
-use PAGI::Transport qw(transport);
-
-my $path    = path_for($request, 'show', { person_id => 42 });
-my $url     = url_for($request, 'show', query => { tab => 'posts' });
-my $db      = app_state($request)->get('db');
-my $user    = session($request)->get('user');
-my $result  = stash($request)->get('result');
-my $token   = csrf($request)->token;
-my $flow    = transport($request);  # undef when the server supplied none
-
-return PAGI::Pages->forbidden
-    unless csrf($request)->verify($submitted);
-```
-
-Pages factories do not accept the Request or native scope. There is no exported `state`
-function: under `use v5.40`, a call spelled `state (...)` is parsed as Perl's `state`
-declaration and silently does not call an imported sub. Use `app_state` or the
-method form `$request->state`.
-
-`PAGI::State` is a strict facade. The transitional spelling
-`$request->state->{db}` still dereferences through overload and warns once per
-package/file/line. Set `PAGI_SILENCE_STATE_HASHREF_WARNING` to exactly `1` to
-suppress that warning temporarily. The overload does not make the facade a
-real hashref:
-
-```perl
-ref($request->state) eq 'HASH';  # false
-my $hashref = $request->state->data;
-```
-
-Pass `->data` to HashRef type constraints, serializers, cloning libraries, and
-code guarded by `ref($value) eq 'HASH'` while migrating.
-
-Session and CSRF croak when their required middleware-owned data is absent.
-State and Transport return `undef` when the optional capability is absent.
-Stash is created lazily in the request scope.
-
-### Connection and transport are separate optional capabilities
-
-```perl
-# Before
-$c->on_disconnect(\&cancel);
-$c->on_drain(\&resume);
-
-# After
-my $connection = $request->connection;
-$connection->on_disconnect(\&cancel) if $connection;
-
-my $flow = transport($request);
-$flow->on_drain(\&resume) if $flow;
-```
-
-`$request->is_disconnected` is tri-state: true after a supplied connection
-disconnects, false while it remains connected, and `undef` when the server did
-not provide `pagi.connection`. Test `defined` when unsupported must differ from
-connected. Advanced connection methods move behind `$request->connection`;
-outbound buffering, watermarks, and drain callbacks move behind
-`transport($request)`.
-
-### Pages factories are source-free
-
-`PAGI::Pages` functions and methods return deferred native HTTP applications.
-Pass them directly to Route, Mount, Router defaults, or `invoke_app`.
-There is no arity-dependent Pages bridge.
-
-### Direct protocol ownership is now complete
-
-The former wrapper class family is removed by this release. Normal HTTP
-handlers return an application value. A native application delegates through
-`invoke_app($value, $scope, $receive, $send)`; Response exposes no separate
-public emission protocol.
-
-### Framework-author and Thunderhorse handoff
-
-The PAGI protocol contract is unchanged: a native application or middleware
-still receives `($scope, $receive, $send)`. This is a PAGI-Tools handler API
-break, not a change to PAGI itself.
-
-Framework adapters should account for these points:
-
-- HTTP Route callbacks now receive `PAGI::Request`; WebSocket and SSE callbacks
-  receive their direct protocol objects.
-- Request construction is HTTP-only and takes exactly `($scope, $receive)`.
-- Removed wrapper subclasses, type maps, and construction overrides have no
-  replacement in shared Router dispatch.
-- Router URL generation belongs to `PAGI::Routing::URL`. Thunderhorse may keep
-  its own Controller/Router URL builder and need not manufacture
-  `pagi.routing` frames for it.
-- State is a `PAGI::State` facade with the temporary warned hash-dereference
-  bridge described above.
-- HTTP handlers still return an application value directly or through a
-  Future. Response construction uses the concrete class/factory family and
-  native delegation passes all three channels.
-- The former Context family is removed by this release without a deferred
-  compatibility review or replacement hook.
-
-A higher-level framework may deliberately attach its own conveniences to its
-own handler/controller object. The neutral PAGI Request does not require that
-framework to adopt PAGI::Routing or expose middleware capabilities as Request
-methods.
-
-## Replace the removed Route `raw` mode with `as_app`
-
-**Before (removed):** native Route ownership used either an implicit coderef
-or the later `raw` declaration mode.
-
-```perl
-$r->get('/download' => $native_download_app);
-$r->get('/download', raw => $native_download_app);
-```
-
-**After (shipped):** wrap native CODE explicitly for HTTP, WebSocket, or SSE.
-
-```perl
-use PAGI::Utils qw(as_app);
-
-$r->get('/download' => as_app($native_download_app));
-$r->websocket('/socket' => as_app($native_socket_app));
-$r->sse('/events' => as_app($native_event_app));
-```
-
-Why: an explicit application value makes it visible that the target receives
-`($scope, $receive, $send)` and emits its own protocol events.
-
-Endpoint uses the same grammar, including after positional middleware. Use
-`app_as` only when the native target is a local Endpoint method:
-
-```perl
-$r->get('/download' => [$self->middleware_as('audit')],
-    as_app($self->app_as('download')));
-```
-
-The wrapped coderef is preserved rather than rebound. Ordinary Endpoint
-method names receive `($self, $request_or_protocol)`, and ordinary handler
-coderefs receive `($request_or_protocol)`.
-
-## Generic `route` is path-first
-
-**Before (removed):** the generic form put the HTTP method before the path.
-
-```perl
-$r->route('POST', '/jobs' => $job_app);
-```
-
-**After (shipped):** put the path first and supply the method set as an option.
-
-```perl
-use PAGI::Response;
-
-$r->route('/jobs' => sub {
-    my ($request) = @_;
-    return PAGI::Response::json_response($jobs->create($request));
-}, methods => ['POST']);
-```
-
-Why: the path-first form aligns generic HTTP declarations with `get`, `post`,
-`websocket`, `sse`, and the immutable routing constructors.
-
-## Names are slash-addressed
-
-**Before (removed):** names and nested prefixes were joined with dots.
-
-```perl
-$r->get('/people/{id}' => $show_app)->name('people.show');
-my $path = $r->uri_for('people.show', { id => 42 });
-```
-
-**After (shipped):** each declaration contributes one local name segment and
-nested references use canonical slash addresses.
-
-```perl
-use PAGI::Response;
-
-$r->mount('/people', routes => sub {
-    my ($people) = @_;
-    $people->get('/{id}' => sub { return PAGI::Response::text_response('person') })
-        ->name('show');
-})->name('people');
-
-my $path = $r->path_for('/people/show', { id => 42 });
-```
-
-Why: slash addresses provide one unambiguous logical path for routes and
-inspectable mounts.
-
-## `name` replaces `as` and mount `namespace`
-
-**Before (removed):** an inspectable child was mounted positionally and its
-names were imported afterward with `as`.
-
-```perl
-$r->mount('/api' => $child_router)->as('api');
-my $path = $r->uri_for('api.people.show', { id => 42 });
-```
-
-**Removed metadata vocabulary:** public mount `namespace` values and accessors
-are not part of the new description model.
-
-**After (shipped):** put the immutable child Router in `app` and give that
-Mount its local name with the universal modifier.
-
-```perl
-$r->mount('/api', app => $child_router)->name('api');
-my $path = $r->path_for('/api/people/show', { id => 42 });
-```
-
-Why: one `name` operation now assigns local logical segments to routes and
-Mounts without a second import mechanism.
-
-## Replace `group` with a real child Router Mount
-
-**Before (removed):** a group callback received its parent builder, and its
-declarations were flattened into the parent's protocol collections.
-
-```perl
-$r->group('/api' => sub {
-    my ($same_router) = @_;
-    $same_router->get('/people' => $people_app);
-});
-```
-
-**After (shipped):** `routes` receives a fresh child builder retained as one
-real Router application at the Mount's declaration position.
-
-```perl
-use PAGI::Response;
-
-$r->mount('/api', routes => sub {
-    my ($api) = @_;
-    $api->get('/people' => sub { return PAGI::Response::json_response($people->all) })
-        ->name('people');
-})->name('api');
-```
-
-The callback return value is ignored. The child owns its own stock/custom 404
-and built-in 405; this is no longer transparent inline dispatch.
-
-## Load and construct packages explicitly
-
-**Before (removed):** group and mount string targets could load packages and
-construct routing behavior as a side effect.
-
-```perl
-$r->group('/users' => 'MyApp::Routes::Users');
-$r->mount('/admin' => 'MyApp::Admin');
-```
-
-**After (shipped):** load dependencies normally, construct configured objects,
-and pass the exact object at a routing-aware boundary.
-
-```perl
-use MyApp::Endpoint::Users;
-use MyApp::Endpoint::Admin;
-
-my $users = MyApp::Endpoint::Users->new(repository => $repository);
-my $admin = MyApp::Endpoint::Admin->new(policy => $policy);
-
-$r->mount('/users', app => $users)->name('users');
-$r->mount('/admin', app => $admin)->name('admin');
-```
-
-Why: explicit loading and construction make configuration, object identity,
-dependency failures, and recursive router graphs visible to the application.
-These are ordinary opaque application mounts; convert with `to_router` only
-when the parent must discover a child's names or inspect a retained snapshot.
-
-## Declaration order now governs routes and mounts
-
-**Before (removed):** the old App Router kept separate HTTP, WebSocket, SSE,
-and mount collections, checked protocol routes before mounts, and sorted mounts
-longest-prefix-first.
-
-```perl
-$r->mount('/api'    => $broad_app);
-$r->mount('/api/v2' => $v2_app);  # tried first because its prefix is longer
-```
-
-**After (shipped):** all declarations retain their written positions, so the
-first full match owns dispatch.
-
-```perl
-$r->mount('/api',    app => $broad_app);
-$r->mount('/api/v2', app => $v2_app);  # unreachable below /api while broad is first
-
-# Reverse these declarations when /api/v2 must win.
-```
-
-Why: one declaration order makes route-versus-mount ownership and overlapping
-prefix behavior inspectable without kind-specific precedence rules.
-
-## Middleware has one native contract and frontend sugar
-
-**Before (removed):** App routing lists accepted a factory coderef or an object
-with `wrap`, while other routing surfaces had different accepted forms.
-
-```perl
-$r->get('/admin' => [
-    $logging_factory,
-    $configured_auth_object,
-] => $admin_app);
-```
-
-**After (shipped):** App Router and Endpoint Router middleware lists accept a
-class name, factory coderef, configured wrapping object, or explicit
-description as frontend sugar. They immediately materialize every entry into
-the explicit descriptions required by immutable Router, Mount, Route, and
-protocol-route middleware lists. The `$r` example below is that intentional
-higher-level syntax:
-
-```perl
-use PAGI::Response;
-use PAGI::Routing qw(middleware);
-
-$r->get('/admin' => [
-    'RequestId',
-    $logging_factory,
-    $configured_auth_object,
-    middleware('Session', cookie_name => 'sid'),
-] => sub { return PAGI::Response::text_response('admin') });
-```
-
-At an immutable core boundary, spell the equivalent entries as
-`middleware('RequestId')`, `middleware($logging_factory)`,
-`middleware($configured_auth_object)`, and the configured `middleware(...)`
-description already shown. Why: one native app-to-app middleware contract can
-wrap HTTP, WebSocket, SSE, Mount, Route, Router, and Compose boundaries
-consistently, while the core remains explicit and inspectable.
-
-## Endpoint middleware is native PAGI middleware
-
-**Before (removed):** an Endpoint route middleware name selected a
-response-valued method receiving `($self, $c, $next)`.
-
-```perl
-$r->get('/admin' => ['authenticate'] => 'admin');
-
-sub authenticate {
-    my ($self, $c, $next) = @_;
-    my $response = $next->()->get;
-    return $response;
-}
-```
-
-**After (shipped):** Endpoint lists use the same synchronous app factory or
-wrapping-object forms as every other routing surface.
-
-```perl
-$r->get('/admin' => [$auth_factory] => 'admin');
-
-sub build_auth_factory {
-    my ($policy) = @_;
-    return sub {
-        my ($inner_app) = @_;
-        return sub {
-            my ($scope, $receive, $send) = @_;
-            return $policy->allows($scope)
-                ? $inner_app->($scope, $receive, $send)
-                : deny($send);
-        };
-    };
-}
-```
-
-Why: native middleware controls downstream calls and channel wrapping without a
-second response-valued execution model.
-
-## Use `middleware_as` for a local middleware method
-
-**Before (removed):** a bare string in an Endpoint middleware list was treated
-as a local value-flow middleware method name.
-
-```perl
-$r->get('/account' => ['authenticate'] => 'account');
-```
-
-**After (shipped):** adapt a local method explicitly into a native middleware
-factory.
-
-```perl
 sub routes {
     my ($self, $r) = @_;
-    $r->get('/account' => [
-        $self->middleware_as('authenticate'),
-    ] => 'account');
+    $r->get('/people' => 'list_people')->name('index');
+    $r->get('/people/{id}' => [
+        $self->middleware_as('require_auth'),
+    ] => 'show_person')->name('show');
+    $r->get('/download' => as_app_object($self->app_as('download')));
+    $r->mount('/child', app => $self->{child}->to_router)
+        ->name('child');
 }
 
-sub authenticate {
-    my ($self, $inner_app) = @_;
-    return sub {
-        my ($scope, $receive, $send) = @_;
-        $self->check_scope($scope);
-        return $inner_app->($scope, $receive, $send);
-    };
+my $request = $endpoint->new_request($scope, $receive);
+my $root = $endpoint->app_path('public');
+```
+
+**After: an ordinary object returns an immutable Router from `routing`.**
+
+```perl
+package MyApp::API;
+use strict;
+use warnings;
+use PAGI::Request;
+use PAGI::Routing qw(middleware mount route router);
+use PAGI::Utils qw(app_path as_app_object);
+
+sub routing {
+    my ($self) = @_;
+    return router(routes => [
+        route('/people' => sub {
+            return $self->list_people(@_);
+        }, name => 'index'),
+
+        route('/people/{id}' => sub {
+            return $self->show_person(@_);
+        },
+            name => 'show',
+            middleware => [middleware(sub {
+                my ($inner) = @_;
+                return $self->require_auth($inner);
+            })],
+        ),
+
+        route('/download' => as_app_object(sub {
+            return $self->download(@_);
+        })),
+
+        mount('/child',
+            app  => $self->{child}->routing,
+            name => 'child',
+        ),
+    ]);
+}
+
+sub public_root {
+    return app_path('public');
+}
+
+package MyApp::Native;
+use strict;
+use warnings;
+use PAGI::Request;
+
+sub request_from_channels {
+    my ($scope, $receive) = @_;
+    return PAGI::Request->new($scope, $receive);
 }
 ```
 
-Why: the adapter keeps method binding explicit while preserving the universal
-native middleware contract.
+Closures make local method binding ordinary Perl. Use a direct
+`PAGI::Request->new($scope, $receive)` only in genuinely raw code. Import and
+call `PAGI::Utils::app_path` directly in the module that owns the assets;
+unlike the removed inherited helper, its result is caller-sensitive and is a
+path string, not an application.
 
-## Use lifespan state through `PAGI::State`
-
-**Before (removed):** Endpoint created a private state hash and injected it
-into requests.
-
-```perl
-$self->state->{database} = connect_database();
-my $database = $self->state->{database};
-```
-
-**After (shipped):** let the server or `PAGI::Compose` own lifespan state and
-read it through the strict Request State facade.
+For one resource with meaningful HTTP verb dispatch, use an exact leaf class
+rather than rebuilding a Router frontend:
 
 ```perl
-use PAGI::Compose qw(compose);
-use PAGI::Response;
-use PAGI::Routing qw(mount);
-use PAGI::State qw(app_state);
+package MyApp::PeopleRepository;
 
-my $app = compose(
-    routes => [mount('/' => app => $endpoint)],
-    lifespan => {
-        startup  => sub { $_[0]{database} = connect_database() },
-        shutdown => sub { $_[0]{database}->disconnect },
-    },
-)->to_app;
+sub new {
+    my ($class, %args) = @_;
+    return bless \%args, $class;
+}
 
-sub list_people {
+sub find {
+    my ($self, $id) = @_;
+    return $self->{people}{$id};
+}
+
+package MyApp::Person;
+use parent 'PAGI::Endpoint::HTTP';
+use PAGI::Response qw(json_response);
+
+sub new {
+    my ($class, %args) = @_;
+    return bless \%args, $class;
+}
+
+sub get {
     my ($self, $request) = @_;
-    return PAGI::Response::json_response(
-        app_state($request)->get('database')->people,
+    return json_response(
+        $self->{repo}->find($request->path_param('id')),
     );
 }
-```
 
-Why: server-owned lifespan state has an explicit startup and shutdown lifetime
-and retains one identity across the requests that receive it.
+package MyApp::Routes;
+use PAGI::Routing qw(route);
 
-## Removed Endpoint construction hooks
-
-**Before (removed):** overriding `context_class` changed the class Endpoint
-used to build Context objects for compiled handlers.
-
-```perl
-sub context_class { return 'MyApp::Context' }
-```
-
-**After (shipped):** compiled routes receive direct protocol objects.
-`PAGI::Endpoint::Router->new_request($scope, $receive)` is an explicit HTTP-only
-convenience for native middleware or application code that wants the Request
-API; compiled dispatch does not call it. There is no `new_context` alias.
-
-```perl
-use PAGI::Response;
-
-my $manual_request = $endpoint->new_request($scope, $receive);
-
-$r->get('/normal' => sub {
-    my ($request) = @_;  # PAGI::Request from the shared compiler
-    return PAGI::Response::text_response('ok');
-});
-```
-
-Why: removing the compiler override keeps protocol construction identical
-across all frontends while leaving explicit HTTP Request construction locally
-available where a native adapter needs it.
-
-## Mount nested Endpoint objects through `app`
-
-**Before (removed):** compiling a nested Endpoint to an app first made it an
-opaque mount whose routes and names were hidden from its parent.
-
-```perl
-$r->mount('/people' => MyApp::People->to_app);
-```
-
-**After (shipped):** construct the child and mount its immutable Router
-snapshot when the parent must discover names.
-
-```perl
-my $people = MyApp::People->new(repository => $repository);
-$r->mount('/people', app => $people->to_router)->name('people');
-
-my $show = $endpoint->to_router
-    ->path_for('/people/show', { id => 42 });
-```
-
-Why: a routing-aware object mount retains child metadata, reverse names, shared
-materialization, identity reuse, and cycle diagnostics.
-
-## Route middleware works for HTTP, WebSocket, and SSE
-
-**Before (removed):** Endpoint rejected route-level middleware for WebSocket
-and SSE declarations.
-
-```perl
-$r->websocket('/chat' => ['authenticate'] => 'chat'); # rejected
-$r->sse('/events' => ['authenticate'] => 'events');   # rejected
-```
-
-**After (shipped):** use the same native middleware entry on every protocol
-route.
-
-```perl
-my $auth = $self->middleware_as('authenticate');
-
-$r->get('/account'       => [$auth] => 'account');
-$r->websocket('/chat'    => [$auth] => 'chat');
-$r->sse('/events'        => [$auth] => 'events');
-```
-
-Why: middleware now wraps the native application boundary, which exists for
-all three protocols.
-
-## Read `pagi.routing`, not `pagi.router`
-
-**Before (removed):** matched App routes published a small route hash at the
-old scope key.
-
-```perl
-my $route_path = $scope->{'pagi.router'}{route};
-```
-
-**After (shipped):** the shared compiler publishes a versioned routing
-container whose frame stack records the current routing owner and any
-compatible ancestor owners.
-
-```perl
-my $container = $request->scope->{'pagi.routing'};
-die 'unsupported routing metadata' unless $container->{version} == 1;
-my $current_frame = $container->{frames}[-1];
-```
-
-Prefer `path_for($request, ...)` from `PAGI::Routing::URL` when the goal is
-reverse routing rather than metadata inspection.
-
-Why: the frame stack and its mount ancestry can describe nested immutable
-routers, captures, logical placement, and the selected leaf without mutating
-shared descriptions.
-
-An inspectable Router Mount appends a distinct child boundary frame that keeps
-the root Resolver and root entry `root_path`. An opaque Mount keeps its terminal
-Mount match in the parent frame; if its native target is a separately compiled
-Router, that Router appends its own frame/container boundary with its own
-Resolver and entry `root_path` when the incoming metadata is compatible.
-
-## Retain a `to_router` snapshot for stable inspection
-
-**Before (removed):** named-route inspection and generation read the mutable
-App Router's internal tables directly.
-
-```perl
-my $routes = $r->named_routes;
-my $path = $r->uri_for('people.show', { id => 42 });
-```
-
-**After (shipped):** materialize once and use that immutable object for a
-coherent inspection view.
-
-```perl
-my $routing = $r->to_router;
-my $route = $routing->route_named('/people/show');
-my $path = $routing->path_for('/people/show', { id => 42 });
-my $app = $routing->to_app;
-```
-
-Why: each frontend `to_router` call creates a fresh snapshot, so retaining one
-keeps route identity, inspection, reverse routing, and compilation aligned.
-
-## Generated paths validate and encode parameters
-
-**Before (removed):** route generation substituted path values without applying
-the route's full constraints or percent-encoding path parameters.
-
-```perl
-$r->get('/tags/{name}' => $tag_app)->name('tag.show');
-my $path = $r->uri_for('tag.show', { name => 'Perl tools' });
-```
-
-**After (shipped):** `path_for` validates the complete effective path and
-percent-encodes path, query, and fragment values.
-
-```perl
-use PAGI::Response;
-
-$r->get('/tags/{name}' => sub { return PAGI::Response::text_response('tag') })
-    ->name('show')
-    ->constraints(name => qr/\A[[:print:]]+\z/);
-
-my $path = $r->path_for('/show',
-    { name => 'Perl tools' },
-    { from => 'upgrade guide' },
-    'examples');
-# /tags/Perl%20tools?from=upgrade%20guide#examples
-```
-
-Why: generated paths now obey the same parameter contract as dispatch and are
-safe to place in URI path, query, and fragment components.
-
-## Application Routes and opaque Mounts are different
-
-**Before (removed):** ordinary route targets and mounts both accepted native
-applications without making their different ownership rules explicit.
-
-```perl
-$r->get('/health' => $native_health_app);
-$r->mount('/legacy' => $legacy_app);
-```
-
-**After (shipped):** use an exact, method-aware application Route for one leaf and an
-opaque mount for a protocol-wide prefix boundary.
-
-```perl
-use PAGI::Utils qw(as_app);
-
-$r->get('/health' => as_app($native_health_app));
-$r->mount('/legacy', app => $legacy_app);
-```
-
-An application Route keeps `path` and `root_path` unchanged, participates in HTTP 405
-selection, and publishes leaf metadata; an opaque mount strips its prefix,
-extends `root_path`, owns every protocol at that prefix, and hides its internals.
-
-Why: choosing between a leaf and a prefix boundary determines matching,
-methods, path rewriting, metadata visibility, and downstream ownership.
-
-## Mount accessors now describe one application
-
-**Before (removed):** callers inspected dispatch mode through `router`,
-`target`, or `is_raw`.
-
-```perl
-my $router = $mount->router;
-my $target = $mount->target;
-my $raw    = $mount->is_raw;
-```
-
-**After (shipped):** every Mount has one base application.
-
-```perl
-my $app = $mount->app;
-my $middleware = $mount->middleware;
-```
-
-There is no mode flag. `routes` constructs a child Router and stores it as the
-same `app` value used by explicit application Mounts.
-
-## Application strings and middleware strings are different contracts
-
-**Before (rejected):** an application position does not load, construct, or
-call a package.
-
-```perl
-mount('/legacy', app => 'MyApp::Legacy');
-```
-
-**After (shipped):** instantiate the application explicitly.
-
-```perl
-use MyApp::Legacy;
-mount('/legacy', app => MyApp::Legacy->new);
-```
-
-Middleware strings remain accepted because the middleware descriptor defines
-loading, construction, configuration, and `wrap` behavior:
-
-```perl
-middleware('RequestId', header => 'X-Request-ID');
-```
-
-This distinction applies to Route application values, Mount `app`, and Router
-`http_default`; `PAGI::Test::Client`'s `app`; `PAGI::Lifespan`'s `app`/`wrap`
-target; `PAGI::Middleware::Builder`'s final fallback and Mount targets; and
-URLMap/Cascade application entries. A package-name application is rejected
-synchronously rather than guessed.
-
-Construct once and pass the same explicit object at these boundaries:
-
-```perl
-use MyApp::Legacy;
-use PAGI::Lifespan;
-use PAGI::Middleware::Builder;
-use PAGI::Test::Client;
-
-my $legacy = MyApp::Legacy->new;
-
-my $client = PAGI::Test::Client->new(app => $legacy);
-my $with_lifespan = PAGI::Lifespan->wrap($legacy,
-    startup => sub { my ($state) = @_; $state->{ready} = 1 },
+my $repo = MyApp::PeopleRepository->new(
+    people => { 42 => { id => 42, name => 'Ada' } },
 );
-my $built = builder {
-    mount '/legacy' => $legacy;
-    $legacy;
-};
+
+my $person_route = route('/people/{id}' => MyApp::Person->new(repo => $repo),
+    name => 'show',
+);
 ```
 
-## Removed routing fallback machinery
+Simple behavior stays a closure. Endpoint classes are best when HTTP verb
+dispatch, WebSocket/SSE connection lifecycle, or a long-lived configured
+dependency earns the class. They own one exact leaf, never a subtree.
 
-`PAGI::Routing::Trace`, its Recorder/Snapshot family, and
-`PAGI::Middleware::Routing::NotFound` /
-`PAGI::Middleware::Routing::MethodNotAllowed` are removed, not deprecated.
-The `pagi.routing` scope convention now carries only selected route and reverse
-lookup metadata. It is not a decline channel. Compose no longer creates a
-Trace or installs automatic 404/405 middleware; the selected Router owns
-those outcomes.
+### Configured WebSocket and SSE endpoint lifecycle
 
-## Exact current Mount spellings
-
-These accepted forms are deliberately explicit:
+Configured protocol endpoint instances now work as leaf applications:
 
 ```perl
-use PAGI::Response;
-
-mount('/x', app => $app);
-
-# Immutable functional constructor: structural nodes in an arrayref.
-mount('/x', routes => [
-    route('/' => sub { return PAGI::Response::text_response('child') }),
-]);
-
-# Mutable App/Endpoint builder: one declaration-time callback.
-$r->mount('/x', routes => sub {
-    my ($child) = @_;
-    $child->get('/' => sub { return PAGI::Response::text_response('child') });
-});
+websocket('/chat' => MyApp::Chat->new(hub => $hub));
+sse('/events' => MyApp::Events->new(bus => $bus));
 ```
 
-The functional form accepts an arrayref, never a callback. The callback form is
-available only in the mutable App and Endpoint frontends. It runs once during
-declaration, receives a fresh child builder bound to the same Endpoint object
-when applicable, and ignores its return value. Both `/x` and `/x/` reach the
-child `/` leaf without redirecting.
+Calling `to_app` on a class constructs one receiver immediately. Calling it
+on an instance retains that same object. No receiver is reconstructed for each
+connection. The configured WebSocket and SSE instance may serve concurrent
+connections, so store configuration and long-lived services on it and keep
+connection-local state on each `PAGI::WebSocket` or `PAGI::SSE` object.
 
-## Deliberate Starlette differences and deferred schema work
+Earlier configured WebSocket/SSE objects could build successfully and then die
+on their first connection because the implementation attempted to construct
+through an object. That defect is fixed; it is not preserved as compatibility
+behavior.
 
-PAGI follows Starlette's Route/Mount/Router/application topology, not every
-method on Starlette Request. `PAGI::Request` owns HTTP input; imports identify
-the Router or middleware that supplies optional behavior. Ordinary handlers
-receive direct Request, WebSocket, or SSE objects; `as_app`, Mount `app`, and
-Router `http_default` are native three-channel application positions. Compose
-accepts only `routes`; preserve an immutable Router through an explicit Mount
-inside that list. Constraints validate without coercion. Logical names use slash
-addresses and relative `PAGI::Routing::URL` lookup. SSE is first-class. Middleware is pure
-PAGI app-to-app wrapping at Route, Mount, Router, and Compose boundaries.
+### HTTP endpoint method capability
 
-Current Starlette does not subclass Router. Its application object owns
-`self.router`, while lifespan handling is stored on Router, so a standalone
-Starlette Router is lifecycle-capable. Mounted Starlette Routers do not receive
-the root lifespan exchange. See Starlette's official
-[application](https://github.com/Kludex/starlette/blob/main/starlette/applications.py),
-[routing](https://github.com/Kludex/starlette/blob/main/starlette/routing.py),
-and [routing-test](https://github.com/Kludex/starlette/blob/main/tests/test_routing.py)
-sources.
+An object endpoint that implements `allowed_methods` publishes its method
+capability to its containing Route. Route consults `allowed_methods` exactly
+once during construction whether methods are omitted or explicitly finite,
+and snapshots the normalized result. GET adds HEAD, and
+`PAGI::Endpoint::HTTP` also advertises OPTIONS.
 
-PAGI preserves one non-cascading root lifecycle but keeps it on Compose. A bare
-PAGI Router declines lifespan, and strict mode rejects that decline.
-Starlette's single multiprotocol Router `default` was considered and
-deliberately not copied. PAGI's HTTP-only default preserves stock WebSocket
-and SSE misses.
-OpenAPI and schema support remain deferred until a concrete consumer is
-designed; `schema`,
-`include_in_schema`, registries, and placeholder metadata are not shipped.
+A finite method string or arrayref must be a restriction of that capability:
+
+```perl
+route('/messages' => $endpoint, methods => 'GET');
+route('/messages' => $endpoint, methods => ['GET', 'POST']);
+```
+
+Construction fails if a finite declaration includes a method the endpoint does
+not advertise. The Router owns method mismatch, the first-seen `Allow` union,
+and OPTIONS dispatch at that Route boundary. A mounted or standalone endpoint
+still owns its own 405 and OPTIONS behavior.
+
+Only scalar `methods => '*'` bypasses the capability:
+
+```perl
+route('/delegated' => $endpoint, methods => '*');
+```
+
+This skips the capability lookup and lets the endpoint own every method and
+405 outcome. WebSocket and SSE routes never inspect `allowed_methods`.
+
+### What was removed without replacement
+
+The following frontend conveniences do not have compatibility aliases:
+
+- mutable verb methods and chained modifiers;
+- callback-built child Routers;
+- string method targets;
+- `to_router` snapshots;
+- `middleware_as` and `app_as`;
+- the Endpoint `new_request` shortcut; and
+- the Endpoint `app_path` shortcut.
+
+Use constructor options, route arrays, ordinary closures, immutable Router
+values, `PAGI::Request->new`, and direct `PAGI::Utils::app_path` calls
+instead. Higher-level frameworks can add conventions without adding a second
+core routing model.

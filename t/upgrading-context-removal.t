@@ -5,7 +5,6 @@ use Test2::V0;
 use Future::AsyncAwait;
 
 use lib 'lib';
-use PAGI::App::Router;
 use PAGI::Endpoint::HTTP;
 use PAGI::Endpoint::SSE;
 use PAGI::Endpoint::WebSocket;
@@ -13,6 +12,7 @@ use PAGI::Middleware::ErrorHandler;
 use PAGI::Response qw(
     html_response json_response redirect_response text_response
 );
+use PAGI::Routing qw(route router sse websocket);
 use PAGI::Stash qw(stash);
 use PAGI::Test::Client;
 
@@ -43,31 +43,31 @@ subtest 'Context hooks and modules are removed' => sub {
 
 subtest 'declarative Router callbacks remain direct protocol objects' => sub {
     my ($request_seen, $websocket_seen, $sse_seen);
-    my $router = PAGI::App::Router->new;
-
-    $router->get('/request/{name}' => sub {
+    my $routing = router(routes => [
+    route('/request/{name}' => sub {
         my ($request) = @_;
         $request_seen = $request;
         return text_response('hello ' . $request->path_param('name'));
-    });
+    }),
 
-    $router->websocket('/socket' => async sub {
+    websocket('/socket' => async sub {
         my ($websocket) = @_;
         $websocket_seen = $websocket;
         await $websocket->accept;
         await $websocket->send_text('direct websocket');
         await $websocket->run;
-    });
+    }),
 
-    $router->sse('/events' => async sub {
+    sse('/events' => async sub {
         my ($sse) = @_;
         $sse_seen = $sse;
         stash($sse)->set(upgrade_example => 'direct sse');
         await $sse->send(stash($sse)->get('upgrade_example'));
         await $sse->run;
-    });
+    }),
+    ]);
 
-    my $client = PAGI::Test::Client->new(app => $router);
+    my $client = PAGI::Test::Client->new(app => $routing);
     my $response = $client->get('/request/world');
     is($response->text, 'hello world',
         'Router HTTP callback remains Request-first and returns a Response');
