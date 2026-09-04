@@ -22,7 +22,7 @@ the exported umbrella with five opt-in factories:
 ```perl
 use PAGI::Auth qw(
     challenge forbid
-    basic_challenge bearer_challenge auth_challenge
+    basic bearer custom_challenge
 );
 ```
 
@@ -32,7 +32,7 @@ least one structured authentication challenge:
 
 ```perl
 return challenge(
-    challenges => [bearer_challenge(realm => 'api')],
+    challenges => [bearer(realm => 'api')],
     detail      => 'A valid access token is required.',
 );
 ```
@@ -51,7 +51,7 @@ challenge:
 
 ```perl
 return forbid(
-    challenges => [bearer_challenge(
+    challenges => [bearer(
         realm => 'api',
         error => 'insufficient_scope',
         scope => ['apples:write'],
@@ -85,7 +85,7 @@ This gives the three first-party request protocols one outcome vocabulary:
 
 ```perl
 my $failure = challenge(
-    challenges => [bearer_challenge(realm => 'api')],
+    challenges => [bearer(realm => 'api')],
 );
 
 # HTTP Request handler: return the application value.
@@ -191,6 +191,15 @@ resource-error semantics:
 - insufficient privileges normally produce 403 with
   `error="insufficient_scope"` and may advertise the required scope.
 
+[RFC 9470](https://www.rfc-editor.org/rfc/rfc9470.html) extends Bearer and
+related OAuth challenges with `error="insufficient_user_authentication"`,
+`acr_values`, and `max_age` for step-up authentication. [RFC
+9728](https://www.rfc-editor.org/rfc/rfc9728.html) adds the
+`resource_metadata` challenge parameter used for protected-resource metadata
+discovery, including MCP authorization deployments. These extensions show
+that Bearer's registered parameter and error spaces cannot be treated as
+permanently closed.
+
 [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457.html) supplies the problem
 JSON representation already implemented by `PAGI::Pages`. This design reuses
 that representation rather than creating an authentication-specific JSON
@@ -245,7 +254,7 @@ into the concrete Response those protocol methods intentionally require.
 
 | Repository | Work item | Branch | Base | Owned changes | Deployment boundary | Push target |
 | --- | --- | --- | --- | --- | --- | --- |
-| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | Phase 1 authentication outcomes and challenge construction | To be created by the implementation plan | `main` at the source-audit commit, refreshed before implementation | This design; later `PAGI::Auth`, challenge value/builders, Pages materialization seam, tests, examples, POD, Cookbook/Tutorial, Changes | PAGI-Tools only; no PAGI specification or PAGI::Server change | A dedicated PAGI-Tools feature branch and PR |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | Phase 1 authentication outcomes and challenge construction | `feature/authentication-outcomes-phase1` | local `main` at `c4c007f7a0603c2e36cd88266f2289db4f3baa12` | This design; later `PAGI::Auth`, challenge value/builders, Pages materialization seam, tests, examples, POD, Cookbook/Tutorial, Changes | PAGI-Tools only; no PAGI specification or PAGI::Server change | Local feature branch until the user requests a PR |
 
 The implementation plan must refresh this map against current `main` before
 editing and again before push. The untracked settlement/audit notes currently
@@ -353,12 +362,12 @@ response-policy object. It exports nothing by default.
 ```perl
 our @EXPORT_OK = qw(
     challenge forbid
-    basic_challenge bearer_challenge auth_challenge
+    basic bearer custom_challenge
 );
 
 our %EXPORT_TAGS = (
     outcomes   => [qw(challenge forbid)],
-    challenges => [qw(basic_challenge bearer_challenge auth_challenge)],
+    challenges => [qw(basic bearer custom_challenge)],
     all        => [@EXPORT_OK],
 );
 ```
@@ -371,6 +380,14 @@ object in Phase 1. This deliberately reserves the natural
 `PAGI::Auth->new($source)` shape for the normalized identity facade being
 considered in Phase 2. Adding response policy must not force that later helper
 into an overloaded constructor.
+
+The three-package split is intentional rather than package growth for its own
+sake: `PAGI::Auth` is the opt-in functional vocabulary,
+`PAGI::Auth::Outcomes` is configured response policy, and
+`PAGI::Auth::Challenge` is an immutable protocol value. The Phase 2 identity
+facade is an already identified ecosystem requirement analogous to the
+request-bound Session, State, Stash, CSRF, and URL helpers, not a hypothetical
+reason invented solely to reserve a name here.
 
 ### 8.2 `PAGI::Auth::Outcomes` and configured Pages policy
 
@@ -396,8 +413,15 @@ Exported `PAGI::Auth` functions delegate to the base
 `PAGI::Auth::Outcomes` class and never infer a caller subclass.
 
 Challenge builders work as exported functions or fully qualified
-`PAGI::Auth::basic_challenge(...)`-style package functions. They do not depend
+`PAGI::Auth::basic(...)`-style package functions. They do not depend
 on an Outcomes instance or its retained Pages policy.
+
+The vocabulary is deliberate: `challenge()` constructs the 401 outcome,
+`challenges` supplies one or more structured values, and
+`PAGI::Auth::Challenge` names that value type. The scheme-specific builders
+use the shorter `basic()` and `bearer()` names so the common expression does
+not read as `challenge(challenges => [bearer_challenge(...)])`. All of these
+ordinary words remain opt-in exports.
 
 Subclasses may override `new`, `challenge`, or `forbid` through ordinary Perl
 inheritance. Version one adds no renderer hooks to
@@ -453,10 +477,10 @@ information belongs in the negotiated Pages `detail` and presentation hooks.
 ### 9.2 Basic
 
 ```perl
-my $value = basic_challenge(realm => 'Staff');
+my $value = basic(realm => 'Staff');
 # Basic realm="Staff"
 
-my $utf8 = basic_challenge(
+my $utf8 = basic(
     realm   => 'Staff',
     charset => 'UTF-8',
 );
@@ -477,16 +501,16 @@ then `charset`.
 ### 9.3 Bearer
 
 ```perl
-my $missing = bearer_challenge(realm => 'api');
+my $missing = bearer(realm => 'api');
 
-my $invalid = bearer_challenge(
+my $invalid = bearer(
     realm             => 'api',
     error             => 'invalid_token',
     error_description => 'The access token is no longer valid',
     error_uri         => 'https://example.test/docs/auth/invalid-token',
 );
 
-my $scope = bearer_challenge(
+my $scope = bearer(
     realm => 'api',
     error => 'insufficient_scope',
     scope => ['apples:write', 'inventory:write'],
@@ -501,19 +525,29 @@ scope
 error
 error_description
 error_uri
+params
 ```
 
-At least one of `realm`, `scope`, or `error` is required because RFC 6750
-requires a Bearer challenge to contain at least one auth parameter.
+At least one of `realm`, `scope`, `error`, or one entry in `params` is required
+because a Bearer challenge must contain at least one auth parameter.
 `error_description` and `error_uri` require `error`.
 
-`error` is exactly one of:
+The builder recognizes these standardized errors and retains their outcome
+semantics:
 
 ```text
 invalid_request
 invalid_token
 insufficient_scope
+insufficient_user_authentication
 ```
+
+Another `error` value is accepted as an extension when it is a nonempty RFC
+9110 token. Unknown extension errors are structurally valid but carry no
+status classification known to PAGI-Tools. They therefore do not receive
+outcome-specific rejection beyond the rules for the standardized errors.
+This keeps future standards and private profiles usable without making the
+generic builder an unchecked Bearer escape hatch.
 
 `scope` must be a nonempty arrayref of unique, nonempty scope tokens. Scope
 tokens are case-sensitive, so only exact duplicates are rejected. Each
@@ -523,24 +557,57 @@ DEL, or non-ASCII data. The serialized parameter joins the values with one
 ASCII space while preserving declaration order. Duplicate tokens croak rather
 than being silently removed.
 
-`error` and `error_description` contain only
+The four recognized `error` values satisfy the token grammar. An extension
+error must satisfy that grammar explicitly. `error_description` contains only
 `%x20-21 / %x23-5B / %x5D-7E`. `error_uri` contains only
 `%x21 / %x23-5B / %x5D-7E` and must be a syntactically valid absolute URI.
-The builder does not fetch or dereference it.
+RFC 6750's ABNF admits a URI-reference while its semantic prose describes an
+absolute URI identifying a human-readable page. This API deliberately accepts
+the useful, unambiguous absolute-URI subset. The builder does not fetch or
+dereference it.
 
-Parameter order is always:
+`params` is an optional nonempty unblessed hashref for registered or private
+Bearer extensions. Parameter names use the RFC 9110 token grammar and may not
+collide case-insensitively with `realm`, `scope`, `error`,
+`error_description`, or `error_uri`. Keys that differ only by case croak.
+Values must be defined non-reference ASCII scalars satisfying the shared
+quoted-string safety rules; serialization always quotes and escapes them.
+PAGI-Tools validates the generic field shape but does not invent semantic
+validation for an extension it does not own.
+
+For example, current standards can be represented without bypassing Bearer
+validation:
+
+```perl
+my $step_up = bearer(
+    realm  => 'api',
+    error  => 'insufficient_user_authentication',
+    params => {
+        acr_values => 'urn:example:strong',
+        max_age    => 300,
+        resource_metadata =>
+            'https://api.example/.well-known/oauth-protected-resource',
+    },
+);
+```
+
+The caller remains responsible for extension-specific requirements. For
+example, RFC 9470 requires `max_age` to represent a nonnegative integer, and
+RFC 9728 defines the meaning and URL requirements of `resource_metadata`.
+
+First-party parameter order is always:
 
 ```text
 realm, scope, error, error_description, error_uri
 ```
 
-Order has no semantic meaning but stable output improves diagnostics and
-tests.
+Extension parameters follow in case-insensitive ASCII lexical order. Order has
+no semantic meaning but stable output improves diagnostics and tests.
 
 ### 9.4 Generic extension scheme
 
 ```perl
-my $demo = auth_challenge(
+my $demo = custom_challenge(
     scheme => 'DemoToken',
     params => {
         realm => 'demo',
@@ -549,12 +616,12 @@ my $demo = auth_challenge(
 );
 # DemoToken mode="interactive", realm="demo"
 
-my $negotiate = auth_challenge(
+my $negotiate = custom_challenge(
     scheme  => 'Negotiate',
     token68 => $opaque_challenge_data,
 );
 
-my $bare = auth_challenge(scheme => 'Mutual');
+my $bare = custom_challenge(scheme => 'Mutual');
 ```
 
 `scheme` is required. `params` is an optional nonempty unblessed hashref.
@@ -565,7 +632,9 @@ grammar. `params` and `token68` are mutually exclusive. Omitted `params` and
 
 `scheme` must not be `Basic` or `Bearer`, compared case-insensitively. Those
 schemes have strict first-party builders and using the generic path would
-silently bypass their scheme-specific validation.
+silently bypass their scheme-specific validation. Bearer extensions use the
+checked `params` and open-error seams on `bearer()` rather than the generic
+builder.
 
 Generic parameters are serialized in case-insensitive ASCII lexical order.
 Keys that differ only by case croak. The builder always quotes parameter
@@ -614,6 +683,12 @@ that intentionally need a raw or unusual status/header combination may use
 `PAGI::Pages` or a Response directly; that is the explicit lower-level escape
 hatch.
 
+Internally, `forbid` serializes its checked challenge values and supplies the
+resulting repeated `WWW-Authenticate` pairs through Pages' ordinary `headers`
+path because Pages only synthesizes challenges itself for statuses 401 and
+407. This internal use does not reopen the field to callers: caller headers
+are validated first, and only Auth's structured values may add the field.
+
 Neither factory accepts `status`, Pages' singular `challenge` option, or proxy
 authentication options.
 
@@ -622,8 +697,8 @@ authentication options.
 ```perl
 my $application = challenge(
     challenges => [
-        basic_challenge(realm => 'Staff'),
-        bearer_challenge(realm => 'api'),
+        basic(realm => 'Staff'),
+        bearer(realm => 'api'),
     ],
     detail => 'Authenticate using either supported scheme.',
 );
@@ -638,9 +713,14 @@ For a Bearer value used in `challenge`:
 
 - an absent `error` is valid and is the normal missing-credentials response;
 - `error="invalid_token"` is valid;
+- `error="insufficient_user_authentication"` is valid for a step-up
+  authentication challenge;
 - `error="invalid_request"` croaks and directs the caller to an explicit 400
   response; and
-- `error="insufficient_scope"` croaks and directs the caller to `forbid`.
+- `error="insufficient_scope"` croaks and directs the caller to `forbid`;
+  and
+- an unknown extension error is accepted because Auth cannot infer the status
+  semantics of a future standard or private profile.
 
 The default title and detail come from Pages' 401 catalog. The factory does
 not mention whether credentials were absent, expired, revoked, or malformed
@@ -659,12 +739,15 @@ my $application = forbid(
 authorization failure does not require a `WWW-Authenticate` field.
 
 When a Bearer challenge is supplied to `forbid`, it must use
-`error="insufficient_scope"`. A Bearer challenge with no error,
-`invalid_token`, or `invalid_request` croaks with a diagnostic naming the
-correct outcome/status. Generic and Basic challenges remain syntactically
-legal because RFC 9110 permits `WWW-Authenticate` on responses other than
-401 when different credentials might affect the response. Their use on 403
-is deliberately explicit and documented as uncommon.
+`error="insufficient_scope"` or an unknown extension error whose defining
+profile assigns 403 semantics. A Bearer challenge with no error,
+`invalid_token`, `invalid_request`, or `insufficient_user_authentication`
+croaks with a diagnostic naming the correct outcome/status. Generic and Basic
+challenges remain syntactically legal because RFC 9110 permits
+`WWW-Authenticate` on responses other than 401 when different credentials
+might affect the response. Their use on 403 is deliberately explicit and
+documented as uncommon. Auth validates the status semantics it knows; an
+application using an extension error owns that extension's status rules.
 
 The default title and detail come from Pages' 403 catalog.
 
@@ -689,12 +772,12 @@ In a native three-argument PAGI app:
 
 ```perl
 use Future::AsyncAwait;
-use PAGI::Auth qw(challenge bearer_challenge);
+use PAGI::Auth qw(challenge bearer);
 use PAGI::Utils qw(invoke_app);
 
 my $app = async sub ($scope, $receive, $send) {
     return await invoke_app(
-        challenge(challenges => [bearer_challenge(realm => 'api')]),
+        challenge(challenges => [bearer(realm => 'api')]),
         $scope, $receive, $send,
     );
 };
@@ -726,8 +809,10 @@ protocol object can emit the resulting Response; the custom protocol owns
 that adapter.
 
 This follows the existing `PAGI::Utils::Scope::scope_from_source` convention.
-The method must reuse or delegate to that validator rather than introduce a
-second source grammar.
+That helper resolves a source but does not validate its protocol type. The
+shared internal Pages materialization operation must use it for source
+resolution and then own the type/lifespan validation described above. Neither
+`response_for` nor `to_app` may grow a separate source grammar.
 
 ### 11.2 Behavior
 
@@ -751,6 +836,14 @@ original scope is never mutated. The shallow metadata view does not clone or
 freeze nested values; request metadata is caller-owned under the ordinary
 PAGI rules.
 
+One derived cache is deliberately invalidated in a synthesized non-HTTP view:
+`pagi.request.headers` is omitted. `PAGI::Request` caches a `PAGI::Headers`
+there, while the current WebSocket and SSE accessors cache a
+`Hash::MultiValue` under the same key. A protocol-specific cached facade is
+not valid after the view changes the scope to HTTP. Pages therefore rebuilds
+the HTTP header facade from the retained raw repeated header pairs. The
+original protocol scope and its cache are unchanged.
+
 `response_for` performs no receive, send, filesystem, network, session,
 credential, or other asynchronous I/O. A descriptor or renderer returning a
 Future continues to croak under the existing synchronous Pages contract.
@@ -771,7 +864,7 @@ presentation and auth policy come from the original factory:
 
 ```perl
 my $failure = challenge(
-    challenges => [bearer_challenge(realm => 'api')],
+    challenges => [bearer(realm => 'api')],
     as          => 'json',
     detail      => 'A token is required.',
 );
@@ -793,7 +886,11 @@ outcome construction when they require a fixed denial format.
 
 `PAGI::Pages::Application->to_app` remains HTTP-only. Its returned app must use
 the same internal materialization operation as `response_for`, then delegate
-the concrete Response through `PAGI::Utils::invoke_app`.
+the concrete Response through `PAGI::Utils::invoke_app`. The shared operation
+owns source resolution, required scalar type validation, lifespan rejection,
+descriptor creation, metadata-view construction, and response construction.
+The `to_app` entry point adds only its narrower exact-HTTP requirement before
+invoking that operation.
 
 The implementation must not maintain two descriptor/response construction
 paths. `response_for` exposes an operation Pages already performs privately;
@@ -801,6 +898,14 @@ it does not introduce a second response model.
 
 The method is intentionally specific to deferred Pages applications. This
 phase does not add a universal `to_response` protocol to all app objects.
+
+`PAGI::Response::_respond_for_protocol` also derives an HTTP-shaped scope, but
+for a different purpose: it maps an already concrete Response into a protocol
+denial/decline event family. It does not perform Pages negotiation or
+descriptor construction and must not depend on Pages. The two internal views
+remain separate so the one-way `Auth -> Pages -> Response` dependency is not
+reversed; the implementation and POD must state this distinction rather than
+claim that every HTTP-shaped internal scope has one owner.
 
 ## 12. Protocol use
 
@@ -811,7 +916,7 @@ A Request handler returns the outcome application directly:
 ```perl
 async sub account ($request) {
     return challenge(
-        challenges => [basic_challenge(realm => 'Accounts')],
+        challenges => [basic(realm => 'Accounts')],
     ) unless authenticated($request);
 
     return html_response('<h1>Account</h1>');
@@ -830,7 +935,7 @@ An endpoint must deny before `accept`:
 async sub handle ($self, $ws) {
     unless ($self->may_connect($ws)) {
         my $failure = challenge(
-            challenges => [bearer_challenge(realm => 'chat')],
+            challenges => [bearer(realm => 'chat')],
             as          => 'json',
         );
         return await $ws->deny($failure->response_for($ws));
@@ -883,6 +988,13 @@ with the `body-events-v1` protocol response capability. Pages currently
 selects `Empty`, `HTML`, `JSON`, `Problem`, or `Text`, all of which satisfy
 that contract.
 
+They do not detect and invoke arbitrary objects that happen to provide
+`response_for`. That convenience would establish a new deferred-response
+protocol inside two lifecycle-sensitive adapters and couple them to Pages-like
+materialization. The explicit `response_for($ws)` or `response_for($sse)` call
+keeps the transition from deferred application to concrete Response visible;
+`deny` and `decline` continue owning emission only.
+
 `PAGI::Response::File` deliberately opts out. The PAGI denial-response
 definitions permit only body events and do not use file/fh forms. This phase
 does not weaken that rule or teach protocol adapters to read files.
@@ -899,9 +1011,11 @@ client received the bytes.
 | No credentials supplied | `challenge` | 401 | Bearer challenge has no `error`; Basic or generic also allowed |
 | Unsupported auth scheme | `challenge` | 401 | Applicable challenges, no Bearer error information |
 | Expired/revoked/invalid Bearer token | `challenge` | 401 | Bearer `error="invalid_token"` |
+| Valid token needs stronger or more recent user authentication | `challenge` | 401 | Bearer `error="insufficient_user_authentication"`, with applicable extension parameters |
 | Malformed Bearer transport/request | explicit Pages/Response | 400 | Bearer `error="invalid_request"`; not represented by `challenge` |
 | Authenticated but generally unauthorized | `forbid` | 403 | No challenge required |
 | Bearer token lacks required scope | `forbid` | 403 | Bearer `error="insufficient_scope"`, optional required `scope` |
+| Extension-defined Bearer failure | defining profile decides | profile-defined | Builder validates generic syntax; application owns extension semantics not known to PAGI-Tools |
 | Conceal protected resource | explicit `not_found()` | 404 | Application policy; not inferred by Auth |
 | Interactive login flow | explicit `redirect()` | chosen 3xx | Application policy; never selected from `Accept` |
 | Credential provider/database/network failure | throw/fail | 500 path | Operational error, not challenge or forbid |
@@ -923,8 +1037,8 @@ synchronously before any response event is emitted. Diagnostics must identify:
 Examples:
 
 ```text
-PAGI::Auth basic_challenge requires realm
-PAGI::Auth bearer_challenge error must be invalid_request, invalid_token, or insufficient_scope
+PAGI::Auth basic requires realm
+PAGI::Auth bearer extension error must use the token grammar
 PAGI::Auth challenge challenges[1] must be a PAGI::Auth::Challenge
 PAGI::Auth challenge cannot use Bearer insufficient_scope; use forbid
 PAGI::Auth forbid Bearer challenge requires error=insufficient_scope
@@ -949,8 +1063,10 @@ reinterpret those errors.
 
 Challenge builders own authentication field serialization. They reject CRLF,
 control characters, malformed token/token68 syntax, case-insensitive duplicate
-parameters, malformed Bearer fields, and invalid URI references before the
-field reaches `PAGI::Headers` or a server.
+parameters, malformed Bearer fields, and invalid error URIs before the field
+reaches `PAGI::Headers` or a server. Bearer extension parameters pass through
+the same checked name, value, quoting, and collision rules; the escape hatch
+is extensible but not raw.
 
 Each challenge becomes a separate field line. Auth never joins challenge
 values with commas because commas also separate auth parameters and combined
@@ -1011,7 +1127,7 @@ my $outcomes = PAGI::Auth::Outcomes->new(
 );
 
 return $outcomes->challenge(
-    challenges => [bearer_challenge(realm => 'api')],
+    challenges => [bearer(realm => 'api')],
 );
 ```
 
@@ -1019,10 +1135,10 @@ Auth does not copy Pages' renderer hooks or add parallel JSON/HTML callbacks.
 
 ### 16.2 Authentication-scheme extension
 
-A custom scheme uses `auth_challenge`:
+A custom scheme uses `custom_challenge`:
 
 ```perl
-my $value = auth_challenge(
+my $value = custom_challenge(
     scheme => 'CompanySignature',
     params => {
         realm     => 'billing',
@@ -1035,7 +1151,7 @@ return challenge(challenges => [$value]);
 
 If a scheme needs validation more specific than the generic token and quoted
 parameter grammar, its distribution should provide its own builder that
-ultimately delegates to `auth_challenge`. Phase 1 does not make
+ultimately delegates to `custom_challenge`. Phase 1 does not make
 `PAGI::Auth::Challenge` subclassing a public extension contract.
 
 ### 16.3 Protocol extension
@@ -1100,6 +1216,193 @@ That question remains open for the Phase 2 design review.
 
 ## 19. Documentation and examples
 
+### 19.1 Complete migrated flagship application
+
+The public API is not review-ready without the complete migrated flagship
+application. `examples/starlette-apples/app.pl` becomes the following program.
+Its `/apples/auth-required` route deliberately demonstrates only Phase 1's
+outcome construction: it always returns a challenge and does not pretend to
+parse or verify credentials. The existing CRUD behavior remains unchanged;
+Phase 2 will provide the identity/provider layer that can select this outcome
+from real authentication state.
+
+```perl
+#!/usr/bin/env perl
+use v5.40;
+
+use Future::AsyncAwait;
+use Types::Standard qw(Int);
+
+use AppleApp::Middleware qw(with_apples_api_header);
+use AppleApp::Model qw(apple_model);
+use PAGI::Auth qw(challenge bearer);
+use PAGI::Compose qw(compose);
+use PAGI::Pages qw(welcome not_found);
+use PAGI::Response qw(file_response json_response ndjson_response);
+use PAGI::Routing qw(route mount middleware);
+use PAGI::Routing::URL qw(url_for path_for);
+use PAGI::Utils qw(app_path);
+
+my $manager_file = app_path('public', 'index.html');
+
+sub startup($state, $scope) {
+    $state->{apples} = apple_model();
+    return;
+}
+
+sub apples($request) {
+    my $state = $request->state
+        or die 'starlette-apples requires Compose lifespan state';
+    return $state->get('apples');
+}
+
+async sub list_apples($request) {
+    my $apples = apples($request);
+
+    return json_response([
+        map {
+            +{
+                %$_,
+                url => url_for(
+                    $request,
+                    'read',
+                    { apple_id => $_->{id} },
+                ),
+            }
+        } @{$apples->all}
+    ]);
+}
+
+async sub export_apples($request) {
+    my $items = apples($request)->all;
+
+    return ndjson_response(async sub ($writer) {
+        for my $apple (@$items) {
+            last if $writer->is_disconnected;
+            await $writer->write_item($apple);
+        }
+    });
+}
+
+async sub read_apple($request) {
+    my $id = $request->path_param('apple_id');
+    my $apple = apples($request)->find($id);
+
+    return json_response($apple) if $apple;
+    return json_response(
+        { error => 'Apple not found' },
+        status => 404,
+    );
+}
+
+async sub create_apple($request) {
+    my $data = await $request->json;
+    my $apple = apples($request)->create($data);
+
+    return json_response(
+        $apple,
+        status  => 201,
+        headers => [
+            Location => path_for(
+                $request,
+                'read',
+                { apple_id => $apple->{id} },
+            ),
+        ],
+    );
+}
+
+async sub update_apple($request) {
+    my $id = $request->path_param('apple_id');
+    my $apples = apples($request);
+
+    return json_response(
+        { error => 'Apple not found' },
+        status => 404,
+    ) unless $apples->find($id);
+
+    my $data = await $request->json;
+    my $apple = $apples->update($id, $data);
+
+    return json_response(
+        { error => 'Apple not found' },
+        status => 404,
+    ) unless $apple;
+
+    return json_response($apple);
+}
+
+async sub delete_apple($request) {
+    my $id = $request->path_param('apple_id');
+    my $apple = apples($request)->delete($id);
+
+    return json_response(
+        { error => 'Apple not found' },
+        status => 404,
+    ) unless $apple;
+
+    return json_response({
+        success => \1,
+        deleted => $apple,
+    });
+}
+
+async sub authentication_required($request) {
+    return challenge(
+        challenges => [bearer(realm => 'apples')],
+        detail      => 'A valid access token is required.',
+    );
+}
+
+compose(
+    routes => [
+        route('/' => file_response($manager_file, inline => 1),
+            name => 'home',
+            desc => 'Apple manager SPA',
+        ),
+        route('/welcome' => welcome(),
+            name => 'welcome',
+            desc => 'PAGI welcome page',
+        ),
+        mount('/apples',
+            routes => [
+                route('/' => \&list_apples,
+                    methods => ['GET'], name => 'list'),
+                route('/' => \&create_apple,
+                    methods => ['POST'], name => 'create'),
+                route('/export' => \&export_apples,
+                    methods => ['GET'], name => 'export'),
+                route('/auth-required' => \&authentication_required,
+                    methods => ['GET'], name => 'auth_required'),
+                route('/{apple_id:&Int}' => \&read_apple,
+                    methods => ['GET'], name => 'read'),
+                route('/{apple_id:&Int}' => \&update_apple,
+                    methods => ['PUT'], name => 'update'),
+                route('/{apple_id:&Int}' => \&delete_apple,
+                    methods => ['DELETE'], name => 'delete'),
+            ],
+            name       => 'apples',
+            middleware => [middleware(\&with_apples_api_header)],
+        ),
+    ],
+    http_default => not_found(
+        detail => 'That page does not exist in the Apple demo.',
+    ),
+    middleware => [middleware('RequestId')],
+    lifespan => { startup => \&startup },
+    desc     => 'Starlette apples comparison application',
+);
+```
+
+The example README must identify `/apples/auth-required` as an outcome-only
+demonstration, show its separate `WWW-Authenticate: Bearer realm="apples"`
+field, and point forward to Phase 2 rather than teaching ad hoc credential
+parsing in a handler. Its Test Client coverage must exercise the route in
+HTML, text, and problem-JSON forms while retaining the existing CRUD,
+streaming, middleware, URL-generation, and lifespan coverage.
+
+### 19.2 Remaining documentation and examples
+
 Implementation updates must include:
 
 1. complete `PAGI::Auth` POD covering every exported factory, validation
@@ -1122,6 +1425,11 @@ Implementation updates must include:
 9. an example of configured custom Pages presentation; and
 10. `Changes` and any appropriate distribution metadata.
 
+The existing SSE authorization recipe near
+`PAGI::Tools::Cookbook`'s event-source examples currently declines with a bare
+401 text response and no `WWW-Authenticate` field. It must be migrated to the
+structured Auth outcome path and retained as an explicit regression example.
+
 Examples must say whether a snippet is an HTTP Request handler, WebSocket
 endpoint, SSE endpoint, or native three-argument PAGI app. They must not mix
 those invocation shapes without naming the adapter.
@@ -1141,9 +1449,16 @@ outcomes.
 - required, unknown, duplicate, reference-valued, control-character, DEL,
   non-ASCII, and malformed options;
 - Bearer deterministic parameter order;
-- all three Bearer error codes and every cross-option dependency;
+- all three RFC 6750 Bearer error codes, RFC 9470
+  `insufficient_user_authentication`, an unknown extension error, and every
+  cross-option dependency;
 - scope order, duplicate rejection, and grammar;
-- error-description and error-URI grammar;
+- error-description grammar and the deliberate absolute error-URI rule;
+- extension parameter name/value grammar, reserved-name collision,
+  case-insensitive duplicate rejection, deterministic ordering, and the
+  at-least-one-parameter rule;
+- RFC 9470 and RFC 9728 extension examples without bypassing the Bearer
+  builder;
 - generic bare scheme, parameter, and token68 forms;
 - params/token68 exclusivity and case-insensitive duplicate keys; and
 - immutable value accessors with no stringification overload.
@@ -1154,8 +1469,11 @@ outcomes.
 - separate `WWW-Authenticate` field lines in declaration order;
 - 401 always has at least one challenge;
 - 403 works without a challenge;
-- Bearer status/error matrix enforcement;
+- known Bearer status/error matrix enforcement and explicit non-inference for
+  unknown extension errors;
 - raw `WWW-Authenticate` rejection in `headers`;
+- Auth-owned 403 challenges passing through Pages' repeated raw-header path
+  without admitting caller-owned `WWW-Authenticate`;
 - configured Pages instance and subclass identity;
 - HTML, text, and RFC 9457 JSON negotiation;
 - fixed `as`, repeated Accept fields, total rejection, `Vary: Accept`, and
@@ -1173,6 +1491,9 @@ outcomes.
 - exactly one descriptor and policy call per materialization;
 - fresh concrete Responses from repeated calls;
 - no source mutation and correct HTTP metadata defaults;
+- WebSocket and SSE `headers()` called before `response_for`, proving that the
+  protocol-specific `pagi.request.headers` cache is omitted from the
+  synthesized HTTP view and raw repeated headers are rebuilt correctly;
 - no options accepted by `response_for`;
 - Future-returning descriptor/renderer rejection; and
 - `to_app` and `response_for` sharing one materialization path.
@@ -1197,6 +1518,12 @@ and existing authentication middleware must pass. The full distribution suite
 must pass once at the final campaign boundary. PAGI specification and
 PAGI::Server suites are not in scope because this feature consumes existing
 protocol contracts without changing them.
+
+The complete `examples/starlette-apples/app.pl` source in section 19.1 must be
+kept in lockstep with the installed example. Its existing Test Client suite
+must retain every prior behavior and add negotiated coverage for the
+`/apples/auth-required` outcome demonstration. The Cookbook SSE recipe must
+also prove that a declined 401 carries a structured `WWW-Authenticate` field.
 
 ## 21. Stop conditions
 
@@ -1277,6 +1604,26 @@ larger and more application-sensitive design space. Separate specs let Phase 1
 land as a stable dependency and keep Phase 2 from becoming another oversized
 compatibility campaign.
 
+### 22.9 Make WebSocket and SSE materialize deferred outcomes implicitly
+
+Rejected for Phase 1. Letting `deny` or `decline` call any object that happens
+to provide `response_for` would introduce a new duck-typed deferred-response
+protocol inside lifecycle-sensitive adapters. The explicit
+`$failure->response_for($ws)` or `$failure->response_for($sse)` step is slightly
+longer but makes materialization visible and leaves those adapters responsible
+only for validating and emitting concrete Responses. This can be revisited
+after real use demonstrates that the explicit boundary is recurring ceremony.
+
+### 22.10 Make `PAGI::Auth` both the configured outcome policy and exporter
+
+Rejected. Pages can combine those roles because its configured object and its
+factories describe the same presentation responsibility. Auth already has a
+second request-bound identity responsibility identified for Phase 2. Making
+`PAGI::Auth->new(...)` mean response presentation now would either overload
+that constructor later or force the ordinary identity facade into an
+unrelated name. `PAGI::Auth::Outcomes` keeps configuration explicit while the
+opt-in `PAGI::Auth` functions remain concise.
+
 ## 23. Acceptance summary
 
 The design is complete when an application can express the common outcomes
@@ -1284,11 +1631,11 @@ without repeating protocol detail:
 
 ```perl
 return challenge(
-    challenges => [bearer_challenge(realm => 'api')],
+    challenges => [bearer(realm => 'api')],
 );
 
 return forbid(
-    challenges => [bearer_challenge(
+    challenges => [bearer(
         error => 'insufficient_scope',
         scope => ['apples:write'],
     )],
