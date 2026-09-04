@@ -170,6 +170,18 @@ subtest 'published standalone recipes compile and construct their values' => sub
     );
 };
 
+subtest 'custom Request route helper recipe executes as published' => sub {
+    my $recipe = first_code_block(
+        $cookbook, '=head2 Custom Request Route Helpers');
+    perl_script_runs(
+        'custom Request route helper',
+        $recipe
+            . "use PAGI::Test::Client;\n"
+            . "my \$captured = PAGI::Test::Client->new(app => \$route->to_app)->get('/reports');\n"
+            . "die 'expected custom Request response' unless \$captured->status == 200 && \$captured->content eq 'Example Corp reports';\n",
+    );
+};
+
 subtest 'Streaming Response Extension NDJSON recipe executes as published' => sub {
     my $recipe = first_code_block($cookbook,
         '=head2 Streaming Response Extension: NDJSON');

@@ -112,6 +112,76 @@ Router's stock/custom 404 and built-in 405, but has no root ErrorHandler,
 response guard, or lifespan. Compile once for the application instance; do not
 call C<to_app> inside a request.
 
+=head2 Custom Request Route Helpers
+
+A project or higher-level framework can standardize a Request subclass without
+adding another routing engine. Build a named helper from C<request_response>
+and return an ordinary Route:
+
+  use v5.40;
+  use PAGI::Response qw(text_response);
+  use PAGI::Routing qw(route request_response);
+
+  package MyCompany::Request {
+      use parent 'PAGI::Request';
+
+      sub company_name($self) { return 'Example Corp' }
+  }
+
+  package MyCompany::Routing {
+      use Exporter qw(import);
+
+      our @EXPORT_OK = qw(my_special_route);
+
+      sub my_special_route($path, $handler, @options) {
+          return PAGI::Routing::route(
+              $path => PAGI::Routing::request_response(
+                  $handler,
+                  request_factory => sub ($scope, $receive) {
+                      return MyCompany::Request->new($scope, $receive);
+                  },
+              ),
+              @options,
+          );
+      }
+  }
+
+  package main;
+  MyCompany::Routing->import('my_special_route');
+
+  sub reports($request) {
+      return text_response($request->company_name . ' reports');
+  }
+
+  my $route = my_special_route('/reports' => \&reports,
+      methods => ['GET'],
+      name    => 'reports',
+  );
+
+In a normal distribution, put the two packages under F<lib/> and load the
+helper with Perl's usual compile-time import:
+
+  use MyCompany::Routing qw(my_special_route);
+
+  my $route = my_special_route('/reports' => \&reports,
+      methods => ['GET'],
+      name    => 'reports',
+  );
+
+C<my_special_route> creates no new node type. Its result is a normal immutable
+L<PAGI::Routing::Route>, so method selection, middleware, constraints, names,
+reverse routing, descriptions, and inspection continue to use the core
+Router. The request factory runs synchronously once for each matching request,
+receives the exact C<($scope, $receive)> pair, and must return a
+L<PAGI::Request> instance or subclass. It must not consume the request body or
+return a Future.
+
+Because the helper package calls C<route>, an unqualified inline provider such
+as C<{id:&ReportId}> resolves in C<MyCompany::Routing>. This is useful when the
+helper package owns the routing dialect. Use an explicit C<constraints> value
+or a qualified provider such as C<{id:&MyApp::Types::ReportId}> when the
+constraint belongs elsewhere.
+
 =head2 Inline, Router, and Application Mounts
 
 The C<routes> form constructs a complete child Router. Its names and reverse

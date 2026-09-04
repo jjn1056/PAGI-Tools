@@ -48,9 +48,15 @@ sub middleware {
 
 sub request_response {
     croak 'request_response handler must be a coderef'
-        unless @_ == 1 && ref($_[0]) eq 'CODE';
+        unless @_ && ref($_[0]) eq 'CODE';
+    my $handler = shift;
+    croak 'request_response option list must be key/value pairs'
+        if @_ % 2;
     require PAGI::Routing::RequestResponse;
-    return PAGI::Routing::RequestResponse->new(handler => $_[0]);
+    return PAGI::Routing::RequestResponse->new(
+        handler => $handler,
+        @_,
+    );
 }
 
 1;
@@ -236,8 +242,10 @@ the normal route middleware, matching, method, and HEAD boundaries. Package
 names and unblessed references are invalid.
 
 =item * C<< request_response($handler) >> remains the explicit adapter for
-placing a one-Request handler in Mount C<app>. Ordinary C<http_default> use
-does not need it: a bare CODE there already receives one Request. It never
+placing a one-Request handler in Mount C<app>. Its optional
+C<< request_factory => $coderef >> constructs a C<PAGI::Request> subclass for
+projects that publish custom Route helpers. Ordinary C<http_default> use does
+not need the adapter: a bare CODE there already receives one Request. It never
 infers coderef arity.
 
 =item * C<< websocket('/x' =E<gt> $code) >> and

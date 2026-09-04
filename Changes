@@ -53,6 +53,10 @@
     native default, and `request_response` only when adapting a one-Request
     handler into Mount `app`. This unreleased consistency correction preserves
     Router-owned NONE/404 versus PARTIAL/405 outcomes.
+  - NEW: `request_response` accepts an optional synchronous `request_factory`
+    that constructs a `PAGI::Request` subclass from the exact scope/receive
+    pair. Projects can use it to publish custom Route helpers while returning
+    ordinary immutable Route nodes.
 
   [Buffering middleware]
   - NEW: PAGI::Middleware::BufferedResponse, two helpers for the
