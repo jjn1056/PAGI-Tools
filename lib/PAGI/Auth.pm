@@ -37,6 +37,66 @@ sub basic {
     );
 }
 
+sub bearer {
+    my %opts = _options(
+        'Bearer',
+        [qw(realm scope error error_description error_uri params)],
+        @_,
+    );
+
+    _quoted_value('Bearer realm', $opts{realm}) if exists $opts{realm};
+    _scope('Bearer scope', $opts{scope}) if exists $opts{scope};
+
+    my %known_error = map { $_ => 1 } qw(
+        invalid_request invalid_token insufficient_scope
+        insufficient_user_authentication
+    );
+    if (exists $opts{error}) {
+        _token('Bearer extension error', $opts{error})
+            unless $known_error{$opts{error}};
+    }
+
+    croak 'Bearer error_description requires error'
+        if exists($opts{error_description}) && !exists($opts{error});
+    _bearer_printable('Bearer error_description', $opts{error_description})
+        if exists $opts{error_description};
+
+    croak 'Bearer error_uri requires error'
+        if exists($opts{error_uri}) && !exists($opts{error});
+    _absolute_bearer_uri('Bearer error_uri', $opts{error_uri})
+        if exists $opts{error_uri};
+
+    my @extensions;
+    if (exists $opts{params}) {
+        @extensions = _params('Bearer params', $opts{params});
+        my %core = map { $_ => 1 } qw(
+            realm scope error error_description error_uri
+        );
+        for my $name (keys %{ $opts{params} }) {
+            croak "Bearer params must not contain core name '$name'"
+                if $core{lc $name};
+        }
+    }
+
+    my @serialized;
+    push @serialized, 'realm=' . _quote($opts{realm}) if exists $opts{realm};
+    push @serialized, 'scope=' . _quote(join ' ', @{ $opts{scope} })
+        if exists $opts{scope};
+    push @serialized, 'error=' . _quote($opts{error}) if exists $opts{error};
+    push @serialized, 'error_description=' . _quote($opts{error_description})
+        if exists $opts{error_description};
+    push @serialized, 'error_uri=' . _quote($opts{error_uri})
+        if exists $opts{error_uri};
+    push @serialized, @extensions;
+
+    return PAGI::Auth::Challenge->_new(
+        scheme       => 'Bearer',
+        header_value => 'Bearer ' . join(', ', @serialized),
+        kind         => 'bearer',
+        error        => $opts{error},
+    );
+}
+
 sub custom_challenge {
     my %opts = _options('custom challenge', [qw(scheme params token68)], @_);
 
@@ -114,6 +174,38 @@ sub _quoted_value {
     _scalar($name, $value);
     croak "$name must contain only printable ASCII"
         unless $value =~ /\A[\x20-\x7E]*\z/;
+    return $value;
+}
+
+sub _scope {
+    my ($name, $value) = @_;
+    croak "$name must be an unblessed arrayref"
+        unless ref($value) eq 'ARRAY' && !blessed($value);
+    croak "$name must not be empty" unless @$value;
+
+    my %seen;
+    for my $token (@$value) {
+        _scalar("$name token", $token);
+        croak "$name tokens must contain only RFC scope characters"
+            unless $token =~ /\A[\x21\x23-\x5B\x5D-\x7E]+\z/;
+        croak "$name contains duplicate token '$token'" if $seen{$token}++;
+    }
+    return $value;
+}
+
+sub _bearer_printable {
+    my ($name, $value) = @_;
+    _scalar($name, $value);
+    croak "$name must contain only RFC printable characters"
+        unless $value =~ /\A[\x20-\x21\x23-\x5B\x5D-\x7E]+\z/;
+    return $value;
+}
+
+sub _absolute_bearer_uri {
+    my ($name, $value) = @_;
+    _bearer_printable($name, $value);
+    croak "$name must be an absolute URI"
+        unless $value =~ /\A[A-Za-z][A-Za-z0-9+.-]*:[\x21-\x7E]*\z/;
     return $value;
 }
 
