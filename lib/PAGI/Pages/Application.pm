@@ -8,6 +8,7 @@ use Future::AsyncAwait;
 use Scalar::Util qw(blessed);
 
 use PAGI::Utils qw(invoke_app);
+use PAGI::Utils::Scope ();
 
 sub new {
     my ($class, %args) = @_;
@@ -19,28 +20,52 @@ sub new {
             && blessed($policy) && $policy->isa('PAGI::Pages')
             && ref($descriptor_factory) eq 'CODE';
 
-    my $app = async sub {
-        my ($scope, $receive, $send) = @_;
-        croak 'PAGI::Pages application requires an unblessed HTTP scope hashref'
-            unless ref($scope) eq 'HASH' && !blessed($scope);
-        my $type = $scope->{type};
-        croak 'PAGI::Pages application scope type is required'
-            unless defined($type) && !ref($type) && length($type);
-        croak "PAGI::Pages application requires HTTP scope; received '$type'"
-            unless $type eq 'http';
+    return bless {
+        policy             => $policy,
+        descriptor_factory => $descriptor_factory,
+    }, $class;
+}
 
-        my $descriptor = $descriptor_factory->($scope);
-        my $response = $policy->_response_for($scope, $descriptor);
-        return await invoke_app($response, $scope, $receive, $send);
-    };
+sub response_for {
+    my ($self, @sources) = @_;
+    my $scope = $self->_validated_scope(@sources);
+    return $self->_materialize_scope($scope);
+}
 
-    my $self = bless \$app, $class;
-    Internals::SvREADONLY($$self, 1);
-    return $self;
+sub _validated_scope {
+    my ($self, @sources) = @_;
+    my $scope = PAGI::Utils::Scope::scope_from_source(
+        'PAGI::Pages::Application response_for', @sources,
+    );
+    my $type = $scope->{type};
+    croak 'PAGI::Pages::Application response_for scope type is required'
+        unless defined($type) && !ref($type) && length($type);
+    croak 'PAGI::Pages application requires HTTP scope when invoked via to_app; '
+        . 'PAGI::Pages::Application response_for does not accept a lifespan scope'
+        if $type eq 'lifespan';
+    return $scope;
+}
+
+sub _materialize_scope {
+    my ($self, $scope) = @_;
+    my $descriptor = $self->{descriptor_factory}->($scope);
+    croak 'PAGI::Pages descriptor factory must return an immediate value'
+        if blessed($descriptor) && $descriptor->isa('Future');
+    my $metadata = PAGI::Pages::_http_metadata_scope($scope);
+    return $self->{policy}->_response_for($metadata, $descriptor);
 }
 
 sub to_app {
-    return ${$_[0]};
+    my ($self) = @_;
+    return async sub {
+        my ($source, $receive, $send) = @_;
+        my $scope = $self->_validated_scope($source);
+        my $type = $scope->{type};
+        croak "PAGI::Pages application requires HTTP scope; received '$type'"
+            unless $type eq 'http';
+        my $response = $self->_materialize_scope($scope);
+        return await invoke_app($response, $scope, $receive, $send);
+    };
 }
 
 1;
@@ -74,6 +99,7 @@ lifespan mode may treat that exception as a decline; strict mode rejects it.
 
 =head2 to_app
 
-Returns the retained native HTTP application coderef.
+Returns a native HTTP application coderef that uses the same response
+materialization path as C<response_for>.
 
 =cut

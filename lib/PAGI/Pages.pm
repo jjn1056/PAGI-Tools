@@ -201,6 +201,7 @@ sub _http_metadata_scope {
         unless defined($metadata{method}) && !ref($metadata{method});
     $metadata{path} = '/'
         unless defined($metadata{path}) && !ref($metadata{path});
+    delete $metadata{'pagi.request.headers'};
     return \%metadata;
 }
 
