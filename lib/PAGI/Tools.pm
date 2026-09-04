@@ -27,7 +27,7 @@ For an ordinary HTTP application:
     use Future::AsyncAwait;
     use PAGI::Compose qw(compose);
     use PAGI::Response qw(json_response);
-    use PAGI::Routing qw(mount route router);
+    use PAGI::Routing qw(route);
 
     async sub home {
         my ($request) = @_;
@@ -39,17 +39,10 @@ For an ordinary HTTP application:
         return json_response({ id => $request->path_param('id') });
     }
 
-    my $people = router(
-        routes => [
-            route('/{id}' => \&user, name => 'show'),
-        ],
-        desc => 'People routes',
-    );
-
     my $app = compose(
         routes => [
-            route('/' => \&home, name => 'home'),
-            mount('/people', app => $people, name => 'people'),
+            route('/' => \&home),
+            route('/people/{id}' => \&user),
         ],
     );
 
@@ -118,6 +111,9 @@ C<request_response($handler)> only when adapting that handler into Mount
 C<app>. The wrapper is a narrow escape hatch for special protocol handling or
 an existing native PAGI coderef; ordinary Route handlers use their direct
 Request, WebSocket, or SSE object.
+C<request_response($handler, request_factory =E<gt> $factory)> also lets a
+project build an ordinary Route around its own L<PAGI::Request> subclass
+without adding a new router node type.
 
 For HTTP app objects that implement C<allowed_methods>, Route calls
 that capability once at construction and snapshots the normalized methods.

@@ -14,7 +14,7 @@ For an ordinary HTTP application:
     use Future::AsyncAwait;
     use PAGI::Compose qw(compose);
     use PAGI::Response qw(json_response);
-    use PAGI::Routing qw(mount route router);
+    use PAGI::Routing qw(route);
 
     async sub home {
         my ($request) = @_;
@@ -26,17 +26,10 @@ For an ordinary HTTP application:
         return json_response({ id => $request->path_param('id') });
     }
 
-    my $people = router(
-        routes => [
-            route('/{id}' => \&user, name => 'show'),
-        ],
-        desc => 'People routes',
-    );
-
     my $app = compose(
         routes => [
-            route('/' => \&home, name => 'home'),
-            mount('/people', app => $people, name => 'people'),
+            route('/' => \&home),
+            route('/people/{id}' => \&user),
         ],
     );
 
@@ -95,18 +88,19 @@ Callable meaning is determined by its position:
     Mount app object                     -> app object via to_app
 
 An **app object** is an instantiated object with a `to_app` method. Route
-accepts either a one-argument Request/WebSocket/SSE handler or an app object.
+therefore accepts either a one-argument Request/WebSocket/SSE handler or an app
+object.
 
 A native three-channel coderef used at a Route or `http_default` must be
-marked with ["as\_app\_object" in PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils#as_app_object).
-Mount `app` CODE is already a native application position. A bare
-`http_default` CODE receives one Request; use `request_response($handler)`
-only when adapting that handler into Mount `app`. The wrapper is a narrow
-escape hatch for special protocol handling or an existing native PAGI coderef;
-ordinary Route handlers use their direct Request, WebSocket, or SSE object.
-`request_response($handler, request_factory => $factory)` also lets a project
-build an ordinary Route around its own `PAGI::Request` subclass without adding
-a new router node type.
+marked with ["as\_app\_object" in PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils#as_app_object). Mount `app` CODE is already a native
+application position. A bare `http_default` CODE receives one Request; use
+`request_response($handler)` only when adapting that handler into Mount
+`app`. The wrapper is a narrow escape hatch for special protocol handling or
+an existing native PAGI coderef; ordinary Route handlers use their direct
+Request, WebSocket, or SSE object.
+`request_response($handler, request_factory => $factory)` also lets a
+project build an ordinary Route around its own [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) subclass
+without adding a new router node type.
 
 For HTTP app objects that implement `allowed_methods`, Route calls
 that capability once at construction and snapshots the normalized methods.
