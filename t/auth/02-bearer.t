@@ -3,6 +3,11 @@ use warnings;
 use Test2::V0;
 use PAGI::Auth qw(bearer);
 
+{
+    package T::StringifiesAsInvalidToken;
+    use overload '""' => sub { 'invalid_token' }, fallback => 1;
+}
+
 is bearer(realm => 'api')->header_value, 'Bearer realm="api"';
 
 my $value = bearer(
@@ -42,6 +47,7 @@ is bearer(
 
 subtest 'Bearer rejects malformed options and field values' => sub {
     my @cases = (
+        [ 'requires at least one parameter', sub { bearer() } ],
         [ 'odd options', sub { bearer(realm => 'api', 'scope') } ],
         [ 'unknown option', sub { bearer(realm => 'api', mode => 'strict') } ],
         [ 'reference option name', sub { bearer([] => 'api') } ],
@@ -57,6 +63,11 @@ subtest 'Bearer rejects malformed options and field values' => sub {
         [ 'scope token rejects a quote', sub { bearer(scope => ['read"write']) } ],
         [ 'scope token rejects a backslash', sub { bearer(scope => ['read\\write']) } ],
         [ 'scope rejects duplicate declarations', sub { bearer(scope => ['read', 'read']) } ],
+        [ 'error must be defined', sub { bearer(error => undef) } ],
+        [ 'error must be a scalar', sub { bearer(error => []) } ],
+        [ 'error rejects an overloaded object', sub {
+            bearer(error => bless({}, 'T::StringifiesAsInvalidToken'));
+        } ],
         [ 'error must be a token', sub { bearer(error => 'bad error') } ],
         [ 'error description requires an error', sub { bearer(error_description => 'explain') } ],
         [ 'error uri requires an error', sub { bearer(error_uri => 'https://example.test/error') } ],
@@ -98,7 +109,7 @@ subtest 'Bearer rejects malformed options and field values' => sub {
 
     for my $case (@cases) {
         like dies { $case->[1]->() },
-            qr/(?:realm|scope|error|description|uri|params|option|scalar|token|ASCII|printable|pairs|duplicate|absolute)/i,
+            qr/(?:realm|scope|error|description|uri|params|parameter|option|scalar|token|ASCII|printable|pairs|duplicate|absolute)/i,
             $case->[0];
     }
 };

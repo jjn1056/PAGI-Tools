@@ -47,14 +47,8 @@ sub bearer {
     _quoted_value('Bearer realm', $opts{realm}) if exists $opts{realm};
     _scope('Bearer scope', $opts{scope}) if exists $opts{scope};
 
-    my %known_error = map { $_ => 1 } qw(
-        invalid_request invalid_token insufficient_scope
-        insufficient_user_authentication
-    );
-    if (exists $opts{error}) {
-        _token('Bearer extension error', $opts{error})
-            unless $known_error{$opts{error}};
-    }
+    my $error = exists($opts{error})
+        ? _token('Bearer error', $opts{error}) : undef;
 
     croak 'Bearer error_description requires error'
         if exists($opts{error_description}) && !exists($opts{error});
@@ -78,11 +72,15 @@ sub bearer {
         }
     }
 
+    croak 'Bearer requires at least one parameter'
+        unless exists($opts{realm}) || exists($opts{scope})
+            || exists($opts{error}) || @extensions;
+
     my @serialized;
     push @serialized, 'realm=' . _quote($opts{realm}) if exists $opts{realm};
     push @serialized, 'scope=' . _quote(join ' ', @{ $opts{scope} })
         if exists $opts{scope};
-    push @serialized, 'error=' . _quote($opts{error}) if exists $opts{error};
+    push @serialized, 'error=' . _quote($error) if exists $opts{error};
     push @serialized, 'error_description=' . _quote($opts{error_description})
         if exists $opts{error_description};
     push @serialized, 'error_uri=' . _quote($opts{error_uri})
@@ -93,7 +91,7 @@ sub bearer {
         scheme       => 'Bearer',
         header_value => 'Bearer ' . join(', ', @serialized),
         kind         => 'bearer',
-        error        => $opts{error},
+        error        => $error,
     );
 }
 
