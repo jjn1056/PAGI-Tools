@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-04
 
-**Status:** Draft for user review; self-reviewed against the source tree and
-the cited standards/framework documentation
+**Status:** Approved for Phase 1 implementation; self-reviewed against the
+source tree and the cited standards/framework documentation
 
 **Source audit base:** `main` at
 `cd19251ce1e7cd9c734d4e092c77872d4e4c04c1`
@@ -1420,10 +1420,26 @@ Implementation updates must include:
    redirect, deliberate 404 concealment, WebSocket denial, and SSE decline;
 7. a concise Tutorial example that uses the high-level outcome without
    teaching credential validation prematurely;
-8. one runnable example that exercises HTTP, WebSocket, and SSE outcomes with
-   PAGI Test Client coverage;
+8. one runnable cookie-login example, covered through PAGI Test Client, that
+   demonstrates the explicit application-policy boundary around login,
+   redirect, session regeneration, logout, and protected HTML without
+   pretending that Phase 1 authenticates credentials;
 9. an example of configured custom Pages presentation; and
 10. `Changes` and any appropriate distribution metadata.
+
+The standalone example uses the existing Session facilities and a hardcoded
+demo credential. It is deliberately not an Auth outcome showcase: an
+interactive login redirect is application policy, while Phase 1 supplies the
+401/403 outcome vocabulary used by APIs and protocol handshakes. The example
+must label its hardcoded credential and default in-memory session store as
+single-process demonstration choices and name TLS, CSRF, throttling, secure
+cookies, and a shared production store as deployment requirements.
+
+A full runnable application combining real credential acquisition with HTTP,
+WebSocket, and SSE enforcement is deferred to Phase 2, where one normalized
+identity contract can make that example truthful. Phase 1 proves those three
+outcome boundaries through focused tests and Cookbook examples instead of
+shipping a throwaway authentication parser as architecture.
 
 The existing SSE authorization recipe near
 `PAGI::Tools::Cookbook`'s event-source examples currently declines with a bare
