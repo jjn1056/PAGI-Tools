@@ -295,11 +295,11 @@ subtest 'known Bearer errors enforce the complete outcome matrix' => sub {
 
     like dies {
         challenge(challenges => bearer(error => 'invalid_request'))
-    }, qr/invalid_request.*explicit.*400|invalid_request.*bad_request/i,
+    }, qr/\APAGI::Auth challenge cannot use Bearer invalid_request; use an explicit 400 at /,
         'invalid_request directs callers to an explicit 400';
     like dies {
         challenge(challenges => bearer(error => 'insufficient_scope'))
-    }, qr/insufficient_scope.*forbid/i,
+    }, qr/\APAGI::Auth challenge cannot use Bearer insufficient_scope; use forbid at /,
         'insufficient_scope directs callers to forbid';
 
     my $scope_events = run_http_app(forbid(
@@ -318,7 +318,7 @@ subtest 'known Bearer errors enforce the complete outcome matrix' => sub {
     );
     for my $case (@forbid_invalid) {
         like dies { forbid(challenges => $case->[1]) },
-            qr/Bearer.*(?:error|challenge).*not valid.*forbid|forbid.*Bearer/i,
+            qr/\APAGI::Auth forbid Bearer challenge requires error=insufficient_scope at /,
             "forbid rejects $case->[0]";
     }
 

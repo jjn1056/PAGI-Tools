@@ -120,9 +120,11 @@ sub _validate_bearer_outcome {
         return unless defined $error;
         return if $error eq 'invalid_token'
             || $error eq 'insufficient_user_authentication';
-        croak "Bearer error 'invalid_request' requires an explicit 400 outcome"
+        croak 'PAGI::Auth challenge cannot use Bearer invalid_request; '
+            . 'use an explicit 400'
             if $error eq 'invalid_request';
-        croak "Bearer error 'insufficient_scope' must use forbid"
+        croak 'PAGI::Auth challenge cannot use Bearer insufficient_scope; '
+            . 'use forbid'
             if $error eq 'insufficient_scope';
         return;
     }
@@ -133,9 +135,8 @@ sub _validate_bearer_outcome {
         && $error ne 'invalid_request'
         && $error ne 'insufficient_user_authentication';
 
-    croak 'Bearer challenge without an error is not valid for forbid'
-        unless defined $error;
-    croak "Bearer error '$error' is not valid for forbid";
+    croak 'PAGI::Auth forbid Bearer challenge requires '
+        . 'error=insufficient_scope';
 }
 
 sub _validate_caller_headers {
