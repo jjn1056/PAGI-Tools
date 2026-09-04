@@ -56,6 +56,11 @@ not use C<file> or C<fh>. See
 L<PAGI::Spec::Www/"WebSocket Denial Response (extension)"> and
 L<PAGI::Spec::Www/"Decline SSE - send event">.
 
+The same boundary applies when rejection begins as a L<PAGI::Auth> outcome:
+pass the concrete Response selected by C<response_for> to C<deny> or C<decline>.
+Substituting a File response remains invalid because PAGI denial supports the
+ordinary body form only.
+
 =cut
 
 our @EXPORT_OK = qw(file_response);

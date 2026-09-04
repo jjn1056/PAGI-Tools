@@ -1153,18 +1153,28 @@ C<on_connect> runs), C<start> arms it immediately after sending C<sse.start>
 
 =head2 decline
 
-    use PAGI::Response qw(text_response);
+    use Future::AsyncAwait;
+    use PAGI::Auth qw(challenge bearer);
 
-    await $sse->decline(text_response(
-        'Unauthorized',
-        status  => 401,
-        headers => ['www-authenticate' => 'Bearer'],
-    ));
+    async sub declined_stream {
+        my ($sse) = @_;
+        my $failure = challenge(
+            challenges => [bearer(realm => 'private')],
+            as         => 'json',
+        );
+        return await $sse->decline($failure->response_for($sse));
+    }
 
 Declines the request with a real HTTP response instead of starting the SSE
 stream -- an auth gate, a not-found, a rate limit, anything that should
 return an ordinary response rather than open an event stream. This is the
 SSE parity of L<PAGI::WebSocket/deny>.
+
+C<response_for> synchronously creates a fresh, request-local Response from the
+deferred L<PAGI::Auth> outcome. It sends nothing and owns no stream state.
+C<decline> validates the concrete Response capability and remains the sole
+owner of event mapping, send settlement, disconnect observation, deferred
+keepalive disposal, and terminal cleanup.
 
 The Response must advertise the inheritable C<body-events-v1> protocol
 capability. Its HTTP start/body events are mapped incrementally in order to

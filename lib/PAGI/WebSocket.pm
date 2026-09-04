@@ -1104,17 +1104,27 @@ See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
 =head2 deny
 
-    use PAGI::Response qw(text_response);
+    use Future::AsyncAwait;
+    use PAGI::Auth qw(challenge bearer);
 
-    await $ws->deny(text_response(
-        'Unauthorized',
-        status  => 401,
-        headers => ['www-authenticate' => 'Bearer'],
-    ));
+    async sub denied_socket {
+        my ($ws) = @_;
+        my $failure = challenge(
+            challenges => [bearer(realm => 'private')],
+            as         => 'json',
+        );
+        return await $ws->deny($failure->response_for($ws));
+    }
 
 Rejects the WebSocket handshake with one concrete L<PAGI::Response> instead of
 accepting it. Valid only before C<accept>. Marks the connection closed on
 return.
+
+C<response_for> synchronously creates a fresh, request-local Response from the
+deferred L<PAGI::Auth> outcome. It sends nothing and owns no connection state.
+C<deny> validates the concrete Response capability and remains the sole owner
+of event mapping, send settlement, disconnect observation, and terminal
+cleanup.
 
 When the server advertises the C<websocket.http.response> extension
 (C<supports_denial_response()> is true), the Response must advertise the

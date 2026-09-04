@@ -103,6 +103,32 @@ non-HTTP scope croaks before sending. That is an application failure, not a
 guaranteed denial wire response. Use L<PAGI::WebSocket/deny> or
 L<PAGI::SSE/decline> for controlled pre-start protocol rejection.
 
+A deferred L<PAGI::Auth> outcome stays an ordinary application value at an
+HTTP boundary. At a WebSocket or SSE boundary, materialize it explicitly and
+then hand the concrete Response to the protocol owner:
+
+    use Future::AsyncAwait;
+    use PAGI::Auth qw(challenge bearer);
+
+    my $failure = challenge(
+        challenges => [bearer(realm => 'private')],
+        as         => 'json',
+    );
+
+    async sub denied_socket {
+        my ($ws) = @_;
+        my $response = $failure->response_for($ws); # sends nothing
+        return await $ws->deny($response);
+    }
+
+C<response_for> creates only fresh local Response state; it performs no send or
+receive. L<PAGI::Utils/invoke_app> owns HTTP emission, while
+L<PAGI::WebSocket/deny> and L<PAGI::SSE/decline> validate
+C<body-events-v1> and own their mapped sends, start commitment, disconnect,
+backpressure, and cleanup. A mapped start send resolves when the server accepts
+and owns the response slot (or finishes discarding it after disconnect), not
+when the client receives bytes.
+
 =head1 METHODS
 
 =head2 new
