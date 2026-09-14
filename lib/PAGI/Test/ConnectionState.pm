@@ -12,9 +12,10 @@ PAGI::Test::ConnectionState - the pagi.connection object provided by PAGI::Test
 PAGI::Test is a test server, so it provides the per-request C<pagi.connection>
 object. It implements the full connection surface to which L<PAGI::Request>
 delegates
-(C<is_connected>, C<disconnect_reason>, C<disconnect_future>,
-C<on_disconnect>, C<on_complete>) plus C<response_started> and
-C<response_complete>, mirroring production C<PAGI::Server::ConnectionState>:
+(C<is_connected>, C<disconnect_reason>, C<disconnect_detail>,
+C<disconnect_future>, C<on_disconnect>, C<on_complete>, C<abort>) plus
+C<response_started> and C<response_complete>, mirroring production
+C<PAGI::Server::ConnectionState>:
 a clean completion ends the request and fires C<on_complete> but is not a
 disconnect; exactly one of C<on_complete> / C<on_disconnect> fires.
 C<disconnect_future> is modeled fully, not left always-C<undef> -- see
@@ -23,14 +24,32 @@ in that this test double can actually resolve it.
 
 =cut
 
+=head2 new
+
+    my $conn = PAGI::Test::ConnectionState->new(
+        on_abort => sub {
+            my ($conn, $detail) = @_;
+            ...
+        },
+    );
+
+Creates a connection state object. C<on_abort> is an optional test-client
+transport teardown hook; L</abort> invokes it at most once, after recording
+the abnormal outcome required by
+L<PAGI::Spec::Www/"Connection Object Interface">.
+
+=cut
+
 sub new {
-    my ($class) = @_;
+    my ($class, %args) = @_;
     return bless {
         _connected          => 1,
         _response_started   => 0,
         _response_complete  => 0,
         _completed          => 0,           # explicit terminal-state flag, like production
         _reason             => undef,
+        _detail             => undef,
+        _on_abort           => $args{on_abort},
         _disc_cbs           => [],
         _comp_cbs           => [],
         _disconnect_master  => undef,       # private lazy signal; never exposed directly
@@ -41,25 +60,26 @@ sub is_connected      { return $_[0]->{_connected} ? 1 : 0 }
 sub response_started  { return $_[0]->{_response_started} ? 1 : 0 }
 sub disconnect_reason { return $_[0]->{_reason} }
 
+=head2 disconnect_detail
+
+    my $detail = $conn->disconnect_detail;   # String or undef
+
+Returns the free-text diagnostic for an abnormal end, or C<undef>. The value
+is diagnostic only and is never a branching key. See
+L<PAGI::Spec::Www/"Connection Object Interface">.
+
+=cut
+
+sub disconnect_detail { return $_[0]->{_detail} }
+
 =head2 response_complete
 
     my $done = $conn->response_complete;   # 0 or 1, always defined
 
-True (C<1>) once this request's HTTP response has reached its legal terminal
-state (the terminal body chunk, or trailers if declared -- the same instant
-L<PAGI::Utils::_SendValidation/complete> reports true for the scope); false (C<0>)
-before that (streaming, or not yet started). Per L<PAGI::Spec::Www>'s
-"Connection State" section, C<undef> is not a per-request progress value --
-it signals a fixed B<capability>: "C<undef> if the server does not track
-completion" at all. This mock always tracks completion, so
-C<response_complete> is B<always defined> for the whole request, unlike
-production L<PAGI::Server::ConnectionState>, whose C<response_complete>
-always returns C<undef> because a real socket server cannot always pin down
-the exact instant the last byte reached the client -- production's C<undef>
-there is exactly that capability signal, correctly constant across the
-request. (Test C<defined> before relying on this against an arbitrary PAGI
-server, since not every server tracks it -- but against this mock, it will
-always be true.)
+True (C<1>) once this request reaches its clean completed terminal state;
+false (C<0>) while active and after an abnormal end. This mock always tracks
+completion and therefore always returns a defined boolean. See
+L<PAGI::Spec::Www/"Connection Object Interface">.
 
 =cut
 
@@ -126,10 +146,24 @@ sub _fire {
     return;
 }
 
+=head2 on_disconnect
+
+    $conn->on_disconnect(sub {
+        my ($reason, $detail) = @_;
+        ...
+    });
+
+Registers a callback for an abnormal end. It receives the stable reason token
+and the diagnostic L</disconnect_detail>, including when registered after the
+transition. A callback registered after clean completion does not run. See
+L<PAGI::Spec::Www/"Connection Object Interface">.
+
+=cut
+
 sub on_disconnect {
     my ($self, $cb) = @_;
     if (!$self->{_connected}) {                       # terminal: never store, fire only if abnormal
-        _fire($cb, $self->{_reason}) unless $self->{_completed};
+        _fire($cb, $self->{_reason}, $self->{_detail}) unless $self->{_completed};
         return;
     }
     push @{$self->{_disc_cbs}}, $cb;                   # still in flight: register
@@ -154,23 +188,50 @@ sub _mark_complete {
     return unless $self->{_connected};
     $self->{_connected} = 0;
     $self->{_completed} = 1;                 # clean completion (distinguishes from disconnect)
+    $self->{_response_complete} = 1;
     _fire($_) for @{$self->{_comp_cbs}};
     @{$self->{_comp_cbs}} = ();
     @{$self->{_disc_cbs}} = ();
+    delete $self->{_on_abort};
     return;
 }
 
 sub _mark_disconnected {
-    my ($self, $reason) = @_;
+    my ($self, $reason, $detail) = @_;
     return unless $self->{_connected};
-    $self->{_connected} = 0;
-    $self->{_reason}    = $reason // 'unknown';   # coerce like production
+    $self->{_connected}         = 0;
+    $self->{_reason}            = $reason // 'unknown';   # coerce like production
+    $self->{_detail}            = $detail;
+    $self->{_response_complete} = 0;
     if ($self->{_disconnect_master} && !$self->{_disconnect_master}->is_ready) {
         $self->{_disconnect_master}->done($self->{_reason});
     }
-    _fire($_, $self->{_reason}) for @{$self->{_disc_cbs}};
+    _fire($_, $self->{_reason}, $self->{_detail}) for @{$self->{_disc_cbs}};
     @{$self->{_disc_cbs}} = ();
     @{$self->{_comp_cbs}} = ();
+    delete $self->{_on_abort};
+    return;
+}
+
+=head2 abort
+
+    $conn->abort($detail);
+
+Ends this test scope abnormally with reason C<app_abort>, records C<$detail>
+as L</disconnect_detail>, and invokes the optional constructor C<on_abort>
+hook as C<< $hook->($conn, $detail) >>. It is synchronous, idempotent, and a
+no-op after either terminal outcome. See
+L<PAGI::Spec::Www/"Connection Object Interface">.
+
+=cut
+
+sub abort {
+    my ($self, $detail) = @_;
+    return unless $self->{_connected};
+
+    my $hook = delete $self->{_on_abort};
+    $self->_mark_disconnected('app_abort', $detail);
+    $hook->($self, $detail) if $hook;
     return;
 }
 

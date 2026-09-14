@@ -141,4 +141,47 @@ sub still_pending_after {
     is $c->response_complete, 0, 'still 0 after response_started alone (streaming, not complete)';
 }
 
+subtest 'disconnect_detail and two-argument on_disconnect' => sub {
+    my $cs = PAGI::Test::ConnectionState->new;
+    my @got;
+    $cs->on_disconnect(sub { push @got, [@_] });
+    is $cs->disconnect_detail, undef, 'undef while active';
+    $cs->_mark_disconnected('keepalive_timeout', 'no pong within 10s');
+    is $cs->disconnect_detail, 'no pong within 10s', 'accessor';
+    is_deeply \@got, [['keepalive_timeout', 'no pong within 10s']],
+        'callback arguments';
+    my @late;
+    $cs->on_disconnect(sub { push @late, [@_] });
+    is_deeply \@late, [['keepalive_timeout', 'no pong within 10s']],
+        'late registration';
+};
+
+subtest 'abort: hook once, app_abort with detail, idempotent, no-op after completion' => sub {
+    my @hook;
+    my $cs = PAGI::Test::ConnectionState->new(on_abort => sub { push @hook, [@_] });
+    my @cb;
+    $cs->on_disconnect(sub { push @cb, [@_] });
+    my $f = $cs->disconnect_future;
+    $cs->_mark_response_complete;
+    is $cs->response_complete, 1, 'legacy response completion marker remains supported';
+    $cs->abort('quota');
+    is scalar @hook, 1, 'hook once';
+    is $hook[0][1], 'quota', 'hook detail';
+    is $cs->disconnect_reason, 'app_abort', 'token';
+    is $cs->disconnect_detail, 'quota', 'detail';
+    is $cs->response_complete, 0, 'abnormal terminal is not response complete';
+    ok $f->is_ready, 'future resolved';
+    is_deeply \@cb, [['app_abort', 'quota']], 'callback';
+    $cs->abort('again');
+    is scalar @hook, 1, 'idempotent';
+
+    my $done = PAGI::Test::ConnectionState->new(on_abort => sub { push @hook, 'never' });
+    $done->_mark_complete;
+    $done->abort('late');
+    is scalar @hook, 1, 'no hook after completion';
+    is $done->response_complete, 1, 'completion preserved';
+    is $done->disconnect_reason, undef, 'clean outcome preserved';
+    is $done->disconnect_detail, undef, 'clean completion has no detail';
+};
+
 done_testing;
