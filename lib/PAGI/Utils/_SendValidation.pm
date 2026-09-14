@@ -353,6 +353,8 @@ sub _check_http_start_fields {
     return $self->_error(sequence => "websocket refusal status must be 300 or above")
         if defined $minimum_status
             && defined $event->{status}
+            && !ref $event->{status}
+            && $event->{status} =~ /\A[0-9]+\z/
             && $event->{status} < $minimum_status;
     return undef;
 }

@@ -183,10 +183,26 @@ subtest 'websocket: HTTP response events refuse the handshake before accept' => 
     like $sv->check({ type => 'websocket.accept' }), qr/refusal already complete/, 'nothing after completion';
 };
 
-subtest 'websocket: refusal status must be 300 or above and failure does not commit' => sub {
+subtest 'websocket: refusal status comparison is safe and failure does not commit' => sub {
+    for my $status ('not-a-status', []) {
+        my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
+        my @warnings;
+        my $err = 'check did not return';
+        my $died = dies {
+            local $SIG{__WARN__} = sub {
+                push @warnings, @_;
+                die "warning promoted to exception: $_[0]";
+            };
+            $err = $sv->check({ type => 'http.response.start', status => $status });
+        };
+        is $died, undef, 'malformed status does not die under a throwing warning handler';
+        is \@warnings, [], 'malformed status does not warn';
+        is $err, undef, 'sequencing validator leaves malformed status to shape validation';
+    }
+
     my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
-    my $err = $sv->check({ type => 'http.response.start', status => 200 });
-    ok $err, '2xx refusal is rejected';
+    my $err = $sv->check({ type => 'http.response.start', status => 299 });
+    ok $err, 'numeric status below 300 is rejected';
     is $err->category, 'sequence', 'status failure is a sequence error';
     is $sv->check({ type => 'http.response.start', status => 300 }), undef,
         'boundary status is accepted after the rejection';
