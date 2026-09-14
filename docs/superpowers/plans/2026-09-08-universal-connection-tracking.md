@@ -82,8 +82,8 @@ Rules (from John's CLAUDE.md): one row per task; the row is updated in the same 
 
 | task | status | commit | tests | reversed assertions (sign-off) / notes |
 |---|---|---|---|---|
-| C1 Test::ConnectionState: detail, abort | todo | | | |
-| C2 _SendValidation refusal states | todo | | | |
+| C1 Test::ConnectionState: detail, abort | done | 6cefc42 | RED missing disconnect_detail; GREEN + independent reviewer: `prove -l t/test/connection-state.t t/test/client-connection.t`, 2 files / 47 tests PASS; POD/diff checks pass | Review spec/quality PASS, no findings. Legacy _mark_response_complete caller retained until C3; _mark_complete now implies response_complete, abnormal end clears it. |
+| C2 _SendValidation refusal states | in progress | | | Current Www status boundary and shared HTTP body/trailer sequencing replace stale plan snippets. |
 | C3 Test Client: object everywhere, 0.6, HTTP refusals | todo | | | reverses t/test/client-headers-extensions.t:185 (D4/D11) |
 | C4 delete the bridge; deny/decline emit directly | todo | | | reverses t/websocket/denial-response.t 329,475,615,642 (D4/D5/D11) |
 | C5 handlers observe the object; Stream aborts on cancel | todo | | | |

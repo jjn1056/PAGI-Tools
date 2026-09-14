@@ -12,6 +12,8 @@
 
 **Status:** Proposed continuation, prepared September 14, 2026. No implementation or verification run has occurred in this planning pass. This document preserves the earlier plans and adds a current execution order, corrections, and acceptance gates; their task-level code remains reference material to check against current source.
 
+**Execution update (September 14):** User approved continuation. Branch `feature/universal-connection-tools` created from `2733ba2`; recovery documents preserved in `cff46ba`. Focused baseline: 14 files / 392 tests pass. Real-server SSE baseline reproduces 500 instead of 404; HTTP/2 support is available. Task evidence is recorded in the universal connection tracking ledger.
+
 ## Global constraints
 
 - Preserve the original Auth design and plans; do not rewrite their history. Record later rulings and task evidence in the campaign ledgers.
@@ -88,7 +90,7 @@ prove -lv t/auth/ t/pages/ t/response/03-stream.t t/websocket/denial-response.t 
 Checkout integration command:
 
 ```bash
-/bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && PERL5LIB=/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Server/lib prove -lv t/integration/sse-decline-end-to-end.t'
+/bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && export PERL5LIB="/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Server/lib:$PERL5LIB" && prove -lv t/integration/sse-decline-end-to-end.t'
 ```
 
 ### 2. Make validation and the test server model the real contract — C1, C2, C3
