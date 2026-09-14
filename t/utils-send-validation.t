@@ -153,13 +153,13 @@ subtest 'websocket: send before accept' => sub {
     is $sv->check({ type => 'websocket.accept' }), undef, 'legal event after rejection still works';
 };
 
-subtest 'websocket: close before accept is a legal denial and marks closed' => sub {
+subtest 'websocket: close before accept is a sequence error' => sub {
     my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
-    is $sv->check({ type => 'websocket.close' }), undef, 'close-before-accept is legal';
-    is $sv->closed, 1, 'closed true (denial)';
-    my $err = $sv->check({ type => 'websocket.accept' });
-    ok $err, 'accept after denial close is illegal';
-    is $err->category, 'sequence', 'category sequence';
+    my $err = $sv->check({ type => 'websocket.close', code => 1008 });
+    like $err, qr/before websocket\.accept/, 'close-before-accept is rejected';
+    is $err ? $err->category : undef, 'sequence', 'category sequence';
+    is $sv->check({ type => 'websocket.accept' }), undef,
+        'rejected close did not prevent a later accept';
 };
 
 subtest 'websocket: send after app-sent close' => sub {
@@ -171,63 +171,54 @@ subtest 'websocket: send after app-sent close' => sub {
     is $err->category, 'sequence', 'category sequence';
 };
 
-subtest 'websocket: http.response.* denial rejected without the extension declared' => sub {
+subtest 'websocket: HTTP response events refuse the handshake before accept' => sub {
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket', extensions => {});
+    is $sv->check({ type => 'http.response.start', status => 401, headers => [] }), undef, 'start accepted';
+    ok !$sv->complete, 'not complete after start';
+    is $sv->check({ type => 'http.response.body', body => 'more', more => 1 }), undef, 'more keeps refusing';
+    is $sv->check({ type => 'http.response.body', body => 'done' }), undef, 'terminal';
+    ok $sv->complete, 'complete after terminal';
+    ok !$sv->closed, 'a refusal is not websocket.close';
+    is $sv->finalize, undef, 'completed refusal finalizes';
+    like $sv->check({ type => 'websocket.accept' }), qr/refusal already complete/, 'nothing after completion';
+};
+
+subtest 'websocket: refusal status must be 300 or above and failure does not commit' => sub {
     my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket');
-    my $err = $sv->check({ type => 'websocket.http.response.start', status => 401 });
-    ok $err, 'undeclared extension denial start is illegal';
-    is $err->category, 'extension', 'category extension';
-    $err = $sv->check({ type => 'websocket.http.response.body', body => 'no' });
-    ok $err, 'undeclared extension denial body is illegal';
-    is $err->category, 'extension', 'category extension';
+    my $err = $sv->check({ type => 'http.response.start', status => 200 });
+    ok $err, '2xx refusal is rejected';
+    is $err->category, 'sequence', 'status failure is a sequence error';
+    is $sv->check({ type => 'http.response.start', status => 300 }), undef,
+        'boundary status is accepted after the rejection';
+    is $sv->check({ type => 'http.response.body', body => '' }), undef, 'refusal completes';
 };
 
-subtest 'websocket: http.response.* legal happy denial path when declared' => sub {
-    my $sv = PAGI::Utils::_SendValidation->new(
-        scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
-    );
-    ok $sv->finalize, 'finalize illegal before accept/close/denial';
-    is $sv->check({ type => 'websocket.http.response.start', status => 401 }), undef, 'denial start legal';
-    is $sv->complete, 0, 'not complete yet: denial started but no terminal body chunk';
-    is $sv->closed, 0, 'not closed: denial is not websocket.close';
-    is $sv->check({ type => 'websocket.http.response.body', body => 'more', more => 1 }), undef, 'non-terminal denial chunk legal';
-    is $sv->complete, 0, 'still not complete after more=>1 chunk';
-    is $sv->check({ type => 'websocket.http.response.body', body => 'no' }), undef, 'terminal denial chunk legal';
-    is $sv->complete, 1, 'complete once denial body is terminal';
-    is $sv->closed, 0, 'closed still false: a completed denial is not websocket.close';
-    is $sv->finalize, undef, 'finalize legal once denial complete';
-};
-
-subtest 'websocket: http.response.* denial after accept is illegal' => sub {
-    my $sv = PAGI::Utils::_SendValidation->new(
-        scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
-    );
-    $sv->check({ type => 'websocket.accept' });
-    my $err = $sv->check({ type => 'websocket.http.response.start', status => 401 });
-    ok $err, 'denial start after accept is illegal';
-    is $err->category, 'sequence', 'category sequence';
-};
-
-subtest 'websocket: non-body event after denial started is illegal' => sub {
-    my $sv = PAGI::Utils::_SendValidation->new(
-        scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
-    );
-    $sv->check({ type => 'websocket.http.response.start', status => 401 });
-    my $err = $sv->check({ type => 'websocket.send', text => 'nope' });
-    ok $err, 'send after denial start is illegal';
-    is $err->category, 'sequence', 'category sequence';
-};
-
-subtest 'websocket: any event after a completed denial is illegal' => sub {
-    my $sv = PAGI::Utils::_SendValidation->new(
-        scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
-    );
-    $sv->check({ type => 'websocket.http.response.start', status => 401 });
-    $sv->check({ type => 'websocket.http.response.body', body => 'no' });
-    for my $event ({ type => 'websocket.http.response.body', body => 'extra' },
-                    { type => 'websocket.accept' }, { type => 'websocket.close' }) {
+subtest 'websocket: HTTP events after accept fail without changing accepted state' => sub {
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'websocket', extensions => { fullflush => 1 });
+    is $sv->check({ type => 'websocket.accept' }), undef, 'accept';
+    for my $event (
+        { type => 'http.response.start', status => 401 },
+        { type => 'http.response.body', body => 'no' },
+        { type => 'http.response.trailers', headers => [] },
+        { type => 'http.fullflush' },
+    ) {
         my $err = $sv->check($event);
-        ok $err, "$event->{type} after completed denial is illegal";
+        like $err, qr/after websocket\.accept/, "$event->{type} rejected after accept";
         is $err->category, 'sequence', 'category sequence';
+    }
+    is $sv->check({ type => 'websocket.send', text => 'still accepted' }), undef,
+        'rejected HTTP events did not change accepted state';
+};
+
+subtest 'websocket: removed response event names are unknown types' => sub {
+    for my $type (qw(websocket.http.response.start websocket.http.response.body)) {
+        my $sv = PAGI::Utils::_SendValidation->new(
+            scope_type => 'websocket', extensions => { 'websocket.http.response' => {} },
+        );
+        my $err = $sv->check({ type => $type, status => 401, body => 'no' });
+        is $err ? $err->category : undef, 'unknown_type',
+            "$type is unknown even with the former extension";
+        is $sv->check({ type => 'websocket.accept' }), undef, 'unknown event did not change state';
     }
 };
 
@@ -245,12 +236,12 @@ subtest 'sse: legal happy stream path' => sub {
     is $sv->finalize, undef, 'finalize legal once closed';
 };
 
-subtest 'sse: legal happy decline path' => sub {
+subtest 'sse: HTTP response events refuse the stream before start, including status 200' => sub {
     my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
-    is $sv->check({ type => 'sse.http.response.start', status => 404 }), undef, 'decline start legal';
-    is $sv->check({ type => 'sse.http.response.body', body => 'x' }), undef, 'decline terminal body legal';
-    is $sv->complete, 1, 'complete after decline';
-    is $sv->finalize, undef, 'finalize legal once decline complete';
+    is $sv->check({ type => 'http.response.start', status => 200, headers => [] }), undef, 'start';
+    is $sv->check({ type => 'http.response.body', body => 'nope' }), undef, 'terminal';
+    ok $sv->complete, 'complete';
+    is $sv->finalize, undef, 'completed refusal finalizes';
 };
 
 subtest 'sse: sse.start twice' => sub {
@@ -261,24 +252,28 @@ subtest 'sse: sse.start twice' => sub {
     is $err->category, 'sequence', 'category sequence';
 };
 
-subtest 'sse: decline events after sse.start' => sub {
-    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
-    $sv->check({ type => 'sse.start' });
-    my $err = $sv->check({ type => 'sse.http.response.start', status => 404 });
-    ok $err, 'decline after sse.start is illegal';
-    is $err->category, 'sequence', 'category sequence';
+subtest 'sse: HTTP events after sse.start fail without changing streaming state' => sub {
+    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse', extensions => { fullflush => 1 });
+    is $sv->check({ type => 'sse.start', status => 200 }), undef, 'start stream';
+    for my $event (
+        { type => 'http.response.start', status => 404 },
+        { type => 'http.response.body', body => 'no' },
+        { type => 'http.response.trailers', headers => [] },
+    ) {
+        my $err = $sv->check($event);
+        like $err, qr/after sse\.start/, "$event->{type} rejected after sse.start";
+        is $err->category, 'sequence', 'category sequence';
+    }
+    is $sv->check({ type => 'sse.send', data => 'still streaming' }), undef,
+        'rejected HTTP events did not change streaming state';
 };
 
-subtest 'sse: stream events after a completed decline' => sub {
-    my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
-    $sv->check({ type => 'sse.http.response.start', status => 404 });
-    $sv->check({ type => 'sse.http.response.body', body => 'x' });
-    is $sv->complete, 1, 'decline complete';
-    for my $event ({ type => 'sse.start' }, { type => 'sse.send', data => 'x' },
-                    { type => 'sse.keepalive', interval => 1 }, { type => 'sse.close' }) {
-        my $err = $sv->check($event);
-        ok $err, "$event->{type} after completed decline is illegal";
-        is $err->category, 'sequence', 'category sequence';
+subtest 'sse: removed response event names are unknown types' => sub {
+    for my $type (qw(sse.http.response.start sse.http.response.body)) {
+        my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
+        my $err = $sv->check({ type => $type, status => 404, body => 'no' });
+        is $err ? $err->category : undef, 'unknown_type', "$type is unknown";
+        is $sv->check({ type => 'sse.start' }), undef, 'unknown event did not change state';
     }
 };
 
@@ -289,6 +284,78 @@ subtest 'sse: no-advance-on-error' => sub {
     ok $err, 'duplicate rejected';
     is $sv->check({ type => 'sse.send', data => 'ok' }), undef, 'legal event after rejection still works';
 };
+
+for my $case (
+    { scope => 'websocket', status => 401 },
+    { scope => 'sse',       status => 200 },
+) {
+    my $scope  = $case->{scope};
+    my $status = $case->{status};
+
+    subtest "$scope refusal: file and fh bodies are terminal" => sub {
+        for my $body ({ file => '/tmp/refusal-body' }, { fh => 'opaque-handle' }) {
+            my $sv = PAGI::Utils::_SendValidation->new(scope_type => $scope);
+            is $sv->check({ type => 'http.response.start', status => $status }), undef, 'start';
+            is $sv->check({ type => 'http.response.body', %$body, more => 1 }), undef,
+                (exists $body->{file} ? 'file' : 'fh') . ' body accepted';
+            ok $sv->complete, 'file/fh overrides more and completes the refusal';
+        }
+    };
+
+    subtest "$scope refusal: declared trailers are required after the terminal body" => sub {
+        my $sv = PAGI::Utils::_SendValidation->new(scope_type => $scope);
+        is $sv->check({ type => 'http.response.start', status => $status, trailers => 1 }), undef,
+            'start declaring trailers';
+        my $protocol_type = $scope eq 'websocket' ? 'websocket.accept' : 'sse.start';
+        my $err = $sv->check({ type => $protocol_type });
+        like $err, qr/after http\.response\.start/, "$protocol_type rejected once refusal started";
+        $err = $sv->check({ type => 'http.response.trailers', headers => [] });
+        like $err, qr/body is not complete/, 'early trailers rejected';
+        is $err->category, 'sequence', 'category sequence';
+        is $sv->check({ type => 'http.response.body', body => 'done' }), undef,
+            'terminal body accepted after rejected early trailers';
+        ok !$sv->complete, 'body alone does not complete a response that declared trailers';
+        like $sv->finalize, qr/awaiting declared http\.response\.trailers/,
+            'finalize reports the missing declared trailers';
+        $err = $sv->check({ type => 'http.response.body', body => 'extra' });
+        like $err, qr/body already terminal/, 'body after terminal is rejected while awaiting trailers';
+        is $sv->check({ type => 'http.response.trailers', headers => [] }), undef,
+            'declared trailers complete the refusal after rejected extra body';
+        ok $sv->complete, 'complete after trailers';
+    };
+
+    subtest "$scope refusal: undeclared trailers and duplicate start do not advance state" => sub {
+        my $sv = PAGI::Utils::_SendValidation->new(scope_type => $scope);
+        my $err = $sv->check({ type => 'http.response.trailers', headers => [] });
+        like $err, qr/before http\.response\.start/, 'trailers before start rejected';
+        is $sv->check({ type => 'http.response.start', status => $status }), undef,
+            'start remains legal after rejected trailers';
+        $err = $sv->check({ type => 'http.response.start', status => $status });
+        like $err, qr/duplicate http\.response\.start/, 'duplicate start rejected';
+        $err = $sv->check({ type => 'http.response.trailers', headers => [] });
+        like $err, qr/trailers were not declared/, 'undeclared trailers rejected';
+        is $sv->check({ type => 'http.response.body', body => 'done' }), undef,
+            'terminal body remains legal after both rejected events';
+        ok $sv->complete, 'refusal completes normally';
+    };
+
+    subtest "$scope refusal: http.fullflush follows the HTTP extension rule" => sub {
+        my $without = PAGI::Utils::_SendValidation->new(scope_type => $scope);
+        is $without->check({ type => 'http.response.start', status => $status }), undef, 'start without extension';
+        my $err = $without->check({ type => 'http.fullflush' });
+        is $err->category, 'extension', 'fullflush without extension rejected';
+        is $without->check({ type => 'http.response.body', body => 'done' }), undef,
+            'extension error did not change refusal state';
+
+        my $with = PAGI::Utils::_SendValidation->new(
+            scope_type => $scope, extensions => { fullflush => 1 },
+        );
+        is $with->check({ type => 'http.response.start', status => $status }), undef, 'start with extension';
+        is $with->check({ type => 'http.fullflush' }), undef, 'declared fullflush accepted while refusing';
+        is $with->check({ type => 'http.response.body', body => 'done' }), undef,
+            'fullflush did not change refusal state';
+    };
+}
 
 # ==========================================================================
 # Lifespan
@@ -420,16 +487,16 @@ subtest 'http.fullflush legal in awaiting_trailers state' => sub {
     is $sv->check({ type => 'http.response.trailers', headers => [] }), undef, 'trailers still legal afterward';
 };
 
-subtest 'sse.comment legal while streaming, rejected after a completed decline' => sub {
+subtest 'sse.comment legal while streaming, rejected after a completed refusal' => sub {
     my $sv = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
     $sv->check({ type => 'sse.start' });
     is $sv->check({ type => 'sse.comment', comment => 'hi' }), undef, 'sse.comment legal while streaming';
 
     my $sv2 = PAGI::Utils::_SendValidation->new(scope_type => 'sse');
-    $sv2->check({ type => 'sse.http.response.start', status => 404 });
-    $sv2->check({ type => 'sse.http.response.body', body => 'x' });
+    $sv2->check({ type => 'http.response.start', status => 404 });
+    $sv2->check({ type => 'http.response.body', body => 'x' });
     my $err = $sv2->check({ type => 'sse.comment', comment => 'too late' });
-    ok $err, 'sse.comment after a completed decline is illegal';
+    ok $err, 'sse.comment after a completed refusal is illegal';
     is $err->category, 'sequence', 'category sequence';
 };
 

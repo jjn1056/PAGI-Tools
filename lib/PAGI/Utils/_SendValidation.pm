@@ -91,6 +91,8 @@ sub new {
         extensions         => $args{extensions} || {},
         state              => $INITIAL_STATE{$args{scope_type}}, # undef for lifespan
         trailers_declared  => 0,
+        refusal_http_state => 'initial',
+        refusal_trailers_declared => 0,
         phase              => 'startup', # lifespan only
         result_sent        => 0,         # lifespan only; reset by enter_phase
     }, $class;
@@ -169,17 +171,18 @@ distinct from its phase).
 
 True once the scope has reached the fully-sent terminal state for its
 protocol: HTTP -- body terminal and any declared trailers sent; WebSocket --
-C<websocket.close> sent (including a close-before-accept denial); SSE --
-C<sse.close> sent, or a decline's terminal body chunk sent. Always false for
+C<websocket.close> sent after acceptance, or an HTTP refusal completed; SSE --
+C<sse.close> sent, or an HTTP refusal completed. Always false for
 C<scope_type =E<gt> 'lifespan'>.
 
 =head2 closed
 
     my $bool = $sv->closed;
 
-True for WebSocket and SSE scopes once C<close>/decline has reached their
-protocol's C<closed> state (WebSocket: C<websocket.close> sent; SSE:
-C<sse.close> sent). Always false for HTTP and lifespan scopes, which have no
+True for WebSocket and SSE scopes once C<close> has reached their protocol's
+C<closed> state (WebSocket: C<websocket.close> sent; SSE: C<sse.close> sent).
+An HTTP refusal completes its scope without setting C<closed>. Always false
+for HTTP and lifespan scopes, which have no
 "closed" concept distinct from C<complete>.
 
 =head2 trailers_declared
@@ -221,52 +224,44 @@ Legal terminal state for C<finalize>: C<complete>.
 
 =head2 websocket
 
-States: C<connecting>, C<accepted>, C<denial>, C<denial_complete>,
+States: C<connecting>, C<accepted>, C<refusing>, C<refusal_complete>,
 C<closed>. Starting state is C<connecting>.
 
-Illegal: C<websocket.send>/C<websocket.keepalive> before
-C<websocket.accept>; any event once C<websocket.close> has been sent
+Illegal: C<websocket.send>, C<websocket.keepalive>, or C<websocket.close>
+before C<websocket.accept>; any event once C<websocket.close> has been sent
 (including a second close -- close is not idempotent here); a second
-C<websocket.accept> once already accepted; C<websocket.http.response.start>
-or C<websocket.http.response.body> when the C<websocket.http.response>
-extension is not in the scope's C<extensions>; any non-body event once a
-denial has started (both while still C<denial> and once
-C<denial_complete>); C<websocket.http.response.start> once already
-C<accepted>.
+C<websocket.accept> once already accepted; an HTTP response event after
+C<websocket.accept>; any WebSocket event once an HTTP refusal has started;
+or any event once the refusal is complete. The removed
+C<websocket.http.response.*> names are unrecognized event types.
 
-Legal: C<websocket.close> before C<websocket.accept> is a portable denial,
-not an error -- it moves straight to C<closed>. When the
-C<websocket.http.response> extension is declared,
-C<websocket.http.response.start> before C<websocket.accept> is an
-extension denial -- it moves to C<denial>, mirroring the SSE decline
-mechanism; C<websocket.http.response.body> from C<denial> keeps C<denial>
-while C<more> is true, and advances to C<denial_complete> on its terminal
-chunk.
+Legal: before C<websocket.accept>, C<http.response.start> with a status of
+C<300> or above starts a refusal without an extension gate. Its body,
+trailers, and C<http.fullflush> follow the HTTP rules above, including
+file/fh terminal bodies and the requirement to send declared trailers.
 
-Legal terminal state for C<finalize>: C<closed> or C<denial_complete>. A
-completed extension denial (C<denial_complete>) reports C<complete> true
-but C<closed> false -- it is not a C<websocket.close>, matching how SSE's
-C<decline_complete> state behaves.
+Legal terminal state for C<finalize>: C<closed> or C<refusal_complete>. A
+completed refusal reports C<complete> true but C<closed> false because it is
+not a C<websocket.close>.
 
 =head2 sse
 
-States: C<initial>, C<streaming>, C<declining>, C<decline_complete>,
+States: C<initial>, C<streaming>, C<refusing>, C<refusal_complete>,
 C<closed>. Starting state is C<initial>.
 
 Illegal: any stream event (C<sse.start>, C<sse.send>, C<sse.comment>,
-C<sse.keepalive>, C<sse.close>) once a decline has started -- both while
-still C<declining> (before its terminal body chunk) and once
-C<decline_complete> -- and likewise any decline event
-(C<sse.http.response.start>, C<sse.http.response.body>) once a decline has
-reached its terminal body chunk; a duplicate C<sse.start>; a decline
-(C<sse.http.response.start>) after C<sse.start>; C<http.fullflush> when
-C<fullflush> is not in C<extensions>, or when sent outside the
-C<streaming> state.
+C<sse.keepalive>, C<sse.close>) once a refusal has started; any HTTP response
+event after C<sse.start>; any event once a refusal is complete; a duplicate
+C<sse.start>; or C<http.fullflush> without the C<fullflush> extension. The
+removed C<sse.http.response.*> names are unrecognized event types.
 
-Legal: C<sse.close> is idempotent once C<closed>. C<http.fullflush>, when
-declared, is legal only while C<streaming> and never changes the state.
+Legal: before C<sse.start>, C<http.response.start> starts a refusal and may
+carry any status, including C<200>. Its body, trailers, and
+C<http.fullflush> follow the HTTP rules above. C<sse.close> is idempotent
+once C<closed>. C<http.fullflush>, when declared, is legal while streaming or
+refusing and never changes the state.
 
-Legal terminal state for C<finalize>: C<closed> or C<decline_complete>.
+Legal terminal state for C<finalize>: C<closed> or C<refusal_complete>.
 
 =head2 lifespan
 
@@ -298,9 +293,9 @@ sub started {
 sub complete {
     my ($self) = @_;
     my $type = $self->{scope_type};
-    return $self->{state} eq 'complete' ? 1 : 0                                  if $type eq 'http';
-    return ($self->{state} eq 'closed' || $self->{state} eq 'denial_complete') ? 1 : 0  if $type eq 'websocket';
-    return ($self->{state} eq 'closed' || $self->{state} eq 'decline_complete') ? 1 : 0 if $type eq 'sse';
+    return $self->{state} eq 'complete' ? 1 : 0 if $type eq 'http';
+    return ($self->{state} eq 'closed' || $self->{state} eq 'refusal_complete') ? 1 : 0
+        if $type eq 'websocket' || $type eq 'sse';
     return 0;
 }
 
@@ -352,6 +347,64 @@ sub _http_body_is_terminal {
     return !($event->{more} // 0);
 }
 
+sub _check_http_start_fields {
+    my ($self, $event, $minimum_status) = @_;
+
+    return $self->_error(sequence => "websocket refusal status must be 300 or above")
+        if defined $minimum_status
+            && defined $event->{status}
+            && $event->{status} < $minimum_status;
+    return undef;
+}
+
+sub _check_http_response_event {
+    my ($self, $event, $state_key, $trailers_key, $minimum_status) = @_;
+    my $type  = $event->{type};
+    my $state = $self->{$state_key};
+
+    if ($type eq 'http.fullflush') {
+        return $self->_error(extension => "Extension not enabled: fullflush")
+            unless exists $self->{extensions}{fullflush};
+        return $self->_error(sequence => "cannot send http.fullflush before http.response.start")
+            if $state eq 'initial';
+        return $self->_error(sequence => "cannot send http.fullflush: response already complete")
+            if $state eq 'complete';
+        return undef;
+    }
+
+    return $self->_error(sequence => "cannot send '$type': response already complete")
+        if $state eq 'complete';
+
+    if ($type eq 'http.response.start') {
+        return $self->_error(sequence => 'cannot send duplicate http.response.start')
+            unless $state eq 'initial';
+        my $err = $self->_check_http_start_fields($event, $minimum_status);
+        return $err if $err;
+        my $declares_trailers = $event->{trailers} ? 1 : 0;
+        $self->{$state_key}    = $declares_trailers ? 'started_t' : 'started';
+        $self->{$trailers_key} = $declares_trailers;
+        return undef;
+    }
+
+    if ($type eq 'http.response.body') {
+        return $self->_error(sequence => 'cannot send http.response.body before http.response.start')
+            if $state eq 'initial';
+        return $self->_error(sequence => 'cannot send http.response.body: body already terminal, awaiting trailers')
+            if $state eq 'awaiting_trailers';
+        if (_http_body_is_terminal($event)) {
+            $self->{$state_key} = ($state eq 'started_t') ? 'awaiting_trailers' : 'complete';
+        }
+        return undef;
+    }
+
+    return $self->_error(sequence => 'cannot send http.response.trailers before http.response.start')
+        if $state eq 'initial';
+    return $self->_error(sequence => 'cannot send http.response.trailers: trailers were not declared or body is not complete')
+        unless $state eq 'awaiting_trailers';
+    $self->{$state_key} = 'complete';
+    return undef;
+}
+
 sub _check_http {
     my ($self, $event) = @_;
     my $type = defined $event->{type} ? $event->{type} : '';
@@ -359,49 +412,15 @@ sub _check_http {
     return $self->_error(malformed => "http send event missing 'type' field")
         if $type eq '';
 
-    if ($type eq 'http.fullflush') {
-        return $self->_error(extension => "Extension not enabled: fullflush")
-            unless exists $self->{extensions}{fullflush};
-        return $self->_error(sequence => "cannot send http.fullflush before http.response.start")
-            if $self->{state} eq 'initial';
-        return $self->_error(sequence => "cannot send http.fullflush: response already complete")
-            if $self->{state} eq 'complete';
-        return undef; # legal, no state change
-    }
-
     return $self->_error(unknown_type => "unrecognized event type '$type' for http protocol")
         unless $type eq 'http.response.start'
             || $type eq 'http.response.body'
-            || $type eq 'http.response.trailers';
+            || $type eq 'http.response.trailers'
+            || $type eq 'http.fullflush';
 
-    return $self->_error(sequence => "cannot send '$type': response already complete")
-        if $self->{state} eq 'complete';
-
-    if ($type eq 'http.response.start') {
-        return $self->_error(sequence => 'cannot send duplicate http.response.start')
-            unless $self->{state} eq 'initial';
-        my $declares_trailers = $event->{trailers} ? 1 : 0;
-        $self->{state}             = $declares_trailers ? 'started_t' : 'started';
-        $self->{trailers_declared} = $declares_trailers;
-        return undef;
-    }
-
-    if ($type eq 'http.response.body') {
-        return $self->_error(sequence => 'cannot send http.response.body before http.response.start')
-            if $self->{state} eq 'initial';
-        return $self->_error(sequence => 'cannot send http.response.body: body already terminal, awaiting trailers')
-            if $self->{state} eq 'awaiting_trailers';
-        if (_http_body_is_terminal($event)) {
-            $self->{state} = ($self->{state} eq 'started_t') ? 'awaiting_trailers' : 'complete';
-        }
-        return undef;
-    }
-
-    # $type eq 'http.response.trailers'
-    return $self->_error(sequence => 'cannot send http.response.trailers: trailers were not declared or body is not complete')
-        unless $self->{state} eq 'awaiting_trailers';
-    $self->{state} = 'complete';
-    return undef;
+    return $self->_check_http_response_event(
+        $event, 'state', 'trailers_declared', undef,
+    );
 }
 
 sub _finalize_http {
@@ -427,55 +446,69 @@ sub _check_websocket {
     return $self->_error(malformed => "websocket send event missing 'type' field")
         if $type eq '';
 
-    if ($type eq 'websocket.http.response.start' || $type eq 'websocket.http.response.body') {
-        return $self->_error(extension => "Extension not enabled: websocket.http.response")
-            unless exists $self->{extensions}{'websocket.http.response'};
-    }
-    else {
-        return $self->_error(unknown_type => "unrecognized event type '$type' for websocket protocol")
-            unless $type eq 'websocket.accept' || $type eq 'websocket.send'
-                || $type eq 'websocket.close'  || $type eq 'websocket.keepalive';
-    }
+    my $is_http = $type eq 'http.response.start'
+        || $type eq 'http.response.body'
+        || $type eq 'http.response.trailers'
+        || $type eq 'http.fullflush';
+    return $self->_error(unknown_type => "unrecognized event type '$type' for websocket protocol")
+        unless $is_http || $type eq 'websocket.accept' || $type eq 'websocket.send'
+            || $type eq 'websocket.close' || $type eq 'websocket.keepalive';
 
     if ($self->{state} eq 'closed') {
         return $self->_error(sequence => "cannot send '$type' after websocket.close");
     }
-    if ($self->{state} eq 'denial_complete') {
-        return $self->_error(sequence => "cannot send '$type': denial response already complete");
+    if ($self->{state} eq 'refusal_complete') {
+        return $self->_error(sequence => "cannot send '$type': refusal already complete");
     }
 
     if ($self->{state} eq 'connecting') {
         if ($type eq 'websocket.accept') { $self->{state} = 'accepted'; return undef; }
-        if ($type eq 'websocket.close')  { $self->{state} = 'closed';   return undef; } # portable denial
-        if ($type eq 'websocket.http.response.start') { $self->{state} = 'denial'; return undef; } # extension denial
+        if ($is_http) {
+            my $err = $self->_check_http_response_event(
+                $event, 'refusal_http_state', 'refusal_trailers_declared', 300,
+            );
+            return $err if $err;
+            $self->{state} = $self->{refusal_http_state} eq 'complete'
+                ? 'refusal_complete' : 'refusing';
+            return undef;
+        }
         return $self->_error(sequence => "cannot send '$type' before websocket.accept");
     }
 
-    if ($self->{state} eq 'denial') {
-        if ($type eq 'websocket.http.response.body') {
-            my $more = $event->{more} // 0;
-            $self->{state} = $more ? 'denial' : 'denial_complete';
+    if ($self->{state} eq 'refusing') {
+        if ($is_http) {
+            my $err = $self->_check_http_response_event(
+                $event, 'refusal_http_state', 'refusal_trailers_declared', 300,
+            );
+            return $err if $err;
+            $self->{state} = 'refusal_complete'
+                if $self->{refusal_http_state} eq 'complete';
             return undef;
         }
-        return $self->_error(sequence => "cannot send '$type' after websocket.http.response.start");
+        return $self->_error(sequence => "cannot send '$type' after http.response.start");
     }
 
     # $self->{state} eq 'accepted'
+    return $self->_error(sequence => "cannot send '$type' after websocket.accept")
+        if $is_http;
     return undef if $type eq 'websocket.send' || $type eq 'websocket.keepalive';
     if ($type eq 'websocket.close') { $self->{state} = 'closed'; return undef; }
     return $self->_error(sequence => 'cannot send duplicate websocket.accept')
         if $type eq 'websocket.accept';
-    return $self->_error(sequence => "cannot send '$type' after websocket.accept"); # http.response.* after accept
+    return $self->_error(sequence => "cannot send '$type' after websocket.accept");
 }
 
 sub _finalize_websocket {
     my ($self) = @_;
 
-    return undef if $self->{state} eq 'closed' || $self->{state} eq 'denial_complete';
-    return $self->_error(incomplete => 'websocket connection awaiting websocket.accept or websocket.close')
+    return undef if $self->{state} eq 'closed' || $self->{state} eq 'refusal_complete';
+    return $self->_error(incomplete => 'websocket connection awaiting websocket.accept or an HTTP refusal')
         if $self->{state} eq 'connecting';
-    return $self->_error(incomplete => 'websocket denial awaiting a terminal body chunk')
-        if $self->{state} eq 'denial';
+    if ($self->{state} eq 'refusing') {
+        return $self->_error(incomplete => 'websocket refusal awaiting declared http.response.trailers')
+            if $self->{refusal_http_state} eq 'awaiting_trailers';
+        return $self->_error(incomplete => 'websocket refusal awaiting a terminal body chunk');
+    }
     return $self->_error(incomplete => 'websocket connection awaiting websocket.close'); # accepted
 }
 
@@ -485,7 +518,7 @@ sub _finalize_websocket {
 
 my %SSE_RECOGNIZED = map { $_ => 1 } qw(
     sse.start sse.send sse.comment sse.keepalive sse.close
-    sse.http.response.start sse.http.response.body
+    http.response.start http.response.body http.response.trailers http.fullflush
 );
 
 sub _check_sse {
@@ -495,58 +528,75 @@ sub _check_sse {
     return $self->_error(malformed => "sse send event missing 'type' field")
         if $type eq '';
 
-    if ($type eq 'http.fullflush') {
-        return $self->_error(extension => 'Extension not enabled: fullflush')
-            unless exists $self->{extensions}{fullflush};
-        return undef if $self->{state} eq 'streaming'; # legal, no state change
-        return $self->_error(sequence => "cannot send http.fullflush in sse state '$self->{state}'");
-    }
-
     return $self->_error(unknown_type => "unrecognized event type '$type' for sse protocol")
         unless $SSE_RECOGNIZED{$type};
+
+    my $is_http = $type eq 'http.response.start'
+        || $type eq 'http.response.body'
+        || $type eq 'http.response.trailers'
+        || $type eq 'http.fullflush';
 
     if ($self->{state} eq 'closed') {
         return undef if $type eq 'sse.close'; # idempotent, like the reference server
         return $self->_error(sequence => "cannot send '$type' after sse.close");
     }
-    return $self->_error(sequence => "cannot send '$type': decline response already complete")
-        if $self->{state} eq 'decline_complete';
+    return $self->_error(sequence => "cannot send '$type': refusal already complete")
+        if $self->{state} eq 'refusal_complete';
 
     if ($self->{state} eq 'initial') {
-        if ($type eq 'sse.start')               { $self->{state} = 'streaming'; return undef; }
-        if ($type eq 'sse.http.response.start')  { $self->{state} = 'declining'; return undef; }
+        if ($type eq 'sse.start') { $self->{state} = 'streaming'; return undef; }
+        if ($is_http) {
+            my $err = $self->_check_http_response_event(
+                $event, 'refusal_http_state', 'refusal_trailers_declared', undef,
+            );
+            return $err if $err;
+            $self->{state} = $self->{refusal_http_state} eq 'complete'
+                ? 'refusal_complete' : 'refusing';
+            return undef;
+        }
         return $self->_error(sequence => "cannot send '$type' before sse.start");
     }
 
     if ($self->{state} eq 'streaming') {
+        if ($type eq 'http.fullflush') {
+            return $self->_error(extension => 'Extension not enabled: fullflush')
+                unless exists $self->{extensions}{fullflush};
+            return undef;
+        }
+        return $self->_error(sequence => "cannot send '$type' after sse.start")
+            if $is_http;
         return undef if $type eq 'sse.send' || $type eq 'sse.comment' || $type eq 'sse.keepalive';
         if ($type eq 'sse.close') { $self->{state} = 'closed'; return undef; }
         return $self->_error(sequence => 'cannot send duplicate sse.start')
             if $type eq 'sse.start';
-        return $self->_error(sequence => 'cannot decline with sse.http.response.start after sse.start')
-            if $type eq 'sse.http.response.start';
         return $self->_error(sequence => "cannot send '$type' after sse.start");
     }
 
-    # $self->{state} eq 'declining'
-    if ($type eq 'sse.http.response.body') {
-        my $more = $event->{more} // 0;
-        $self->{state} = $more ? 'declining' : 'decline_complete';
+    # $self->{state} eq 'refusing'
+    if ($is_http) {
+        my $err = $self->_check_http_response_event(
+            $event, 'refusal_http_state', 'refusal_trailers_declared', undef,
+        );
+        return $err if $err;
+        $self->{state} = 'refusal_complete'
+            if $self->{refusal_http_state} eq 'complete';
         return undef;
     }
-    return $self->_error(sequence => "cannot send '$type' after sse.http.response.start");
+    return $self->_error(sequence => "cannot send '$type' after http.response.start");
 }
 
 sub _finalize_sse {
     my ($self) = @_;
     my $state = $self->{state};
 
-    return undef if $state eq 'closed' || $state eq 'decline_complete';
-    return $self->_error(incomplete => 'sse stream never started (no sse.start and no decline)')
+    return undef if $state eq 'closed' || $state eq 'refusal_complete';
+    return $self->_error(incomplete => 'sse stream never started (no sse.start and no refusal)')
         if $state eq 'initial';
     return $self->_error(incomplete => 'sse stream awaiting sse.close')
         if $state eq 'streaming';
-    return $self->_error(incomplete => 'sse decline awaiting a terminal body chunk'); # declining
+    return $self->_error(incomplete => 'sse refusal awaiting declared http.response.trailers')
+        if $self->{refusal_http_state} eq 'awaiting_trailers';
+    return $self->_error(incomplete => 'sse refusal awaiting a terminal body chunk'); # refusing
 }
 
 # =============================================================================
