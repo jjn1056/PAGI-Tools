@@ -5,11 +5,11 @@ use warnings;
 use Test2::V0;
 use Future;
 use Future::AsyncAwait;
-use PAGI::Middleware::Helpers qw(clone_scope wrap_send wrap_receive);
+use PAGI::Utils::Middleware qw(clone_scope wrap_send wrap_receive);
 
 subtest 'exports are explicit' => sub {
     package NoHelperImports {
-        use PAGI::Middleware::Helpers;
+        use PAGI::Utils::Middleware;
     }
 
     ok(!NoHelperImports->can('clone_scope'), 'clone_scope is not exported by default');

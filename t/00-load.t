@@ -20,7 +20,6 @@ my @load_modules = qw(
     PAGI::Routing::Compiler
     PAGI::Routing::HeadBoundary
     PAGI::Middleware
-    PAGI::Middleware::Helpers
     PAGI::Middleware::Builder
     PAGI::App::File
     PAGI::App::File::Result
@@ -56,6 +55,7 @@ my @load_modules = qw(
     PAGI::SSE
     PAGI::Lifespan
     PAGI::Utils
+    PAGI::Utils::Middleware
     PAGI::Utils::AppObject
     PAGI::Utils::Scope
     PAGI::Utils::_SendValidation

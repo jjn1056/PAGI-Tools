@@ -2,6 +2,10 @@
 
 0.002003 - UNRELEASED
 
+  [Middleware utilities]
+  - Renamed the unreleased PAGI::Middleware::Helpers to PAGI::Utils::Middleware.
+    The explicit clone_scope, wrap_send, and wrap_receive exports are unchanged.
+
   [NDJSON response]
   - NEW: PAGI::Response::NDJSON and the exported ndjson_response factory stream
     UTF-8 JSON records framed by LF through a specialized Writer. Each awaited

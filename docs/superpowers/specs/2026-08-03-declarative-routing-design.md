@@ -991,11 +991,11 @@ middleware => [
 
 ## 16. Middleware authoring helpers
 
-`PAGI::Middleware::Helpers` is a standalone, non-inherited Exporter module with
+`PAGI::Utils::Middleware` is a standalone, non-inherited Exporter module with
 no default exports:
 
 ```perl
-use PAGI::Middleware::Helpers qw(
+use PAGI::Utils::Middleware qw(
     clone_scope
     wrap_send
     wrap_receive

@@ -122,7 +122,7 @@ The unqualified name `response_filter` would conceal that distinction.
 
 The existing primitives already express the honest PAGI mechanisms:
 
-- `PAGI::Middleware::Helpers::wrap_send`;
+- `PAGI::Utils::Middleware::wrap_send`;
 - `PAGI::Middleware::BufferedResponse::stream_transform_response`; and
 - `PAGI::Middleware::BufferedResponse::buffer_whole_response`.
 

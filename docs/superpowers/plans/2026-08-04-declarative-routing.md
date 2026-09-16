@@ -232,7 +232,7 @@ runtime dependency.
   descriptor has no `to_app` method.
 
 - [ ] **Step 7: Add `PAGI::Routing` and the four description modules to the
-  public load list.** Task 4 adds `PAGI::Middleware::Helpers` after its file
+  public load list.** Task 4 adds `PAGI::Utils::Middleware` after its file
   exists. Run `t/routing/01-constructors.t` and `t/00-load.t`.
 
 - [ ] **Step 8: Commit** the constructor/object slice with message
@@ -419,8 +419,8 @@ runtime dependency.
 
 **Files:**
 
-- Create: `lib/PAGI/Middleware/Helpers.pm`
-- Create: `t/middleware/helpers.t`
+- Create: `lib/PAGI/Utils/Middleware.pm`
+- Create: `t/utils/middleware.t`
 - Create: `t/routing/04-middleware-descriptors.t`
 - Modify: `lib/PAGI/Routing/Middleware.pm`
 - Modify: `t/00-load.t`
@@ -452,7 +452,7 @@ runtime dependency.
   });
   ```
 
-- [ ] **Step 2: Implement `PAGI::Middleware::Helpers`.** Export nothing by
+- [ ] **Step 2: Implement `PAGI::Utils::Middleware`.** Export nothing by
   default. `clone_scope` returns `{ %$scope, %$changes }`. The wrappers are
   async callbacks that call only their interceptors; they do not delegate
   automatically or inspect event types. Invoke each interceptor in scalar
@@ -487,7 +487,7 @@ runtime dependency.
   interceptor returns or awaits it, and the wrappers may observe any event
   family the enclosing middleware receives.
 
-- [ ] **Step 6: Add `PAGI::Middleware::Helpers` to `t/00-load.t`.**
+- [ ] **Step 6: Add `PAGI::Utils::Middleware` to `t/00-load.t`.**
   `PAGI::Routing` was added in Task 1. Run the focused middleware tests plus
   `t/middleware/00-base.t` and
   `t/middleware-builder-resolution.t` to prove the existing OO/Builder surfaces
@@ -1095,7 +1095,7 @@ runtime dependency.
 - Modify: `lib/PAGI/Routing/Pattern.pm`
 - Modify: `lib/PAGI/Routing/Resolver.pm`
 - Modify: `lib/PAGI/Routing/Compiler.pm`
-- Modify: `lib/PAGI/Middleware/Helpers.pm`
+- Modify: `lib/PAGI/Utils/Middleware.pm`
 - Modify: `lib/PAGI/Tools.pm`
 - Modify: `lib/PAGI/Tools/Tutorial.pod`
 - Modify: `lib/PAGI/Tools/Cookbook.pod`
@@ -1218,7 +1218,7 @@ runtime dependency.
 - [ ] **Step 1: Run every focused routing test together.**
 
   ```bash
-  /bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lr t/routing t/context/12-routing-reverse.t t/middleware/helpers.t t/integration-declarative-routing-demo.t'
+  /bin/bash -lc 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && prove -lr t/routing t/context/12-routing-reverse.t t/utils/middleware.t t/integration-declarative-routing-demo.t'
   ```
 
   Expected: `Result: PASS` with no warnings outside captured diagnostics.

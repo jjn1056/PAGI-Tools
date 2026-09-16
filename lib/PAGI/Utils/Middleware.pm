@@ -1,4 +1,4 @@
-package PAGI::Middleware::Helpers;
+package PAGI::Utils::Middleware;
 
 use strict;
 use warnings;
@@ -55,12 +55,12 @@ __END__
 
 =head1 NAME
 
-PAGI::Middleware::Helpers - Functional middleware authoring helpers
+PAGI::Utils::Middleware - Functional middleware authoring helpers
 
 =head1 SYNOPSIS
 
     use Future::AsyncAwait;
-    use PAGI::Middleware::Helpers qw(clone_scope wrap_send wrap_receive);
+    use PAGI::Utils::Middleware qw(clone_scope wrap_send wrap_receive);
 
     my $inner_scope = clone_scope($scope, { authenticated => 1 });
 
