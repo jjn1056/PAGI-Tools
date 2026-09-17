@@ -48,3 +48,19 @@ removed. Routing misses on WebSocket and SSE scopes emit an ordinary HTTP 404.
 
 The existing close-callback implementation is intentionally retained for C5.
 No full-suite or top-level test run was performed, per the focused-gate brief.
+
+## Review fix round 1
+
+- Repaired `direct_protocol` so its connection object publishes response start
+  and clean completion only after the corresponding send Future succeeds.
+  Focused assertions cover failed, pending, start-settled, and fully completed
+  boundaries.
+- Gave every successful WebSocket refusal fixture a legal status of at least
+  300, including Empty, scope-identity, inherited Stream, backpressure, and
+  cancellation paths. The response matrix also asserts the status boundary.
+- Red evidence: the two-file gate failed 2 Auth subtests because successful
+  sends left connection state inert, and the WebSocket matrix failed for Text,
+  HTML, JSON, Empty, and Stream statuses.
+- Green command:
+  `bash -c 'source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && PERL_FUTURE_NO_XS=1 prove -l t/auth/04-protocol-integration.t t/websocket/denial-response.t'`
+  passed 2 files and 19 top-level tests.

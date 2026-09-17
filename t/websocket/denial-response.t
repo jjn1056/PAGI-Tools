@@ -72,10 +72,10 @@ my @matrix = (
         ],
     ],
     [
-        Text => PAGI::Response::Text->new('text'),
+        Text => PAGI::Response::Text->new('text', status => 403),
         [
             {
-                type => 'http.response.start', status => 200,
+                type => 'http.response.start', status => 403,
                 headers => [
                     ['Content-Type' => 'text/plain; charset=utf-8'],
                     ['content-length' => 4],
@@ -85,10 +85,10 @@ my @matrix = (
         ],
     ],
     [
-        HTML => PAGI::Response::HTML->new('<b>x</b>'),
+        HTML => PAGI::Response::HTML->new('<b>x</b>', status => 403),
         [
             {
-                type => 'http.response.start', status => 200,
+                type => 'http.response.start', status => 403,
                 headers => [
                     ['Content-Type' => 'text/html; charset=utf-8'],
                     ['content-length' => 8],
@@ -98,10 +98,10 @@ my @matrix = (
         ],
     ],
     [
-        JSON => PAGI::Response::JSON->new([1]),
+        JSON => PAGI::Response::JSON->new([1], status => 403),
         [
             {
-                type => 'http.response.start', status => 200,
+                type => 'http.response.start', status => 403,
                 headers => [
                     ['Content-Type' => 'application/json'],
                     ['content-length' => 3],
@@ -138,9 +138,10 @@ my @matrix = (
         ],
     ],
     [
-        Empty => PAGI::Response::Empty->new,
+        Empty => PAGI::Response::Empty->new(status => 403),
         [
-            { type => 'http.response.start', status => 204, headers => [] },
+            { type => 'http.response.start', status => 403,
+              headers => [['content-length', 0]] },
             { type => 'http.response.body', body => '', more => 0 },
         ],
     ],
@@ -149,10 +150,10 @@ my @matrix = (
             my ($writer) = @_;
             await $writer->write('one');
             await $writer->write('two');
-        }, content_type => 'application/x-stream'),
+        }, status => 403, content_type => 'application/x-stream'),
         [
             {
-                type => 'http.response.start', status => 200,
+                type => 'http.response.start', status => 403,
                 headers => [['Content-Type' => 'application/x-stream']],
             },
             { type => 'http.response.body', body => 'one', more => 1 },
@@ -172,6 +173,8 @@ subtest 'deny adapts the complete concrete Response matrix exactly' => sub {
 
             my $returned = $ws->deny($response)->get;
             ok($returned == $ws, 'returns the WebSocket');
+            ok($sent[0]{status} >= 300,
+                'successful WebSocket refusal uses a legal status');
             is(\@sent, $expected, 'maps start/body fields, order, and more exactly');
             ok($ws->is_closed, 'denial closes the handshake');
             is($ws->close_code, undef, 'HTTP denial has no WebSocket close code');
@@ -237,7 +240,7 @@ subtest 'Response receives the original WebSocket scope unchanged' => sub {
     my @sent;
     my $ws = websocket($scope, sub { push @sent, $_[0]; Future->done });
 
-    $ws->deny(T::ScopeResponse->new('scope'))->get;
+    $ws->deny(T::ScopeResponse->new('scope', status => 403))->get;
 
     is(refaddr($T::ScopeResponse::seen_scope), refaddr($scope),
         'Response sees the original scope');
@@ -266,7 +269,7 @@ subtest 'Response receives the original WebSocket scope unchanged' => sub {
         ++$producer_calls;
         await $writer->write('first');
         await $writer->write('second');
-    });
+    }, status => 403);
     my $ws = websocket(ws_scope(), sub {
         push @sent, $_[0];
         return Future->done if $_[0]{type} eq 'websocket.accept';
@@ -367,7 +370,7 @@ subtest 'a mapped body-send failure propagates and leaves denial committed' => s
         return Future->fail("denial body resource failed\n");
     });
 
-    like(dies { $ws->deny(PAGI::Response::Text->new('body'))->get },
+    like(dies { $ws->deny(PAGI::Response::Text->new('body', status => 403))->get },
         qr/denial body resource failed/, 'genuine body-send failure reaches the caller');
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
@@ -383,7 +386,7 @@ subtest 'disconnect during a backpressured mapped body settles normally' => sub 
     my $stream = PAGI::Response::Stream->new(async sub {
         my ($writer) = @_;
         await $writer->write('pending');
-    });
+    }, status => 403);
     my $ws = websocket(ws_scope('pagi.connection' => $connection), sub {
         push @sent, $_[0];
         return Future->done if $_[0]{type} eq 'http.response.start';
@@ -497,7 +500,7 @@ subtest 'cancelling deny during start leaves the retained lifecycle authoritativ
         return Future->done;
     });
     $ws->on_close(sub { ++$close_calls });
-    my $denial = $ws->deny(PAGI::Response::Text->new('pending'));
+    my $denial = $ws->deny(PAGI::Response::Text->new('pending', status => 403));
 
     $denial->cancel;
     ok($denial->is_cancelled, 'caller cancellation settles only the public observer');
@@ -527,7 +530,7 @@ subtest 'cancelling deny during a body send preserves producer and cleanup owner
         my ($writer) = @_;
         $writer->on_close(sub { ++$writer_cleanup });
         await $writer->write('pending');
-    });
+    }, status => 403);
     my $ws = websocket(ws_scope(), sub {
         push @sent, $_[0];
         return $body_send

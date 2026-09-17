@@ -44,12 +44,23 @@ sub protocol_scope {
 sub direct_protocol {
     my ($type, $send, %changes) = @_;
     my $scope = protocol_scope($type, %changes);
+    my $connection = $scope->{'pagi.connection'};
+    my $tracking_send = async sub {
+        my ($event) = @_;
+        await Future->wrap($send->($event));
+        $connection->_mark_response_started
+            if $connection && ($event->{type} // '') eq 'http.response.start';
+        $connection->_mark_complete
+            if $connection && ($event->{type} // '') eq 'http.response.body'
+                && !$event->{more};
+        return;
+    };
     my $receive = $type eq 'websocket'
         ? sub { Future->done({ type => 'websocket.connect' }) }
         : sub { Future->new };
     return $type eq 'websocket'
-        ? PAGI::WebSocket->new($scope, $receive, $send)
-        : PAGI::SSE->new($scope, $receive, $send);
+        ? PAGI::WebSocket->new($scope, $receive, $tracking_send)
+        : PAGI::SSE->new($scope, $receive, $tracking_send);
 }
 
 my $two_challenges = challenge(
@@ -204,6 +215,10 @@ subtest 'failed mapped starts leave Auth responses retryable' => sub {
             }, qr/controlled start failure/, 'the genuine send failure propagates';
             is $protocol->connection_state, $case->{initial_state},
                 'failed start releases the response slot';
+            ok !$protocol->scope->{'pagi.connection'}->response_started,
+                'failed start remains uncommitted in connection state';
+            ok !$protocol->scope->{'pagi.connection'}->response_complete,
+                'failed start is not complete in connection state';
             is $close_calls, 0, 'an uncommitted response has no terminal cleanup';
 
             my $returned = $case->{reject}->($protocol, $response)->get;
@@ -214,6 +229,10 @@ subtest 'failed mapped starts leave Auth responses retryable' => sub {
                 "$case->{prefix}.body",
             ], 'retry performs one complete mapped response';
             is $protocol->connection_state, 'closed';
+            ok $protocol->scope->{'pagi.connection'}->response_started,
+                'successful retry publishes response start';
+            ok $protocol->scope->{'pagi.connection'}->response_complete,
+                'successful retry publishes clean completion';
             is $close_calls, 1, 'successful retry runs terminal cleanup once';
         };
     }
@@ -253,12 +272,18 @@ subtest 'mapped start settlement owns the slot while body backpressure remains s
                 'only mapped start is sent before its settlement';
             is $protocol->connection_state, $case->{reserved_state},
                 'the pending start reserves the first-event slot';
+            ok !$connection->response_started,
+                'pending start is not published before send settlement';
             like dies { $case->{compete}->($protocol)->get },
                 qr/response is pending/, 'a competing first event fails locally';
 
             $settlements[0]->done;
             is $protocol->connection_state, 'closed',
                 'start acceptance commits the response slot before body settlement';
+            ok $connection->response_started,
+                'settled start is published to connection state';
+            ok !$connection->response_complete,
+                'pending body leaves connection state incomplete';
             is [map { $_->{type} } @sent], [
                 "$case->{prefix}.start", "$case->{prefix}.body",
             ], 'body emission begins only after start acceptance';
