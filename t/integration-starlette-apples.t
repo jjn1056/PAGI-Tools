@@ -108,6 +108,8 @@ my $load_error = $@ || $!;
 ok(!$load_error, 'Starlette comparison example loads cleanly')
     or diag($load_error);
 isa_ok($app, 'PAGI::Compose');
+ok($app && $app->route_named('/apples/auth_required'),
+    'auth-required is registered under its local route name');
 
 subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
     plan skip_all => 'example did not load'
@@ -198,6 +200,49 @@ subtest 'apple manager, welcome, routing outcomes, and apples CRUD' => sub {
     is($export_head->content, '', 'HEAD apples export suppresses the wire body');
     is($export_head->content_type, 'application/x-ndjson',
         'HEAD apples export retains the NDJSON media type');
+
+    my $problem = $client->get('/apples/auth-required',
+        headers => { Accept => 'application/problem+json' });
+    is($problem->status, 401,
+        'auth-required takes priority over the typed apple route');
+    is($problem->header_all('WWW-Authenticate'), ['Bearer realm="apples"'],
+        'problem response carries the apples Bearer challenge');
+    is($problem->content_type, 'application/problem+json',
+        'auth-required negotiates problem JSON');
+    is($problem->json->{detail}, 'A valid access token is required.',
+        'problem response carries the safe challenge detail');
+    ok(defined($problem->header('X-Request-ID'))
+            && length($problem->header('X-Request-ID')),
+        'global RequestId middleware identifies the challenge');
+    is($problem->header('X-Apples-API'), '1',
+        'mounted apples middleware marks the challenge');
+
+    my $text = $client->get('/apples/auth-required',
+        headers => { Accept => 'text/plain' });
+    is($text->status, 401, 'text challenge retains status 401');
+    is($text->content_type, 'text/plain; charset=utf-8',
+        'auth-required negotiates text');
+    like($text->text, qr/A valid access token is required\./,
+        'text challenge carries the safe detail');
+
+    my $html = $client->get('/apples/auth-required',
+        headers => { Accept => 'text/html' });
+    is($html->status, 401, 'HTML challenge retains status 401');
+    is($html->content_type, 'text/html; charset=utf-8',
+        'auth-required negotiates HTML');
+
+    my $auth_head = $client->head('/apples/auth-required',
+        headers => { Accept => 'text/plain' });
+    is($auth_head->status, 401, 'HEAD auth-required retains status 401');
+    is($auth_head->header_all('WWW-Authenticate'),
+        ['Bearer realm="apples"'],
+        'HEAD auth-required preserves the challenge');
+    is($auth_head->content, '', 'HEAD auth-required suppresses its body');
+    ok(defined($auth_head->header('X-Request-ID'))
+            && length($auth_head->header('X-Request-ID')),
+        'global RequestId middleware identifies the HEAD challenge');
+    is($auth_head->header('X-Apples-API'), '1',
+        'mounted apples middleware marks the HEAD challenge');
 
     my $slash_list = $client->get('/apples/');
     is($slash_list->status, 200,

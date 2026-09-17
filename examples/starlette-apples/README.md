@@ -74,6 +74,10 @@ Router under `/apples`.
 
 `/apples/export` is an intentional PAGI extension: it demonstrates an NDJSON
 export and has no counterpart in the original Starlette sample above.
+`/apples/auth-required` is another PAGI extension. It demonstrates construction
+of an authentication outcome and always returns a Bearer challenge on purpose.
+It does not parse or validate credentials. Phase 2 will own credential
+acquisition and identity state.
 
 ```perl
 use v5.40;
@@ -83,6 +87,7 @@ use Types::Standard qw(Int);
 
 use AppleApp::Middleware qw(with_apples_api_header);
 use AppleApp::Model qw(apple_model);
+use PAGI::Auth qw(challenge bearer);
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(file_response json_response ndjson_response);
@@ -129,6 +134,13 @@ async sub export_apples($request) {
             await $writer->write_item($apple);
         }
     });
+}
+
+async sub authentication_required($request) {
+    return challenge(
+        challenges => [bearer(realm => 'apples')],
+        detail      => 'A valid access token is required.',
+    );
 }
 
 async sub read_apple($request) {
@@ -212,6 +224,8 @@ compose(
                     methods => ['POST'], name => 'create'),
                 route('/export' => \&export_apples,
                     methods => ['GET'], name => 'export'),
+                route('/auth-required' => \&authentication_required,
+                    methods => ['GET'], name => 'auth_required'),
                 route('/{apple_id:&Int}' => \&read_apple,
                     methods => ['GET'], name => 'read'),
                 route('/{apple_id:&Int}' => \&update_apple,
@@ -311,6 +325,22 @@ curl -i http://127.0.0.1:5000/apples
 curl -i http://127.0.0.1:5000/apples/1
 curl -i http://127.0.0.1:5000/apples/export
 ```
+
+Request the outcome-only authentication route in each supported
+representation:
+
+```bash
+curl -i -H 'Accept: application/problem+json' \
+  http://127.0.0.1:5000/apples/auth-required
+curl -i -H 'Accept: text/plain' \
+  http://127.0.0.1:5000/apples/auth-required
+curl -i -H 'Accept: text/html' \
+  http://127.0.0.1:5000/apples/auth-required
+```
+
+Each request receives `401` and `WWW-Authenticate: Bearer realm="apples"`.
+The route is limited to outcome construction; it has no token provider,
+parser, middleware, or authenticated state.
 
 Create, update, and delete an apple. In a freshly started process, the new
 record receives ID 3:

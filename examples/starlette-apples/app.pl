@@ -6,6 +6,7 @@ use Types::Standard qw(Int);
 
 use AppleApp::Middleware qw(with_apples_api_header);
 use AppleApp::Model qw(apple_model);
+use PAGI::Auth qw(challenge bearer);
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(welcome not_found);
 use PAGI::Response qw(file_response json_response ndjson_response);
@@ -52,6 +53,13 @@ async sub export_apples($request) {
             await $writer->write_item($apple);
         }
     });
+}
+
+async sub authentication_required($request) {
+    return challenge(
+        challenges => [bearer(realm => 'apples')],
+        detail      => 'A valid access token is required.',
+    );
 }
 
 async sub read_apple($request) {
@@ -135,6 +143,8 @@ compose(
                     methods => ['POST'], name => 'create'),
                 route('/export' => \&export_apples,
                     methods => ['GET'], name => 'export'),
+                route('/auth-required' => \&authentication_required,
+                    methods => ['GET'], name => 'auth_required'),
                 route('/{apple_id:&Int}' => \&read_apple,
                     methods => ['GET'], name => 'read'),
                 route('/{apple_id:&Int}' => \&update_apple,
