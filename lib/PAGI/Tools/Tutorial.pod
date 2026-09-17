@@ -722,8 +722,10 @@ Before C<accept>, a concrete finite or Stream Response can deny the handshake:
       text_response('Unauthorized', status => 401),
   );
 
-The optional denial extension maps ordinary body events. File is rejected
-before start; without the extension WebSocket uses its policy-close fallback.
+The Response is emitted as an ordinary HTTP response on the original
+WebSocket scope. Every concrete Response is valid here, including File. A
+streaming Response requires the Www 0.6 universal C<pagi.connection> contract
+so cancellation and terminal cleanup remain observable.
 
 =head2 5.2 PAGI::SSE - Server-Sent Events Helper
 

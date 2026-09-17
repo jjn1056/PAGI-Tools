@@ -62,6 +62,7 @@ use PAGI::Transport qw(transport);
         return bless {
             connected    => 1,
             reason       => undef,
+            detail       => undef,
             callbacks    => [],
             notification => 0,
             in_send      => 0,
@@ -70,22 +71,24 @@ use PAGI::Transport qw(transport);
 
     sub is_connected { return $_[0]{connected} ? 1 : 0 }
     sub disconnect_reason { return $_[0]{reason} }
+    sub disconnect_detail { return $_[0]{detail} }
 
     sub on_disconnect {
         my ($self, $callback) = @_;
         if ($self->{connected}) {
             push @{$self->{callbacks}}, $callback;
         } else {
-            $callback->($self->{reason});
+            $callback->($self->{reason}, $self->{detail});
         }
         return $self;
     }
 
     sub transition {
-        my ($self, $reason) = @_;
+        my ($self, $reason, $detail) = @_;
         return $self unless $self->{connected};
         $self->{connected} = 0;
         $self->{reason} = $reason;
+        $self->{detail} = $detail;
         $self->{notification} = 1;
         return $self;
     }
@@ -94,7 +97,7 @@ use PAGI::Transport qw(transport);
         my ($self) = @_;
         die "on_disconnect delivered inside send\n" if $self->{in_send};
         return $self unless delete $self->{notification};
-        $_->($self->{reason}) for @{$self->{callbacks}};
+        $_->($self->{reason}, $self->{detail}) for @{$self->{callbacks}};
         return $self;
     }
 
@@ -591,7 +594,11 @@ subtest 'disconnect cancels unrelated producer work and awaits exactly-once clea
         },
     );
 
-    $connection->transition('client_gone');
+    $connection->transition('client_gone', 'peer reset upload');
+    my @late_disconnect;
+    $connection->on_disconnect(sub { @late_disconnect = @_ });
+    is(\@late_disconnect, ['client_gone', 'peer reset upload'],
+        'late connection callback receives reason and diagnostic detail');
     is($writer->is_disconnected, 1,
         'synchronous state is visible before deferred callback delivery');
     is($work_cancelled, 0,
@@ -600,6 +607,8 @@ subtest 'disconnect cancels unrelated producer work and awaits exactly-once clea
     is($work_cancelled, 1, 'disconnect requests cancellation of unrelated producer work');
     is($writer->is_disconnected, 1, 'Writer records the disconnection');
     is($writer->disconnect_reason, 'client_gone', 'Writer retains the connection reason');
+    is($writer->disconnect_detail, 'peer reset upload',
+        'Writer retains the connection diagnostic detail');
     ok(!$running->is_ready, 'runner awaits Future-backed cleanup');
     is(\@cleanup, ['first'], 'cleanup callbacks run sequentially');
     $work->done unless $work->is_ready || $work->is_cancelled;

@@ -662,7 +662,7 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
     is(run_scope($app, scope(
         type => 'websocket', method => undef,
         path => '/api/missing', raw_path => '/api/missing',
-        extensions => { 'websocket.http.response' => {} },
+        extensions => {},
     )), [
         {
             type => 'http.response.start', status => 404,

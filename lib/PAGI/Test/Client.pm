@@ -296,7 +296,7 @@ sub _build_scope {
 
     my $scope = {
         type         => 'http',
-        # source of truth: released PAGI::Server scope advertisement
+        # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
         pagi         => { version => '0.5', spec_version => '0.6' },
         http_version => '1.1',
         method       => $method,
@@ -386,7 +386,7 @@ sub websocket {
     my $connection = PAGI::Test::ConnectionState->new(websocket => 1);
     my $scope = {
         type         => 'websocket',
-        # source of truth: released PAGI::Server scope advertisement
+        # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
         pagi         => { version => '0.5', spec_version => '0.6' },
         http_version => '1.1',
         scheme       => 'ws',
@@ -487,7 +487,7 @@ sub sse {
     my $connection = PAGI::Test::ConnectionState->new;
     my $scope = {
         type         => 'sse',
-        # source of truth: released PAGI::Server scope advertisement
+        # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
         pagi         => { version => '0.5', spec_version => '0.6' },
         http_version => '1.1',
         method       => $method,
@@ -921,6 +921,14 @@ It is best suited for unit and integration tests of application logic, routing,
 cookies, and basic protocol flows. For behavior that depends on real socket I/O,
 HTTP framing, backpressure, or server lifecycle semantics, prefer testing
 against L<PAGI::Server>.
+
+HTTP, WebSocket, and SSE fixtures advertise Www C<spec_version 0.6> and carry
+the complete per-scope C<pagi.connection> interface. A manual WebSocket/SSE
+test-side C<close> records the peer outcome; application terminal sends record
+clean completion. The streaming test objects' C<pump> method advances queued
+application work and deferred terminal notifications when a test is holding
+the connection open. Terminal facts are readable before that notification
+delivery. These in-process facts do not model socket framing or timing.
 
 =head1 SEND STRICTNESS (http)
 

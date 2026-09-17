@@ -1237,8 +1237,8 @@ L<PAGI::Response::JSON> perform JSON encoding:
 C<new> owns the collection contract: invalid source values fail immediately,
 and every constructed instance already contains the completed envelope.
 Inherited C<render> has one job--encode that document as JSON. The inherited
-C<to_app>, status, headers, cookies, content type, buffered delivery, and
-C<body-events-v1> capability require no registration or reimplementation.
+C<to_app>, status, headers, cookies, content type, and buffered delivery
+require no registration or reimplementation.
 
 The exported factory is optional application-level shorthand with a fixed
 mapping to the company class:
@@ -1319,6 +1319,62 @@ received it. Writer checks connection state after settlement and does not count
 a discarded chunk. Stream may cancel producer-owned work, never the send
 Future, and cleanup runs once. It has no WebSocket/SSE reconnect behavior.
 
+=head2 Enforce a Per-Route Limit on an Unknown-Length Upload
+
+A server-wide body limit protects the process. A route-specific policy belongs
+to the application and must count bytes as it reads them; C<Content-Length> may
+be absent or untrusted. This raw HTTP application limits one streaming upload:
+
+  use Future::AsyncAwait;
+
+  my $limit = 10 * 1024 * 1024;
+  my $upload = async sub {
+      my ($scope, $receive, $send) = @_;
+      die 'upload app requires an http scope' unless $scope->{type} eq 'http';
+
+      my $connection = $scope->{'pagi.connection'}
+          or die 'upload app requires the Www 0.6 connection API';
+      my $seen = 0;
+
+      while (1) {
+          my $event = await $receive->();
+          last if $event->{type} eq 'http.disconnect';
+          next unless $event->{type} eq 'http.request';
+
+          $seen += length($event->{body} // '');
+          if ($seen > $limit) {
+              if ($connection->response_started) {
+                  # Use only when this response format defines such an error.
+                  await $send->({
+                      type => 'http.response.body',
+                      body => qq({"error":"upload too large"}\n),
+                      more => 1,
+                  });
+                  $connection->abort("route upload limit exceeded after $seen bytes");
+              } else {
+                  await $send->({
+                      type => 'http.response.start', status => 413,
+                      headers => [['content-type', 'text/plain']],
+                  });
+                  await $send->({
+                      type => 'http.response.body', body => 'upload too large', more => 0,
+                  });
+              }
+              return;
+          }
+
+          last unless $event->{more};
+      }
+
+      # Process the accepted upload and send its ordinary response here.
+  };
+
+After response start, status and headers are committed. If the response format
+has a client-visible error record, send it in-band and await that send before
+calling public C<abort>; otherwise abort directly. The application owns this
+abort and its diagnostic detail. This recipe is for raw C<http> scopes and does
+not imply that SSE helpers expose HTTP request-body readers.
+
 HEAD normally executes the whole producer behind the outer suppression
 boundary. Put a cheap explicit HEAD Route before an expensive GET Route:
 
@@ -1370,10 +1426,11 @@ that intentionally handles those handshakes can make that policy explicit:
       die "unsupported scope type '$scope->{type}'";
   };
 
-Base, finite subclasses, Empty, Redirect, Stream, and subclasses preserving
-C<body-events-v1> are eligible. File is rejected before start because PAGI Www
-denial bodies exclude C<file>/C<fh>. Mapped-start settlement commits protocol
-ownership; later cleanup follows state/disconnect watchers rather than treating
+Every concrete Response is eligible, including File and Stream. The Response is
+emitted unchanged on the original protocol scope as ordinary
+C<http.response.*> events. A streaming refusal requires the Www 0.6 universal
+C<pagi.connection> contract. Start settlement commits protocol ownership;
+later cleanup follows connection terminal facts rather than treating a
 disconnect as a failed send.
 
 =head1 AUTHENTICATION & SESSIONS
@@ -1727,7 +1784,7 @@ observe that non-event, it parks forever instead -- there is nothing left to
 receive. Return right after declining, as above.
 
 First-send-wins picks the mode: once you have sent C<sse.start> a decline
-raises, and once you have sent C<sse.http.response.start> a stream event
+raises, and once you have sent C<http.response.start> a stream event
 (C<sse.send>, C<sse.start>, ...) raises. Decide before you start.
 
 See L<PAGI::SSE/decline> for the method and
@@ -1736,19 +1793,22 @@ the full state machine.
 
 =head3 Under the hood
 
-C<decline> sends C<sse.http.response.start> followed by
-C<sse.http.response.body> on the raw C<$send> (the same one you passed to
-C<< PAGI::SSE->new >>), then marks the connection closed. This is what it is
+C<decline> emits the concrete Response directly on the original SSE scope,
+using ordinary C<http.response.start> and C<http.response.body> events. This is what it is
 doing on your behalf -- shown so the underlying contract is explicit, not as
 a recommended application style:
 
   # Equivalent to adapting text_response('Unauthorized', status => 401).
   await $send->({
-      type    => 'sse.http.response.start',
+      type    => 'http.response.start',
       status  => 401,
       headers => [['content-type', 'text/plain']],
   });
-  await $send->({ type => 'sse.http.response.body', body => 'Unauthorized', more => 0 });
+  await $send->({ type => 'http.response.body', body => 'Unauthorized', more => 0 });
+
+File responses use a terminal C<http.response.body> carrying C<file> or C<fh>.
+Streaming declines require the universal connection API so caller cancellation,
+transport loss, and retained cleanup have one authoritative terminal source.
 
 =head1 BACKGROUND WORK
 

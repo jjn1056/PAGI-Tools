@@ -28,7 +28,7 @@ sub ws_scope {
         method     => 'POST',
         path       => '/socket',
         headers    => [],
-        extensions => { 'websocket.http.response' => {} },
+        extensions => {},
         state      => { shared => 'state' },
         marker     => ['nested'],
         'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),

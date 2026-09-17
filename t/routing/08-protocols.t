@@ -773,7 +773,7 @@ subtest 'handler and native protocols apply inline providers and explicit constr
     for my $path (qw(/provider-ws/rejected /predicate-ws/rejected)) {
         my $events = run_scope($app, scope(
             type => 'websocket', path => $path,
-            extensions => { 'websocket.http.response' => {} },
+            extensions => {},
         ));
         is($events->[0]{type}, 'http.response.start',
             "$path rejection uses the existing WebSocket denial family");
@@ -995,7 +995,7 @@ subtest 'the first prefix Mount owns every protocol and middleware boundary' => 
         'a child WebSocket miss returns ordinary HTTP without parent resumption');
     my $denial = run_scope($app, scope(
         type => 'websocket', path => '/api/missing', raw_path => '/api/missing',
-        extensions => { 'websocket.http.response' => {} }));
+        extensions => {}));
     is([$denial->[0]{type}, $denial->[0]{status}],
         ['http.response.start', 404],
         'a child WebSocket miss owns its HTTP denial');
@@ -1072,7 +1072,7 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
     my $ws_denial = run_scope($app, scope(
         type       => 'websocket',
         path       => '/missing',
-        extensions => { 'websocket.http.response' => {} },
+        extensions => {},
     ));
     is($ws_denial, [
         {
@@ -1085,7 +1085,7 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
             body => 'Not Found',
             more => 0,
         },
-    ], 'the advertised WebSocket denial extension carries a namespaced 404');
+    ], 'an unmatched WebSocket receives an ordinary HTTP 404');
 
     my $ws_close = run_scope($app, scope(
         type => 'websocket',
@@ -1262,7 +1262,7 @@ subtest 'standalone protocol leaves and mounts compile as complete applications'
     is(ref($mount_app), 'CODE', 'a standalone mount compiles to an application');
     my $mounted_miss = run_scope($mount_app, scope(
         type => 'websocket', path => '/api/missing',
-        extensions => { 'websocket.http.response' => {} },
+        extensions => {},
     ));
     is($mounted_miss->[0]{type}, 'http.response.start',
         'the routes-shorthand child owns its protocol-specific miss');

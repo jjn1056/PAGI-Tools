@@ -227,7 +227,7 @@ subtest 'WebSocket denial and SSE decline take concrete Responses' => sub {
     my $ws = PAGI::WebSocket->new(
         {
             type => 'websocket', method => 'GET', path => '/socket', headers => [],
-            extensions => { 'websocket.http.response' => {} },
+            extensions => {},
         },
         sub { Future->done({ type => 'websocket.connect' }) },
         sub { push @ws_events, $_[0]; Future->done },

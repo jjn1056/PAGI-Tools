@@ -2,6 +2,25 @@
 
 0.002003 - UNRELEASED
 
+  [Universal connection state (Www 0.6)]
+  - WebSocket, SSE, and HTTP Test::Client scopes now carry the complete
+    `pagi.connection` contract and report `spec_version` 0.6. Applications and
+    helpers may observe clean completion, abnormal reason/detail, peer Close
+    code/text, and may abort work they own through the public connection API.
+  - WebSocket denial and SSE decline now emit any concrete Response, including
+    File, as ordinary `http.response.*` events on the original scope. The old
+    protocol-response bridge, response capability, namespaced denial events,
+    and `websocket.http.response` extension are removed. `websocket.close`
+    before acceptance is invalid; use `deny` for an HTTP refusal.
+  - WebSocket and SSE helpers retain terminal cleanup independently of caller
+    observers. Successful helper-handler return closes an accepted/started
+    protocol at Router and Endpoint boundaries; raw PAGI apps still owe the
+    protocol terminal event. Stream caller cancellation aborts through
+    `pagi.connection` while leaving server-owned send Futures uncancelled.
+  - Lint uses the shared send validator for HTTP, WebSocket, and SSE and emits
+    protocol-specific incomplete-response diagnostics, while accepting clean
+    peer-first terminal connection facts.
+
   [Middleware utilities]
   - Renamed the unreleased PAGI::Middleware::Helpers to PAGI::Utils::Middleware.
     The explicit clone_scope, wrap_send, and wrap_receive exports are unchanged.

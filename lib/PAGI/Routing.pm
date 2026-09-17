@@ -987,8 +987,8 @@ downstream top-level additions.
 
 =head1 PROTOCOL OUTCOMES AND FAILURES
 
-Unmatched SSE routes emit an SSE HTTP-decline 404. Unmatched WebSockets use the
-HTTP-denial extension when advertised and otherwise close before acceptance.
+Unmatched SSE and WebSocket routes emit ordinary HTTP 404 responses on their
+original scopes before C<sse.start> or C<websocket.accept>.
 Routing itself ignores lifespan scopes. At the deployed application root, use
 L<PAGI::Compose> with the Router behind an explicit root Mount to combine that
 routing application, application middleware, and startup/shutdown callbacks.

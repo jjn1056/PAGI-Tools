@@ -458,6 +458,11 @@ C<close> sends one terminal empty body event and runs cleanup. It is
 idempotent; repeated calls while terminal delivery or cleanup is pending join
 that same close completion. Writes after close fail.
 
+Cancelling a Stream producer through its caller-owned observer publishes the
+owned cancellation signal, then invokes public C<pagi.connection-E<gt>abort>
+with diagnostic detail. Server-owned send Futures are never cancelled. The
+retained cleanup worker still runs once to completion.
+
 =head2 is_disconnected, disconnect_reason, disconnect_detail, bytes_written
 
 Connection capability is tri-state: C<is_disconnected> is C<undef> without
