@@ -48,7 +48,7 @@ real send-Future backpressure.
 Each invocation receives a fresh specialized Writer and runs a fresh producer.
 Connection and transport observation, disconnect handling, terminal delivery,
 and cleanup remain owned by Stream and its generic Writer. The response is
-reusable and inherits C<body-events-v1>. HEAD requests still run the producer,
+reusable. HEAD requests still run the producer,
 so use an explicit lightweight HEAD route when that work is too expensive.
 
 =head1 METHODS

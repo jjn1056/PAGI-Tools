@@ -93,8 +93,8 @@ subtest 'decline clears a recorded-but-never-armed pending keepalive' => sub {
     is(scalar @keepalive_events, 0, 'no keepalive event at all -- recorded state was simply dropped');
 
     is(scalar @sent, 2, 'only the decline response events were sent');
-    is($sent[0]{type}, 'sse.http.response.start', 'decline start');
-    is($sent[1]{type}, 'sse.http.response.body', 'decline body');
+    is($sent[0]{type}, 'http.response.start', 'decline start');
+    is($sent[1]{type}, 'http.response.body', 'decline body');
 };
 
 subtest 'start() after decline does not resurrect a cleared pending keepalive' => sub {

@@ -163,7 +163,6 @@ subtest 'Response application validates the full triplet, awaits each send, and 
     for my $bad (
         undef,
         {},
-        { type => 'websocket' },
         { type => 'unknown' },
         bless({}, 'T::BlessedScope'),
     ) {

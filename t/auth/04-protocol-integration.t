@@ -22,15 +22,7 @@ use PAGI::WebSocket;
 
 sub mapped_response {
     my ($protocol, $events) = @_;
-    my @http_events;
-    for my $event (@$events) {
-        next unless ($event->{type} // '')
-            =~ /^\Q$protocol\E\.http\.response\.(start|body)$/;
-        my %http_event = %$event;
-        $http_event{type} = "http.response.$1";
-        push @http_events, \%http_event;
-    }
-    return PAGI::Test::Response->new(events => \@http_events);
+    return PAGI::Test::Response->new(events => $events);
 }
 
 sub protocol_scope {
@@ -41,9 +33,10 @@ sub protocol_scope {
         path         => $type eq 'websocket' ? '/socket' : '/events',
         headers      => [],
         query_string => '',
-        extensions   => $type eq 'websocket'
-            ? { 'websocket.http.response' => {} }
-            : {},
+        extensions   => {},
+        'pagi.connection' => PAGI::Test::ConnectionState->new(
+            websocket => $type eq 'websocket',
+        ),
         %changes,
     };
 }
@@ -138,7 +131,7 @@ subtest 'WebSocket denial and SSE decline emit the same captured Auth response' 
                 my ($event) = @_;
                 push @websocket_events, $event
                     if ($event->{type} // '')
-                        =~ /^websocket\.http\.response\./;
+                        =~ /^http\.response\./;
                 return $send->($event);
             };
         }
@@ -170,32 +163,11 @@ subtest 'WebSocket denial and SSE decline emit the same captured Auth response' 
     }
 };
 
-subtest 'WebSocket denial without the extension retains policy-close fallback' => sub {
-    my @sent;
-    my $close_calls = 0;
-    my $ws = direct_protocol(
-        websocket => sub { push @sent, $_[0]; return Future->done },
-        extensions => {},
-    );
-    $ws->on_close(sub { ++$close_calls });
-
-    my $response = $protocol_failure->response_for($ws);
-    is \@sent, [], 'response_for creates local Response state and emits nothing';
-    $ws->deny($response)->get;
-
-    is \@sent, [{
-        type => 'websocket.close', code => 1008, reason => '',
-    }], 'the existing portable policy close is unchanged';
-    is $ws->connection_state, 'closed';
-    is $ws->close_code, 1008;
-    is $close_calls, 1, 'fallback terminal cleanup runs once';
-};
-
-my @protocol_cases = (
+ my @protocol_cases = (
     {
         name          => 'WebSocket',
         type          => 'websocket',
-        prefix        => 'websocket.http.response',
+        prefix        => 'http.response',
         initial_state => 'connecting',
         reserved_state => 'denying',
         reject        => sub { $_[0]->deny($_[1]) },
@@ -204,7 +176,7 @@ my @protocol_cases = (
     {
         name          => 'SSE',
         type          => 'sse',
-        prefix        => 'sse.http.response',
+        prefix        => 'http.response',
         initial_state => 'pending',
         reserved_state => 'declining',
         reject        => sub { $_[0]->decline($_[1]) },
@@ -311,38 +283,4 @@ subtest 'mapped start settlement owns the slot while body backpressure remains s
     }
 };
 
-subtest 'Pages response classes advertise the denial body capability and File stays opted out' => sub {
-    my $source = protocol_scope('websocket');
-    my @selected = (
-        ['HTML',    challenge(challenges => basic(realm => 'x'), as => 'html')],
-        ['Text',    challenge(challenges => basic(realm => 'x'), as => 'text')],
-        ['Problem', challenge(challenges => basic(realm => 'x'), as => 'json')],
-        ['JSON',    PAGI::Pages->welcome(as => 'json')],
-    );
-
-    for my $case (@selected) {
-        my ($class, $application) = @$case;
-        my $response = $application->response_for($source);
-        isa_ok $response, "PAGI::Response::$class";
-        is $response->protocol_response_capability, 'body-events-v1',
-            "$class advertises ordinary body-event delivery";
-    }
-
-    my $file = PAGI::Response::File->new(__FILE__);
-    is $file->protocol_response_capability, undef,
-        'File remains outside the body-only denial capability';
-
-    for my $case (@protocol_cases) {
-        my @sent;
-        my $protocol = direct_protocol(
-            $case->{type}, sub { push @sent, $_[0]; return Future->done },
-        );
-        like dies { $case->{reject}->($protocol, $file)->get },
-            qr/File.*body-events-v1/, "$case->{name} rejects File before start";
-        is \@sent, [], 'capability rejection sends nothing';
-        is $protocol->connection_state, $case->{initial_state},
-            'capability rejection leaves the protocol pending';
-    }
-};
-
-done_testing;
+ done_testing;

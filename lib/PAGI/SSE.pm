@@ -325,9 +325,9 @@ async sub keepalive {
 sub decline {
     my ($self, @args) = @_;
     croak 'SSE decline requires exactly one concrete PAGI::Response'
-        unless @args == 1;
+        unless @args == 1 && blessed($args[0]) && $args[0]->isa('PAGI::Response');
     my $response = $args[0];
-    PAGI::Response::_validate_protocol_response($response, 'SSE decline');
+    $self->_require_connection_for_stream($response, 'SSE decline');
 
     return Future->done($self) if $self->{_declined};
     croak 'SSE decline response is pending'
@@ -337,26 +337,22 @@ sub decline {
 
     $self->{_state} = 'declining';
     my $committed = 0;
+    my $send = $self->{send};
+    my $observing_send = async sub {
+        my ($event) = @_;
+        await Future->wrap($send->($event));
+        if (($event->{type} // '') eq 'http.response.start') {
+            $committed = 1;
+            $self->{_declined} = 1;
+            delete $self->{_pending_keepalive};
+            $self->_set_closed;
+        }
+        return;
+    };
     my $lifecycle = async sub {
         my $completed = eval {
-            await PAGI::Response::_respond_for_protocol(
-                $response,
-                $self->{scope},
-                $self->{receive},
-                $self->{send},
-                'sse.http.response',
-                'SSE decline',
-                sub {
-                    $committed = 1;
-                    $self->{_declined} = 1;
-                    $self->{_disconnect_reason} //= 'declined';
-
-                    # This deferred record has never reached the server. Retain it
-                    # until start actually commits so a failed start remains retryable.
-                    delete $self->{_pending_keepalive};
-                    $self->_set_closed;
-                },
-            );
+            await Future->wrap($response->_emit(
+                $self->{scope}, $self->{receive}, $observing_send));
             1;
         };
         my $error = $@ unless $completed;
@@ -380,6 +376,14 @@ sub decline {
                 && $self->{_response_lifecycle} == $ready;
     });
     return $lifecycle->without_cancel;
+}
+
+sub _require_connection_for_stream {
+    my ($self, $response, $op) = @_;
+    return if $response->is_buffered;
+    return if $self->{scope}{'pagi.connection'};
+    my $v = $self->{scope}{pagi}{spec_version} // '0.1';
+    croak "$op of a streaming Response requires pagi.connection (server reports spec_version $v; 0.6 needed)";
 }
 
 # Single header lookup (case-insensitive, returns last value)
@@ -1172,27 +1176,24 @@ SSE parity of L<PAGI::WebSocket/deny>.
 
 C<response_for> synchronously creates a fresh, request-local Response from the
 deferred L<PAGI::Auth> outcome. It sends nothing and owns no stream state.
-C<decline> validates the concrete Response capability and remains the sole
-owner of event mapping, send settlement, disconnect observation, deferred
+C<decline> invokes the concrete Response on the original SSE scope and remains
+the sole owner of send settlement, disconnect observation, deferred
 keepalive disposal, and terminal cleanup.
 
-The Response must advertise the inheritable C<body-events-v1> protocol
-capability. Its HTTP start/body events are mapped incrementally in order to
-C<sse.http.response.start> and C<sse.http.response.body>, retaining multi-chunk
-C<more> values and send backpressure. Successful mapped-start settlement owns
+Its ordinary C<http.response.*> events, including File and trailer forms, go
+directly to the server with normal send backpressure. Successful start
+settlement owns
 the response slot immediately, discards deferred keepalive, and leaves the SSE
 object closed after either completion or a later failure. A failed start send
-leaves the request pending. File returns no capability because PAGI Www permits
-only the body form and not C<file>/C<fh> for a decline; trailer and unknown
-events are also rejected. The concrete Response is invoked through its
-application contract; Response has no separate public emission method. See
+leaves the request pending. A non-buffered Response requires the Www 0.6
+C<pagi.connection> object. Prefer a finite response: once a streaming decline
+starts, the application is committed to finishing or aborting that HTTP
+response. See
 L<PAGI::Spec::Www/"Decline SSE - send event">. Per the
 B<first-send-wins> rule (see
 L<PAGI::Spec::Www/"SSE Response Denial">), this must happen B<before>
 C<start> or any send method has run -- declining after the stream has
-already started fails before another event is sent. The Response is invoked
-with a shallow HTTP-scope clone whose C<type> is C<http> and C<method> is
-C<GET>; the live SSE scope and all nested references are left unchanged.
+already started fails before another event is sent.
 
 Mapped-start settlement means the PAGI server validated and consumed the event
 and accepted it into outbound processing, or finished discarding it after the

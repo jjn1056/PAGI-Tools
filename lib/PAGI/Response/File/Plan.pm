@@ -82,10 +82,10 @@ sub new {
     croak 'File plan path must be a defined nonempty scalar string'
         unless defined($path) && !ref($path) && length($path);
     my $scope = $args{scope};
-    croak 'File plan scope must be an HTTP hashref'
+    croak 'File plan scope must be a supported response hashref'
         unless ref($scope) eq 'HASH'
             && defined($scope->{type}) && !ref($scope->{type})
-            && $scope->{type} eq 'http';
+            && $scope->{type} =~ /\A(?:http|websocket|sse)\z/;
 
     my @stat = stat($path);
     croak "Cannot inspect selected file '$path': $!" unless @stat;

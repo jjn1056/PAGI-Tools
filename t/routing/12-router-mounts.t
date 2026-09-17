@@ -619,6 +619,7 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
         },
         routes => [
             websocket('/socket' => sub {
+                $_[0]->accept->get;
                 $_[0]->close(1000, 'child')->get;
                 return 'synchronous websocket completion';
             }),
@@ -646,7 +647,8 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
     is(run_scope($app, scope(
         type => 'websocket', method => undef,
         path => '/api/socket', raw_path => '/api/socket',
-    )), [{ type => 'websocket.close', code => 1000, reason => 'child' }],
+    )), [{ type => 'websocket.accept' },
+         { type => 'websocket.close', code => 1000, reason => 'child' }],
         'the mounted child WebSocket owns its exact emitted event');
     is(run_scope($app, scope(
         type => 'sse', method => undef,
@@ -663,27 +665,30 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
         extensions => { 'websocket.http.response' => {} },
     )), [
         {
-            type => 'websocket.http.response.start', status => 404,
+            type => 'http.response.start', status => 404,
             headers => [['content-type', 'text/plain']],
         },
         {
-            type => 'websocket.http.response.body', body => 'Not Found', more => 0,
+            type => 'http.response.body', body => 'Not Found', more => 0,
         },
     ], 'a mounted unmatched WebSocket owns its HTTP denial without rewriting');
     is(run_scope($app, scope(
         type => 'websocket', method => undef,
         path => '/api/missing', raw_path => '/api/missing',
-    )), [{ type => 'websocket.close' }],
-        'a mounted unmatched WebSocket owns its close outcome');
+    )), [
+        { type => 'http.response.start', status => 404,
+          headers => [['content-type', 'text/plain']] },
+        { type => 'http.response.body', body => 'Not Found', more => 0 },
+    ], 'a mounted unmatched WebSocket owns its ordinary HTTP outcome');
     is(run_scope($app, scope(
         type => 'sse', method => undef,
         path => '/api/missing', raw_path => '/api/missing',
     )), [
         {
-            type => 'sse.http.response.start', status => 404,
+            type => 'http.response.start', status => 404,
             headers => [['content-type', 'text/plain']],
         },
-        { type => 'sse.http.response.body', body => 'Not Found', more => 0 },
+        { type => 'http.response.body', body => 'Not Found', more => 0 },
     ], 'a mounted unmatched SSE owns its decline event family');
     is(\@http_fallback_calls, [], 'protocol misses never invoke child HTTP handlers');
     is(\@parent_protocol_calls, [], 'protocol ownership never resumes parent scanning');

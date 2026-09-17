@@ -219,7 +219,7 @@ subtest 'Stream validates construction and the native HTTP triplet before sendin
         qr/duplicate/i, 'common response options keep duplicate validation');
 
     my $stream = PAGI::Response::Stream->new(sub { });
-    for my $bad_scope (undef, {}, { type => 'websocket' }, bless({}, 'T::Scope')) {
+    for my $bad_scope (undef, {}, { type => 'unknown' }, bless({}, 'T::Scope')) {
         my @events;
         like(dies {
             $stream->to_app->(
@@ -227,7 +227,7 @@ subtest 'Stream validates construction and the native HTTP triplet before sendin
                 receive(),
                 sub { push @events, $_[0]; Future->done },
             )->get;
-        }, qr/(?:scope|HTTP)/i, 'non-HTTP scope is rejected');
+        }, qr/(?:scope|supported)/i, 'unsupported scope is rejected');
         is(\@events, [], 'invalid protocol use sends no events');
     }
     like(dies { $stream->to_app->(http_scope(), 'receive', sub { Future->done })->get },

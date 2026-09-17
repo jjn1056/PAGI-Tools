@@ -237,7 +237,7 @@ subtest 'WebSocket denial and SSE decline take concrete Responses' => sub {
         'removed WebSocket denial option list fails directly');
     $ws->deny(text_response('no', status => 401))->get;
     is([map { $_->{type} } @ws_events], [
-        'websocket.http.response.start', 'websocket.http.response.body',
+        'http.response.start', 'http.response.body',
     ], 'Response-valued WebSocket denial executes');
 
     my @sse_events;
@@ -254,7 +254,7 @@ subtest 'WebSocket denial and SSE decline take concrete Responses' => sub {
         status => 404,
     }))->get;
     is([map { $_->{type} } @sse_events], [
-        'sse.http.response.start', 'sse.http.response.body',
+        'http.response.start', 'http.response.body',
     ], 'Response-valued SSE decline executes');
     is($sse_events[0]{status}, 404,
         'the documented decline preserves the concrete Response status');

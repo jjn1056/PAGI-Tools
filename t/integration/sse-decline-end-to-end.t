@@ -15,21 +15,15 @@ use lib "$FindBin::Bin/../../lib";
 # independent. Run it with:
 #   prove -I <PAGI-Server>/lib -lr t/integration/sse-decline-end-to-end.t
 #
-# Requires PAGI::Server >= 0.002005: that release added the sse.http.response.*
-# decline protocol this test exercises (PAGI-Server Changes, "0.002005 -
-# 2026-06-30" / Features). Older servers don't recognize
-# 'sse.http.response.start' and crash the connection with a 500 instead of
-# returning 404 (CPAN Testers FAIL against 0.001012, PAGI-Tools 0.002001).
-use constant MIN_SSE_DECLINE_SERVER_VERSION => '0.002005';
-
 eval { require Future::IO::Impl::IOAsync; 1 }
     or plan skip_all => 'Future::IO::Impl::IOAsync required for SSE tests';
 eval { require PAGI::Server; 1 }
     or plan skip_all => 'PAGI::Server not on @INC; run with -I <PAGI-Server>/lib';
-plan skip_all => "PAGI::Server $PAGI::Server::VERSION does not support the sse.http.response.* "
-                . "decline protocol; need >= " . MIN_SSE_DECLINE_SERVER_VERSION
-    unless eval { PAGI::Server->VERSION(MIN_SSE_DECLINE_SERVER_VERSION); 1 };
-
+eval { require PAGI::Server::ConnectionState; 1 }
+    or plan skip_all => 'PAGI::Server connection-state API unavailable';
+plan skip_all => 'PAGI::Server lacks the Www 0.6 terminal connection API'
+    unless PAGI::Server::ConnectionState->can('on_end')
+        && PAGI::Server::ConnectionState->can('end_future');
 plan skip_all => "Server integration tests not supported on Windows" if $^O eq 'MSWin32';
 
 use PAGI::Endpoint::SSE;
@@ -45,6 +39,8 @@ use IO::Socket::INET;
         my ($self, $sse) = @_;
         ++$self->{connections};
         $self->{protocol_class} = ref($sse);
+        $self->{advertised_www_version} = $sse->scope->{pagi}{spec_version};
+        $self->{connection} = $sse->scope->{'pagi.connection'};
         return $sse->decline(
             PAGI::Response::Text->new('Not Found', status => 404),
         );
@@ -98,6 +94,11 @@ subtest 'concrete SSE decline Response returns a real HTTP 404 over the real ser
     like($wire, qr/Not Found/,             'decline body delivered');
     unlike($wire, qr{text/event-stream},   'NOT an event stream');
     ok($eof, 'connection closed');
+    is($endpoint->{advertised_www_version}, '0.6', 'server advertises Www 0.6');
+    ok($endpoint->{connection}, 'scope exposes a connection object');
+    ok($endpoint->{connection}->can('on_end')
+        && $endpoint->{connection}->can('end_future'),
+        'connection object exposes the required public terminal API');
     is([$endpoint->{connections}, $endpoint->{protocol_class}],
         [1, 'PAGI::SSE'],
         'declarative dispatch retains the configured endpoint and direct protocol object');

@@ -31,6 +31,7 @@ sub ws_scope {
         extensions => { 'websocket.http.response' => {} },
         state      => { shared => 'state' },
         marker     => ['nested'],
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
         %changes,
     };
 }
@@ -39,7 +40,18 @@ sub receive { return sub { Future->done({ type => 'websocket.connect' }) } }
 
 sub websocket {
     my ($scope, $send) = @_;
-    return PAGI::WebSocket->new($scope, receive(), $send);
+    my $connection = $scope->{'pagi.connection'};
+    my $tracking_send = async sub {
+        my ($event) = @_;
+        await Future->wrap($send->($event));
+        $connection->_mark_response_started
+            if $connection && ($event->{type} // '') eq 'http.response.start';
+        $connection->_mark_complete
+            if $connection && ($event->{type} // '') eq 'http.response.body'
+                && !$event->{more};
+        return;
+    };
+    return PAGI::WebSocket->new($scope, receive(), $tracking_send);
 }
 
 my $redirect_body = '<!doctype html><html><head><title>Found</title></head><body><p>Redirecting to <a href="/next">/next</a>.</p></body></html>';
@@ -49,87 +61,87 @@ my @matrix = (
         base => PAGI::Response->new('raw', status => 418, headers => ['X-Kind' => 'base']),
         [
             {
-                type => 'websocket.http.response.start', status => 418,
+                type => 'http.response.start', status => 418,
                 headers => [
                     ['X-Kind' => 'base'],
                     ['Content-Type' => 'application/octet-stream'],
                     ['content-length' => 3],
                 ],
             },
-            { type => 'websocket.http.response.body', body => 'raw', more => 0 },
+            { type => 'http.response.body', body => 'raw', more => 0 },
         ],
     ],
     [
         Text => PAGI::Response::Text->new('text'),
         [
             {
-                type => 'websocket.http.response.start', status => 200,
+                type => 'http.response.start', status => 200,
                 headers => [
                     ['Content-Type' => 'text/plain; charset=utf-8'],
                     ['content-length' => 4],
                 ],
             },
-            { type => 'websocket.http.response.body', body => 'text', more => 0 },
+            { type => 'http.response.body', body => 'text', more => 0 },
         ],
     ],
     [
         HTML => PAGI::Response::HTML->new('<b>x</b>'),
         [
             {
-                type => 'websocket.http.response.start', status => 200,
+                type => 'http.response.start', status => 200,
                 headers => [
                     ['Content-Type' => 'text/html; charset=utf-8'],
                     ['content-length' => 8],
                 ],
             },
-            { type => 'websocket.http.response.body', body => '<b>x</b>', more => 0 },
+            { type => 'http.response.body', body => '<b>x</b>', more => 0 },
         ],
     ],
     [
         JSON => PAGI::Response::JSON->new([1]),
         [
             {
-                type => 'websocket.http.response.start', status => 200,
+                type => 'http.response.start', status => 200,
                 headers => [
                     ['Content-Type' => 'application/json'],
                     ['content-length' => 3],
                 ],
             },
-            { type => 'websocket.http.response.body', body => '[1]', more => 0 },
+            { type => 'http.response.body', body => '[1]', more => 0 },
         ],
     ],
     [
         Problem => PAGI::Response::Problem->new({ status => 409 }),
         [
             {
-                type => 'websocket.http.response.start', status => 409,
+                type => 'http.response.start', status => 409,
                 headers => [
                     ['Content-Type' => 'application/problem+json'],
                     ['content-length' => 14],
                 ],
             },
-            { type => 'websocket.http.response.body', body => '{"status":409}', more => 0 },
+            { type => 'http.response.body', body => '{"status":409}', more => 0 },
         ],
     ],
     [
         Redirect => PAGI::Response::Redirect->new('/next'),
         [
             {
-                type => 'websocket.http.response.start', status => 302,
+                type => 'http.response.start', status => 302,
                 headers => [
                     ['Content-Type' => 'text/html; charset=utf-8'],
                     ['Location' => '/next'],
                     ['content-length' => length($redirect_body)],
                 ],
             },
-            { type => 'websocket.http.response.body', body => $redirect_body, more => 0 },
+            { type => 'http.response.body', body => $redirect_body, more => 0 },
         ],
     ],
     [
         Empty => PAGI::Response::Empty->new,
         [
-            { type => 'websocket.http.response.start', status => 204, headers => [] },
-            { type => 'websocket.http.response.body', body => '', more => 0 },
+            { type => 'http.response.start', status => 204, headers => [] },
+            { type => 'http.response.body', body => '', more => 0 },
         ],
     ],
     [
@@ -140,12 +152,12 @@ my @matrix = (
         }, content_type => 'application/x-stream'),
         [
             {
-                type => 'websocket.http.response.start', status => 200,
+                type => 'http.response.start', status => 200,
                 headers => [['Content-Type' => 'application/x-stream']],
             },
-            { type => 'websocket.http.response.body', body => 'one', more => 1 },
-            { type => 'websocket.http.response.body', body => 'two', more => 1 },
-            { type => 'websocket.http.response.body', body => '', more => 0 },
+            { type => 'http.response.body', body => 'one', more => 1 },
+            { type => 'http.response.body', body => 'two', more => 1 },
+            { type => 'http.response.body', body => '', more => 0 },
         ],
     ],
 );
@@ -165,6 +177,28 @@ subtest 'deny adapts the complete concrete Response matrix exactly' => sub {
             is($ws->close_code, undef, 'HTTP denial has no WebSocket close code');
         };
     }
+};
+
+subtest 'deny emits File directly with an ordinary HTTP file body' => sub {
+    my ($fh, $path) = tempfile();
+    print {$fh} 'file refusal';
+    close $fh;
+    my @sent;
+    my $ws = websocket(ws_scope(), sub { push @sent, $_[0]; Future->done });
+    $ws->deny(PAGI::Response::File->new($path, status => 403))->get;
+    is($sent[0]{type}, 'http.response.start', 'ordinary HTTP start');
+    is($sent[0]{status}, 403, 'WebSocket refusal status is valid');
+    is($sent[1]{type}, 'http.response.body', 'ordinary HTTP body');
+    is($sent[1]{file}, $path, 'file body is preserved');
+};
+
+subtest 'streaming denial requires pagi.connection synchronously' => sub {
+    my $scope = ws_scope();
+    delete $scope->{'pagi.connection'};
+    my $ws = websocket($scope, sub { Future->done });
+    like dies { $ws->deny(PAGI::Response::Stream->new(sub {})) },
+        qr/WebSocket deny.*pagi\.connection.*0\.6 needed/,
+        'missing connection is diagnosed before returning a Future';
 };
 
 subtest 'one Response value can be reused for independent denials' => sub {
@@ -196,7 +230,7 @@ subtest 'one Response value can be reused for independent denials' => sub {
     }
 }
 
-subtest 'Response receives a shallow HTTP scope clone without protocol mutation' => sub {
+subtest 'Response receives the original WebSocket scope unchanged' => sub {
     my $scope = ws_scope();
     my $state = $scope->{state};
     my $marker = $scope->{marker};
@@ -205,10 +239,10 @@ subtest 'Response receives a shallow HTTP scope clone without protocol mutation'
 
     $ws->deny(T::ScopeResponse->new('scope'))->get;
 
-    isnt(refaddr($T::ScopeResponse::seen_scope), refaddr($scope),
-        'Response sees a distinct top-level hash');
-    is($T::ScopeResponse::seen_scope->{type}, 'http', 'clone type is HTTP');
-    is($T::ScopeResponse::seen_scope->{method}, 'GET', 'clone method is GET');
+    is(refaddr($T::ScopeResponse::seen_scope), refaddr($scope),
+        'Response sees the original scope');
+    is($T::ScopeResponse::seen_scope->{type}, 'websocket', 'scope type stays WebSocket');
+    is($T::ScopeResponse::seen_scope->{method}, 'POST', 'scope method is unchanged');
     is($T::ScopeResponse::seen_scope->{path}, '/socket', 'unrelated scalar fields are retained');
     is(refaddr($T::ScopeResponse::seen_scope->{state}), refaddr($state),
         'nested state reference is identical');
@@ -223,18 +257,7 @@ subtest 'Response receives a shallow HTTP scope clone without protocol mutation'
     use parent -norequire, 'PAGI::Response::Stream';
 }
 
-subtest 'protocol response capability is inherited without implying buffering' => sub {
-    is(PAGI::Response->new('base')->protocol_response_capability,
-        'body-events-v1', 'base advertises the versioned byte-body capability');
-    is(PAGI::Response::Stream->new(sub {})->protocol_response_capability,
-        'body-events-v1', 'Stream inherits the byte-body capability');
-    is(T::InheritedProtocolStream->new(sub {})->protocol_response_capability,
-        'body-events-v1', 'a delivery-preserving Stream subclass inherits it');
-    is(PAGI::Response::File->new(__FILE__)->protocol_response_capability,
-        undef, 'File explicitly opts out of denial-body delivery');
-};
-
-subtest 'an inherited Stream reaches mapped sends incrementally and commits at start settlement' => sub {
+ subtest 'an inherited Stream reaches mapped sends incrementally and commits at start settlement' => sub {
     my @sent;
     my @settlements;
     my $producer_calls = 0;
@@ -253,7 +276,7 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     });
 
     my $denial = $ws->deny($stream);
-    is([map { $_->{type} } @sent], ['websocket.http.response.start'],
+    is([map { $_->{type} } @sent], ['http.response.start'],
         'only response start is sent initially');
     is($producer_calls, 0, 'producer waits for mapped start settlement');
     ok(!$denial->is_ready, 'deny awaits response start');
@@ -277,7 +300,7 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
         'second chunk waits for first chunk settlement');
 
     $settlements[2]->done;
-    is($sent[-1], { type => 'websocket.http.response.body', body => '', more => 0 },
+    is($sent[-1], { type => 'http.response.body', body => '', more => 0 },
         'terminal chunk waits for second chunk settlement');
     ok(!$denial->is_ready, 'deny awaits terminal send');
     $settlements[3]->done;
@@ -302,7 +325,6 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     use Future::AsyncAwait;
     use parent -norequire, 'PAGI::Response';
     our $calls = 0;
-    sub protocol_response_capability { return undef }
     async sub _emit {
         my ($self, @args) = @_;
         ++$calls;
@@ -326,74 +348,13 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     async sub _emit { ++$calls; die "custom response was invoked\n" }
 }
 
-subtest 'unsupported response capabilities fail before denial start' => sub {
-    my ($fh, $path) = tempfile();
-    print {$fh} 'file';
-    close $fh;
-
-    my @unsupported = (
-        ['File response', PAGI::Response::File->new($path), qr/File/i],
-        ['explicit custom opt-out', T::UnsupportedProtocolResponse->new('opaque'), qr/capability/i],
-    );
-
-    for my $case (@unsupported) {
-        my ($name, $response, $error) = @$case;
-        subtest $name => sub {
-            my @sent;
-            local $T::UnsupportedProtocolResponse::calls = 0;
-            my $ws = websocket(ws_scope(), sub { push @sent, $_[0]; Future->done });
-            like(dies { $ws->deny($response)->get }, $error, 'unsupported response is rejected');
-            is(\@sent, [], 'no protocol response event was sent');
-            is($ws->connection_state, 'connecting', 'handshake state remains live');
-            is($T::UnsupportedProtocolResponse::calls, 0,
-                'unsupported custom delivery is rejected before invocation')
-                if $name eq 'explicit custom opt-out';
-        };
-    }
-};
-
-subtest 'advertised invalid events fail before that event, without rolling back committed start' => sub {
-    my @invalid = (
-        ['declared trailers', T::InvalidProtocolResponse->new([{
-            type => 'http.response.start', status => 200, headers => [], trailers => 1,
-        }]), qr/trailer/i, 0],
-        ['fh body', T::InvalidProtocolResponse->new([
-            { type => 'http.response.start', status => 200, headers => [] },
-            { type => 'http.response.body', fh => 'opaque', more => 0 },
-        ]), qr/(?:fh|opaque|body)/i, 1],
-        ['trailer event', T::InvalidProtocolResponse->new([
-            { type => 'http.response.start', status => 200, headers => [] },
-            { type => 'http.response.trailers', headers => [] },
-        ]), qr/trailer|event/i, 1],
-        ['unknown event', T::InvalidProtocolResponse->new([
-            { type => 'http.response.start', status => 200, headers => [] },
-            { type => 'http.response.push' },
-        ]),
-            qr/unknown|event/i, 1],
-    );
-
-    for my $case (@invalid) {
-        my ($name, $response, $error, $start_commits) = @$case;
-        subtest $name => sub {
-            my @sent;
-            my $ws = websocket(ws_scope(), sub { push @sent, $_[0]; Future->done });
-            like(dies { $ws->deny($response)->get }, $error, 'invalid response is rejected');
-            is([map { $_->{type} } @sent],
-                $start_commits ? ['websocket.http.response.start'] : [],
-                'the invalid event itself never reaches the protocol send');
-            is($ws->connection_state, $start_commits ? 'closed' : 'connecting',
-                'state reflects whether mapped start committed');
-        };
-    }
-};
-
-subtest 'a producer failure after mapped start propagates and leaves denial committed' => sub {
+  subtest 'a producer failure after mapped start propagates and leaves denial committed' => sub {
     my @sent;
     my $ws = websocket(ws_scope(), sub { push @sent, $_[0]; Future->done });
 
     like(dies { $ws->deny(T::ProducerFailureResponse->new('unused'))->get },
         qr/producer failed after response start/, 'producer failure reaches the caller');
-    is([map { $_->{type} } @sent], ['websocket.http.response.start'],
+    is([map { $_->{type} } @sent], ['http.response.start'],
         'mapped start reached the protocol before the producer failed');
     is($ws->connection_state, 'closed', 'post-start producer failure cannot reopen the slot');
 };
@@ -402,14 +363,14 @@ subtest 'a mapped body-send failure propagates and leaves denial committed' => s
     my @sent;
     my $ws = websocket(ws_scope(), sub {
         push @sent, $_[0];
-        return Future->done if $_[0]{type} eq 'websocket.http.response.start';
+        return Future->done if $_[0]{type} eq 'http.response.start';
         return Future->fail("denial body resource failed\n");
     });
 
     like(dies { $ws->deny(PAGI::Response::Text->new('body'))->get },
         qr/denial body resource failed/, 'genuine body-send failure reaches the caller');
     is([map { $_->{type} } @sent], [
-        'websocket.http.response.start', 'websocket.http.response.body',
+        'http.response.start', 'http.response.body',
     ], 'body send was attempted only after mapped start committed');
     is($ws->connection_state, 'closed', 'post-start send failure cannot reopen the slot');
 };
@@ -425,7 +386,7 @@ subtest 'disconnect during a backpressured mapped body settles normally' => sub 
     });
     my $ws = websocket(ws_scope('pagi.connection' => $connection), sub {
         push @sent, $_[0];
-        return Future->done if $_[0]{type} eq 'websocket.http.response.start';
+        return Future->done if $_[0]{type} eq 'http.response.start';
         $body_send = Future->new;
         $body_send->on_cancel(sub { $body_cancelled = 1 });
         return $body_send;
@@ -433,7 +394,7 @@ subtest 'disconnect during a backpressured mapped body settles normally' => sub 
 
     my $denial = $ws->deny($stream);
     is([map { $_->{type} } @sent], [
-        'websocket.http.response.start', 'websocket.http.response.body',
+        'http.response.start', 'http.response.body',
     ], 'the first body write is parked on the real mapped send');
     ok(!$denial->is_ready, 'denial remains pending on body backpressure');
 
@@ -472,22 +433,7 @@ subtest 'deny accepts exactly one concrete Response and only while connecting' =
     ok($ws->is_connected, 'accepted connection remains connected');
 };
 
-subtest 'without the extension deny uses policy-close and never invokes the custom Response' => sub {
-    my @sent;
-    my $scope = ws_scope(extensions => {});
-    my $ws = websocket($scope, sub { push @sent, $_[0]; Future->done });
-    local $T::ExplodingResponse::calls = 0;
-
-    my $returned = $ws->deny(bless({}, 'T::ExplodingResponse'))->get;
-    ok($returned == $ws, 'fallback resolves with WebSocket');
-    is($T::ExplodingResponse::calls, 0, 'custom response body is ignored');
-    is(\@sent, [{ type => 'websocket.close', code => 1008, reason => '' }],
-        'fallback is exactly one policy-close event');
-    ok($ws->is_closed, 'fallback closes the connection');
-    is($ws->close_code, 1008, 'fallback records policy close code');
-};
-
-subtest 'mapped start-send failure preserves the connecting state' => sub {
+ subtest 'mapped start-send failure preserves the connecting state' => sub {
     my @sent;
     my $calls = 0;
     my $ws = websocket(ws_scope(), sub {
@@ -502,7 +448,7 @@ subtest 'mapped start-send failure preserves the connecting state' => sub {
     is($ws->connection_state, 'connecting', 'failed start does not claim the response slot');
     $ws->accept->get;
     is([map { $_->{type} } @sent], [
-        'websocket.http.response.start', 'websocket.accept',
+        'http.response.start', 'websocket.accept',
     ], 'accept remains available after pre-commit failure');
     ok($ws->is_connected, 'successful accept establishes the still-live connection');
 };
@@ -520,7 +466,7 @@ subtest 'pending denial start reserves the first-event slot' => sub {
         my $start = Future->new;
         my $ws = websocket(ws_scope(), sub {
             push @sent, $_[0];
-            return $start if $_[0]{type} eq 'websocket.http.response.start';
+            return $start if $_[0]{type} eq 'http.response.start';
             return Future->done;
         });
         my $denial = $ws->deny(PAGI::Response::Text->new('reserved'));
@@ -528,7 +474,7 @@ subtest 'pending denial start reserves the first-event slot' => sub {
         is($ws->connection_state, 'denying', 'pending start has a distinct reserved state');
         like(dies { $claim->($ws)->get }, qr/denial response.*pending/i,
             "$name fails locally while denial owns the response slot");
-        is([map { $_->{type} } @sent], ['websocket.http.response.start'],
+        is([map { $_->{type} } @sent], ['http.response.start'],
             "$name emits no competing first event");
 
         $start->fail("controlled denial start failure\n");
@@ -547,7 +493,7 @@ subtest 'cancelling deny during start leaves the retained lifecycle authoritativ
     $start->on_cancel(sub { ++$start_cancelled });
     my $ws = websocket(ws_scope(), sub {
         push @sent, $_[0];
-        return $start if $_[0]{type} eq 'websocket.http.response.start';
+        return $start if $_[0]{type} eq 'http.response.start';
         return Future->done;
     });
     $ws->on_close(sub { ++$close_calls });
@@ -563,7 +509,7 @@ subtest 'cancelling deny during start leaves the retained lifecycle authoritativ
 
     $start->done;
     is([map { $_->{type} } @sent], [
-        'websocket.http.response.start', 'websocket.http.response.body',
+        'http.response.start', 'http.response.body',
     ], 'retained lifecycle emits the terminal buffered body after start settles');
     is($ws->connection_state, 'closed', 'start settlement commits and closes denial');
     is($close_calls, 1, 'denial cleanup runs exactly once after cancellation');
@@ -585,14 +531,14 @@ subtest 'cancelling deny during a body send preserves producer and cleanup owner
     my $ws = websocket(ws_scope(), sub {
         push @sent, $_[0];
         return $body_send
-            if $_[0]{type} eq 'websocket.http.response.body' && $_[0]{more};
+            if $_[0]{type} eq 'http.response.body' && $_[0]{more};
         return Future->done;
     });
     $ws->on_close(sub { ++$close_calls });
     my $denial = $ws->deny($stream);
 
     is([map { $_->{type} } @sent], [
-        'websocket.http.response.start', 'websocket.http.response.body',
+        'http.response.start', 'http.response.body',
     ], 'stream is parked in its first mapped body send');
     $denial->cancel;
     is($body_cancelled, 0, 'public cancellation never cancels the body send');
@@ -604,7 +550,7 @@ subtest 'cancelling deny during a body send preserves producer and cleanup owner
 
     $body_send->done;
     is($sent[-1], {
-        type => 'websocket.http.response.body', body => '', more => 0,
+        type => 'http.response.body', body => '', more => 0,
     }, 'retained producer still applies the normal terminal-body policy');
     is($body_cancelled, 0, 'body settlement path never cancels the send');
     is($writer_cleanup, 1, 'Stream Writer cleanup runs exactly once');
@@ -612,42 +558,4 @@ subtest 'cancelling deny during a body send preserves producer and cleanup owner
     is($ws->connection_state, 'closed', 'denial remains closed');
 };
 
-subtest 'cancelling policy-close fallback retains send and cleanup ownership' => sub {
-    my @sent;
-    my $close_send = Future->new;
-    my $close_cancelled = 0;
-    my $close_calls = 0;
-    $close_send->on_cancel(sub { ++$close_cancelled });
-    my $ws = websocket(ws_scope(extensions => {}), sub {
-        push @sent, $_[0];
-        return $close_send;
-    });
-    $ws->on_close(sub { ++$close_calls });
-    my $denial = $ws->deny(PAGI::Response::Text->new('ignored'));
-
-    $denial->cancel;
-    is($close_cancelled, 0, 'fallback send remains server-owned');
-    is($ws->connection_state, 'denying', 'fallback reserves the response slot');
-    like(dies { $ws->accept->get }, qr/denial response.*pending/i,
-        'accept fails locally while the fallback is pending');
-    is(scalar @sent, 1, 'fallback cancellation sends no competing event');
-
-    $close_send->done;
-    is($ws->connection_state, 'closed', 'fallback eventually closes');
-    is($ws->close_code, 1008, 'fallback retains its policy close code');
-    is($close_calls, 1, 'fallback cleanup runs exactly once');
-    is($close_cancelled, 0, 'fallback settlement never cancels the send');
-};
-
-subtest 'supports_denial_response reports the advertised extension' => sub {
-    my $with = websocket(ws_scope(), sub { Future->done });
-    ok($with->supports_denial_response, 'extension is reported');
-
-    my $without = websocket(ws_scope(extensions => {}), sub { Future->done });
-    ok(!$without->supports_denial_response, 'missing extension is reported false');
-
-    my $none = websocket(ws_scope(extensions => undef), sub { Future->done });
-    ok(!$none->supports_denial_response, 'undefined extensions are reported false');
-};
-
-done_testing;
+  done_testing;

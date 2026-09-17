@@ -123,8 +123,8 @@ then hand the concrete Response to the protocol owner:
 
 C<response_for> creates only fresh local Response state; it performs no send or
 receive. L<PAGI::Utils/invoke_app> owns HTTP emission, while
-L<PAGI::WebSocket/deny> and L<PAGI::SSE/decline> validate
-C<body-events-v1> and own their mapped sends, start commitment, disconnect,
+L<PAGI::WebSocket/deny> and L<PAGI::SSE/decline> emit it directly on the
+original scope and own their sends, start commitment, disconnect,
 backpressure, and cleanup. A mapped start send resolves when the server accepts
 and owns the response slot (or finishes discarding it after disconnect), not
 when the client receives bytes.
@@ -167,24 +167,6 @@ C<content_type> replaces Content-Type. The C<*_try> setters are chainable and
 do not overwrite an explicit value. C<body> is read-only encoded bytes for
 buffered responses and croaks for File and Stream. C<is_buffered> reports the
 memory strategy, independently of protocol adaptation.
-
-=head2 protocol_response_capability
-
-    my $capability = $response->protocol_response_capability;
-
-Returns the inheritable versioned token C<body-events-v1>. It promises that
-C<to_app> emits one C<http.response.start> followed only by ordinary byte
-C<http.response.body> events: no trailers and no opaque C<file> or C<fh> body.
-The token describes event vocabulary, not memory strategy;
-L<PAGI::Response::Stream> inherits it while retaining incremental emission and
-real send-Future backpressure. A subclass that introduces another delivery
-form must override this method and return C<undef> unless a later specification
-defines a matching capability.
-
-L<PAGI::Response::File> returns C<undef>. PAGI Www denial bodies permit only
-the body form and do not use C<file> or C<fh>; see
-L<PAGI::Spec::Www/"WebSocket Denial Response (extension)"> and
-L<PAGI::Spec::Www/"Decline SSE - send event">.
 
 =head1 SUBCLASSING
 
@@ -240,10 +222,7 @@ class may combine construction-time normalization with a new C<render> method
 when it genuinely owns both concerns, but validation and document assembly
 should not be hidden inside an encoder.
 
-Delivery internals used by File and Stream are not a public subclass seam. A
-delivery subclass that emits something outside ordinary body events must override
-C<protocol_response_capability> and opt out unless a matching future token is
-defined.
+Delivery internals used by File and Stream are not a public subclass seam.
 
 =head2 stream_response
 
@@ -467,8 +446,6 @@ sub delete_cookie {
 
 sub is_buffered { 1 }
 
-sub protocol_response_capability { return 'body-events-v1' }
-
 sub body {
     my ($self) = @_;
     my $body = $self->{_body};
@@ -687,109 +664,13 @@ sub _valid_reg_name {
 
 sub _validate_http_triplet {
     my ($scope, $receive, $send) = @_;
-    croak 'Response requires an unblessed HTTP scope hashref'
+    croak 'Response requires an unblessed supported scope hashref'
         unless ref($scope) eq 'HASH' && !blessed($scope);
-    croak 'Response requires HTTP scope type'
-        unless defined $scope->{type} && !ref($scope->{type}) && $scope->{type} eq 'http';
+    croak 'Response requires supported scope type (http, websocket, or sse)'
+        unless defined $scope->{type} && !ref($scope->{type})
+            && $scope->{type} =~ /\A(?:http|websocket|sse)\z/;
     croak 'Response receive must be a coderef' unless ref($receive) eq 'CODE';
     croak 'Response send must be a coderef' unless ref($send) eq 'CODE';
-    return;
-}
-
-# Private bridge used by protocol handshake denials. It deliberately keeps the
-# complete Response triplet intact: only the top-level scope type/method and
-# emitted event type are adapted. The mapped send Future remains server-owned.
-sub _validate_protocol_response {
-    my ($response, $operation) = @_;
-    $operation //= 'Protocol response';
-    croak "$operation requires exactly one concrete PAGI::Response"
-        unless blessed($response) && $response->isa('PAGI::Response');
-    my $capability = $response->protocol_response_capability;
-    croak "$operation cannot adapt " . ref($response)
-        . " without the body-events-v1 protocol response capability"
-        unless defined($capability) && !ref($capability)
-            && $capability eq 'body-events-v1';
-    return;
-}
-
-async sub _respond_for_protocol {
-    my ($response, $scope, $receive, $send, $prefix, $operation, $on_start_committed) = @_;
-    _validate_protocol_response($response, $operation);
-    croak "$operation requires a protocol scope hashref"
-        unless ref($scope) eq 'HASH' && !blessed($scope);
-    croak "$operation receive must be a coderef" unless ref($receive) eq 'CODE';
-    croak "$operation send must be a coderef" unless ref($send) eq 'CODE';
-    croak "$operation requires a protocol response prefix"
-        unless defined($prefix) && !ref($prefix) && length($prefix);
-    croak "$operation requires a start-commit callback"
-        unless ref($on_start_committed) eq 'CODE';
-
-    my %http_scope = (
-        %$scope,
-        type   => 'http',
-        method => 'GET',
-    );
-    my $emission_state = 'initial';
-    my $start_committed = 0;
-
-    my $map_event = sub {
-        my ($event) = @_;
-        croak "$operation Response events must be unblessed hashrefs"
-            unless @_ == 1 && ref($event) eq 'HASH' && !blessed($event);
-
-        my $type = $event->{type} // '';
-        croak "$operation cannot adapt opaque file/fh response bodies"
-            if exists($event->{file}) || exists($event->{fh});
-
-        my %mapped = %$event;
-        if ($type eq 'http.response.start') {
-            croak "$operation cannot adapt responses that declare trailers"
-                if exists $event->{trailers};
-            croak "$operation received duplicate or out-of-order response start"
-                unless $emission_state eq 'initial';
-            $mapped{type} = "$prefix.start";
-            $emission_state = 'body';
-        }
-        elsif ($type eq 'http.response.body') {
-            croak "$operation received response body before response start"
-                unless $emission_state eq 'body';
-            $mapped{type} = "$prefix.body";
-            $emission_state = 'complete' unless $event->{more};
-        }
-        else {
-            croak "$operation cannot adapt unknown HTTP response event '$type'";
-        }
-
-        return \%mapped;
-    };
-
-    my $mapped_send = async sub {
-        my ($event) = @_;
-        my $type = ref($event) eq 'HASH' ? ($event->{type} // '') : '';
-        my $mapped = $map_event->($event);
-
-        await Future->wrap($send->($mapped));
-        if ($type eq 'http.response.start') {
-            $start_committed = 1;
-            $on_start_committed->();
-        }
-        return;
-    };
-
-    await Future->wrap(
-        $response->_emit(\%http_scope, $receive, $mapped_send),
-    );
-
-    croak "$operation Response did not emit response start"
-        if $emission_state eq 'initial';
-    unless ($emission_state eq 'complete') {
-        # Unreachable today: this path serves only WebSocket deny and SSE
-        # decline, whose scopes carry no pagi.connection. It becomes live if
-        # connection state is ever extended to those scope types, so it is
-        # kept correct rather than deleted.
-        croak "$operation Response did not emit a terminal response body"
-            unless $start_committed && request_ended_abnormally(\%http_scope);
-    }
     return;
 }
 

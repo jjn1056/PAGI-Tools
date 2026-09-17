@@ -49,17 +49,9 @@ pre-start application/resource failure, not App::File routing policy. If a
 deployment requires startup validation, perform explicit C<-f>/C<-r> checks in
 startup or lifespan code.
 
-File returns C<undef> from C<protocol_response_capability> and therefore cannot
-serve a WebSocket denial or SSE decline. This is the PAGI Www conformance
-boundary: denial response bodies permit only the ordinary C<body> form and do
-not use C<file> or C<fh>. See
-L<PAGI::Spec::Www/"WebSocket Denial Response (extension)"> and
-L<PAGI::Spec::Www/"Decline SSE - send event">.
-
-The same boundary applies when rejection begins as a L<PAGI::Auth> outcome:
-pass the concrete Response selected by C<response_for> to C<deny> or C<decline>.
-Substituting a File response remains invalid because PAGI denial supports the
-ordinary body form only.
+File may serve an ordinary HTTP WebSocket refusal or SSE decline. Because File
+is non-buffered, those scopes must provide C<pagi.connection> so disconnect and
+terminal state remain authoritative while the file send is in flight.
 
 =cut
 
@@ -137,8 +129,6 @@ sub new {
 sub default_content_type { return undef }
 
 sub is_buffered { return 0 }
-
-sub protocol_response_capability { return undef }
 
 sub body {
     croak 'File response has no buffered body';
@@ -392,15 +382,7 @@ C<to_app> retains the exact File object. Each invocation performs all file
 inspection before response start, then awaits response start and the plan's one
 terminal body event. Later deliberate changes affect later invocations while
 each request keeps its complete pre-start plan. At an existing triplet boundary
-use L<PAGI::Utils/invoke_app>. C<is_buffered> returns false, C<body> croaks, and
-C<protocol_response_capability> returns C<undef>.
-
-The capability opt-out is independent of buffering: Stream remains eligible
-for protocol denial because it emits only ordinary body events. File opts out
-because a successful delivery plan may emit an opaque C<file> event from the
-C<file>/C<fh> vocabulary that PAGI Www explicitly excludes from WebSocket
-denial and SSE decline bodies; the fact that its 304/416 plans use ordinary
-empty bodies does not change that class-level capability.
+use L<PAGI::Utils/invoke_app>. C<is_buffered> returns false and C<body> croaks.
 
 =cut
 

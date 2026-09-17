@@ -531,6 +531,7 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                         && $case->{kind} eq 'websocket') {
                     my $event = await $protocol->receive;
                     $received_from = $event->{text};
+                    await $protocol->accept;
                     await $protocol->close(1000, 'selected');
                 }
                 elsif ($case->{cache_at} eq 'incoming') {
@@ -538,6 +539,7 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                     $received_from = $protocol->disconnect_reason;
                 }
                 elsif ($case->{kind} eq 'websocket') {
+                    await $protocol->accept;
                     await $protocol->close(1000, 'selected');
                 }
                 else {
@@ -642,9 +644,12 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                 if $case->{cache_at} eq 'incoming';
             is(\@old_events, [],
                 'handler emits nothing through the inherited callback');
-            is(\@selected_events, [$case->{event}],
+            my @expected = $case->{kind} eq 'websocket'
+                ? ({ type => 'websocket.accept' }, $case->{event})
+                : ($case->{event});
+            is(\@selected_events, \@expected,
                 'handler emits through the selected callback');
-            is(\@wire_events, [$case->{event}],
+            is(\@wire_events, \@expected,
                 'selected callback forwards the event to the wire');
         };
     }
@@ -726,6 +731,7 @@ subtest 'handler and native protocols apply inline providers and explicit constr
     my $app = router(routes => [
         websocket('/provider-ws/{id:&ProtocolProvider}' => async sub {
             push @normal_ws, $_[0]->path_param('id');
+            await $_[0]->accept;
             await $_[0]->close(1000, 'normal provider');
         }),
         websocket('/predicate-ws/{id}' => as_app_object(sub {
@@ -751,7 +757,8 @@ subtest 'handler and native protocols apply inline providers and explicit constr
     ])->to_app;
 
     is(run_scope($app, scope(type => 'websocket', path => '/provider-ws/accepted')),
-        [{ type => 'websocket.close', code => 1000, reason => 'normal provider' }],
+        [{ type => 'websocket.accept' },
+         { type => 'websocket.close', code => 1000, reason => 'normal provider' }],
         'normal WebSocket dispatch accepts an inline provider capture');
     is(run_scope($app, scope(type => 'websocket', path => '/predicate-ws/accepted')),
         [{ type => 'websocket.close', code => 1001, reason => 'native predicate' }],
@@ -768,13 +775,13 @@ subtest 'handler and native protocols apply inline providers and explicit constr
             type => 'websocket', path => $path,
             extensions => { 'websocket.http.response' => {} },
         ));
-        is($events->[0]{type}, 'websocket.http.response.start',
+        is($events->[0]{type}, 'http.response.start',
             "$path rejection uses the existing WebSocket denial family");
         is($events->[0]{status}, 404, "$path rejection is a denial 404");
     }
     for my $path (qw(/predicate-sse/rejected /provider-sse/rejected)) {
         my $events = run_scope($app, scope(type => 'sse', path => $path));
-        is($events->[0]{type}, 'sse.http.response.start',
+        is($events->[0]{type}, 'http.response.start',
             "$path rejection uses the existing SSE decline family");
         is($events->[0]{status}, 404, "$path rejection is a decline 404");
     }
@@ -863,10 +870,12 @@ subtest 'protocol selection is declaration ordered, protocol local, and mount aw
         }),
         websocket('/shared' => async sub {
             push @trace, 'first websocket';
+            await $_[0]->accept;
             await $_[0]->close;
         }),
         websocket('/shared' => async sub {
             push @trace, 'second websocket';
+            await $_[0]->accept;
             await $_[0]->close;
         }),
         sse('/shared' => async sub {
@@ -876,11 +885,13 @@ subtest 'protocol selection is declaration ordered, protocol local, and mount aw
         mount('/blocked/{tenant}', routes => [
             websocket('/socket' => async sub {
                 push @trace, 'blocked mount';
+                await $_[0]->accept;
                 await $_[0]->close;
             }),
         ], constraints => { tenant => qr/allowed/ }),
         websocket('/blocked/denied/socket' => async sub {
             push @trace, 'constraint fallback';
+            await $_[0]->accept;
             await $_[0]->close;
         }, middleware => [$route_middleware]),
         mount('/nested', routes => [
@@ -937,6 +948,7 @@ subtest 'the first prefix Mount owns every protocol and middleware boundary' => 
     my $first = router(routes => [
         route('/http' => sub { return PAGI::Response::Text->new('first http') }),
         websocket('/socket' => async sub {
+            await $_[0]->accept;
             await $_[0]->close(1000, 'first websocket');
         }),
         sse('/events' => async sub {
@@ -969,6 +981,7 @@ subtest 'the first prefix Mount owns every protocol and middleware boundary' => 
     is($http->[-1]{body}, 'first http',
         'the first same-prefix Mount owns HTTP');
     is($websocket, [
+        { type => 'websocket.accept' },
         { type => 'websocket.close', code => 1000, reason => 'first websocket' },
     ], 'the first same-prefix Mount owns WebSocket');
     is($sse, [{ type => 'sse.close' }],
@@ -976,18 +989,20 @@ subtest 'the first prefix Mount owns every protocol and middleware boundary' => 
 
     is(run_scope($app, scope(
         type => 'websocket', path => '/api/missing', raw_path => '/api/missing')),
-        [{ type => 'websocket.close' }],
-        'a child WebSocket miss closes without parent resumption');
+        [{ type => 'http.response.start', status => 404,
+           headers => [['content-type', 'text/plain']] },
+         { type => 'http.response.body', body => 'Not Found', more => 0 }],
+        'a child WebSocket miss returns ordinary HTTP without parent resumption');
     my $denial = run_scope($app, scope(
         type => 'websocket', path => '/api/missing', raw_path => '/api/missing',
         extensions => { 'websocket.http.response' => {} }));
     is([$denial->[0]{type}, $denial->[0]{status}],
-        ['websocket.http.response.start', 404],
+        ['http.response.start', 404],
         'a child WebSocket miss owns its HTTP denial');
     my $sse_miss = run_scope($app, scope(
         type => 'sse', path => '/api/missing', raw_path => '/api/missing'));
     is([$sse_miss->[0]{type}, $sse_miss->[0]{status}],
-        ['sse.http.response.start', 404],
+        ['http.response.start', 404],
         'a child SSE miss owns its protocol-specific 404');
     is(\@middleware_types,
         [qw(http websocket sse websocket websocket sse)],
@@ -1043,12 +1058,12 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
     my $sse_events = run_scope($app, scope(type => 'sse', path => '/missing'));
     is($sse_events, [
         {
-            type    => 'sse.http.response.start',
+            type    => 'http.response.start',
             status  => 404,
             headers => [['content-type', 'text/plain']],
         },
         {
-            type => 'sse.http.response.body',
+            type => 'http.response.body',
             body => 'Not Found',
             more => 0,
         },
@@ -1061,12 +1076,12 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
     ));
     is($ws_denial, [
         {
-            type    => 'websocket.http.response.start',
+            type    => 'http.response.start',
             status  => 404,
             headers => [['content-type', 'text/plain']],
         },
         {
-            type => 'websocket.http.response.body',
+            type => 'http.response.body',
             body => 'Not Found',
             more => 0,
         },
@@ -1076,8 +1091,11 @@ subtest 'protocol misses, lifespan, and unknown scopes have distinct wire outcom
         type => 'websocket',
         path => '/missing',
     ));
-    is($ws_close, [{ type => 'websocket.close' }],
-        'without the denial extension an unmatched WebSocket closes before acceptance');
+    is($ws_close, [
+        { type => 'http.response.start', status => 404,
+          headers => [['content-type', 'text/plain']] },
+        { type => 'http.response.body', body => 'Not Found', more => 0 },
+    ], 'an unmatched WebSocket receives ordinary HTTP without an extension');
     is(\@http_default_calls, [],
         'WebSocket and SSE misses never invoke the HTTP default');
 
@@ -1207,6 +1225,7 @@ subtest 'scope-type gates run before short-circuiting router middleware' => sub 
 
 subtest 'standalone protocol leaves and mounts compile as complete applications' => sub {
     my $ws_app = websocket('/socket' => async sub {
+        await $_[0]->accept;
         await $_[0]->close(1000, 'standalone');
     })->to_app;
     my $sse_app = sse('/events' => async sub {
@@ -1216,16 +1235,16 @@ subtest 'standalone protocol leaves and mounts compile as complete applications'
     is(ref($ws_app), 'CODE', 'a standalone WebSocket node compiles to an application');
     is(ref($sse_app), 'CODE', 'a standalone SSE node compiles to an application');
     is(run_scope($ws_app, scope(type => 'websocket', path => '/socket')), [
+        { type => 'websocket.accept' },
         { type => 'websocket.close', code => 1000, reason => 'standalone' },
     ], 'the standalone WebSocket application dispatches its leaf');
     is(run_scope($ws_app, scope(type => 'sse', path => '/missing'))->[0]{type},
-        'sse.http.response.start', 'a standalone WebSocket application retains SSE fallback behavior');
+        'http.response.start', 'a standalone WebSocket application retains SSE fallback behavior');
     is(run_scope($sse_app, scope(type => 'sse', path => '/events')), [
         { type => 'sse.close' },
     ], 'the standalone SSE application dispatches its leaf');
-    is(run_scope($sse_app, scope(type => 'websocket', path => '/missing')), [
-        { type => 'websocket.close' },
-    ], 'a standalone SSE application retains WebSocket fallback behavior');
+    is(run_scope($sse_app, scope(type => 'websocket', path => '/missing'))->[0]{type},
+        'http.response.start', 'a standalone SSE application returns ordinary HTTP for a WebSocket miss');
 
     my @trace;
     my $mount_wrapper = middleware(sub {
@@ -1238,14 +1257,14 @@ subtest 'standalone protocol leaves and mounts compile as complete applications'
         };
     });
     my $mount_app = mount('/api', routes => [
-        websocket('/socket' => async sub { await $_[0]->close }),
+        websocket('/socket' => async sub { await $_[0]->accept; await $_[0]->close }),
     ], middleware => [$mount_wrapper])->to_app;
     is(ref($mount_app), 'CODE', 'a standalone mount compiles to an application');
     my $mounted_miss = run_scope($mount_app, scope(
         type => 'websocket', path => '/api/missing',
         extensions => { 'websocket.http.response' => {} },
     ));
-    is($mounted_miss->[0]{type}, 'websocket.http.response.start',
+    is($mounted_miss->[0]{type}, 'http.response.start',
         'the routes-shorthand child owns its protocol-specific miss');
     is($mounted_miss->[0]{status}, 404, 'the child Router emits its complete 404 fallback');
     is(\@trace, ['mount before', 'mount after'],
