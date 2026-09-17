@@ -1338,7 +1338,7 @@ be absent or untrusted. This raw HTTP application limits one streaming upload:
 
       while (1) {
           my $event = await $receive->();
-          last if $event->{type} eq 'http.disconnect';
+          return if $event->{type} eq 'http.disconnect';
           next unless $event->{type} eq 'http.request';
 
           $seen += length($event->{body} // '');
@@ -1777,11 +1777,12 @@ good.
   # Tell EventSource to stop reconnecting: a bare 204.
   await $sse->decline(PAGI::Response::empty_response(status => 204));
 
-A decline is not a disconnect: no C<sse.disconnect> event ever follows it,
-because the stream never started. If your code calls C<< $sse->receive >> (or
-anything that reads C<$receive> directly) after a decline expecting to
-observe that non-event, it parks forever instead -- there is nothing left to
-receive. Return right after declining, as above.
+A normally completed decline is a clean end, not an abnormal disconnect. The
+server does not deliver C<sse.disconnect> on its own because no event stream
+started. If application code calls C<< $sse->receive >> (or the raw
+C<$receive>) after the refusal, however, that receive resolves with a
+reasonless C<sse.disconnect> reporting the clean terminal scope. Return right
+after declining, as above; there is no further application work to perform.
 
 First-send-wins picks the mode: once you have sent C<sse.start> a decline
 raises, and once you have sent C<http.response.start> a stream event

@@ -117,3 +117,25 @@ passed. Full guarantees require a server implementing the normative Www 0.6
 connection API. The referenced server checkout supplied the integration
 evidence but is not the only supported implementation. No release version or
 PAGI::Server internal dependency is claimed.
+
+## Review fix round 1 — Cookbook terminal outcomes
+
+Addressed both documentation findings from `task-C7-resume-review.md`. The
+unknown-length upload recipe now returns immediately on `http.disconnect`, so
+a truncated upload cannot fall through to accepted-upload processing or emit a
+success response. The SSE decline section now distinguishes unsolicited event
+delivery from an explicit post-refusal receive: the completed refusal is a
+clean end, and that receive resolves with a reasonless `sse.disconnect` under
+Www 0.6. No runtime code, feature, or test behavior changed.
+
+Focused checks after the edits:
+
+```text
+perlbrew exec --with perl-5.42.2@default env PERL_FUTURE_NO_XS=1 podchecker lib/PAGI/Tools/Cookbook.pod
+perlbrew exec --with perl-5.42.2@default env PERL_FUTURE_NO_XS=1 prove -l t/00-pod/cookbook-examples.t
+git diff --check
+```
+
+The POD checker passed. The extracted Cookbook example test passed **1 file,
+9 tests**. The diff whitespace check passed. No full suite was run in this
+bounded documentation fix round.
