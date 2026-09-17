@@ -3,6 +3,7 @@ use strict;
 use warnings;
 
 use Future;
+use Scalar::Util qw(weaken);
 use Future::AsyncAwait;
 use Test2::V0;
 
@@ -29,6 +30,7 @@ sub protocol_scope {
     my ($type, %changes) = @_;
     return {
         type         => $type,
+        pagi         => { version => '0.5', spec_version => '0.6' },
         method       => 'GET',
         path         => $type eq 'websocket' ? '/socket' : '/events',
         headers      => [],
@@ -308,4 +310,38 @@ subtest 'mapped start settlement owns the slot while body backpressure remains s
     }
 };
 
- done_testing;
+subtest 'unrelated parked refusal producers observe the test connection terminal outcome' => sub {
+    for my $case (@protocol_cases) {
+        subtest $case->{name} => sub {
+            my (@sent, $weak_writer, $weak_producer);
+            my ($cancelled, $writer_cleanup, $helper_cleanup) = (0, 0, 0);
+            my $protocol = direct_protocol($case->{type}, sub {
+                push @sent, $_[0]->{type}; return Future->done;
+            });
+            $protocol->on_close(sub { ++$helper_cleanup; return });
+            my $response = PAGI::Response::Stream->new(sub {
+                my ($writer) = @_;
+                $weak_writer = $writer; weaken($weak_writer);
+                $writer->on_close(sub { ++$writer_cleanup; return });
+                my $producer = (async sub {
+                    await $writer->write('parked');
+                    await Future->new;
+                })->();
+                $weak_producer = $producer; weaken($weak_producer);
+                $producer->on_cancel(sub { ++$cancelled });
+                return $producer;
+            }, status => 403);
+            my $rejection = $case->{reject}->($protocol, $response);
+            ok !$rejection->is_ready, 'producer parks after body send settles';
+            ok $weak_writer && $weak_producer, 'resources remain live before disconnect';
+            $protocol->scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+            ok lives { $rejection->get }, 'refusal settles successfully on disconnect';
+            is [$cancelled, $writer_cleanup, $helper_cleanup], [1, 1, 1], 'cancellation and both cleanups run once';
+            ok !$weak_producer, 'producer released';
+            ok !$weak_writer, 'writer released';
+            is \@sent, ['http.response.start', 'http.response.body'], 'no protocol start or terminal HTTP send';
+        };
+    }
+};
+
+done_testing;

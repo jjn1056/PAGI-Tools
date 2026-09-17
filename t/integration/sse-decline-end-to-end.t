@@ -8,7 +8,7 @@ use lib "$FindBin::Bin/../../lib";
 # Cross-repo smoke test: a PAGI-Tools SSE route must drive the real PAGI::Server
 # to return one concrete Response through PAGI::SSE->decline, instead of
 # starting an event stream. Each repo is unit-tested in isolation; this proves
-# the whole chain (Response emits HTTP events -> SSE maps decline events ->
+# the whole chain (Response emits HTTP events on the original SSE scope ->
 # server returns a real HTTP response -> client reads a 404).
 #
 # Skips unless PAGI::Server is on @INC, so PAGI-Tools' standalone suite stays
