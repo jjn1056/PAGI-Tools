@@ -285,8 +285,8 @@ subtest 'Response receives the original WebSocket scope unchanged' => sub {
     ok(!$denial->is_ready, 'deny awaits response start');
 
     $settlements[0]->done;
-    is($ws->connection_state, 'closed',
-        'successful mapped start settlement commits the response slot immediately');
+    is($ws->connection_state, 'denying',
+        'committed response slot remains nonterminal while body is pending');
     is($producer_calls, 1, 'producer starts after response start settles');
     is([map { $_->{body} // '<start>' } @sent], ['<start>', 'first'],
         'first chunk follows start');
@@ -359,7 +359,7 @@ subtest 'Response receives the original WebSocket scope unchanged' => sub {
         qr/producer failed after response start/, 'producer failure reaches the caller');
     is([map { $_->{type} } @sent], ['http.response.start'],
         'mapped start reached the protocol before the producer failed');
-    is($ws->connection_state, 'closed', 'post-start producer failure cannot reopen the slot');
+    is($ws->connection_state, 'denying', 'post-start producer failure cannot reopen the slot');
 };
 
 subtest 'a mapped body-send failure propagates and leaves denial committed' => sub {
@@ -375,7 +375,7 @@ subtest 'a mapped body-send failure propagates and leaves denial committed' => s
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
     ], 'body send was attempted only after mapped start committed');
-    is($ws->connection_state, 'closed', 'post-start send failure cannot reopen the slot');
+    is($ws->connection_state, 'denying', 'post-start send failure cannot reopen the slot');
 };
 
 subtest 'disconnect during a backpressured mapped body settles normally' => sub {

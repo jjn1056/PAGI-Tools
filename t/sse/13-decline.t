@@ -282,8 +282,8 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     ok(!$decline->is_ready, 'decline awaits response start');
 
     $settlements[0]->done;
-    is($sse->connection_state, 'closed',
-        'successful mapped start settlement commits the response slot immediately');
+    is($sse->connection_state, 'declining',
+        'committed response slot remains nonterminal while body is pending');
     ok(!exists $sse->{_pending_keepalive}, 'start commitment discards deferred keepalive');
     is($close_calls, 0, 'close cleanup waits for response completion or failure');
     is($producer_calls, 1, 'producer starts after response start settles');
@@ -342,7 +342,7 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     }
 }
 
-  subtest 'a producer failure after mapped start closes and cleans up exactly once' => sub {
+  subtest 'a producer failure after mapped start awaits server terminal cleanup' => sub {
     my @sent;
     my $close_calls = 0;
     my $sse = sse(sse_scope(), sub { push @sent, $_[0]; Future->done });
@@ -353,14 +353,16 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
         qr/producer failed after response start/, 'producer failure reaches the caller');
     is([map { $_->{type} } @sent], ['http.response.start'],
         'mapped start reached the protocol before the producer failed');
-    is($sse->connection_state, 'closed', 'post-start producer failure cannot reopen the slot');
-    is($close_calls, 1, 'post-start failure runs close cleanup exactly once');
+    is($sse->connection_state, 'declining', 'post-start producer failure cannot reopen the slot');
+    is($close_calls, 0, 'producer failure cannot publish terminal cleanup');
     ok(!exists $sse->{_pending_keepalive}, 'post-start failure cannot preserve deferred keepalive');
     $sse->decline(PAGI::Response::Text->new('again'))->get;
-    is($close_calls, 1, 'a repeated decline cannot repeat cleanup');
+    is($close_calls, 0, 'repeated decline cannot publish terminal cleanup');
+    $sse->scope->{'pagi.connection'}->_mark_disconnected('server_error', 'producer failed');
+    is($close_calls, 1, 'server outcome runs terminal cleanup once');
 };
 
-subtest 'a mapped body-send failure propagates and runs close cleanup exactly once' => sub {
+subtest 'a mapped body-send failure propagates and awaits server terminal cleanup' => sub {
     my @sent;
     my $close_calls = 0;
     my $sse = sse(sse_scope(), sub {
@@ -375,8 +377,10 @@ subtest 'a mapped body-send failure propagates and runs close cleanup exactly on
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
     ], 'body send was attempted only after mapped start committed');
-    is($sse->connection_state, 'closed', 'post-start send failure cannot reopen the slot');
-    is($close_calls, 1, 'post-start send failure runs close cleanup exactly once');
+    is($sse->connection_state, 'declining', 'post-start send failure cannot reopen the slot');
+    is($close_calls, 0, 'send failure cannot publish terminal cleanup');
+    $sse->scope->{'pagi.connection'}->_mark_disconnected('server_error', 'body failed');
+    is($close_calls, 1, 'server outcome runs terminal cleanup once');
 };
 
 subtest 'disconnect during a backpressured mapped body settles normally and cleans up' => sub {

@@ -54,11 +54,50 @@ sub handler {
         $raw_name = uri_unescape($raw_name // '');
         $last_msg_id = int($last_msg_id // 0);
 
+        my $session;
+        my $connected = 1;
+        my $ping_timer;
+
+        # Register cleanup callback - runs on ANY disconnect
+        # This replaces manual disconnect handling in the message loop
+        $ws->on_close(sub {
+            my ($code, $reason) = @_;
+            $connected = 0;
+            if ($ping_timer) {
+                $ping_timer->stop;
+                $loop->remove($ping_timer);
+            }
+
+            # Broadcast leave callback for grace period
+            my $broadcast_leave = sub {
+                my ($room_name, $username) = @_;
+                my $room_users = get_room_users($room_name);
+                for my $other (@$room_users) {
+                    my $other_session = get_session($other->{id});
+                    next unless $other_session && $other_session->{send_cb};
+                    # Runs from the grace-period timer's on_expire (a plain
+                    # synchronous callback), so it can't await -- handle the
+                    # returned Future explicitly instead of firing it bare.
+                    $other_session->{send_cb}->({
+                        type  => 'user_left',
+                        room  => $room_name,
+                        user  => $username,
+                        users => get_room_users($room_name),
+                    })->on_fail(sub {
+                        my ($error) = @_;
+                        warn "Failed to notify $other->{id} that $username left $room_name: $error\n";
+                    })->retain;
+                }
+            };
+
+            set_session_disconnected($session_id, $broadcast_leave) if $session;
+        });
+
         # Accept connection - one line vs manual protocol handling
         await $ws->accept;
+        return if $ws->is_closed;
 
-        # Check if this is a resume (existing session)
-        my $session = $session_id ? get_session($session_id) : undef;
+        $session = $session_id ? get_session($session_id) : undef;
 
         if ($session) {
             # Resume existing session
@@ -92,16 +131,19 @@ sub handler {
                 rooms      => [sort keys %{get_all_rooms()}],
             });
 
+            return if $ws->is_closed;
+
             # Auto-join general room
             await _join_room($ws, $session_id, 'general');
         }
 
+        return if $ws->is_closed;
+
         # Set up ping timer
-        my $connected = 1;
         my $weak_ws = $ws;
         weaken($weak_ws);
 
-        my $ping_timer = IO::Async::Timer::Periodic->new(
+        $ping_timer = IO::Async::Timer::Periodic->new(
             interval => 25,
             on_tick  => sub {
                 return unless $connected && $weak_ws;
@@ -114,39 +156,6 @@ sub handler {
         );
         $loop->add($ping_timer);
         $ping_timer->start;
-
-        # Register cleanup callback - runs on ANY disconnect
-        # This replaces manual disconnect handling in the message loop
-        $ws->on_close(sub {
-            my ($code, $reason) = @_;
-            $connected = 0;
-            $ping_timer->stop;
-            $loop->remove($ping_timer);
-
-            # Broadcast leave callback for grace period
-            my $broadcast_leave = sub {
-                my ($room_name, $username) = @_;
-                my $room_users = get_room_users($room_name);
-                for my $other (@$room_users) {
-                    my $other_session = get_session($other->{id});
-                    next unless $other_session && $other_session->{send_cb};
-                    # Runs from the grace-period timer's on_expire (a plain
-                    # synchronous callback), so it can't await -- handle the
-                    # returned Future explicitly instead of firing it bare.
-                    $other_session->{send_cb}->({
-                        type  => 'user_left',
-                        room  => $room_name,
-                        user  => $username,
-                        users => get_room_users($room_name),
-                    })->on_fail(sub {
-                        my ($error) = @_;
-                        warn "Failed to notify $other->{id} that $username left $room_name: $error\n";
-                    })->retain;
-                }
-            };
-
-            set_session_disconnected($session_id, $broadcast_leave);
-        });
 
         # Message loop - each_json handles JSON decode and disconnect
         # Compare to raw: while(1) { my $event = await $receive->(); ... }

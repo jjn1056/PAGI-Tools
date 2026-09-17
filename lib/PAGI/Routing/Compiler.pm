@@ -335,6 +335,7 @@ sub _compile_protocol_leaf {
                 : PAGI::SSE->new($scope, $receive, $send);
             my $returned = $handler->($protocol);
             await Future->wrap($returned);
+            await $protocol->close if $protocol->is_connected;
             return;
         };
     }

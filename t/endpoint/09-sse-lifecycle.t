@@ -270,7 +270,7 @@ subtest 'failed on_connect Future propagates through the endpoint app' => sub {
     }, qr/connect hook failed/, 'failed connect Future is not swallowed');
 };
 
-subtest 'on_disconnect remains synchronous and its return is not awaited' => sub {
+subtest 'on_disconnect Future is awaited by cleanup' => sub {
     {
         package SynchronousDisconnectEndpoint;
         use parent 'PAGI::Endpoint::SSE';
@@ -291,10 +291,12 @@ subtest 'on_disconnect remains synchronous and its return is not awaited' => sub
         sub { Future->done({ type => 'sse.disconnect' }) },
         sub { Future->done },
     );
-    is($running->get, undef, 'endpoint completes without disconnect return');
+    ok(!$running->is_ready, 'legacy receive cleanup awaits disconnect hook');
     is($SynchronousDisconnectEndpoint::called, 1, 'disconnect hook was called');
     ok(!$SynchronousDisconnectEndpoint::returned->is_ready,
-        'disconnect return Future was not awaited');
+        'disconnect return Future is pending');
+    $SynchronousDisconnectEndpoint::returned->done;
+    is($running->get, undef, 'endpoint completes after disconnect hook');
 };
 
 subtest 'to_app returns PAGI-compatible coderef' => sub {

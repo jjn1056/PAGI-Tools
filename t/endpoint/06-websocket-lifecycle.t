@@ -336,7 +336,7 @@ subtest 'failed callback Future propagates through the endpoint app' => sub {
     }, qr/receive hook failed/, 'failed receive Future is not swallowed');
 };
 
-subtest 'on_disconnect remains synchronous and its return is not awaited' => sub {
+subtest 'on_disconnect Future is awaited by cleanup' => sub {
     {
         package SynchronousDisconnectEndpoint;
         use parent 'PAGI::Endpoint::WebSocket';
@@ -357,10 +357,12 @@ subtest 'on_disconnect remains synchronous and its return is not awaited' => sub
         sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
         sub { Future->done },
     );
-    is($running->get, undef, 'endpoint completes without disconnect return');
+    ok(!$running->is_ready, 'legacy receive cleanup awaits disconnect hook');
     is($SynchronousDisconnectEndpoint::called, 1, 'disconnect hook was called');
     ok(!$SynchronousDisconnectEndpoint::returned->is_ready,
-        'disconnect return Future was not awaited');
+        'disconnect return Future is pending');
+    $SynchronousDisconnectEndpoint::returned->done;
+    is($running->get, undef, 'endpoint completes after disconnect hook');
 };
 
 done_testing;

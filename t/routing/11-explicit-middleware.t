@@ -87,10 +87,12 @@ subtest 'explicit descriptions run across Route Mount Router and protocols' => s
             ]),
             websocket('/socket' => async sub {
                 push @trace, 'handler:websocket';
+                await $_[0]->accept;
                 await $_[0]->close;
             }, middleware => [middleware(tracing_factory('websocket', \@trace))]),
             sse('/events' => async sub {
                 push @trace, 'handler:sse';
+                await $_[0]->start;
                 await $_[0]->close;
             }, middleware => [middleware(tracing_factory('sse', \@trace))]),
         ],

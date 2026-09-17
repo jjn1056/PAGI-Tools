@@ -37,6 +37,12 @@ fresh L<PAGI::Response::Writer> for every invocation, sends and awaits the
 response start before calling the producer, and sends one terminal empty body
 event after normal producer completion.
 
+Cancelling the invocation observer requests
+C<< pagi.connection->abort('response cancelled by caller') >> once, including
+while response start is pending. The cancellation signal is published before
+abort, which may settle a send synchronously. Server send Futures and local
+cleanup remain owned; only the Stream's producer is cancelled.
+
 The producer must await each Writer C<write> Future. That Future is the
 response-side backpressure contract; Stream does not prefetch chunks or hide
 an unbounded queue. Starting a second write before the first settles is an
@@ -119,6 +125,9 @@ sub _emit {
     $observer->on_cancel(sub {
         $cancel_signal->done('caller_cancelled')
             unless $cancel_signal->is_ready || $cancel_signal->is_cancelled;
+        # Publish first: abort may synchronously settle response.start.
+        $scope->{'pagi.connection'}->abort('response cancelled by caller')
+            if $scope->{'pagi.connection'};
     });
     return $observer;
 }

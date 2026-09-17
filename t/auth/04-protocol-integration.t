@@ -278,8 +278,8 @@ subtest 'mapped start settlement owns the slot while body backpressure remains s
                 qr/response is pending/, 'a competing first event fails locally';
 
             $settlements[0]->done;
-            is $protocol->connection_state, 'closed',
-                'start acceptance commits the response slot before body settlement';
+            is $protocol->connection_state, $case->{reserved_state},
+                'start acceptance commits the slot but body remains nonterminal';
             ok $connection->response_started,
                 'settled start is published to connection state';
             ok !$connection->response_complete,

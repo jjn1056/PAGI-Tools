@@ -37,8 +37,8 @@ async sub handle {
     # Register disconnect callback
     if ($self->can('on_disconnect')) {
         $sse->on_close(sub {
-            $self->on_disconnect($sse);
-            return;
+            my ($stream, $reason, $detail) = @_;
+            return $self->on_disconnect($stream, $reason, $detail);
         });
     }
 
@@ -76,6 +76,7 @@ sub to_app {
         my $sse = PAGI::SSE->new($scope, $receive, $send);
 
         await $endpoint->handle($sse);
+        await $sse->close if $sse->is_connected;
         return;
     };
 }
@@ -173,7 +174,10 @@ sent.
         # Cleanup subscriptions
     }
 
-Called when connection closes. This is synchronous (not async).
+Called at terminal connection notification. The hook may return a Future;
+cleanup awaits it and retains the endpoint until it settles. Arguments are
+C<($self, $sse, $disconnect_reason, $disconnect_detail)>; the last two are
+undefined for clean completion.
 
 =head1 CLASS METHODS
 

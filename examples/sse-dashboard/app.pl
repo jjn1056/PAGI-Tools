@@ -99,6 +99,13 @@ my $app = async sub {
         my $sub_id = $next_id++;
         $subscribers{$sub_id} = { sse => $sse };
 
+        # Cleanup on disconnect
+        $sse->on_close(sub {
+            delete $subscribers{$sub_id};
+            stop_metrics_broadcaster();
+            print STDERR "SSE client $sub_id disconnected\n";
+        });
+
         # Enable keepalive
         $sse->keepalive(25);
 
@@ -111,6 +118,8 @@ my $app = async sub {
             },
         );
 
+        return if $sse->is_closed;
+
         # Handle reconnection
         if (my $last_id = $sse->last_event_id) {
             await $sse->send_event(
@@ -119,15 +128,10 @@ my $app = async sub {
             );
         }
 
+        return if $sse->is_closed;
+
         # Start broadcaster if first subscriber
         start_metrics_broadcaster();
-
-        # Cleanup on disconnect
-        $sse->on_close(sub {
-            delete $subscribers{$sub_id};
-            stop_metrics_broadcaster();
-            print STDERR "SSE client $sub_id disconnected\n";
-        });
 
         print STDERR "SSE client $sub_id connected\n";
 

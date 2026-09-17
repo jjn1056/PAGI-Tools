@@ -87,9 +87,9 @@ sub _new {
         my $weak_self = $self;
         weaken($weak_self);
         $connection->on_disconnect(sub {
-            my ($reason) = @_;
+            my ($reason, $detail) = @_;
             return unless $weak_self;
-            $weak_self->_record_disconnect($reason);
+            $weak_self->_record_disconnect($reason, $detail);
         });
         $self->_refresh_disconnect;
     }
@@ -335,6 +335,12 @@ sub disconnect_reason {
     return $self->{_disconnect_reason};
 }
 
+sub disconnect_detail {
+    my ($self) = @_;
+    $self->_refresh_disconnect if $self->{_connection};
+    return $self->{_disconnect_detail};
+}
+
 sub bytes_written { return $_[0]{_bytes_written} }
 
 sub buffered_amount {
@@ -395,6 +401,7 @@ sub _refresh_disconnect {
     }
 
     $self->{_disconnected} = 1;
+    $self->{_disconnect_detail} = $connection->disconnect_detail;
     my $reason = $connection->disconnect_reason;
     $self->{_disconnect_reason} = $reason
         if defined($reason) && length($reason);
@@ -402,7 +409,8 @@ sub _refresh_disconnect {
 }
 
 sub _record_disconnect {
-    my ($self, $reason) = @_;
+    my ($self, $reason, $detail) = @_;
+    $self->{_disconnect_detail} = $detail;
     $self->{_disconnected} = 1;
     $self->{_disconnect_reason} = $reason
         if defined($reason) && length($reason);
@@ -450,10 +458,12 @@ C<close> sends one terminal empty body event and runs cleanup. It is
 idempotent; repeated calls while terminal delivery or cleanup is pending join
 that same close completion. Writes after close fail.
 
-=head2 is_disconnected, disconnect_reason, bytes_written
+=head2 is_disconnected, disconnect_reason, disconnect_detail, bytes_written
 
 Connection capability is tri-state: C<is_disconnected> is C<undef> without
-C<pagi.connection>. C<bytes_written> counts only nonterminal bytes whose send
+C<pagi.connection>. C<disconnect_detail> preserves its diagnostic text,
+including synchronous facts before callback delivery; clean completion is
+not an abnormal disconnect. C<bytes_written> counts only nonterminal bytes whose send
 settled before a detected disconnect.
 
 =head2 on_close

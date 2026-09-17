@@ -42,7 +42,33 @@ sub new {
     $scope->{'pagi.sse'} = $self;
     Scalar::Util::weaken($scope->{'pagi.sse'});
 
+    $self->{_cleanup_future} = Future->new;
+    if (my $connection = $scope->{'pagi.connection'}) {
+        # The connection owns this helper until end; the retained worker then
+        # owns asynchronous cleanup until all registered hooks have settled.
+        $connection->on_end(sub {
+            $self->_refresh_connection;
+            $self->_run_close_callbacks;
+            return;
+        });
+        $self->_refresh_connection;
+    }
     return $self;
+}
+
+sub _refresh_connection {
+    my ($self) = @_;
+    my $connection = $self->{scope}{'pagi.connection'} or return;
+    $self->{_disconnect_reason} = $connection->disconnect_reason;
+    $self->{_disconnect_detail} = $connection->disconnect_detail;
+    $self->{_state} = 'closed' unless $connection->is_connected;
+    return;
+}
+
+sub disconnect_detail {
+    my ($self) = @_;
+    $self->_refresh_connection;
+    return $self->{_disconnect_detail};
 }
 
 # Scope property accessors
@@ -157,25 +183,23 @@ sub path_param {
 }
 
 # Connection state accessors
-sub connection_state { shift->{_state} }
+sub connection_state { my $self = shift; $self->_refresh_connection; return $self->{_state} }
 
 sub is_started {
     my $self = shift;
-    return $self->{_state} eq 'started';
+    return $self->connection_state eq 'started';
 }
 
 sub is_closed {
     my $self = shift;
-    return $self->{_state} eq 'closed';
+    return $self->connection_state eq 'closed';
 }
 
 # True while the stream is live (started and not yet closed/disconnected).
-# Mirrors PAGI::WebSocket->is_connected (state eq 'connected'): an SSE scope
-# carries no pagi.connection (spec: N/A for sse), so connection liveness is
-# derived from this object's own state machine.
+# Synchronous connection facts take precedence over local protocol progress.
 sub is_connected {
     my $self = shift;
-    return $self->{_state} eq 'started';
+    return $self->connection_state eq 'started';
 }
 
 # Disconnect reason - why the connection closed
@@ -183,6 +207,7 @@ sub is_connected {
 # 'read_error', 'protocol_error', 'server_shutdown', 'server_error'
 sub disconnect_reason {
     my $self = shift;
+    $self->_refresh_connection;
     return $self->{_disconnect_reason};
 }
 
@@ -250,11 +275,12 @@ sub _set_closed {
 # Start the SSE stream
 async sub start {
     my ($self, %opts) = @_;
+    return $self if $self->{_declined};
 
     croak 'SSE decline response is pending'
         if $self->{_state} eq 'declining';
     # Idempotent - don't start twice
-    return $self if $self->is_started || $self->is_closed;
+    return $self if $self->is_started || $self->is_closed || $self->connection_state eq 'closing';
 
     my $event = {
         type   => 'sse.start',
@@ -263,7 +289,8 @@ async sub start {
     $event->{headers} = $opts{headers} if exists $opts{headers};
 
     await $self->{send}->($event);
-    $self->_set_state('started');
+    $self->_set_state('started') unless $self->is_closed;
+    return $self if $self->is_closed;
 
     # Arm any keepalive requested before the stream started (see
     # keepalive()'s deferred-arm note below) -- illegal before sse.start,
@@ -295,7 +322,7 @@ async sub keepalive {
 
     # Safe no-op once closed (including via decline) -- there is no live
     # connection left for the server to time a ping against.
-    return $self if $self->is_closed;
+    return $self if $self->is_closed || $self->{_declined} || $self->connection_state eq 'closing';
 
     $interval //= 0;
     $comment  //= '';
@@ -345,7 +372,7 @@ sub decline {
             $committed = 1;
             $self->{_declined} = 1;
             delete $self->{_pending_keepalive};
-            $self->_set_closed;
+            $self->_set_closed unless $self->{scope}{'pagi.connection'};
         }
         return;
     };
@@ -363,7 +390,7 @@ sub decline {
             die $error unless $completed;
         }
 
-        await $self->_run_close_callbacks if $committed;
+        await $self->_run_close_callbacks if $committed && !$self->{scope}{'pagi.connection'};
         die $error unless $completed;
         return $self;
     }->();
@@ -430,7 +457,7 @@ async sub send {
     my ($self, $data) = @_;
 
     return $self if $self->{_declined};
-    croak "Cannot send on closed SSE connection" if $self->is_closed;
+    croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
 
     # Auto-start if not started
     await $self->start unless $self->is_started;
@@ -448,7 +475,7 @@ async sub send_json {
     my ($self, $data) = @_;
 
     return $self if $self->{_declined};
-    croak "Cannot send on closed SSE connection" if $self->is_closed;
+    croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->start unless $self->is_started;
 
@@ -467,7 +494,7 @@ async sub send_event {
     my ($self, %opts) = @_;
 
     return $self if $self->{_declined};
-    croak "Cannot send on closed SSE connection" if $self->is_closed;
+    croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
     croak "send_event requires 'data' parameter" unless exists $opts{data};
 
     await $self->start unless $self->is_started;
@@ -495,7 +522,7 @@ async sub send_event {
 # Safe send - returns bool instead of throwing
 async sub try_send {
     my ($self, $data) = @_;
-    return 0 if $self->is_closed;
+    return 0 if $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -505,7 +532,7 @@ async sub try_send {
         });
     };
     if (my $err = $@) {
-        $self->_set_closed;
+        $self->_set_closed unless $self->{scope}{'pagi.connection'};
         await $self->_trigger_error($err);
         return 0;
     }
@@ -514,7 +541,7 @@ async sub try_send {
 
 async sub try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->is_closed;
+    return 0 if $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -525,7 +552,7 @@ async sub try_send_json {
         });
     };
     if (my $err = $@) {
-        $self->_set_closed;
+        $self->_set_closed unless $self->{scope}{'pagi.connection'};
         await $self->_trigger_error($err);
         return 0;
     }
@@ -537,7 +564,7 @@ async sub send_comment {
     my ($self, $comment) = @_;
 
     return $self if $self->{_declined};
-    croak "Cannot send on closed SSE connection" if $self->is_closed;
+    croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->start unless $self->is_started;
 
@@ -551,7 +578,7 @@ async sub send_comment {
 
 async sub try_send_comment {
     my ($self, $comment) = @_;
-    return 0 if $self->is_closed;
+    return 0 if $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -561,7 +588,7 @@ async sub try_send_comment {
         });
     };
     if (my $err = $@) {
-        $self->_set_closed;
+        $self->_set_closed unless $self->{scope}{'pagi.connection'};
         await $self->_trigger_error($err);
         return 0;
     }
@@ -570,7 +597,7 @@ async sub try_send_comment {
 
 async sub try_send_event {
     my ($self, %opts) = @_;
-    return 0 if $self->is_closed;
+    return 0 if $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -591,7 +618,7 @@ async sub try_send_event {
         await $self->{send}->($event);
     };
     if (my $err = $@) {
-        $self->_set_closed;
+        $self->_set_closed unless $self->{scope}{'pagi.connection'};
         await $self->_trigger_error($err);
         return 0;
     }
@@ -623,6 +650,7 @@ async sub _trigger_error {
 # Register close callback
 sub on_close {
     my ($self, $callback) = @_;
+    croak 'Cannot register on_close after cleanup begins' if $self->{_close_callbacks_ran};
     push @{$self->{_on_close}}, $callback;
     return $self;
 }
@@ -649,30 +677,32 @@ sub on {
 }
 
 # Internal: run all on_close callbacks
-async sub _run_close_callbacks {
+sub _run_close_callbacks {
     my ($self) = @_;
-
-    # Only run once
-    return if $self->{_close_callbacks_ran};
+    my $completion = $self->{_cleanup_future};
+    return $completion->without_cancel if $self->{_close_callbacks_ran};
     $self->{_close_callbacks_ran} = 1;
+    my $worker = $self->_close_callbacks_worker;
+    $worker->on_ready(sub {
+        my ($ready) = @_;
+        $ready->is_failed ? $completion->fail($ready->failure) : $completion->done;
+    });
+    $worker->retain;
+    return $completion->without_cancel;
+}
 
-    my $reason = $self->{_disconnect_reason} // 'unknown';
-
+async sub _close_callbacks_worker {
+    my ($self) = @_;
     for my $cb (@{$self->{_on_close}}) {
         eval {
-            my $r = $cb->($self, $reason);
-            if (blessed($r) && $r->isa('Future')) {
-                await $r;
-            }
+            my $result = $cb->($self, $self->disconnect_reason, $self->disconnect_detail);
+            await $result if blessed($result) && $result->isa('Future');
         };
-        if ($@) {
-            warn "PAGI::SSE on_close callback error: $@";
-        }
+        warn "PAGI::SSE on_close callback error: $@" if $@;
     }
-
-    # Clear all callback arrays to break any closure-based cycles
     $self->{_on_close} = [];
     $self->{_on_error} = [];
+    return;
 }
 
 # Internal: mark closed and fire on_close callbacks for a disconnect that
@@ -681,6 +711,7 @@ async sub _run_close_callbacks {
 # gone.
 async sub _note_disconnected {
     my ($self, $code, $reason) = @_;
+    if ($self->{scope}{'pagi.connection'}) { $self->_refresh_connection; return }
     # $code is accepted for signature parity with PAGI::WebSocket's version but
     # unused -- SSE has no RFC6455-style close code, only a reason.
 
@@ -691,7 +722,51 @@ async sub _note_disconnected {
 }
 
 # Close the connection
-async sub close {
+sub close {
+    my ($self, @args) = @_;
+    return $self->_legacy_close(@args) unless $self->{scope}{'pagi.connection'};
+    return Future->done($self) if $self->{_declined};
+    croak 'SSE decline response is pending' if $self->connection_state eq 'declining';
+    if ($self->{_close_callbacks_ran}) {
+        return $self->{_close_send}
+            ? $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
+            : Future->done($self);
+    }
+    return $self->{_close_operation}->without_cancel->then(sub { Future->done($self) })->retain
+        if $self->{_close_operation};
+    return $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
+        if $self->{_close_send};
+    return Future->done($self) if $self->is_closed;
+    croak "SSE close requires an active accepted/started connection"
+        unless $self->is_started;
+    $self->{_state} = 'closing';
+    my $settled = $self->{_close_send} = Future->new;
+    my $send;
+    my $ok = eval {
+        my %opts = @args;
+        $send = Future->wrap($self->{send}->({type => 'sse.close', (defined $opts{reason} ? (reason => $opts{reason}) : ())}));
+        1;
+    };
+    if (!$ok) { $settled->fail($@) }
+    else {
+        $send->on_ready(sub {
+            my ($ready) = @_;
+            if ($ready->is_failed) { $settled->fail($ready->failure) }
+            elsif ($ready->is_cancelled) { $settled->fail("Close send was cancelled\n") }
+            else { $settled->done }
+        });
+    }
+    my $operation = (async sub {
+        await $settled->without_cancel;
+        await $self->{_cleanup_future}->without_cancel;
+        return;
+    })->();
+    $self->{_close_operation} = $operation;
+    $operation->on_ready(sub { delete $self->{_close_operation} });
+    return $operation->without_cancel->then(sub { Future->done($self) })->retain;
+}
+
+async sub _legacy_close {
     my ($self, %opts) = @_;
 
     croak 'SSE decline response is pending'
@@ -717,6 +792,12 @@ async sub close {
 # Wait for disconnect
 async sub run {
     my ($self) = @_;
+    return if $self->{_declined};
+    if ($self->{scope}{'pagi.connection'}) {
+        await $self->start unless $self->is_started || $self->is_closed;
+        await $self->{_cleanup_future}->without_cancel;
+        return;
+    }
 
     await $self->start unless $self->is_started;
 
@@ -756,7 +837,7 @@ async sub _guarded_dispatch {
     my $ok = eval { $result = await $thunk->(); 1 };
     unless ($ok) {
         my $err = $@;
-        await $self->_run_close_callbacks;    # idempotent; may already have run
+        await $self->_run_close_callbacks unless $self->{scope}{'pagi.connection'};
         die $err;                             # re-raise: caller still sees the error
     }
 
@@ -837,7 +918,8 @@ async sub every {
     await $self->start unless $self->is_started;
 
     # Start background disconnect monitor
-    my $disconnect_future = $self->_watch_for_disconnect;
+    my $connection = $self->{scope}{'pagi.connection'};
+    my $disconnect_future = $connection ? undef : $self->_watch_for_disconnect;
 
     while (!$self->is_closed) {
         # Execute the callback
@@ -845,18 +927,20 @@ async sub every {
         unless ($ok) {
             my $err = $@;
             # Callback failed - connection likely closed or error occurred
-            $self->_set_closed;
-            await $self->_run_close_callbacks;
+            unless ($connection) {
+                $self->_set_closed;
+                await $self->_run_close_callbacks;
+            }
             # $disconnect_future is _watch_for_disconnect's decoupled signal
             # (see its comment), not the live receive itself, so cancelling
             # it here is safe -- it never reaches the in-flight receive call.
-            $disconnect_future->cancel if $disconnect_future->can('cancel') && !$disconnect_future->is_ready;
+            $disconnect_future->cancel if $disconnect_future && $disconnect_future->can('cancel') && !$disconnect_future->is_ready;
             die $err;    # re-raise: caller still sees the error, matching each()/each_*
         }
 
         # Race between sleep and disconnect detection
         my $sleep_future = Future::IO->sleep($interval);
-        my $winner = await Future->wait_any($sleep_future, $disconnect_future);
+        my $winner = await Future->wait_any($sleep_future, $connection ? $connection->end_future : $disconnect_future->without_cancel);
 
         # If disconnect won, exit the loop
         if ($self->is_closed) {
@@ -868,7 +952,7 @@ async sub every {
     # Clean up disconnect monitor if still running. Safe to cancel: it is
     # the decoupled signal, not the live receive itself (see
     # _watch_for_disconnect's comment).
-    $disconnect_future->cancel if $disconnect_future->can('cancel') && !$disconnect_future->is_ready;
+    $disconnect_future->cancel if $disconnect_future && $disconnect_future->can('cancel') && !$disconnect_future->is_ready;
 
     return $self;
 }
@@ -1177,14 +1261,14 @@ SSE parity of L<PAGI::WebSocket/deny>.
 C<response_for> synchronously creates a fresh, request-local Response from the
 deferred L<PAGI::Auth> outcome. It sends nothing and owns no stream state.
 C<decline> invokes the concrete Response on the original SSE scope and remains
-the sole owner of send settlement, disconnect observation, deferred
-keepalive disposal, and terminal cleanup.
+the owner of send settlement and deferred keepalive disposal. The helper's
+single connection observer owns terminal cleanup.
 
 Its ordinary C<http.response.*> events, including File and trailer forms, go
 directly to the server with normal send backpressure. Successful start
 settlement owns
 the response slot immediately, discards deferred keepalive, and leaves the SSE
-object closed after either completion or a later failure. A failed start send
+object C<declining> until the connection records a terminal outcome. A failed start send
 leaves the request pending. A non-buffered Response requires the Www 0.6
 C<pagi.connection> object. Prefer a finite response: once a streaming decline
 starts, the application is committed to finishing or aborting that HTTP
@@ -1200,7 +1284,7 @@ and accepted it into outbound processing, or finished discarding it after the
 connection ended. It does not prove client delivery. A body send pending at
 disconnect resolves under PAGI 0.002007 rather than manufacturing a disconnect
 failure. Post-commit cleanup therefore follows authoritative SSE/connection
-state and disconnect watchers, not send-Future failure; genuine validation and
+state and its C<on_end> observer, not send-Future failure; genuine validation and
 resource failures still propagate.
 
 Before mapped-start settlement, C<connection_state> is C<declining> and no
@@ -1217,8 +1301,7 @@ that live protocol behavior.
 After C<decline>, C<start>, C<run>, and the send methods (C<send>,
 C<send_json>, C<send_event>, C<send_comment>, C<keepalive>) all become B<safe
 no-ops> -- they return without touching the wire instead of croaking, since
-the response is already complete and there is no longer a stream to write
-to. If L</keepalive> was called before C<decline> -- for example
+the response slot is committed to HTTP rather than a live event stream. If L</keepalive> was called before C<decline> -- for example
 L<PAGI::Endpoint::SSE>'s C<keepalive_interval>, which is configured before
 C<on_connect> runs -- it was only ever a deferred, never-sent recording (see
 L</keepalive>'s B<DEFERRED ARM> note); C<decline> simply drops it. There is
@@ -1248,24 +1331,32 @@ C<on_connect> (see L<PAGI::Endpoint::SSE/on_connect>):
     await $sse->close;
     await $sse->close(reason => 'job_complete');
 
-Ends the SSE stream by sending an C<sse.close> event, then runs C<on_close>
-callbacks. The optional C<reason> is server-side metadata only (logging,
-metrics, tracing): it is passed to C<on_close> callbacks but is B<never> written
-to the wire -- SSE has no close frame, so to signal anything to the client send
-an ordinary C<send_event> before closing. Calling C<close> also wakes a parked
-L</run>, so you can end the stream from deep in a helper. Returns a Future and is
-asynchronous, so C<await> it -- this ensures the C<sse.close> send and any
-asynchronous C<on_close> callbacks complete before C<close> resolves.
+Requests stream completion with one C<sse.close> event. State becomes
+C<closing>, which stops new data sends; only the connection can make it
+C<closed>. The optional C<reason> is outgoing server-side metadata and does
+not replace the authoritative terminal reason/detail.
+
+The first close and concurrent calls before cleanup starts await send
+settlement and the shared asynchronous cleanup. Once terminal cleanup has
+begun, C<close> is idempotent and returns on close-send settlement (or
+immediately if no send was needed). This rule also applies to unrelated later
+callers: it allows an C<on_close> hook to call C<close> without waiting on
+itself. Cleanup itself always has one shared completion; cancelling an
+observer cannot cancel the worker or server I/O.
+
+The router and endpoint C<to_app> boundary send a missing close on successful
+handler return only if a stream is started and active. Exceptions propagate
+without creating a clean terminal outcome.
 
 =head2 run
 
     await $sse->run;
 
-Waits for client disconnect. Use this at the end of your
-handler to keep the connection open.
+Waits for connection end and its asynchronous cleanup without reading the
+receive queue. Use this to keep a live stream handler open.
 
-Safe no-op if the connection is already closed -- notably after L</decline>,
-where there was never a stream to wait on.
+Safe no-op after L</decline>, where no live stream was opened. For a started
+stream that has ended, it joins the same cleanup completion.
 
 =head1 CONNECTION STATE ACCESSORS
 
@@ -1273,7 +1364,7 @@ where there was never a stream to wait on.
 
     if ($sse->is_started) { ... }
     if ($sse->is_closed) { ... }
-    my $state = $sse->connection_state;    # pending, declining, started, closed
+    my $state = $sse->connection_state;    # pending, declining, started, closing, closed
 
 =head2 is_connected
 
@@ -1284,42 +1375,15 @@ True while the stream is live: started and not yet closed or disconnected
 non-destructive check that does not consume the receive queue. Mirrors
 L<PAGI::WebSocket/is_connected>.
 
-Because an SSE scope carries no C<pagi.connection> (the spec marks it
-B<not applicable> for C<sse>), liveness is derived from this object's own
-state machine. Like its WebSocket counterpart, the value is only as fresh
-as the last observed I/O: a half-open connection is not detected until the
-next send fails or the server reports a disconnect, so treat it as
-"not falsely stale" rather than a live network probe.
+Every modern SSE scope supplies C<pagi.connection>. Synchronous terminal
+facts take precedence over local progress, including before deferred callback
+delivery. A send settling successfully or failing does not establish liveness.
 
-=head2 disconnect_reason
+=head2 disconnect_reason, disconnect_detail
 
-    my $reason = $sse->disconnect_reason;
-
-Returns the reason for disconnect, if available. Common values:
-
-=over 4
-
-=item * C<client_closed> - Client closed connection normally
-
-=item * C<write_error> - Failed to write data (network error)
-
-=item * C<write_timeout> - Response write timed out
-
-=item * C<read_error> - Socket read failed
-
-=item * C<idle_timeout> - Connection closed due to inactivity
-
-=item * C<protocol_error> - HTTP parse error, invalid request
-
-=item * C<server_shutdown> - Server shutting down gracefully
-
-=item * C<server_error> - Unhandled server-side error aborted the request
-
-=back
-
-See L<PAGI::Spec::Www/"Standard Disconnect Reasons"> for the full,
-authoritative vocabulary. Returns C<undef> if connection is still open or
-reason is unknown.
+Return the connection's lifecycle reason token and diagnostic detail. Both
+are C<undef> on a clean end; the helper does not invent an application-close
+or client-close reason. See L<PAGI::Spec::Www/"Standard Disconnect Reasons">.
 
 =head2 buffered_amount, high_water_mark, low_water_mark
 
@@ -1511,8 +1575,10 @@ Parameters:
 =back
 
 The callback is executed first, then the method sleeps for the interval
-before the next iteration. If the callback throws, the connection is
-closed and on_close callbacks are run.
+before the next iteration. Every timer race gets a fresh cancellation-isolated
+connection end observer; it never starts a receive watcher on a connection-backed
+scope. Callback exceptions propagate to the server; terminal cleanup waits for
+the connection outcome.
 
 =head1 EVENT CALLBACKS
 
@@ -1520,7 +1586,7 @@ closed and on_close callbacks are run.
 
     $sse->on_close(sub {
         my ($sse, $reason) = @_;
-        if ($reason eq 'client_closed') {
+        if (!defined $reason) {
             cleanup_resources();
         } else {
             log_error("Unexpected disconnect: $reason");
@@ -1533,18 +1599,22 @@ closed and on_close callbacks are run.
         await cleanup_async($reason);
     });
 
-Registers cleanup callback. Runs on disconnect or close().
+Registers cleanup for the connection's terminal C<on_end> notification.
+Register before awaited I/O. Registration after cleanup has started or
+finished (including constructor-time terminal notification) croaks.
 Callbacks can be regular subs or async subs — async results are
 automatically awaited. Multiple callbacks run in registration order.
 Exceptions are caught and warned but do not prevent other callbacks.
 
-Callbacks receive two arguments:
+Callbacks receive three arguments:
 
 =over 4
 
 =item * C<$sse> - The SSE connection object (same as C<$self>)
 
-=item * C<$reason> - Why the connection closed (see L</disconnect_reason>)
+=item * C<$reason> - Lifecycle token, or C<undef> for clean completion
+
+=item * C<$detail> - Diagnostic detail, or C<undef>
 
 =back
 
@@ -1560,9 +1630,11 @@ it, use C<Scalar::Util::weaken>:
     weaken($weak_sse);
     $sse->on_close(sub { $weak_sse->... if $weak_sse });
 
-The callback arrays are cleared after firing, so any cycle via a closure
-is broken at connection close, but C<weaken> prevents the object from
-being kept alive until that point.
+The connection retains the helper until terminal notification. A single
+retained worker then owns asynchronous hooks, surviving handler return until
+cleanup settles and releases the hooks and helper. These guarantees require
+a complete Www 0.6 connection object. Manually constructed triplets without
+one retain legacy receive/close-driven behavior.
 
 =head2 on_error
 
@@ -1583,7 +1655,7 @@ regular subs or async subs — async results are automatically awaited.
 Multiple callbacks run in registration order. Exceptions are caught
 and warned but do not prevent other callbacks.
 
-Callbacks receive two arguments:
+Callbacks receive three arguments:
 
 =over 4
 
@@ -1618,6 +1690,15 @@ Returns C<$self> for chaining.
 
         my $sse = PAGI::SSE->new($scope, $receive, $send);
 
+        my $sub_id;
+        $sse->on_close(sub {
+            my ($sse, $reason) = @_;
+            unsubscribe_metrics($sub_id) if defined $sub_id;
+            # Log abnormal disconnects for debugging
+            warn "SSE client disconnected: $reason"
+                if defined $reason;
+        });
+
         await $sse->keepalive(25);
 
         # Send initial state
@@ -1626,21 +1707,15 @@ Returns C<$self> for chaining.
             data  => { time => time() },
         );
 
+        return if $sse->is_closed;
+
         # Subscribe to metrics
-        my $sub_id = subscribe_metrics(sub {
+        $sub_id = subscribe_metrics(sub {
             my ($metrics) = @_;
             $sse->try_send_event(
                 event => 'metrics',
                 data  => $metrics,
             );
-        });
-
-        $sse->on_close(sub {
-            my ($sse, $reason) = @_;
-            unsubscribe_metrics($sub_id);
-            # Log abnormal disconnects for debugging
-            warn "SSE client disconnected: $reason"
-                unless $reason eq 'client_closed';
         });
 
         await $sse->run;
