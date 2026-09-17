@@ -689,6 +689,27 @@ Use a Pages instance or subclass explicitly when application presentation
 needs custom synchronous render hooks. Compose has no Pages configuration
 option.
 
+L<PAGI::Auth> adds structured authentication outcomes without teaching a
+credential parser or provider. A missing token is a 401 challenge:
+
+  use PAGI::Auth qw(challenge forbid bearer);
+
+  return challenge(
+      challenges => [bearer(realm => 'api')],
+      detail      => 'An access token is required.',
+  ) unless defined $identity;
+
+An authenticated identity without permission is a 403 outcome:
+
+  return forbid(detail => 'This action requires write access.')
+      unless $identity->may('write');
+
+Both values are reusable Pages applications. See
+L<PAGI::Tools::Cookbook/Authentication & Sessions> for Basic, Bearer,
+multi-challenge, WebSocket, SSE, native-app, custom presentation, concealment,
+and explicit login redirect recipes. The cookie-login example is application
+policy; it is not an alternate Auth renderer.
+
 =head1 PART 5: REAL-TIME & STREAMING
 
 =head2 5.1 PAGI::WebSocket - WebSocket Helper

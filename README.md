@@ -148,6 +148,8 @@ a larger framework:
 - [PAGI::Middleware](https://metacpan.org/pod/PAGI%3A%3AMiddleware) and the `PAGI::Middleware::*` suite
 - [PAGI::App::File](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3AFile), proxies, health checks, and other ready-made applications
 - [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) for conventional negotiated HTTP applications
+- [PAGI::Auth](https://metacpan.org/pod/PAGI%3A%3AAuth) for structured authentication challenges and 401/403 outcome applications
+- [PAGI::Middleware::Auth::Basic](https://metacpan.org/pod/PAGI%3A%3AMiddleware%3A%3AAuth%3A%3ABasic) and [PAGI::Middleware::Auth::Bearer](https://metacpan.org/pod/PAGI%3A%3AMiddleware%3A%3AAuth%3A%3ABearer) for legacy credential middleware
 - [PAGI::State](https://metacpan.org/pod/PAGI%3A%3AState), [PAGI::Stash](https://metacpan.org/pod/PAGI%3A%3AStash), [PAGI::Session](https://metacpan.org/pod/PAGI%3A%3ASession), [PAGI::CSRF](https://metacpan.org/pod/PAGI%3A%3ACSRF), and [PAGI::Transport](https://metacpan.org/pod/PAGI%3A%3ATransport)
 - [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and related in-process testing tools
 
@@ -158,7 +160,7 @@ core Router grammar.
 # SEE ALSO
 
 [PAGI::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATutorial), [PAGI::Tools::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ATutorial), [PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook),
-[PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose), [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse),
+[PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose), [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting), [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages), [PAGI::Auth](https://metacpan.org/pod/PAGI%3A%3AAuth), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse),
 [PAGI::App::File](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3AFile), [PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils), [PAGI::Spec](https://metacpan.org/pod/PAGI%3A%3ASpec),
 [router frontend upgrade guide](https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md),
 [PAGI::Server::Runner](https://metacpan.org/pod/PAGI%3A%3AServer%3A%3ARunner)

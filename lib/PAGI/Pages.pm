@@ -1286,6 +1286,10 @@ supplied as validated raw headers. Repeated authentication challenges remain
 separate field lines. Pages reserves Content-Type, Content-Length,
 Transfer-Encoding, Location, Cache-Control, and Connection.
 
+L<PAGI::Auth> supplies structured Basic, Bearer, and custom challenge values
+and constructs 401/403 Pages applications. Pages does not join repeated
+C<WWW-Authenticate> field lines.
+
 Errors default to C<Cache-Control: no-store>. Statuses 428, 429, 431, and 511
 cannot weaken that policy. Welcome and redirects add no cache field by default.
 
@@ -1339,6 +1343,7 @@ calling Pages.
 =head1 SEE ALSO
 
 L<PAGI::Response>, L<PAGI::Routing>, L<PAGI::Request>,
-L<PAGI::WebSocket>, L<PAGI::SSE>
+L<PAGI::WebSocket>, L<PAGI::SSE>, L<PAGI::Auth>,
+L<PAGI::Pages::Application>
 
 =cut

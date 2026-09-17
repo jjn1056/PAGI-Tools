@@ -102,4 +102,25 @@ lifespan mode may treat that exception as a decline; strict mode rejects it.
 Returns a native HTTP application coderef that uses the same response
 materialization path as C<response_for>.
 
+=head2 response_for
+
+  my $response = $page->response_for($request);
+  my $response = $page->response_for($websocket);
+  my $response = $page->response_for($sse);
+  my $response = $page->response_for($scope_hash);
+
+Synchronously materializes one concrete L<PAGI::Response> using metadata from
+a Request, WebSocket, SSE, or raw scope hash. It accepts HTTP, WebSocket, and
+SSE scopes and rejects lifespan or unknown scope types. It does not call
+C<receive> or C<send>, emit events, or own protocol lifecycle. Use the
+appropriate helper's C<deny> or C<decline> to emit the returned Response.
+
+Materialization does not mutate the application, descriptor, source object,
+or scope hash. Repeated and concurrent calls derive fresh response values.
+
+=head1 SEE ALSO
+
+L<PAGI::Pages>, L<PAGI::Auth>, L<PAGI::Response>, L<PAGI::WebSocket>,
+L<PAGI::SSE>
+
 =cut

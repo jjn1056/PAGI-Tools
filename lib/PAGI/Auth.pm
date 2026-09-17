@@ -240,3 +240,92 @@ sub _quote {
 }
 
 1;
+
+=head1 NAME
+
+PAGI::Auth - structured authentication challenges and HTTP outcomes
+
+=head1 SYNOPSIS
+
+  use PAGI::Auth qw(challenge forbid basic bearer custom_challenge);
+
+  my $missing = challenge(
+      challenges => [bearer(realm => 'api')],
+      detail      => 'An access token is required.',
+  );
+
+  my $denied = forbid(
+      challenges => [bearer(
+          realm => 'api', error => 'insufficient_scope', scope => ['write'],
+      )],
+  );
+
+=head1 EXPORTS
+
+Nothing is exported by default. C<:outcomes> exports C<challenge> and
+C<forbid>; C<:challenges> exports C<basic>, C<bearer>, and
+C<custom_challenge>; C<:all> exports all five functions.
+
+=head1 CHALLENGE BUILDERS
+
+Every builder returns an immutable L<PAGI::Auth::Challenge>. It is protocol
+metadata, not a Response. All option lists must contain unique, named pairs;
+malformed tokens, controls, non-ASCII quoted values, and injection attempts
+croak synchronously.
+
+=head2 basic
+
+  basic(realm => 'Staff', charset => 'UTF-8')
+
+C<realm> is required and may be empty. Optional C<charset> accepts UTF-8
+case-insensitively and serializes as C<UTF-8>. Basic credentials require TLS
+in real deployments.
+
+=head2 bearer
+
+Accepts C<realm>, C<scope>, C<error>, C<error_description>, C<error_uri>, and
+C<params>, and requires at least one parameter. C<scope> is a nonempty arrayref
+of unique RFC scope tokens. C<params> is a nonempty hashref of extension
+parameters and cannot replace a core parameter. C<error_description> and
+C<error_uri> require C<error>; C<error_uri> deliberately requires an absolute
+URI, for example C<https://example.test/errors/expired>. Public
+C<error_description> text is sent on the wire and must never contain tokens,
+passwords, internal exceptions, or other secrets. Bearer tokens require TLS in
+real deployments.
+
+Known errors enforce their HTTP outcome: C<invalid_token> and
+C<insufficient_user_authentication> are 401 challenges, C<invalid_request>
+belongs in an explicit 400 response, and C<insufficient_scope> is a 403
+forbid. Unknown extension errors remain open protocol values; Auth does not
+infer their status.
+
+=head2 custom_challenge
+
+  custom_challenge(scheme => 'Demo', params => { realm => 'api' })
+  custom_challenge(scheme => 'Negotiate', token68 => 'abc+/==')
+
+C<scheme> is required and cannot be Basic or Bearer. Optional C<params> and
+C<token68> are mutually exclusive. Parameter names use HTTP token grammar;
+values use validated quoted-string serialization. C<token68> uses token68
+grammar.
+
+=head1 OUTCOME FACTORIES
+
+C<challenge> always constructs a reusable 401 L<PAGI::Pages::Application> and
+requires one challenge or a nonempty arrayref. C<forbid> constructs a reusable
+403 Pages application; its optional challenges must obey the Bearer status
+rules above. Both accept Pages presentation options C<as>, C<detail>, C<type>,
+C<title>, C<instance>, C<extensions>, C<headers>, and C<cache_control>. Caller
+C<WWW-Authenticate> headers are rejected because Auth owns those fields. Each
+challenge is emitted as a separate field line.
+
+These functions describe an outcome only. They never inspect credentials,
+request bodies, identity state, or providers. Credential and identity
+middleware is a separate application concern.
+
+=head1 SEE ALSO
+
+L<PAGI::Auth::Challenge>, L<PAGI::Auth::Outcomes>, L<PAGI::Pages::Application>,
+L<PAGI::Tools::Cookbook>
+
+=cut

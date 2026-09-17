@@ -304,6 +304,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
 
   use AppleApp::Middleware qw(with_apples_api_header);
   use AppleApp::Model qw(apple_model);
+  use PAGI::Auth qw(challenge bearer);
   use PAGI::Compose qw(compose);
   use PAGI::Pages qw(welcome not_found);
   use PAGI::Response qw(file_response json_response ndjson_response);
@@ -350,6 +351,13 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
               await $writer->write_item($apple);
           }
       });
+  }
+
+  async sub authentication_required($request) {
+      return challenge(
+          challenges => [bearer(realm => 'apples')],
+          detail      => 'A valid access token is required.',
+      );
   }
 
   async sub read_apple($request) {
@@ -433,6 +441,8 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
                       methods => ['POST'], name => 'create'),
                   route('/export' => \&export_apples,
                       methods => ['GET'], name => 'export'),
+                  route('/auth-required' => \&authentication_required,
+                      methods => ['GET'], name => 'auth_required'),
                   route('/{apple_id:&Int}' => \&read_apple,
                       methods => ['GET'], name => 'read'),
                   route('/{apple_id:&Int}' => \&update_apple,
@@ -1434,6 +1444,198 @@ later cleanup follows connection terminal facts rather than treating a
 disconnect as a failed send.
 
 =head1 AUTHENTICATION & SESSIONS
+
+L<PAGI::Auth> builds protocol challenges and 401/403 outcome applications. It
+does not parse credentials or select identities. The legacy authentication
+middleware below remains the place for those application-specific jobs.
+Basic credentials and Bearer tokens require TLS in real deployments.
+
+=head2 Basic Challenge
+
+B<Request handler:> return the reusable Pages application from the handler.
+
+  use PAGI::Auth qw(challenge basic);
+
+  sub protected($request) {
+      return challenge(
+          challenges => [basic(realm => 'Staff', charset => 'UTF-8')],
+          as          => 'text',
+          detail      => 'Authentication is required.',
+      );
+  }
+
+=head2 Missing Bearer Token
+
+B<Request handler:> a missing token is a plain Bearer challenge without an
+C<error> parameter.
+
+  use PAGI::Auth qw(challenge bearer);
+
+  sub token_required($request) {
+      return challenge(
+          challenges => [bearer(realm => 'api')],
+          detail      => 'An access token is required.',
+      );
+  }
+
+=head2 Invalid Bearer Token
+
+B<Request handler:> validation happened elsewhere. The description is public
+wire text; never put the token, a password, or an internal exception in it.
+The error URI choice is explicitly absolute.
+
+  return challenge(
+      challenges => [bearer(
+          realm             => 'api',
+          error             => 'invalid_token',
+          error_description => 'The access token is no longer valid.',
+          error_uri         => 'https://example.test/errors/invalid-token',
+      )],
+  );
+
+=head2 Insufficient Bearer Scope
+
+B<Request handler:> an authenticated principal without permission receives
+403. Known C<insufficient_scope> belongs on C<forbid>, not C<challenge>.
+
+  use PAGI::Auth qw(forbid bearer);
+
+  return forbid(
+      challenges => [bearer(
+          realm => 'api', error => 'insufficient_scope', scope => ['write'],
+      )],
+      detail => 'Write access is required.',
+  );
+
+Unknown Bearer extension error names remain open protocol values; Auth does
+not guess whether they imply 401 or 403.
+
+=head2 Multiple Authentication Challenges
+
+B<Request handler:> pass one ordered array. Each challenge remains its own
+C<WWW-Authenticate> field line; values are never comma-joined.
+
+  use PAGI::Auth qw(challenge basic bearer custom_challenge);
+
+  return challenge(challenges => [
+      basic(realm => 'Staff'),
+      bearer(realm => 'api'),
+      custom_challenge(
+          scheme => 'DemoToken', params => { realm => 'partners' },
+      ),
+  ]);
+
+=head2 Explicit Login Redirect Policy
+
+B<Request handler:> interactive login is application policy, not an alternate
+Auth renderer. Redirect deliberately, and keep the 401 challenge for clients
+that need protocol authentication.
+
+  use PAGI::Pages qw(redirect);
+
+  sub browser_home($request) {
+      return redirect('/login', status => 303) unless signed_in($request);
+      return home_page($request);
+  }
+
+F<examples/auth-cookie-login> demonstrates the complete cookie and session
+flow, including login and logout methods. It requires Perl 5.40 or newer.
+
+=head2 Deliberate 404 Concealment
+
+B<Request handler:> when disclosing resource existence is itself sensitive,
+make concealment explicit policy.
+
+  use PAGI::Pages qw(not_found);
+
+  sub confidential_report($request) {
+      return not_found(detail => 'Report not found')
+          unless may_discover_report($request);
+      return report_response($request);
+  }
+
+=head2 WebSocket Authentication Denial
+
+B<WebSocket endpoint:> materialize locally, then let C<deny> perform event
+emission and retain WebSocket terminal ownership.
+
+  use PAGI::Auth qw(challenge bearer);
+
+  websocket('/chat' => async sub {
+      my ($ws) = @_;
+      unless (authorized($ws)) {
+          my $failure = challenge(
+              challenges => [bearer(realm => 'chat')],
+              as          => 'text',
+          );
+          return await $ws->deny($failure->response_for($ws));
+      }
+      await $ws->accept;
+      await $ws->run;
+  });
+
+C<response_for> is synchronous and sends no events. The denial is an ordinary
+C<http.response.*> response on the original scope. Every concrete Response is
+eligible, including File; C<deny> owns actual emission and close timing.
+
+=head2 SSE Authentication Decline
+
+B<SSE endpoint:> decline before starting the stream.
+
+  use PAGI::Auth qw(challenge bearer);
+
+  sse('/events' => async sub {
+      my ($sse) = @_;
+      unless (authorized($sse)) {
+          my $failure = challenge(
+              challenges => [bearer(realm => 'events')],
+              as          => 'text',
+          );
+          return await $sse->decline($failure->response_for($sse));
+      }
+      await $sse->start;
+      await $sse->run;
+  });
+
+The concrete 401 contains the structured Bearer C<WWW-Authenticate> field.
+C<response_for> only creates that local Response; C<decline> emits the ordinary
+C<http.response.*> events and owns SSE cleanup. File responses are eligible.
+
+=head2 Invoke an Auth Outcome from a Native Application
+
+B<Native triplet app:> use the normal application invocation helper.
+
+  use Future::AsyncAwait;
+  use PAGI::Auth qw(challenge bearer);
+  use PAGI::Utils qw(invoke_app);
+
+  my $failure = challenge(
+      challenges => [bearer(realm => 'native')],
+  );
+
+  my $app = async sub {
+      my ($scope, $receive, $send) = @_;
+      return await invoke_app($failure, $scope, $receive, $send);
+  };
+
+=head2 Custom Pages Presentation for Auth Outcomes
+
+B<Request handler setup:> inject a configured Pages subclass once and reuse
+the outcome factory. Rendering hooks stay synchronous.
+
+  use PAGI::Auth qw(bearer);
+  use PAGI::Auth::Outcomes;
+
+  my $auth = PAGI::Auth::Outcomes->new(
+      pages => MyApp::Pages->new,
+  );
+
+  sub custom_token_required($request) {
+      return $auth->challenge(
+          challenges => [bearer(realm => 'api')],
+          detail      => 'Sign in to continue.',
+      );
+  }
 
 =head2 Session Management
 

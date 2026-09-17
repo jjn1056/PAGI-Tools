@@ -2,6 +2,17 @@
 
 0.002003 - UNRELEASED
 
+  [Structured authentication outcomes]
+  - NEW: PAGI::Auth builds injection-safe Basic, Bearer, and custom challenge
+    metadata. `challenge` and `forbid` return reusable negotiated Pages
+    applications for 401 and 403; repeated `WWW-Authenticate` challenges stay
+    as separate field lines. `response_for` synchronously materializes a local
+    Response without sending, so WebSocket denial and SSE decline explicitly
+    retain protocol emission and lifecycle ownership. The apples canary shows
+    a missing-token outcome, while the cookie-login example labels interactive
+    redirects as application policy. Credential parsing, identity providers,
+    and a full multi-protocol authentication application remain Phase 2.
+
   [Universal connection state (Www 0.6)]
   - WebSocket, SSE, and HTTP Test::Client scopes now carry the complete
     `pagi.connection` contract and report `spec_version` 0.6. Applications and

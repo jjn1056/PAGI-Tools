@@ -169,6 +169,10 @@ a larger framework:
 
 =item * L<PAGI::Pages> for conventional negotiated HTTP applications
 
+=item * L<PAGI::Auth> for structured authentication challenges and 401/403 outcome applications
+
+=item * L<PAGI::Middleware::Auth::Basic> and L<PAGI::Middleware::Auth::Bearer> for legacy credential middleware
+
 =item * L<PAGI::State>, L<PAGI::Stash>, L<PAGI::Session>, L<PAGI::CSRF>, and L<PAGI::Transport>
 
 =item * L<PAGI::Test::Client> and related in-process testing tools
@@ -182,7 +186,7 @@ core Router grammar.
 =head1 SEE ALSO
 
 L<PAGI::Tutorial>, L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>,
-L<PAGI::Compose>, L<PAGI::Routing>, L<PAGI::Pages>, L<PAGI::Response>,
+L<PAGI::Compose>, L<PAGI::Routing>, L<PAGI::Pages>, L<PAGI::Auth>, L<PAGI::Response>,
 L<PAGI::App::File>, L<PAGI::Utils>, L<PAGI::Spec>,
 L<router frontend upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md>,
 L<PAGI::Server::Runner>

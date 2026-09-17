@@ -156,3 +156,64 @@ sub _validate_caller_headers {
 }
 
 1;
+
+=head1 NAME
+
+PAGI::Auth::Outcomes - configurable authentication outcome factories
+
+=head1 SYNOPSIS
+
+  my $auth = PAGI::Auth::Outcomes->new(
+      pages => MyApp::Pages->new,
+  );
+  my $app = $auth->challenge(
+      challenges => [PAGI::Auth::bearer(realm => 'api')],
+  );
+
+=head1 CONSTRUCTION
+
+C<new> accepts only C<pages>, which must be a L<PAGI::Pages> instance (a
+subclass is allowed). The default is a fresh C<PAGI::Pages> instance. This is
+the supported hook for application-specific synchronous rendering and
+presentation.
+
+=head1 METHODS
+
+=head2 challenge
+
+Constructs a reusable 401 Pages application. C<challenges> is required and is
+one L<PAGI::Auth::Challenge> or a nonempty arrayref of them.
+
+=head2 forbid
+
+Constructs a reusable 403 Pages application. C<challenges> is optional; when
+present it accepts the same shapes. A Bearer challenge on 403 must use
+C<error=insufficient_scope>.
+
+Both methods also accept C<as>, C<detail>, C<type>, C<title>, C<instance>,
+C<extensions>, C<headers>, and C<cache_control>. Unknown options croak. Auth
+reserves C<WWW-Authenticate>; other caller headers are validated by
+Pages before Auth appends one separate field line per challenge.
+
+The methods may also be called on the class, which creates a default instance.
+They do not cache applications or mutate identities, scopes, challenges, Pages
+instances, or caller data.
+
+=head1 MATERIALIZATION
+
+The returned L<PAGI::Pages::Application> can be invoked repeatedly. Its
+C<response_for> method synchronously creates a concrete local
+L<PAGI::Response> for a Request, WebSocket, SSE, or raw scope hash. It sends no
+events. The protocol helper remains responsible for emission:
+
+  my $failure = $auth->challenge(
+      challenges => [PAGI::Auth::bearer(realm => 'events')],
+      as => 'text',
+  );
+  return await $sse->decline($failure->response_for($sse));
+
+=head1 SEE ALSO
+
+L<PAGI::Auth>, L<PAGI::Pages>, L<PAGI::Pages::Application>
+
+=cut
