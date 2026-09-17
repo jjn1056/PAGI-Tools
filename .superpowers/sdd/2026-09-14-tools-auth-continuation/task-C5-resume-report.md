@@ -93,3 +93,27 @@ Stream tests park start, body, terminal-send, and cleanup stages. Public cancell
 ## Remaining concerns / boundaries
 
 No unresolved implementation blocker. C6 owns real-socket integration, including natural close timeout/close_incomplete behavior; C7 owns the repository-wide gate. This change intentionally depends on a complete normative connection object on modern scopes. An application hook that never settles retains its cleanup resources by design. The SSE close timing rule and pre-I/O registration requirement are explicit API costs, not hidden fallback behavior.
+
+## Review fix round 1 — committed-refusal data guards
+
+Addressed the single P2 in `task-C5-resume-review.md` on top of parent ledger commit `b3fd210`. The nonterminal `denying`/`declining` progress states exposed a missed former implicit guard: WebSocket text/bytes/JSON sends and their boolean variants, plus all four SSE boolean sends, could issue protocol data while a committed HTTP refusal body was pending.
+
+Added the existing `_denied`/`_declined` commitment flag to those ten public send guards. Throwing WebSocket methods now reject locally before invoking send; boolean methods return false without send/error hooks. Connection liveness and terminal cleanup ownership remain unchanged. Keepalive, ordinary SSE sends, and all other behavior are unchanged.
+
+Parameterized regressions cover each affected method with a pending refusal-body Future, assert that only `http.response.start` and `http.response.body` reached send, preserve nonterminal connection facts, and prove terminal cleanup starts exactly once only after the connection ends.
+
+Exact red command:
+
+```sh
+source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && PERL_FUTURE_NO_XS=1 prove -l t/websocket/15-connection-cleanup.t
+```
+
+**1 file, 22 tests: 10 failed (subtests 13–22).** Every new case failed its local-rejection/no-protocol-send assertions; existing 12 subtests passed.
+
+Exact green covering command:
+
+```sh
+source /Users/jnapiorkowski/perl5/perlbrew/etc/bashrc && perlbrew use perl-5.42.2@default && PERL_FUTURE_NO_XS=1 prove -l t/websocket/15-connection-cleanup.t t/websocket/denial-response.t t/sse/13-decline.t
+```
+
+**3 files, 51 tests passed**, with no warnings. `git diff --check` passed. No aggregate/full-suite run, sibling repository mutation, push, or additional scope in this fix round.

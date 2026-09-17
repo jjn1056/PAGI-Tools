@@ -522,7 +522,7 @@ async sub send_event {
 # Safe send - returns bool instead of throwing
 async sub try_send {
     my ($self, $data) = @_;
-    return 0 if $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->{_declined} || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -541,7 +541,7 @@ async sub try_send {
 
 async sub try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->{_declined} || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -578,7 +578,7 @@ async sub send_comment {
 
 async sub try_send_comment {
     my ($self, $comment) = @_;
-    return 0 if $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->{_declined} || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -597,7 +597,7 @@ async sub try_send_comment {
 
 async sub try_send_event {
     my ($self, %opts) = @_;
-    return 0 if $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->{_declined} || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;

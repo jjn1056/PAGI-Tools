@@ -230,4 +230,52 @@ subtest 'receive sees authoritative metadata before deferred terminal notificati
     $conn->_deliver_notifications;
     is($calls, 1, 'deferred terminal callback alone publishes cleanup');
 };
+for my $case (
+    [websocket => send_text => ['data'], 'throws'],
+    [websocket => send_bytes => ['bytes'], 'throws'],
+    [websocket => send_json => [{message => 'data'}], 'throws'],
+    [websocket => try_send_text => ['data'], 'false'],
+    [websocket => try_send_bytes => ['bytes'], 'false'],
+    [websocket => try_send_json => [{message => 'data'}], 'false'],
+    [sse => try_send => ['data'], 'false'],
+    [sse => try_send_json => [{message => 'data'}], 'false'],
+    [sse => try_send_comment => ['comment'], 'false'],
+    [sse => try_send_event => [data => 'data', event => 'update'], 'false'],
+) {
+    my ($kind, $method, $args, $outcome) = @$case;
+    subtest "$kind $method cannot send into a committed refusal body" => sub {
+        my $conn = PAGI::Test::ConnectionState->new(websocket => $kind eq 'websocket');
+        my $body = Future->new;
+        my @events;
+        my $class = $kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE';
+        my $helper = $class->new({type => $kind, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
+            push @events, $_[0]{type};
+            return $_[0]{type} eq 'http.response.body' ? $body : Future->done;
+        });
+        my ($cleanup, $errors) = (0, 0);
+        $helper->on_close(sub {++$cleanup});
+        $helper->on_error(sub {++$errors});
+        my $response = text_response('refused', status => 403);
+        my $refusal = $kind eq 'websocket' ? $helper->deny($response) : $helper->decline($response);
+        ok(!$refusal->is_ready, 'committed refusal body is pending');
+        if ($outcome eq 'throws') {
+            like(dies {$helper->$method(@$args)->get}, qr/Cannot send/, 'throwing method rejects locally');
+        } else {
+            is($helper->$method(@$args)->get, 0, 'boolean method rejects with false');
+        }
+        is(\@events, [qw(http.response.start http.response.body)], 'no protocol send reaches the committed HTTP response');
+        is($errors, 0, 'guard does not invoke send-error hooks');
+        is($helper->connection_state, $kind eq 'websocket' ? 'denying' : 'declining', 'local guard preserves refusal progress');
+        ok($conn->is_connected && !$helper->is_closed, 'local rejection does not fabricate terminal state');
+        is($cleanup, 0, 'local rejection does not start terminal cleanup');
+        $body->done;
+        ok($refusal->is_ready && !$refusal->is_failed, 'refusal still finishes normally');
+        is($cleanup, 0, 'body settlement alone does not publish cleanup');
+        $conn->_mark_complete;
+        ok($helper->is_closed, 'connection completion supplies terminal fact');
+        is($cleanup, 1, 'connection end runs cleanup once');
+        $conn->_mark_complete;
+        is($cleanup, 1, 'repeated terminal observation cannot repeat cleanup');
+    };
+}
 done_testing;

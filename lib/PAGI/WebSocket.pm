@@ -545,7 +545,7 @@ sub _require_connection_for_stream {
 async sub send_text {
     my ($self, $text) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->{send}->({
         type => 'websocket.send',
@@ -559,7 +559,7 @@ async sub send_text {
 async sub send_bytes {
     my ($self, $bytes) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->{send}->({
         type  => 'websocket.send',
@@ -573,7 +573,7 @@ async sub send_bytes {
 async sub send_json {
     my ($self, $data) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
 
     my $json = JSON::MaybeXS::encode_json($data);
 
@@ -589,7 +589,7 @@ async sub send_json {
 
 async sub try_send_text {
     my ($self, $text) = @_;
-    return 0 if $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->{send}->({
@@ -610,7 +610,7 @@ async sub try_send_text {
 
 async sub try_send_bytes {
     my ($self, $bytes) = @_;
-    return 0 if $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->{send}->({
@@ -631,7 +631,7 @@ async sub try_send_bytes {
 
 async sub try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
