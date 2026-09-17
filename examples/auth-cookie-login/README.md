@@ -5,11 +5,11 @@ application policy. It intentionally does not use `PAGI::Auth`: Phase 1 Auth
 outcomes construct 401 and 403 responses and do not perform an interactive
 login.
 
-Run it from the distribution root so the runner supplies the local library
-path:
+This example requires Perl 5.40 or newer. Run it from the distribution root
+and give the runner the checkout's local library path:
 
 ```console
-pagi-server --app examples/auth-cookie-login/app.pl --port 5000
+pagi-server --lib lib --app examples/auth-cookie-login/app.pl --port 5000
 ```
 
 Open <http://localhost:5000/> and sign in with the demo-only credential:
