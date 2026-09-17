@@ -80,3 +80,28 @@ bump, tag, upload, or release occurred.
 None within Auth8 scope. Credential/identity middleware and a full runnable
 multi-protocol authentication application remain explicitly deferred to
 Phase 2.
+
+## Review fix round 1
+
+Addressed both findings from `task-Auth8-resume-review.md`. The pre-existing
+SSE decline recipe now constructs a structured Bearer outcome, synchronously
+materializes it with `response_for($sse)`, and lets `decline` emit it. The
+recipe labels its identity decision as application policy and no longer parses
+a query parameter or demonstrates a bare 401. Challenge POD now states that
+the value has no stringification overload or automatic wire conversion and
+directs callers to `header_value` for explicit serialized text.
+
+Focused verification used Perl 5.42.2 with `PERL_FUTURE_NO_XS=1`:
+
+- `podchecker lib/PAGI/Auth/Challenge.pm lib/PAGI/Tools/Cookbook.pod`: both
+  files passed.
+- `prove -l t/00-pod/cookbook-examples.t`: **1 file, 9 tests**, PASS.
+- `git diff --check`: PASS.
+
+The documentation-only round did not rerun the full suite. A fresh
+`perlbrew exec --with perl-5.42.2@default dzil build` rebuilt
+`PAGI-Tools-0.002002.tar.gz`; direct archive extraction confirmed both revised
+POD passages. Dist::Zilla emitted only the previously recorded nonfatal
+PkgVersion layout warnings. Root `README.md` had no new delta, so it is not
+part of this fix commit. No version bump, release, upload, or sibling-repository
+change occurred.

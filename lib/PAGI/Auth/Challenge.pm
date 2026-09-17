@@ -28,6 +28,8 @@ A challenge is protocol metadata for one C<WWW-Authenticate> field line. It is
 not a L<PAGI::Response> and does not send events. Construct values with
 L<PAGI::Auth/basic>, L<PAGI::Auth/bearer>, or
 L<PAGI::Auth/custom_challenge>; there is no public constructor.
+The object has no stringification overload or automatic wire conversion.
+Call C<header_value> when serialized challenge text is explicitly needed.
 
 =head1 METHODS
 

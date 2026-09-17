@@ -1942,22 +1942,29 @@ you start the stream you can B<decline> it and return a normal HTTP response
 instead -- no event stream. Use C<< $sse->decline >>, which is how most
 application code should write this:
 
+  use PAGI::Auth qw(challenge bearer);
+
   sse('/feed' => async sub {
       my ($sse) = @_;
 
-      # Auth check before we commit to a stream.
-      unless (authorized($sse->query_param('token'))) {
-          return await $sse->decline(
-              PAGI::Response::text_response(
-                  'Unauthorized',
-                  status => 401,
-              ),
+      # Application policy has already decided whether an identity exists.
+      unless (has_authenticated_identity($sse)) {
+          my $failure = challenge(
+              challenges => [bearer(realm => 'events')],
+              as          => 'text',
           );
+          return await $sse->decline($failure->response_for($sse));
       }
 
       await $sse->start;
       # ... stream ...
   });
+
+This is outcome construction after an application-owned identity decision. It
+does not parse a query parameter, credential, or token, and PAGI::Auth does not
+provide a credential parser or identity provider. C<response_for> creates the
+concrete local 401 without sending; C<decline> emits it and retains SSE
+lifecycle ownership.
 
 Three common reasons to decline:
 
