@@ -162,6 +162,66 @@ subtest 'response_for materializes fresh concrete problem responses for request-
         'repeated materialization creates fresh concrete responses');
 };
 
+subtest 'negotiated HTTP materialization preserves source scopes and header caches' => sub {
+    for my $kind (qw(raw request)) {
+        for my $cached (0, 1) {
+            local @Local::CountingPages::RESPONSE_SCOPES;
+            local @Local::CountingPages::NEGOTIATION_SCOPES;
+            my @descriptor_scopes;
+            my $policy = Local::CountingPages->new(as => 'auto', default => 'text');
+            my $application = PAGI::Pages::Application->new(
+                policy => $policy,
+                descriptor_factory => sub {
+                    push @descriptor_scopes, $_[0];
+                    return problem_descriptor();
+                },
+            );
+            my $scope = scope('http', headers => [
+                ['Accept' => 'text/html;q=0.1'],
+                ['Accept' => 'application/problem+json;q=0.9'],
+            ]);
+            my $request = PAGI::Request->new($scope, sub {
+                die 'materialization must not receive';
+            });
+            my $cache = $cached ? $request->headers : undef;
+            my $source = $kind eq 'raw' ? $scope : $request;
+            my @keys = sort keys %$scope;
+            my $headers = $scope->{headers};
+            my $label = "$kind cached=$cached";
+            for my $call (1, 2) {
+                my $response = $application->response_for($source);
+                is($response->content_type, 'application/problem+json',
+                    "$label call $call negotiates repeated Accept fields");
+                is([sort keys %$scope], \@keys,
+                    "$label call $call preserves source keys");
+                is(refaddr($scope->{headers}), refaddr($headers),
+                    "$label call $call preserves raw header identity");
+                is($scope->{headers}, [
+                    ['Accept' => 'text/html;q=0.1'],
+                    ['Accept' => 'application/problem+json;q=0.9'],
+                ], "$label call $call preserves raw header values");
+                if ($cached) {
+                    is(refaddr($scope->{'pagi.request.headers'}), refaddr($cache),
+                        "$label call $call preserves cache identity");
+                    is([$cache->get_all('accept')], [
+                        'text/html;q=0.1', 'application/problem+json;q=0.9',
+                    ], "$label call $call preserves cached header values");
+                }
+                else {
+                    ok(!exists $scope->{'pagi.request.headers'},
+                        "$label call $call leaves source uncached");
+                }
+                for my $seen ($descriptor_scopes[-1],
+                    $Local::CountingPages::RESPONSE_SCOPES[-1],
+                    $Local::CountingPages::NEGOTIATION_SCOPES[-1]) {
+                    is(refaddr($seen), refaddr($scope),
+                        "$label call $call hook retains original scope identity");
+                }
+            }
+        }
+    }
+};
+
 subtest 'response_for validates the exact source grammar and request type' => sub {
     my $application = PAGI::Pages->unauthorized(
         challenge => 'Bearer realm="api"', as => 'json',
@@ -270,8 +330,8 @@ subtest 'materialization gives policy a shallow HTTP metadata view without chang
         'the repeated raw header list retains identity');
     is(refaddr($metadata->{state}), refaddr($nested),
         'other nested scope metadata retains identity');
-    isa_ok($metadata->{'pagi.request.headers'}, ['PAGI::Headers'],
-        'negotiation rebuilds an HTTP header facade in the metadata view');
+    ok(!exists $metadata->{'pagi.request.headers'},
+        'negotiation keeps its rebuilt HTTP header cache private');
 
     is([sort keys %$source], \@source_keys, 'source keys are unchanged');
     is($source->{type}, 'websocket', 'source type is unchanged');
@@ -344,10 +404,10 @@ subtest 'WebSocket and SSE caches are omitted only from synthesized HTTP views' 
             "$label selects the higher-quality repeated Accept representation");
 
         my $metadata = $Local::CountingPages::RESPONSE_SCOPES[-1];
-        isa_ok($metadata->{'pagi.request.headers'}, ['PAGI::Headers'],
-            "$label metadata rebuilds the HTTP cache class");
-        is([$metadata->{'pagi.request.headers'}->get_all('accept')], \@accept,
-            "$label metadata rebuild retains both raw Accept lines");
+        ok(!exists $metadata->{'pagi.request.headers'},
+            "$label metadata does not receive the private HTTP cache");
+        is($metadata->{headers}, [map { ['Accept' => $_] } @accept],
+            "$label metadata retains both raw Accept lines");
         is(refaddr($source->{'pagi.request.headers'}), refaddr($cache),
             "$label source retains its original protocol cache");
         isa_ok($source->{'pagi.request.headers'}, ['Hash::MultiValue'],

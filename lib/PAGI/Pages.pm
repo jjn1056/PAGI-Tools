@@ -823,8 +823,10 @@ sub _select_representation {
     my $no_body = sub {
         return Future->fail('metadata-only Request cannot consume a body');
     };
+    # Request lazily installs its header cache; keep those writes local while
+    # descriptor and policy hooks retain the prescribed metadata scope identity.
     my $request = PAGI::Request->new(
-        _http_metadata_scope($scope), $no_body,
+        { %{_http_metadata_scope($scope)} }, $no_body,
     );
     my @accept_values = $request->header_all('accept');
     my $accept = @accept_values ? join(', ', @accept_values) : undef;

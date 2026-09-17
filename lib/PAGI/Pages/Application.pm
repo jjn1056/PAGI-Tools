@@ -91,8 +91,8 @@ deliberate later mutation may affect later invocations; renderer-maintained
 subclass state is caller-owned. Concurrent mutation during descriptor/Response
 derivation is unsupported.
 
-The application rejects lifespan, WebSocket, SSE, and unknown scopes before
-receive, rendering, or send. It does not handle lifespan. Automatic server
+When invoked via C<to_app>, the application rejects lifespan, WebSocket,
+SSE, and custom scopes before receive, rendering, or send. It does not handle lifespan. Automatic server
 lifespan mode may treat that exception as a decline; strict mode rejects it.
 
 =head1 METHODS
@@ -110,10 +110,12 @@ materialization path as C<response_for>.
   my $response = $page->response_for($scope_hash);
 
 Synchronously materializes one concrete L<PAGI::Response> using metadata from
-a Request, WebSocket, SSE, or raw scope hash. It accepts HTTP, WebSocket, and
-SSE scopes and rejects lifespan or unknown scope types. It does not call
-C<receive> or C<send>, emit events, or own protocol lifecycle. Use the
-appropriate helper's C<deny> or C<decline> to emit the returned Response.
+a Request, WebSocket, SSE, or raw scope hash. It accepts HTTP, WebSocket, SSE,
+and custom request-like scopes with a defined, non-reference, nonempty
+C<type>; lifespan scopes are rejected. It does not call C<receive> or C<send>,
+emit events, or own protocol lifecycle. Use the appropriate helper's C<deny>
+or C<decline> to emit the returned Response. A custom protocol adapter owns
+emission for its protocol. C<to_app> remains restricted to HTTP scopes.
 
 Materialization does not mutate the application, descriptor, source object,
 or scope hash. Repeated and concurrent calls derive fresh response values.
