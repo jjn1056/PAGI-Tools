@@ -139,3 +139,8 @@ git diff --check
 The POD checker passed. The extracted Cookbook example test passed **1 file,
 9 tests**. The diff whitespace check passed. No full suite was run in this
 bounded documentation fix round.
+
+Review fix round 2 removed the nonexistent C<PAGI::SSE-E<gt>receive> call from
+the decline guidance; only a raw application's C<$receive> callback exposes
+the spec-defined reasonless post-refusal C<sse.disconnect>. Cookbook
+C<podchecker> and C<git diff --check> passed; no tests or broader audit ran.

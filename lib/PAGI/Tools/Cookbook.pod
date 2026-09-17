@@ -1779,8 +1779,8 @@ good.
 
 A normally completed decline is a clean end, not an abnormal disconnect. The
 server does not deliver C<sse.disconnect> on its own because no event stream
-started. If application code calls C<< $sse->receive >> (or the raw
-C<$receive>) after the refusal, however, that receive resolves with a
+started. If raw application code calls its C<$receive> callback after the
+refusal, however, that receive resolves with a
 reasonless C<sse.disconnect> reporting the clean terminal scope. Return right
 after declining, as above; there is no further application work to perform.
 
