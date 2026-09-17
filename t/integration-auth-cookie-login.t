@@ -7,6 +7,11 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib";
 use PAGI::Test::Client;
 
+if ($] < 5.040) {
+    plan skip_all => 'examples/auth-cookie-login requires Perl 5.40';
+    exit 0;
+}
+
 my $app_file = "$Bin/../examples/auth-cookie-login/app.pl";
 my $app = do $app_file;
 my $load_error = $@ || $!;
@@ -14,7 +19,7 @@ ok(!$load_error, 'cookie login example loads cleanly')
     or diag($load_error);
 
 SKIP: {
-    skip 'example did not load', 20 unless $app;
+    skip 'example did not load', 21 unless $app;
 
     my $client = PAGI::Test::Client->new(app => $app);
 
