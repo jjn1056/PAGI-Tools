@@ -9,18 +9,17 @@ PAGI::Test::ConnectionState - the pagi.connection object provided by PAGI::Test
 
 =head1 DESCRIPTION
 
-PAGI::Test is a test server, so it provides the per-request C<pagi.connection>
-object. It implements the full connection surface to which L<PAGI::Request>
-delegates
-(C<is_connected>, C<disconnect_reason>, C<disconnect_detail>,
-C<disconnect_future>, C<on_disconnect>, C<on_complete>, C<abort>) plus
-C<response_started> and C<response_complete>, mirroring production
-C<PAGI::Server::ConnectionState>:
-a clean completion ends the request and fires C<on_complete> but is not a
-disconnect; exactly one of C<on_complete> / C<on_disconnect> fires.
-C<disconnect_future> is modeled fully, not left always-C<undef> -- see
-L</disconnect_future> below for how its behavior differs from production only
-in that this test double can actually resolve it.
+PAGI::Test provides the per-scope C<pagi.connection> interface defined by
+L<PAGI::Spec::Www/"Connection Object Interface">. Clean completion and abnormal
+disconnection are mutually exclusive; C<on_end> observes either outcome.
+Terminal facts, including peer WebSocket metadata, are immutable and readable
+before notification delivery. HTTP and SSE have no Close metadata.
+
+Client send calls defer terminal callbacks and Future resolution until the
+client's next scheduling boundary. The streaming clients expose C<pump> for
+tests that drive external Futures without finishing their application.
+Standalone state transitions deliver immediately. Late callbacks always run
+immediately; each Future observer is cancellation-isolated.
 
 =cut
 
@@ -44,13 +43,14 @@ sub new {
     my ($class, %args) = @_;
     return bless {
         _connected          => 1,
+        _websocket          => $args{websocket} ? 1 : 0,
         _response_started   => 0,
-        _response_complete  => 0,
         _completed          => 0,           # explicit terminal-state flag, like production
         _reason             => undef,
         _detail             => undef,
         _on_abort           => $args{on_abort},
         _disc_cbs           => [],
+        _end_cbs            => [],
         _comp_cbs           => [],
         _disconnect_master  => undef,       # private lazy signal; never exposed directly
     }, $class;
@@ -83,11 +83,11 @@ L<PAGI::Spec::Www/"Connection Object Interface">.
 
 =cut
 
-sub response_complete { return $_[0]->{_response_complete} ? 1 : 0 }
+sub response_complete { return $_[0]->{_completed} ? 1 : 0 }
 
-# Server-internal: called from the send path once the response reaches its
-# legal terminal state (mirrors _mark_response_started's shape).
-sub _mark_response_complete { $_[0]->{_response_complete} = 1; return }
+# Server-internal: the test client installs the teardown hook after the
+# handler that owns the transport exists.
+sub _set_abort_hook { $_[0]->{_on_abort} = $_[1]; return }
 
 =head2 disconnect_future
 
@@ -96,7 +96,7 @@ sub _mark_response_complete { $_[0]->{_response_complete} = 1; return }
 
 Returns a fresh cancellation-isolated Future observer that resolves, with the
 reason, on an B<abnormal> disconnect; stays pending forever after a B<clean>
-completion (use C<on_complete> to observe that case instead). One private
+completion (use C<end_future> to observe that case instead). One private
 master Future is created lazily on first call, exactly like production
 L<PAGI::Server::ConnectionState>, and every call returns a new
 C<without_cancel> observer so cancelling one race cannot cancel the master or
@@ -129,11 +129,84 @@ sub disconnect_future {
     # Resolve immediately only for an already-abnormal end. A clean
     # completion leaves this pending forever -- on_complete is the signal
     # for that case.
-    if (!$self->{_connected} && !$self->{_completed} && !$master->is_ready) {
+    if (!$self->{_connected} && !$self->{_completed} && !$self->{_notifications_pending} && !$master->is_ready) {
         $master->done($self->{_reason});
     }
 
     return $master->without_cancel;
+}
+
+=head2 close_code / close_reason
+
+The peer's WebSocket Close metadata, undefined until observed. An empty peer
+Close is 1005 with undefined reason; an abnormal accepted WebSocket end
+without a peer Close is 1006 with undefined reason.
+
+=head2 on_end
+
+    $conn->on_end(sub { my ($reason, $detail) = @_; ... });
+
+Runs once for either terminal outcome. Both arguments are undefined after
+clean completion. Exceptions are isolated just as for C<on_disconnect>.
+
+=head2 end_future
+
+    my $reason = await $conn->end_future;
+
+Resolves with one value: the abnormal reason token, or C<undef> for a clean
+end. Each call returns an independent cancellation-isolated observer.
+
+=cut
+
+sub close_code { return $_[0]->{_close_code} }
+sub close_reason { return $_[0]->{_close_reason} }
+
+sub _set_peer_close {
+    my ($self, $code, $reason) = @_;
+    return unless $self->{_connected};
+    $self->{_close_code} = $code;
+    $self->{_close_reason} = $reason;
+}
+
+sub end_future {
+    my ($self) = @_;
+    my $master = $self->{_end_master} ||= Future->new;
+    $master->done($self->{_reason})
+        if !$self->{_connected} && !$self->{_notifications_pending} && !$master->is_ready;
+    return $master->without_cancel;
+}
+
+sub on_end {
+    my ($self, $cb) = @_;
+    if (!$self->{_connected}) {
+        _fire($cb, $self->{_reason}, $self->{_detail});
+        return;
+    }
+    push @{$self->{_end_cbs}}, $cb;
+    return;
+}
+
+# Test-client scheduling: facts change immediately; client boundaries drain
+# notifications deferred while an application send is on the stack.
+sub _deliver_notifications {
+    my ($self) = @_;
+    return if $self->{_defer_notifications};
+    return unless delete $self->{_notifications_pending};
+    my @disc = @{delete $self->{_disc_cbs} || []};
+    my @comp = @{delete $self->{_comp_cbs} || []};
+    my @end = @{delete $self->{_end_cbs} || []};
+    if (!$self->{_completed}) {
+        $self->{_disconnect_master}->done($self->{_reason})
+            if $self->{_disconnect_master} && !$self->{_disconnect_master}->is_ready;
+        $self->{_end_master}->done($self->{_reason})
+            if $self->{_end_master} && !$self->{_end_master}->is_ready;
+        _fire($_, $self->{_reason}, $self->{_detail}) for @disc;
+    }
+    else { _fire($_) for @comp; }
+    _fire($_, $self->{_reason}, $self->{_detail}) for @end;
+    $self->{_end_master}->done($self->{_reason})
+        if $self->{_end_master} && !$self->{_end_master}->is_ready;
+    return;
 }
 
 # Late registration fires immediately for the terminal state that occurred —
@@ -188,11 +261,9 @@ sub _mark_complete {
     return unless $self->{_connected};
     $self->{_connected} = 0;
     $self->{_completed} = 1;                 # clean completion (distinguishes from disconnect)
-    $self->{_response_complete} = 1;
-    _fire($_) for @{$self->{_comp_cbs}};
-    @{$self->{_comp_cbs}} = ();
-    @{$self->{_disc_cbs}} = ();
     delete $self->{_on_abort};
+    $self->{_notifications_pending} = 1;
+    $self->_deliver_notifications;
     return;
 }
 
@@ -202,14 +273,14 @@ sub _mark_disconnected {
     $self->{_connected}         = 0;
     $self->{_reason}            = $reason // 'unknown';   # coerce like production
     $self->{_detail}            = $detail;
-    $self->{_response_complete} = 0;
-    if ($self->{_disconnect_master} && !$self->{_disconnect_master}->is_ready) {
-        $self->{_disconnect_master}->done($self->{_reason});
+    # An accepted WebSocket without a peer Close ends with RFC 6455 1006.
+    if ($self->{_websocket} && !defined $self->{_close_code}) {
+        $self->{_close_code} = 1006;
+        $self->{_close_reason} = undef;
     }
-    _fire($_, $self->{_reason}, $self->{_detail}) for @{$self->{_disc_cbs}};
-    @{$self->{_disc_cbs}} = ();
-    @{$self->{_comp_cbs}} = ();
     delete $self->{_on_abort};
+    $self->{_notifications_pending} = 1;
+    $self->_deliver_notifications;
     return;
 }
 

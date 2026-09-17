@@ -129,7 +129,7 @@ sub still_pending_after {
     my $c = PAGI::Test::ConnectionState->new;
     ok defined $c->response_complete, 'defined before the response starts (this mock always tracks completion)';
     is $c->response_complete, 0, '0 before the response is complete';
-    $c->_mark_response_complete;
+    $c->_mark_complete;
     ok defined $c->response_complete, 'still defined once complete';
     is $c->response_complete, 1, '1 once the response is complete';
 }
@@ -162,8 +162,6 @@ subtest 'abort: hook once, app_abort with detail, idempotent, no-op after comple
     my @cb;
     $cs->on_disconnect(sub { push @cb, [@_] });
     my $f = $cs->disconnect_future;
-    $cs->_mark_response_complete;
-    is $cs->response_complete, 1, 'legacy response completion marker remains supported';
     $cs->abort('quota');
     is scalar @hook, 1, 'hook once';
     is $hook[0][1], 'quota', 'hook detail';

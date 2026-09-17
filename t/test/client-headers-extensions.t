@@ -182,7 +182,7 @@ subtest 'an unadvertised http extension fails its send' => sub {
     is $res->status, 200, 'assembled response unaffected by the rejected fullflush';
 };
 
-subtest 'websocket scope advertises exactly websocket.http.response' => sub {
+subtest 'websocket scope advertises no extensions' => sub {
     my $scope;
     my $app = async sub {
         my ($s, $receive, $send) = @_;
@@ -192,8 +192,8 @@ subtest 'websocket scope advertises exactly websocket.http.response' => sub {
     };
     PAGI::Test::Client->new(app => $app)->websocket('/');
 
-    is_deeply $scope->{extensions}, { 'websocket.http.response' => {} },
-        'websocket advertises exactly websocket.http.response -- the mock genuinely implements the denial path';
+    is_deeply $scope->{extensions}, {},
+        'ordinary HTTP refusal events need no websocket extension';
 };
 
 subtest 'sse scope advertises no extensions' => sub {

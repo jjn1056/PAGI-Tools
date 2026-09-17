@@ -1,93 +1,119 @@
 use strict; use warnings; use Test2::V0; use Future::AsyncAwait;
 use PAGI::Test::Client;
 
-# ---------------------------------------------------------------------------
-# B7: PAGI::Test::SSE recognizes a decline (sse.http.response.start/.body),
-# mirroring the server: the client API gets back a PAGI::Test::Response with
-# that status/body, never a croak, and no sse.disconnect is ever delivered
-# (the stream never started, so there is nothing to disconnect from).
-# ---------------------------------------------------------------------------
-
-subtest 'B7(a): sse decline returns a Test::Response, no croak, no sse.disconnect' => sub {
-    my $pending_future;
+subtest 'ordinary HTTP refusal returns Test::Response and reasonless end events' => sub {
+    my ($conn, @received);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
+        $conn = $scope->{'pagi.connection'} or die 'no connection object';
         await $send->({
-            type    => 'sse.http.response.start',
-            status  => 404,
+            type => 'http.response.start',
+            status => 404,
             headers => [['content-type', 'text/plain']],
         });
-        await $send->({ type => 'sse.http.response.body', body => 'Not Found', more => 0 });
-        $pending_future = $receive->(); # must NOT be awaited: would hang forever
+        await $send->({ type => 'http.response.body', body => 'Not Found', more => 0 });
+        die 'terminal refusal send did not complete scope' unless $conn->response_complete;
+
+        # Explicit finite tripwire for repeated end delivery.
+        for my $attempt (1 .. 2) {
+            push @received, await $receive->();
+        }
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $res;
-    ok lives { $res = $client->sse('/events') }, 'no croak for a decline'
-        or note $@;
+    my $res = PAGI::Test::Client->new(app => $app)->sse('/events');
+
     isa_ok $res, ['PAGI::Test::Response'];
-    is $res->status, 404, 'decline status';
-    is $res->content, 'Not Found', 'decline body';
-
-    ok defined $pending_future, 'app captured a receive Future';
-    ok !$pending_future->is_ready, 'receive stays pending: no sse.disconnect delivered on a decline';
+    is $res->status, 404, 'refusal status';
+    is $res->content, 'Not Found', 'refusal body';
+    is \@received, [
+        { type => 'sse.disconnect' },
+        { type => 'sse.disconnect' },
+    ], 'completed refusal reports a clean, reasonless SSE end';
 };
 
-# ---------------------------------------------------------------------------
-# B7(b): sse.close is honored: closed state is set, and exactly one
-# reason-carrying sse.disconnect is delivered (default reason client_closed
-# when the test does not supply one), never repeated.
-# ---------------------------------------------------------------------------
-
-subtest 'B7(b): sse.close honored -- closed state, one reason-carrying sse.disconnect' => sub {
-    my (@received, $pending_future);
+subtest 'refusal response uses the captured response decoder for file bodies' => sub {
+    my $path = __FILE__;
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
-        await $send->({ type => 'sse.start', status => 200, headers => [] });
-        push @received, await $receive->();
-        $pending_future = $receive->(); # must NOT be awaited: would hang forever
+        await $send->({ type => 'http.response.start', status => 403, headers => [] });
+        await $send->({
+            type => 'http.response.body', file => $path, offset => 0, length => 3,
+        });
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $sse = $client->sse('/events');
+    my $res = PAGI::Test::Client->new(app => $app)->sse('/events');
+    is $res->content, 'use', 'file window decoded by Test::Response';
+};
+
+subtest 'peer close is abnormal and repeats its end event' => sub {
+    my ($conn, @order, @received);
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $conn = $scope->{'pagi.connection'};
+        $conn->on_disconnect(sub { push @order, "callback:$_[0]" });
+        await $send->({ type => 'sse.start', status => 200, headers => [] });
+        for my $attempt (1 .. 2) {
+            push @received, await $receive->();
+            push @order, 'receive:' . ($conn->disconnect_reason // 'none');
+        }
+    };
+
+    my $sse = PAGI::Test::Client->new(app => $app)->sse('/events');
     $sse->close;
 
-    ok $sse->is_closed, 'closed state set';
-    is scalar(@received), 1, 'exactly one disconnect delivered';
-    is $received[0]{type}, 'sse.disconnect', 'disconnect event type';
-    is $received[0]{reason}, 'client_closed', 'default reason is client_closed';
-    ok !$pending_future->is_ready, 'further receive stays pending';
+    is \@order, [
+        'callback:client_closed',
+        'receive:client_closed',
+        'receive:client_closed',
+    ], 'state transition and callback precede receive wakes';
+    is $received[0], { type => 'sse.disconnect', reason => 'client_closed' },
+        'peer close event';
+    is $received[1], $received[0], 'peer close event repeats';
+    is $conn->response_complete, 0, 'peer disconnect is abnormal';
 };
 
-subtest 'B7(b): sse.close with an explicit reason is threaded through' => sub {
-    my @received;
+subtest 'sse.close is clean before send returns and wakes with reasonless end' => sub {
+    my ($conn, @received);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
+        $conn = $scope->{'pagi.connection'};
         await $send->({ type => 'sse.start', status => 200, headers => [] });
-        push @received, await $receive->();
+        await $send->({ type => 'sse.close' });
+        die 'sse.close did not complete scope' unless $conn->response_complete;
+        for my $attempt (1 .. 2) {
+            push @received, await $receive->();
+        }
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $sse = $client->sse('/events');
-    $sse->close('idle_timeout');
-
-    is $received[0]{reason}, 'idle_timeout', 'explicit reason is threaded through';
+    my $sse = PAGI::Test::Client->new(app => $app)->sse('/events');
+    ok $sse->is_closed, 'stream closed';
+    is \@received, [
+        { type => 'sse.disconnect' },
+        { type => 'sse.disconnect' },
+    ], 'clean stream end is reasonless and repeatable';
+    is $conn->disconnect_reason, undef, 'clean stream end has no abnormal reason';
 };
 
-subtest 'B7(b): repeated close is idempotent, no repeat sse.disconnect' => sub {
-    my @received;
+subtest 'abort closes transport and wakes pending and later receives' => sub {
+    my ($conn, @received);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
+        $conn = $scope->{'pagi.connection'};
         await $send->({ type => 'sse.start', status => 200, headers => [] });
-        push @received, await $receive->();
+        for my $attempt (1 .. 2) {
+            push @received, await $receive->();
+        }
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $sse = $client->sse('/events');
-    $sse->close;
-    $sse->close; # idempotent: must not deliver a second disconnect or die
+    my $sse = PAGI::Test::Client->new(app => $app)->sse('/events');
+    $conn->abort('cancelled subscription');
 
-    is scalar(@received), 1, 'still exactly one disconnect after a repeated close call';
+    ok $sse->is_closed, 'abort closes SSE transport';
+    is $conn->disconnect_reason, 'app_abort', 'abort reason';
+    is $conn->disconnect_detail, 'cancelled subscription', 'abort detail';
+    is $received[0], { type => 'sse.disconnect', reason => 'app_abort' },
+        'pending receive gets app_abort';
+    is $received[1], $received[0], 'later receive repeats app_abort';
 };
 
 done_testing;
