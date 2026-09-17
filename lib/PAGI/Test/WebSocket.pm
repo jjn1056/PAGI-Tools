@@ -95,13 +95,13 @@ sub _start {
             # own websocket.close, which sv already rejected above -- a real
             # server just drops writes to a dead socket: tolerated no-op,
             # nothing reaches the client's readable stream.
-            push @{$self->{recv_queue}}, $event unless $self->{closed};
+            push @{$self->{recv_queue}}, $event unless $self->{closed} || $self->{_peer_close};
         }
         elsif ($type eq 'websocket.close') {
             $self->{_app_close} = 1;
             # The first app Close may race a peer Close already handled by
             # the test transport. Validation still records the terminal send.
-            if ($conn->is_connected) {
+            if ($conn->is_connected && !$self->{_peer_close}) {
                 $self->{close_code} = $event->{code} // 1000;
                 $self->{close_reason} = $event->{reason} // '';
                 if ($self->{close_mode} eq 'cooperative') {
@@ -136,7 +136,10 @@ sub _start {
     $self->{app_future}->on_ready(sub {
         my ($future) = @_;
         my $conn = $self->{scope}{'pagi.connection'};
-        if ($conn->is_connected && !$sv->complete && !$self->{_peer_close}) {
+        # Validator completion precedes body capture; a failed refusal read
+        # is not delivery. Only an app Close or peer Close may keep an active
+        # socket waiting for the manual transport outcome after app return.
+        if ($conn->is_connected && !$self->{_app_close} && !$self->{_peer_close}) {
             my $detail = $future->is_failed ? scalar($future->failure) : undef;
             $self->_transport_closed(code => 1011, reason => 'server_error', detail => $detail);
         }
@@ -325,6 +328,10 @@ sub simulate_close_timeout {
 
 sub simulate_abnormal_close {
     my ($self, %opts) = @_;
+    croak "close_incomplete requires a peer Close"
+        if ($opts{reason} // '') eq 'close_incomplete'
+            && $self->{scope}{'pagi.connection'}->is_connected
+            && !$self->{_peer_close};
     return $self->_transport_closed(%opts);
 }
 

@@ -188,4 +188,70 @@ subtest 'end observer exceptions do not block later observers' => sub {
     is [$c->end_future->get], ['read_error'], 'Future still settles';
 };
 
+for my $protocol (qw(websocket sse)) {
+    subtest "$protocol failed refusal capture publishes an abnormal end" => sub {
+        my ($conn, $end);
+        my @ended;
+        my $error = dies {
+            PAGI::Test::Client->new(app => async sub {
+                my ($scope, $receive, $send) = @_;
+                $conn = $scope->{'pagi.connection'};
+                $end = $conn->end_future;
+                $conn->on_end(sub { push @ended, [@_] });
+                await $send->({type => 'http.response.start', status => 403, headers => []});
+                # This existing source file cannot also be a directory.
+                await $send->({type => 'http.response.body', file => __FILE__ . '/missing-body'});
+            })->$protocol('/');
+        };
+        like $error, qr/Cannot open file response/, 'capture error is preserved';
+        ok !$conn->is_connected, 'failed capture ends the scope';
+        is $conn->disconnect_reason, 'server_error', 'failed delivery is abnormal';
+        ok !$conn->response_complete, 'validated framing alone is not successful delivery';
+        ok $end->is_ready, 'terminal Future settles';
+        is [$end->get], ['server_error'], 'end observer reason' if $end->is_ready;
+        is scalar @ended, 1, 'terminal callback delivered once';
+        is $ended[0][0], 'server_error', 'callback sees abnormal outcome';
+    };
+}
+
+subtest 'manual peer-first Close keeps peer metadata across racing app Close' => sub {
+    my %slot;
+    my $ws = PAGI::Test::Client->new(app => ws_app(\%slot, 0))->websocket('/', close_mode => 'manual');
+    $ws->close(1008, 'peer');
+    ok $slot{send}->({type => 'websocket.close', code => 1000, reason => 'app'})->is_done,
+        'first racing application Close succeeds';
+    $ws->complete_close;
+    is [$ws->close_code, $ws->close_reason], [1008, 'peer'], 'public client metadata stays peer data';
+    is [$slot{conn}->close_code, $slot{conn}->close_reason], [1008, 'peer'], 'connection metadata agrees';
+    my $event = $slot{receive}->()->get;
+    is [$event->{code}, $event->{reason}], [1008, 'peer'], 'receive metadata agrees';
+};
+
+subtest 'manual peer Close suppresses later application data while transport is pending' => sub {
+    my %slot;
+    my $ws = PAGI::Test::Client->new(app => ws_app(\%slot, 0))->websocket('/', close_mode => 'manual');
+    $ws->close(1000, 'peer');
+    is $slot{receive}->()->get->{type}, 'websocket.disconnect', 'app has received peer Close';
+    ok $slot{conn}->is_connected, 'transport completion is still pending';
+    ok $slot{send}->({type => 'websocket.send', text => 'after Close'})->is_done,
+        'racing data send may be discarded successfully';
+    $ws->complete_close;
+    is $ws->receive_text, undef, 'post-Close application data was never delivered';
+};
+
+subtest 'close_incomplete requires peer Close without mutating a pending scope' => sub {
+    my %slot;
+    my $ws = PAGI::Test::Client->new(app => ws_app(\%slot, 1))->websocket('/', close_mode => 'manual');
+    my $end = $slot{conn}->end_future;
+    like dies { $ws->simulate_abnormal_close(reason => 'close_incomplete') },
+        qr/close_incomplete requires a peer Close/, 'impossible outcome rejected';
+    ok $slot{conn}->is_connected, 'connection remains pending';
+    ok !$end->is_ready, 'invalid control did not publish terminal state';
+    is $slot{conn}->close_code, undef, 'invalid control did not invent peer metadata';
+    $ws->close(undef, undef);
+    $ws->simulate_abnormal_close(reason => 'close_incomplete');
+    is $slot{conn}->disconnect_reason, 'close_incomplete', 'valid empty-peer outcome still works';
+    is [$slot{conn}->close_code, $slot{conn}->close_reason], [1005, undef], 'empty peer metadata preserved';
+};
+
 done_testing;

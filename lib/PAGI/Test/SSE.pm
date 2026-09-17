@@ -120,7 +120,9 @@ sub _start {
     $self->{app_future}->on_ready(sub {
         my ($future) = @_;
         my $conn = $self->{scope}{'pagi.connection'};
-        if ($conn->is_connected && !$sv->complete) {
+        # Successful close/refusal capture already ended the scope. A
+        # validator-complete event whose body capture failed has not.
+        if ($conn->is_connected) {
             my $detail = $future->is_failed ? scalar($future->failure) : undef;
             $self->_transport_closed(reason => 'server_error', detail => $detail);
         }
