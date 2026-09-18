@@ -40,7 +40,7 @@ be at least 300; SSE may use ordinary HTTP 200 or 204.
 
 | Repository | Branch / commit | Role | Changes |
 | --- | --- | --- | --- |
-| PAGI-Tools | `feature/universal-connection-tools` / `387388e` | protocol-refusal-applications | implementation, migration-test correction, and this handoff |
+| PAGI-Tools | `feature/universal-connection-tools` / `f2bcd59` before final review-record commit | protocol-refusal-applications | implementation, tests, examples, and documentation |
 | PAGI | `main` / `9aebdbcd938f4ff520d68ce2ea2e86cd00cf150f` | read-only normative reference | none |
 | PAGI-Server | `feature/websocket-close-truthfulness` / `c0c08f695a4ecb1cd1d553fdbdfec3dbda86601e` | read-only integration checkout | none |
 
@@ -110,10 +110,10 @@ claimed.
   body and metadata contract was designed; the cost was deliberate sequential
   execution rather than parallel edits.
 - `Endpoint::HTTP` remains HTTP-only with a local scope guard. Broadening it
-  would default WebSocket extended CONNECT requests without a method to GET,
+  would default WebSocket scopes without a method to GET,
   which this redesign did not authorize. Built-in Response, Pages, and
   RequestResponse applications provide the promised refusal support.
-- Narrow task gates were used while implementing each task; the one complete
+- Narrow task gates were used while implementing each task; the required final
   Tools-suite gate was reserved for Task 7. This kept the tests relevant while
   retaining whole-branch regression evidence before handoff.
 - Final broad review is scoped to the approved implementation since
@@ -139,8 +139,15 @@ claimed.
 
 ## Review state
 
-Tasks 1–6 received their recorded scoped reviews. Final broad implementation
-review is pending controller dispatch after this handoff. It should assess
-scope/channel identity, cleanup retention, all body readers, header-cache
-access order, sequential recovery, server independence, and removal of
-duplicated refusal code. There are no known runtime blockers.
+Tasks 1–6 received scoped reviews. Final broad review covered
+`7958037..aecc89a`, including the Task 7 migration-test correction. It passed
+spec compliance and found no runtime blockers. Its sole minor finding was
+older Tutorial/Cookbook wording implying that only streaming refusals require
+a connection. Commit `f2bcd59` corrected both paragraphs; both POD checks
+passed and the scoped re-review approved the correction.
+
+Final verdict: **spec PASS, quality APPROVE, mergeable within the approved
+scope; no outstanding review findings**. The full-suite result above applies
+to the final runtime and tests; subsequent changes were documentation only.
+The current branch and local review evidence are preserved. No push or merge
+has occurred.
