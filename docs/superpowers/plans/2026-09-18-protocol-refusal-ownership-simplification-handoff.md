@@ -2,8 +2,9 @@
 
 Date: 2026-09-18
 
-Status: Tasks 1–3 implemented and locally verified. Task 1 and Task 2 reviews
-are clean. The controller-owned Task 3 review and final broad review are pending.
+Status: Tasks 1–3 implemented and locally verified. All three independent task
+reviews and the final broad review are clean. The approved execution range is
+`3fa6a63..3d9c651`; the branch remains local and unmerged.
 
 ## Result
 
@@ -34,8 +35,7 @@ ordinary closed-helper behavior applies.
 
 - `2e1561e` — `fix: isolate buffered Response sends from caller cancellation`
 - `d2858ee` — `refactor: await protocol refusal applications directly`
-- Task 3 documentation commit — created after this handoff is staged; see branch
-  HEAD for `docs: explain ordinary refusal ownership`
+- `3d9c651` — `docs: explain ordinary refusal ownership`
 
 The execution base for the complete amendment is
 `3fa6a63a7ae3c383152a1683552f653c962fba4f`. Task 3 began at
@@ -83,13 +83,13 @@ There is no deployment or push target for this work.
 
 ## Review status and remaining limits
 
-Task 1 and Task 2 each received clean independent specification and quality
-review. The controller-owned Task 3 review and final broad review are pending.
-The broad review will assess mergeability without a predetermined conclusion
-and will check that the detached coordinator and rollback are gone, send
-protection sits at the Response boundary, normal start and keepalive still work,
-and no alternate orphan-retention mechanism or lifecycle framework replaced the
-removed code.
+All three tasks received clean independent specification and quality reviews.
+The final broad review approved `3fa6a63..3d9c651` as ready to merge within the
+agreed scope, with no Critical, Important, Minor, deferred, or parked findings.
+It verified that the detached coordinator and rollback are gone, send protection
+sits at the Response boundary, normal start and keepalive remain covered, and
+no alternate orphan-retention mechanism or lifecycle framework replaced the
+removed code. No runtime or test changes were requested after verification.
 
 The only known verification limits are the release-only multipart test skip and
 the unavailable dependency-complete Perl 5.018 runtime. The branch remains local.
