@@ -98,7 +98,9 @@ sub transport {
         my @request_headers = $type eq 'websocket'
             ? ([':protocol', 'websocket'], ['sec-websocket-version', '13'])
             : (['accept', 'text/event-stream']);
-        push @request_headers, @$extra_headers;
+        push @request_headers, map {
+            [substr($_->[0], 0, 1) eq ':' ? $_->[0] : lc($_->[0]), $_->[1]]
+        } @$extra_headers;
         my %request = (
             method => ($type eq 'websocket' ? 'CONNECT' : $method),
             path => '/', scheme => ($type eq 'websocket' ? 'https' : 'http'),
