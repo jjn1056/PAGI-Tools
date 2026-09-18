@@ -147,7 +147,7 @@ subtest 'header accessors' => sub {
     my @customs = $ws->header_all('x-custom');
     is(\@customs, ['value1', 'value2'], 'header_all returns all values');
 
-    isa_ok($ws->headers, ['Hash::MultiValue'], 'headers returns Hash::MultiValue');
+    isa_ok($ws->headers, ['PAGI::Headers'], 'headers returns PAGI::Headers');
 };
 
 subtest 'defaults for optional scope keys' => sub {

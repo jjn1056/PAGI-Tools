@@ -6,6 +6,7 @@ use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
+use PAGI::Headers ();
 use PAGI::Response ();
 use Scalar::Util qw(blessed);
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
@@ -416,34 +417,20 @@ sub _require_connection_for_stream {
 # Single header lookup (case-insensitive, returns last value)
 sub header {
     my ($self, $name) = @_;
-    $name = lc($name);
-    my $value;
-    for my $pair (@{$self->{scope}{headers} // []}) {
-        if (lc($pair->[0]) eq $name) {
-            $value = $pair->[1];
-        }
-    }
-    return $value;
+    return $self->headers->get($name);
 }
 
-# All headers as Hash::MultiValue (cached in scope)
+# All headers as PAGI::Headers (cached in scope)
 sub headers {
-    my $self = shift;
-    return $self->{scope}{'pagi.request.headers'} if $self->{scope}{'pagi.request.headers'};
-
-    my @pairs;
-    for my $pair (@{$self->{scope}{headers} // []}) {
-        push @pairs, lc($pair->[0]), $pair->[1];
-    }
-
-    $self->{scope}{'pagi.request.headers'} = Hash::MultiValue->new(@pairs);
-    return $self->{scope}{'pagi.request.headers'};
+    my ($self) = @_;
+    return $self->{scope}{'pagi.request.headers'}
+        //= PAGI::Headers->new($self->{scope}{headers} // []);
 }
 
 # All values for a header
 sub header_all {
     my ($self, $name) = @_;
-    return $self->headers->get_all(lc($name));
+    return $self->headers->get_all($name);
 }
 
 # Get Last-Event-ID header from client (for reconnection)
@@ -1123,6 +1110,9 @@ connection, so this does not arise.
 
     my $auth = $sse->header('authorization');
     my @cookies = $sse->header_all('cookie');
+    my $headers = $sse->headers;        # PAGI::Headers
+
+Case-insensitive header access through L<PAGI::Headers>.
 
 =head2 last_event_id
 

@@ -81,6 +81,7 @@ subtest 'header accessors' => sub {
 
     my @cookies = $sse->header_all('cookie');
     is(\@cookies, ['a=1', 'b=2'], 'header_all returns all values');
+    isa_ok($sse->headers, ['PAGI::Headers'], 'headers returns PAGI::Headers');
 };
 
 done_testing;

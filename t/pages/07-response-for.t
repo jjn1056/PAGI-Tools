@@ -3,8 +3,8 @@ use warnings;
 
 use Test2::V0;
 use Future;
-use Hash::MultiValue;
 use JSON::MaybeXS qw(decode_json);
+use PAGI::Headers ();
 use Scalar::Util qw(blessed refaddr);
 
 use PAGI::Pages;
@@ -298,7 +298,7 @@ subtest 'materialization gives policy a shallow HTTP metadata view without chang
 
     my $nested = { request_id => 'nested-by-identity' };
     my $headers = [['Accept' => 'application/problem+json']];
-    my $protocol_cache = Hash::MultiValue->new(accept => 'text/plain');
+    my $protocol_cache = PAGI::Headers->new([['Accept' => 'text/plain']]);
     my $source = {
         type                   => 'websocket',
         method                 => 'POST',
@@ -394,7 +394,7 @@ subtest 'WebSocket and SSE caches are omitted only from synthesized HTTP views' 
         my $object = $factory->();
         my $source = $object->scope;
         my $cache = $object->headers;
-        isa_ok($cache, ['Hash::MultiValue'], "$label builds its protocol cache first");
+        isa_ok($cache, ['PAGI::Headers'], "$label builds its protocol cache first");
         my @source_keys = sort keys %$source;
 
         my $response = $application->response_for($object);
@@ -410,7 +410,7 @@ subtest 'WebSocket and SSE caches are omitted only from synthesized HTTP views' 
             "$label metadata retains both raw Accept lines");
         is(refaddr($source->{'pagi.request.headers'}), refaddr($cache),
             "$label source retains its original protocol cache");
-        isa_ok($source->{'pagi.request.headers'}, ['Hash::MultiValue'],
+        isa_ok($source->{'pagi.request.headers'}, ['PAGI::Headers'],
             "$label source cache class is not replaced");
         is([sort keys %$source], \@source_keys,
             "$label response materialization does not change source keys");
