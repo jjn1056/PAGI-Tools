@@ -186,7 +186,7 @@ for my $kind (qw(websocket sse)) {
             await $send->({type => 'http.response.body', body => 'refused', more => 1});
         });
         my $f = $kind eq 'websocket' ? $h->deny($response) : $h->decline($response);
-        is($h->connection_state, $kind eq 'websocket' ? 'denying' : 'declining', 'committed refusal body still in progress');
+        ok($conn->response_started, 'committed refusal body still in progress');
         ok(!$h->is_closed, 'refusal start is not terminal');
         is($h->receive->get, undef, 'committed refusal never reads message queue') if $kind eq 'websocket';
         $body->done;
@@ -277,7 +277,7 @@ for my $case (
         }
         is(\@events, [qw(http.response.start http.response.body)], 'no protocol send reaches the committed HTTP response');
         is($errors, 0, 'guard does not invoke send-error hooks');
-        is($helper->connection_state, $kind eq 'websocket' ? 'denying' : 'declining', 'local guard preserves refusal progress');
+        ok($conn->response_started, 'local guard preserves refusal progress');
         ok($conn->is_connected && !$helper->is_closed, 'local rejection does not fabricate terminal state');
         is($cleanup, 0, 'local rejection does not start terminal cleanup');
         $body->done;

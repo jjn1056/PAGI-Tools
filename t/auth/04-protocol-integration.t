@@ -182,18 +182,14 @@ subtest 'WebSocket denial and SSE decline emit the same captured Auth response' 
         type          => 'websocket',
         prefix        => 'http.response',
         initial_state => 'connecting',
-        reserved_state => 'denying',
         reject        => sub { $_[0]->deny($_[1]) },
-        compete       => sub { $_[0]->accept },
     },
     {
         name          => 'SSE',
         type          => 'sse',
         prefix        => 'http.response',
         initial_state => 'pending',
-        reserved_state => 'declining',
         reject        => sub { $_[0]->decline($_[1]) },
-        compete       => sub { $_[0]->start },
     },
 );
 
@@ -272,16 +268,10 @@ subtest 'mapped start settlement owns the slot while body backpressure remains s
             my $rejection = $case->{reject}->($protocol, $response);
             is [map { $_->{type} } @sent], ["$case->{prefix}.start"],
                 'only mapped start is sent before its settlement';
-            is $protocol->connection_state, $case->{reserved_state},
-                'the pending start reserves the first-event slot';
             ok !$connection->response_started,
                 'pending start is not published before send settlement';
-            like dies { $case->{compete}->($protocol)->get },
-                qr/response is pending/, 'a competing first event fails locally';
 
             $settlements[0]->done;
-            is $protocol->connection_state, $case->{reserved_state},
-                'start acceptance commits the slot but body remains nonterminal';
             ok $connection->response_started,
                 'settled start is published to connection state';
             ok !$connection->response_complete,

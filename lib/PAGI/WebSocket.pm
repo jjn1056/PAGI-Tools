@@ -8,7 +8,7 @@ use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
 use PAGI::Headers ();
-use PAGI::Utils::_Refusal ();
+use PAGI::Common ();
 use Scalar::Util qw(blessed);
 
 
@@ -33,7 +33,7 @@ sub new {
         scope   => $scope,
         receive => $receive,
         send    => $send,
-        _state  => 'connecting',  # connecting -> denying -> closed, or connected -> closed
+        _state  => 'connecting',  # connecting -> connected -> closed
         _close_code   => undef,
         _close_reason => undef,
         _on_close     => [],
@@ -47,7 +47,7 @@ sub new {
 
     $self->{_cleanup_future} = Future->new;
     if (my $connection = $scope->{'pagi.connection'}) {
-        PAGI::Utils::_Refusal::require_connection($scope, 'PAGI::WebSocket');
+        PAGI::Common::require_connection($scope, 'PAGI::WebSocket');
         # The connection owns this helper until end; the retained worker then
         # owns asynchronous cleanup until all registered hooks have settled.
         $connection->on_end(sub {
@@ -67,18 +67,17 @@ sub _refresh_connection {
     $self->{_disconnect_detail} = $connection->disconnect_detail;
     $self->{_close_code} = $connection->close_code;
     $self->{_close_reason} = $connection->close_reason;
-    $self->{_denied} = 1
-        if $self->{_state} eq 'denying' && $connection->response_started;
     $self->{_state} = 'closed' unless $connection->is_connected;
     return;
 }
 
-# Derive refusal progress before protocol operations; response_started alone
-# also includes a normal accept/start and must not identify a refusal.
-sub _refusal_started {
+# An initial helper cannot claim a response slot already used by an application.
+# Accepted/started helpers continue to use their established protocol.
+sub _response_claimed_before_start {
     my ($self) = @_;
     $self->_refresh_connection;
-    return $self->{_denied};
+    my $connection = $self->{scope}{'pagi.connection'} or return 0;
+    return $self->{_state} eq 'connecting' && $connection->response_started;
 }
 
 sub disconnect_detail {
@@ -401,10 +400,8 @@ async sub _trigger_error {
 # Accept the WebSocket connection
 async sub accept {
     my ($self, %opts) = @_;
-    return $self if $self->_refusal_started || $self->connection_state eq 'closing';
+    return $self if $self->_response_claimed_before_start || $self->connection_state eq 'closing';
 
-    croak 'WebSocket denial response is pending'
-        if $self->{_state} eq 'denying';
     return $self if $self->is_closed;
 
     my $event = {
@@ -423,8 +420,7 @@ async sub accept {
 sub close {
     my ($self, @args) = @_;
     return $self->_legacy_close(@args) unless $self->{scope}{'pagi.connection'};
-    return Future->done($self) if $self->_refusal_started;
-    croak 'WebSocket denial response is pending' if $self->connection_state eq 'denying';
+    return Future->done($self) if $self->_response_claimed_before_start;
     return $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
         if $self->{_close_send};
     return Future->done if $self->is_closed;
@@ -455,8 +451,6 @@ async sub _legacy_close {
 
     croak 'WebSocket close is only valid after accept; use deny'
         if $self->{_state} eq 'connecting';
-    croak 'WebSocket denial response is pending'
-        if $self->{_state} eq 'denying';
     # Idempotent - don't send close twice
     return if $self->is_closed;
 
@@ -477,15 +471,22 @@ async sub _legacy_close {
 
 # Delegate the handshake refusal to a public PAGI application. Valid only
 # before accept.
-sub deny {
-    return PAGI::Utils::_Refusal::run_refusal(@_);
+async sub deny {
+    my ($self, @targets) = @_;
+    my $app = PAGI::Common::prepare_refusal(
+        $self->{scope}, 'WebSocket deny', @targets,
+    );
+    await PAGI::Utils::invoke_app(
+        $app, $self->{scope}, $self->{receive}, $self->{send},
+    );
+    return $self;
 }
 
 # Send text message
 async sub send_text {
     my ($self, $text) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->{send}->({
         type => 'websocket.send',
@@ -499,7 +500,7 @@ async sub send_text {
 async sub send_bytes {
     my ($self, $bytes) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->{send}->({
         type  => 'websocket.send',
@@ -513,7 +514,7 @@ async sub send_bytes {
 async sub send_json {
     my ($self, $data) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     my $json = JSON::MaybeXS::encode_json($data);
 
@@ -529,7 +530,7 @@ async sub send_json {
 
 async sub try_send_text {
     my ($self, $text) = @_;
-    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->{send}->({
@@ -550,7 +551,7 @@ async sub try_send_text {
 
 async sub try_send_bytes {
     my ($self, $bytes) = @_;
-    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->{send}->({
@@ -571,7 +572,7 @@ async sub try_send_bytes {
 
 async sub try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
@@ -619,7 +620,7 @@ async sub send_json_if_connected {
 async sub receive {
     my ($self) = @_;
 
-    return undef if $self->is_closed || $self->_refusal_started;
+    return undef if $self->is_closed || $self->_response_claimed_before_start;
 
     while (1) {
         my $event = await $self->{receive}->();
@@ -784,7 +785,7 @@ async sub run {
 # Sends websocket.keepalive event to server - loop-agnostic, server handles timers
 async sub keepalive {
     my ($self, $interval, $timeout) = @_;
-    return $self if $self->is_closed || $self->_refusal_started || $self->connection_state eq 'closing';
+    return $self if $self->is_closed || $self->_response_claimed_before_start || $self->connection_state eq 'closing';
 
     $interval //= 0;
 
@@ -1129,17 +1130,20 @@ required for every target, including buffered Responses. Missing capabilities
 fail before factories, handlers, or C<to_app> execute.
 
 Await the returned Future. Success resolves to this helper and means the
-application finished, not that the connection completed. Its C<denying> phase
-lasts until connection termination once a response has started. A settled
+application finished, not that the connection completed. The helper retains
+its initial protocol state until normal protocol progress or connection end;
+that state does not promise that a response slot is available. A settled
 attempt on a live connection with no response start permits sequential retry;
 after response start or termination another refusal fails. Application errors
-propagate, and only live, unstarted attempts restore the initial helper state.
+propagate through the returned Future.
 Applications must sequence answering operations; overlapping refusal and
 acceptance/start calls are unsupported.
 
-Cancelling the returned observer does not cancel the retained application work
-or server sends. Connection C<on_end> owns close callbacks, including
-asynchronous cleanup after application return.
+Cancelling the returned Future follows the invoked application's cancellation
+behavior. Buffered Responses protect submitted server sends but stop subsequent
+emission; Stream retains its own abort and cleanup behavior. Connection
+C<on_end> owns close callbacks, including asynchronous cleanup after application
+return.
 
 The sending environment requires WebSocket refusal status 300 or greater.
 Request metadata is available, but WebSocket Request body APIs reject access
@@ -1158,7 +1162,7 @@ See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
     if ($ws->is_connected) { ... }
     if ($ws->is_closed) { ... }
-    my $state = $ws->connection_state; # connecting, denying, connected, closing, closed
+    my $state = $ws->connection_state; # connecting, connected, closing, closed
 
 =head2 close_code, close_reason
 

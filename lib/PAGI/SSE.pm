@@ -7,7 +7,7 @@ use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
 use PAGI::Headers ();
-use PAGI::Utils::_Refusal ();
+use PAGI::Common ();
 use Scalar::Util qw(blessed);
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 
@@ -33,7 +33,7 @@ sub new {
         scope             => $scope,
         receive           => $receive,
         send              => $send,
-        _state            => 'pending',  # pending -> declining -> closed, or started -> closed
+        _state            => 'pending',  # pending -> started -> closed
         _on_close         => [],
         _on_error         => [],
         _disconnect_reason => undef,     # Set when disconnect received
@@ -45,7 +45,7 @@ sub new {
 
     $self->{_cleanup_future} = Future->new;
     if (my $connection = $scope->{'pagi.connection'}) {
-        PAGI::Utils::_Refusal::require_connection($scope, 'PAGI::SSE');
+        PAGI::Common::require_connection($scope, 'PAGI::SSE');
         # The connection owns this helper until end; the retained worker then
         # owns asynchronous cleanup until all registered hooks have settled.
         $connection->on_end(sub {
@@ -63,19 +63,20 @@ sub _refresh_connection {
     my $connection = $self->{scope}{'pagi.connection'} or return;
     $self->{_disconnect_reason} = $connection->disconnect_reason;
     $self->{_disconnect_detail} = $connection->disconnect_detail;
-    $self->{_declined} = 1
-        if $self->{_state} eq 'declining' && $connection->response_started;
-    delete $self->{_pending_keepalive} if $self->{_declined};
-    $self->{_state} = 'closed' unless $connection->is_connected;
+    unless ($connection->is_connected) {
+        $self->{_state} = 'closed';
+        delete $self->{_pending_keepalive};
+    }
     return;
 }
 
-# Derive refusal progress before protocol operations; response_started alone
-# also includes a normal accept/start and must not identify a refusal.
-sub _refusal_started {
+# An initial helper cannot claim a response slot already used by an application.
+# Accepted/started helpers continue to use their established protocol.
+sub _response_claimed_before_start {
     my ($self) = @_;
     $self->_refresh_connection;
-    return $self->{_declined};
+    my $connection = $self->{scope}{'pagi.connection'} or return 0;
+    return $self->{_state} eq 'pending' && $connection->response_started;
 }
 
 sub disconnect_detail {
@@ -288,10 +289,11 @@ sub _set_closed {
 # Start the SSE stream
 async sub start {
     my ($self, %opts) = @_;
-    return $self if $self->_refusal_started;
+    if ($self->_response_claimed_before_start) {
+        delete $self->{_pending_keepalive};
+        return $self;
+    }
 
-    croak 'SSE decline response is pending'
-        if $self->{_state} eq 'declining';
     # Idempotent - don't start twice
     return $self if $self->is_started || $self->is_closed || $self->connection_state eq 'closing';
 
@@ -335,7 +337,11 @@ async sub keepalive {
 
     # Safe no-op once closed (including via decline) -- there is no live
     # connection left for the server to time a ping against.
-    return $self if $self->is_closed || $self->_refusal_started || $self->connection_state eq 'closing';
+    if ($self->_response_claimed_before_start) {
+        delete $self->{_pending_keepalive};
+        return $self;
+    }
+    return $self if $self->is_closed || $self->connection_state eq 'closing';
 
     $interval //= 0;
     $comment  //= '';
@@ -362,8 +368,15 @@ async sub keepalive {
 
 # Delegate to a public PAGI application instead of starting SSE.
 # See PAGI::Spec::Www "SSE Response Denial".
-sub decline {
-    return PAGI::Utils::_Refusal::run_refusal(@_);
+async sub decline {
+    my ($self, @targets) = @_;
+    my $app = PAGI::Common::prepare_refusal(
+        $self->{scope}, 'SSE decline', @targets,
+    );
+    await PAGI::Utils::invoke_app(
+        $app, $self->{scope}, $self->{receive}, $self->{send},
+    );
+    return $self;
 }
 
 # Single header lookup (case-insensitive, returns last value)
@@ -395,7 +408,7 @@ sub last_event_id {
 async sub send {
     my ($self, $data) = @_;
 
-    return $self if $self->_refusal_started;
+    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
 
     # Auto-start if not started
@@ -413,7 +426,7 @@ async sub send {
 async sub send_json {
     my ($self, $data) = @_;
 
-    return $self if $self->_refusal_started;
+    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->start unless $self->is_started;
@@ -432,7 +445,7 @@ async sub send_json {
 async sub send_event {
     my ($self, %opts) = @_;
 
-    return $self if $self->_refusal_started;
+    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
     croak "send_event requires 'data' parameter" unless exists $opts{data};
 
@@ -461,7 +474,7 @@ async sub send_event {
 # Safe send - returns bool instead of throwing
 async sub try_send {
     my ($self, $data) = @_;
-    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -480,7 +493,7 @@ async sub try_send {
 
 async sub try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -502,7 +515,7 @@ async sub try_send_json {
 async sub send_comment {
     my ($self, $comment) = @_;
 
-    return $self if $self->_refusal_started;
+    return $self if $self->_response_claimed_before_start;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->start unless $self->is_started;
@@ -517,7 +530,7 @@ async sub send_comment {
 
 async sub try_send_comment {
     my ($self, $comment) = @_;
-    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -536,7 +549,7 @@ async sub try_send_comment {
 
 async sub try_send_event {
     my ($self, %opts) = @_;
-    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -664,8 +677,7 @@ async sub _note_disconnected {
 sub close {
     my ($self, @args) = @_;
     return $self->_legacy_close(@args) unless $self->{scope}{'pagi.connection'};
-    return Future->done($self) if $self->_refusal_started;
-    croak 'SSE decline response is pending' if $self->connection_state eq 'declining';
+    return Future->done($self) if $self->_response_claimed_before_start;
     if ($self->{_close_callbacks_ran}) {
         return $self->{_close_send}
             ? $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
@@ -708,8 +720,6 @@ sub close {
 async sub _legacy_close {
     my ($self, %opts) = @_;
 
-    croak 'SSE decline response is pending'
-        if $self->{_state} eq 'declining';
     return $self if $self->is_closed;
 
     # Record the reason so on_close callbacks (and the server access log) see it.
@@ -731,7 +741,10 @@ async sub _legacy_close {
 # Wait for disconnect
 async sub run {
     my ($self) = @_;
-    return if $self->_refusal_started;
+    if ($self->_response_claimed_before_start) {
+        delete $self->{_pending_keepalive};
+        return;
+    }
     if ($self->{scope}{'pagi.connection'}) {
         await $self->start unless $self->is_started || $self->is_closed;
         await $self->{_cleanup_future}->without_cancel;
@@ -786,6 +799,7 @@ async sub _guarded_dispatch {
 # Iterate over items and send events
 async sub each {
     my ($self, $source, $callback) = @_;
+    return $self if $self->_response_claimed_before_start;
 
     await $self->start unless $self->is_started;
 
@@ -828,6 +842,7 @@ async sub each {
 # Requires Future::IO to be installed
 async sub every {
     my ($self, $interval, $callback) = @_;
+    return $self if $self->_response_claimed_before_start;
 
     croak "every() requires interval" unless defined $interval && $interval > 0;
     croak "every() requires callback coderef" unless ref $callback eq 'CODE';
@@ -1217,17 +1232,20 @@ required for every target, including buffered Responses. Missing capabilities
 fail before factories, handlers, or C<to_app> execute.
 
 Await the returned Future. Success resolves to this helper and means the
-application finished, not that the connection completed. Its C<declining> phase
-lasts until connection termination once a response has started. A settled
+application finished, not that the connection completed. The helper retains
+its initial protocol state until normal protocol progress or connection end;
+that state does not promise that a response slot is available. A settled
 attempt on a live connection with no response start permits sequential retry;
 after response start or termination another refusal fails. Application errors
-propagate, and only live, unstarted attempts restore the initial helper state.
+propagate through the returned Future.
 Applications must sequence answering operations; overlapping refusal and
 acceptance/start calls are unsupported.
 
-Cancelling the returned observer does not cancel the retained application work
-or server sends. Connection C<on_end> owns close callbacks, including
-asynchronous cleanup after application return.
+Cancelling the returned Future follows the invoked application's cancellation
+behavior. Buffered Responses protect submitted server sends but stop subsequent
+emission; Stream retains its own abort and cleanup behavior. Connection
+C<on_end> owns close callbacks, including asynchronous cleanup after application
+return.
 
 SSE refusals may use ordinary HTTP statuses including 200 and 204. Request
 body APIs consume the actual C<sse.request> body stream. Once HTTP refusal
@@ -1280,7 +1298,7 @@ stream that has ended, it joins the same cleanup completion.
 
     if ($sse->is_started) { ... }
     if ($sse->is_closed) { ... }
-    my $state = $sse->connection_state;    # pending, declining, started, closing, closed
+    my $state = $sse->connection_state;    # pending, started, closing, closed
 
 =head2 is_connected
 

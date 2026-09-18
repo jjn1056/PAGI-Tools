@@ -113,4 +113,21 @@ subtest 'start() after decline does not resurrect a cleared pending keepalive' =
     is(scalar @$sent, $before, 'start() after decline is still a full no-op');
 };
 
+subtest 'in-flight normal start preserves deferred keepalive through public refresh' => sub {
+    my $start = Future->new;
+    my $h = PAGITest::RefusalHarness->new('sse', send => sub {
+        return $_[0]{type} eq 'sse.start' ? $start : Future->done;
+    });
+    $h->{helper}->keepalive(25, 'ping')->get;
+    my $operation = $h->{helper}->start;
+    ok($h->{connection}->response_started, 'server already claimed the normal start');
+    is($h->{helper}->connection_state, 'pending', 'helper awaits start settlement');
+    $start->done;
+    $operation->get;
+    is([map { $_->{type} } @{$h->{events}}], ['sse.start', 'sse.keepalive'], 'saved keepalive arms after normal start settles');
+    is($h->{events}[1]{interval}, 25, 'saved interval preserved');
+    $h->{connection}->_mark_disconnected('client_closed');
+    $h->deliver;
+};
+
 done_testing;
