@@ -442,6 +442,13 @@ sub sse {
 
     $path //= '/';
 
+    # SSE requests use the same HTTP request-body framing as ordinary HTTP.
+    # The body itself is delivered by PAGI::Test::SSE as one terminal
+    # sse.request event, matching the real server's in-process abstraction.
+    if (defined $opts{body}) {
+        _set_header(\$opts{headers}, 'Content-Length', length($opts{body}), 0);
+    }
+
     # Parse query string from path
     my $query_string = '';
     if ($path =~ s/\?(.*)$//) {
@@ -504,7 +511,10 @@ sub sse {
 
     $scope->{state} = $self->{state} if $self->{state};
 
-    my $sse = PAGI::Test::SSE->new(app => $self->{app}, scope => $scope);
+    my $sse = PAGI::Test::SSE->new(
+        app => $self->{app}, scope => $scope,
+        request_body => $opts{body} // '',
+    );
     my $weak_sse = $sse;
     weaken($weak_sse);
     $connection->_set_abort_hook(sub {
@@ -1315,6 +1325,14 @@ portable and extension denial paths, and C<simulate_abnormal_close>.
     # With headers (e.g., for reconnection)
     my $sse = $client->sse('/events',
         headers => { 'Last-Event-ID' => '42' },
+    );
+
+    # POST request body (delivered to the app as sse.request)
+    my $body = '{"job":42}';
+    my $res = $client->sse('/jobs',
+        method  => 'POST',
+        body    => $body,
+        headers => { 'Content-Type' => 'application/json' },
     );
 
     # Options with callback

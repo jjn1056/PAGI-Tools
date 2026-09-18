@@ -27,6 +27,7 @@ plan skip_all => 'PAGI::Server lacks the Www 0.6 terminal connection API'
 plan skip_all => "Server integration tests not supported on Windows" if $^O eq 'MSWin32';
 
 use PAGI::Endpoint::SSE;
+use PAGI::Pages;
 use PAGI::Response::Text;
 use PAGI::Routing qw(router sse);
 use IO::Socket::INET;
@@ -44,6 +45,21 @@ use IO::Socket::INET;
         return $sse->decline(
             PAGI::Response::Text->new('Not Found', status => 404),
         );
+    }
+}
+
+{
+    package Local::PagesDecliningSSEEndpoint;
+    use parent 'PAGI::Endpoint::SSE';
+
+    sub on_connect {
+        my ($self, $sse) = @_;
+        $self->{scope} = $sse->scope;
+        $self->{connection} = $sse->scope->{'pagi.connection'};
+        $sse->on_close(sub { ++$self->{cleanup}; return });
+        return $sse->decline(PAGI::Pages->service_unavailable(
+            detail => 'Scheduled maintenance', as => 'text',
+        ));
     }
 }
 
@@ -104,6 +120,29 @@ subtest 'concrete SSE decline Response returns a real HTTP 404 over the real ser
         'declarative dispatch retains the configured endpoint and direct protocol object');
 
     $server->shutdown->get;
+};
+
+subtest 'direct Pages application returns a clean HTTP refusal through an SSE endpoint' => sub {
+    my $endpoint = Local::PagesDecliningSSEEndpoint->new;
+    my $routing = router(routes => [
+        sse('/maintenance' => $endpoint),
+    ]);
+
+    my $server = create_server($routing->to_app);
+    my ($wire, $eof) = sse_get($server->port, '/maintenance');
+
+    like($wire, qr{HTTP/1\.1 503}, 'Pages application controls the HTTP status');
+    like($wire, qr/Scheduled maintenance/, 'Pages application body reaches the client');
+    unlike($wire, qr{text/event-stream}, 'no SSE stream is started');
+    ok($eof, 'connection closed after the refusal');
+    is($endpoint->{scope}{type}, 'sse', 'endpoint retains the original SSE scope');
+    ok($endpoint->{connection}->response_complete, 'connection records clean completion');
+    is($endpoint->{connection}->disconnect_reason, undef,
+        'clean refusal has no disconnect reason');
+    is($endpoint->{cleanup}, 1, 'terminal callback runs once');
+
+    $server->shutdown->get;
+    is($endpoint->{cleanup}, 1, 'shutdown does not duplicate terminal cleanup');
 };
 
 done_testing;

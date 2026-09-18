@@ -1,5 +1,7 @@
 use strict; use warnings; use Test2::V0; use Future::AsyncAwait;
 use PAGI::Test::Client;
+use PAGI::Pages;
+use PAGI::WebSocket;
 
 async sub try_send {
     my ($send, $event) = @_;
@@ -165,6 +167,34 @@ subtest 'ordinary HTTP refusal returns a WebSocket object with a decoded respons
         { type => 'http.disconnect' },
         { type => 'http.disconnect' },
     ], 'receives after completed refusal report the HTTP end';
+};
+
+subtest 'direct Pages application denies a WebSocket handshake' => sub {
+    my ($seen_scope, @events, $cleanup);
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $seen_scope = $scope;
+        my $ws = PAGI::WebSocket->new($scope, $receive, async sub {
+            my ($event) = @_;
+            push @events, $event->{type};
+            return await $send->($event);
+        });
+        $ws->on_close(sub { ++$cleanup; return });
+        return await $ws->deny(PAGI::Pages->service_unavailable(
+            detail => 'Scheduled maintenance', as => 'text',
+        ));
+    };
+
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
+
+    ok $ws->refused, 'handshake refused';
+    is $ws->response->status, 503, 'Pages status';
+    like $ws->response->content, qr/Scheduled maintenance/,
+        'Pages text body';
+    is $seen_scope->{type}, 'websocket', 'original WebSocket scope remains in use';
+    is $cleanup, 1, 'terminal callback runs once';
+    is \@events, ['http.response.start', 'http.response.body'],
+        'denial emits no websocket.accept';
 };
 
 subtest 'refusal response uses the captured response decoder for fh bodies and trailers' => sub {

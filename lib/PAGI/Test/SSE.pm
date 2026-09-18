@@ -19,6 +19,7 @@ sub new {
     return bless {
         app        => $args{app},
         scope      => $args{scope},
+        request_body => $args{request_body} // '',
         recv_queue => [],      # Events from app -> test
         closed     => 0,
         started    => 0,
@@ -49,8 +50,14 @@ sub _start {
             return { %{$self->{_end_event}} };
         }
 
-        # SSE only receives disconnects from client, so we wait indefinitely
-        # until the connection is closed
+        if (!$self->{_request_sent}) {
+            $self->{_request_sent} = 1;
+            return {
+                type => 'sse.request', body => $self->{request_body}, more => 0,
+            };
+        }
+
+        # After the one request-body event, SSE receives only disconnects.
         my $future = Future->new;
         # This future will be resolved when close() is called
         push @{$self->{_pending_receives}}, $future;

@@ -7,7 +7,7 @@ use IO::Async::Loop;
 use IO::Async::Stream;
 use IO::Socket::INET;
 use Socket qw(AF_UNIX SOCK_STREAM);
-use Scalar::Util qw(weaken);
+use Scalar::Util qw(refaddr weaken);
 use Time::HiRes qw(time);
 use FindBin;
 use lib "$FindBin::Bin/../../lib";
@@ -23,6 +23,7 @@ BEGIN {
 use PAGI::Server::Protocol::HTTP1;
 use PAGI::WebSocket;
 use PAGI::SSE;
+use PAGI::Pages;
 use PAGI::Response::Stream;
 use Protocol::WebSocket::Frame;
 
@@ -44,21 +45,29 @@ sub until_ready {
 # transport bootstrap touches server construction; lifecycle assertions below
 # use the scope's public connection object and Tools helpers.
 sub transport {
-    my ($version, $type, $app, $logs) = @_;
+    my ($version, $type, $app, $logs, $request_options) = @_;
+    $request_options //= {};
     my $server = PAGI::Server->new(app => $app, host => '127.0.0.1', port => 0,
         quiet => 1, access_log => undef, shutdown_timeout => 1, http2 => $version eq '2',
         ws_close_timeout => 0.5, logger => sub { push @$logs, $_[0] });
     $loop->add($server);
     my ($sock, $stream, $connection, $client, $sid);
     my ($wire, $body, %headers) = ('', '');
+    my $method = $request_options->{method} // 'GET';
+    my $request_body = $request_options->{body} // '';
+    my $extra_headers = $request_options->{headers} // [];
     if ($version eq '1.1') {
         $server->listen->get;
         $sock = IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $server->port,
             Proto => 'tcp', Timeout => 5) or die "connect: $!";
-        my $fields = $type eq 'websocket'
-            ? "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-            : "Accept: text/event-stream\r\n";
-        print $sock "GET / HTTP/1.1\r\nHost: localhost\r\n${fields}\r\n";
+        my @fields = $type eq 'websocket'
+            ? (['Upgrade', 'websocket'], ['Connection', 'Upgrade'],
+                ['Sec-WebSocket-Version', '13'],
+                ['Sec-WebSocket-Key', 'dGhlIHNhbXBsZSBub25jZQ=='])
+            : (['Accept', 'text/event-stream']);
+        push @fields, @$extra_headers;
+        my $fields = join '', map { "$_->[0]: $_->[1]\r\n" } @fields;
+        print $sock "$method / HTTP/1.1\r\nHost: localhost\r\n${fields}\r\n$request_body";
         $sock->blocking(0);
     } else {
         socketpair(my $a, $sock, AF_UNIX, SOCK_STREAM, 0) or die "socketpair: $!";
@@ -86,11 +95,20 @@ sub transport {
         my $out = $client->mem_send; $sock->syswrite($out) if length $out;
         $loop->loop_once(0.1);
         my $extra = ''; $sock->sysread($extra, 4096); $client->mem_recv($extra) if length $extra;
-        $sid = $type eq 'websocket'
-            ? $client->submit_request(method => 'CONNECT', path => '/', scheme => 'https', authority => 'localhost',
-                headers => [[':protocol', 'websocket'], ['sec-websocket-version', '13']], body => sub { undef })
-            : $client->submit_request(method => 'GET', path => '/', scheme => 'http', authority => 'localhost',
-                headers => [['accept', 'text/event-stream']]);
+        my @request_headers = $type eq 'websocket'
+            ? ([':protocol', 'websocket'], ['sec-websocket-version', '13'])
+            : (['accept', 'text/event-stream']);
+        push @request_headers, @$extra_headers;
+        my %request = (
+            method => ($type eq 'websocket' ? 'CONNECT' : $method),
+            path => '/', scheme => ($type eq 'websocket' ? 'https' : 'http'),
+            authority => 'localhost', headers => \@request_headers,
+        );
+        $request{body} = sub { undef }
+            if $type eq 'websocket' || exists $request_options->{body};
+        $sid = $client->submit_request(%request);
+        $client->submit_data($sid, $request_body, 1)
+            if $type eq 'sse' && exists $request_options->{body};
         $sock->syswrite($client->mem_send);
     }
     my $pump = sub {
@@ -118,6 +136,131 @@ sub transport {
             if ($stream) { $stream->close_now } else { $server->shutdown->get }
             $loop->remove($server);
         },
+    };
+}
+
+for my $version ('1.1', '2') {
+    for my $type (qw(websocket sse)) {
+        subtest "$type HTTP/$version direct Pages refusal" => sub {
+            plan skip_all => 'optional HTTP/2 dependencies unavailable'
+                if $version eq '2' && !$h2;
+            my (%seen, @events, @logs, @warnings);
+            local $SIG{__WARN__} = sub { push @warnings, @_ };
+            my $app = async sub {
+                my ($scope, $receive, $send) = @_;
+                return unless $scope->{type} eq $type;
+                $seen{scope} = $scope;
+                $seen{connection} = $scope->{'pagi.connection'};
+                my $class = $type eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE';
+                my $method = $type eq 'websocket' ? 'deny' : 'decline';
+                my $helper = $class->new($scope, $receive, async sub {
+                    my ($event) = @_;
+                    push @events, $event->{type};
+                    return await $send->($event);
+                });
+                $seen{helper_scope} = $helper->scope;
+                $helper->on_close(sub { ++$seen{cleanup}; return });
+                await $helper->$method(PAGI::Pages->service_unavailable(
+                    detail => 'Scheduled maintenance',
+                    as => ($type eq 'websocket' ? 'text' : 'json'),
+                ));
+                ++$seen{returned};
+                return;
+            };
+            my $options = $type eq 'sse'
+                ? { headers => [['Accept', 'application/problem+json']] }
+                : {};
+            my $t = transport($version, $type, $app, \@logs, $options);
+            ok until_ready(sub {
+                my ($status, $body) = $t->{response}->();
+                defined($status) && $status == 503
+                    && $body =~ /Scheduled maintenance/ && $seen{cleanup};
+            }, $t->{pump}), 'Pages refusal reaches the wire and terminates cleanly';
+            my ($status, $body) = $t->{response}->();
+            is $status, 503, 'Pages status';
+            like $body, qr/Scheduled maintenance/, 'Pages body';
+            is refaddr($seen{helper_scope}), refaddr($seen{scope}),
+                'helper delegates with the original scope identity';
+            is $seen{scope}{type}, $type, 'protocol scope type remains unchanged';
+            is $seen{scope}{http_version}, $version, 'actual transport version';
+            is \@events, ['http.response.start', 'http.response.body'],
+                'no websocket.accept or sse.start';
+            is $seen{cleanup}, 1, 'terminal callback runs once';
+            is $seen{returned}, 1, 'delegated application settles once';
+            ok $seen{connection}->response_complete, 'refusal is a clean completion';
+            is $seen{connection}->disconnect_reason, undef,
+                'clean refusal has no disconnect reason';
+            $t->{finish}->();
+            is $seen{cleanup}, 1, 'transport disposal does not duplicate cleanup';
+            is \@logs, [], 'no unexpected server logs';
+            is \@warnings, [], 'no unexpected warnings';
+        };
+    }
+
+    subtest "sse HTTP/$version POST body reaches Request handler" => sub {
+        plan skip_all => 'optional HTTP/2 dependencies unavailable'
+            if $version eq '2' && !$h2;
+        my (%seen, @events, @logs, @warnings);
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        my $app = async sub {
+            my ($scope, $receive, $send) = @_;
+            return unless $scope->{type} eq 'sse';
+            $seen{scope} = $scope;
+            $seen{connection} = $scope->{'pagi.connection'};
+            my $sse = PAGI::SSE->new($scope, $receive, async sub {
+                my ($event) = @_;
+                push @events, $event->{type};
+                return await $send->($event);
+            });
+            $sse->on_close(sub { ++$seen{cleanup}; return });
+            await $sse->decline(async sub {
+                my ($request) = @_;
+                $seen{request_scope} = $request->scope;
+                $seen{method} = $request->method;
+                $seen{content_type} = $request->content_type;
+                my $data = await $request->json;
+                $seen{job} = $data->{job};
+                return PAGI::Pages->service_unavailable(
+                    as => 'json', extensions => { job => $data->{job} },
+                );
+            });
+            ++$seen{returned};
+            return;
+        };
+        my $request_body = '{"job":42}';
+        my $t = transport($version, 'sse', $app, \@logs, {
+            method => 'POST', body => $request_body,
+            headers => [
+                ['Accept', 'application/problem+json'],
+                ['Content-Type', 'application/json'],
+                ['Content-Length', length($request_body)],
+            ],
+        });
+        ok until_ready(sub {
+            my ($status, $body) = $t->{response}->();
+            defined($status) && $status == 503
+                && $body =~ /"job"\s*:\s*42/ && $seen{cleanup};
+        }, $t->{pump}), 'POST body handler returns its JSON refusal';
+        my ($status, $body) = $t->{response}->();
+        is $status, 503, 'handler refusal status';
+        like $body, qr/"job"\s*:\s*42/, 'response contains decoded job';
+        is [$seen{method}, $seen{content_type}, $seen{job}],
+            ['POST', 'application/json', 42],
+            'Request decoded native sse.request body and metadata';
+        is refaddr($seen{request_scope}), refaddr($seen{scope}),
+            'Request handler receives the original scope identity';
+        is $seen{scope}{http_version}, $version, 'actual transport version';
+        is \@events, ['http.response.start', 'http.response.body'],
+            'body handler emits no sse.start';
+        is [$seen{cleanup}, $seen{returned}], [1, 1],
+            'cleanup and delegated application settle once';
+        ok $seen{connection}->response_complete, 'refusal is a clean completion';
+        is $seen{connection}->disconnect_reason, undef,
+            'clean refusal has no disconnect reason';
+        $t->{finish}->();
+        is $seen{cleanup}, 1, 'transport disposal does not duplicate cleanup';
+        is \@logs, [], 'no unexpected server logs';
+        is \@warnings, [], 'no unexpected warnings';
     };
 }
 
