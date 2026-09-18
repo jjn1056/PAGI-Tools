@@ -630,6 +630,41 @@ response emission. State that arbitrary application compatibility and behavior
 belong to the application. Explain Request's SSE body support and WebSocket body
 restriction without suggesting that its scope has become HTTP.
 
+### 15.1 Required usage examples
+
+The six usage mockups reviewed with the user are documentation requirements,
+not merely design illustrations. The documentation for both `deny` and
+`decline` must teach all of these forms:
+
+1. A direct concrete Response, showing text and JSON responses.
+2. A synchronous one-Request handler building a response from request metadata,
+   including reuse of the same handler in either protocol endpoint.
+3. An async one-Request handler awaiting an application-owned service before
+   returning its response; describe the reservation while that work is pending.
+4. A Pages application passed directly and returned by a handler, explaining
+   content negotiation without requiring `response_for`.
+5. A custom application object implementing `to_app` without toolkit inheritance,
+   with a complete minimal class definition and a call-site example.
+6. A native three-argument async application wrapped with `as_app_object`,
+   showing ordinary `http.response.start` and `http.response.body` events.
+
+Each method's POD must show its basic response and Request-handler usage and
+directly link to the remaining examples in a maintained shared guide or
+Cookbook section. All six forms must be discoverable from either method's
+documentation; a link to this design document is not sufficient. The shared
+examples must show both `deny` and `decline` call sites and make clear that they
+are alternatives on separate requests, not sequential refusals on one request.
+
+Include imports and async/signature prerequisites, mark application-owned
+services as illustrative, and show endpoint control flow ending after refusal.
+Explain the direct-coderef versus returned-native-coderef distinction, original
+scope preservation, the connection requirement, repeated-call behavior, and
+the WebSocket/SSE status distinction alongside the examples. No example may
+use `_emit` or depend on the proposed Auth redesign.
+
+The implementation's documentation review must account for all six examples
+and verify their syntax and API usage against the implemented public contract.
+
 Audit `examples/` and maintained docs for refusal snippets, old `_emit` guidance,
 Response-only restrictions, and unnecessary mandatory materialization. Keep
 historical plans as historical records; do not rewrite them to imply they
