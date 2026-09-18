@@ -31,8 +31,13 @@ nor deliverables of this change. Examples use manually constructed handlers,
 Responses, Pages applications, and native apps.
 
 The requested input forms and public invocation boundary are settled direction.
-The detailed lifecycle and compatibility choices below are proposed for review.
-Approval to write this spec is not approval to implement it.
+On 2026-09-18 the user explicitly confirmed that backward compatibility is not
+a requirement for this redesign. Existing APIs, behavior, tests, and examples
+may change to establish a coherent contract; do not add compatibility branches,
+shims, or deprecation stages merely to preserve the previous implementation.
+This ruling does not expand the task into unrelated API changes or Auth work.
+The detailed lifecycle design remains for review. Approval to write this spec
+is not approval to implement it.
 
 ## 2. Work map
 
@@ -171,8 +176,8 @@ that refusal invocation; a dynamically returned object's `to_app` is likewise
 normalized once when its result is invoked. Do not cache per-request returned
 apps on a reusable protocol adapter.
 
-Success resolves to the protocol helper (`$ws` or `$sse`), preserving the existing
-fluent result. It means the invoked application finished, not independent proof
+Success resolves to the protocol helper (`$ws` or `$sse`) for fluent use.
+It means the invoked application finished, not independent proof
 that the peer received the response or that the connection completed cleanly.
 
 ## 5. Scope and event ownership
@@ -268,9 +273,8 @@ Content negotiation, explicit representation choices, custom Pages rendering,
 and request-local materialization remain intact. A refusal method does not
 special-case Pages or call `response_for` on behalf of an arbitrary target.
 
-`response_for` remains useful as an explicit, synchronous, no-send materializer;
-existing callers do not have to stop using it. It is no longer required merely
-to pass a Pages application to `deny` or `decline`.
+`response_for` remains useful as an explicit, synchronous, no-send materializer.
+It is not required merely to pass a Pages application to `deny` or `decline`.
 
 For HTTP/WebSocket/SSE materialization, use the expanded Request support rather
 than synthesizing an HTTP-typed metadata scope just to satisfy Request's old
@@ -278,10 +282,11 @@ constructor. Preserve the no-source-mutation guarantee: isolated metadata
 copies for header-cache writes remain legitimate, but retain the real type and
 values. Descriptor factories still observe the documented original source.
 
-Existing metadata-only `response_for` support for custom request-like scopes is
-not a reason to widen execution of Pages apps to arbitrary protocol types. Keep
-that separate materialization contract compatible; do not expand this work into
-a custom-protocol redesign.
+Both execution and explicit materialization support HTTP, WebSocket, and SSE
+scopes. Reject unsupported scope types clearly. Existing metadata-only support
+for custom request-like scopes is not a compatibility requirement and must not
+retain HTTP-type coercion or introduce another adapter path. Custom-protocol
+support would require a separate design.
 
 ## 8. Responsibility split and shared coordinator
 
@@ -333,10 +338,10 @@ Do not introduce a configurable callback framework with many hooks just to
 factor two functions. Protocol-specific admission and keepalive decisions can
 remain in the helpers; common operation execution belongs in one place.
 
-## 9. Connection baseline and compatibility decision
+## 9. Required connection baseline
 
-**Proposed deliberate compatibility change:** refusal through `deny` or
-`decline` requires the current public `pagi.connection` contract for every target,
+Refusal through `deny` or `decline` requires the current public
+`pagi.connection` contract for every target,
 including buffered Responses. Fail before calling user code if that capability
 is missing or invalid. State the required capability and the advertised spec
 version in the diagnostic where available; do not rely solely on a version
@@ -346,15 +351,15 @@ The spec already requires the connection object on supported WebSocket/SSE
 scopes. This choice removes refusal-only legacy branches and the need to inspect
 Response buffering to decide whether a legacy path is safe.
 
-This does not require removing legacy constructor or accepted-connection support
-elsewhere in the helpers. Keep that larger compatibility question out of scope.
-Update manually constructed refusal fixtures to provide the spec-defined
-connection object. Test-client doubles must update its facts at send processing
-boundaries like a conforming server.
+Remove legacy branches affected by this redesign rather than carrying them into
+the new coordinator. Constructor or accepted-connection paths may also change
+where necessary for a coherent implementation; unrelated cleanup is not a
+deliverable. Update manually constructed refusal fixtures to provide the
+spec-defined connection object. Test-client doubles must update its facts at
+send processing boundaries like a conforming server.
 
-This choice must be reviewed explicitly with this spec. If old-server refusal
-support is still required, revise the design before implementation; do not hide
-a fallback emitter inside the shared coordinator.
+Old-server refusal support is not required. Do not hide a fallback emitter
+inside the shared coordinator or retain a buffered-Response exception.
 
 ## 10. Lifecycle contract
 
@@ -442,18 +447,18 @@ and can observe the connection itself. Do not add a competing receive watcher.
 
 ### 10.6 Repeated calls
 
-Retain the existing settled-call distinction: WebSocket repeated denial is an
-invalid transition; an already declined SSE helper may return itself without
-invoking another target. A still-pending operation rejects a second refusal in
-both cases, including after its response has started.
+Both methods use the same admission rule: reject another refusal while an
+operation is pending, after a response has started, or after the connection
+ends. Rejection does not invoke the target, emit events, or repeat cleanup.
+There is no SSE-only idempotent success path after a completed refusal.
 
-That active-operation rule deliberately tightens the current SSE early-return
-path, which can see `_declined` as soon as start settles. It must not report a
-second call as finished while the first operation still owns pending work.
+A later attempt is allowed only when the previous operation has settled, the
+connection remains active, and no response has started, as described for
+pre-start failures and no-output returns above. Cancellation of an observer
+does not settle the owned operation or make a retry admissible.
 
-Both methods validate argument shape consistently. Any decision to unify their
-settled idempotence behavior belongs in an explicit follow-up, not an accidental
-consequence of sharing code. Neither path sends twice or repeats cleanup.
+Validate argument shape consistently in both methods. Replace tests of the old
+settled-call distinction with tests of this shared contract.
 
 ## 11. Normal protocol constraints
 
@@ -547,7 +552,7 @@ regression proving the private interface is not invoked by refusal helpers.
 
 ### 14.2 Request and Pages
 
-- HTTP Request behavior remains compatible.
+- Ordinary HTTP Request metadata and body semantics remain correct.
 - WebSocket metadata works with absent method and with ws/wss schemes; body APIs
   fail before receive, including streaming constructors and cached fast paths.
 - SSE buffered, chunked, JSON, form, and streaming/multipart input use actual
@@ -559,8 +564,8 @@ regression proving the private interface is not invoked by refusal helpers.
 - Pages negotiation produces independent response values across repeated and
   concurrent requests without replacing the source scope type or corrupting its
   header cache.
-- Unsupported execution scopes still fail clearly; explicit custom-scope
-  `response_for` behavior remains separately compatible.
+- Unsupported execution and materialization scopes fail clearly without
+  coercing their type to HTTP.
 
 ### 14.3 Reservation and lifetime
 
@@ -578,7 +583,8 @@ regression proving the private interface is not invoked by refusal helpers.
   delegation behavior; no fabricated terminal response is added.
 - Missing/invalid connection capability fails for every target form, before
   handler or app execution.
-- Existing WebSocket/SSE repeated-call behavior remains deliberate and tested.
+- Both helpers reject repeated refusal while pending, after response start,
+  and after termination; only settled, live, pre-start attempts permit retry.
 
 ### 14.4 Public protocol and integration proof
 
@@ -615,6 +621,9 @@ a coderef returned by a Request handler is already a native application value.
 
 Document the deliberate requirement for the universal connection capability,
 including its impact on old servers and manually constructed test helpers.
+Document the shared repeated-call rule and supported materialization scopes.
+Replace superseded tests and examples with the new contract; no compatibility
+mode, deprecated alias, or staged migration is required.
 
 Update both methods' POD to describe application delegation, not concrete
 response emission. State that arbitrary application compatibility and behavior
@@ -640,13 +649,13 @@ Stop and discuss before implementation adds any of the following:
 - server/spec changes merely to accommodate a Tools implementation shortcut;
 - new Auth APIs or a rename of current Auth modules.
 
-Two choices deserve explicit attention during user review:
+Backward compatibility has been explicitly waived. The current connection
+baseline and removal of legacy refusal paths do not need another compatibility
+decision before planning.
 
-1. Requiring the current connection object for all refusal forms is a deliberate
-   compatibility change that enables substantial simplification.
-2. Request handlers on SSE support its actual request body; WebSocket Request
-   body APIs fail before consuming protocol events. This is broader than merely
-   removing the Request constructor's type check.
+Review the supporting Request contract carefully: handlers on SSE support its
+actual request body; WebSocket Request body APIs fail before consuming protocol
+events. This is broader than merely removing the constructor's type check.
 
 The public handler/application shape is not blocked on choosing an internal
 coordinator class name. That choice belongs in the implementation plan once the
