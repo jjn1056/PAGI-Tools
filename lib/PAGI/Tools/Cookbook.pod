@@ -1409,39 +1409,187 @@ representation; only a valid client Range produces 206. Use
 L<PAGI::App::File> instead when an untrusted URL path must be resolved beneath
 a configured root.
 
-=head2 Guard a Response Application Across Protocols
+=head2 Refusing WebSocket and SSE with applications
 
-C<to_app> creates an HTTP-only application. Non-HTTP invocation is an
-application failure, not an automatic WebSocket denial or SSE decline. A root
-that intentionally handles those handshakes can make that policy explicit:
+C<deny> and C<decline> accept the same six useful application forms. This
+complete route tree exposes each form on separate C</ws/E<lt>formE<gt>> and
+C</events/E<lt>formE<gt>> requests:
 
+  use strict;
+  use warnings;
+  use Future;
   use Future::AsyncAwait;
-  use PAGI::Response qw(text_response);
-  use PAGI::SSE;
-  use PAGI::WebSocket;
+  use PAGI::Compose qw(compose);
+  use PAGI::Pages ();
+  use PAGI::Response qw(json_response text_response);
+  use PAGI::Routing qw(sse websocket);
+  use PAGI::Utils qw(as_app_object);
 
-  my $response = text_response('Temporarily unavailable', status => 503);
-  my $http = $response->to_app;
+  {
+      package MyApp::NoticeService;
+      sub new {
+          my ($class, %args) = @_;
+          return bless { label => $args{label} }, $class;
+      }
+      sub notice_for {
+          my ($self, $request) = @_;
+          return Future->done($self->{label} . ':' . $request->path);
+      }
+  }
 
-  my $guard = async sub {
-      my ($scope, $receive, $send) = @_;
-      return await $http->($scope, $receive, $send)
-          if $scope->{type} eq 'http';
-      return await PAGI::WebSocket->new($scope, $receive, $send)
-          ->deny($response)
-          if $scope->{type} eq 'websocket';
-      return await PAGI::SSE->new($scope, $receive, $send)
-          ->decline($response)
-          if $scope->{type} eq 'sse';
-      die "unsupported scope type '$scope->{type}'";
+  {
+      package MyApp::Refusal;
+      sub new { return bless {}, $_[0] }
+      sub to_app {
+          my ($self) = @_;
+          return async sub {
+              my ($scope, $receive, $send) = @_;
+              my $body = 'Custom application: ' . $scope->{path};
+              await $send->({
+                  type => 'http.response.start', status => 503,
+                  headers => [['content-type', 'text/plain; charset=utf-8']],
+              });
+              await $send->({
+                  type => 'http.response.body', body => $body, more => 0,
+              });
+              return;
+          };
+      }
+  }
+
+  my $notices = MyApp::NoticeService->new(label => 'notice-service');
+  my $handler = sub {
+      my ($request) = @_;
+      return json_response(
+          { error => 'Unavailable', path => $request->path },
+          status => 503,
+      );
   };
+  my $async_handler = async sub {
+      my ($request) = @_;
+      my $notice = await $notices->notice_for($request);
+      return json_response(
+          { error => 'Unavailable', notice => $notice },
+          status => 503,
+      );
+  };
+  my $page = PAGI::Pages->service_unavailable(
+      detail => 'Protocol refusal example',
+  );
+  my $object = MyApp::Refusal->new;
+  my $native = as_app_object(async sub {
+      my ($scope, $receive, $send) = @_;
+      await $send->({
+          type => 'http.response.start', status => 503,
+          headers => [['content-type', 'text/plain; charset=utf-8']],
+      });
+      await $send->({
+          type => 'http.response.body', body => 'Scheduled maintenance', more => 0,
+      });
+      return;
+  });
 
-Every concrete Response is eligible, including File and Stream. The Response is
-emitted unchanged on the original protocol scope as ordinary
-C<http.response.*> events. A streaming refusal requires the Www 0.6 universal
-C<pagi.connection> contract. Start settlement commits protocol ownership;
-later cleanup follows connection terminal facts rather than treating a
-disconnect as a failed send.
+  my $app = compose(routes => [
+      # 1. A concrete Response: text on WebSocket, JSON on SSE.
+      websocket('/ws/response' => async sub {
+          my ($ws) = @_;
+          await $ws->deny(text_response('Scheduled maintenance', status => 503));
+          return;
+      }),
+      sse('/events/response' => async sub {
+          my ($sse) = @_;
+          await $sse->decline(json_response(
+              { error => 'Unavailable', form => 'response' }, status => 503,
+          ));
+          return;
+      }),
+
+      # 2. One synchronous Request handler, reusable at either boundary.
+      websocket('/ws/handler' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($handler);
+          return;
+      }),
+      sse('/events/handler' => async sub {
+          my ($sse) = @_;
+          await $sse->decline($handler);
+          return;
+      }),
+
+      # 3. One async Request handler awaiting application-owned work.
+      websocket('/ws/async-handler' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($async_handler);
+          return;
+      }),
+      sse('/events/async-handler' => async sub {
+          my ($sse) = @_;
+          await $sse->decline($async_handler);
+          return;
+      }),
+
+      # 4. Pages directly, or returned by a Request handler.
+      websocket('/ws/pages' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($page);
+          return;
+      }),
+      sse('/events/pages' => async sub {
+          my ($sse) = @_;
+          await $sse->decline(sub { return $page });
+          return;
+      }),
+
+      # 5. Any complete application object with to_app.
+      websocket('/ws/object' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($object);
+          return;
+      }),
+      sse('/events/object' => async sub {
+          my ($sse) = @_;
+          await $sse->decline($object);
+          return;
+      }),
+
+      # 6. A native triplet application selected explicitly.
+      websocket('/ws/native' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($native);
+          return;
+      }),
+      sse('/events/native' => async sub {
+          my ($sse) = @_;
+          await $sse->decline($native);
+          return;
+      }),
+  ]);
+
+These routes are alternatives for different requests. Call one refusal helper,
+await it, and return from the endpoint; do not try the forms sequentially on
+one connection. A live attempt that finishes before response start can be
+retried sequentially, but after response start or terminal completion another
+refusal fails. Overlapping refusal and acceptance/start calls are unsupported.
+
+A bare coderef in C<deny> or C<decline> position is a one-C<Request> handler.
+If that handler returns a coderef, the returned value is a native triplet
+application. C<as_app_object> selects the native triplet meaning when passing a
+coderef directly. Async handlers own the service work they start and await;
+cancelling a refusal observer does not cancel that retained work.
+
+Every delegated application receives the original protocol scope, remaining
+receive stream, and original send channel. The scope remains C<websocket> or
+C<sse>; the helper does not spoof C<http>. Pages therefore negotiates from the
+real request headers without a mandatory C<response_for> step.
+
+All forms require the current universal C<pagi.connection> capability, including
+buffered Responses. The sending environment requires WebSocket refusal status
+300 or greater. SSE may decline with ordinary HTTP status 200 or 204, including
+204 to stop browser C<EventSource> reconnection. Application compatibility and
+errors belong to the selected application.
+
+F<examples/protocol-refusal/app.pl> is the maintained executable version, with
+all twelve routes exercised through L<PAGI::Test::Client>.
 
 =head1 AUTHENTICATION & SESSIONS
 
@@ -1556,8 +1704,8 @@ make concealment explicit policy.
 
 =head2 WebSocket Authentication Denial
 
-B<WebSocket endpoint:> materialize locally, then let C<deny> perform event
-emission and retain WebSocket terminal ownership.
+B<WebSocket endpoint:> pass the negotiated Auth outcome application directly
+and let C<deny> retain WebSocket terminal ownership.
 
   use PAGI::Auth qw(challenge bearer);
 
@@ -1568,15 +1716,17 @@ emission and retain WebSocket terminal ownership.
               challenges => [bearer(realm => 'chat')],
               as          => 'text',
           );
-          return await $ws->deny($failure->response_for($ws));
+          await $ws->deny($failure);
+          return;
       }
       await $ws->accept;
       await $ws->run;
   });
 
-C<response_for> is synchronous and sends no events. The denial is an ordinary
-C<http.response.*> response on the original scope. Every concrete Response is
-eligible, including File; C<deny> owns actual emission and close timing.
+The Pages-backed outcome negotiates on the original WebSocket scope and emits
+an ordinary C<http.response.*> response. C<response_for> remains available for
+code that intentionally needs a concrete local Response, but refusal does not
+require that materialization step.
 
 =head2 SSE Authentication Decline
 
@@ -1591,15 +1741,16 @@ B<SSE endpoint:> decline before starting the stream.
               challenges => [bearer(realm => 'events')],
               as          => 'text',
           );
-          return await $sse->decline($failure->response_for($sse));
+          await $sse->decline($failure);
+          return;
       }
       await $sse->start;
       await $sse->run;
   });
 
-The concrete 401 contains the structured Bearer C<WWW-Authenticate> field.
-C<response_for> only creates that local Response; C<decline> emits the ordinary
-C<http.response.*> events and owns SSE cleanup. File responses are eligible.
+The negotiated 401 contains the structured Bearer C<WWW-Authenticate> field.
+C<decline> invokes the outcome application on the original SSE scope and owns
+SSE refusal cleanup.
 
 =head2 Invoke an Auth Outcome from a Native Application
 
@@ -1953,7 +2104,8 @@ application code should write this:
               challenges => [bearer(realm => 'events')],
               as          => 'text',
           );
-          return await $sse->decline($failure->response_for($sse));
+          await $sse->decline($failure);
+          return;
       }
 
       await $sse->start;
@@ -1962,9 +2114,8 @@ application code should write this:
 
 This is outcome construction after an application-owned identity decision. It
 does not parse a query parameter, credential, or token, and PAGI::Auth does not
-provide a credential parser or identity provider. C<response_for> creates the
-concrete local 401 without sending; C<decline> emits it and retains SSE
-lifecycle ownership.
+provide a credential parser or identity provider. C<decline> invokes the
+Pages-backed outcome and retains SSE lifecycle ownership.
 
 Three common reasons to decline:
 
@@ -1985,6 +2136,7 @@ good.
 
   # Tell EventSource to stop reconnecting: a bare 204.
   await $sse->decline(PAGI::Response::empty_response(status => 204));
+  return;
 
 A normally completed decline is a clean end, not an abnormal disconnect. The
 server does not deliver C<sse.disconnect> on its own because no event stream
@@ -2001,24 +2153,14 @@ See L<PAGI::SSE/decline> for the method and
 L<PAGI::Spec::Www/"Decline SSE - C<send> event"> for the protocol events and
 the full state machine.
 
-=head3 Under the hood
+=head3 Application boundary
 
-C<decline> emits the concrete Response directly on the original SSE scope,
-using ordinary C<http.response.start> and C<http.response.body> events. This is what it is
-doing on your behalf -- shown so the underlying contract is explicit, not as
-a recommended application style:
-
-  # Equivalent to adapting text_response('Unauthorized', status => 401).
-  await $send->({
-      type    => 'http.response.start',
-      status  => 401,
-      headers => [['content-type', 'text/plain']],
-  });
-  await $send->({ type => 'http.response.body', body => 'Unauthorized', more => 0 });
-
-File responses use a terminal C<http.response.body> carrying C<file> or C<fh>.
-Streaming declines require the universal connection API so caller cancellation,
-transport loss, and retained cleanup have one authoritative terminal source.
+C<decline> converts the selected value through its public C<to_app> contract
+and invokes that application with the original SSE scope, remaining receive
+stream, and original send channel. The application emits ordinary
+C<http.response.start> and C<http.response.body> events. Streaming applications
+require the universal connection API so caller cancellation, transport loss,
+and retained cleanup have one authoritative terminal source.
 
 =head1 BACKGROUND WORK
 

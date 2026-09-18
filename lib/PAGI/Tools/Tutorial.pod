@@ -354,7 +354,8 @@ uploads. It handles UTF-8 decoding and body parsing for you.
 
 =head2 3.1 PAGI::Request - Request Parsing
 
-L<PAGI::Request> parses HTTP requests and provides convenient accessors for headers, query parameters, cookies, and request bodies.
+L<PAGI::Request> exposes HTTP, WebSocket, and SSE request metadata and parses
+request bodies for HTTP and SSE.
 
 =head3 Creating a Request
 
@@ -362,14 +363,15 @@ L<PAGI::Request> parses HTTP requests and provides convenient accessors for head
 
 Normal Router handlers receive this object directly. Raw PAGI applications
 construct it only when they choose the Request API; construction requires an
-HTTP scope and a receive coderef.
+HTTP, WebSocket, or SSE scope and a receive coderef. WebSocket body methods
+fail before reading protocol events.
 
 =head3 Basic Properties
 
-  $req->method         # HTTP method (GET, POST, etc.)
+  $req->method         # method, or undef on a methodless WebSocket scope
   $req->path           # URL path (decoded UTF-8)
   $req->query_string   # Query string (raw bytes)
-  $req->scheme         # 'http' or 'https'
+  $req->scheme         # 'http'/'https' or WebSocket 'ws'/'wss'
   $req->host           # Host header value
 
 =head3 Headers
@@ -604,9 +606,10 @@ A native PAGI application owns all three channels and delegates explicitly:
       await invoke_app($response, $scope, $receive, $send);
   };
 
-C<to_app> exposes the exact Response as an HTTP-only native application. A
-non-HTTP scope fails before emission; controlled WebSocket denial and SSE
-decline use their protocol methods instead. Compose remains the deployed-root
+C<to_app> exposes the exact Response as a native application for HTTP,
+preaccept WebSocket refusal, or prestart SSE refusal. Controlled WebSocket
+denial and SSE decline pass the Response to their protocol methods so the
+helper owns admission and terminal cleanup. Compose remains the deployed-root
 owner for lifespan, errors, response completion, and final HEAD suppression.
 
 File construction validates option shape, not the filesystem. Existence,
@@ -635,7 +638,8 @@ lightweight explicit HEAD route before an expensive streaming GET route.
 
 Use L<PAGI::Pages> when the response is a conventional welcome, HTTP error, or
 redirect rather than an application-owned literal document. Its source-free
-factories return deferred HTTP applications:
+factories return deferred HTTP, WebSocket-refusal, and SSE-refusal
+applications:
 
   use PAGI::Pages qw(welcome gone);
   use PAGI::Response qw(json_response);
@@ -669,6 +673,8 @@ complete rewritten subtree. The same Pages value can be a Router
 C<http_default> directly. A bare Pages root declines lifespan in automatic
 server mode; strict lifespan rejects that decline. Pages does not handle
 lifespan, so use Compose when startup and shutdown ownership is required.
+The application can also be passed directly to C<< $ws->deny >> or
+C<< $sse->decline >>; explicit C<response_for> materialization is optional.
 
 Automatic representation selection negotiates HTML, RFC 9457 problem JSON for
 errors (ordinary JSON for welcome and redirects), and text. Use C<< as =>
@@ -735,18 +741,25 @@ L<PAGI::WebSocket> simplifies WebSocket connections:
 
   await $ws->close(1000, 'Goodbye');
 
-Before C<accept>, a concrete finite or Stream Response can deny the handshake:
+Before C<accept>, a concrete Response or another application can deny the
+handshake:
 
   use PAGI::Response qw(text_response);
 
   await $ws->deny(
       text_response('Unauthorized', status => 401),
   );
+  return;
 
 The Response is emitted as an ordinary HTTP response on the original
 WebSocket scope. Every concrete Response is valid here, including File. A
 streaming Response requires the Www 0.6 universal C<pagi.connection> contract
 so cancellation and terminal cleanup remain observable.
+
+A bare coderef in this position receives one L<PAGI::Request>; application
+objects such as Pages can be passed directly. See
+L<PAGI::Tools::Cookbook/Refusing WebSocket and SSE with applications> for the
+six complete forms and matching SSE routes.
 
 =head2 5.2 PAGI::SSE - Server-Sent Events Helper
 
@@ -778,6 +791,7 @@ Before C<start>, decline with the same Response vocabulary:
   await $sse->decline(
       problem_response({ title => 'Not Found', status => 404 }),
   );
+  return;
 
 Denial/decline start-send settlement commits the protocol response slot; it is
 server acceptance/settlement, not proof of client delivery. Pending body sends
@@ -785,6 +799,11 @@ at disconnect resolve normally under PAGI 0.002007. Cleanup follows protocol sta
 and disconnect watchers rather than an invented send failure. HTTP Stream is a
 finite request's body delivery mechanism; WebSocket and live SSE retain their
 own connection, event, keepalive, and reconnection lifecycles.
+
+SSE accepts the same Request-handler and application-object forms as
+WebSocket. It may decline with ordinary HTTP 200 or 204 as well as error
+statuses; see
+L<PAGI::Tools::Cookbook/Refusing WebSocket and SSE with applications>.
 
 =head1 PART 6: MIDDLEWARE
 

@@ -622,6 +622,8 @@ the app object is a native application endpoint.
 
     route('/native' => as_app_object($native));
     route('/relay' => as_app_object($native), methods => '*');
+    await $ws->deny(as_app_object($native));
+    await $sse->decline(as_app_object($native));
 
 Given a native application coderef, returns a
 L<PAGI::Utils::AppObject> whose C<to_app> returns that exact coderef. Given an
@@ -630,10 +632,13 @@ inspect arity, alter Future behavior, capture a scope, or add protocol policy.
 At an HTTP Route, no explicit methods means GET plus automatic HEAD; scalar
 C<< methods => '*' >> is unrestricted.
 
-This is a narrow Route escape hatch. Use it when an endpoint genuinely needs
-to own C<($scope, $receive, $send)> -- for example, special protocol handling
--- or when adapting an existing native PAGI coderef. Ordinary Route coderefs
-receive one Request, WebSocket, or SSE object and do not need this wrapper.
+Use C<as_app_object> to pass a native C<($scope, $receive, $send)> application
+where a bare coderef would otherwise be interpreted as a handler. This
+includes Route endpoints, WebSocket C<deny>, and SSE C<decline>. Ordinary
+handler callbacks do not need the wrapper.
+
+The wrapper's C<to_app> returns the original native coderef. It does not change
+the scope, receive or send channel, events, or application lifecycle behavior.
 
 =head2 invoke_app
 

@@ -220,7 +220,7 @@ subtest 'negotiated HTTP materialization preserves source scopes and header cach
                 is($metadata->{type}, 'http',
                     "$label call $call metadata retains the real HTTP type");
                 ok(!exists $metadata->{'pagi.request.headers'},
-                    "$label call $call metadata owns a private header cache");
+                    "$label call $call metadata does not inherit the source header cache");
             }
         }
     }
@@ -356,7 +356,7 @@ subtest 'materialization gives policy a shallow real-protocol metadata view with
     is(refaddr($metadata->{state}), refaddr($nested),
         'other nested scope metadata retains identity');
     ok(!exists $metadata->{'pagi.request.headers'},
-        'negotiation keeps its rebuilt HTTP header cache private');
+        'negotiation keeps its rebuilt request header cache private');
 
     is([sort keys %$source], \@source_keys, 'source keys are unchanged');
     is($source->{type}, 'websocket', 'source type is unchanged');

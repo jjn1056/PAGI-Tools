@@ -111,7 +111,8 @@ Callable position selects one of these contracts:
     Mount app object                     app object via to_app
 
 This component adapts a one-Request handler into an app object, commonly for
-Mount C<app> or for a custom Route helper. The handler receives exactly one
+Mount C<app>, for a custom Route helper, or for a bare handler passed to
+L<PAGI::WebSocket/deny> or L<PAGI::SSE/decline>. The handler receives exactly one
 L<PAGI::Request> and returns an immediate or Future-backed application value:
 a native CODE or app object. Response and Pages objects are the ordinary
 results. Do not use C<request_response> for ordinary
@@ -160,7 +161,7 @@ loop.
 
 =head1 SEE ALSO
 
-L<PAGI::Routing>, L<PAGI::Routing::Route>, L<PAGI::Response>, and
-L<PAGI::Pages>.
+L<PAGI::Routing>, L<PAGI::Routing::Route>, L<PAGI::Response>, L<PAGI::Pages>,
+L<PAGI::WebSocket>, and L<PAGI::SSE>.
 
 =cut

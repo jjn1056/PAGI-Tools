@@ -170,6 +170,55 @@ subtest 'published standalone recipes compile and construct their values' => sub
     );
 };
 
+subtest 'protocol refusal recipe executes all six forms on both protocols' => sub {
+    my $recipe = first_code_block($cookbook,
+        '=head2 Refusing WebSocket and SSE with applications');
+    my $checks = <<'PERL';
+use PAGI::Test::Client;
+my $client = PAGI::Test::Client->new(app => $app);
+for my $form (qw(response handler async-handler pages object native)) {
+    my %ws_options = $form eq 'pages'
+        ? (headers => {Accept => 'text/html'}) : ();
+    my $socket = $client->websocket("/ws/$form", %ws_options);
+    die "$form WebSocket was accepted" unless $socket->refused;
+    my $ws_response = $socket->response;
+    die "$form WebSocket status" unless $ws_response->status == 503;
+
+    my %sse_options = $form eq 'pages'
+        ? (headers => {Accept => 'application/problem+json'}) : ();
+    my $sse_response = $client->sse("/events/$form", %sse_options);
+    die "$form SSE started" unless $sse_response->isa('PAGI::Test::Response');
+    die "$form SSE status" unless $sse_response->status == 503;
+
+    if ($form eq 'response') {
+        die 'response WebSocket body' unless $ws_response->text eq 'Scheduled maintenance';
+        die 'response SSE body' unless $sse_response->json->{form} eq 'response';
+    }
+    elsif ($form eq 'handler') {
+        die 'handler WebSocket path' unless $ws_response->json->{path} eq '/ws/handler';
+        die 'handler SSE path' unless $sse_response->json->{path} eq '/events/handler';
+    }
+    elsif ($form eq 'async-handler') {
+        die 'async WebSocket notice' unless $ws_response->json->{notice} eq 'notice-service:/ws/async-handler';
+        die 'async SSE notice' unless $sse_response->json->{notice} eq 'notice-service:/events/async-handler';
+    }
+    elsif ($form eq 'pages') {
+        die 'Pages WebSocket HTML' unless $ws_response->content_type eq 'text/html; charset=utf-8';
+        die 'Pages SSE JSON' unless $sse_response->content_type eq 'application/problem+json';
+    }
+    elsif ($form eq 'object') {
+        die 'object WebSocket scope' unless $ws_response->text eq 'Custom application: /ws/object';
+        die 'object SSE scope' unless $sse_response->text eq 'Custom application: /events/object';
+    }
+    else {
+        die 'native WebSocket body' unless $ws_response->text eq 'Scheduled maintenance';
+        die 'native SSE body' unless $sse_response->text eq 'Scheduled maintenance';
+    }
+}
+PERL
+    perl_script_runs('protocol refusal application forms', $recipe . $checks);
+};
+
 subtest 'custom Request route helper recipe executes as published' => sub {
     my $recipe = first_code_block(
         $cookbook, '=head2 Custom Request Route Helpers');

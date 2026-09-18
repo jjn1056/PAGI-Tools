@@ -96,7 +96,9 @@ lifespan mode may treat that exception as a decline; strict mode rejects it.
 =head2 to_app
 
 Returns a native HTTP, WebSocket, or SSE application coderef that uses the same
-response materialization path as C<response_for>.
+response materialization path as C<response_for>. The application can be passed
+directly to L<PAGI::WebSocket/deny> or L<PAGI::SSE/decline>; explicit
+materialization is not required.
 
 =head2 response_for
 
@@ -108,9 +110,10 @@ response materialization path as C<response_for>.
 Synchronously materializes one concrete L<PAGI::Response> using metadata from
 a Request, WebSocket, SSE, or raw scope hash. It accepts HTTP, WebSocket, and
 SSE scopes; lifespan and custom scope types are rejected. It does not call
-C<receive> or C<send>, emit events, or own protocol lifecycle. Use the
-appropriate helper's C<deny> or C<decline> to emit the returned Response. A
-custom protocol adapter owns emission for its protocol.
+C<receive> or C<send>, emit events, or own protocol lifecycle. This method is
+available when code intentionally needs the concrete Response. For ordinary
+protocol refusal, pass the Pages application itself to the appropriate
+helper's C<deny> or C<decline>.
 
 Materialization does not mutate the application, descriptor, source object,
 or scope hash. Repeated and concurrent calls derive fresh response values.

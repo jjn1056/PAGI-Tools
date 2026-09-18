@@ -1100,15 +1100,17 @@ propagate to the server without publishing a synthetic terminal outcome.
 
     async sub unavailable {
         my ($ws) = @_;
-        return await $ws->deny(text_response('Unavailable', status => 503));
+        await $ws->deny(text_response('Unavailable', status => 503));
+        return;
     }
 
     async sub unavailable_for_request {
         my ($ws) = @_;
-        return await $ws->deny(sub {
+        await $ws->deny(sub {
             my ($request) = @_;
             return text_response('Unavailable: ' . $request->path, status => 503);
         });
+        return;
     }
 
 Delegates the WebSocket handshake refusal to exactly one Request handler or
@@ -1142,6 +1144,11 @@ asynchronous cleanup after application return.
 The sending environment requires WebSocket refusal status 300 or greater.
 Request metadata is available, but WebSocket Request body APIs reject access
 without consuming protocol events.
+
+See L<PAGI::Tools::Cookbook/Refusing WebSocket and SSE with applications> for
+complete synchronous and async handlers, direct Pages applications, custom
+application objects, and wrapped native applications, with matching SSE call
+sites.
 
 See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 

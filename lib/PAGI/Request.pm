@@ -685,7 +685,9 @@ a C<$send> callback or any other extra argument is rejected.
 
 =head2 method
 
-HTTP method (GET, POST, PUT, etc.)
+Request method (GET, POST, PUT, etc.). A WebSocket scope may omit this value,
+in which case C<method> returns C<undef>; it does not guess GET for an extended
+CONNECT request.
 
 =head2 path
 
@@ -701,7 +703,8 @@ Raw query string (without leading ?).
 
 =head2 scheme
 
-C<http> or C<https>.
+C<http> or C<https> for HTTP and SSE scopes; C<ws> or C<wss> for WebSocket
+scopes.
 
 =head2 host
 
@@ -758,8 +761,9 @@ Get all values for a header.
 
 Returns the exact cached L<PAGI::Headers> object used by C<header>,
 C<header_all>, and header-derived accessors. Deliberate mutation through this
-object therefore affects later Request header reads. Call C<< $req->headers->clone >>
-when an isolated copy is required.
+object therefore affects later Request, WebSocket, or SSE header reads on the
+same scope. All three helpers share C<< $scope->{'pagi.request.headers'} >>.
+Call C<< $req->headers->clone >> when an isolated copy is required.
 
 =head1 QUERY PARAMETERS
 

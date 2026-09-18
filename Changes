@@ -2,6 +2,13 @@
 
 0.002003 - UNRELEASED
 
+  [Protocol refusal applications]
+  - WebSocket `deny` and SSE `decline` now document and demonstrate concrete
+    Responses, synchronous and async Request handlers, negotiated Pages
+    applications, custom `to_app` objects, and explicitly wrapped native
+    applications. The maintained protocol-refusal example executes all twelve
+    WebSocket/SSE routes without requiring `response_for` materialization.
+
   [Structured authentication outcomes]
   - NEW: PAGI::Auth builds injection-safe Basic, Bearer, and custom challenge
     metadata. `challenge` and `forbid` return reusable negotiated Pages

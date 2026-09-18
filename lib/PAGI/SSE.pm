@@ -1188,15 +1188,17 @@ C<on_connect> runs), C<start> arms it immediately after sending C<sse.start>
 
     async sub unavailable {
         my ($sse) = @_;
-        return await $sse->decline(text_response('Unavailable', status => 503));
+        await $sse->decline(text_response('Unavailable', status => 503));
+        return;
     }
 
     async sub unavailable_for_request {
         my ($sse) = @_;
-        return await $sse->decline(sub {
+        await $sse->decline(sub {
             my ($request) = @_;
             return text_response('Unavailable: ' . $request->path, status => 503);
         });
+        return;
     }
 
 Delegates the SSE request refusal to exactly one Request handler or
@@ -1232,6 +1234,11 @@ body APIs consume the actual C<sse.request> body stream. Once HTTP refusal
 starts, protocol sends and C<start> cannot reopen it, and deferred keepalive
 is discarded. A live attempt that settles before response start preserves
 pending keepalive for a later ordinary C<start>.
+
+See L<PAGI::Tools::Cookbook/Refusing WebSocket and SSE with applications> for
+complete synchronous and async handlers, direct Pages applications, custom
+application objects, and wrapped native applications, with matching WebSocket
+call sites.
 
 See L<PAGI::Spec::Www/"SSE Response Denial">.
 
