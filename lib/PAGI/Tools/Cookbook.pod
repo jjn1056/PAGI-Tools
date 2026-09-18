@@ -2158,9 +2158,10 @@ the full state machine.
 C<decline> converts the selected value through its public C<to_app> contract
 and invokes that application with the original SSE scope, remaining receive
 stream, and original send channel. The application emits ordinary
-C<http.response.start> and C<http.response.body> events. Streaming applications
-require the universal connection API so caller cancellation, transport loss,
-and retained cleanup have one authoritative terminal source.
+C<http.response.start> and C<http.response.body> events. Every refusal target,
+including buffered Responses, requires the current public universal connection
+API so caller cancellation, transport loss, and retained cleanup have one
+authoritative terminal source.
 
 =head1 BACKGROUND WORK
 

@@ -752,9 +752,10 @@ handshake:
   return;
 
 The Response is emitted as an ordinary HTTP response on the original
-WebSocket scope. Every concrete Response is valid here, including File. A
-streaming Response requires the Www 0.6 universal C<pagi.connection> contract
-so cancellation and terminal cleanup remain observable.
+WebSocket scope. Every concrete Response is valid here, including File. Every
+refusal target, including buffered Responses, requires the current public Www
+0.6 universal C<pagi.connection> contract so cancellation and terminal cleanup
+remain observable.
 
 A bare coderef in this position receives one L<PAGI::Request>; application
 objects such as Pages can be passed directly. See
