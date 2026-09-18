@@ -155,8 +155,10 @@ an invocation derives its delivery values is unsupported.
 At a native triplet boundary, use L<PAGI::Utils/invoke_app> to invoke this or
 any other application value. Every send Future is awaited. Preflight errors
 occur before start where possible; a genuine failed send Future propagates,
-and failure after start never sends a replacement response. There is no public
-Response-specific emission method.
+and failure after start never sends a replacement response. Cancelling a
+buffered invocation stops further emission but does not cancel a send already
+submitted to the server; it does not promise a transport abort. There is no
+public Response-specific emission method.
 
 =head2 metadata
 
@@ -486,10 +488,10 @@ async sub _emit {
         type    => 'http.response.start',
         status  => $plan->{status},
         headers => $plan->{headers},
-    });
+    })->without_cancel;
     await $send->({
         type => 'http.response.body', body => $plan->{body}, more => 0,
-    });
+    })->without_cancel;
     return;
 }
 
