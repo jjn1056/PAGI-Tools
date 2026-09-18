@@ -6,6 +6,7 @@ use Future::AsyncAwait;
 use HTTP::MultiPartParser;
 use Hash::MultiValue;
 use PAGI::Request::Upload;
+use PAGI::Request::_BodyInput ();
 use File::Temp qw(tempfile);
 
 # Default limits
@@ -26,6 +27,7 @@ sub new {
     return bless {
         boundary        => $args{boundary},
         receive         => $args{receive},
+        _scope_type     => $args{_scope_type} // 'http',
         max_field_size  => $args{max_field_size}  // $MAX_FIELD_SIZE,
         max_file_size   => $args{max_file_size}   // $MAX_FILE_SIZE,
         spool_threshold => $args{spool_threshold} // $SPOOL_THRESHOLD,
@@ -182,8 +184,10 @@ async sub parse {
         my $disconnected = 0;
         while (1) {
             my $message = await $receive->();
-            last unless $message && $message->{type};
-            if ($message->{type} eq 'http.disconnect') {
+            my $kind = PAGI::Request::_BodyInput::event_kind(
+                $self->{_scope_type}, $message,
+            );
+            if ($kind eq 'disconnect') {
                 $disconnected = 1;
                 last;
             }
@@ -251,8 +255,10 @@ PAGI::Request::MultiPartHandler - Async multipart/form-data parser
 
 =head1 DESCRIPTION
 
-Parses multipart/form-data requests asynchronously. Applies separate size
-limits to form fields (C<max_field_size>) and file uploads (C<max_file_size>).
+Parses multipart/form-data request input asynchronously. Handlers created by
+L<PAGI::Request> consume the native HTTP or SSE event family for the scope;
+direct construction defaults to HTTP events. Applies separate size limits to
+form fields (C<max_field_size>) and file uploads (C<max_file_size>).
 If the client disconnects mid-body, C<parse> dies with
 C<"Request body incomplete: client disconnected mid-body"> instead of
 parsing whatever partial data had arrived as if it were the complete

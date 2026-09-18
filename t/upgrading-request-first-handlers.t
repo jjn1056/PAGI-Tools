@@ -104,11 +104,10 @@ subtest 'Request construction is strict and state has an explicit HashRef escape
 
     like(dies { PAGI::Request->new($scope) }, qr/receive coderef/,
         'Request requires the receive channel');
-    like(
-        dies { PAGI::Request->new({ %$scope, type => 'websocket' }, \&receive_empty) },
-        qr/requires HTTP scope/,
-        'Request rejects a non-HTTP scope',
-    );
+    my $websocket_scope = { %$scope, type => 'websocket' };
+    my $websocket_request = PAGI::Request->new($websocket_scope, \&receive_empty);
+    is($websocket_request->scope, $websocket_scope,
+        'Request accepts a WebSocket scope for shared metadata');
 
     my $compiled = eval q{
         package Local::UpgradeAppState;

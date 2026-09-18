@@ -64,16 +64,27 @@ subtest 'app handles full request cycle' => sub {
 subtest 'invalid scopes fail before a handler runs' => sub {
     my $app = ScopeValidationEndpoint->to_app;
     $ScopeValidationEndpoint::calls = 0;
+    my $receive_calls = 0;
+    my $send_calls = 0;
+    my $receive = sub { ++$receive_calls; Future->done };
+    my $send = sub { ++$send_calls; Future->done };
 
     like(dies {
-        $app->({}, sub { Future->done }, sub { Future->done })->get;
-    }, qr/PAGI::Request scope type is required/, 'missing type is rejected');
+        $app->({}, $receive, $send)->get;
+    }, qr/scope type is required/, 'missing type is rejected clearly');
     is($ScopeValidationEndpoint::calls, 0, 'missing type does not call the handler');
+    is($receive_calls, 0, 'missing type does not receive');
+    is($send_calls, 0, 'missing type does not send');
 
-    like(dies {
-        $app->({ type => 'websocket' }, sub { Future->done }, sub { Future->done })->get;
-    }, qr/PAGI::Request requires HTTP scope/, 'non-HTTP type is rejected');
-    is($ScopeValidationEndpoint::calls, 0, 'non-HTTP type does not call the handler');
+    for my $type ('websocket', 'sse') {
+        like(dies {
+            $app->({ type => $type }, $receive, $send)->get;
+        }, qr/PAGI::Endpoint::HTTP requires HTTP scope.*\Q$type\E/,
+            "$type scope is rejected");
+        is($ScopeValidationEndpoint::calls, 0, "$type does not call the handler");
+        is($receive_calls, 0, "$type does not receive");
+        is($send_calls, 0, "$type does not send");
+    }
 };
 
 done_testing;

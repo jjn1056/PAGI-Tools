@@ -7,6 +7,7 @@ use Future;
 use Future::AsyncAwait;
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Carp qw(croak);
+use PAGI::Request::_BodyInput ();
 
 
 =head1 NAME
@@ -53,6 +54,10 @@ PAGI::Request::BodyStream - Streaming body consumption for PAGI requests
 PAGI::Request::BodyStream provides streaming body consumption for large request
 bodies. This is useful when you need to process request data incrementally
 without loading the entire body into memory.
+
+Streams created by L<PAGI::Request> consume the native HTTP or SSE request and
+disconnect event family for the request scope. Direct construction defaults to
+HTTP events.
 
 The stream is pull-based: you call C<next_chunk()> to receive the next chunk
 of data. The stream handles:
@@ -115,6 +120,7 @@ sub new {
         decode        => $args{decode},
         strict        => $args{strict} // 0,
         limit_name    => $args{limit_name} // 'max_bytes',
+        _scope_type   => $args{_scope_type} // 'http',
         _bytes_read   => 0,
         _done         => 0,
         _error        => undef,
@@ -132,7 +138,7 @@ sub new {
     my $chunk = await $stream->next_chunk;
 
 Returns a Future that resolves to the next chunk of data, or undef when the
-stream is exhausted or client disconnects.
+stream is exhausted or the client disconnects.
 
 If C<decode> was specified in the constructor, chunks are decoded to the
 specified encoding. UTF-8 decoding properly handles incomplete multi-byte
@@ -148,9 +154,12 @@ async sub next_chunk {
     return undef if $self->{_error};
 
     my $message = await $self->{receive}->();
+    my $kind = PAGI::Request::_BodyInput::event_kind(
+        $self->{_scope_type}, $message,
+    );
 
     # Handle disconnect
-    if (!$message || $message->{type} eq 'http.disconnect') {
+    if ($kind eq 'disconnect') {
         $self->{_done} = 1;
         # No bytes ever arrived -- an empty stream, not a truncated one.
         $self->{_truncated} = 1 if $self->{_bytes_read} > 0;

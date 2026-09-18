@@ -263,7 +263,7 @@ subtest 'content-type parameter stripping' => sub {
     is($req_plain->content_type, 'application/xml', 'content_type without parameters');
 };
 
-subtest 'constructor requires an HTTP scope and receive callback' => sub {
+subtest 'constructor requires a supported request scope and receive callback' => sub {
     my $scope = {
         type => 'http',
         method => 'GET',
@@ -274,8 +274,9 @@ subtest 'constructor requires an HTTP scope and receive callback' => sub {
         'receive callback is required');
     like(dies { PAGI::Request->new({ headers => [] }, $receive) },
         qr/scope type is required/i, 'scope type is required');
-    like(dies { PAGI::Request->new({ type => 'sse' }, $receive) },
-        qr/requires HTTP scope.*sse/i, 'only HTTP scopes are accepted');
+    like(dies { PAGI::Request->new({ type => 'lifespan' }, $receive) },
+        qr/requires HTTP, WebSocket, or SSE scope.*lifespan/i,
+        'non-request scope types are rejected');
     like(dies { PAGI::Request->new(bless({}, 'Local::Scope'), $receive) },
         qr/unblessed scope hashref/i, 'scope must be an unblessed hashref');
     like(

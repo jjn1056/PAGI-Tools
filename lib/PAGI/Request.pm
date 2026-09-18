@@ -15,6 +15,7 @@ use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::Request::Negotiate;
 use PAGI::Request::BodyStream;
+use PAGI::Request::_BodyInput ();
 
 sub new {
     croak 'PAGI::Request->new requires exactly scope and receive arguments'
@@ -25,8 +26,8 @@ sub new {
     my $type = $scope->{type};
     croak 'PAGI::Request scope type is required'
         unless defined($type) && !ref($type) && length($type);
-    croak "PAGI::Request requires HTTP scope; received '$type'"
-        unless $type eq 'http';
+    croak "PAGI::Request requires HTTP, WebSocket, or SSE scope; received '$type'"
+        unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
     croak 'PAGI::Request requires a receive coderef'
         unless ref($receive) eq 'CODE';
     return bless { scope => $scope, receive => $receive }, $class;
@@ -37,7 +38,7 @@ sub method       { shift->{scope}{method} }
 sub path         { shift->{scope}{path} }
 sub raw_path     { my $s = shift; $s->{scope}{raw_path} // $s->{scope}{path} }
 sub query_string { shift->{scope}{query_string} // '' }
-sub scheme       { shift->{scope}{scheme} // 'http' }
+sub scheme       { my $s = shift; $s->{scope}{scheme} // ($s->{scope}{type} eq 'websocket' ? 'ws' : 'http') }
 sub http_version { shift->{scope}{http_version} // '1.1' }
 sub client       { shift->{scope}{client} }
 sub server       { shift->{scope}{server} }
@@ -296,6 +297,14 @@ sub path_param {
 
 sub scope { shift->{scope} }
 
+sub _require_body_scope {
+    my ($self) = @_;
+    my $type = $self->{scope}{type};
+    croak 'body input requires HTTP or SSE scope'
+        unless $type eq 'http' || $type eq 'sse';
+    return $type;
+}
+
 # Application state (injected by PAGI::Lifespan, read-only)
 sub has_state {
     my $self = shift;
@@ -314,6 +323,7 @@ sub state {
 # Body streaming - mutually exclusive with buffered body methods
 sub body_stream {
     my ($self, %opts) = @_;
+    my $scope_type = $self->_require_body_scope;
 
     croak "Body already consumed; streaming not available" if $self->{scope}{'pagi.request.body.read'};
     croak "Body streaming already started" if $self->{scope}{'pagi.request.body.stream.created'};
@@ -336,12 +346,14 @@ sub body_stream {
         limit_name => $limit_name,
         decode     => $opts{decode},
         strict     => $opts{strict},
+        _scope_type => $scope_type,
     );
 }
 
 # Streaming multipart - mutually exclusive with buffered body methods
 sub multipart_stream {
     my ($self, %opts) = @_;
+    my $scope_type = $self->_require_body_scope;
     croak "Body already consumed; multipart_stream() not available"
         if $self->{scope}{'pagi.request.body.read'}
         || $self->{scope}{'pagi.request.body.stream.created'};
@@ -358,6 +370,7 @@ sub multipart_stream {
     return PAGI::Request::MultipartStream->new(
         receive  => $self->{receive},
         boundary => $boundary,
+        _scope_type => $scope_type,
         map { defined $opts{$_} ? ($_ => $opts{$_}) : () }
             qw(max_files max_fields max_field_size max_file_size max_request_body),
     );
@@ -366,6 +379,7 @@ sub multipart_stream {
 # Read raw body bytes (async, cached in scope)
 async sub body {
     my $self = shift;
+    my $scope_type = $self->_require_body_scope;
 
     croak "Body streaming already started; buffered helpers unavailable"
         if $self->{scope}{'pagi.request.body.stream.created'};
@@ -388,8 +402,8 @@ async sub body {
     my $body = '';
     while (1) {
         my $message = await $receive->();
-        last unless $message && $message->{type};
-        if ($message->{type} eq 'http.disconnect') {
+        my $kind = PAGI::Request::_BodyInput::event_kind($scope_type, $message);
+        if ($kind eq 'disconnect') {
             last unless length $body;  # no bytes ever arrived -- an empty body, not a truncation
             $self->{scope}{'pagi.request.body.truncated'} = 1;
             my $connection = $self->connection;
@@ -429,6 +443,7 @@ async sub json {
 # Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
 async sub form_params {
     my ($self, %opts) = @_;
+    $self->_require_body_scope;
     my $strict = delete $opts{strict} // 0;
     my $raw    = delete $opts{raw}    // 0;
 
@@ -513,6 +528,7 @@ async sub raw_form_param {
 # Parse multipart form (internal, cached in scope)
 async sub _parse_multipart_form {
     my ($self, %opts) = @_;
+    my $scope_type = $self->_require_body_scope;
 
     croak "Body streaming already started; buffered helpers unavailable"
         if $self->{scope}{'pagi.request.body.stream.created'};
@@ -531,6 +547,7 @@ async sub _parse_multipart_form {
     my $handler = PAGI::Request::MultiPartHandler->new(
         boundary        => $boundary,
         receive         => $self->{receive},
+        _scope_type     => $scope_type,
         max_field_size  => $opts{max_field_size},
         max_file_size   => $opts{max_file_size},
         spool_threshold => $opts{spool_threshold},
@@ -551,6 +568,7 @@ async sub _parse_multipart_form {
 # Get all uploads as Hash::MultiValue (cached in scope)
 async sub uploads {
     my ($self, %opts) = @_;
+    $self->_require_body_scope;
 
     return $self->{scope}{'pagi.request.uploads'} if $self->{scope}{'pagi.request.uploads'};
 
@@ -643,6 +661,11 @@ the raw C<$scope> hashref and C<$receive> callback with convenient methods
 for accessing headers, query parameters, cookies, request body, and file
 uploads.
 
+HTTP, WebSocket, and SSE scopes are supported for metadata access. Request
+body input is available for HTTP and SSE scopes using each protocol's native
+request and disconnect events. WebSocket scopes reject body methods before
+reading from C<$receive> or changing body-consumption state.
+
 This is an optional convenience layer. Raw PAGI applications continue to
 work with C<$scope> and C<$receive> directly.
 
@@ -652,11 +675,11 @@ work with C<$scope> and C<$receive> directly.
 
     my $req = PAGI::Request->new($scope, $receive);
 
-Creates an HTTP request object. C<$scope> must be an unblessed hashref with
-C<< $scope->{type} eq 'http' >>, and C<$receive> must be a coderef. The
-receive callback is retained for deferred body consumption; construction never
-reads from it. These are the constructor's exact two arguments after the
-invocant; a C<$send> callback or any other extra argument is rejected.
+Creates a request object. C<$scope> must be an unblessed HTTP, WebSocket, or
+SSE scope hashref, and C<$receive> must be a coderef. The receive callback is
+retained for deferred HTTP or SSE body consumption; construction never reads
+from it. These are the constructor's exact two arguments after the invocant;
+a C<$send> callback or any other extra argument is rejected.
 
 =head1 PROPERTIES
 
@@ -873,6 +896,10 @@ Get all cookies.
 Get a single cookie value.
 
 =head1 BODY METHODS (ASYNC)
+
+Body methods accept HTTP and SSE scopes and consume the matching native event
+family. They croak on WebSocket scopes without calling C<$receive>, even when
+a body, form, or upload cache is already present.
 
 =head2 body_stream
 
