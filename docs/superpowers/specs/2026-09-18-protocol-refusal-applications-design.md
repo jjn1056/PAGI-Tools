@@ -531,8 +531,11 @@ Expected implementation areas, subject to the later plan:
   as Route endpoints; no adapter implementation change is required for this.
 - `lib/PAGI/Request.pm`: supported scope metadata and protocol-aware body entry
   points.
-- `lib/PAGI/Request/BodyStream.pm`, `lib/PAGI/Request/MultipartStream.pm`, or their
-  shared input path: SSE request-body/disconnect semantics without duplication.
+- `lib/PAGI/Request/BodyStream.pm`, `lib/PAGI/Request/MultipartStream.pm`, and
+  `lib/PAGI/Request/MultiPartHandler.pm`, or their shared input path: SSE
+  request-body/disconnect semantics without duplication. Buffered form/upload
+  parsing reads receive independently; updating `Request->body` alone does not
+  cover it.
 - `lib/PAGI/Pages/Application.pm`, `lib/PAGI/Pages.pm`: execute on supported
   refusal scopes and remove unnecessary HTTP-typed metadata coercion there.
 - A narrowly scoped internal shared refusal coordinator if needed.
@@ -581,6 +584,9 @@ regression proving the private interface is not invoked by refusal helpers.
   fail before receive, including streaming constructors and cached fast paths.
 - SSE buffered, chunked, JSON, form, and streaming/multipart input use actual
   `sse.request` events; disconnect and partial-body behavior remain correct.
+- Buffered multipart coverage explicitly exercises complete SSE forms,
+  interrupted uploads, and temporary-file cleanup through the public form/upload
+  methods, including the `MultiPartHandler` path.
 - No connect/body events are consumed merely to construct a Request or render
   Pages metadata.
 - A returned native app receives the remaining original input, with no replay or
