@@ -124,7 +124,6 @@ subtest 'response_for materializes fresh concrete problem responses for request-
         scope('http'),
         scope('websocket', path => '/chat'),
         scope('sse', path => '/events'),
-        scope('example.custom', path => '/custom'),
     );
 
     for my $source (@raw_scopes) {
@@ -149,7 +148,6 @@ subtest 'response_for materializes fresh concrete problem responses for request-
         PAGI::Request->new(scope('http'), $receive),
         PAGI::WebSocket->new(scope('websocket'), $receive, $send),
         PAGI::SSE->new(scope('sse'), $receive, $send),
-        Local::ScopeSource->new(scope('example.object')),
     );
     for my $source (@objects) {
         isa_ok($application->response_for($source), ['PAGI::Response::Problem'],
@@ -211,12 +209,18 @@ subtest 'negotiated HTTP materialization preserves source scopes and header cach
                     ok(!exists $scope->{'pagi.request.headers'},
                         "$label call $call leaves source uncached");
                 }
-                for my $seen ($descriptor_scopes[-1],
-                    $Local::CountingPages::RESPONSE_SCOPES[-1],
-                    $Local::CountingPages::NEGOTIATION_SCOPES[-1]) {
-                    is(refaddr($seen), refaddr($scope),
-                        "$label call $call hook retains original scope identity");
-                }
+                is(refaddr($descriptor_scopes[-1]), refaddr($scope),
+                    "$label call $call descriptor retains original scope identity");
+                my $metadata = $Local::CountingPages::RESPONSE_SCOPES[-1];
+                isnt(refaddr($metadata), refaddr($scope),
+                    "$label call $call policy receives an isolated metadata copy");
+                is(refaddr($Local::CountingPages::NEGOTIATION_SCOPES[-1]),
+                    refaddr($metadata),
+                    "$label call $call negotiation shares the policy metadata copy");
+                is($metadata->{type}, 'http',
+                    "$label call $call metadata retains the real HTTP type");
+                ok(!exists $metadata->{'pagi.request.headers'},
+                    "$label call $call metadata owns a private header cache");
             }
         }
     }
@@ -259,6 +263,27 @@ subtest 'response_for validates the exact source grammar and request type' => su
     }, qr/scope lookup exploded/i, 'scope() exceptions propagate');
     like(dies { $application->response_for({type => 'lifespan'}) },
         qr/response_for.*lifespan/i, 'lifespan is not request metadata');
+    like(dies { $application->response_for({type => 'example.custom'}) },
+        qr/response_for.*HTTP, WebSocket, or SSE.*example\.custom/i,
+        'custom scope types are not coerced into request metadata');
+
+    local $Local::CountingPages::RESPONSE_COUNT = 0;
+    my $descriptor_count = 0;
+    my $guarded = PAGI::Pages::Application->new(
+        policy             => Local::CountingPages->new(as => 'text'),
+        descriptor_factory => sub {
+            ++$descriptor_count;
+            return problem_descriptor();
+        },
+    );
+    for my $type (qw(lifespan example.custom)) {
+        my $error = dies { $guarded->response_for({type => $type}) };
+        ok($error, "$type response_for materialization is rejected");
+    }
+    is($descriptor_count, 0,
+        'unsupported response_for scopes are rejected before descriptor creation');
+    is($Local::CountingPages::RESPONSE_COUNT, 0,
+        'unsupported response_for scopes are rejected before rendering');
 };
 
 subtest 'response_for rejects asynchronous descriptor and renderer results' => sub {
@@ -278,7 +303,7 @@ subtest 'response_for rejects asynchronous descriptor and renderer results' => s
         'a renderer Future is rejected synchronously');
 };
 
-subtest 'materialization gives policy a shallow HTTP metadata view without changing the source' => sub {
+subtest 'materialization gives policy a shallow real-protocol metadata view without changing the source' => sub {
     local $Local::CountingPages::RESPONSE_COUNT = 0;
     local $Local::CountingPages::NEGOTIATION_COUNT = 0;
     local @Local::CountingPages::RESPONSE_SCOPES;
@@ -320,12 +345,12 @@ subtest 'materialization gives policy a shallow HTTP metadata view without chang
 
     my $metadata = $Local::CountingPages::RESPONSE_SCOPES[0];
     is(refaddr($Local::CountingPages::NEGOTIATION_SCOPES[0]), refaddr($metadata),
-        'renderer negotiation sees the policy HTTP metadata view');
+        'renderer negotiation sees the policy metadata view');
     isnt(refaddr($metadata), refaddr($source),
-        'non-HTTP metadata uses a distinct top-level hash');
-    is($metadata->{type}, 'http', 'metadata type is HTTP');
-    is($metadata->{method}, 'POST', 'a valid method is preserved');
-    is($metadata->{path}, '/chat', 'a valid path is preserved');
+        'protocol metadata uses a distinct top-level hash');
+    is($metadata->{type}, 'websocket', 'metadata retains the real WebSocket type');
+    is($metadata->{method}, 'POST', 'metadata retains the real method');
+    is($metadata->{path}, '/chat', 'metadata retains the real path');
     is(refaddr($metadata->{headers}), refaddr($headers),
         'the repeated raw header list retains identity');
     is(refaddr($metadata->{state}), refaddr($nested),
@@ -340,30 +365,22 @@ subtest 'materialization gives policy a shallow HTTP metadata view without chang
     is(refaddr($source->{'pagi.request.headers'}), refaddr($protocol_cache),
         'the original protocol header cache is unchanged');
 
-    my $invalid_method = [];
-    my $invalid_path = {};
-    my $defaulted = {
-        type    => 'example.custom',
-        method  => $invalid_method,
-        path    => $invalid_path,
+    my $methodless = {
+        type    => 'sse',
         headers => [],
         state   => $nested,
     };
-    $application->response_for($defaulted);
-    my $default_metadata = $Local::CountingPages::RESPONSE_SCOPES[-1];
-    is($default_metadata->{method}, 'GET',
-        'missing or reference-valued method defaults to GET');
-    is($default_metadata->{path}, '/',
-        'missing or reference-valued path defaults to slash');
-    is(refaddr($defaulted->{method}), refaddr($invalid_method),
-        'defaulting does not replace the source method');
-    is(refaddr($defaulted->{path}), refaddr($invalid_path),
-        'defaulting does not replace the source path');
-    is(refaddr($default_metadata->{state}), refaddr($nested),
-        'defaulting still preserves nested reference identity');
+    $application->response_for($methodless);
+    my $methodless_metadata = $Local::CountingPages::RESPONSE_SCOPES[-1];
+    ok(!exists $methodless_metadata->{method},
+        'SSE metadata does not manufacture GET');
+    ok(!exists $methodless_metadata->{path},
+        'SSE metadata does not manufacture a path');
+    is(refaddr($methodless_metadata->{state}), refaddr($nested),
+        'shallow copying preserves nested reference identity');
 };
 
-subtest 'WebSocket and SSE caches are omitted only from synthesized HTTP views' => sub {
+subtest 'WebSocket and SSE caches are omitted only from isolated metadata views' => sub {
     local $Local::CountingPages::RESPONSE_COUNT = 0;
     local @Local::CountingPages::RESPONSE_SCOPES;
 
@@ -433,11 +450,14 @@ subtest 'response_for and to_app share the same materializer' => sub {
     is($Local::CountingApplication::MATERIALIZE_COUNT, 1,
         'response_for enters the materializer once');
 
-    my $events = invoke_application($application, scope('http'));
-    is($events->[0]{status}, 401, 'to_app invokes the materialized response');
-    is($Local::CountingApplication::MATERIALIZE_COUNT, 2,
-        'to_app enters that same materializer once');
-    is($descriptor_count, 2,
+    for my $type (qw(http websocket sse)) {
+        my $events = invoke_application($application, scope($type));
+        is($events->[0]{status}, 401,
+            "to_app invokes the materialized response for $type");
+    }
+    is($Local::CountingApplication::MATERIALIZE_COUNT, 4,
+        'each to_app invocation enters that same materializer once');
+    is($descriptor_count, 4,
         'each entry point creates exactly one fresh descriptor');
 };
 

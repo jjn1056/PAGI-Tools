@@ -9,9 +9,10 @@ use PAGI::Test::Client;
 
 use PAGI::Pages;
 
-# A bare Pages application is intentionally HTTP-only. PAGI::Server's default
-# automatic lifespan mode interprets its lifespan exception as a conforming
-# decline and continues startup. Operator-selected lifespan_mode => 'on' is
+# A bare Pages application accepts request scopes but not lifespan.
+# PAGI::Server's default automatic lifespan mode interprets its lifespan
+# exception as a conforming decline and continues startup. Operator-selected
+# lifespan_mode => 'on' is
 # strict and rejects the same root because Pages does not claim lifecycle
 # ownership; applications that require lifecycle hooks use PAGI::Compose.
 sub lifespan_probe {
@@ -38,8 +39,8 @@ is($automatic->{lifespan_supported}, 0,
 my $strict = lifespan_probe('on');
 is($strict->{success}, 0,
     'bare Pages root is rejected when the operator requires lifespan');
-like($strict->{message}, qr/lifespan_mode.*on.*application raised.*Pages.*HTTP/is,
-    'strict mode preserves the HTTP-only decline as its startup diagnostic');
+like($strict->{message}, qr/lifespan_mode.*on.*application raised.*Pages.*HTTP.*WebSocket.*SSE/is,
+    'strict mode preserves the request-scope decline as its startup diagnostic');
 
 my $client = PAGI::Test::Client->new(app => PAGI::Pages->welcome);
 my $html = $client->get('/', headers => { Accept => 'text/html' });

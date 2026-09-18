@@ -192,15 +192,9 @@ sub _application_for {
     );
 }
 
-sub _http_metadata_scope {
+sub _metadata_scope {
     my ($scope) = @_;
-    return $scope if $scope->{type} eq 'http';
     my %metadata = %$scope;
-    $metadata{type} = 'http';
-    $metadata{method} = 'GET'
-        unless defined($metadata{method}) && !ref($metadata{method});
-    $metadata{path} = '/'
-        unless defined($metadata{path}) && !ref($metadata{path});
     delete $metadata{'pagi.request.headers'};
     return \%metadata;
 }
@@ -780,7 +774,7 @@ sub _assembled_headers {
             return Future->fail('metadata-only Request cannot consume a body');
         };
         my $version = PAGI::Request->new(
-            _http_metadata_scope($scope), $no_body,
+            _metadata_scope($scope), $no_body,
         )->http_version;
         croak 'PAGI::Pages status 426 Upgrade requires HTTP/1.1'
             unless defined($version) && !ref($version) && $version eq '1.1';
@@ -824,9 +818,9 @@ sub _select_representation {
         return Future->fail('metadata-only Request cannot consume a body');
     };
     # Request lazily installs its header cache; keep those writes local while
-    # descriptor and policy hooks retain the prescribed metadata scope identity.
+    # descriptor factories retain the original scope identity.
     my $request = PAGI::Request->new(
-        { %{_http_metadata_scope($scope)} }, $no_body,
+        _metadata_scope($scope), $no_body,
     );
     my @accept_values = $request->header_all('accept');
     my $accept = @accept_values ? join(', ', @accept_values) : undef;
@@ -1124,10 +1118,10 @@ and constructs one concrete L<PAGI::Response> when its deferred application is
 invoked.
 
 Factories accept options only, perform no request I/O, and return a reusable
-HTTP-only L<PAGI::Pages::Application>. Negotiation uses the later invocation
-scope. A Request or scope is not a factory argument. The application constructs
-a fresh request-local descriptor and concrete Response, then invokes it through
-the common application path.
+L<PAGI::Pages::Application> for HTTP, WebSocket, and SSE. Negotiation uses the
+later invocation scope. A Request or scope is not a factory argument. The
+application constructs a fresh request-local descriptor and concrete Response,
+then invokes it through the common application path.
 
 C<ref($response)> during rendering identifies the concrete representation
 selected by policy; Pages does not hide it behind a generic mutable Response.
@@ -1166,11 +1160,12 @@ instance of the invoked class.
 =head1 APPLICATION INVOCATION
 
 Every page method and exported function returns a deferred application. On an
-HTTP invocation it derives negotiation metadata from the supplied scope,
-creates one descriptor and concrete Response, and invokes that Response.
+HTTP, WebSocket, or SSE invocation it derives negotiation metadata from the
+supplied scope, creates one descriptor and concrete Response, and invokes that
+Response.
 
-Pages rejects lifespan, WebSocket, SSE, and unknown scopes before receive,
-rendering, or send. Pages does not handle lifespan. At a bare server root,
+Pages rejects lifespan and unknown scopes before receive, rendering, or send.
+Pages does not handle lifespan. At a bare server root,
 automatic lifespan mode treats the lifespan exception as a decline and
 continues without sending later lifespan events; strict mode rejects startup.
 Use L<PAGI::Compose> when the root needs lifecycle hooks, root safety, or final
@@ -1334,7 +1329,7 @@ At a native triplet boundary use L<PAGI::Utils/invoke_app>:
 The factory result retains the exact Pages policy object. Pages does not clone,
 freeze, reconstruct, or inspect arbitrary subclass storage. Deliberate later
 policy mutation may affect later invocations, and renderer-maintained subclass
-state remains subclass-owned. Each HTTP invocation still creates its own fresh
+state remains subclass-owned. Each request-scope invocation still creates its own fresh
 descriptor and concrete Response. Concurrent mutation while an invocation
 derives those values is unsupported.
 

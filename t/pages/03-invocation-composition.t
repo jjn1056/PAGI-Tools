@@ -8,6 +8,7 @@ use Scalar::Util qw(refaddr);
 
 use PAGI::Pages;
 use PAGI::Pages::_Catalog;
+use PAGI::Headers ();
 use PAGI::Request;
 use PAGI::Routing qw(route mount);
 use PAGI::Utils qw(invoke_app);
@@ -379,6 +380,49 @@ subtest 'deferred Pages applications occupy Route, Mount, and root positions dir
     is($root->[0]{status}, 200, 'a bare Pages application serves HTTP as a root');
 };
 
+subtest 'direct request-protocol invocation negotiates without mutating shared headers' => sub {
+    my $application = PAGI::Pages->new(
+        as => 'auto', default => 'html',
+    )->not_found;
+    my @cases = (
+        [http      => 'application/problem+json', 'application/problem+json'],
+        [websocket => 'text/html',                'text/html; charset=utf-8'],
+        [sse       => 'text/plain',               'text/plain; charset=utf-8'],
+    );
+
+    for my $case (@cases) {
+        my ($type, $accept, $content_type) = @$case;
+        my $headers = [['Accept' => $accept]];
+        my $cache = PAGI::Headers->new($headers);
+        my $scope = {
+            type                   => $type,
+            method                 => 'POST',
+            path                   => "/$type",
+            headers                => $headers,
+            query_string           => '',
+            http_version           => '1.1',
+            'pagi.request.headers' => $cache,
+        };
+        my @keys = sort keys %$scope;
+
+        my $events = run_app($application, $scope);
+        is(response_header($events, 'Content-Type'), $content_type,
+            "$type invocation negotiates its requested representation");
+        is(refaddr($scope->{headers}), refaddr($headers),
+            "$type invocation preserves the raw header list identity");
+        is(refaddr($scope->{'pagi.request.headers'}), refaddr($cache),
+            "$type invocation preserves the shared header cache identity");
+        is([sort keys %$scope], \@keys,
+            "$type invocation does not add or remove source keys");
+    }
+
+    my $configured = Local::HookPages->not_found(as => 'text');
+    is(response_body(run_app($configured, {
+        type => 'sse', method => 'POST', path => '/configured', headers => [],
+    })), "hook:404:Not Found\n",
+        'caller-configured renderer executes on an SSE request scope');
+};
+
 subtest 'shared policy creates request-local descriptors and Responses' => sub {
     local $Local::CountingPages::NEW_COUNT = 0;
     local @Local::CountingPages::RENDERED_BY;
@@ -397,7 +441,9 @@ subtest 'shared policy creates request-local descriptors and Responses' => sub {
     my $component = Local::ConcurrentPages->new(as => 'auto')->not_found;
     my $app = $component->to_app;
     my $html_scope = http_scope(accept => 'text/html');
+    $html_scope->{type} = 'websocket';
     my $text_scope = http_scope(accept => 'text/plain');
+    $text_scope->{type} = 'sse';
     my (@html_events, @text_events);
     my $html_gate = Future->new;
     my $text_gate = Future->new;
@@ -419,7 +465,7 @@ subtest 'shared policy creates request-local descriptors and Responses' => sub {
         $text_scope, sub { Future->done }, $text_send,
     ));
     ok(!$html_future->is_ready && !$text_future->is_ready,
-        'both request-local Responses can remain independently in flight');
+        'different protocol Responses can remain independently in flight');
 
     $text_gate->done;
     $text_future->get;

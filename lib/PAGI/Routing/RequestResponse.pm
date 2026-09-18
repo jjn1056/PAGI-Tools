@@ -51,8 +51,8 @@ sub to_app {
     return async sub {
         my ($scope, $receive, $send) = @_;
         my $type = $scope->{type} // '';
-        croak "PAGI::Routing::RequestResponse requires HTTP scope; received '$type'"
-            unless $type eq 'http';
+        croak "PAGI::Routing::RequestResponse requires HTTP, WebSocket, or SSE scope; received '$type'"
+            unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
 
         my $request = $request_factory->($scope, $receive);
         croak 'request_response request_factory must return a '
@@ -146,8 +146,9 @@ construction. The functional C<request_response> helper accepts the handler
 positionally followed by the same optional C<request_factory> pair.
 
 Arbitrary returned applications are advanced delegation. They receive the
-unchanged HTTP scope and remaining receive stream; body events already consumed
-through Request are not replayed. No lifespan startup or shutdown is replayed.
+unchanged HTTP, WebSocket, or SSE scope and remaining receive stream; body
+events already consumed through Request are not replayed. No lifespan startup
+or shutdown is replayed.
 The returned app's routes, constraints, reverse names, and schema metadata are
 opaque to the outer Router, and a nested app may apply another method/routing
 policy or emit invalid events. Static or expensive app objects belong directly
