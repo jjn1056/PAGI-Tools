@@ -527,6 +527,8 @@ Expected implementation areas, subject to the later plan:
 - `lib/PAGI/WebSocket.pm`, `lib/PAGI/SSE.pm`: new target contract and thin refusal
   coordination using public connection facts.
 - `lib/PAGI/Routing/RequestResponse.pm`: shared supported-scope handler adapter.
+- `lib/PAGI/Utils.pm` POD: document `as_app_object` for refusal methods as well
+  as Route endpoints; no adapter implementation change is required for this.
 - `lib/PAGI/Request.pm`: supported scope metadata and protocol-aware body entry
   points.
 - `lib/PAGI/Request/BodyStream.pm`, `lib/PAGI/Request/MultipartStream.pm`, or their
@@ -641,6 +643,19 @@ required for these supported protocol boundaries.
 Document the CODE-position distinction with examples: a direct coderef is a
 Request handler; `as_app_object` explicitly selects the native triplet form;
 a coderef returned by a Request handler is already a native application value.
+
+Update `PAGI::Utils/as_app_object` documentation to replace its description as
+a "narrow Route escape hatch" with the following broader role:
+
+> Use `as_app_object` to pass a native `($scope, $receive, $send)` application
+> where a bare coderef would otherwise be interpreted as a handler. This
+> includes Route endpoints, WebSocket `deny`, and SSE `decline`. Ordinary
+> handler callbacks do not need the wrapper.
+
+Add both refusal call-site examples there and retain the explanation that the
+wrapper returns the original native coderef through `to_app`, without changing
+scope, events, or lifecycle behavior. This is a documentation change to the
+existing adapter, approved during the 2026-09-18 review.
 
 Document the deliberate requirement for the universal connection capability,
 including its impact on old servers and manually constructed test helpers.
