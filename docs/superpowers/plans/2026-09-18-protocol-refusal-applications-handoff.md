@@ -40,15 +40,16 @@ be at least 300; SSE may use ordinary HTTP 200 or 204.
 
 | Repository | Branch / commit | Role | Changes |
 | --- | --- | --- | --- |
-| PAGI-Tools | `feature/universal-connection-tools` / `4c6561b` before this handoff commit | protocol-refusal-applications | implementation and migration-test correction |
+| PAGI-Tools | `feature/universal-connection-tools` / `387388e` | protocol-refusal-applications | implementation, migration-test correction, and this handoff |
 | PAGI | `main` / `9aebdbcd938f4ff520d68ce2ea2e86cd00cf150f` | read-only normative reference | none |
-| PAGI-Server | `feature/websocket-close-truthfulness` / `c0c08f695a4ecb1cd1d553fdbec3dbda86601e` | read-only integration checkout | none |
+| PAGI-Server | `feature/websocket-close-truthfulness` / `c0c08f695a4ecb1cd1d553fdbdfec3dbda86601e` | read-only integration checkout | none |
 
 Execution began from `79580372db37926f1a6c6a31d7b1968df5d8929a`; the
 documentation planning base was `e0f14366c1e7afffabfe87a14de2dcba14c89d63`.
 The final test correction is `4c6561b` (`test: update refusal migration
-contract`). This handoff is a local-only record. No server/spec runtime code
-was changed, and no push, merge, or release occurred.
+contract`), followed by this handoff commit `387388e`. This is a local-only
+record. No server/spec runtime code was changed, and no push, merge, or
+release occurred.
 
 ## Verification
 
@@ -100,6 +101,25 @@ claimed.
 
 ## Durable execution rulings
 
+- The user directed execution in the current `feature/universal-connection-tools`
+  checkout, so no worktree was created. This preserved the existing dirty
+  workspace; exact paths only were staged. Cost: unrelated older work remains
+  outside this task's review scope.
+- The Request header-container helper/POD task preceded the protocol Request
+  constructor/access-order task. This avoided broadening Request before its
+  body and metadata contract was designed; the cost was deliberate sequential
+  execution rather than parallel edits.
+- `Endpoint::HTTP` remains HTTP-only with a local scope guard. Broadening it
+  would default WebSocket extended CONNECT requests without a method to GET,
+  which this redesign did not authorize. Built-in Response, Pages, and
+  RequestResponse applications provide the promised refusal support.
+- Narrow task gates were used while implementing each task; the one complete
+  Tools-suite gate was reserved for Task 7. This kept the tests relevant while
+  retaining whole-branch regression evidence before handoff.
+- Final broad review is scoped to the approved implementation since
+  `7958037`, with the spec and plan as inputs. Older long-lived-branch work is
+  not re-reviewed here; the cost is that an independent earlier defect would
+  remain outside this focused review.
 - Backward compatibility for the superseded Response-only refusal API is not
   required. The migration test now describes the application-valued contract.
 - Connection admission is public-capability based for every target, including
