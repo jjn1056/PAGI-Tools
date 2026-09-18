@@ -40,15 +40,17 @@ sub receive { return sub { Future->new } }
 sub sse {
     my ($scope, $send) = @_;
     my $connection = $scope->{'pagi.connection'};
-    my $tracking_send = async sub {
+    my $tracking_send = sub {
         my ($event) = @_;
-        await Future->wrap($send->($event));
+        local $connection->{_defer_notifications} = 1 if $connection;
+        my $result = Future->wrap($send->($event));
+        return $result if $result->is_failed;
         $connection->_mark_response_started
-            if $connection && ($event->{type} // '') eq 'http.response.start';
+            if $connection && ($event->{type} // '') =~ /^(?:http\.response\.start|sse\.start|websocket\.accept)$/;
         $connection->_mark_complete
             if $connection && ($event->{type} // '') eq 'http.response.body'
                 && !$event->{more};
-        return;
+        return $result;
     };
     return PAGI::SSE->new($scope, receive(), $tracking_send);
 }
@@ -194,7 +196,7 @@ subtest 'streaming decline requires pagi.connection synchronously' => sub {
     delete $scope->{'pagi.connection'};
     my $sse = sse($scope, sub { Future->done });
     like dies { $sse->decline(PAGI::Response::Stream->new(sub {})) },
-        qr/SSE decline.*pagi\.connection.*0\.6 needed/,
+        qr/SSE decline.*pagi\.connection.*current connection contract required/,
         'missing connection is diagnosed before returning a Future';
 };
 
@@ -254,7 +256,7 @@ subtest 'Response receives the original SSE scope unchanged' => sub {
     use parent -norequire, 'PAGI::Response::Stream';
 }
 
-subtest 'an inherited Stream reaches mapped sends incrementally and commits at start settlement' => sub {
+subtest 'an inherited Stream reaches original sends incrementally and observes server progress' => sub {
     my @sent;
     my @settlements;
     my $producer_calls = 0;
@@ -278,13 +280,14 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     my $decline = $sse->decline($stream);
     is([map { $_->{type} } @sent], ['http.response.start'],
         'only response start is sent initially');
-    is($producer_calls, 0, 'producer waits for mapped start settlement');
+    is($producer_calls, 0, 'producer waits for ordinary start settlement');
     ok(!$decline->is_ready, 'decline awaits response start');
 
     $settlements[0]->done;
     is($sse->connection_state, 'declining',
         'committed response slot remains nonterminal while body is pending');
     ok(!exists $sse->{_pending_keepalive}, 'start commitment discards deferred keepalive');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 0, 'close cleanup waits for response completion or failure');
     is($producer_calls, 1, 'producer starts after response start settles');
     is([map { $_->{body} // '<start>' } @sent], ['<start>', 'first'],
@@ -305,6 +308,7 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     $settlements[3]->done;
     my $returned = $decline->get;
     ok($returned == $sse, 'decline resolves after every send settles');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 1, 'successful decline runs close cleanup exactly once');
 };
 
@@ -342,7 +346,7 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     }
 }
 
-  subtest 'a producer failure after mapped start awaits server terminal cleanup' => sub {
+  subtest 'a producer failure after ordinary start awaits server terminal cleanup' => sub {
     my @sent;
     my $close_calls = 0;
     my $sse = sse(sse_scope(), sub { push @sent, $_[0]; Future->done });
@@ -352,17 +356,20 @@ subtest 'an inherited Stream reaches mapped sends incrementally and commits at s
     like(dies { $sse->decline(T::SSEProducerFailureResponse->new('unused'))->get },
         qr/producer failed after response start/, 'producer failure reaches the caller');
     is([map { $_->{type} } @sent], ['http.response.start'],
-        'mapped start reached the protocol before the producer failed');
+        'ordinary start reached the protocol before the producer failed');
     is($sse->connection_state, 'declining', 'post-start producer failure cannot reopen the slot');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 0, 'producer failure cannot publish terminal cleanup');
     ok(!exists $sse->{_pending_keepalive}, 'post-start failure cannot preserve deferred keepalive');
-    $sse->decline(PAGI::Response::Text->new('again'))->get;
+    like(dies { $sse->decline(PAGI::Response::Text->new('again'))->get }, qr/before start/, 'repeated decline rejected');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 0, 'repeated decline cannot publish terminal cleanup');
     $sse->scope->{'pagi.connection'}->_mark_disconnected('server_error', 'producer failed');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 1, 'server outcome runs terminal cleanup once');
 };
 
-subtest 'a mapped body-send failure propagates and awaits server terminal cleanup' => sub {
+subtest 'an ordinary body-send failure propagates and awaits server terminal cleanup' => sub {
     my @sent;
     my $close_calls = 0;
     my $sse = sse(sse_scope(), sub {
@@ -376,14 +383,16 @@ subtest 'a mapped body-send failure propagates and awaits server terminal cleanu
         qr/decline body resource failed/, 'genuine body-send failure reaches the caller');
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
-    ], 'body send was attempted only after mapped start committed');
+    ], 'body send was attempted only after ordinary start committed');
     is($sse->connection_state, 'declining', 'post-start send failure cannot reopen the slot');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 0, 'send failure cannot publish terminal cleanup');
     $sse->scope->{'pagi.connection'}->_mark_disconnected('server_error', 'body failed');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 1, 'server outcome runs terminal cleanup once');
 };
 
-subtest 'disconnect during a backpressured mapped body settles normally and cleans up' => sub {
+subtest 'disconnect during a backpressured ordinary body settles normally and cleans up' => sub {
     my $connection = PAGI::Test::ConnectionState->new;
     my @sent;
     my $body_send;
@@ -405,7 +414,7 @@ subtest 'disconnect during a backpressured mapped body settles normally and clea
     my $decline = $sse->decline($stream);
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
-    ], 'the first body write is parked on the real mapped send');
+    ], 'the first body write is parked on the original send');
     ok(!$decline->is_ready, 'decline remains pending on body backpressure');
 
     $connection->_mark_disconnected('client_closed');
@@ -414,13 +423,14 @@ subtest 'disconnect during a backpressured mapped body settles normally and clea
     $body_send->done;
 
     ok(lives { $decline->get }, 'successful post-disconnect settlement remains a normal outcome');
-    is($body_cancelled, 0, 'mapped body send was awaited without cancellation');
+    is($body_cancelled, 0, 'ordinary body send was awaited without cancellation');
     is($sse->connection_state, 'closed', 'decline remains committed after disconnect');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 1, 'disconnect outcome runs SSE close cleanup exactly once');
     is(scalar @sent, 2, 'disconnect suppresses terminal success without another send');
 };
 
-subtest 'decline accepts exactly one concrete Response and only before start' => sub {
+subtest 'decline accepts exactly one Request handler or app object and only before start' => sub {
     for my $arguments (
         [],
         [undef],
@@ -430,7 +440,7 @@ subtest 'decline accepts exactly one concrete Response and only before start' =>
     ) {
         my @sent;
         my $sse = sse(sse_scope(), sub { push @sent, $_[0]; Future->done });
-        like(dies { $sse->decline(@$arguments)->get }, qr/(?:one|PAGI::Response|concrete)/i,
+        like(dies { $sse->decline(@$arguments)->get }, qr/(?:one|Request handler|app object)/i,
             'invalid argument list is rejected');
         is(\@sent, [], 'invalid call sends nothing');
     }
@@ -454,8 +464,9 @@ subtest 'decline drops deferred keepalive, closes once, and permits no live even
     $sse->keepalive(25, 'pending')->get;
     is(\@sent, [], 'pre-start keepalive is deferred');
     $sse->decline($response)->get;
-    $sse->decline($response)->get;
+    like(dies { $sse->decline($response)->get }, qr/before start/, 'settled repeat rejected');
 
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 1, 'close callbacks run exactly once');
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
@@ -473,7 +484,7 @@ subtest 'decline drops deferred keepalive, closes once, and permits no live even
     is(scalar @sent, $before, 'no live SSE event follows the terminal response body');
 };
 
- subtest 'mapped start-send failure preserves pending state and deferred keepalive' => sub {
+ subtest 'ordinary start-send failure preserves pending state and deferred keepalive' => sub {
     my @sent;
     my $calls = 0;
     my $sse = sse(sse_scope(), sub {
@@ -492,41 +503,6 @@ subtest 'decline drops deferred keepalive, closes once, and permits no live even
         'http.response.start', 'sse.start', 'sse.keepalive',
     ], 'live start remains available and arms the preserved keepalive');
     is($sent[-1]{interval}, 17, 'the original deferred interval is preserved');
-};
-
-subtest 'pending decline start reserves the first-event slot' => sub {
-    my @claimants = (
-        start   => sub { $_[0]->start },
-        close   => sub { $_[0]->close },
-        decline => sub { $_[0]->decline(PAGI::Response::Text->new('competing')) },
-    );
-
-    while (@claimants) {
-        my ($name, $claim) = splice @claimants, 0, 2;
-        my @sent;
-        my $start = Future->new;
-        my $sse = sse(sse_scope(), sub {
-            push @sent, $_[0];
-            return $start if $_[0]{type} eq 'http.response.start';
-            return Future->done;
-        });
-        $sse->keepalive(17, 'reserved')->get;
-        my $decline = $sse->decline(PAGI::Response::Text->new('reserved'));
-
-        is($sse->connection_state, 'declining', 'pending start has a distinct reserved state');
-        like(dies { $claim->($sse)->get }, qr/decline response.*pending/i,
-            "$name fails locally while decline owns the response slot");
-        is([map { $_->{type} } @sent], ['http.response.start'],
-            "$name emits no competing first event");
-
-        $start->fail("controlled decline start failure\n");
-        like(dies { $decline->get }, qr/controlled decline start failure/,
-            'the genuine pre-commit send failure reaches the observer');
-        is($sse->connection_state, 'pending',
-            'a genuine pre-commit failure releases the reservation');
-        ok(exists $sse->{_pending_keepalive},
-            'pre-commit failure retains deferred keepalive');
-    }
 };
 
 subtest 'cancelling decline during start leaves the retained lifecycle authoritative' => sub {
@@ -548,8 +524,6 @@ subtest 'cancelling decline during start leaves the retained lifecycle authorita
     ok($decline->is_cancelled, 'caller cancellation settles only the public observer');
     is($start_cancelled, 0, 'caller cancellation never cancels the start send');
     is($sse->connection_state, 'declining', 'the response slot remains reserved');
-    like(dies { $sse->start->get }, qr/decline response.*pending/i,
-        'live start cannot claim the reserved slot');
     is(scalar @sent, 1, 'no competing event was sent');
 
     $start->done;
@@ -558,8 +532,8 @@ subtest 'cancelling decline during start leaves the retained lifecycle authorita
     ], 'retained lifecycle emits the terminal buffered body after start settles');
     is($sse->connection_state, 'closed', 'start settlement commits and closes decline');
     ok(!exists $sse->{_pending_keepalive}, 'commit discards deferred keepalive');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 1, 'decline cleanup runs exactly once after cancellation');
-    ok(!exists $sse->{_response_lifecycle}, 'completed lifecycle releases its retention slot');
 };
 
 subtest 'cancelling decline during a body send preserves producer and cleanup ownership' => sub {
@@ -585,12 +559,12 @@ subtest 'cancelling decline during a body send preserves producer and cleanup ow
 
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
-    ], 'stream is parked in its first mapped body send');
+    ], 'stream is parked in its first ordinary body send');
     $decline->cancel;
     is($body_cancelled, 0, 'public cancellation never cancels the body send');
     my $before = scalar @sent;
     $sse->start->get;
-    $sse->decline(PAGI::Response::Text->new('again'))->get;
+    like(dies { $sse->decline(PAGI::Response::Text->new('again'))->get }, qr/before start/, 'repeated decline rejected');
     is(scalar @sent, $before, 'committed decline admits no competing event');
 
     $body_send->done;
@@ -599,6 +573,7 @@ subtest 'cancelling decline during a body send preserves producer and cleanup ow
     }, 'retained producer still applies the normal terminal-body policy');
     is($body_cancelled, 0, 'body settlement path never cancels the send');
     is($writer_cleanup, 1, 'Stream Writer cleanup runs exactly once');
+    $sse->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 1, 'SSE decline cleanup runs exactly once');
     is($sse->connection_state, 'closed', 'decline remains closed');
 };

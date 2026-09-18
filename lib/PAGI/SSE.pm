@@ -7,7 +7,7 @@ use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
 use PAGI::Headers ();
-use PAGI::Response ();
+use PAGI::Utils::_Refusal ();
 use Scalar::Util qw(blessed);
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 
@@ -45,6 +45,7 @@ sub new {
 
     $self->{_cleanup_future} = Future->new;
     if (my $connection = $scope->{'pagi.connection'}) {
+        PAGI::Utils::_Refusal::require_connection($scope, 'PAGI::SSE');
         # The connection owns this helper until end; the retained worker then
         # owns asynchronous cleanup until all registered hooks have settled.
         $connection->on_end(sub {
@@ -62,8 +63,19 @@ sub _refresh_connection {
     my $connection = $self->{scope}{'pagi.connection'} or return;
     $self->{_disconnect_reason} = $connection->disconnect_reason;
     $self->{_disconnect_detail} = $connection->disconnect_detail;
+    $self->{_declined} = 1
+        if $self->{_state} eq 'declining' && $connection->response_started;
+    delete $self->{_pending_keepalive} if $self->{_declined};
     $self->{_state} = 'closed' unless $connection->is_connected;
     return;
+}
+
+# Derive refusal progress before protocol operations; response_started alone
+# also includes a normal accept/start and must not identify a refusal.
+sub _refusal_started {
+    my ($self) = @_;
+    $self->_refresh_connection;
+    return $self->{_declined};
 }
 
 sub disconnect_detail {
@@ -276,7 +288,7 @@ sub _set_closed {
 # Start the SSE stream
 async sub start {
     my ($self, %opts) = @_;
-    return $self if $self->{_declined};
+    return $self if $self->_refusal_started;
 
     croak 'SSE decline response is pending'
         if $self->{_state} eq 'declining';
@@ -323,7 +335,7 @@ async sub keepalive {
 
     # Safe no-op once closed (including via decline) -- there is no live
     # connection left for the server to time a ping against.
-    return $self if $self->is_closed || $self->{_declined} || $self->connection_state eq 'closing';
+    return $self if $self->is_closed || $self->_refusal_started || $self->connection_state eq 'closing';
 
     $interval //= 0;
     $comment  //= '';
@@ -348,70 +360,10 @@ async sub keepalive {
     return $self;
 }
 
-# Decline the request with a concrete HTTP Response instead of starting SSE.
+# Delegate to a public PAGI application instead of starting SSE.
 # See PAGI::Spec::Www "SSE Response Denial".
 sub decline {
-    my ($self, @args) = @_;
-    croak 'SSE decline requires exactly one concrete PAGI::Response'
-        unless @args == 1 && blessed($args[0]) && $args[0]->isa('PAGI::Response');
-    my $response = $args[0];
-    $self->_require_connection_for_stream($response, 'SSE decline');
-
-    return Future->done($self) if $self->{_declined};
-    croak 'SSE decline response is pending'
-        if $self->{_state} eq 'declining';
-    croak 'SSE decline is only valid before start while pending'
-        unless $self->{_state} eq 'pending';
-
-    $self->{_state} = 'declining';
-    my $committed = 0;
-    my $send = $self->{send};
-    my $observing_send = async sub {
-        my ($event) = @_;
-        await Future->wrap($send->($event));
-        if (($event->{type} // '') eq 'http.response.start') {
-            $committed = 1;
-            $self->{_declined} = 1;
-            delete $self->{_pending_keepalive};
-            $self->_set_closed unless $self->{scope}{'pagi.connection'};
-        }
-        return;
-    };
-    my $lifecycle = async sub {
-        my $completed = eval {
-            await Future->wrap($response->_emit(
-                $self->{scope}, $self->{receive}, $observing_send));
-            1;
-        };
-        my $error = $@ unless $completed;
-
-        if (!$committed) {
-            $self->{_state} = 'pending'
-                if $self->{_state} eq 'declining';
-            die $error unless $completed;
-        }
-
-        await $self->_run_close_callbacks if $committed && !$self->{scope}{'pagi.connection'};
-        die $error unless $completed;
-        return $self;
-    }->();
-
-    $self->{_response_lifecycle} = $lifecycle;
-    $lifecycle->on_ready(sub {
-        my ($ready) = @_;
-        delete $self->{_response_lifecycle}
-            if $self->{_response_lifecycle}
-                && $self->{_response_lifecycle} == $ready;
-    });
-    return $lifecycle->without_cancel;
-}
-
-sub _require_connection_for_stream {
-    my ($self, $response, $op) = @_;
-    return if $response->is_buffered;
-    return if $self->{scope}{'pagi.connection'};
-    my $v = $self->{scope}{pagi}{spec_version} // '0.1';
-    croak "$op of a streaming Response requires pagi.connection (server reports spec_version $v; 0.6 needed)";
+    return PAGI::Utils::_Refusal::run_refusal(@_);
 }
 
 # Single header lookup (case-insensitive, returns last value)
@@ -443,7 +395,7 @@ sub last_event_id {
 async sub send {
     my ($self, $data) = @_;
 
-    return $self if $self->{_declined};
+    return $self if $self->_refusal_started;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
 
     # Auto-start if not started
@@ -461,7 +413,7 @@ async sub send {
 async sub send_json {
     my ($self, $data) = @_;
 
-    return $self if $self->{_declined};
+    return $self if $self->_refusal_started;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->start unless $self->is_started;
@@ -480,7 +432,7 @@ async sub send_json {
 async sub send_event {
     my ($self, %opts) = @_;
 
-    return $self if $self->{_declined};
+    return $self if $self->_refusal_started;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
     croak "send_event requires 'data' parameter" unless exists $opts{data};
 
@@ -509,7 +461,7 @@ async sub send_event {
 # Safe send - returns bool instead of throwing
 async sub try_send {
     my ($self, $data) = @_;
-    return 0 if $self->{_declined} || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -528,7 +480,7 @@ async sub try_send {
 
 async sub try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->{_declined} || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -550,7 +502,7 @@ async sub try_send_json {
 async sub send_comment {
     my ($self, $comment) = @_;
 
-    return $self if $self->{_declined};
+    return $self if $self->_refusal_started;
     croak "Cannot send on closed SSE connection" if $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->start unless $self->is_started;
@@ -565,7 +517,7 @@ async sub send_comment {
 
 async sub try_send_comment {
     my ($self, $comment) = @_;
-    return 0 if $self->{_declined} || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -584,7 +536,7 @@ async sub try_send_comment {
 
 async sub try_send_event {
     my ($self, %opts) = @_;
-    return 0 if $self->{_declined} || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
@@ -712,7 +664,7 @@ async sub _note_disconnected {
 sub close {
     my ($self, @args) = @_;
     return $self->_legacy_close(@args) unless $self->{scope}{'pagi.connection'};
-    return Future->done($self) if $self->{_declined};
+    return Future->done($self) if $self->_refusal_started;
     croak 'SSE decline response is pending' if $self->connection_state eq 'declining';
     if ($self->{_close_callbacks_ran}) {
         return $self->{_close_send}
@@ -779,7 +731,7 @@ async sub _legacy_close {
 # Wait for disconnect
 async sub run {
     my ($self) = @_;
-    return if $self->{_declined};
+    return if $self->_refusal_started;
     if ($self->{scope}{'pagi.connection'}) {
         await $self->start unless $self->is_started || $self->is_closed;
         await $self->{_cleanup_future}->without_cancel;
@@ -1232,89 +1184,56 @@ C<on_connect> runs), C<start> arms it immediately after sending C<sse.start>
 =head2 decline
 
     use Future::AsyncAwait;
-    use PAGI::Auth qw(challenge bearer);
-
-    async sub declined_stream {
-        my ($sse) = @_;
-        my $failure = challenge(
-            challenges => [bearer(realm => 'private')],
-            as         => 'json',
-        );
-        return await $sse->decline($failure->response_for($sse));
-    }
-
-Declines the request with a real HTTP response instead of starting the SSE
-stream -- an auth gate, a not-found, a rate limit, anything that should
-return an ordinary response rather than open an event stream. This is the
-SSE parity of L<PAGI::WebSocket/deny>.
-
-C<response_for> synchronously creates a fresh, request-local Response from the
-deferred L<PAGI::Auth> outcome. It sends nothing and owns no stream state.
-C<decline> invokes the concrete Response on the original SSE scope and remains
-the owner of send settlement and deferred keepalive disposal. The helper's
-single connection observer owns terminal cleanup.
-
-Its ordinary C<http.response.*> events, including File and trailer forms, go
-directly to the server with normal send backpressure. Successful start
-settlement owns
-the response slot immediately, discards deferred keepalive, and leaves the SSE
-object C<declining> until the connection records a terminal outcome. A failed start send
-leaves the request pending. A non-buffered Response requires the Www 0.6
-C<pagi.connection> object. Prefer a finite response: once a streaming decline
-starts, the application is committed to finishing or aborting that HTTP
-response. See
-L<PAGI::Spec::Www/"Decline SSE - send event">. Per the
-B<first-send-wins> rule (see
-L<PAGI::Spec::Www/"SSE Response Denial">), this must happen B<before>
-C<start> or any send method has run -- declining after the stream has
-already started fails before another event is sent.
-
-Mapped-start settlement means the PAGI server validated and consumed the event
-and accepted it into outbound processing, or finished discarding it after the
-connection ended. It does not prove client delivery. A body send pending at
-disconnect resolves under PAGI 0.002007 rather than manufacturing a disconnect
-failure. Post-commit cleanup therefore follows authoritative SSE/connection
-state and its C<on_end> observer, not send-Future failure; genuine validation and
-resource failures still propagate.
-
-Before mapped-start settlement, C<connection_state> is C<declining> and no
-other first event may claim the response slot. A genuine start-send failure
-releases that reservation and restores C<pending>, including any deferred
-keepalive. Cancelling the Future returned to the caller does not cancel a PAGI
-send or abandon the retained decline lifecycle and its cleanup.
-
-This decline response is finite HTTP handshake output. It is separate from the
-live SSE protocol's event formatting, Last-Event-ID, retry, keepalive, and
-reconnection lifecycle. L<PAGI::Response::Stream> does not replace or subclass
-that live protocol behavior.
-
-After C<decline>, C<start>, C<run>, and the send methods (C<send>,
-C<send_json>, C<send_event>, C<send_comment>, C<keepalive>) all become B<safe
-no-ops> -- they return without touching the wire instead of croaking, since
-the response slot is committed to HTTP rather than a live event stream. If L</keepalive> was called before C<decline> -- for example
-L<PAGI::Endpoint::SSE>'s C<keepalive_interval>, which is configured before
-C<on_connect> runs -- it was only ever a deferred, never-sent recording (see
-L</keepalive>'s B<DEFERRED ARM> note); C<decline> simply drops it. There is
-therefore no C<sse.keepalive> event on the wire at all in the normal case:
-nothing was ever armed, so there's nothing to disarm.
-
-B<The supported auth-gate pattern> is to call C<decline> from inside
-C<on_connect> (see L<PAGI::Endpoint::SSE/on_connect>):
-
     use PAGI::Response qw(text_response);
 
-    async sub on_connect {
-        my ($self, $sse) = @_;
-
-        unless (authorized($sse)) {
-            await $sse->decline(
-                text_response('Unauthorized', status => 401),
-            );
-            return;
-        }
-
-        await $sse->send_event(event => 'connected', data => { ok => 1 });
+    async sub unavailable {
+        my ($sse) = @_;
+        return await $sse->decline(text_response('Unavailable', status => 503));
     }
+
+    async sub unavailable_for_request {
+        my ($sse) = @_;
+        return await $sse->decline(sub {
+            my ($request) = @_;
+            return text_response('Unavailable: ' . $request->path, status => 503);
+        });
+    }
+
+Delegates the SSE request refusal to exactly one Request handler or
+instantiated application object with C<to_app>, before C<start>. Concrete
+L<PAGI::Response> values, L<PAGI::Pages> applications, and custom application
+objects are accepted directly. A bare coderef receives exactly one
+L<PAGI::Request>; its immediate or Future-backed result must be an application
+object or native C<($scope, $receive, $send)> coderef. Use
+L<PAGI::Utils/as_app_object> to pass a native coderef directly.
+
+The application receives the original scope, receive, and send channels.
+The scope type stays unchanged. Applications own their protocol compatibility;
+this method neither inspects response contents nor substitutes a response for
+application errors. The current public C<pagi.connection> capabilities are
+required for every target, including buffered Responses. Missing capabilities
+fail before factories, handlers, or C<to_app> execute.
+
+Await the returned Future. Success resolves to this helper and means the
+application finished, not that the connection completed. Its C<declining> phase
+lasts until connection termination once a response has started. A settled
+attempt on a live connection with no response start permits sequential retry;
+after response start or termination another refusal fails. Application errors
+propagate, and only live, unstarted attempts restore the initial helper state.
+Applications must sequence answering operations; overlapping refusal and
+acceptance/start calls are unsupported.
+
+Cancelling the returned observer does not cancel the retained application work
+or server sends. Connection C<on_end> owns close callbacks, including
+asynchronous cleanup after application return.
+
+SSE refusals may use ordinary HTTP statuses including 200 and 204. Request
+body APIs consume the actual C<sse.request> body stream. Once HTTP refusal
+starts, protocol sends and C<start> cannot reopen it, and deferred keepalive
+is discarded. A live attempt that settles before response start preserves
+pending keepalive for a later ordinary C<start>.
+
+See L<PAGI::Spec::Www/"SSE Response Denial">.
 
 =head2 close
 

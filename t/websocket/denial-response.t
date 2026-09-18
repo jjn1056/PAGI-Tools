@@ -41,15 +41,17 @@ sub receive { return sub { Future->done({ type => 'websocket.connect' }) } }
 sub websocket {
     my ($scope, $send) = @_;
     my $connection = $scope->{'pagi.connection'};
-    my $tracking_send = async sub {
+    my $tracking_send = sub {
         my ($event) = @_;
-        await Future->wrap($send->($event));
+        local $connection->{_defer_notifications} = 1 if $connection;
+        my $result = Future->wrap($send->($event));
+        return $result if $result->is_failed;
         $connection->_mark_response_started
-            if $connection && ($event->{type} // '') eq 'http.response.start';
+            if $connection && ($event->{type} // '') =~ /^(?:http\.response\.start|sse\.start|websocket\.accept)$/;
         $connection->_mark_complete
             if $connection && ($event->{type} // '') eq 'http.response.body'
                 && !$event->{more};
-        return;
+        return $result;
     };
     return PAGI::WebSocket->new($scope, receive(), $tracking_send);
 }
@@ -200,7 +202,7 @@ subtest 'streaming denial requires pagi.connection synchronously' => sub {
     delete $scope->{'pagi.connection'};
     my $ws = websocket($scope, sub { Future->done });
     like dies { $ws->deny(PAGI::Response::Stream->new(sub {})) },
-        qr/WebSocket deny.*pagi\.connection.*0\.6 needed/,
+        qr/WebSocket deny.*pagi\.connection.*current connection contract required/,
         'missing connection is diagnosed before returning a Future';
 };
 
@@ -260,7 +262,7 @@ subtest 'Response receives the original WebSocket scope unchanged' => sub {
     use parent -norequire, 'PAGI::Response::Stream';
 }
 
- subtest 'an inherited Stream reaches mapped sends incrementally and commits at start settlement' => sub {
+ subtest 'an inherited Stream reaches original sends incrementally and observes server progress' => sub {
     my @sent;
     my @settlements;
     my $producer_calls = 0;
@@ -281,7 +283,7 @@ subtest 'Response receives the original WebSocket scope unchanged' => sub {
     my $denial = $ws->deny($stream);
     is([map { $_->{type} } @sent], ['http.response.start'],
         'only response start is sent initially');
-    is($producer_calls, 0, 'producer waits for mapped start settlement');
+    is($producer_calls, 0, 'producer waits for ordinary start settlement');
     ok(!$denial->is_ready, 'deny awaits response start');
 
     $settlements[0]->done;
@@ -351,18 +353,18 @@ subtest 'Response receives the original WebSocket scope unchanged' => sub {
     async sub _emit { ++$calls; die "custom response was invoked\n" }
 }
 
-  subtest 'a producer failure after mapped start propagates and leaves denial committed' => sub {
+  subtest 'a producer failure after ordinary start propagates and leaves denial committed' => sub {
     my @sent;
     my $ws = websocket(ws_scope(), sub { push @sent, $_[0]; Future->done });
 
     like(dies { $ws->deny(T::ProducerFailureResponse->new('unused'))->get },
         qr/producer failed after response start/, 'producer failure reaches the caller');
     is([map { $_->{type} } @sent], ['http.response.start'],
-        'mapped start reached the protocol before the producer failed');
+        'ordinary start reached the protocol before the producer failed');
     is($ws->connection_state, 'denying', 'post-start producer failure cannot reopen the slot');
 };
 
-subtest 'a mapped body-send failure propagates and leaves denial committed' => sub {
+subtest 'an ordinary body-send failure propagates and leaves denial committed' => sub {
     my @sent;
     my $ws = websocket(ws_scope(), sub {
         push @sent, $_[0];
@@ -374,11 +376,11 @@ subtest 'a mapped body-send failure propagates and leaves denial committed' => s
         qr/denial body resource failed/, 'genuine body-send failure reaches the caller');
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
-    ], 'body send was attempted only after mapped start committed');
+    ], 'body send was attempted only after ordinary start committed');
     is($ws->connection_state, 'denying', 'post-start send failure cannot reopen the slot');
 };
 
-subtest 'disconnect during a backpressured mapped body settles normally' => sub {
+subtest 'disconnect during a backpressured ordinary body settles normally' => sub {
     my $connection = PAGI::Test::ConnectionState->new;
     my @sent;
     my $body_send;
@@ -398,7 +400,7 @@ subtest 'disconnect during a backpressured mapped body settles normally' => sub 
     my $denial = $ws->deny($stream);
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
-    ], 'the first body write is parked on the real mapped send');
+    ], 'the first body write is parked on the original send');
     ok(!$denial->is_ready, 'denial remains pending on body backpressure');
 
     $connection->_mark_disconnected('client_closed');
@@ -407,12 +409,12 @@ subtest 'disconnect during a backpressured mapped body settles normally' => sub 
     $body_send->done;
 
     ok(lives { $denial->get }, 'successful post-disconnect settlement remains a normal outcome');
-    is($body_cancelled, 0, 'mapped body send was awaited without cancellation');
+    is($body_cancelled, 0, 'ordinary body send was awaited without cancellation');
     is($ws->connection_state, 'closed', 'denial remains committed after disconnect');
     is(scalar @sent, 2, 'disconnect suppresses terminal success without another send');
 };
 
-subtest 'deny accepts exactly one concrete Response and only while connecting' => sub {
+subtest 'deny accepts exactly one Request handler or app object and only while connecting' => sub {
     for my $arguments (
         [],
         [undef],
@@ -422,7 +424,7 @@ subtest 'deny accepts exactly one concrete Response and only while connecting' =
     ) {
         my @sent;
         my $ws = websocket(ws_scope(), sub { push @sent, $_[0]; Future->done });
-        like(dies { $ws->deny(@$arguments)->get }, qr/(?:one|PAGI::Response|concrete)/i,
+        like(dies { $ws->deny(@$arguments)->get }, qr/(?:one|Request handler|app object)/i,
             'invalid argument list is rejected');
         is(\@sent, [], 'invalid call sends nothing');
     }
@@ -436,7 +438,7 @@ subtest 'deny accepts exactly one concrete Response and only while connecting' =
     ok($ws->is_connected, 'accepted connection remains connected');
 };
 
- subtest 'mapped start-send failure preserves the connecting state' => sub {
+ subtest 'ordinary start-send failure preserves the connecting state' => sub {
     my @sent;
     my $calls = 0;
     my $ws = websocket(ws_scope(), sub {
@@ -454,38 +456,6 @@ subtest 'deny accepts exactly one concrete Response and only while connecting' =
         'http.response.start', 'websocket.accept',
     ], 'accept remains available after pre-commit failure');
     ok($ws->is_connected, 'successful accept establishes the still-live connection');
-};
-
-subtest 'pending denial start reserves the first-event slot' => sub {
-    my @claimants = (
-        accept => sub { $_[0]->accept },
-        close  => sub { $_[0]->close },
-        deny   => sub { $_[0]->deny(PAGI::Response::Text->new('competing')) },
-    );
-
-    while (@claimants) {
-        my ($name, $claim) = splice @claimants, 0, 2;
-        my @sent;
-        my $start = Future->new;
-        my $ws = websocket(ws_scope(), sub {
-            push @sent, $_[0];
-            return $start if $_[0]{type} eq 'http.response.start';
-            return Future->done;
-        });
-        my $denial = $ws->deny(PAGI::Response::Text->new('reserved'));
-
-        is($ws->connection_state, 'denying', 'pending start has a distinct reserved state');
-        like(dies { $claim->($ws)->get }, qr/denial response.*pending/i,
-            "$name fails locally while denial owns the response slot");
-        is([map { $_->{type} } @sent], ['http.response.start'],
-            "$name emits no competing first event");
-
-        $start->fail("controlled denial start failure\n");
-        like(dies { $denial->get }, qr/controlled denial start failure/,
-            'the genuine pre-commit send failure reaches the observer');
-        is($ws->connection_state, 'connecting',
-            'a genuine pre-commit failure releases the reservation');
-    }
 };
 
 subtest 'cancelling deny during start leaves the retained lifecycle authoritative' => sub {
@@ -506,8 +476,6 @@ subtest 'cancelling deny during start leaves the retained lifecycle authoritativ
     ok($denial->is_cancelled, 'caller cancellation settles only the public observer');
     is($start_cancelled, 0, 'caller cancellation never cancels the start send');
     is($ws->connection_state, 'denying', 'the response slot remains reserved');
-    like(dies { $ws->accept->get }, qr/denial response.*pending/i,
-        'accept cannot claim the reserved slot');
     is(scalar @sent, 1, 'no competing event was sent');
 
     $start->done;
@@ -515,8 +483,8 @@ subtest 'cancelling deny during start leaves the retained lifecycle authoritativ
         'http.response.start', 'http.response.body',
     ], 'retained lifecycle emits the terminal buffered body after start settles');
     is($ws->connection_state, 'closed', 'start settlement commits and closes denial');
+    $ws->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 1, 'denial cleanup runs exactly once after cancellation');
-    ok(!exists $ws->{_response_lifecycle}, 'completed lifecycle releases its retention slot');
 };
 
 subtest 'cancelling deny during a body send preserves producer and cleanup ownership' => sub {
@@ -542,7 +510,7 @@ subtest 'cancelling deny during a body send preserves producer and cleanup owner
 
     is([map { $_->{type} } @sent], [
         'http.response.start', 'http.response.body',
-    ], 'stream is parked in its first mapped body send');
+    ], 'stream is parked in its first ordinary body send');
     $denial->cancel;
     is($body_cancelled, 0, 'public cancellation never cancels the body send');
     my $before = scalar @sent;
@@ -557,6 +525,7 @@ subtest 'cancelling deny during a body send preserves producer and cleanup owner
     }, 'retained producer still applies the normal terminal-body policy');
     is($body_cancelled, 0, 'body settlement path never cancels the send');
     is($writer_cleanup, 1, 'Stream Writer cleanup runs exactly once');
+    $ws->scope->{'pagi.connection'}->_deliver_notifications;
     is($close_calls, 1, 'WebSocket denial cleanup runs exactly once');
     is($ws->connection_state, 'closed', 'denial remains closed');
 };

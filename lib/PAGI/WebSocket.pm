@@ -8,7 +8,7 @@ use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
 use PAGI::Headers ();
-use PAGI::Response ();
+use PAGI::Utils::_Refusal ();
 use Scalar::Util qw(blessed);
 
 
@@ -47,6 +47,7 @@ sub new {
 
     $self->{_cleanup_future} = Future->new;
     if (my $connection = $scope->{'pagi.connection'}) {
+        PAGI::Utils::_Refusal::require_connection($scope, 'PAGI::WebSocket');
         # The connection owns this helper until end; the retained worker then
         # owns asynchronous cleanup until all registered hooks have settled.
         $connection->on_end(sub {
@@ -66,8 +67,18 @@ sub _refresh_connection {
     $self->{_disconnect_detail} = $connection->disconnect_detail;
     $self->{_close_code} = $connection->close_code;
     $self->{_close_reason} = $connection->close_reason;
+    $self->{_denied} = 1
+        if $self->{_state} eq 'denying' && $connection->response_started;
     $self->{_state} = 'closed' unless $connection->is_connected;
     return;
+}
+
+# Derive refusal progress before protocol operations; response_started alone
+# also includes a normal accept/start and must not identify a refusal.
+sub _refusal_started {
+    my ($self) = @_;
+    $self->_refresh_connection;
+    return $self->{_denied};
 }
 
 sub disconnect_detail {
@@ -390,7 +401,7 @@ async sub _trigger_error {
 # Accept the WebSocket connection
 async sub accept {
     my ($self, %opts) = @_;
-    return $self if $self->{_denied} || $self->connection_state eq 'closing';
+    return $self if $self->_refusal_started || $self->connection_state eq 'closing';
 
     croak 'WebSocket denial response is pending'
         if $self->{_state} eq 'denying';
@@ -412,7 +423,7 @@ async sub accept {
 sub close {
     my ($self, @args) = @_;
     return $self->_legacy_close(@args) unless $self->{scope}{'pagi.connection'};
-    return Future->done($self) if $self->{_denied};
+    return Future->done($self) if $self->_refusal_started;
     croak 'WebSocket denial response is pending' if $self->connection_state eq 'denying';
     return $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
         if $self->{_close_send};
@@ -464,75 +475,17 @@ async sub _legacy_close {
     return $self;
 }
 
-# Reject the handshake with a concrete ordinary HTTP Response. Valid only
+# Delegate the handshake refusal to a public PAGI application. Valid only
 # before accept.
 sub deny {
-    my ($self, @args) = @_;
-    croak 'WebSocket deny is only valid before accept while connecting' if $self->{_denied};
-    croak 'WebSocket denial response is pending'
-        if $self->{_state} eq 'denying';
-    croak 'WebSocket deny is only valid before accept while connecting'
-        unless $self->{_state} eq 'connecting';
-    croak 'WebSocket deny requires exactly one concrete PAGI::Response'
-        unless @args == 1 && blessed($args[0]) && $args[0]->isa('PAGI::Response');
-    my $response = $args[0];
-    $self->_require_connection_for_stream($response, 'WebSocket deny');
-
-    $self->{_state} = 'denying';
-    my $committed = 0;
-    my $send = $self->{send};
-    my $observing_send = async sub {
-        my ($event) = @_;
-        await Future->wrap($send->($event));
-        if (($event->{type} // '') eq 'http.response.start') {
-            $committed = 1;
-            $self->{_denied} = 1;
-            $self->{_state} = 'closed' unless $self->{scope}{'pagi.connection'};
-        }
-        return;
-    };
-    my $lifecycle = async sub {
-        my $completed = eval {
-            await Future->wrap($response->_emit(
-                $self->{scope}, $self->{receive}, $observing_send));
-            1;
-        };
-        my $error = $@ unless $completed;
-
-        if (!$committed) {
-            $self->{_state} = 'connecting'
-                if $self->{_state} eq 'denying';
-            die $error unless $completed;
-        }
-
-        await $self->_run_close_callbacks if $committed && !$self->{scope}{'pagi.connection'};
-        die $error unless $completed;
-        return $self;
-    }->();
-
-    $self->{_response_lifecycle} = $lifecycle;
-    $lifecycle->on_ready(sub {
-        my ($ready) = @_;
-        delete $self->{_response_lifecycle}
-            if $self->{_response_lifecycle}
-                && $self->{_response_lifecycle} == $ready;
-    });
-    return $lifecycle->without_cancel;
-}
-
-sub _require_connection_for_stream {
-    my ($self, $response, $op) = @_;
-    return if $response->is_buffered;
-    return if $self->{scope}{'pagi.connection'};
-    my $v = $self->{scope}{pagi}{spec_version} // '0.1';
-    croak "$op of a streaming Response requires pagi.connection (server reports spec_version $v; 0.6 needed)";
+    return PAGI::Utils::_Refusal::run_refusal(@_);
 }
 
 # Send text message
 async sub send_text {
     my ($self, $text) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->{send}->({
         type => 'websocket.send',
@@ -546,7 +499,7 @@ async sub send_text {
 async sub send_bytes {
     my ($self, $bytes) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->{send}->({
         type  => 'websocket.send',
@@ -560,7 +513,7 @@ async sub send_bytes {
 async sub send_json {
     my ($self, $data) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
+    croak "Cannot send on closed WebSocket" if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     my $json = JSON::MaybeXS::encode_json($data);
 
@@ -576,7 +529,7 @@ async sub send_json {
 
 async sub try_send_text {
     my ($self, $text) = @_;
-    return 0 if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->{send}->({
@@ -597,7 +550,7 @@ async sub try_send_text {
 
 async sub try_send_bytes {
     my ($self, $bytes) = @_;
-    return 0 if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->{send}->({
@@ -618,7 +571,7 @@ async sub try_send_bytes {
 
 async sub try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->{_denied} || $self->is_closed || $self->connection_state eq 'closing';
+    return 0 if $self->_refusal_started || $self->is_closed || $self->connection_state eq 'closing';
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
@@ -666,7 +619,7 @@ async sub send_json_if_connected {
 async sub receive {
     my ($self) = @_;
 
-    return undef if $self->is_closed || $self->{_denied};
+    return undef if $self->is_closed || $self->_refusal_started;
 
     while (1) {
         my $event = await $self->{receive}->();
@@ -831,7 +784,7 @@ async sub run {
 # Sends websocket.keepalive event to server - loop-agnostic, server handles timers
 async sub keepalive {
     my ($self, $interval, $timeout) = @_;
-    return $self if $self->is_closed || $self->{_denied} || $self->connection_state eq 'closing';
+    return $self if $self->is_closed || $self->_refusal_started || $self->connection_state eq 'closing';
 
     $interval //= 0;
 
@@ -1143,48 +1096,52 @@ propagate to the server without publishing a synthetic terminal outcome.
 =head2 deny
 
     use Future::AsyncAwait;
-    use PAGI::Auth qw(challenge bearer);
+    use PAGI::Response qw(text_response);
 
-    async sub denied_socket {
+    async sub unavailable {
         my ($ws) = @_;
-        my $failure = challenge(
-            challenges => [bearer(realm => 'private')],
-            as         => 'json',
-        );
-        return await $ws->deny($failure->response_for($ws));
+        return await $ws->deny(text_response('Unavailable', status => 503));
     }
 
-Rejects the WebSocket handshake with one concrete L<PAGI::Response> instead of
-accepting it. Valid only before C<accept>. The reserved C<denying> state
-lasts until the connection records a terminal outcome.
+    async sub unavailable_for_request {
+        my ($ws) = @_;
+        return await $ws->deny(sub {
+            my ($request) = @_;
+            return text_response('Unavailable: ' . $request->path, status => 503);
+        });
+    }
 
-C<response_for> synchronously creates a fresh, request-local Response from the
-deferred L<PAGI::Auth> outcome. It sends nothing and owns no connection state.
-C<deny> invokes the concrete Response on the original WebSocket scope. Its
-ordinary C<http.response.*> events, including File and trailer forms, go
-directly to the server with normal send backpressure. Successful
-C<http.response.start> settlement permanently owns the handshake response slot
-even while the body is pending or later fails. A non-buffered Response requires
-the Www 0.6 C<pagi.connection> object. Prefer a finite response: once a
-streaming refusal starts, the application is committed to finishing or
-aborting that HTTP response.
+Delegates the WebSocket handshake refusal to exactly one Request handler or
+instantiated application object with C<to_app>, before C<accept>. Concrete
+L<PAGI::Response> values, L<PAGI::Pages> applications, and custom application
+objects are accepted directly. A bare coderef receives exactly one
+L<PAGI::Request>; its immediate or Future-backed result must be an application
+object or native C<($scope, $receive, $send)> coderef. Use
+L<PAGI::Utils/as_app_object> to pass a native coderef directly.
 
-"Successful settlement" means the PAGI server validated and consumed the
-mapped start event and accepted it into outbound processing, or finished
-discarding it after the connection ended. It does not mean the client received
-it. While that send is pending, C<connection_state> is C<denying> and no other
-first event may claim the response slot. A genuine start-send failure releases
-the reservation and leaves the WebSocket connecting. At settlement, denial
-commits the response slot; a later body failure cannot reopen the handshake.
-The helper stays C<denying> until the connection ends. Cancelling the Future returned to the caller does not cancel a PAGI
-send or abandon the retained denial lifecycle and its cleanup.
+The application receives the original scope, receive, and send channels.
+The scope type stays unchanged. Applications own their protocol compatibility;
+this method neither inspects response contents nor substitutes a response for
+application errors. The current public C<pagi.connection> capabilities are
+required for every target, including buffered Responses. Missing capabilities
+fail before factories, handlers, or C<to_app> execute.
 
-A body send pending at disconnect resolves under the same PAGI 0.002007
-settlement rule rather than failing merely because the peer vanished. Disconnect cleanup
-therefore follows the connection's single C<on_end> notification, never an
-inferred send failure. Genuine validation and resource
-send failures still propagate. C<deny> never starts a live WebSocket receive
-loop or introduces reconnection behavior.
+Await the returned Future. Success resolves to this helper and means the
+application finished, not that the connection completed. Its C<denying> phase
+lasts until connection termination once a response has started. A settled
+attempt on a live connection with no response start permits sequential retry;
+after response start or termination another refusal fails. Application errors
+propagate, and only live, unstarted attempts restore the initial helper state.
+Applications must sequence answering operations; overlapping refusal and
+acceptance/start calls are unsupported.
+
+Cancelling the returned observer does not cancel the retained application work
+or server sends. Connection C<on_end> owns close callbacks, including
+asynchronous cleanup after application return.
+
+The sending environment requires WebSocket refusal status 300 or greater.
+Request metadata is available, but WebSocket Request body APIs reject access
+without consuming protocol events.
 
 See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 

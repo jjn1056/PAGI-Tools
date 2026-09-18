@@ -2,6 +2,8 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Future::AsyncAwait;
+use PAGI::Utils qw(as_app_object);
 use Scalar::Util qw(weaken);
 use PAGI::WebSocket;
 use PAGI::SSE;
@@ -172,12 +174,17 @@ for my $kind (qw(websocket sse)) {
         my @events;
         my $class = $kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE';
         my $h = $class->new({type => $kind, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
+            $conn->_mark_response_started if $_[0]{type} eq 'http.response.start';
             push @events, $_[0]{type};
             $_[0]{type} eq 'http.response.body' ? $body : Future->done;
         });
         my @calls;
         $h->on_close(sub {push @calls, [@_]});
-        my $response = text_response('denied', status => 403);
+        my $response = as_app_object(async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({type => 'http.response.start', status => 403, headers => []});
+            await $send->({type => 'http.response.body', body => 'refused', more => 1});
+        });
         my $f = $kind eq 'websocket' ? $h->deny($response) : $h->decline($response);
         is($h->connection_state, $kind eq 'websocket' ? 'denying' : 'declining', 'committed refusal body still in progress');
         ok(!$h->is_closed, 'refusal start is not terminal');
@@ -249,13 +256,18 @@ for my $case (
         my @events;
         my $class = $kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE';
         my $helper = $class->new({type => $kind, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
+            $conn->_mark_response_started if $_[0]{type} eq 'http.response.start';
             push @events, $_[0]{type};
             return $_[0]{type} eq 'http.response.body' ? $body : Future->done;
         });
         my ($cleanup, $errors) = (0, 0);
         $helper->on_close(sub {++$cleanup});
         $helper->on_error(sub {++$errors});
-        my $response = text_response('refused', status => 403);
+        my $response = as_app_object(async sub {
+            my ($scope, $receive, $send) = @_;
+            await $send->({type => 'http.response.start', status => 403, headers => []});
+            await $send->({type => 'http.response.body', body => 'refused', more => 1});
+        });
         my $refusal = $kind eq 'websocket' ? $helper->deny($response) : $helper->decline($response);
         ok(!$refusal->is_ready, 'committed refusal body is pending');
         if ($outcome eq 'throws') {

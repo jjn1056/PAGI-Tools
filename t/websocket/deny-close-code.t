@@ -4,6 +4,8 @@ use Test2::V0;
 use Future::AsyncAwait;
 use PAGI::WebSocket;
 use PAGI::Response::Text;
+use lib 't/lib';
+use PAGITest::RefusalHarness;
 
 # An ordinary HTTP denial sends a response, not a WebSocket
 # close frame, so there is no RFC6455 close code — close_code must be undef
@@ -12,12 +14,9 @@ use PAGI::Response::Text;
 sub recorder { my @e; my $s = sub { push @e, $_[0]; Future->done }; return ($s, \@e) }
 
 subtest 'deny() with denial-response support: closed, but no close code' => sub {
-    my ($send, $sent) = recorder();
-    my $scope = {
-        type => 'websocket', path => '/ws', headers => [],
-        extensions => {},
-    };
-    my $ws = PAGI::WebSocket->new($scope, sub { Future->done }, $send);
+    my $h = PAGITest::RefusalHarness->new('websocket');
+    my $ws = $h->{helper};
+    my $sent = $h->{events};
 
     $ws->deny(PAGI::Response::Text->new('Unauthorized', status => 401))->get;
 
