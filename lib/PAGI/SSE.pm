@@ -1242,8 +1242,9 @@ Applications must sequence answering operations; overlapping refusal and
 acceptance/start calls are unsupported.
 
 Cancelling the returned Future follows the invoked application's cancellation
-behavior. Buffered Responses protect submitted server sends but stop subsequent
-emission; Stream retains its own abort and cleanup behavior. Connection
+behavior; the helper does not keep abandoned application work running.
+Buffered Responses protect submitted server sends but stop subsequent
+emission, and Stream retains its own abort and cleanup behavior. Connection
 C<on_end> owns close callbacks, including asynchronous cleanup after application
 return.
 
@@ -1299,6 +1300,12 @@ stream that has ended, it joins the same cleanup completion.
     if ($sse->is_started) { ... }
     if ($sse->is_closed) { ... }
     my $state = $sse->connection_state;    # pending, started, closing, closed
+
+These are the complete protocol phase values. The former C<declining> phase is
+retired: invoking L</decline> does not mutate helper state. The initial
+C<pending> value describes SSE progress, not availability of the HTTP response
+slot; refusal admission also reads the public connection facts. After terminal
+notification, a declined helper is an ordinary closed helper.
 
 =head2 is_connected
 
@@ -1369,11 +1376,10 @@ JSON-encodes data before sending.
 
 Sends a full SSE event with all fields.
 
-C<send>, C<send_json>, and C<send_event> normally croak (C<"Cannot send on
-closed SSE connection">) if the connection is closed -- except after
-L</decline>, where they instead become safe no-ops (return C<$self> without
-sending anything), since a declined connection was never a stream to write
-to in the first place.
+C<send>, C<send_json>, and C<send_event> croak (C<"Cannot send on closed SSE
+connection">) after terminal notification, including after L</decline>. While
+a refusal response has started but the connection is still live, these methods
+return C<$self> without emitting an SSE start or data event.
 
 =head2 try_send, try_send_json, try_send_event
 

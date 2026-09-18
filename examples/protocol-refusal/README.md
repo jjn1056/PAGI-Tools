@@ -19,6 +19,12 @@ awaits one refusal and returns. The WebSocket responses use status 503; SSE
 also permits ordinary HTTP 200 and 204 declines when application policy calls
 for them.
 
+The returned refusal Future has ordinary application ownership: cancelling it
+follows the selected application's cancellation behavior, and the helper does
+not keep abandoned application work running. Built-in buffered Responses leave
+an already-submitted server send under server ownership while stopping later
+emission. Connection terminal notification drives helper cleanup separately.
+
 Run the example from the distribution root:
 
 ```sh

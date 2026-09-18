@@ -757,6 +757,14 @@ refusal target, including buffered Responses, requires the current public Www
 0.6 universal C<pagi.connection> contract so cancellation and terminal cleanup
 remain observable.
 
+Await the Future returned by C<deny>. Cancelling it follows the invoked
+application's normal behavior; the helper does not keep abandoned application
+work running. A buffered Response protects an already-submitted server send
+while stopping later emission. Connection terminal notification separately
+drives helper cleanup. C<connection_state> continues to report only
+C<connecting>, C<connected>, C<closing>, or C<closed>; it does not enter a
+temporary refusal phase.
+
 A bare coderef in this position receives one L<PAGI::Request>; application
 objects such as Pages can be passed directly. See
 L<PAGI::Tools::Cookbook/Refusing WebSocket and SSE with applications> for the
@@ -805,6 +813,10 @@ SSE accepts the same Request-handler and application-object forms as
 WebSocket. It may decline with ordinary HTTP 200 or 204 as well as error
 statuses; see
 L<PAGI::Tools::Cookbook/Refusing WebSocket and SSE with applications>.
+Await C<decline> under the same ordinary cancellation rules. Its
+C<connection_state> values remain C<pending>, C<started>, C<closing>, and
+C<closed>; there is no temporary decline phase. After terminal notification,
+normal closed-helper behavior applies to later data sends.
 
 =head1 PART 6: MIDDLEWARE
 

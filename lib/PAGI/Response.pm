@@ -98,7 +98,8 @@ A Response is not a terminal deployed root. C<to_app> produces a native
 application that emits ordinary HTTP response events. It accepts HTTP scopes
 and can emit a preaccept WebSocket refusal or prestart SSE refusal on the
 original protocol scope. Use L<PAGI::WebSocket/deny> or L<PAGI::SSE/decline>
-for controlled refusal with the helper owning protocol lifecycle.
+to validate refusal admission and invoke the Response on those original
+protocol channels.
 
 Place the Response at a Route when a routing root needs L<PAGI::Compose>
 lifespan, HEAD suppression, ErrorHandler, and incomplete-response policy;
@@ -128,10 +129,12 @@ receive, and remains available when code intentionally needs a concrete
 Response. L<PAGI::Utils/invoke_app>, L<PAGI::WebSocket/deny>, and
 L<PAGI::SSE/decline> convert application values through their public C<to_app>
 contract and invoke them with the original scope, receive, and send channels.
-The protocol helpers own admission, start commitment, disconnect,
-backpressure, and cleanup. A mapped start send resolves when the server accepts
-and owns the response slot (or finishes discarding it after disconnect), not
-when the client receives bytes.
+The protocol helpers validate admission and prevent their streaming protocol
+from starting after the response slot is claimed. The invoked application owns
+response emission, while connection terminal notification independently drives
+helper cleanup. A mapped start send resolves when the server accepts and owns
+the response slot (or finishes discarding it after disconnect), not when the
+client receives bytes.
 
 =head1 METHODS
 

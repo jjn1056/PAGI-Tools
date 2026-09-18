@@ -8,17 +8,27 @@
     applications, custom `to_app` objects, and explicitly wrapped native
     applications. The maintained protocol-refusal example executes all twelve
     WebSocket/SSE routes without requiring `response_for` materialization.
+  - BREAKING: `deny` and `decline` now await the selected application directly.
+    Cancelling their returned Future follows that application's normal
+    cancellation behavior; the helpers no longer retain abandoned refusal
+    work or expose temporary `denying`/`declining` states. Buffered Responses
+    keep already-submitted server sends uncancelled while stopping later
+    emission, and connection terminal notification continues to drive helper
+    cleanup independently.
 
   [Structured authentication outcomes]
   - NEW: PAGI::Auth builds injection-safe Basic, Bearer, and custom challenge
     metadata. `challenge` and `forbid` return reusable negotiated Pages
     applications for 401 and 403; repeated `WWW-Authenticate` challenges stay
     as separate field lines. `response_for` synchronously materializes a local
-    Response without sending, so WebSocket denial and SSE decline explicitly
-    retain protocol emission and lifecycle ownership. The apples canary shows
-    a missing-token outcome, while the cookie-login example labels interactive
-    redirects as application policy. Credential parsing, identity providers,
-    and a full multi-protocol authentication application remain Phase 2.
+    Response without sending. WebSocket denial and SSE decline invoke an Auth
+    outcome application directly on the original protocol channels; its
+    cancellation and emission follow ordinary application ownership, while
+    connection terminal notification separately drives helper cleanup. The
+    apples canary shows a missing-token outcome, while the cookie-login example
+    labels interactive redirects as application policy. Credential parsing,
+    identity providers, and a full multi-protocol authentication application
+    remain Phase 2.
 
   [Universal connection state (Www 0.6)]
   - WebSocket, SSE, and HTTP Test::Client scopes now carry the complete
@@ -30,11 +40,12 @@
     protocol-response bridge, response capability, namespaced denial events,
     and `websocket.http.response` extension are removed. `websocket.close`
     before acceptance is invalid; use `deny` for an HTTP refusal.
-  - WebSocket and SSE helpers retain terminal cleanup independently of caller
-    observers. Successful helper-handler return closes an accepted/started
-    protocol at Router and Endpoint boundaries; raw PAGI apps still owe the
-    protocol terminal event. Stream caller cancellation aborts through
-    `pagi.connection` while leaving server-owned send Futures uncancelled.
+  - Connection terminal notification drives WebSocket and SSE helper cleanup
+    independently of refusal callers. Successful helper-handler return closes
+    an accepted/started protocol at Router and Endpoint boundaries; raw PAGI
+    apps still owe the protocol terminal event. Stream caller cancellation
+    aborts through `pagi.connection` while leaving server-owned send Futures
+    uncancelled.
   - Lint uses the shared send validator for HTTP, WebSocket, and SSE and emits
     protocol-specific incomplete-response diagnostics, while accepting clean
     peer-first terminal connection facts.

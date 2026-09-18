@@ -1574,8 +1574,11 @@ refusal fails. Overlapping refusal and acceptance/start calls are unsupported.
 A bare coderef in C<deny> or C<decline> position is a one-C<Request> handler.
 If that handler returns a coderef, the returned value is a native triplet
 application. C<as_app_object> selects the native triplet meaning when passing a
-coderef directly. Async handlers own the service work they start and await;
-cancelling a refusal observer does not cancel that retained work.
+coderef directly. Await the Future returned by C<deny> or C<decline>.
+Cancellation follows the invoked application's normal behavior; the helper
+does not keep abandoned application work running. Built-in Responses protect
+server-owned sends, and connection terminal notification continues to drive
+helper cleanup.
 
 Every delegated application receives the original protocol scope, remaining
 receive stream, and original send channel. The scope remains C<websocket> or
@@ -1705,7 +1708,7 @@ make concealment explicit policy.
 =head2 WebSocket Authentication Denial
 
 B<WebSocket endpoint:> pass the negotiated Auth outcome application directly
-and let C<deny> retain WebSocket terminal ownership.
+and await C<deny>.
 
   use PAGI::Auth qw(challenge bearer);
 
@@ -1749,8 +1752,8 @@ B<SSE endpoint:> decline before starting the stream.
   });
 
 The negotiated 401 contains the structured Bearer C<WWW-Authenticate> field.
-C<decline> invokes the outcome application on the original SSE scope and owns
-SSE refusal cleanup.
+C<decline> invokes the outcome application on the original SSE scope. Connection
+terminal notification drives helper cleanup independently of that invocation.
 
 =head2 Invoke an Auth Outcome from a Native Application
 

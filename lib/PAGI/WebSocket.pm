@@ -1140,8 +1140,9 @@ Applications must sequence answering operations; overlapping refusal and
 acceptance/start calls are unsupported.
 
 Cancelling the returned Future follows the invoked application's cancellation
-behavior. Buffered Responses protect submitted server sends but stop subsequent
-emission; Stream retains its own abort and cleanup behavior. Connection
+behavior; the helper does not keep abandoned application work running.
+Buffered Responses protect submitted server sends but stop subsequent
+emission, and Stream retains its own abort and cleanup behavior. Connection
 C<on_end> owns close callbacks, including asynchronous cleanup after application
 return.
 
@@ -1163,6 +1164,11 @@ See L<PAGI::Spec::Www/"WebSocket Denial Response">.
     if ($ws->is_connected) { ... }
     if ($ws->is_closed) { ... }
     my $state = $ws->connection_state; # connecting, connected, closing, closed
+
+These are the complete protocol phase values. The former C<denying> phase is
+retired: invoking L</deny> does not mutate helper state. The initial
+C<connecting> value describes WebSocket progress, not availability of the HTTP
+response slot; refusal admission also reads the public connection facts.
 
 =head2 close_code, close_reason
 
