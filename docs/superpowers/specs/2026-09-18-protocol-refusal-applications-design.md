@@ -247,9 +247,11 @@ disconnect handling, and buffered-versus-streaming exclusivity.
 Body readers may select the proper native event family internally. This must
 not replace the receive channel supplied to a delegated native application.
 Maintain the distinction between an empty body and a disconnected partial body.
-Account for the spec-defined terminal receive behavior after a completed
-refusal, including its `http.disconnect` event; do not silently interpret an
-unrelated event as an empty body chunk.
+SSE body readers recognize `sse.disconnect`, including the reasonless event
+returned after a completed SSE refusal. After a completed WebSocket refusal,
+receive returns `http.disconnect`; WebSocket Request body APIs nevertheless
+reject access without consuming events. Do not silently interpret an unrelated
+event as an empty body chunk.
 
 On a WebSocket Request, every body-consuming API must fail clearly before
 consuming receive events or setting body-consumption/cache flags. A missing
