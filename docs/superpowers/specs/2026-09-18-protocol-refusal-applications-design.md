@@ -4,6 +4,13 @@ Date: 2026-09-18
 
 Status: **draft design for user review; not an implementation plan**.
 
+Follow-up authority (2026-09-18): the implementation of this design was completed
+and reviewed. The user subsequently approved
+[ordinary awaited refusal ownership](2026-09-18-protocol-refusal-ownership-simplification-design.md).
+That amendment supersedes the detached-worker, observer-cancellation, and
+temporary refusal-state requirements identified there. Other requirements below
+remain in force; this document preserves the earlier design discussion.
+
 ## 1. Objective and authority
 
 Change `PAGI::WebSocket->deny` and `PAGI::SSE->decline` to accept the same
