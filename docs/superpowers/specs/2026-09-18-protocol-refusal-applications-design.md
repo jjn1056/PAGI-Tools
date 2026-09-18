@@ -310,8 +310,7 @@ use their own private implementation methods inside their public `to_app` path.
 The protocol helper owns:
 
 - checking that a refusal can still begin;
-- reserving the operation before invoking user code;
-- preventing competing helper operations while that reservation is active;
+- owning the invoked asynchronous work until it settles;
 - protocol-specific bookkeeping such as deferred SSE keepalive removal;
 - delegating execution to shared machinery;
 - existing connection-driven close callbacks and cleanup ownership.
@@ -333,14 +332,14 @@ sent a successful refusal.
 
 ### 8.4 Shared implementation
 
-Centralize application adaptation, asynchronous ownership, and reservation
+Centralize application adaptation, asynchronous ownership, and operation
 settlement instead of duplicating the current lifecycle body in both helpers.
 A small internal coordinator is acceptable; no new public lifecycle framework
 or Response-specific interface is needed.
 
 The implementation plan should identify each piece of state and its owner.
-Avoid separate copies of connection facts. A local operation reservation is
-necessary while application code is running but has not sent a response.
+Avoid separate copies of connection facts. Retain the running operation for
+its lifetime; this does not require arbitration of conflicting helper calls.
 
 Do not introduce a configurable callback framework with many hooks just to
 factor two functions. Protocol-specific admission and keepalive decisions can
@@ -371,19 +370,27 @@ inside the shared coordinator or retain a buffered-Response exception.
 
 ## 10. Lifecycle contract
 
-### 10.1 Admission and reservation
+### 10.1 Admission and caller sequencing
 
 A refusal begins only before WebSocket acceptance or SSE start, with the
 connection still active and its response slot unclaimed. Validate the target's
 basic public shape and required connection capability before user execution.
 
-Reserve synchronously before constructing a Request, calling `to_app`, or
-invoking a handler: all may execute application code. A pending handler that has
-not yet returned a response still owns the local refusal reservation.
+Applications must sequence operations that answer the request and await the
+chosen operation. Overlapping acceptance/start and refusal, repeated concurrent
+refusals, and reentrant conflicting helper calls are unsupported; helpers need
+not detect or arbitrate them. There is no promised winner, early helper error,
+or recovery behavior. Existing inexpensive guards may reject misuse, but this
+work must not add pending-accept/start flags or a concurrency state machine to
+guarantee rejection in every ordering. This boundary was approved during the
+2026-09-18 review.
 
-Competing helper accept/start, data-send, close, or refusal operations must not
-emit a second first response. Pending-operation conflicts fail clearly.
-Explicitly audit helper methods that currently auto-accept or auto-start.
+Likewise, applications must not run competing receive consumers while delegating
+the original receive channel. Already-running readers are caller responsibility;
+do not add receive arbitration, cancellation, or event replay to manage them.
+
+Normal admission checks and ownership of the invoked work remain required.
+Operation retention supports asynchronous lifetime, not concurrent-call safety.
 
 Native application code is not placed behind a new event whitelist. It can
 misuse the protocol; the adapter neither certifies nor repairs it.
@@ -395,10 +402,11 @@ to maintain a separate `$committed` flag. The delegated app receives the origina
 send channel. Server processing sets response progress before a successful
 start-send continuation resumes.
 
-The operation remains reserved while the app runs. If the app finishes after a
-response has started but before terminal observation, helper state remains
-reserved/response-started until the connection ends. Close callbacks use the
-connection, not the app's return value.
+Retain the operation while the app runs. If it finishes after a response has
+started but before terminal observation, later sequential helper calls still
+observe the claimed response slot through the connection facts. App return
+does not reopen acceptance/start or refusal. Close callbacks use the connection,
+not the app's return value.
 
 If public connection semantics prove insufficient to implement this behavior,
 produce a focused failing case and stop for design review. Do not silently
@@ -408,7 +416,7 @@ reintroduce send interception or a second terminal state machine.
 
 | Facts when the application fails | Required behavior |
 | --- | --- |
-| Connection active; no response started | Propagate the original error; release the local reservation so the caller can deliberately recover |
+| Connection active; no response started | Propagate the original error; settle operation bookkeeping so the caller can deliberately recover |
 | Response started; connection still active | Propagate the error; never reopen acceptance/start or a second response |
 | Connection terminal | Propagate genuine application errors; never restore an initial helper state |
 
@@ -416,16 +424,15 @@ Failure during object normalization, Request construction, handler execution,
 or returned-app invocation follows the same rule. Do not catch errors merely
 to produce a replacement page after a response has started.
 
-SSE deferred keepalive survives a pre-start failure that releases the
-reservation. Once a response starts, it must not later arm a live SSE stream.
-All helper entry points must respect that reservation/progress, even while the
-application is awaiting further work.
+SSE deferred keepalive survives a pre-start failure. Once a response starts,
+it must not later arm a live SSE stream. Sequential helper entry points must
+respect the connection's progress; concurrent misuse has the boundary in 10.1.
 
 ### 10.4 Application returns without a response
 
 A structurally valid native app may return without sending anything. That is
 application responsibility. If the connection is still active and no response
-started, release the local reservation and return the helper without inventing
+started, settle operation bookkeeping and return the helper without inventing
 a refusal, clean completion, or replacement body. Normal outer server/app
 completion policy still applies if the whole request returns without a response.
 
@@ -440,7 +447,7 @@ body event, drain a custom producer, or mark it complete.
 
 Return a cancellation-isolated observer for the refusal operation. Cancelling
 that observer does not cancel the handler, native app, producer, or server-owned
-send Future and does not release the reservation. This preserves the existing
+send Future and does not release ownership of the work. This preserves the existing
 refusal cancellation ownership rule.
 
 Retain the operation independently until the invoked work settles, then release
@@ -455,15 +462,17 @@ and can observe the connection itself. Do not add a competing receive watcher.
 
 ### 10.6 Repeated calls
 
-Both methods use the same admission rule: reject another refusal while an
-operation is pending, after a response has started, or after the connection
-ends. Rejection does not invoke the target, emit events, or repeat cleanup.
+Both methods use the same sequential-call admission rule: reject another
+refusal after a response has started or after the connection ends. Rejection
+does not invoke the target, emit events, or repeat cleanup.
 There is no SSE-only idempotent success path after a completed refusal.
 
 A later attempt is allowed only when the previous operation has settled, the
 connection remains active, and no response has started, as described for
 pre-start failures and no-output returns above. Cancellation of an observer
 does not settle the owned operation or make a retry admissible.
+Calling again while work is pending is unsupported concurrency under 10.1,
+not a guaranteed helper rejection.
 
 Validate argument shape consistently in both methods. Replace tests of the old
 settled-call distinction with tests of this shared contract.
@@ -498,7 +507,7 @@ The redesign removes:
 
 It retains the complexity that has a separate purpose:
 
-- local reservation before response start;
+- ownership of pending application work, including before response start;
 - asynchronous operation ownership;
 - recovery only before the response slot has been claimed;
 - connection-authoritative terminal state and once-only cleanup;
@@ -578,11 +587,10 @@ regression proving the private interface is not invoked by refusal helpers.
 - Unsupported execution and materialization scopes fail clearly without
   coercing their type to HTTP.
 
-### 14.3 Reservation and lifetime
+### 14.3 Operation lifetime and sequential recovery
 
-- Refusal is reserved while an async handler is pending before its first send.
-- Reentrant target normalization cannot start a competing helper operation.
-- Before-start failure on a live connection releases the reservation and
+- Async handler work remains owned while pending before its first send.
+- Before-start failure on a live connection permits sequential recovery and
   preserves pending SSE keepalive.
 - Failure after response start or connection end never restores the initial
   protocol state.
@@ -594,8 +602,10 @@ regression proving the private interface is not invoked by refusal helpers.
   delegation behavior; no fabricated terminal response is added.
 - Missing/invalid connection capability fails for every target form, before
   handler or app execution.
-- Both helpers reject repeated refusal while pending, after response start,
-  and after termination; only settled, live, pre-start attempts permit retry.
+- Both helpers reject sequential repeated refusal after response start and
+  after termination; only settled, live, pre-start attempts permit retry.
+- Tests do not require detection or arbitration of unsupported overlapping
+  helper operations or competing receive consumers.
 
 ### 14.4 Public protocol and integration proof
 
@@ -651,7 +661,7 @@ not merely design illustrations. The documentation for both `deny` and
 2. A synchronous one-Request handler building a response from request metadata,
    including reuse of the same handler in either protocol endpoint.
 3. An async one-Request handler awaiting an application-owned service before
-   returning its response; describe the reservation while that work is pending.
+   returning its response; explain awaiting the operation and its work ownership.
 4. A Pages application passed directly and returned by a handler, explaining
    content negotiation without requiring `response_for`.
 5. A custom application object implementing `to_app` without toolkit inheritance,
