@@ -199,18 +199,24 @@ The methods may also be called on the class, which creates a default instance.
 They do not cache applications or mutate identities, scopes, challenges, Pages
 instances, or caller data.
 
-=head1 MATERIALIZATION
+=head1 APPLICATION USE AND MATERIALIZATION
 
-The returned L<PAGI::Pages::Application> can be invoked repeatedly. Its
-C<response_for> method synchronously creates a concrete local
-L<PAGI::Response> for a Request, WebSocket, SSE, or raw scope hash. It sends no
-events. The protocol helper remains responsible for emission:
+The returned L<PAGI::Pages::Application> can be invoked repeatedly or passed
+directly to a protocol refusal helper:
 
   my $failure = $auth->challenge(
       challenges => [PAGI::Auth::bearer(realm => 'events')],
       as => 'text',
   );
-  return await $sse->decline($failure->response_for($sse));
+  await $sse->decline($failure);
+  return;
+
+C<decline> converts the application through its public C<to_app> contract and
+invokes it with the original SSE scope, receive, and send channels. The same
+rule applies to WebSocket C<deny>. The optional C<response_for> method
+synchronously creates a concrete local L<PAGI::Response> for a Request,
+WebSocket, SSE, or raw scope hash when code intentionally needs one. It sends
+no events.
 
 =head1 SEE ALSO
 

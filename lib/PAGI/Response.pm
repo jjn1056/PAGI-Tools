@@ -106,9 +106,8 @@ Compose itself accepts only structural C<routes>, not a Response. Invoking a
 Response app with lifespan or an unsupported scope type croaks before sending.
 That is an application failure, not a guaranteed denial wire response.
 
-A deferred L<PAGI::Auth> outcome stays an ordinary application value at an
-HTTP boundary. At a WebSocket or SSE boundary, materialize it explicitly and
-then hand the concrete Response to the protocol owner:
+A deferred L<PAGI::Auth> outcome stays an ordinary application value at every
+supported boundary. Pass it directly to the protocol owner:
 
     use Future::AsyncAwait;
     use PAGI::Auth qw(challenge bearer);
@@ -120,14 +119,16 @@ then hand the concrete Response to the protocol owner:
 
     async sub denied_socket {
         my ($ws) = @_;
-        my $response = $failure->response_for($ws); # sends nothing
-        return await $ws->deny($response);
+        await $ws->deny($failure);
+        return;
     }
 
 C<response_for> creates only fresh local Response state; it performs no send or
-receive. L<PAGI::Utils/invoke_app> owns HTTP emission, while
-L<PAGI::WebSocket/deny> and L<PAGI::SSE/decline> emit it directly on the
-original scope and own their sends, start commitment, disconnect,
+receive, and remains available when code intentionally needs a concrete
+Response. L<PAGI::Utils/invoke_app>, L<PAGI::WebSocket/deny>, and
+L<PAGI::SSE/decline> convert application values through their public C<to_app>
+contract and invoke them with the original scope, receive, and send channels.
+The protocol helpers own admission, start commitment, disconnect,
 backpressure, and cleanup. A mapped start send resolves when the server accepts
 and owns the response slot (or finishes discarding it after disconnect), not
 when the client receives bytes.
