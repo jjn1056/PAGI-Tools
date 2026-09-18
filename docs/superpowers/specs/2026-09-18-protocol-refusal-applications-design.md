@@ -214,6 +214,14 @@ Headers, query parameters, routing parameters, application state, and the
 standalone helpers remain available according to data actually in the scope.
 The design does not add auth-specific properties.
 
+Request, WebSocket, and SSE use `PAGI::Headers` for their shared
+`pagi.request.headers` cache. Their `headers` methods expose that container;
+`header` and `header_all` use its case-insensitive lookup behavior and preserve
+repeated values regardless of which helper accesses the headers first. Replace
+the protocol helpers' `Hash::MultiValue` header containers; do not add a legacy
+container adapter or separate header caches. This does not change query/form
+parameter containers. This choice was approved during the 2026-09-18 review.
+
 Do not fabricate a WebSocket method: preserve `method` if supplied and otherwise
 return `undef`. In particular, do not guess GET for HTTP/2 extended CONNECT.
 Method predicates must remain safe when method is absent. Preserve `ws`/`wss`
@@ -553,6 +561,9 @@ regression proving the private interface is not invoked by refusal helpers.
 ### 14.2 Request and Pages
 
 - Ordinary HTTP Request metadata and body semantics remain correct.
+- Request and each protocol helper share a `PAGI::Headers` header cache in both
+  access orders. Test mixed-case names, repeated values, and consistent public
+  container type; update affected header documentation and examples.
 - WebSocket metadata works with absent method and with ws/wss schemes; body APIs
   fail before receive, including streaming constructors and cached fast paths.
 - SSE buffered, chunked, JSON, form, and streaming/multipart input use actual
