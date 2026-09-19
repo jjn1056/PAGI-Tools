@@ -95,9 +95,17 @@ lifespan mode may treat that exception as a decline; strict mode rejects it.
 
 =head2 to_app
 
-Returns a native HTTP, WebSocket, or SSE application coderef that uses the same
-response materialization path as C<response_for>. The application can be passed
-directly to L<PAGI::WebSocket/deny> or L<PAGI::SSE/decline>; explicit
+  my $native = $page->to_app();
+
+Returns a native application coderef. Each call
+C<< $native-E<gt>($scope, $receive, $send) >> validates an HTTP, WebSocket, or
+SSE scope, immediately materializes a fresh concrete L<PAGI::Response>, invokes
+it through L<PAGI::Utils/invoke_app>, and returns a Future for that invocation.
+The coderef uses the same materialization path as C<response_for>.
+
+The C<PAGI::Pages::Application> itself already implements C<to_app>, so callers
+may pass C<$page> directly to ordinary application positions,
+L<PAGI::WebSocket/deny>, or L<PAGI::SSE/decline>. Explicit conversion or
 materialization is not required.
 
 =head2 response_for
@@ -106,21 +114,29 @@ materialization is not required.
   my $response = $page->response_for($websocket);
   my $response = $page->response_for($sse);
   my $response = $page->response_for($scope_hash);
+  my $response = $page->response_for($object_with_scope_method);
 
-Synchronously materializes one concrete L<PAGI::Response> using metadata from
-a Request, WebSocket, SSE, or raw scope hash. It accepts HTTP, WebSocket, and
-SSE scopes; lifespan and custom scope types are rejected. It does not call
-C<receive> or C<send>, emit events, or own protocol lifecycle. This method is
-available when code intentionally needs the concrete Response. For ordinary
-protocol refusal, pass the Pages application itself to the appropriate
-helper's C<deny> or C<decline>.
+C<response_for($source)> synchronously and immediately returns one concrete
+L<PAGI::Response>. It requires exactly one source: an unblessed scope hashref,
+or any blessed object whose C<scope()> method returns an unblessed scope
+hashref. This includes L<PAGI::Request>, L<PAGI::WebSocket>, and L<PAGI::SSE>
+without limiting the contract to those classes.
+
+The resulting scope type must be C<http>, C<websocket>, or C<sse>. Lifespan,
+custom, missing, and reference-valued types croak before descriptor creation or
+rendering. Extra arguments are not materialization options and are rejected.
+C<response_for> does not call C<receive> or C<send>, emit events, or own
+protocol lifecycle. For ordinary protocol refusal, pass the Pages application
+itself to the appropriate helper's C<deny> or C<decline>.
 
 Materialization does not mutate the application, descriptor, source object,
 or scope hash. Repeated and concurrent calls derive fresh response values.
+Negotiation, preserved redirect query validation, the 426 HTTP/1.1 rule, and
+presentation-hook validation occur during this call and can croak. A renderer
+or descriptor factory must return an immediate value rather than a Future.
 
 =head1 SEE ALSO
 
-L<PAGI::Pages>, L<PAGI::Auth>, L<PAGI::Response>, L<PAGI::WebSocket>,
-L<PAGI::SSE>
+L<PAGI::Pages>, L<PAGI::Response>, L<PAGI::WebSocket>, L<PAGI::SSE>
 
 =cut

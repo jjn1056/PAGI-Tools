@@ -1126,7 +1126,8 @@ then invokes it through the common application path.
 C<ref($response)> during rendering identifies the concrete representation
 selected by policy; Pages does not hide it behind a generic mutable Response.
 
-The returned class identifies the selected representation:
+Materialization returns a concrete Response whose class identifies the selected
+representation:
 
 =over 4
 
@@ -1145,19 +1146,39 @@ The returned class identifies the selected representation:
 The concrete class owns encoding and Content-Length. Pages does not duplicate
 either operation.
 
-=head1 CONSTRUCTION
+=head1 API REFERENCE
+
+=head2 new
 
     my $pages = PAGI::Pages->new(
         as      => 'auto', # auto, html, json, or text
         default => 'html', # html, json, or text
     );
 
-C<as> defaults to C<auto>. C<default> defaults to C<html> and is used only by
-automatic negotiation. Instances contain request-independent policy and can be
-reused concurrently. A class method call constructs a fresh default policy
-instance of the invoked class.
+C<new(%options)> is a class method and returns a reusable, request-independent
+policy object. It accepts a flat key/value list with these options:
 
-=head1 APPLICATION INVOCATION
+=over 4
+
+=item * C<as>
+
+C<auto>, C<html>, C<json>, or C<text>; defaults to C<auto>. A factory's
+per-call C<as> overrides this value for that application.
+
+=item * C<default>
+
+C<html>, C<json>, or C<text>; defaults to C<html>. It is used only when
+C<as> is C<auto> and negotiation has no preferred supported representation.
+C<default> is constructor-only and is not accepted by factories.
+
+=back
+
+Unknown options, odd option lists, and invalid values croak. Instances can be
+reused concurrently. A class factory call constructs a fresh default policy
+instance of the invoked class, so a subclass class call retains that subclass's
+hooks. A configured-instance call retains the exact object and its policy.
+
+=head2 APPLICATION INVOCATION
 
 Every page method and exported function returns a deferred application. On an
 HTTP, WebSocket, or SSE invocation it derives negotiation metadata from the
@@ -1178,7 +1199,7 @@ continues without sending later lifespan events; strict mode rejects startup.
 Use L<PAGI::Compose> when the root needs lifecycle hooks, root safety, or final
 HEAD policy.
 
-=head1 EXPORTED FACTORIES
+=head2 IMPORTS
 
 Nothing exports by default. Import only the source-free factories needed by a
 package:
@@ -1187,9 +1208,10 @@ package:
         welcome status redirect not_found
     );
 
-C<welcome>, C<status>, and C<redirect> are the generic functions. Every
-checked-in named status method has a matching function. Each delegates to the
-same base-class factory with the same options.
+C<welcome>, C<status>, and C<redirect> are the generic functions. Every named
+error method documented below has a matching function. An imported function
+uses a fresh default C<PAGI::Pages> policy; it does not capture a configured
+instance or a caller package's subclass.
 
 The C<:common> tag exports exactly:
 
@@ -1202,53 +1224,793 @@ import those individually when wanted. C<:all> includes every opt-in factory.
 An explicit import still can replace a same-named local function, so qualified
 class or configured-instance calls are the collision-free shared-package form.
 
+The five named redirect helpers are methods only. C<moved_permanently>,
+C<found>, C<see_other>, C<temporary_redirect>, and C<permanent_redirect> are
+not in C<@EXPORT_OK> or C<:all>.
+
 Exported functions return app objects that can be placed directly:
 
     route('/missing' => not_found());
     mount('/missing', app => not_found());
 
-=head1 METHODS
+=head2 FACTORY REFERENCE
 
-=head2 welcome
+Every factory below immediately returns a deferred
+L<PAGI::Pages::Application>. It takes no Request or scope argument. Rendering,
+negotiation, and concrete Response construction happen when that application
+is invoked or when L<PAGI::Pages::Application/response_for> is called.
 
-    my $application = PAGI::Pages->welcome(%options);
+=head3 welcome
 
-Builds the stock Welcome page. It accepts C<as>, C<headers>, and
-C<cache_control>.
+    use PAGI::Pages qw(welcome);
+    my $page = welcome(%options);
+    my $class_page = PAGI::Pages->welcome(%options);
+    my $configured_page = $pages->welcome(%options);
 
-=head2 status
+Returns a deferred 200 Welcome application. C<%options> is a flat key/value
+list accepting exactly C<as>, C<headers>, and C<cache_control>; see
+L</"WELCOME OPTIONS"> for shapes and defaults. The configured form retains
+C<$pages>; a per-call C<as> overrides its policy selection. The stock page is
+titled "Welcome to PAGI", describes PAGI's HTTP, WebSocket, and Server-Sent
+Events role, and links to L<https://metacpan.org/pod/PAGI>.
 
-    my $application = PAGI::Pages->status($code, %options);
+=head3 status
 
-Builds an error response for an integer status from 400 through 599.
-Registered codes use the checked-in catalog. An unregistered code requires
-C<type>, C<title>, and C<detail>.
+    use PAGI::Pages qw(status);
+    my $page = status($code, %options);
+    my $class_page = PAGI::Pages->status($code, %options);
+    my $configured_page = $pages->status($code, %options);
 
-=head2 named error methods
+C<$code> is an integer from 400 through 599. The result is a deferred error
+application with that status. Registered codes use the same stock title and
+detail as their named factory. An unregistered code requires C<type>, C<title>,
+and C<detail>. C<%options> accepts the common error options and only the
+status-specific options applicable to C<$code>; see L</"ERROR OPTIONS"> and
+L</"STATUS-SPECIFIC ERROR OPTIONS">. A custom C<type> is an absolute URI other
+than C<about:blank>. Factory-time validation rejects an unsupported code,
+missing custom fields, or an option invalid for the selected status.
 
-Every catalog entry is installed as an ordinary method, including
-C<bad_request>, C<unauthorized>, C<forbidden>, C<not_found>,
-C<method_not_allowed>, C<conflict>, C<too_many_requests>,
-C<internal_server_error>, C<bad_gateway>, and C<service_unavailable>.
-The complete method set follows the checked-in IANA-derived catalog; 418 is
-unused and 510 obsolete, so neither has a named method.
+=head3 redirect
 
-=head2 redirect
+    use PAGI::Pages qw(redirect);
+    my $page = redirect($target, %options);
+    my $class_page = PAGI::Pages->redirect($target, %options);
+    my $configured_page = $pages->redirect($target, %options);
 
-    my $application = PAGI::Pages->redirect(
-        '/new',
-        status         => 308,
-        preserve_query => 1,
+Returns a deferred redirect application. C<$target> is a required ASCII
+URI-reference scalar. C<%options> is a flat key/value list accepting exactly
+C<as>, C<status>, C<detail>, C<headers>, C<cache_control>, C<preserve_query>,
+and C<retry_after>; see L</"REDIRECT OPTIONS">. C<status> defaults to 302 and
+must be 301, 302, 303, 307, or 308. The configured form retains C<$pages>; a
+per-call C<as> overrides its policy selection.
+
+=head2 NAMED ERROR FACTORIES
+
+Each named error supports the exported, class, and configured-instance forms
+shown in its entry. Each returns a deferred application and takes only a flat
+option list, never a Request or scope. Unless an entry says otherwise, its
+complete option set is C<as>, C<detail>, C<type>, C<title>, C<instance>,
+C<extensions>, C<headers>, and C<cache_control>. The stock detail shown is the
+default. All errors default to C<type =E<gt> 'about:blank'> and
+C<cache_control =E<gt> 'no-store'>; C<instance> is omitted and C<extensions>
+is empty. Supplying a custom C<type> and C<title> requires both. See
+L</"ERROR OPTIONS"> for value shapes and shared constraints.
+
+=head3 bad_request
+
+    use PAGI::Pages qw(bad_request);
+    my $page = bad_request(%options);
+    my $class_page = PAGI::Pages->bad_request(%options);
+    my $configured_page = $pages->bad_request(%options);
+
+Returns a deferred 400 C<Bad Request> application. The stock detail is
+"The server could not understand the request." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 unauthorized
+
+    use PAGI::Pages qw(unauthorized);
+    my $page = unauthorized(challenge => 'Bearer realm="api"', %options);
+    my $class_page = PAGI::Pages->unauthorized(challenge => 'Bearer realm="api"', %options);
+    my $configured_page = $pages->unauthorized(challenge => 'Bearer realm="api"', %options);
+
+Returns a deferred 401 C<Unauthorized> application. The stock detail is
+"Authentication is required to access this resource." In addition to the
+common options in L</"ERROR OPTIONS">, it accepts C<challenge>, which is
+required unless C<headers> supplies at least one nonempty
+C<WWW-Authenticate> field. See L</"STATUS-SPECIFIC ERROR OPTIONS">.
+
+=head3 payment_required
+
+    use PAGI::Pages qw(payment_required);
+    my $page = payment_required(%options);
+    my $class_page = PAGI::Pages->payment_required(%options);
+    my $configured_page = $pages->payment_required(%options);
+
+Returns a deferred 402 C<Payment Required> application. The stock detail is
+"Payment is required to access this resource." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 forbidden
+
+    use PAGI::Pages qw(forbidden);
+    my $page = forbidden(%options);
+    my $class_page = PAGI::Pages->forbidden(%options);
+    my $configured_page = $pages->forbidden(%options);
+
+Returns a deferred 403 C<Forbidden> application. The stock detail is "You do
+not have permission to access this resource." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 not_found
+
+    use PAGI::Pages qw(not_found);
+    my $page = not_found(detail => 'No matching record');
+    my $class_page = PAGI::Pages->not_found(detail => 'No matching record');
+
+    my $pages = PAGI::Pages->new(as => 'auto', default => 'text');
+    my $configured_page = $pages->not_found(detail => 'No matching record');
+
+All three forms return a deferred 404 C<Not Found> application. Options are a
+flat key/value list; no Request or scope is a factory argument. The complete
+option set is C<as>, C<detail>, C<type>, C<title>, C<instance>, C<extensions>,
+C<headers>, and C<cache_control>. The stock detail is "The requested resource
+was not found." C<type> defaults to C<about:blank>, C<cache_control> defaults
+to C<no-store>, and a custom C<type>/C<title> override must supply both. The
+configured form retains C<$pages>; its default representation is text when
+automatic negotiation has no preference, and a per-call C<as> overrides the
+policy selection. See L</"ERROR OPTIONS"> for complete shapes and constraints.
+
+=head3 method_not_allowed
+
+    use PAGI::Pages qw(method_not_allowed);
+    my $page = method_not_allowed(allow => [qw(GET HEAD)], %options);
+    my $class_page = PAGI::Pages->method_not_allowed(allow => [qw(GET HEAD)], %options);
+    my $configured_page = $pages->method_not_allowed(allow => [qw(GET HEAD)], %options);
+
+Returns a deferred 405 C<Method Not Allowed> application. The stock detail is
+"The request method is not allowed for this resource." In addition to the
+common options in L</"ERROR OPTIONS">, it accepts C<allow>, which is required
+unless C<headers> supplies C<Allow>. See
+L</"STATUS-SPECIFIC ERROR OPTIONS">.
+
+=head3 not_acceptable
+
+    use PAGI::Pages qw(not_acceptable);
+    my $page = not_acceptable(%options);
+    my $class_page = PAGI::Pages->not_acceptable(%options);
+    my $configured_page = $pages->not_acceptable(%options);
+
+Returns a deferred 406 C<Not Acceptable> application. The stock detail is
+"The requested response representation is not available." It accepts the
+common error option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 proxy_authentication_required
+
+    use PAGI::Pages qw(proxy_authentication_required);
+    my $page = proxy_authentication_required(challenge => 'Basic realm="proxy"', %options);
+    my $class_page = PAGI::Pages->proxy_authentication_required(
+        challenge => 'Basic realm="proxy"', %options,
+    );
+    my $configured_page = $pages->proxy_authentication_required(
+        challenge => 'Basic realm="proxy"', %options,
     );
 
-Redirect status is one of 301, 302, 303, 307, or 308. Named methods
-C<moved_permanently>, C<found>, C<see_other>, C<temporary_redirect>, and
-C<permanent_redirect> fix the corresponding status and reject a C<status>
-option.
+Returns a deferred 407 C<Proxy Authentication Required> application. The stock
+detail is "Proxy authentication is required to access this resource." In
+addition to the common options in L</"ERROR OPTIONS">, it accepts
+C<challenge>, which is required unless C<headers> supplies at least one
+nonempty C<Proxy-Authenticate> field. See
+L</"STATUS-SPECIFIC ERROR OPTIONS">.
 
-C<preserve_query> appends the original raw query before the first fragment
-without decoding or re-encoding it. The target, query, Location field, and
-rendered body are validated and use one final URI-reference.
+=head3 request_timeout
+
+    use PAGI::Pages qw(request_timeout);
+    my $page = request_timeout(%options);
+    my $class_page = PAGI::Pages->request_timeout(%options);
+    my $configured_page = $pages->request_timeout(%options);
+
+Returns a deferred 408 C<Request Timeout> application. The stock detail is
+"The server timed out waiting for the request." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 conflict
+
+    use PAGI::Pages qw(conflict);
+    my $page = conflict(%options);
+    my $class_page = PAGI::Pages->conflict(%options);
+    my $configured_page = $pages->conflict(%options);
+
+Returns a deferred 409 C<Conflict> application. The stock detail is "The
+request conflicts with the current state of the resource." It accepts the
+common error option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 gone
+
+    use PAGI::Pages qw(gone);
+    my $page = gone(%options);
+    my $class_page = PAGI::Pages->gone(%options);
+    my $configured_page = $pages->gone(%options);
+
+Returns a deferred 410 C<Gone> application. The stock detail is "The requested
+resource is no longer available." It accepts the common error option set and
+defaults described in L</"ERROR OPTIONS">.
+
+=head3 length_required
+
+    use PAGI::Pages qw(length_required);
+    my $page = length_required(%options);
+    my $class_page = PAGI::Pages->length_required(%options);
+    my $configured_page = $pages->length_required(%options);
+
+Returns a deferred 411 C<Length Required> application. The stock detail is
+"The request must include a Content-Length header." It accepts the common
+error option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 precondition_failed
+
+    use PAGI::Pages qw(precondition_failed);
+    my $page = precondition_failed(%options);
+    my $class_page = PAGI::Pages->precondition_failed(%options);
+    my $configured_page = $pages->precondition_failed(%options);
+
+Returns a deferred 412 C<Precondition Failed> application. The stock detail is
+"A precondition for this request was not met." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 content_too_large
+
+    use PAGI::Pages qw(content_too_large);
+    my $page = content_too_large(retry_after => 60, %options);
+    my $class_page = PAGI::Pages->content_too_large(retry_after => 60, %options);
+    my $configured_page = $pages->content_too_large(retry_after => 60, %options);
+
+Returns a deferred 413 C<Content Too Large> application. The stock detail is
+"The request content is too large for the server to process." In addition to
+the common options in L</"ERROR OPTIONS">, it accepts optional C<retry_after>;
+see L</"STATUS-SPECIFIC ERROR OPTIONS">.
+
+=head3 uri_too_long
+
+    use PAGI::Pages qw(uri_too_long);
+    my $page = uri_too_long(%options);
+    my $class_page = PAGI::Pages->uri_too_long(%options);
+    my $configured_page = $pages->uri_too_long(%options);
+
+Returns a deferred 414 C<URI Too Long> application. The stock detail is "The
+request URI is too long for the server to process." It accepts the common
+error option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 unsupported_media_type
+
+    use PAGI::Pages qw(unsupported_media_type);
+    my $page = unsupported_media_type(%options);
+    my $class_page = PAGI::Pages->unsupported_media_type(%options);
+    my $configured_page = $pages->unsupported_media_type(%options);
+
+Returns a deferred 415 C<Unsupported Media Type> application. The stock detail
+is "The request content type is not supported." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 range_not_satisfiable
+
+    use PAGI::Pages qw(range_not_satisfiable);
+    my $page = range_not_satisfiable(length => 1048576, %options);
+    my $class_page = PAGI::Pages->range_not_satisfiable(length => 1048576, %options);
+    my $configured_page = $pages->range_not_satisfiable(length => 1048576, %options);
+
+Returns a deferred 416 C<Range Not Satisfiable> application. The stock detail
+is "The requested range cannot be satisfied." In addition to the common error
+options in L</"ERROR OPTIONS">, it accepts optional C<length>; see
+L</"STATUS-SPECIFIC ERROR OPTIONS">.
+
+=head3 expectation_failed
+
+    use PAGI::Pages qw(expectation_failed);
+    my $page = expectation_failed(%options);
+    my $class_page = PAGI::Pages->expectation_failed(%options);
+    my $configured_page = $pages->expectation_failed(%options);
+
+Returns a deferred 417 C<Expectation Failed> application. The stock detail is
+"The server cannot meet the request expectation." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 misdirected_request
+
+    use PAGI::Pages qw(misdirected_request);
+    my $page = misdirected_request(%options);
+    my $class_page = PAGI::Pages->misdirected_request(%options);
+    my $configured_page = $pages->misdirected_request(%options);
+
+Returns a deferred 421 C<Misdirected Request> application. The stock detail is
+"The request was sent to a server that cannot respond for this authority." It
+accepts the common error option set and defaults described in
+L</"ERROR OPTIONS">.
+
+=head3 unprocessable_content
+
+    use PAGI::Pages qw(unprocessable_content);
+    my $page = unprocessable_content(%options);
+    my $class_page = PAGI::Pages->unprocessable_content(%options);
+    my $configured_page = $pages->unprocessable_content(%options);
+
+Returns a deferred 422 C<Unprocessable Content> application. The stock detail
+is "The request content could not be processed." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 locked
+
+    use PAGI::Pages qw(locked);
+    my $page = locked(%options);
+    my $class_page = PAGI::Pages->locked(%options);
+    my $configured_page = $pages->locked(%options);
+
+Returns a deferred 423 C<Locked> application. The stock detail is "The
+requested resource is locked." It accepts the common error option set and
+defaults described in L</"ERROR OPTIONS">.
+
+=head3 failed_dependency
+
+    use PAGI::Pages qw(failed_dependency);
+    my $page = failed_dependency(%options);
+    my $class_page = PAGI::Pages->failed_dependency(%options);
+    my $configured_page = $pages->failed_dependency(%options);
+
+Returns a deferred 424 C<Failed Dependency> application. The stock detail is
+"The request failed because a required operation failed." It accepts the
+common error option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 too_early
+
+    use PAGI::Pages qw(too_early);
+    my $page = too_early(%options);
+    my $class_page = PAGI::Pages->too_early(%options);
+    my $configured_page = $pages->too_early(%options);
+
+Returns a deferred 425 C<Too Early> application. The stock detail is "The
+server is unwilling to process this request yet." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 upgrade_required
+
+    use PAGI::Pages qw(upgrade_required);
+    my $page = upgrade_required(upgrade => 'websocket', %options);
+    my $class_page = PAGI::Pages->upgrade_required(upgrade => 'websocket', %options);
+    my $configured_page = $pages->upgrade_required(upgrade => 'websocket', %options);
+
+Returns a deferred 426 C<Upgrade Required> application. The stock detail is
+"The client must use a different protocol for this resource." In addition to
+the common options in L</"ERROR OPTIONS">, it accepts C<upgrade>, which is
+required unless C<headers> supplies C<Upgrade>. Materialization
+requires HTTP/1.1; the PAGI server supplies the companion
+C<Connection: upgrade> field. See L</"STATUS-SPECIFIC ERROR OPTIONS">.
+
+=head3 precondition_required
+
+    use PAGI::Pages qw(precondition_required);
+    my $page = precondition_required(%options);
+    my $class_page = PAGI::Pages->precondition_required(%options);
+    my $configured_page = $pages->precondition_required(%options);
+
+Returns a deferred 428 C<Precondition Required> application. The stock detail
+is "The request must include a precondition." It accepts the common error
+option set, but its cache policy cannot be weakened from C<no-store>; see
+L</"ERROR OPTIONS">.
+
+=head3 too_many_requests
+
+    use PAGI::Pages qw(too_many_requests);
+    my $page = too_many_requests(retry_after => 60, %options);
+    my $class_page = PAGI::Pages->too_many_requests(retry_after => 60, %options);
+    my $configured_page = $pages->too_many_requests(retry_after => 60, %options);
+
+Returns a deferred 429 C<Too Many Requests> application. The stock detail is
+"Too many requests have been received in a short time." In addition to the
+common options in L</"ERROR OPTIONS">, it accepts optional C<retry_after>. Its
+cache policy cannot be weakened from C<no-store>. See
+L</"STATUS-SPECIFIC ERROR OPTIONS">.
+
+=head3 request_header_fields_too_large
+
+    use PAGI::Pages qw(request_header_fields_too_large);
+    my $page = request_header_fields_too_large(%options);
+    my $class_page = PAGI::Pages->request_header_fields_too_large(%options);
+    my $configured_page = $pages->request_header_fields_too_large(%options);
+
+Returns a deferred 431 C<Request Header Fields Too Large> application. The
+stock detail is "The request header fields are too large." It accepts the
+common error option set, but its cache policy cannot be weakened from
+C<no-store>; see L</"ERROR OPTIONS">.
+
+=head3 unavailable_for_legal_reasons
+
+    use PAGI::Pages qw(unavailable_for_legal_reasons);
+    my $page = unavailable_for_legal_reasons(blocked_by => '/authority', %options);
+    my $class_page = PAGI::Pages->unavailable_for_legal_reasons(
+        blocked_by => '/authority', %options,
+    );
+    my $configured_page = $pages->unavailable_for_legal_reasons(
+        blocked_by => '/authority', %options,
+    );
+
+Returns a deferred 451 C<Unavailable For Legal Reasons> application. The stock
+detail is "The resource is unavailable for legal reasons." In addition to the
+common options in L</"ERROR OPTIONS">, it accepts optional C<blocked_by>; see
+L</"STATUS-SPECIFIC ERROR OPTIONS">.
+
+=head3 internal_server_error
+
+    use PAGI::Pages qw(internal_server_error);
+    my $page = internal_server_error(%options);
+    my $class_page = PAGI::Pages->internal_server_error(%options);
+    my $configured_page = $pages->internal_server_error(%options);
+
+Returns a deferred 500 C<Internal Server Error> application. The stock detail
+is "The server encountered an unexpected condition." It accepts the common
+error option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 not_implemented
+
+    use PAGI::Pages qw(not_implemented);
+    my $page = not_implemented(%options);
+    my $class_page = PAGI::Pages->not_implemented(%options);
+    my $configured_page = $pages->not_implemented(%options);
+
+Returns a deferred 501 C<Not Implemented> application. The stock detail is
+"The server does not support this request method." It accepts the common error
+option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 bad_gateway
+
+    use PAGI::Pages qw(bad_gateway);
+    my $page = bad_gateway(%options);
+    my $class_page = PAGI::Pages->bad_gateway(%options);
+    my $configured_page = $pages->bad_gateway(%options);
+
+Returns a deferred 502 C<Bad Gateway> application. The stock detail is "The
+server received an invalid response from an upstream server." It accepts the
+common error option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 service_unavailable
+
+    use PAGI::Pages qw(service_unavailable);
+    my $page = service_unavailable(retry_after => 60, %options);
+    my $class_page = PAGI::Pages->service_unavailable(retry_after => 60, %options);
+    my $configured_page = $pages->service_unavailable(retry_after => 60, %options);
+
+Returns a deferred 503 C<Service Unavailable> application. The stock detail is
+"The server is temporarily unable to handle the request." In addition to the
+common options in L</"ERROR OPTIONS">, it accepts optional C<retry_after>; see
+L</"STATUS-SPECIFIC ERROR OPTIONS">.
+
+=head3 gateway_timeout
+
+    use PAGI::Pages qw(gateway_timeout);
+    my $page = gateway_timeout(%options);
+    my $class_page = PAGI::Pages->gateway_timeout(%options);
+    my $configured_page = $pages->gateway_timeout(%options);
+
+Returns a deferred 504 C<Gateway Timeout> application. The stock detail is
+"The server did not receive a timely response from an upstream server." It
+accepts the common error option set and defaults described in
+L</"ERROR OPTIONS">.
+
+=head3 http_version_not_supported
+
+    use PAGI::Pages qw(http_version_not_supported);
+    my $page = http_version_not_supported(%options);
+    my $class_page = PAGI::Pages->http_version_not_supported(%options);
+    my $configured_page = $pages->http_version_not_supported(%options);
+
+Returns a deferred 505 C<HTTP Version Not Supported> application. The stock
+detail is "The server does not support this HTTP version." It accepts the
+common error option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 variant_also_negotiates
+
+    use PAGI::Pages qw(variant_also_negotiates);
+    my $page = variant_also_negotiates(%options);
+    my $class_page = PAGI::Pages->variant_also_negotiates(%options);
+    my $configured_page = $pages->variant_also_negotiates(%options);
+
+Returns a deferred 506 C<Variant Also Negotiates> application. The stock detail
+is "The server found a configuration error while negotiating a response." It
+accepts the common error option set and defaults described in
+L</"ERROR OPTIONS">.
+
+=head3 insufficient_storage
+
+    use PAGI::Pages qw(insufficient_storage);
+    my $page = insufficient_storage(%options);
+    my $class_page = PAGI::Pages->insufficient_storage(%options);
+    my $configured_page = $pages->insufficient_storage(%options);
+
+Returns a deferred 507 C<Insufficient Storage> application. The stock detail
+is "The server cannot store the representation needed to complete the
+request." It accepts the common error option set and defaults described in
+L</"ERROR OPTIONS">.
+
+=head3 loop_detected
+
+    use PAGI::Pages qw(loop_detected);
+    my $page = loop_detected(%options);
+    my $class_page = PAGI::Pages->loop_detected(%options);
+    my $configured_page = $pages->loop_detected(%options);
+
+Returns a deferred 508 C<Loop Detected> application. The stock detail is "The
+server detected an infinite loop while processing the request." It accepts the
+common error option set and defaults described in L</"ERROR OPTIONS">.
+
+=head3 network_authentication_required
+
+    use PAGI::Pages qw(network_authentication_required);
+    my $page = network_authentication_required(login_url => '/login', %options);
+    my $class_page = PAGI::Pages->network_authentication_required(login_url => '/login', %options);
+    my $configured_page = $pages->network_authentication_required(login_url => '/login', %options);
+
+Returns a deferred 511 C<Network Authentication Required> application. The
+stock detail is "Network authentication is required before access is granted."
+In addition to the common options in L</"ERROR OPTIONS">, it accepts optional
+C<login_url>. Its cache policy cannot be weakened from C<no-store>, and
+C<login> is reserved in C<extensions>. See
+L</"STATUS-SPECIFIC ERROR OPTIONS">.
+
+The named set deliberately has no 418 or 510 entry. Use L</status> for another
+400--599 code and supply custom problem fields when the code is not registered.
+
+=head2 NAMED REDIRECT METHODS
+
+Named redirects are class and configured-instance methods; they are not
+exportable functions. Each requires C<$target>, returns a deferred application,
+and accepts the redirect options C<as>, C<detail>, C<headers>,
+C<cache_control>, C<preserve_query>, and C<retry_after>. They reject C<status>
+even when it matches the method's fixed status. See L</"REDIRECT OPTIONS"> for
+all value shapes and defaults.
+
+=head3 moved_permanently
+
+    my $page = PAGI::Pages->moved_permanently($target, %options);
+    my $configured_page = $pages->moved_permanently($target, %options);
+
+Returns a deferred 301 C<Moved Permanently> redirect application.
+This method is not exportable. Its complete option set and defaults are in
+L</"REDIRECT OPTIONS">.
+
+=head3 found
+
+    my $page = PAGI::Pages->found($target, %options);
+    my $configured_page = $pages->found($target, %options);
+
+Returns a deferred 302 C<Found> redirect application.
+This method is not exportable. Its complete option set and defaults are in
+L</"REDIRECT OPTIONS">.
+
+=head3 see_other
+
+    my $page = PAGI::Pages->see_other($target, %options);
+    my $configured_page = $pages->see_other($target, %options);
+
+Returns a deferred 303 C<See Other> redirect application.
+This method is not exportable. Its complete option set and defaults are in
+L</"REDIRECT OPTIONS">.
+
+=head3 temporary_redirect
+
+    my $page = PAGI::Pages->temporary_redirect($target, %options);
+    my $configured_page = $pages->temporary_redirect($target, %options);
+
+Returns a deferred 307 C<Temporary Redirect> application.
+This method is not exportable. Its complete option set and defaults are in
+L</"REDIRECT OPTIONS">.
+
+=head3 permanent_redirect
+
+    my $page = PAGI::Pages->permanent_redirect($target, %options);
+    my $configured_page = $pages->permanent_redirect($target, %options);
+
+Returns a deferred 308 C<Permanent Redirect> application.
+This method is not exportable. Its complete option set and defaults are in
+L</"REDIRECT OPTIONS">.
+
+=head1 OPTION REFERENCE
+
+All factory options are flat key/value lists. An odd list, an empty or
+reference-valued option name, or an unknown option croaks at factory time.
+Option values are copied into the deferred application; caller mutation of
+C<headers> or C<extensions> after construction does not change later
+responses.
+
+=head2 WELCOME OPTIONS
+
+=over 4
+
+=item * C<as>
+
+C<auto>, C<html>, C<json>, or C<text>. When omitted, the retained policy's
+C<as> value applies.
+
+=item * C<headers>
+
+An even-length arrayref C<[name =E<gt> value, ...]>. See
+L</"HEADERS AND CACHE POLICY">.
+
+=item * C<cache_control>
+
+An ASCII HTTP field-value scalar. Welcome adds no Cache-Control field when it
+is omitted.
+
+=back
+
+=head2 ERROR OPTIONS
+
+Every error accepts these options:
+
+=over 4
+
+=item * C<as>
+
+C<auto>, C<html>, C<json>, or C<text>. When omitted, the retained policy's
+C<as> value applies.
+
+=item * C<detail>
+
+A defined, non-reference Unicode scalar. It replaces the stock detail. For an
+unregistered generic L</status>, it is required.
+
+=item * C<type> and C<title>
+
+C<type> is an absolute ASCII URI and C<title> is a defined, non-reference
+Unicode scalar. On a registered error they must be supplied together or both
+omitted. When omitted, Pages uses the stock title and C<about:blank>. An
+explicit C<type =E<gt> 'about:blank'> is invalid because an explicit type is a
+custom problem type. An unregistered generic L</status> requires both values
+and C<detail>.
+
+=item * C<instance>
+
+An ASCII URI-reference scalar. It is omitted from problem JSON by default.
+
+=item * C<extensions>
+
+An unblessed, JSON-encodable hashref, copied into the top level of problem
+JSON. C<type>, C<title>, C<status>, C<detail>, and C<instance> are reserved.
+Status 511 also reserves C<login>.
+
+=item * C<headers>
+
+An even-length arrayref C<[name =E<gt> value, ...]>. See
+L</"HEADERS AND CACHE POLICY">.
+
+=item * C<cache_control>
+
+An ASCII HTTP field-value scalar. Errors default to C<no-store>. Statuses 428,
+429, 431, and 511 accept only a case-insensitive, surrounding-space-tolerant
+C<no-store> override and always emit canonical C<no-store>.
+
+=back
+
+Status-specific options are accepted only for the statuses listed next.
+
+=head2 STATUS-SPECIFIC ERROR OPTIONS
+
+=over 4
+
+=item * C<challenge> (401 and 407)
+
+A nonempty ASCII field-value scalar or a nonempty arrayref of such values.
+Each value becomes a separate C<WWW-Authenticate> line for 401 or
+C<Proxy-Authenticate> line for 407. At least one semantic or raw challenge is
+required; raw and semantic challenges may coexist.
+
+=item * C<allow> (405)
+
+An HTTP token or arrayref of HTTP tokens. Tokens are uppercased and duplicate
+names are removed case-insensitively. An empty arrayref or empty scalar emits
+the legal empty C<Allow> field. C<allow> is required unless C<headers> supplies
+C<Allow>; the semantic and raw forms conflict.
+
+=item * C<length> (416)
+
+An optional non-negative integer. It is canonicalized by removing leading
+zeroes while retaining arbitrarily large decimal values without numeric
+truncation. It emits
+C<Content-Range: bytes */N> and conflicts with a raw C<Content-Range> field.
+
+=item * C<upgrade> (426)
+
+An HTTP token or nonempty arrayref of tokens. It is required unless C<headers>
+supplies C<Upgrade>; the semantic and raw forms conflict. Pages emits
+C<Upgrade> but reserves C<Connection> for the server. The response can be
+materialized only for an absent/default or explicit C<http_version> of C<1.1>.
+
+=item * C<retry_after> (413, 429, and 503)
+
+Optional non-negative delay seconds or a canonical IMF-fixdate such as
+C<Sun, 06 Nov 1994 08:49:37 GMT>. It emits C<Retry-After> and conflicts with a
+raw field of that name.
+
+=item * C<blocked_by> (451)
+
+An optional ASCII URI-reference without C<E<lt>> or C<E<gt>>. It emits
+C<< Link: <URI>; rel="blocked-by" >> and conflicts with a raw C<Link> field.
+
+=item * C<login_url> (511)
+
+An optional ASCII URI-reference. Stock HTML and text render a login link, and
+problem JSON receives the authoritative C<login> member.
+
+=back
+
+=head2 REDIRECT OPTIONS
+
+The generic and named redirect factories accept:
+
+=over 4
+
+=item * C<as>
+
+C<auto>, C<html>, C<json>, or C<text>. When omitted, the retained policy's
+C<as> value applies.
+
+=item * C<status>
+
+Generic L</redirect> only: 301, 302, 303, 307, or 308. It defaults to 302.
+Named redirect methods reject this option.
+
+=item * C<detail>
+
+A defined, non-reference Unicode scalar. It defaults to "The requested
+resource has moved."
+
+=item * C<headers>
+
+An even-length arrayref C<[name =E<gt> value, ...]>. See
+L</"HEADERS AND CACHE POLICY">.
+
+=item * C<cache_control>
+
+An ASCII HTTP field-value scalar. Redirects add no Cache-Control field when it
+is omitted.
+
+=item * C<preserve_query>
+
+The scalar C<0> or C<1>; defaults to C<0>. When true, the raw invocation
+C<query_string> is appended before the target's first fragment without
+decoding or re-encoding. An unsafe query string croaks during materialization.
+The final URI-reference is shared by the Location field and rendered body.
+
+=item * C<retry_after>
+
+Optional non-negative delay seconds or a canonical IMF-fixdate. It emits
+C<Retry-After> and conflicts with a raw field of that name.
+
+=back
+
+=head2 HEADERS AND CACHE POLICY
+
+C<headers> must be an even-length arrayref C<[name =E<gt> value, ...]>.
+Names are ASCII HTTP tokens. Values are ASCII field-value scalars containing
+only bytes C<0x20> through C<0x7e>; controls, wide characters, and references
+are rejected. Repeated names are allowed where their HTTP field permits them.
+
+Pages reserves C<Content-Type>, C<Content-Length>, C<Transfer-Encoding>,
+C<Location>, C<Cache-Control>, and C<Connection>, case-insensitively. Supply
+cache policy through C<cache_control> and redirect targets through the
+positional C<$target>. C<Vary> is caller-controlled except that automatic
+negotiation merges C<Accept> into it once.
+
+=head2 VALIDATION AND ERROR TIMING
+
+Factories validate option-list shape, names, ordinary values, error field
+requirements, redirect target, and most conflicts before returning the
+application. They return the application before inspecting any request scope
+or calling a renderer.
+
+Scope/source validation, automatic negotiation, preserved query validation,
+and the 426 HTTP/1.1 rule occur in C<response_for> or application invocation.
+Presentation hooks also run then, so a Future-valued hook, invalid hook return,
+or JSON encoding failure is a materialization-time error. These failures occur
+before response start when the application is invoked.
 
 =head1 CONTENT NEGOTIATION
 
@@ -1290,9 +2052,7 @@ supplied as validated raw headers. Repeated authentication challenges remain
 separate field lines. Pages reserves Content-Type, Content-Length,
 Transfer-Encoding, Location, Cache-Control, and Connection.
 
-L<PAGI::Auth> supplies structured Basic, Bearer, and custom challenge values
-and constructs 401/403 Pages applications. Pages does not join repeated
-C<WWW-Authenticate> field lines.
+Pages does not join repeated C<WWW-Authenticate> field lines.
 
 Errors default to C<Cache-Control: no-store>. Statuses 428, 429, 431, and 511
 cannot weaken that policy. Welcome and redirects add no cache field by default.
@@ -1301,19 +2061,66 @@ cannot weaken that policy. Welcome and redirects add no cache field by default.
 
 Subclasses may override:
 
-    render_html($descriptor)     # Unicode scalar
-    render_text($descriptor)     # Unicode scalar
-    render_problem($descriptor)  # unblessed hashref
-    render_json($descriptor)     # unblessed hashref
-    favicon_href($descriptor)    # URI-reference scalar or undef
+    my $html = $self->render_html($descriptor);
+    my $text = $self->render_text($descriptor);
+    my $problem = $self->render_problem($descriptor);
+    my $json = $self->render_json($descriptor);
+    my $href = $self->favicon_href($descriptor);
 
-Hooks receive fresh request-local descriptors. Futures and invalid return
-shapes croak before response start. Pages reasserts
-authoritative problem members, redirect status and location, headers, cache
-policy, and representation metadata after hooks run.
+Hooks run synchronously during response materialization and receive a fresh
+request-local descriptor. C<render_html> and C<render_text> may receive any
+kind and must return a defined, non-reference Unicode scalar.
+C<render_problem> receives only an error descriptor and must return an
+unblessed hashref. C<render_json> receives only a welcome or redirect
+descriptor and must return an unblessed hashref. C<favicon_href>, called by the
+stock C<render_html>, must return an ASCII URI-reference scalar or C<undef>.
+No hook may return a Future.
+
+Descriptor keys are:
+
+=over 4
+
+=item * welcome
+
+C<kind>, C<status>, C<title>, C<detail>, C<documentation>, C<as>, C<headers>,
+and C<cache_control>.
+
+=item * error
+
+C<kind>, C<status>, C<title>, C<detail>, C<type>, C<instance>, C<extensions>,
+C<as>, C<headers>, C<cache_control>, C<login_url>, and
+C<upgrade_connection>.
+
+=item * redirect
+
+C<kind>, C<status>, C<title>, C<detail>, C<location>, C<as>, C<headers>, and
+C<cache_control>.
+
+=back
+
+Pages owns the concrete Response status, headers, cache policy, and selected
+representation regardless of hook output. After C<render_problem>, it restores
+C<type>, C<title>, C<status>, and C<detail>; it restores or removes
+C<instance>; and for 511 it restores or removes C<login>. Other returned
+problem members remain. After redirect C<render_json>, Pages restores
+C<status> and C<location>; other returned members remain. Welcome JSON is the
+returned hash. HTML and text hooks own the complete body string.
+
+For example, a subclass can replace text presentation while leaving policy
+and fields intact:
+
+    package MyApp::Pages;
+    use parent 'PAGI::Pages';
+
+    sub render_text {
+        my ($self, $page) = @_;
+        return "$page->{status} $page->{title}: $page->{detail}\n";
+    }
+
+    my $page = MyApp::Pages->not_found(as => 'text');
 
 Stock HTML escapes dynamic values and embeds an exact-status SVG favicon.
-C<favicon_href> may return a same-origin URI or C<undef>. A complete
+C<favicon_href> may return a URI-reference or C<undef>. A complete
 C<render_html> override owns the entire document and favicon inclusion.
 
 =head1 APPLICATION AND POLICY OWNERSHIP
@@ -1347,7 +2154,6 @@ calling Pages.
 =head1 SEE ALSO
 
 L<PAGI::Response>, L<PAGI::Routing>, L<PAGI::Request>,
-L<PAGI::WebSocket>, L<PAGI::SSE>, L<PAGI::Auth>,
-L<PAGI::Pages::Application>
+L<PAGI::WebSocket>, L<PAGI::SSE>, L<PAGI::Pages::Application>
 
 =cut
