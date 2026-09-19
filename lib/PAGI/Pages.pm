@@ -1238,7 +1238,9 @@ Exported functions return app objects that can be placed directly:
 Every factory below immediately returns a deferred
 L<PAGI::Pages::Application>. It takes no Request or scope argument. Rendering,
 negotiation, and concrete Response construction happen when that application
-is invoked or when L<PAGI::Pages::Application/response_for> is called.
+is invoked. Use L<PAGI::Pages::Application/to_app> to obtain its native
+application coderef or L<PAGI::Pages::Application/response_for> to immediately
+materialize one concrete Response.
 
 =head3 welcome
 
@@ -1772,6 +1774,7 @@ all value shapes and defaults.
     my $page = PAGI::Pages->moved_permanently($target, %options);
     my $configured_page = $pages->moved_permanently($target, %options);
 
+C<$target> is a required ASCII URI-reference scalar.
 Returns a deferred 301 C<Moved Permanently> redirect application.
 This method is not exportable. Its complete option set and defaults are in
 L</"REDIRECT OPTIONS">.
@@ -1781,6 +1784,7 @@ L</"REDIRECT OPTIONS">.
     my $page = PAGI::Pages->found($target, %options);
     my $configured_page = $pages->found($target, %options);
 
+C<$target> is a required ASCII URI-reference scalar.
 Returns a deferred 302 C<Found> redirect application.
 This method is not exportable. Its complete option set and defaults are in
 L</"REDIRECT OPTIONS">.
@@ -1790,6 +1794,7 @@ L</"REDIRECT OPTIONS">.
     my $page = PAGI::Pages->see_other($target, %options);
     my $configured_page = $pages->see_other($target, %options);
 
+C<$target> is a required ASCII URI-reference scalar.
 Returns a deferred 303 C<See Other> redirect application.
 This method is not exportable. Its complete option set and defaults are in
 L</"REDIRECT OPTIONS">.
@@ -1799,6 +1804,7 @@ L</"REDIRECT OPTIONS">.
     my $page = PAGI::Pages->temporary_redirect($target, %options);
     my $configured_page = $pages->temporary_redirect($target, %options);
 
+C<$target> is a required ASCII URI-reference scalar.
 Returns a deferred 307 C<Temporary Redirect> application.
 This method is not exportable. Its complete option set and defaults are in
 L</"REDIRECT OPTIONS">.
@@ -1808,6 +1814,7 @@ L</"REDIRECT OPTIONS">.
     my $page = PAGI::Pages->permanent_redirect($target, %options);
     my $configured_page = $pages->permanent_redirect($target, %options);
 
+C<$target> is a required ASCII URI-reference scalar.
 Returns a deferred 308 C<Permanent Redirect> application.
 This method is not exportable. Its complete option set and defaults are in
 L</"REDIRECT OPTIONS">.
