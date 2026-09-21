@@ -60,6 +60,8 @@ subtest 'Basic parsing validates Base64 and decoded credential bytes' => sub {
         ['decoded credential needs colon', 'Basic dXNlcg==', [undef, undef], 1],
         ['decoded controls rejected', 'Basic dQA6cA==', [undef, undef], 1],
         ['supported scheme without credentials', 'Basic', [undef, undef], 1],
+        ['empty value', '', [undef, undef], 1],
+        ['empty Basic credential', 'Basic ', [undef, undef], 1],
         ['tab is not the credential separator', "Basic\tdTpw", [undef, undef], 1],
     );
 

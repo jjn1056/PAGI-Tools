@@ -6,6 +6,7 @@ use Test2::V0;
 
 use lib 'lib';
 use PAGI::Auth qw(www_authenticate);
+use PAGI::Utils::Headers ();
 
 is www_authenticate('Bearer'), 'Bearer';
 is www_authenticate('Basic', realm => 'api', charset => 'UTF-8'),
@@ -24,6 +25,7 @@ is www_authenticate('Demo', x_extension => 'yes'),
     'Demo x_extension="yes"', 'unknown valid extension names are accepted';
 
 for my $call (
+    [utils => sub { PAGI::Utils::Headers::www_authenticate('Bearer', realm => 'api') }],
     [exported => sub { www_authenticate('Bearer', realm => 'api') }],
     [class => sub { PAGI::Auth->www_authenticate('Bearer', realm => 'api') }],
     [instance => sub { PAGI::Auth->new->www_authenticate('Bearer', realm => 'api') }],
