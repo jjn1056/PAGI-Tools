@@ -8,7 +8,7 @@ use Future::AsyncAwait;
 use Test2::V0;
 
 use lib 'lib';
-use PAGI::Auth qw(challenge basic bearer);
+use PAGI::Auth qw(www_authenticate);
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
 use PAGI::Response::File;
@@ -65,14 +65,17 @@ sub direct_protocol {
         : PAGI::SSE->new($scope, $receive, $tracking_send);
 }
 
-my $two_challenges = challenge(
-    challenges => [
-        basic(realm => 'staff'),
-        bearer(realm => 'private'),
+my $two_challenges = PAGI::Pages->status(
+    401,
+    detail  => 'Authentication is required.',
+    headers => [
+        'WWW-Authenticate' => 'Basic realm="staff"',
+        'WWW-Authenticate' => www_authenticate('Bearer', realm => 'private'),
     ],
+    cache_control => 'no-store',
 );
 
-subtest 'HTTP Request handlers return negotiated Auth applications directly' => sub {
+subtest 'HTTP Request handlers return negotiated refusal applications directly' => sub {
     my $app = compose(routes => [
         route('/private' => sub {
             my ($request) = @_;
@@ -86,7 +89,7 @@ subtest 'HTTP Request handlers return negotiated Auth applications directly' => 
     });
 
     isa_ok $response, 'PAGI::Test::Response';
-    is $response->status, 401, 'RequestResponse invokes the returned outcome';
+    is $response->status, 401, 'RequestResponse invokes the returned application';
     is $response->content_type, 'application/problem+json',
         'the original Request scope drives Pages negotiation';
     is $response->header_all('WWW-Authenticate'), [
@@ -96,7 +99,7 @@ subtest 'HTTP Request handlers return negotiated Auth applications directly' => 
     is $response->header('Cache-Control'), 'no-store';
 };
 
-subtest 'native applications invoke negotiated Auth outcomes through invoke_app' => sub {
+subtest 'native applications invoke negotiated refusals through invoke_app' => sub {
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
         return await invoke_app(
@@ -116,9 +119,14 @@ subtest 'native applications invoke negotiated Auth outcomes through invoke_app'
     ], 'native invocation does not combine challenge fields';
 };
 
-my $protocol_failure = challenge(
-    challenges => [bearer(realm => 'private')],
-    as         => 'json',
+my $protocol_failure = PAGI::Pages->status(
+    401,
+    as      => 'json',
+    detail  => 'Authentication is required.',
+    headers => [
+        'WWW-Authenticate' => www_authenticate('Bearer', realm => 'private'),
+    ],
+    cache_control => 'no-store',
 );
 
 subtest 'WebSocket denial and SSE decline emit the same captured Auth response' => sub {
@@ -126,13 +134,11 @@ subtest 'WebSocket denial and SSE decline emit the same captured Auth response' 
     my $routing = compose(routes => [
         websocket('/socket' => async sub {
             my ($ws) = @_;
-            return await $ws->deny($protocol_failure->response_for($ws));
+            return await $ws->deny($protocol_failure);
         }),
         sse('/events' => async sub {
             my ($stream) = @_;
-            return await $stream->decline(
-                $protocol_failure->response_for($stream),
-            );
+            return await $stream->decline($protocol_failure);
         }),
     ])->to_app;
 

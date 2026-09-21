@@ -695,19 +695,23 @@ Use a Pages instance or subclass explicitly when application presentation
 needs custom synchronous render hooks. Compose has no Pages configuration
 option.
 
-L<PAGI::Auth> adds structured authentication outcomes without teaching a
-credential parser or provider. A missing token is a 401 challenge:
+L<PAGI::Auth> constructs results, reads installed context, and formats challenge
+values without teaching a credential parser or provider. A missing token can
+return an ordinary 401 Pages application:
 
-  use PAGI::Auth qw(challenge forbid bearer);
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
 
-  return challenge(
-      challenges => [bearer(realm => 'api')],
-      detail      => 'An access token is required.',
+  return PAGI::Pages->status(401,
+      headers => ['WWW-Authenticate' =>
+          www_authenticate('Bearer', realm => 'api')],
+      detail  => 'An access token is required.',
   ) unless defined $identity;
 
-An authenticated identity without permission is a 403 outcome:
+An authenticated identity without permission can return a 403 Pages application:
 
-  return forbid(detail => 'This action requires write access.')
+  return PAGI::Pages->status(403,
+      detail => 'This action requires write access.')
       unless $identity->may('write');
 
 Both values are reusable Pages applications. See

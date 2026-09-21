@@ -107,15 +107,20 @@ Compose itself accepts only structural C<routes>, not a Response. Invoking a
 Response app with lifespan or an unsupported scope type croaks before sending.
 That is an application failure, not a guaranteed denial wire response.
 
-A deferred L<PAGI::Auth> outcome stays an ordinary application value at every
-supported boundary. Pass it directly to the protocol owner:
+A L<PAGI::Pages> refusal stays an ordinary application value at every supported
+boundary. Pass it directly to the protocol owner:
 
     use Future::AsyncAwait;
-    use PAGI::Auth qw(challenge bearer);
+    use PAGI::Auth qw(www_authenticate);
+    use PAGI::Pages;
 
-    my $failure = challenge(
-        challenges => [bearer(realm => 'private')],
-        as         => 'json',
+    my $failure = PAGI::Pages->status(
+        401,
+        as      => 'json',
+        headers => [
+            'WWW-Authenticate' =>
+                www_authenticate('Bearer', realm => 'private'),
+        ],
     );
 
     async sub denied_socket {

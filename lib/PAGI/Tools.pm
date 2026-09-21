@@ -169,7 +169,7 @@ a larger framework:
 
 =item * L<PAGI::Pages> for conventional negotiated HTTP applications
 
-=item * L<PAGI::Auth> for structured authentication challenges and 401/403 outcome applications
+=item * L<PAGI::Auth> for authentication results, installed context, and challenge formatting
 
 =item * L<PAGI::Middleware::Auth::Basic> and L<PAGI::Middleware::Auth::Bearer> for legacy credential middleware
 

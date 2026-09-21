@@ -1,331 +1,200 @@
 package PAGI::Auth;
-
 use strict;
 use warnings;
 use Carp qw(croak);
 use Exporter qw(import);
 use Scalar::Util qw(blessed);
-use PAGI::Auth::Challenge ();
+use PAGI::Auth::Credentials ();
+use PAGI::Auth::Failure ();
+use PAGI::Auth::Result ();
+use PAGI::Auth::UnauthenticatedUser ();
+use PAGI::Utils::Scope ();
 
 our @EXPORT = ();
-our @EXPORT_OK = qw(challenge forbid basic bearer custom_challenge);
-our %EXPORT_TAGS = (
-    outcomes   => [qw(challenge forbid)],
-    challenges => [qw(basic bearer custom_challenge)],
-    all        => [@EXPORT_OK],
-);
+our @EXPORT_OK = qw(auth auth_result unauth_result www_authenticate);
 
-sub basic {
-    my %opts = _options('Basic', [qw(realm charset)], @_);
+sub new {
+    my ($class, @args) = @_;
+    croak 'PAGI::Auth constructor does not accept options' if @args;
+    croak 'PAGI::Auth invocant must be an Auth class'
+        if ref($class) || !defined($class) || !$class->isa('PAGI::Auth');
+    return bless {}, $class;
+}
 
-    croak 'Basic realm is required' unless exists $opts{realm};
-    _quoted_value('Basic realm', $opts{realm});
+sub auth {
+    my ($proto, @args) = _factory_invocation(@_);
+    _validate_invocant($proto);
+    my $scope = PAGI::Utils::Scope::scope_from_source('PAGI::Auth auth', @args);
+    croak q{PAGI::Auth auth scope has no 'pagi.auth' result}
+        unless exists $scope->{'pagi.auth'};
+    my $result = $scope->{'pagi.auth'};
+    croak q{PAGI::Auth auth 'pagi.auth' must be a completed PAGI::Auth::Result}
+        unless blessed($result) && $result->isa('PAGI::Auth::Result');
+    return $result;
+}
 
-    my @params = ('realm=' . _quote($opts{realm}));
-    if (exists $opts{charset}) {
-        _quoted_value('Basic charset', $opts{charset});
-        croak 'Basic charset must be UTF-8'
-            unless lc($opts{charset}) eq 'utf-8';
-        push @params, 'charset="UTF-8"';
-    }
-
-    return PAGI::Auth::Challenge->_new(
-        scheme       => 'Basic',
-        header_value => 'Basic ' . join(', ', @params),
-        kind         => 'basic',
-        error        => undef,
+sub auth_result {
+    my ($proto, @args) = _factory_invocation(@_);
+    _validate_invocant($proto);
+    my $opts = _options('auth_result', { user => 1, scopes => 1 }, @args);
+    croak 'PAGI::Auth auth_result user is required' unless exists $opts->{user};
+    _validate_user($opts->{user}, 1, 'auth_result');
+    my $scopes = exists($opts->{scopes}) ? $opts->{scopes} : [];
+    return PAGI::Auth::Result->_new(
+        user        => $opts->{user},
+        credentials => PAGI::Auth::Credentials->_new($scopes),
+        failure     => undef,
     );
 }
 
-sub bearer {
-    my %opts = _options(
-        'Bearer',
-        [qw(realm scope error error_description error_uri params)],
-        @_,
-    );
-
-    _quoted_value('Bearer realm', $opts{realm}) if exists $opts{realm};
-    _scope('Bearer scope', $opts{scope}) if exists $opts{scope};
-
-    my $error = exists($opts{error})
-        ? _token('Bearer error', $opts{error}) : undef;
-
-    croak 'Bearer error_description requires error'
-        if exists($opts{error_description}) && !exists($opts{error});
-    _bearer_printable('Bearer error_description', $opts{error_description})
-        if exists $opts{error_description};
-
-    croak 'Bearer error_uri requires error'
-        if exists($opts{error_uri}) && !exists($opts{error});
-    _absolute_bearer_uri('Bearer error_uri', $opts{error_uri})
-        if exists $opts{error_uri};
-
-    my @extensions;
-    if (exists $opts{params}) {
-        @extensions = _params('Bearer params', $opts{params});
-        my %core = map { $_ => 1 } qw(
-            realm scope error error_description error_uri
-        );
-        for my $name (keys %{ $opts{params} }) {
-            croak "Bearer params must not contain core name '$name'"
-                if $core{lc $name};
-        }
-    }
-
-    croak 'Bearer requires at least one parameter'
-        unless exists($opts{realm}) || exists($opts{scope})
-            || exists($opts{error}) || @extensions;
-
-    my @serialized;
-    push @serialized, 'realm=' . _quote($opts{realm}) if exists $opts{realm};
-    push @serialized, 'scope=' . _quote(join ' ', @{ $opts{scope} })
-        if exists $opts{scope};
-    push @serialized, 'error=' . _quote($error) if exists $opts{error};
-    push @serialized, 'error_description=' . _quote($opts{error_description})
-        if exists $opts{error_description};
-    push @serialized, 'error_uri=' . _quote($opts{error_uri})
-        if exists $opts{error_uri};
-    push @serialized, @extensions;
-
-    return PAGI::Auth::Challenge->_new(
-        scheme       => 'Bearer',
-        header_value => 'Bearer ' . join(', ', @serialized),
-        kind         => 'bearer',
-        error        => $error,
+sub unauth_result {
+    my ($proto, @args) = _factory_invocation(@_);
+    _validate_invocant($proto);
+    my $opts = _options('unauth_result',
+        { user => 1, scopes => 1, failure => 1 }, @args);
+    my $user = exists($opts->{user})
+        ? $opts->{user} : PAGI::Auth::UnauthenticatedUser->new;
+    _validate_user($user, 0, 'unauth_result');
+    my $scopes = exists($opts->{scopes}) ? $opts->{scopes} : [];
+    my $failure = exists($opts->{failure})
+        ? PAGI::Auth::Failure->_new($opts->{failure}) : undef;
+    return PAGI::Auth::Result->_new(
+        user        => $user,
+        credentials => PAGI::Auth::Credentials->_new($scopes),
+        failure     => $failure,
     );
 }
 
-sub custom_challenge {
-    my %opts = _options('custom challenge', [qw(scheme params token68)], @_);
-
-    croak 'custom challenge scheme is required' unless exists $opts{scheme};
-    _token('custom challenge scheme', $opts{scheme});
-    croak 'custom challenge scheme must not be Basic or Bearer'
-        if lc($opts{scheme}) eq 'basic' || lc($opts{scheme}) eq 'bearer';
-
-    croak 'custom challenge params and token68 are mutually exclusive'
-        if exists $opts{params} && exists $opts{token68};
-
-    my $header_value = $opts{scheme};
-    if (exists $opts{params}) {
-        my @params = _params('custom challenge params', $opts{params});
-        $header_value .= ' ' . join(', ', @params);
+sub www_authenticate {
+    my ($proto, @args) = _factory_invocation(@_);
+    _validate_invocant($proto);
+    croak 'PAGI::Auth www_authenticate scheme is required' unless @args;
+    my $scheme = shift @args;
+    my $token = qr/\A[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+\z/;
+    croak 'PAGI::Auth www_authenticate scheme must be an HTTP token'
+        unless defined($scheme) && !ref($scheme) && $scheme =~ $token;
+    croak 'PAGI::Auth www_authenticate parameters must be name/value pairs'
+        if @args % 2;
+    my (%seen, @serialized);
+    while (@args) {
+        my ($name, $value) = splice(@args, 0, 2);
+        croak 'PAGI::Auth www_authenticate parameter name must be an HTTP token'
+            unless defined($name) && !ref($name) && $name =~ $token;
+        croak "PAGI::Auth www_authenticate duplicate parameter '$name'"
+            if $seen{lc $name}++;
+        croak "PAGI::Auth www_authenticate value for '$name' must be a defined scalar"
+            unless defined($value) && !ref($value);
+        croak "PAGI::Auth www_authenticate value for '$name' must be an HTTP quoted-string byte value"
+            unless $value =~ /\A[\x09\x20-\x7e\x80-\xff]*\z/;
+        $value =~ s/([\\"])/\\$1/g;
+        push @serialized, $name . '="' . $value . '"';
     }
-    elsif (exists $opts{token68}) {
-        _token68('custom challenge token68', $opts{token68});
-        $header_value .= ' ' . $opts{token68};
-    }
-
-    return PAGI::Auth::Challenge->_new(
-        scheme       => $opts{scheme},
-        header_value => $header_value,
-        kind         => 'custom',
-        error        => undef,
-    );
+    return @serialized ? $scheme . ' ' . join(', ', @serialized) : $scheme;
 }
 
-sub challenge {
-    require PAGI::Auth::Outcomes;
-    return PAGI::Auth::Outcomes->challenge(@_);
+sub _factory_invocation {
+    return ('PAGI::Auth', @_) unless @_ && _is_auth_invocant($_[0]);
+    return @_;
 }
 
-sub forbid {
-    require PAGI::Auth::Outcomes;
-    return PAGI::Auth::Outcomes->forbid(@_);
+sub _is_auth_invocant {
+    my ($value) = @_;
+    return $value->isa('PAGI::Auth') if blessed($value);
+    return 0 unless defined($value) && !ref($value) && length($value);
+    return eval { $value->isa('PAGI::Auth') } ? 1 : 0;
+}
+
+sub _validate_invocant {
+    my ($proto) = @_;
+    return $proto if blessed($proto) && $proto->isa('PAGI::Auth');
+    croak 'PAGI::Auth invocant must be an Auth class or instance'
+        if ref($proto) || !defined($proto) || !$proto->isa('PAGI::Auth');
+    return $proto;
 }
 
 sub _options {
-    my ($context, $allowed, @args) = @_;
-    croak "$context options must be name/value pairs" if @args % 2;
-
-    my %allowed = map { $_ => 1 } @$allowed;
+    my ($name, $allowed, @args) = @_;
+    croak "PAGI::Auth $name options must be key/value pairs" if @args % 2;
     my %opts;
     while (@args) {
-        my ($name, $value) = splice @args, 0, 2;
-        croak "$context option names must be defined scalar strings"
-            unless defined($name) && !ref($name);
-        croak "unknown $context option '$name'" unless $allowed{$name};
-        croak "duplicate $context option '$name'" if exists $opts{$name};
-        $opts{$name} = $value;
+        my ($key, $value) = splice(@args, 0, 2);
+        croak "PAGI::Auth $name option names must be defined scalars"
+            unless defined($key) && !ref($key);
+        croak "PAGI::Auth $name has unknown option '$key'" unless $allowed->{$key};
+        croak "PAGI::Auth $name has duplicate option '$key'" if exists $opts{$key};
+        $opts{$key} = $value;
     }
-    return %opts;
+    return \%opts;
 }
 
-sub _token {
-    my ($name, $value) = @_;
-    _scalar($name, $value);
-    croak "$name must be an HTTP token"
-        unless $value =~ /\A[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+\z/;
-    return $value;
-}
-
-sub _token68 {
-    my ($name, $value) = @_;
-    _scalar($name, $value);
-    croak "$name must be a nonempty token68"
-        unless $value =~ /\A[A-Za-z0-9\-._~+\/]+=*\z/;
-    return $value;
-}
-
-sub _quoted_value {
-    my ($name, $value) = @_;
-    _scalar($name, $value);
-    croak "$name must contain only printable ASCII"
-        unless $value =~ /\A[\x20-\x7E]*\z/;
-    return $value;
-}
-
-sub _scope {
-    my ($name, $value) = @_;
-    croak "$name must be an unblessed arrayref"
-        unless ref($value) eq 'ARRAY' && !blessed($value);
-    croak "$name must not be empty" unless @$value;
-
-    my %seen;
-    for my $token (@$value) {
-        _scalar("$name token", $token);
-        croak "$name tokens must contain only RFC scope characters"
-            unless $token =~ /\A[\x21\x23-\x5B\x5D-\x7E]+\z/;
-        croak "$name contains duplicate token '$token'" if $seen{$token}++;
-    }
-    return $value;
-}
-
-sub _bearer_printable {
-    my ($name, $value) = @_;
-    _scalar($name, $value);
-    croak "$name must contain only RFC printable characters"
-        unless $value =~ /\A[\x20-\x21\x23-\x5B\x5D-\x7E]+\z/;
-    return $value;
-}
-
-sub _absolute_bearer_uri {
-    my ($name, $value) = @_;
-    _bearer_printable($name, $value);
-    croak "$name must be an absolute URI"
-        unless $value =~ /\A[A-Za-z][A-Za-z0-9+.-]*:[\x21-\x7E]*\z/;
-    return $value;
-}
-
-sub _scalar {
-    my ($name, $value) = @_;
-    croak "$name must be a defined scalar"
-        unless defined($value) && !ref($value);
-    return $value;
-}
-
-sub _params {
-    my ($name, $params) = @_;
-    croak "$name must be an unblessed hashref"
-        unless ref($params) eq 'HASH' && !blessed($params);
-    croak "$name must not be empty" unless keys %$params;
-
-    my %seen;
-    for my $key (keys %$params) {
-        _token("$name name", $key);
-        my $folded = lc $key;
-        croak "$name contains duplicate case-insensitive name '$key'"
-            if $seen{$folded}++;
-        _quoted_value("$name value for '$key'", $params->{$key});
-    }
-
-    return map { $_ . '=' . _quote($params->{$_}) }
-        sort { lc($a) cmp lc($b) || $a cmp $b } keys %$params;
-}
-
-sub _quote {
-    my ($value) = @_;
-    $value =~ s/([\\"])/\\$1/g;
-    return '"' . $value . '"';
+sub _validate_user {
+    my ($user, $authenticated, $constructor) = @_;
+    croak "PAGI::Auth $constructor user must be an object implementing is_authenticated, identity, and display_name"
+        unless blessed($user) && $user->can('is_authenticated')
+            && $user->can('identity') && $user->can('display_name');
+    my $flag = $user->is_authenticated ? 1 : 0;
+    croak "PAGI::Auth $constructor user must be authenticated"
+        if $authenticated && !$flag;
+    croak "PAGI::Auth $constructor user must be unauthenticated"
+        if !$authenticated && $flag;
+    return $user;
 }
 
 1;
 
 =head1 NAME
 
-PAGI::Auth - structured authentication challenges and HTTP outcomes
+PAGI::Auth - authentication results, installed context, and challenge formatting
 
 =head1 SYNOPSIS
 
-  use PAGI::Auth qw(challenge forbid basic bearer custom_challenge);
+  use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
 
-  my $missing = challenge(
-      challenges => [bearer(realm => 'api')],
-      detail      => 'An access token is required.',
-  );
+  return auth_result(user => $user, scopes => ['authenticated', 'notes:read']);
+  return unauth_result(failure => { message => 'The token was not accepted.' });
 
-  my $denied = forbid(
-      challenges => [bearer(
-          realm => 'api', error => 'insufficient_scope', scope => ['write'],
-      )],
-  );
+  my $context = auth($request);
+  my $challenge = www_authenticate('Bearer', realm => 'api');
 
-=head1 EXPORTS
+=head1 DESCRIPTION
 
-Nothing is exported by default. C<:outcomes> exports C<challenge> and
-C<forbid>; C<:challenges> exports C<basic>, C<bearer>, and
-C<custom_challenge>; C<:all> exports all five functions.
+C<PAGI::Auth> constructs completed authentication results and observes a result
+installed under C<pagi.auth> in a raw scope or an object exposing C<scope>.
+Applications explicitly choose their refusal responses and may use
+C<www_authenticate> to format one challenge value.
 
-=head1 CHALLENGE BUILDERS
+Nothing is exported by default. C<auth>, C<auth_result>, C<unauth_result>, and
+C<www_authenticate> are optional exports. Each helper also supports class and
+factory-instance invocation. C<new> accepts no options and creates a shareable,
+stateless factory.
 
-Every builder returns an immutable L<PAGI::Auth::Challenge>. It is protocol
-metadata, not a Response. All option lists must contain unique, named pairs;
-malformed tokens, controls, non-ASCII quoted values, and injection attempts
-croak synchronously.
+=head2 auth
 
-=head2 basic
+Returns the completed L<PAGI::Auth::Result> stored under C<pagi.auth>. Missing
+or invalid installed context is an error.
 
-  basic(realm => 'Staff', charset => 'UTF-8')
+=head2 auth_result
 
-C<realm> is required and may be empty. Optional C<charset> accepts UTF-8
-case-insensitively and serializes as C<UTF-8>. Basic credentials require TLS
-in real deployments.
+Requires a duck-typed authenticated C<user>. Optional C<scopes> is an arrayref
+and defaults to a fresh empty array. Supplied user and scopes references are
+retained.
 
-=head2 bearer
+=head2 unauth_result
 
-Accepts C<realm>, C<scope>, C<error>, C<error_description>, C<error_uri>, and
-C<params>, and requires at least one parameter. C<scope> is a nonempty arrayref
-of unique RFC scope tokens. C<params> is a nonempty hashref of extension
-parameters and cannot replace a core parameter. C<error_description> and
-C<error_uri> require C<error>; C<error_uri> deliberately requires an absolute
-URI, for example C<https://example.test/errors/expired>. Public
-C<error_description> text is sent on the wire and must never contain tokens,
-passwords, internal exceptions, or other secrets. Bearer tokens require TLS in
-real deployments.
+Accepts an optional unauthenticated C<user>, C<scopes>, and C<failure> hash with
+a required C<message> and optional C<code>. Omitted user and scopes values are
+fresh defaults.
 
-Known errors enforce their HTTP outcome: C<invalid_token> and
-C<insufficient_user_authentication> are 401 challenges, C<invalid_request>
-belongs in an explicit 400 response, and C<insufficient_scope> is a 403
-forbid. Unknown extension errors remain open protocol values; Auth does not
-infer their status.
+=head2 www_authenticate
 
-=head2 custom_challenge
-
-  custom_challenge(scheme => 'Demo', params => { realm => 'api' })
-  custom_challenge(scheme => 'Negotiate', token68 => 'abc+/==')
-
-C<scheme> is required and cannot be Basic or Bearer. Optional C<params> and
-C<token68> are mutually exclusive. Parameter names use HTTP token grammar;
-values use validated quoted-string serialization. C<token68> uses token68
-grammar.
-
-=head1 OUTCOME FACTORIES
-
-C<challenge> always constructs a reusable 401 L<PAGI::Pages::Application> and
-requires one challenge or a nonempty arrayref. C<forbid> constructs a reusable
-403 Pages application; its optional challenges must obey the Bearer status
-rules above. Both accept Pages presentation options C<as>, C<detail>, C<type>,
-C<title>, C<instance>, C<extensions>, C<headers>, and C<cache_control>. Caller
-C<WWW-Authenticate> headers are rejected because Auth owns those fields. Each
-challenge is emitted as a separate field line.
-
-These functions describe an outcome only. They never inspect credentials,
-request bodies, identity state, or providers. Credential and identity
-middleware is a separate application concern.
+Formats one scheme and ordered list of named parameters as a plain header value.
+Names use HTTP token syntax. Values are quoted strings; embedded quotes and
+backslashes are escaped. Use repeated ordinary response header fields for
+multiple challenges.
 
 =head1 SEE ALSO
 
-L<PAGI::Auth::Challenge>, L<PAGI::Auth::Outcomes>, L<PAGI::Pages::Application>,
-L<PAGI::Tools::Cookbook>
+L<PAGI::Auth::Result>, L<PAGI::Auth::Credentials>, L<PAGI::Auth::Failure>,
+L<PAGI::Auth::SimpleUser>, L<PAGI::Auth::UnauthenticatedUser>
 
 =cut

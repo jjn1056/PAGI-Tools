@@ -1,9 +1,8 @@
 # Explicit cookie login policy
 
 This small application demonstrates login redirects and session lifecycle as
-application policy. It intentionally does not use `PAGI::Auth`: Phase 1 Auth
-outcomes construct 401 and 403 responses and do not perform an interactive
-login.
+application policy. It intentionally does not use `PAGI::Auth`: the Auth facade
+does not perform interactive login or redirect policy.
 
 This example requires Perl 5.40 or newer. Run it from the distribution root
 and give the runner the checkout's local library path:

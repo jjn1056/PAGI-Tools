@@ -75,9 +75,9 @@ Router under `/apples`.
 `/apples/export` is an intentional PAGI extension: it demonstrates an NDJSON
 export and has no counterpart in the original Starlette sample above.
 `/apples/auth-required` is another PAGI extension. It demonstrates construction
-of an authentication outcome and always returns a Bearer challenge on purpose.
-It does not parse or validate credentials. Phase 2 will own credential
-acquisition and identity state.
+of an ordinary Pages response and always returns a Bearer challenge on purpose.
+It does not parse or validate credentials; those remain separate application
+and authentication-middleware responsibilities.
 
 ```perl
 use v5.40;
@@ -87,9 +87,8 @@ use Types::Standard qw(Int);
 
 use AppleApp::Middleware qw(with_apples_api_header);
 use AppleApp::Model qw(apple_model);
-use PAGI::Auth qw(challenge bearer);
 use PAGI::Compose qw(compose);
-use PAGI::Pages qw(welcome not_found);
+use PAGI::Pages qw(welcome not_found status);
 use PAGI::Response qw(file_response json_response ndjson_response);
 use PAGI::Routing qw(route mount middleware);
 use PAGI::Routing::URL qw(url_for path_for);
@@ -137,9 +136,10 @@ async sub export_apples($request) {
 }
 
 async sub authentication_required($request) {
-    return challenge(
-        challenges => [bearer(realm => 'apples')],
-        detail      => 'A valid access token is required.',
+    return status(401,
+        detail  => 'A valid access token is required.',
+        headers => ['WWW-Authenticate' => 'Bearer realm="apples"'],
+        cache_control => 'no-store',
     );
 }
 

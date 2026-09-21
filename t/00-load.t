@@ -10,10 +10,8 @@ my @load_modules = qw(
     PAGI::Exception::IncompleteResponse
     PAGI::Authority
     PAGI::Auth
-    PAGI::Auth::Challenge
     PAGI::Auth::Credentials
     PAGI::Auth::Failure
-    PAGI::Auth::Outcomes
     PAGI::Auth::Result
     PAGI::Auth::SimpleUser
     PAGI::Auth::UnauthenticatedUser
@@ -85,6 +83,8 @@ ok(
 );
 
 my @removed_modules = (
+    join('::', qw(PAGI Auth Challenge)),
+    join('::', qw(PAGI Auth Outcomes)),
     join('::', qw(PAGI Routing Trace)),
     join('::', qw(PAGI Routing Trace Recorder)),
     join('::', qw(PAGI Routing Trace Snapshot)),
