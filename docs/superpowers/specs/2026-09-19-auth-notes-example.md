@@ -23,7 +23,9 @@ forms, and extension contracts. The main application is the introduction;
 numbered variations below are required companion examples, not optional future
 polish. A capability is not covered merely because prose mentions its name.
 The delivered extension examples exercise the settled interfaces listed in the
-coverage index below.
+coverage index below. The later variation labels and imperative acceptance
+language preserve the original design checklist; the linked runnable files and
+tests above are the current coverage index.
 
 | Delivered file | Executed by | Focus |
 | --- | --- | --- |

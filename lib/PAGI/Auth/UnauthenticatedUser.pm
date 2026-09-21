@@ -25,7 +25,10 @@ PAGI::Auth::UnauthenticatedUser - built-in unauthenticated user
 
 =head2 new
 
-Creates an unauthenticated user. It accepts no options.
+Creates a fresh unauthenticated user. It accepts no options; any argument is an
+error. Applications needing a different guest identity or display label may
+supply their own three-method guest to C<unauth_result>, or override that helper
+in a L<PAGI::Auth> factory subclass.
 
 =head1 METHODS
 

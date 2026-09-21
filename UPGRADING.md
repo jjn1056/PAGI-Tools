@@ -11,6 +11,24 @@ Each After example uses behavior shipped by the current release. Examples use
 ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Authentication v1
+
+The unreleased `PAGI::Auth::Challenge`, `PAGI::Auth::Outcomes`, and
+`PAGI::Middleware::Auth::Basic`/`Bearer` interfaces have been removed. Configure
+`PAGI::Middleware::Authentication` with a coderef or object backend that takes a
+Request and returns exactly one completed `auth_result` or `unauth_result`,
+directly or through a Future. The middleware installs that Result under
+`pagi.auth` and continues, including for guest and rejected credentials.
+
+Read it with `auth($request)` or `auth($scope)` and inspect `->user`,
+`->credentials`, and optional `->failure`. Credentials hold explicit granted
+scopes, not the presented token; an authenticated user gets no automatic
+`authenticated` grant. Put 400/401/403 response policy in application handlers
+or ordinary middleware, and format one `WWW-Authenticate` value with
+`www_authenticate` when needed. The [Auth reference](lib/PAGI/Auth.pm) includes
+an executable two-route group example; the [Notes example](examples/auth-notes/README.md)
+shows an opaque-token backend and response matrix.
+
 ## Breaking: Compose accepts only routes
 
 Compose now has one constructor grammar: it always constructs and owns a
@@ -1587,8 +1605,8 @@ and cache fields may change through consistent negotiation and encoding.
 | `PAGI::App::WrapCGI` | HTTP process-start 500 | CGI execution and parsed CGI responses remain literal |
 | `PAGI::App::Throttle` | default HTTP 429 | `retry_after`, enabled rate-limit fields, and `on_limit` |
 | `PAGI::Middleware::Static` | 403, 404, 416 | pass-through remains local; 416 supplies selected file length |
-| `PAGI::Middleware::Auth::Basic` | default 401 | generated Basic challenge and configured realm |
-| `PAGI::Middleware::Auth::Bearer` | default 401 | generated Bearer challenge, realm, and safe failure detail |
+| `PAGI::Middleware::Auth::Basic` (removed in Auth v1) | former default 401 | superseded by application-owned responses after generic Authentication |
+| `PAGI::Middleware::Auth::Bearer` (removed in Auth v1) | former default 401 | superseded by application-owned responses after generic Authentication |
 | `PAGI::Middleware::CSRF` | enforced default 403 | validation and `enforce => 'app'` application responses |
 | `PAGI::Middleware::ContentNegotiation` | strict-mode 406 | supported-type detail and existing scope metadata |
 | `PAGI::Middleware::FormBody` | body-limit 413 | limit and request consumption remain local |

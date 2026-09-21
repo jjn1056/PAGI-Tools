@@ -52,18 +52,19 @@ PAGI::Auth::SimpleUser - simple authenticated user value
       display_name => 'Alice',
   );
 
-C<identity> is required. C<display_name> is optional and defaults to the
-identity.
+C<identity> is a required defined scalar. C<display_name> is an optional
+defined scalar and defaults to the identity, including when the identity is
+empty. Odd pairs, duplicate or unknown options, and invalid values are errors.
 
 =head1 METHODS
 
 =head2 is_authenticated
 
-Returns true.
+Returns true. This does not insert an C<authenticated> scope grant.
 
 =head2 identity
 
-Returns the supplied identity.
+Returns the supplied identity scalar.
 
 =head2 display_name
 

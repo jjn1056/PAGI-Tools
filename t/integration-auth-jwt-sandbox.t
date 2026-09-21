@@ -3,12 +3,16 @@ use warnings;
 
 use Test2::V0;
 use FindBin qw($Bin);
-use PAGI::Test::Client;
 
 BEGIN {
+    if ($] < 5.040) {
+        plan skip_all => 'examples/auth-jwt-sandbox requires Perl 5.40';
+        exit;
+    }
     eval { require Crypt::JWT; Crypt::JWT->import(qw(encode_jwt)); 1 }
         or plan skip_all => 'Crypt::JWT is required for the optional JWT sandbox example';
 }
+use PAGI::Test::Client;
 
 my $secret = 'learning-only-secret-not-for-production-0123456789';
 

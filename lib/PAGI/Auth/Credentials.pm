@@ -45,25 +45,36 @@ sub has_all {
 
 PAGI::Auth::Credentials - granted authentication scopes
 
+=head1 DESCRIPTION
+
+Credentials are the grants attached to a result, not the token or other
+credentials presented by a client. Use L<PAGI::Auth> result helpers to create
+one; the private C<_new> is not an application constructor. The supplied scopes
+arrayref is retained with normal Perl reference semantics.
+
 =head1 METHODS
 
 =head2 scopes
 
-Returns the live scopes array reference supplied at construction.
+Returns the live scopes arrayref. Changes to it or to the originally supplied
+arrayref are visible to subsequent membership checks. Each element supplied at
+construction must be a defined scalar; grants compare exactly and are case
+sensitive.
 
 =head2 has
 
-Returns whether one exact, case-sensitive scope is granted.
+Accepts exactly one defined scalar scope and returns a boolean for an exact,
+case-sensitive match. Missing, extra, undefined, or reference arguments are
+errors.
 
 =head2 has_any
 
-Returns whether any supplied scope is granted. An empty requirement is false.
+Accepts zero or more defined scalar scopes and returns a boolean. An empty
+requirement is false; invalid entries are errors.
 
 =head2 has_all
 
-Returns whether every supplied scope is granted. An empty requirement is true.
-
-C<_new> is private; applications receive credentials through an authentication
-result.
+Accepts zero or more defined scalar scopes and returns a boolean. An empty
+requirement is true; invalid entries are errors.
 
 =cut

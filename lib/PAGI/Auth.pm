@@ -149,9 +149,27 @@ PAGI::Auth - authentication results, installed context, and challenge formatting
 =head1 SYNOPSIS
 
   use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
+  use PAGI::Auth::SimpleUser;
+  use PAGI::Middleware::Authentication;
 
-  return auth_result(user => $user, scopes => ['authenticated', 'notes:read']);
-  return unauth_result(failure => { message => 'The token was not accepted.' });
+  my $backend = sub {
+      my ($request) = @_;
+      my $token = $request->header('Authorization') // '';
+      return unauth_result() unless $token =~ /\ABearer (.+)\z/;
+      my $claims = verify_application_jwt($1); # application-owned verifier
+      return unauth_result(failure => {
+          message => 'The token was not accepted.',
+      }) unless $claims;
+      return auth_result(
+          user   => PAGI::Auth::SimpleUser->new(identity => $claims->{sub}),
+          scopes => ['notes:read'],
+      );
+  };
+
+  my $authentication = PAGI::Middleware::Authentication->new(
+      backend => $backend,
+  );
+  my $app = $authentication->wrap($next);
 
   my $context = auth($request);
   my $challenge = www_authenticate('Bearer', realm => 'api');
@@ -161,7 +179,10 @@ PAGI::Auth - authentication results, installed context, and challenge formatting
 C<PAGI::Auth> constructs completed authentication results and observes a result
 installed under C<pagi.auth> in a raw scope or an object exposing C<scope>.
 Applications explicitly choose their refusal responses and may use
-C<www_authenticate> to format one challenge value.
+C<www_authenticate> to format one challenge value. C<credentials> means granted
+scopes; it does not hold the original token or other presented credentials.
+C<pagi.auth> contains a completed Result, not a hash of public fields. Reading a
+missing or invalid entry is a configuration error.
 
 Nothing is exported by default. C<auth>, C<auth_result>, C<unauth_result>, and
 C<www_authenticate> are optional exports. Each helper also supports class and
@@ -194,29 +215,129 @@ incoming scope unchanged. It does not merge an outer result or clone the result,
 its user, or its scopes array; supplied references retain normal Perl reference
 semantics.
 
-=head2 auth
+=head1 PUBLIC METHODS
 
-Returns the completed L<PAGI::Auth::Result> stored under C<pagi.auth>. Missing
-or invalid installed context is an error.
+=head2 new
 
-=head2 auth_result
+C<PAGI::Auth-E<gt>new()> returns a shareable, stateless factory instance. It
+accepts no options; any argument is an error. The optional exports work as
+functions, class methods, and instance methods, including subclass overrides.
 
-Requires a duck-typed authenticated C<user>. Optional C<scopes> is an arrayref
-and defaults to a fresh empty array. Supplied user and scopes references are
-retained.
+=head2 auth($source)
 
-=head2 unauth_result
+Accepts exactly one raw scope hashref or an object exposing C<scope>, including
+L<PAGI::Request>, L<PAGI::WebSocket>, and L<PAGI::SSE>. It resolves that
+source's scope and returns the installed L<PAGI::Auth::Result>. An absent
+argument, malformed source, missing C<pagi.auth>, or value other than a
+completed Result is an error. The nearest installed complete context wins;
+this reader does not merge an outer context or construct a guest.
 
-Accepts an optional unauthenticated C<user>, C<scopes>, and C<failure> hash with
-a required C<message> and optional C<code>. Omitted user and scopes values are
-fresh defaults.
+=head2 auth_result(user => $user, scopes => \@grants)
 
-=head2 www_authenticate
+Returns a completed L<PAGI::Auth::Result> with the supplied authenticated user,
+L<PAGI::Auth::Credentials>, and no failure. C<user> is required and must be an
+object implementing C<is_authenticated>, C<identity>, and C<display_name>, with
+a true authentication flag. C<scopes> is optional and defaults to a fresh empty
+arrayref. It must be an arrayref of defined scalar grants. No
+C<authenticated> grant is inserted automatically; the user flag and grants are
+independent. The supplied user and scopes arrayref are retained, not copied.
+Odd pairs, duplicate or unknown options, an undefined user, an invalid user,
+and invalid scopes are errors.
 
-Formats one scheme and ordered list of named parameters as a plain header value.
-Names use HTTP token syntax. Values are quoted strings; embedded quotes and
-backslashes are escaped. Use repeated ordinary response header fields for
-multiple challenges.
+=head2 unauth_result(user => $guest, scopes => \@grants, failure => \%reason)
+
+Returns a completed Result with an unauthenticated user, Credentials, and an
+optional Failure. Omitted C<user> creates a fresh
+L<PAGI::Auth::UnauthenticatedUser>; a custom guest must implement the same three
+user methods and have a false authentication flag. Omitted C<scopes> creates a
+fresh empty arrayref; a supplied arrayref may contain granted scopes even for a
+guest. C<failure>, when supplied, is a hashref with a required defined scalar
+C<message> and optional defined scalar C<code>. An absent failure means guest,
+while a supplied failure records rejection. Empty strings are valid scalar
+values. User and scopes references are retained. Odd pairs, duplicate or
+unknown options, invalid user/scopes, and malformed failure fields are errors.
+
+=head2 www_authenticate($scheme, name => $value, ...)
+
+Returns one plain C<WWW-Authenticate> header value. C<scheme> is required and
+must be an HTTP token. Optional ordered name/value pairs use HTTP token names;
+names are unique without regard to case. Values must be defined scalar HTTP
+quoted-string byte values (tab, printable ASCII, or bytes 0x80-0xff); quotes
+and backslashes are escaped. Without parameters, the return value is just the
+scheme. Missing or invalid scheme, odd pairs, duplicate or invalid names, and
+undefined, reference, or invalid-byte values are errors. This formatter does
+not choose status, send a response, or validate an application's auth policy.
+Use repeated ordinary response header fields for multiple challenges; a raw
+opaque challenge can also be supplied directly.
+
+=head2 Protecting a group of endpoints
+
+This complete recipe installs Authentication before an application-owned HTTP
+check. Both protected routes share it; C</public> sits outside the group.
+The wrapper delegates lifespan and other non-HTTP scopes before reading auth,
+awaits the next application, and invokes an ordinary response directly for a
+guest or rejection. The fixed token is only a teaching fixture; replace the
+backend with application-owned verification.
+
+  use v5.40;
+  use Future::AsyncAwait;
+  use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
+  use PAGI::Auth::SimpleUser;
+  use PAGI::Compose qw(compose);
+  use PAGI::Response qw(text_response);
+  use PAGI::Routing qw(route mount middleware);
+  use PAGI::Utils qw(invoke_app);
+
+  my $backend = sub ($request) {
+      my $value = $request->header('Authorization') // '';
+      return auth_result(
+          user => PAGI::Auth::SimpleUser->new(identity => 'alice'),
+      ) if $value eq 'Bearer accepted';
+      return unauth_result(failure => {
+          message => 'Credential rejected', code => 'invalid_token',
+      }) if length $value;
+      return unauth_result();
+  };
+
+  sub require_login ($next) {
+      return async sub ($scope, $receive, $send) {
+          if (($scope->{type} // '') ne 'http') {
+              await $next->($scope, $receive, $send);
+              return;
+          }
+          unless (auth($scope)->user->is_authenticated) {
+              my $response = text_response('Sign in', status => 401,
+                  headers => ['WWW-Authenticate' =>
+                      www_authenticate('Bearer', realm => 'example')]);
+              await invoke_app($response, $scope, $receive, $send);
+              return;
+          }
+          await $next->($scope, $receive, $send);
+          return;
+      };
+  }
+
+  my $protected = compose(
+      middleware => [
+          middleware('Authentication', backend => $backend),
+          middleware(\&require_login),
+      ],
+      routes => [
+          route('/one' => sub { text_response('one') }),
+          route('/two' => sub { text_response('two') }),
+      ],
+  );
+
+  compose(
+      routes => [
+          route('/public' => sub { text_response('public') }),
+          mount('/', app => $protected),
+      ],
+      lifespan => {
+          startup => sub { $_[0]{ready} = 1; return },
+          shutdown => sub { $_[0]{ready} = 0; return },
+      },
+  );
 
 =head1 SEE ALSO
 

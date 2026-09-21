@@ -76,7 +76,7 @@ grant permissions: the backend deliberately supplies only `authenticated`.
 The shared wrapper checks `user->is_authenticated`, not a scope of that name. The
 [Notes example](../../docs/superpowers/specs/2026-09-19-auth-notes-example.md)
 separately explores single/any/all scope checks and compound authorization;
-its older constructor and failure-response APIs are marked for reconciliation.
+its executable extension companions cover the remaining Auth interfaces.
 
 ## Backend callback or object
 

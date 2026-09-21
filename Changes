@@ -16,19 +16,19 @@
     emission, and connection terminal notification continues to drive helper
     cleanup independently.
 
-  [Structured authentication outcomes]
-  - NEW: PAGI::Auth builds injection-safe Basic, Bearer, and custom challenge
-    metadata. `challenge` and `forbid` return reusable negotiated Pages
-    applications for 401 and 403; repeated `WWW-Authenticate` challenges stay
-    as separate field lines. `response_for` synchronously materializes a local
-    Response without sending. WebSocket denial and SSE decline invoke an Auth
-    outcome application directly on the original protocol channels; its
-    cancellation and emission follow ordinary application ownership, while
-    connection terminal notification separately drives helper cleanup. The
-    apples canary shows a missing-token outcome, while the cookie-login example
-    labels interactive redirects as application policy. Credential parsing,
-    identity providers, and a full multi-protocol authentication application
-    remain Phase 2.
+  [Authentication v1]
+  - BREAKING: Removed the unreleased Auth Challenge/Outcomes objects and
+    Basic/Bearer middleware. `PAGI::Auth` now exports optional `auth`,
+    `auth_result`, `unauth_result`, and `www_authenticate` helpers. A completed
+    Result holds a user, live granted scopes, and optional public failure;
+    `pagi.auth` holds the Result itself.
+  - NEW: Generic `PAGI::Middleware::Authentication` accepts a Request backend
+    coderef or object, installs its completed result for HTTP, WebSocket, and
+    SSE, and continues downstream. Applications own credential parsing,
+    verification, permission decisions, and ordinary 400/401/403 responses.
+    No named scope is granted implicitly. The Notes, JWT sandbox, and extension
+    examples exercise the API; JWT verification remains example-local and
+    optionally depends on Crypt::JWT. OAuth flows are outside Auth v1.
 
   [Universal connection state (Www 0.6)]
   - WebSocket, SSE, and HTTP Test::Client scopes now carry the complete

@@ -80,15 +80,25 @@ PAGI::Middleware::Authentication - install request authentication results
 
 =head1 DESCRIPTION
 
-This middleware constructs one L<PAGI::Request> for each HTTP, WebSocket, or
-SSE invocation and passes it to the configured backend. The backend is either a
-coderef or an object implementing C<authenticate>. It must return one completed
-L<PAGI::Auth::Result>, immediately or through a L<Future>.
+Construct with C<new(backend =E<gt> $backend)> and call C<wrap($next)> to get a
+native application. C<backend> is required and must be exactly a coderef or an
+object implementing C<authenticate>; unknown constructor options are errors.
+The same backend is reused across invocations. This middleware constructs one
+L<PAGI::Request> for each HTTP, WebSocket, or SSE invocation. A coderef receives
+that Request as its only argument; an object's C<authenticate($request)> receives
+it after the normal invocant. Either form must return exactly one completed
+L<PAGI::Auth::Result>, directly or through a L<Future>. Bare users, C<undef>,
+and response values are errors.
+The Request uses the real receive channel: backend body reads have their normal
+consumption effects and protocol restrictions, with no automatic body replay.
 
 The result is installed under C<pagi.auth> in a shallow child scope and the
 downstream application always continues. Guest and rejected results do not
 select responses; applications make that decision explicitly. Backend and
-downstream exceptions and failed Futures propagate normally.
+downstream exceptions and failed Futures propagate normally. No
+C<authenticated> scope is granted implicitly. An application can read the
+result with C<auth($scope)> or C<auth($request)>; absence is a configuration
+error rather than an implicit guest.
 
 Other scope types are passed through unchanged without constructing a request
 or invoking the backend.

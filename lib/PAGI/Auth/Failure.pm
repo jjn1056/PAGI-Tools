@@ -36,15 +36,24 @@ sub code    { return $_[0]{code} }
 
 PAGI::Auth::Failure - public authentication rejection information
 
+=head1 DESCRIPTION
+
+Created through C<unauth_result(failure =E<gt> {...})> in L<PAGI::Auth>.
+This value records an application-owned, public-safe reason for rejection.
+It has no HTTP status, challenge, or response fields. The hash supplied to the
+result helper requires a defined scalar C<message>, permits a defined scalar
+C<code>, and rejects unknown fields.
+
 =head1 METHODS
 
 =head2 message
 
-Returns the public-safe failure message.
+Returns the public-safe scalar message, including an empty string if supplied.
 
 =head2 code
 
-Returns the optional application-defined failure code.
+Returns the optional application-defined scalar code, or C<undef> when omitted.
+An empty string is a valid supplied code.
 
 C<_new> is private; applications create failures through authentication result
 helpers.
