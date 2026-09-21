@@ -79,3 +79,6 @@ Each example has its own `README.md` explaining how to run it.
   applications using Authentication v1: an inline three-route comparison and a
   group-protected variant with a shared browser walkthrough. Crypt::JWT is an
   example-local optional dependency.
+- [auth-extensions](auth-extensions/README.md) — six small, executable companions
+  for custom users, Basic backend objects, context placement, ordinary response
+  forms, protocol admission, and challenge headers.

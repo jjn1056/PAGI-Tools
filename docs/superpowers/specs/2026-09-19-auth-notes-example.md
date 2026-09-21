@@ -2,7 +2,7 @@
 
 Date: 2026-09-19
 
-Status: **runnable introductory Notes example; extension coverage assigned to Task 7**.
+Status: **runnable introductory Notes example and focused extension companions delivered**.
 
 This is the companion application for the
 [Auth design](2026-09-17-authentication-backends-and-context-design.md).
@@ -12,7 +12,8 @@ Authentication establishes context; handlers own authorization and responses.
 The broader guard/policy example is preserved as
 [historical research](2026-09-19-auth-notes-policy-research-snapshot.md).
 The numbered variations below retain the developed coverage requirements;
-Task 7 supplies focused `examples/auth-extensions` companions. The existing
+the focused [extension companions](../../../examples/auth-extensions/README.md)
+provide executable examples for the settled extension contracts. The existing
 [JWT variants](../../../examples/auth-jwt-sandbox/README.md) already demonstrate
 inline and group-level responses against the implemented Auth API.
 
@@ -21,8 +22,22 @@ capability delivered by the project, including defaults, alternate configuration
 forms, and extension contracts. The main application is the introduction;
 numbered variations below are required companion examples, not optional future
 polish. A capability is not covered merely because prose mentions its name.
-The extension examples must exercise the settled interfaces before the
-Authentication example family is declared complete.
+The delivered extension examples exercise the settled interfaces listed in the
+coverage index below.
+
+| Delivered file | Executed by | Focus |
+| --- | --- | --- |
+| [01-users-and-results.pl](../../../examples/auth-extensions/01-users-and-results.pl) | [users and results script](../../../t/auth/11-extension-examples.t) | User/result forms, subclass default, grants and scope helpers |
+| [02-basic-backend.pl](../../../examples/auth-extensions/02-basic-backend.pl) | [Basic backend app](../../../t/auth/11-extension-examples.t) | Object backend, fixed Basic fixture, explicit refusal |
+| [03-context-and-placement.pl](../../../examples/auth-extensions/03-context-and-placement.pl) | [context and placement app](../../../t/auth/11-extension-examples.t) | Cloned context, nesting, placement and ownership |
+| [04-response-applications.pl](../../../examples/auth-extensions/04-response-applications.pl) | [response applications app](../../../t/auth/11-extension-examples.t) | Request, Response, Pages, object and native response forms |
+| [05-protocol-admission.pl](../../../examples/auth-extensions/05-protocol-admission.pl) | [protocol admission app](../../../t/auth/11-extension-examples.t) | HTTP, WebSocket and SSE refusal/admission |
+| [06-header-primitives.pl](../../../examples/auth-extensions/06-header-primitives.pl) | [header primitives script](../../../t/auth/11-extension-examples.t) | Formatter, raw/repeated fields and MCP-style header values |
+
+The introductory Notes routes are exercised by
+[their integration test](../../../t/integration-auth-notes.t); the
+[JWT companion test](../../../t/integration-auth-jwt-sandbox.t) executes both
+JWT variants.
 
 Clarity takes precedence over keeping everything in one application or file.
 Split the material into multiple small, independently understandable examples
@@ -262,7 +277,9 @@ without reading every handler.
 ## 1. Backend forms and result timing
 
 These backend variations follow the current request-only coderef/object contract.
-They are retained as focused companion requirements for Task 7.
+The delivered Basic object backend appears in
+[02-basic-backend.pl](../../../examples/auth-extensions/02-basic-backend.pl);
+the code below retains the broader backend-form rationale.
 A synchronous callback can use the in-memory fixture directly:
 
 ```perl
@@ -454,8 +471,9 @@ authentication middleware was forgotten.
 Authentication has no failure renderer or `on_failure` option. Its result carries
 only a user, credentials, and optional failure with `code`/`message` readers.
 Handlers or ordinary middleware construct status and challenge headers explicitly.
-The main application uses JSON responses; Task 7 supplies focused response-form
-companions for synchronous/asynchronous handlers, Pages values, `to_app` objects,
+The main application uses JSON responses;
+[04-response-applications.pl](../../../examples/auth-extensions/04-response-applications.pl)
+demonstrates synchronous/asynchronous handlers, Pages values, `to_app` objects,
 and native applications adapted with `PAGI::Utils::as_app_object` where a Route
 needs an application object. These remain ordinary PAGI application contracts.
 
@@ -692,7 +710,8 @@ requirements, maps internal grants, or fetches metadata automatically.
 
 Every public constructor, option, method, and supported configuration
 form must map to concrete example code and an observable result before this
-example family is called complete. Complete the assigned extension examples;
+example family is called complete. The assigned focused extension examples are
+indexed above;
 do not omit an awkward capability to make the API appear simpler. Conversely,
 this coverage requirement does not expand implementation scope to every feature
 mentioned as an open possibility in the design.
