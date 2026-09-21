@@ -8,6 +8,7 @@ use PAGI::Auth::Credentials ();
 use PAGI::Auth::Failure ();
 use PAGI::Auth::Result ();
 use PAGI::Auth::UnauthenticatedUser ();
+use PAGI::Utils::Headers ();
 use PAGI::Utils::Scope ();
 
 our @EXPORT = ();
@@ -68,28 +69,7 @@ sub unauth_result {
 sub www_authenticate {
     my ($proto, @args) = _factory_invocation(@_);
     _validate_invocant($proto);
-    croak 'PAGI::Auth www_authenticate scheme is required' unless @args;
-    my $scheme = shift @args;
-    my $token = qr/\A[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+\z/;
-    croak 'PAGI::Auth www_authenticate scheme must be an HTTP token'
-        unless defined($scheme) && !ref($scheme) && $scheme =~ $token;
-    croak 'PAGI::Auth www_authenticate parameters must be name/value pairs'
-        if @args % 2;
-    my (%seen, @serialized);
-    while (@args) {
-        my ($name, $value) = splice(@args, 0, 2);
-        croak 'PAGI::Auth www_authenticate parameter name must be an HTTP token'
-            unless defined($name) && !ref($name) && $name =~ $token;
-        croak "PAGI::Auth www_authenticate duplicate parameter '$name'"
-            if $seen{lc $name}++;
-        croak "PAGI::Auth www_authenticate value for '$name' must be a defined scalar"
-            unless defined($value) && !ref($value);
-        croak "PAGI::Auth www_authenticate value for '$name' must be an HTTP quoted-string byte value"
-            unless $value =~ /\A[\x09\x20-\x7e\x80-\xff]*\z/;
-        $value =~ s/([\\"])/\\$1/g;
-        push @serialized, $name . '="' . $value . '"';
-    }
-    return @serialized ? $scheme . ' ' . join(', ', @serialized) : $scheme;
+    return PAGI::Utils::Headers::www_authenticate(@args);
 }
 
 sub _factory_invocation {

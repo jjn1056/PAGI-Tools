@@ -117,6 +117,20 @@ subtest 'get returns the LAST value and never comma-joins' => sub {
     is [$h->get_all('vary')], ['Accept','Accept-Encoding'], 'get_all keeps values separate, in order';
 };
 
+subtest 'get_single requires exactly one field occurrence' => sub {
+    my $one = PAGI::Headers->new([['X-One', 'value']]);
+    is $one->get_single('x-one'), 'value', 'one occurrence returns its raw value';
+    is $one->get_single('missing'), undef, 'missing field returns undef';
+
+    my $duplicate = PAGI::Headers->new([['X-One', 'first'], ['x-one', 'second']]);
+    is $duplicate->get('X-One'), 'second', 'raw get keeps its last-value contract';
+    is $duplicate->get_single('X-One'), undef, 'duplicates are not selected';
+    like dies { $duplicate->get_single('X-One', raise_on_error => 1) },
+        qr/single|multiple|occurrence/i, 'raise_on_error reports duplicate fields';
+    like dies { $one->get_single('X-One', unknown => 1) }, qr/unknown option/i,
+        'unknown options are programming errors';
+};
+
 subtest 'header values are opaque bytes: CR/LF/NUL/whitespace pass through' => sub {
     # The container never sanitizes. The SERVER rejects injection bytes when it
     # emits a response (PAGI::Spec::Www, "Response Start"); these pin the

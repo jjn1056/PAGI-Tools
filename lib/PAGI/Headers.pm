@@ -3,6 +3,7 @@ package PAGI::Headers;
 use strict;
 use warnings;
 use Carp qw(croak);
+use PAGI::Utils::Headers ();
 
 # Iterating @{$headers} yields the [name,value] pairs (the PAGI wire form), so
 # `@{$res->headers}` callers keep working. READ-ONLY: it returns a COPY, so
@@ -49,6 +50,31 @@ however, be B<defined>: C<add>, C<set>, and C<set_default> C<croak> on an C<unde
 value rather than storing it, since an undefined header value is a caller bug, not
 data.
 
+=head2 get_single($name, %opts)
+
+Returns a raw field value only when exactly one case-insensitive occurrence of
+C<$name> exists. Missing fields return C<undef>. Duplicate fields, even with
+identical values, also return C<undef> by default, or raise with
+C<raise_on_error =E<gt> 1>. The value is not trimmed, parsed, or rewritten.
+The only option is C<raise_on_error>; unknown or duplicate options are errors.
+
+=head2 authorization_bearer(%opts)
+
+Reads a single Authorization field and returns its opaque Bearer token. Missing
+fields, duplicate fields, another identifiable scheme, and malformed input
+return C<undef> by default. C<raise_on_error =E<gt> 1> raises for duplicates or
+malformed Bearer credentials. Parsing uses the shared
+L<PAGI::Utils::Headers/parse_authorization_bearer($value, %opts)> rules and does
+not verify or decode the token.
+
+=head2 authorization_basic(%opts)
+
+Reads a single Authorization field and returns C<(username, password)> in list
+context after shared Basic parsing. It returns C<(undef, undef)> for missing,
+duplicate, another-scheme, or malformed input by default. C<raise_on_error =E<gt>
+1> raises for duplicates or malformed Basic credentials. Credential bytes are
+not decoded as characters or verified.
+
 =cut
 
 # ASCII-only lowercase for name keying. Field names are ASCII tokens (RFC 7230);
@@ -90,6 +116,31 @@ sub get_all {
     croak("header name required") unless defined $name;
     my $key = _fold($name);
     return map { $_->[1] } grep { _fold($_->[0]) eq $key } @{$self->{pairs}};
+}
+
+sub get_single {
+    my ($self, $name, @args) = @_;
+    my $raise = _read_options('get_single', @args);
+    croak("header name required") unless defined $name;
+    my @values = $self->get_all($name);
+    return undef unless @values;
+    if (@values > 1) {
+        croak('PAGI::Headers get_single found multiple occurrences of one field') if $raise;
+        return undef;
+    }
+    return $values[0];
+}
+
+sub authorization_bearer {
+    my ($self, @args) = @_;
+    my $value = $self->get_single('Authorization', @args);
+    return PAGI::Utils::Headers::parse_authorization_bearer($value, @args);
+}
+
+sub authorization_basic {
+    my ($self, @args) = @_;
+    my $value = $self->get_single('Authorization', @args);
+    return PAGI::Utils::Headers::parse_authorization_basic($value, @args);
 }
 
 sub has {
@@ -184,6 +235,23 @@ sub to_hash {
     my ($self, $multi) = @_;
     return { map { $_ => [ $self->get_all($_) ] } $self->names } if $multi;
     return { map { $_ => $self->get($_) } $self->names };
+}
+
+sub _read_options {
+    my ($method, @args) = @_;
+    croak "PAGI::Headers $method options must be key/value pairs" if @args % 2;
+    my %opts;
+    while (@args) {
+        my ($name, $value) = splice @args, 0, 2;
+        croak "PAGI::Headers $method option names must be defined scalars"
+            unless defined($name) && !ref($name);
+        croak "PAGI::Headers $method has unknown option '$name'"
+            unless $name eq 'raise_on_error';
+        croak "PAGI::Headers $method has duplicate option '$name'"
+            if exists $opts{$name};
+        $opts{$name} = $value;
+    }
+    return $opts{raise_on_error} ? 1 : 0;
 }
 
 # Debug/inspection only -- NOT a wire-emission helper. It does not validate or

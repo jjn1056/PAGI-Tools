@@ -6,7 +6,6 @@ use PAGI::Headers ();
 use PAGI::Authority ();
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Cookie::Baker qw(crush_cookie);
-use MIME::Base64 qw(decode_base64);
 use Future::AsyncAwait;
 use JSON::MaybeXS qw(decode_json);
 use Carp qw(croak carp);
@@ -242,24 +241,14 @@ sub preferred_type {
 
 # Extract Bearer token from Authorization header
 sub bearer_token {
-    my $self = shift;
-    my $auth = $self->header('authorization') // '';
-    if ($auth =~ /^Bearer\s+(.+)$/i) {
-        return $1;
-    }
-    return undef;
+    my ($self, @opts) = @_;
+    return $self->headers->authorization_bearer(@opts);
 }
 
 # Extract Basic auth credentials
 sub basic_auth {
-    my $self = shift;
-    my $auth = $self->header('authorization') // '';
-    if ($auth =~ /^Basic\s+(.+)$/i) {
-        my $decoded = decode_base64($1);
-        my ($user, $pass) = split /:/, $decoded, 2;
-        return ($user, $pass);
-    }
-    return (undef, undef);
+    my ($self, @opts) = @_;
+    return $self->headers->authorization_basic(@opts);
 }
 
 # Path parameters - captured from URL path by router
@@ -1174,15 +1163,24 @@ integration truly requires the server's raw transport handle.
 
 =head2 bearer_token
 
-    my $token = $req->bearer_token;
+    my $token = $req->bearer_token(raise_on_error => 1);
 
-Extract Bearer token from Authorization header.
+Returns an RFC 6750 Bearer token only when exactly one Authorization field is
+present. Missing fields and another identifiable scheme return C<undef>.
+Malformed Bearer credentials, including the former permissive whitespace and
+partial-token forms, return C<undef> by default or raise with
+C<raise_on_error =E<gt> 1>. Unknown options are errors.
 
 =head2 basic_auth
 
-    my ($user, $pass) = $req->basic_auth;
+    my ($user, $pass) = $req->basic_auth(raise_on_error => 1);
 
-Decode Basic auth credentials.
+Returns Basic C<(username, password)> bytes in list context only when exactly
+one Authorization field contains a valid conventional padded Base64 credential.
+It splits at the first colon and does not decode character encodings or verify
+credentials. Missing, another scheme, duplicates, and malformed input return
+C<(undef, undef)> by default; C<raise_on_error =E<gt> 1> raises for duplicates
+or malformed Basic credentials. Unknown options are errors.
 
 =head2 scope
 
