@@ -98,3 +98,24 @@ perlbrew exec --with perl-5.40.0@default perl -Ilib -c lib/PAGI/Auth.pm
 lib/PAGI/Auth.pm syntax OK
 Result: PASS (exit 0)
 ```
+
+## Review follow-up: installation-only scope
+
+The recipe was narrowed to the canonical installation boundary. It now begins
+inside custom middleware after credentials have already been verified, constructs
+an authenticated completed result with explicit grants, notes the guest-result
+alternative, installs the whole entry with `clone_scope`, and awaits downstream.
+The example no longer invents a verifier callback or bare-user/undefined return
+contract. This clarification does not restrict application-owned verification.
+
+Exact covering checks after the clarification:
+
+```text
+perlbrew exec --with perl-5.40.0@default podchecker lib/PAGI/Auth.pm
+lib/PAGI/Auth.pm pod syntax OK.
+Result: PASS (exit 0)
+
+perlbrew exec --with perl-5.40.0@default perl -Ilib -c lib/PAGI/Auth.pm
+lib/PAGI/Auth.pm syntax OK
+Result: PASS (exit 0)
+```

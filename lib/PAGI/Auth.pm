@@ -171,36 +171,22 @@ stateless factory.
 =head1 INSTALLING CUSTOM AUTHENTICATION CONTEXT
 
 Custom authentication middleware publishes a completed result under the public
-C<pagi.auth> scope key. Pass unsupported scope types through before doing
-authentication work:
+C<pagi.auth> scope key. Inside custom middleware, after credentials have been
+verified:
 
-  use Future;
-  use Future::AsyncAwait;
   use PAGI::Auth qw(auth_result unauth_result);
   use PAGI::Utils::Middleware qw(clone_scope);
 
-  sub with_custom_authentication {
-      my ($next, $verify) = @_;
+  my $result = auth_result(
+      user   => $verified_user,
+      scopes => ['catalog:read'],
+  );
+  # A guest can instead be established with unauth_result(...).
+  my $child_scope = clone_scope($scope, {
+      'pagi.auth' => $result,
+  });
 
-      return async sub {
-          my ($scope, $receive, $send) = @_;
-          return await $next->($scope, $receive, $send)
-              unless ($scope->{type} // '') =~ /\A(?:http|websocket|sse)\z/;
-
-          my $verified_user = await Future->wrap($verify->($scope));
-          my $result = defined($verified_user)
-              ? auth_result(
-                  user   => $verified_user,
-                  scopes => ['catalog:read'],
-              )
-              : unauth_result();
-
-          my $child_scope = clone_scope($scope, {
-              'pagi.auth' => $result,
-          });
-          return await $next->($child_scope, $receive, $send);
-      };
-  }
+  await $next->($child_scope, $receive, $send);
 
 Downstream code reads the installed value with C<auth($request)>. Installation
 replaces the whole C<pagi.auth> entry in a shallow child scope, leaving the
