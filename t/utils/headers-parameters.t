@@ -80,6 +80,9 @@ subtest 'response disposition formats character filenames as wire bytes' => sub 
     is(content_disposition('attachment', filename => pack('C*', 0xC3, 0xA9)),
         "attachment; filename*=UTF-8''%C3%83%C2%A9",
         'encoded UTF-8 bytes must be decoded by the caller first');
+    is(content_disposition('attachment', 'filename*' => "X{Y}''report.txt"),
+        "attachment; filename*=X{Y}''report.txt",
+        'extended filename accepts charset brace characters');
 
     for my $case (
         ['missing disposition', [], qr/disposition/i],
@@ -90,6 +93,8 @@ subtest 'response disposition formats character filenames as wire bytes' => sub 
         ['filename control', ['attachment', filename => "a\x0ab"], qr/filename/i],
         ['ordinary control', ['attachment', note => "a\x0ab"], qr/value/i],
         ['bad percent escape', ['attachment', 'filename*' => "UTF-8''bad%2"], qr/filename\*/i],
+        ['dot in charset', ['attachment', 'filename*' => "UTF.8''report.txt"], qr/filename\*/i],
+        ['pipe in charset', ['attachment', 'filename*' => "UTF|8''report.txt"], qr/filename\*/i],
         ['non-ASCII extended value', ['attachment', 'filename*' => 'résumé'], qr/filename\*/i],
         ['generated collision', ['attachment', filename => 'résumé',
             'filename*' => "UTF-8''resume"], qr/filename\*/i],

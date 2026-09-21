@@ -207,7 +207,7 @@ sub content_disposition {
         }
         elsif ($folded eq 'filename*') {
             croak 'PAGI::Utils::Headers content_disposition filename* must be a valid ASCII extended value'
-                unless $value =~ /\A[A-Za-z0-9!#\$%&+\-.\^_`|~]+'(?:[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*)?'(?:[A-Za-z0-9!#\$&+\-.\^_`|~]|%[0-9A-Fa-f]{2})*\z/;
+                unless $value =~ /\A[A-Za-z0-9!#\$%&+\-\^_`{}~]+'(?:[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*)?'(?:[A-Za-z0-9!#\$&+\-.\^_`|~]|%[0-9A-Fa-f]{2})*\z/;
             push @formatted, "$name=$value";
         }
         else {
