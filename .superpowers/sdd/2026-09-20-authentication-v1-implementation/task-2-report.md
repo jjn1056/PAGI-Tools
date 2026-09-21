@@ -77,3 +77,24 @@ No active caller of the removed APIs remains outside historical design/plan
 documents. Legacy middleware descriptions remain because middleware removal is
 Task 3. No protocol helper or unrelated dirty file was changed. No unresolved
 contract conflicts or infrastructure concerns were found.
+
+## Review follow-up: custom context installation
+
+Added the public custom-middleware recipe requested by Task 2 review. The Auth
+reference now shows unsupported scope passthrough, completed authenticated and
+guest result construction, whole-entry installation under `pagi.auth` with
+`clone_scope`, and downstream invocation. Its explanation states that the child
+scope replaces the complete entry while preserving the original result, user,
+and scopes references without merging outer context.
+
+Exact covering checks:
+
+```text
+perlbrew exec --with perl-5.40.0@default podchecker lib/PAGI/Auth.pm
+lib/PAGI/Auth.pm pod syntax OK.
+Result: PASS (exit 0)
+
+perlbrew exec --with perl-5.40.0@default perl -Ilib -c lib/PAGI/Auth.pm
+lib/PAGI/Auth.pm syntax OK
+Result: PASS (exit 0)
+```
