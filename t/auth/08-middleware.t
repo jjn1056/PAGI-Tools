@@ -2,6 +2,7 @@ use strict;
 use warnings;
 use Test2::V0;
 use Future;
+use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 
 use PAGI::Auth qw(auth auth_result unauth_result);
@@ -244,6 +245,80 @@ subtest 'constructor accepts only one valid backend option' => sub {
     for my $case (@invalid) {
         like dies { $case->[1]->() }, qr/backend|unknown|option/i, $case->[0];
     }
+};
+
+subtest 'cancellation follows the pending backend or downstream operation' => sub {
+    for my $phase (qw(backend downstream)) {
+        my $pending = Future->new;
+        my ($calls, $responses, $cancelled) = (0, 0, 0);
+        $pending->on_cancel(sub { ++$cancelled });
+        my $middleware = PAGI::Middleware::Authentication->new(backend => sub {
+            return $phase eq 'backend' ? $pending : unauth_result();
+        });
+        my $app = $middleware->wrap(async sub {
+            ++$calls;
+            await $pending;
+            ++$responses;
+        });
+        my $running = $app->({ type => 'http', headers => [] },
+            sub { die 'unexpected receive' }, sub { die 'unexpected send' });
+        ok !$running->is_ready, "$phase is pending";
+        $running->cancel;
+        ok $pending->is_cancelled, "$phase operation receives cancellation";
+        is $cancelled, 1, "$phase cancellation happens once";
+        is $calls, $phase eq 'backend' ? 0 : 1, "$phase downstream call count";
+        # A late producer completion must not resume the cancelled invocation.
+        $pending->done(unauth_result());
+        is $responses, 0, "$phase has no late response";
+        ok $running->is_cancelled, "$phase invocation remains cancelled";
+    }
+};
+
+subtest 'a pending backend failure stays operational and never installs a guest' => sub {
+    my $pending = Future->new;
+    my $called = 0;
+    my $middleware = PAGI::Middleware::Authentication->new(backend => sub { $pending });
+    my $running = invocation($middleware, { type => 'http', headers => [] }, sub {
+        ++$called;
+        return Future->done;
+    });
+    $pending->fail('database unavailable', 'storage', 'lookup');
+    is [$running->failure], ['database unavailable', 'storage', 'lookup'],
+        'failure category and details propagate unchanged';
+    is $called, 0, 'operational failure never reaches a guest handler';
+};
+
+subtest 'one middleware keeps reverse-order pending invocations isolated' => sub {
+    my %pending = map { $_ => Future->new } qw(first second);
+    my (@seen, @running);
+    my $middleware = PAGI::Middleware::Authentication->new(backend => sub {
+        return $pending{$_[0]->header('x-request')};
+    });
+    my $app = $middleware->wrap(sub {
+        my ($scope) = @_;
+        my $context = auth($scope);
+        push @seen, [
+            $context->user->identity,
+            [@{$context->credentials->scopes}],
+            $context->failure ? $context->failure->code : undef,
+        ];
+        return Future->done;
+    });
+    for my $name (qw(first second)) {
+        push @running, $app->({ type => 'http', headers => [['x-request', $name]] },
+            sub { die 'unexpected receive' }, sub { die 'unexpected send' });
+    }
+    is \@seen, [], 'both backends are pending';
+    $pending{second}->done(unauth_result(scopes => ['preview'],
+        failure => { message => 'Rejected second', code => 'second_rejected' }));
+    ok !$running[0]->is_ready, 'first invocation remains pending';
+    $pending{first}->done(auth_result(
+        user => PAGI::Auth::SimpleUser->new(identity => 'first'), scopes => ['private']));
+    $_->get for @running;
+    is \@seen, [
+        ['', ['preview'], 'second_rejected'],
+        ['first', ['private'], undef],
+    ], 'user, grants, and failure belong to their own completion';
 };
 
 done_testing;
