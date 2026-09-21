@@ -62,7 +62,8 @@ sub parse_etag_list {
 
     my (@tags, $wildcards);
     $wildcards = 0;
-    for my $value (@$values) {
+    for my $field_value (@$values) {
+        my $value = $field_value;
         pos($value) = 0;
         while (pos($value) < length($value)) {
             $value =~ /\G[\x20\x09]*/gc;

@@ -6,6 +6,8 @@ use warnings;
 use Carp qw(croak);
 use Digest::MD5 qw(md5_hex);
 use Fcntl qw(S_ISREG);
+use PAGI::Utils::Headers qw(format_etag parse_etag);
+use PAGI::Headers ();
 
 =encoding UTF-8
 
@@ -62,7 +64,7 @@ my %MIME_TYPES = (
 );
 
 my %KNOWN_ARGS = map { $_ => 1 }
-    qw(path scope offset length handle_ranges etag);
+    qw(path scope offset length handle_ranges handle_conditionals etag);
 
 sub new {
     my ($class, @pairs) = @_;
@@ -112,15 +114,21 @@ sub new {
             && ($handle_ranges eq '0' || $handle_ranges eq '1');
     $handle_ranges = $handle_ranges ? 1 : 0;
 
+    my $handle_conditionals = exists($args{handle_conditionals})
+        ? $args{handle_conditionals} : 1;
+    croak 'File plan handle_conditionals must be a boolean'
+        unless defined($handle_conditionals) && !ref($handle_conditionals)
+            && ($handle_conditionals eq '0' || $handle_conditionals eq '1');
+
     my $etag_policy = exists($args{etag}) ? $args{etag} : 'auto';
     croak 'File plan ETag policy must be automatic, disabled, or an entity-tag'
         if ref($etag_policy);
     my $etag;
     if (defined($etag_policy)) {
         if ($etag_policy eq 'auto') {
-            $etag = '"' . md5_hex(join '-',
+            $etag = format_etag(md5_hex(join '-',
                 @stat[0, 1, 2, 7, 9], $offset, $length,
-            ) . '"';
+            ));
         } else {
             croak 'File plan explicit ETag must be a valid entity-tag'
                 unless _valid_entity_tag($etag_policy);
@@ -137,10 +145,25 @@ sub new {
         _etag              => $etag,
     }, $class;
 
-    my $if_none_match = _first_header($scope, 'if-none-match');
-    if (defined($etag) && $if_none_match && $if_none_match eq $etag) {
+    my $method = $scope->{method};
+    my $conditional_http = $handle_conditionals && $scope->{type} eq 'http'
+        && defined($method) && !ref($method)
+        && ($method eq 'GET' || $method eq 'HEAD');
+    my $not_modified = 0;
+    if ($conditional_http) {
+        my $request_headers = PAGI::Headers->new($scope->{headers} // []);
+        if ($request_headers->has('If-None-Match')) {
+            my $condition = $request_headers->if_none_match;
+            $not_modified = $condition->{any}
+                || (defined($etag)
+                    && PAGI::Utils::Headers::etag_matches($condition, $etag,
+                        weak => 1))
+                if defined $condition;
+        }
+    }
+    if ($not_modified) {
         $self->{_status} = 304;
-        $self->{_headers} = [['etag', $etag]];
+        $self->{_headers} = defined($etag) ? [['etag', $etag]] : [];
         $self->{_body_event} = {
             type => 'http.response.body', body => '', more => 0,
         };
@@ -157,7 +180,6 @@ sub new {
     push @base_headers, ['etag', $etag] if defined $etag;
 
     my $range;
-    my $method = $scope->{method};
     if ($handle_ranges
             && defined($method) && !ref($method) && $method eq 'GET') {
         my @values = _header_values($scope, 'range');
@@ -227,7 +249,9 @@ sub _nonnegative_integer {
 sub _valid_entity_tag {
     my ($value) = @_;
     return 0 unless defined($value) && !ref($value) && !utf8::is_utf8($value);
-    return $value =~ /\A(?:W\/)?"[\x21\x23-\x7e\x80-\xff]*"\z/ ? 1 : 0;
+    my $parsed = parse_etag($value);
+    return defined($parsed) && format_etag($parsed->{value},
+        weak => $parsed->{weak}) eq $value ? 1 : 0;
 }
 
 sub _header_values {
@@ -241,12 +265,6 @@ sub _header_values {
         push @values, $header->[1] if lc($field) eq $name;
     }
     return @values;
-}
-
-sub _first_header {
-    my ($scope, $name) = @_;
-    my @values = _header_values($scope, $name);
-    return @values ? $values[0] : undef;
 }
 
 sub _single_byte_range {

@@ -166,6 +166,8 @@ sub _plan_for_scope {
         scope         => $scope,
         handle_ranges => $self->{_handle_ranges} && $self->status == 200
             ? 1 : 0,
+        handle_conditionals => $self->status >= 200 && $self->status < 300
+            && $self->status != 204 && $self->status != 205 ? 1 : 0,
         etag          => $self->{_etag_policy},
     );
     push @args, offset => $self->{_offset} if exists $self->{_offset};
@@ -305,8 +307,8 @@ status must be an integer from 100 through 599, but body-forbidden 1xx, 204,
 205, and 304 are rejected. File additionally rejects an explicit 206: only a
 valid request Range plan may select 206. Range handling is enabled only while
 the configured status is 200. A matched C<If-None-Match> plan can select 304
-for any configured status; when range handling is enabled, an invalid processed
-Range selects 416.
+for eligible 2xx representation statuses; when range handling is enabled, an
+invalid processed Range selects 416.
 
 =item * C<content_type>
 
@@ -370,8 +372,11 @@ tags croak.
 
 =back
 
-C<If-None-Match> compares the first field value exactly with the selected
-ETag. File does not implement Last-Modified, If-Modified-Since, or If-Range.
+C<If-None-Match> reads all field values and uses weak comparison against the
+selected ETag for exact HTTP GET/HEAD requests. A wildcard matches an existing
+selected file even when ETag generation is disabled. Only eligible 2xx
+representation responses can become 304, and matching precedes Range delivery.
+File does not implement Last-Modified, If-Modified-Since, or If-Range.
 
 For example, C<offset =E<gt> 1024, length =E<gt> 65536> is advertised as one
 65536-byte 200 representation. C<Range: bytes=100-199> then produces logical

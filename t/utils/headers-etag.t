@@ -42,6 +42,14 @@ is parse_etag_list([' , "a",, W/"b,c", ']), { any => 0, tags => [
     { value => 'a', weak => 0 }, { value => 'b,c', weak => 1 },
 ] }, 'cursor consumes complete tags before commas';
 is parse_etag_list(['*']), { any => 1, tags => [] }, 'wildcard condition';
+my $positioned_fields = ['"alpha", "beta"'];
+$positioned_fields->[0] =~ /"alpha", /g;
+my $original_position = pos($positioned_fields->[0]);
+is parse_etag_list($positioned_fields), { any => 0, tags => [
+    { value => 'alpha', weak => 0 }, { value => 'beta', weak => 0 },
+] }, 'parser reads a field with an existing regex position';
+is pos($positioned_fields->[0]), $original_position,
+    'list parsing preserves the caller field regex position';
 for my $bad (['*', '"a"'], ['"a", *'], ['*,'], [',*'], ['*', ''],
              ['"a"oops'], ['"a", W/"b'], ['w/"a"']) {
     is parse_etag_list($bad), undef, 'malformed complete condition is unusable';
