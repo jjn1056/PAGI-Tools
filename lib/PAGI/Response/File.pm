@@ -11,6 +11,7 @@ use Scalar::Util qw(blessed);
 
 use parent 'PAGI::Response';
 use PAGI::Response::File::Plan ();
+use PAGI::Utils::Headers ();
 
 =encoding UTF-8
 
@@ -187,12 +188,11 @@ sub _wire_headers_for_plan {
     if (exists($self->{_filename}) || $self->{_inline}) {
         @$configured = grep { lc($_->[0]) ne 'content-disposition' }
             @$configured;
-        my $disposition = $self->{_inline} ? 'inline' : 'attachment';
-        if (exists $self->{_filename}) {
-            my $filename = $self->{_filename};
-            $filename =~ s/([\\"])/\\$1/g;
-            $disposition .= qq{; filename="$filename"};
-        }
+        my @parameters = exists($self->{_filename})
+            ? (filename => $self->{_filename}) : ();
+        my $disposition = PAGI::Utils::Headers::content_disposition(
+            $self->{_inline} ? 'inline' : 'attachment', @parameters,
+        );
         push @$configured, ['Content-Disposition', $disposition];
     }
 
@@ -328,16 +328,19 @@ replaces an application-supplied field of that name.
 
 =item * C<filename>
 
-Optional. It must be a defined non-reference scalar and may not contain bytes
-C<0x00> through C<0x1f> or C<0x7f>. It does not select or alter C<$path>.
+Optional. It must be a defined non-reference scalar and may not contain
+characters C<U+0000> through C<U+001F> or C<U+007F>. It does not select or alter C<$path>.
 Without true C<inline>, it generates an attachment Content-Disposition;
-backslash and double quote are escaped in the quoted filename parameter.
+ASCII filenames are emitted in a quoted C<filename> parameter, escaping
+backslash and double quote. Non-ASCII character filenames are emitted as a
+UTF-8 percent-encoded C<filename*> extended value, without an invented ASCII
+fallback. Callers with encoded text must decode it to Perl characters first.
 
 =item * C<inline>
 
 Optional exact boolean scalar C<0> or C<1>; the default is false. True emits an
-inline Content-Disposition, with a filename parameter when C<filename> is also
-present. False with no C<filename> emits no generated disposition.
+inline Content-Disposition, with C<filename> or C<filename*> when C<filename>
+is also present. False with no C<filename> emits no generated disposition.
 
 =item * C<offset>, C<length>
 

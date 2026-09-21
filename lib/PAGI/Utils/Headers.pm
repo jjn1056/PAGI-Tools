@@ -3,6 +3,7 @@ package PAGI::Utils::Headers;
 use strict;
 use warnings;
 use Carp qw(croak);
+use Encode qw(encode);
 use Exporter qw(import);
 use MIME::Base64 qw(decode_base64);
 
@@ -14,6 +15,7 @@ our @EXPORT_OK = qw(
     parse_header_parameters
     format_header_parameters
     quote_header_value
+    content_disposition
 );
 
 my $HTTP_TOKEN = qr/[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+/;
@@ -160,6 +162,66 @@ sub quote_header_value {
     return _quote_header_value($_[0], 'quote_header_value');
 }
 
+sub content_disposition {
+    croak 'PAGI::Utils::Headers content_disposition disposition is required' unless @_;
+    my ($disposition, @pairs) = @_;
+    croak 'PAGI::Utils::Headers content_disposition disposition must be an HTTP token'
+        unless defined($disposition) && !ref($disposition)
+            && $disposition =~ /\A$HTTP_TOKEN\z/;
+    croak 'PAGI::Utils::Headers content_disposition parameters must be name/value pairs'
+        if @pairs % 2;
+
+    my (%seen, @formatted);
+    my $explicit_extended = 0;
+    for (my $i = 0; $i < @pairs; $i += 2) {
+        my ($name, $value) = @pairs[$i, $i + 1];
+        croak 'PAGI::Utils::Headers content_disposition parameter name must be an HTTP token'
+            unless defined($name) && !ref($name) && $name =~ /\A$HTTP_TOKEN\z/;
+        my $folded = _ascii_fold($name);
+        croak "PAGI::Utils::Headers content_disposition duplicate parameter '$name'"
+            if $seen{$folded}++;
+        croak "PAGI::Utils::Headers content_disposition value for '$name' must be a defined scalar"
+            unless defined($value) && !ref($value);
+        $explicit_extended = 1 if $folded eq 'filename*';
+    }
+
+    while (@pairs) {
+        my ($name, $value) = splice @pairs, 0, 2;
+        my $folded = _ascii_fold($name);
+        if ($folded eq 'filename') {
+            croak 'PAGI::Utils::Headers content_disposition filename must not contain controls'
+                if $value =~ /[\x00-\x1f\x7f]/;
+            if ($value =~ /[^\x00-\x7f]/) {
+                croak 'PAGI::Utils::Headers content_disposition filename* conflicts with generated value'
+                    if $explicit_extended;
+                my $octets = eval { encode('UTF-8', $value, Encode::FB_CROAK | Encode::LEAVE_SRC) };
+                croak 'PAGI::Utils::Headers content_disposition filename contains an invalid character'
+                    unless defined $octets;
+                $octets =~ s/([^A-Za-z0-9!#\$&+\-.\^_`|~])/sprintf('%%%02X', ord($1))/ge;
+                push @formatted, "filename*=UTF-8''$octets";
+            }
+            else {
+                push @formatted, $name . '=' . _quote_header_value($value,
+                    'content_disposition filename');
+            }
+        }
+        elsif ($folded eq 'filename*') {
+            croak 'PAGI::Utils::Headers content_disposition filename* must be a valid ASCII extended value'
+                unless $value =~ /\A[A-Za-z0-9!#\$%&+\-.\^_`|~]+'(?:[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*)?'(?:[A-Za-z0-9!#\$&+\-.\^_`|~]|%[0-9A-Fa-f]{2})*\z/;
+            push @formatted, "$name=$value";
+        }
+        else {
+            push @formatted, $name . '=' . ($value =~ /\A$HTTP_TOKEN\z/
+                ? $value : _quote_header_value($value,
+                    "content_disposition value for '$name'"));
+        }
+    }
+    my $result = join('; ', $disposition, @formatted);
+    croak 'PAGI::Utils::Headers content_disposition result must be a byte string'
+        unless utf8::downgrade($result, 1);
+    return $result;
+}
+
 sub _quote_header_value {
     my ($value, $operation) = @_;
     croak "PAGI::Utils::Headers $operation must be an HTTP quoted-string byte value"
@@ -224,6 +286,8 @@ sub _ascii_fold {
 
 __END__
 
+=encoding UTF-8
+
 =head1 NAME
 
 PAGI::Utils::Headers - synchronous parsers and formatters for HTTP header values
@@ -233,6 +297,7 @@ PAGI::Utils::Headers - synchronous parsers and formatters for HTTP header values
   use PAGI::Utils::Headers qw(
       parse_authorization_bearer parse_authorization_basic www_authenticate
       parse_header_parameters format_header_parameters quote_header_value
+      content_disposition
   );
 
   my $token = parse_authorization_bearer($value, raise_on_error => 1);
@@ -242,6 +307,7 @@ PAGI::Utils::Headers - synchronous parsers and formatters for HTTP header values
   # { value => 'attachment', parameters => [filename => 'report; Q1.txt'] }
   my $field = format_header_parameters('attachment', filename => 'report; Q1.txt');
   my $quoted = quote_header_value('report.txt');
+  my $download = content_disposition('attachment', filename => 'résumé.pdf');
 
 =head1 DESCRIPTION
 
@@ -314,5 +380,25 @@ Always returns an HTTP quoted-string, escaping quotes and backslashes. It
 accepts HTTP quoted-string bytes, including HTAB and bytes above ASCII, but
 rejects other controls, wide characters, references, and undefined values.
 It does not encode characters or quote other grammars such as ETags.
+
+=head2 content_disposition($disposition, name =E<gt> $value, ...)
+
+Formats an HTTP Content-Disposition byte value. The disposition and parameter
+names must be HTTP tokens, and parameter names must be unique without regard
+to ASCII case. Pair order is preserved. Ordinary parameters use token syntax
+where possible and shared quoted-string escaping otherwise.
+
+The C<filename> value is a Perl character string. ASCII filenames always use
+a quoted C<filename> parameter. A filename containing non-ASCII characters
+instead uses C<filename*> with UTF-8 octets percent-encoded as an RFC 8187
+extended value; no ASCII fallback is invented. Callers holding encoded text
+must decode it before calling this function. Control characters and invalid
+Unicode characters in filenames are rejected.
+
+An explicit C<filename*> is an already formatted ASCII extended value. Its
+charset, optional language, percent escapes, and value syntax are checked,
+then it is emitted unchanged and without quotes. It may accompany an ASCII
+C<filename> fallback, but cannot accompany a non-ASCII C<filename> that would
+generate another C<filename*>. Invalid arguments raise an exception.
 
 =cut

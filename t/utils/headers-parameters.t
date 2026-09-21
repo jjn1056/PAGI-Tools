@@ -1,9 +1,13 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
+use utf8;
 use Test2::V0;
 use lib 'lib';
-use PAGI::Utils::Headers qw(parse_header_parameters format_header_parameters quote_header_value);
+use PAGI::Utils::Headers qw(
+    parse_header_parameters format_header_parameters quote_header_value
+    content_disposition
+);
 
 subtest 'complete parameter grammar preserves bytes, order and duplicates' => sub {
     is parse_header_parameters('attachment; filename="quarterly; report.txt"'),
@@ -55,6 +59,45 @@ subtest 'formatter quotes only when needed and rejects injection' => sub {
     like dies { format_header_parameters('x', a => undef) }, qr/value/i, 'undef value rejected';
     like dies { quote_header_value("x\x0a") }, qr/quoted-string/i, 'control byte rejected';
     like dies { quote_header_value("\x{100}") }, qr/quoted-string/i, 'wide character rejected';
+};
+
+subtest 'response disposition formats character filenames as wire bytes' => sub {
+    is(content_disposition('attachment', filename => 'report.pdf'),
+        'attachment; filename="report.pdf"', 'ASCII download filename');
+    my $value = content_disposition('attachment', filename => 'résumé.pdf');
+    is($value, "attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf",
+        'UTF-8 extended filename');
+    ok(!utf8::is_utf8($value), 'formatter produces a byte string');
+    is(content_disposition('attachment', filename => 'resume.pdf',
+        'filename*' => "UTF-8''r%C3%A9sum%C3%A9.pdf"),
+        "attachment; filename=\"resume.pdf\"; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf",
+        'explicit ASCII fallback and extended name');
+    is(content_disposition('inline', filename => 'a"b\\c.txt', note => 'Q1; draft'),
+        'inline; filename="a\\"b\\\\c.txt"; note="Q1; draft"',
+        'filename and ordinary parameters share safe quoted-string escaping');
+    is(content_disposition('attachment', note => 'first', other => 'second'),
+        'attachment; note=first; other=second', 'ordinary pair order is preserved');
+    is(content_disposition('attachment', filename => pack('C*', 0xC3, 0xA9)),
+        "attachment; filename*=UTF-8''%C3%83%C2%A9",
+        'encoded UTF-8 bytes must be decoded by the caller first');
+
+    for my $case (
+        ['missing disposition', [], qr/disposition/i],
+        ['invalid disposition', ['attach ment'], qr/disposition/i],
+        ['odd pairs', ['attachment', 'filename'], qr/pairs/i],
+        ['invalid name', ['attachment', 'bad name' => 'x'], qr/name/i],
+        ['duplicate name', ['attachment', Name => 'a', name => 'b'], qr/duplicate/i],
+        ['filename control', ['attachment', filename => "a\x0ab"], qr/filename/i],
+        ['ordinary control', ['attachment', note => "a\x0ab"], qr/value/i],
+        ['bad percent escape', ['attachment', 'filename*' => "UTF-8''bad%2"], qr/filename\*/i],
+        ['non-ASCII extended value', ['attachment', 'filename*' => 'résumé'], qr/filename\*/i],
+        ['generated collision', ['attachment', filename => 'résumé',
+            'filename*' => "UTF-8''resume"], qr/filename\*/i],
+        ['surrogate filename', ['attachment', filename => "\x{D800}"], qr/filename/i],
+    ) {
+        my ($label, $args, $error) = @$case;
+        like(dies { content_disposition(@$args) }, $error, "$label is rejected");
+    }
 };
 
 done_testing;

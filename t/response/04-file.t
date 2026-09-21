@@ -1,5 +1,6 @@
 use strict;
 use warnings;
+use utf8;
 
 use File::Spec;
 use File::Temp qw(tempdir);
@@ -266,6 +267,12 @@ subtest 'MIME, disposition, ETag, conditionals, and range arithmetic share one p
     is(event_header($named->[0], 'content-disposition'),
         'attachment; filename="monthly \\"report\\".json"',
         'filename defaults to a safely quoted attachment');
+
+    my $unicode = run_response(file_response($json, filename => 'résumé.pdf'));
+    my $disposition = event_header($unicode->[0], 'content-disposition');
+    is($disposition, "attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf",
+        'non-ASCII download filename is emitted as UTF-8 extended value');
+    ok(!utf8::is_utf8($disposition), 'wire disposition is a byte string');
 
     my $inline = run_response(file_response($json, inline => 1));
     is(event_header($inline->[0], 'content-disposition'), 'inline',
