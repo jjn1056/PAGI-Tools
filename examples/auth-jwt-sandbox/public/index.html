@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PAGI JWT Learning App</title>
+    <style>
+        body { font-family: sans-serif; margin: 40px; background: #f4f6f9; color: #333; }
+        .container { max-width: 700px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        button { background: #007bff; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-size: 16px; margin: 4px 4px 4px 0; }
+        button:hover { background: #0056b3; }
+        button:focus-visible { outline: 3px solid #333; outline-offset: 3px; }
+        button:disabled { opacity: 0.6; cursor: wait; }
+        pre { background: #eee; padding: 15px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .box { border: 1px solid #ccc; padding: 15px; margin: 15px 0; border-radius: 4px; background: #fafafa; }
+        .success { color: #176e32; font-weight: bold; }
+        .error { color: #b21e2c; font-weight: bold; }
+        .bad-token { background: #b21e2c; }
+        .no-token { background: #59616a; }
+        #token-display { margin-top: 10px; }
+        @media (max-width: 600px) {
+            body { margin: 12px; }
+            .container { padding: 18px; }
+        }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <h1>JWT Learning Sandbox</h1>
+        <p>Use a PAGI backend to follow a signed token from login to a protected request.</p>
+
+        <section class="box" aria-labelledby="login-heading">
+            <h2 id="login-heading">Step 1: Generate a JWT</h2>
+            <p>Log in as the dummy user <code>alice_dev</code>. The backend signs a token that expires in one hour.</p>
+            <button id="login-button" type="button">Log In (Get JWT)</button>
+            <div id="token-display" role="status" aria-live="polite">
+                <p id="token-status">No token yet.</p>
+                <pre id="token-value" hidden></pre>
+            </div>
+            <p>A signed JWT is not encrypted. Its header and payload can be decoded; the backend verifies its signature and expiration.</p>
+        </section>
+
+        <section class="box" aria-labelledby="protected-heading">
+            <h2 id="protected-heading">Step 2: Access a Protected Route</h2>
+            <p>Send your token in <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+            <button id="protected-button" type="button">Access Protected Data</button>
+        </section>
+
+        <section class="box" aria-labelledby="failure-heading">
+            <h2 id="failure-heading">Step 3: Try a Bad or Missing Token</h2>
+            <p>Compare an invalid token with a request that has no credentials. Look at the status and <code>WWW-Authenticate</code> header.</p>
+            <button id="bad-token-button" class="bad-token" type="button">Send Malformed Token</button>
+            <button id="no-token-button" class="no-token" type="button">Send No Token</button>
+        </section>
+
+        <section aria-labelledby="response-heading">
+            <h2 id="response-heading">API Response</h2>
+            <pre id="api-response" role="status" aria-live="polite">Response will appear here...</pre>
+        </section>
+        <p><small>This sandbox uses a dummy login and a public learning key. Your token is held in page memory and cleared on reload.</small></p>
+    </main>
+
+    <script>
+        let savedToken = "";
+
+        const tokenStatus = document.getElementById('token-status');
+        const tokenValue = document.getElementById('token-value');
+        const apiResponse = document.getElementById('api-response');
+        const buttons = Array.from(document.querySelectorAll('button'));
+
+        async function showRequest(action) {
+            buttons.forEach(button => { button.disabled = true; });
+            try {
+                await action();
+            } catch (error) {
+                apiResponse.textContent = `Request failed: ${error.message}`;
+            } finally {
+                buttons.forEach(button => { button.disabled = false; });
+            }
+        }
+
+        async function login() {
+            savedToken = "";
+            tokenStatus.textContent = 'Requesting a token...';
+            tokenStatus.className = '';
+            tokenValue.textContent = '';
+            tokenValue.hidden = true;
+
+            try {
+                const response = await fetch('/login', { method: 'POST' });
+                const data = await response.json();
+                if (!response.ok || typeof data.token !== 'string' || !data.token) {
+                    throw new Error(data.error || `Login failed (HTTP ${response.status})`);
+                }
+
+                savedToken = data.token;
+                tokenStatus.textContent = 'Token received!';
+                tokenStatus.className = 'success';
+                tokenValue.textContent = savedToken;
+                tokenValue.hidden = false;
+                apiResponse.textContent = `Status: ${response.status}\n\nToken saved in page memory. Try the protected route.`;
+            } catch (error) {
+                tokenStatus.textContent = 'No token received.';
+                tokenStatus.className = 'error';
+                throw error;
+            }
+        }
+
+        async function fetchProtected(token) {
+            const headers = token ? { Authorization: `Bearer ${token}` } : {};
+            const response = await fetch('/protected', { headers });
+            const body = await response.text();
+            const challenge = response.headers.get('WWW-Authenticate');
+            apiResponse.textContent = [
+                `Status: ${response.status}`,
+                `WWW-Authenticate: ${challenge || '(absent)'}`,
+                '',
+                body,
+            ].join('\n');
+        }
+
+        document.getElementById('login-button').addEventListener('click', () => showRequest(login));
+        document.getElementById('protected-button').addEventListener('click', () => showRequest(async () => {
+            if (!savedToken) {
+                apiResponse.textContent = 'Please get a token from Step 1 first.';
+                return;
+            }
+            await fetchProtected(savedToken);
+        }));
+        document.getElementById('bad-token-button').addEventListener('click', () =>
+            showRequest(() => fetchProtected('absolute-gibberish-token')));
+        document.getElementById('no-token-button').addEventListener('click', () =>
+            showRequest(() => fetchProtected('')));
+    </script>
+</body>
+</html>

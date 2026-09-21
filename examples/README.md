@@ -69,3 +69,10 @@ of the shared chat frontend assets so it remains runnable from CPAN tarballs,
 which cannot preserve the source checkout's former directory symlink.
 
 Each example has its own `README.md` explaining how to run it.
+
+## Authentication examples
+
+- [auth-jwt-sandbox](auth-jwt-sandbox/README.md) — two runnable JWT learning
+  applications using Authentication v1: an inline three-route comparison and a
+  group-protected variant with a shared browser walkthrough. Crypt::JWT is an
+  example-local optional dependency.
