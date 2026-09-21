@@ -18,11 +18,136 @@ our @EXPORT_OK = qw(
     content_disposition
     parse_header_tokens
     merge_vary
+    parse_etag
+    format_etag
+    parse_etag_list
+    etag_matches
 );
 
 my $HTTP_TOKEN = qr/[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+/;
 my $BEARER_TOKEN = qr/[A-Za-z0-9\-._~+\/]+={0,}/;
 my $BASE64 = qr/(?:[A-Za-z0-9+\/]{4})*(?:[A-Za-z0-9+\/]{2}==|[A-Za-z0-9+\/]{3}=)?/;
+my $ETAG_OPAQUE = qr/[\x21\x23-\x7e\x80-\xff]*/;
+my $ETAG_WIRE = qr/(?:W\/)?"$ETAG_OPAQUE"/;
+
+sub parse_etag {
+    my ($value, @args) = @_;
+    my $raise = _parser_options('parse_etag', @args);
+    return undef unless defined $value;
+    croak 'PAGI::Utils::Headers parse_etag value must be a scalar' if ref($value);
+    return { value => $2, weak => defined($1) ? 1 : 0 }
+        if $value =~ /\A[\x20\x09]*(W\/)?"($ETAG_OPAQUE)"[\x20\x09]*\z/;
+    return _malformed_etag('parse_etag', $raise);
+}
+
+sub format_etag {
+    croak 'PAGI::Utils::Headers format_etag opaque value is required' unless @_;
+    my ($opaque, @args) = @_;
+    my $weak = _etag_weak_option('format_etag', @args);
+    croak 'PAGI::Utils::Headers format_etag opaque value must be valid HTTP bytes'
+        unless defined($opaque) && !ref($opaque) && $opaque =~ /\A$ETAG_OPAQUE\z/;
+    return ($weak ? 'W/' : '') . '"' . $opaque . '"';
+}
+
+sub parse_etag_list {
+    my ($values, @args) = @_;
+    my $raise = _parser_options('parse_etag_list', @args);
+    croak 'PAGI::Utils::Headers parse_etag_list requires an arrayref of field values'
+        unless ref($values) eq 'ARRAY';
+    return undef unless @$values;
+    for my $value (@$values) {
+        croak 'PAGI::Utils::Headers parse_etag_list field values must be defined scalars'
+            unless defined($value) && !ref($value);
+    }
+
+    my (@tags, $wildcards);
+    $wildcards = 0;
+    for my $value (@$values) {
+        pos($value) = 0;
+        while (pos($value) < length($value)) {
+            $value =~ /\G[\x20\x09]*/gc;
+            last if pos($value) == length($value);
+            if ($value =~ /\G,/gc) { next }
+            if ($value =~ /\G\*/gc) {
+                $wildcards++;
+            }
+            elsif ($value =~ /\G($ETAG_WIRE)/gc) {
+                push @tags, parse_etag($1);
+            }
+            else {
+                return _malformed_etag('parse_etag_list', $raise);
+            }
+            $value =~ /\G[\x20\x09]*/gc;
+            next if pos($value) == length($value);
+            return _malformed_etag('parse_etag_list', $raise)
+                unless $value =~ /\G,/gc;
+        }
+    }
+    return _malformed_etag('parse_etag_list', $raise)
+        if $wildcards && (@$values != 1 || $values->[0] !~ /\A[\x20\x09]*\*[\x20\x09]*\z/);
+    return { any => $wildcards ? 1 : 0, tags => \@tags };
+}
+
+sub etag_matches {
+    my ($condition, $current_wire, @args) = @_;
+    my $weak = _etag_weak_option('etag_matches', @args);
+    croak 'PAGI::Utils::Headers etag_matches current ETag must be a valid wire entity-tag'
+        unless defined($current_wire) && !ref($current_wire);
+    my $current = parse_etag($current_wire);
+    croak 'PAGI::Utils::Headers etag_matches current ETag must be a valid wire entity-tag'
+        unless defined $current;
+    return 0 unless defined $condition;
+    _validate_etag_condition($condition);
+    return 1 if $condition->{any};
+    for my $candidate (@{$condition->{tags}}) {
+        next if !$weak && ($candidate->{weak} || $current->{weak});
+        return 1 if $candidate->{value} eq $current->{value};
+    }
+    return 0;
+}
+
+sub _etag_weak_option {
+    my ($operation, @args) = @_;
+    croak "PAGI::Utils::Headers $operation options must be key/value pairs" if @args % 2;
+    my %opts;
+    while (@args) {
+        my ($name, $value) = splice @args, 0, 2;
+        croak "PAGI::Utils::Headers $operation option names must be defined scalars"
+            unless defined($name) && !ref($name);
+        croak "PAGI::Utils::Headers $operation has unknown option '$name'"
+            unless $name eq 'weak';
+        croak "PAGI::Utils::Headers $operation has duplicate option '$name'"
+            if exists $opts{$name};
+        croak "PAGI::Utils::Headers $operation weak option must be a boolean scalar"
+            if defined($value) && ref($value);
+        $opts{$name} = $value;
+    }
+    return $opts{weak} ? 1 : 0;
+}
+
+sub _validate_etag_condition {
+    my ($condition) = @_;
+    my $bad = 'PAGI::Utils::Headers etag_matches condition must be a parsed entity-tag list';
+    croak $bad unless ref($condition) eq 'HASH'
+        && keys(%$condition) == 2 && exists($condition->{any}) && exists($condition->{tags})
+        && defined($condition->{any}) && !ref($condition->{any})
+        && $condition->{any} =~ /\A[01]\z/ && ref($condition->{tags}) eq 'ARRAY'
+        && (!$condition->{any} || !@{$condition->{tags}});
+    for my $tag (@{$condition->{tags}}) {
+        croak $bad unless ref($tag) eq 'HASH' && keys(%$tag) == 2
+            && exists($tag->{value}) && exists($tag->{weak})
+            && defined($tag->{value}) && !ref($tag->{value})
+            && $tag->{value} =~ /\A$ETAG_OPAQUE\z/
+            && defined($tag->{weak}) && !ref($tag->{weak})
+            && $tag->{weak} =~ /\A[01]\z/;
+    }
+}
+
+sub _malformed_etag {
+    my ($operation, $raise) = @_;
+    croak "PAGI::Utils::Headers $operation received a malformed entity-tag value" if $raise;
+    return undef;
+}
 
 sub parse_header_tokens {
     my ($value, @args) = @_;
@@ -351,6 +476,7 @@ PAGI::Utils::Headers - synchronous parsers and formatters for HTTP header values
       parse_header_parameters format_header_parameters quote_header_value
       content_disposition
       parse_header_tokens merge_vary
+      parse_etag format_etag parse_etag_list etag_matches
   );
 
   my $token = parse_authorization_bearer($value, raise_on_error => 1);
@@ -364,6 +490,10 @@ PAGI::Utils::Headers - synchronous parsers and formatters for HTTP header values
   my $tokens = parse_header_tokens('gzip, br'); # ['gzip', 'br']
   my $vary = merge_vary(['Origin'], 'Accept-Encoding');
   # 'Origin, Accept-Encoding'
+  my $tag = parse_etag('W/"v1"'); # { value => 'v1', weak => 1 }
+  my $wire = format_etag('v2');    # '"v2"'
+  my $condition = parse_etag_list(['"old"', 'W/"v2"']);
+  my $not_modified = etag_matches($condition, '"v2"', weak => 1);
 
 =head1 DESCRIPTION
 
@@ -444,6 +574,47 @@ returns C<Origin, accept-encoding, Accept>.
 The first argument must be an arrayref of scalar values. Existing nonempty
 members and added names must be HTTP tokens. Malformed values and invalid
 arguments raise; the function never silently drops a cache dependency.
+
+=head2 parse_etag($value, %opts)
+
+Parses one wire-format entity tag into C<< { value =E<gt> $opaque_bytes,
+weak =E<gt> 0|1 } >>. The opaque bytes are kept literally: C<< W/"a,b\c" >>
+has C<value> C<< a,b\c >>. Commas and backslashes are data, and quoted-string
+unescaping is not applied. Outer SP and HTAB are ignored. Missing input returns
+C<undef>; malformed syntax returns C<undef> or raises with C<raise_on_error =E<gt>
+1>. A reference value or unknown/duplicate option is a programming error.
+
+=head2 format_etag($opaque_bytes, weak =E<gt> $boolean)
+
+Produces a wire-format ETag from unquoted opaque bytes. It defaults to strong
+form: C<< format_etag('v2') >> returns C<< "v2" >>, and C<<
+format_etag('v2', weak =E<gt> 1) >> returns C<< W/"v2" >>. Empty opaque
+content is valid. Quotes, spaces, controls, and characters outside HTTP byte
+syntax are rejected; the formatter never escapes or changes the content.
+Invalid arguments and options always raise.
+
+=head2 parse_etag_list(\@field_values, %opts)
+
+Parses all C<If-Match> or C<If-None-Match> field occurrences in received order.
+An empty input array means absence and returns C<undef>. A present empty list
+returns C<< { any =E<gt> 0, tags =E<gt> [] } >>. Tag lists return C<< {
+any =E<gt> 0, tags =E<gt> [ $tag, ... ] } >> with each tag in the
+L</parse_etag($value, %opts)> shape; duplicates are retained. A standalone
+wildcard returns C<< { any =E<gt> 1, tags =E<gt> [] } >>. Malformed syntax,
+including a wildcard mixed with tags, returns C<undef> or raises with
+C<raise_on_error =E<gt> 1>. The argument must be an arrayref of defined scalar
+field values. No commas inside quoted tags are split.
+
+=head2 etag_matches($condition, $current_wire_etag, weak =E<gt> $boolean)
+
+Compares a parsed condition with a current wire-format ETag. Comparison is
+strong by default, requiring both matching tags to be strong. C<weak =E<gt> 1>
+compares opaque bytes regardless of strength. It returns false for an absent
+condition or a present empty list. A wildcard matches a valid current ETag.
+The current ETag is required and validated even when the condition is absent;
+this function does not infer whether a representation exists without an ETag.
+Invalid current tags and malformed parsed-condition arguments always raise.
+The inputs are not changed.
 
 =head2 format_header_parameters($leading, name =E<gt> $value, ...)
 

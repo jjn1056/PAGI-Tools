@@ -224,6 +224,48 @@ subtest 'get_single requires exactly one field occurrence' => sub {
         'unknown options are programming errors';
 };
 
+subtest 'entity-tag named readers keep occurrence semantics and raw fields' => sub {
+    my $h = PAGI::Headers->new([
+        ['ETag', 'W/"current"'],
+        ['If-None-Match', '"old", W/"a,b"'],
+        ['if-none-match', '"old"'],
+        ['If-Match', '*'],
+    ]);
+    my $before = $h->to_pairs;
+    is $h->etag, { value => 'current', weak => 1 }, 'ETag is parsed as one tag';
+    is $h->if_none_match, { any => 0, tags => [
+        { value => 'old', weak => 0 }, { value => 'a,b', weak => 1 },
+        { value => 'old', weak => 0 },
+    ] }, 'conditional occurrences are combined in field order';
+    is $h->if_match, { any => 1, tags => [] }, 'If-Match wildcard is parsed';
+    is $h->to_pairs, $before, 'reads do not rewrite fields';
+
+    $h->add('etag', 'W/"current"');
+    is $h->etag, undef, 'duplicate ETag is unusable even when identical';
+    like dies { $h->etag(raise_on_error => 1) }, qr/etag.*multiple/i,
+        'duplicate ETag can raise';
+    $h->set('ETag', 'w/"bad"');
+    is $h->etag, undef, 'malformed ETag is unusable';
+    like dies { $h->etag(raise_on_error => 1) }, qr/etag.*malformed/i,
+        'malformed ETag can raise';
+    $h->add('If-Match', '"other"');
+    is $h->if_match, undef, 'wildcard mixed across occurrences is unusable';
+    like dies { $h->if_match(raise_on_error => 1) }, qr/if_match.*malformed/i,
+        'malformed If-Match can raise';
+    $h->set('If-None-Match', '"ok", bad');
+    is $h->if_none_match, undef, 'malformed member invalidates condition';
+    like dies { $h->if_none_match(raise_on_error => 1) }, qr/if_none_match.*malformed/i,
+        'malformed If-None-Match can raise';
+
+    my $absent = PAGI::Headers->new;
+    is $absent->etag(raise_on_error => 1), undef, 'missing ETag is not error';
+    is $absent->if_match(raise_on_error => 1), undef, 'missing If-Match is absent';
+    $absent->add('If-Match', '');
+    is $absent->if_match, { any => 0, tags => [] }, 'present empty condition is distinct';
+    like dies { $absent->if_match(unknown => 1) }, qr/unknown option/i,
+        'named reader rejects unknown option';
+};
+
 subtest 'header values are opaque bytes: CR/LF/NUL/whitespace pass through' => sub {
     # The container never sanitizes. The SERVER rejects injection bytes when it
     # emits a response (PAGI::Spec::Www, "Response Start"); these pin the

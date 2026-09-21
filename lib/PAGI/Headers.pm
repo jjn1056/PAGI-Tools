@@ -144,6 +144,21 @@ parameter grammar and do not rewrite fields or cache parsed values. Returned
 hashes are detached from the stored field; write a new value with C<set> and
 L<PAGI::Utils::Headers/format_header_parameters($leading, name =E<gt> $value, ...)>.
 
+=head2 etag(%opts)
+
+Parses exactly one C<ETag> occurrence as C<< { value =E<gt> $opaque_bytes,
+weak =E<gt> 0|1 } >>. Missing, duplicate, or malformed fields return C<undef>.
+C<raise_on_error =E<gt> 1> reports duplicates and malformed fields, not absence.
+
+=head2 if_none_match(%opts) and if_match(%opts)
+
+Each reads all occurrences of its conditional field in order and returns
+C<< { any =E<gt> 0, tags =E<gt> \@tags } >> or
+C<< { any =E<gt> 1, tags =E<gt> [] } >> for a wildcard. Absence returns
+C<undef>; a present empty list has an empty C<tags> array. Malformed syntax
+returns C<undef> by default or raises with C<raise_on_error =E<gt> 1>.
+All three readers leave raw fields untouched and reject unknown options.
+
 =cut
 
 # ASCII-only lowercase for name keying. Field names are ASCII tokens (RFC 7230);
@@ -245,6 +260,44 @@ sub authorization_basic {
     my ($self, @args) = @_;
     my $value = $self->get_single('Authorization', @args);
     return PAGI::Utils::Headers::parse_authorization_basic($value, @args);
+}
+
+sub etag {
+    my ($self, @args) = @_;
+    my $raise = _read_options('etag', @args);
+    my @values = $self->get_all('ETag');
+    return undef unless @values;
+    if (@values > 1) {
+        croak 'PAGI::Headers etag found multiple ETag occurrences' if $raise;
+        return undef;
+    }
+    my $parsed = PAGI::Utils::Headers::parse_etag($values[0]);
+    unless (defined $parsed) {
+        croak 'PAGI::Headers etag received a malformed ETag field' if $raise;
+        return undef;
+    }
+    return $parsed;
+}
+
+sub if_none_match {
+    my ($self, @args) = @_;
+    return $self->_etag_condition_field('if_none_match', 'If-None-Match', @args);
+}
+
+sub if_match {
+    my ($self, @args) = @_;
+    return $self->_etag_condition_field('if_match', 'If-Match', @args);
+}
+
+sub _etag_condition_field {
+    my ($self, $method, $field, @args) = @_;
+    my $raise = _read_options($method, @args);
+    my @values = $self->get_all($field);
+    my $parsed = PAGI::Utils::Headers::parse_etag_list(\@values);
+    if (!defined($parsed) && @values && $raise) {
+        croak "PAGI::Headers $method received a malformed $field field";
+    }
+    return $parsed;
 }
 
 sub content_type {
