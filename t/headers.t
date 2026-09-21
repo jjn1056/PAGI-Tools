@@ -117,6 +117,41 @@ subtest 'get returns the LAST value and never comma-joins' => sub {
     is [$h->get_all('vary')], ['Accept','Accept-Encoding'], 'get_all keeps values separate, in order';
 };
 
+subtest 'named parameterized fields validate grammar and duplicates' => sub {
+    my $h = PAGI::Headers->new([['Content-Type', 'Text/HTML; charset=UTF-8']]);
+    is $h->content_type, 'text/html', 'named leading value normalized';
+    is $h->content_type_parameters, { charset => 'UTF-8' }, 'value case retained';
+    is $h->get('Content-Type'), 'Text/HTML; charset=UTF-8', 'raw field remains intact';
+    my $parameters = $h->content_type_parameters;
+    $parameters->{charset} = 'changed';
+    is $h->content_type_parameters, { charset => 'UTF-8' }, 'parsed hash is detached';
+    $h->set('Content-Type', 'text/plain; Charset=a; charset=b');
+    is $h->content_type_parameters, undef, 'named reader rejects duplicate parameters';
+    like dies { $h->content_type(raise_on_error => 1) }, qr/content_type.*duplicate/i,
+        'duplicate can be reported';
+    $h->set('Content-Type', 'application/json');
+    is $h->content_type_parameters, {}, 'valid no-parameter field has empty hash';
+    $h->set('Content-Type', 'text/plain', 'application/json');
+    is $h->content_type, undef, 'duplicate fields are unusable';
+    like dies { $h->content_type(raise_on_error => 1) }, qr/content_type.*multiple/i,
+        'duplicate fields identify the named reader';
+
+    my $d = PAGI::Headers->new([['Content-Disposition',
+        'Attachment; filename="quarterly; report.txt"; filename*=UTF-8\'\'caf%C3%A9.txt; X-Note=Hi']]);
+    is $d->content_disposition, 'attachment', 'disposition token normalized';
+    is $d->content_disposition_parameters,
+        { filename => 'quarterly; report.txt', 'filename*' => "UTF-8''caf%C3%A9.txt", 'x-note' => 'Hi' },
+        'unknown and extended parameters retained raw';
+    $d->set('Content-Disposition', 'attachment/file; x=y');
+    is $d->content_disposition, undef, 'disposition requires one token';
+    $h->set('Content-Type', 'text; charset=utf-8');
+    is $h->content_type, undef, 'media type requires token slash token';
+    $h->remove('Content-Type');
+    is $h->content_type, undef, 'absent field is undef';
+    is $h->content_type_parameters, undef, 'absent parameters are undef';
+    is $h->content_type(raise_on_error => 1), undef, 'absence is not error';
+};
+
 subtest 'get_single requires exactly one field occurrence' => sub {
     my $one = PAGI::Headers->new([['X-One', 'value']]);
     is $one->get_single('x-one'), 'value', 'one occurrence returns its raw value';

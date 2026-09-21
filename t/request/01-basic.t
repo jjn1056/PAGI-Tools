@@ -261,6 +261,17 @@ subtest 'content-type parameter stripping' => sub {
     };
     my $req_plain = PAGI::Request->new($scope_plain, $receive);
     is($req_plain->content_type, 'application/xml', 'content_type without parameters');
+
+    $req_plain->headers->set('Content-Type', 'APPLICATION/JSON; charset="utf;8"');
+    is($req_plain->content_type, 'application/json', 'shortcut normalizes valid media type');
+    is($req_plain->is_json, 1, 'JSON predicate uses normalized media type');
+    $req_plain->headers->set('Content-Type', 'application/json; charset=');
+    is($req_plain->content_type, '', 'malformed parameters have empty-string fallback');
+    ok(!$req_plain->is_json, 'malformed media type does not match JSON');
+    like dies { $req_plain->content_type(raise_on_error => 1) }, qr/content_type|parse_header_parameters/i,
+        'shortcut forwards reporting option';
+    $req_plain->headers->remove('Content-Type');
+    is($req_plain->content_type, '', 'absent field retains empty-string fallback');
 };
 
 subtest 'constructor requires a supported request scope and receive callback' => sub {

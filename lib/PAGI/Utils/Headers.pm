@@ -11,6 +11,9 @@ our @EXPORT_OK = qw(
     parse_authorization_bearer
     parse_authorization_basic
     www_authenticate
+    parse_header_parameters
+    format_header_parameters
+    quote_header_value
 );
 
 my $HTTP_TOKEN = qr/[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+/;
@@ -69,12 +72,106 @@ sub www_authenticate {
             if $seen{_ascii_fold($name)}++;
         croak "PAGI::Utils::Headers www_authenticate value for '$name' must be a defined scalar"
             unless defined($value) && !ref($value);
-        croak "PAGI::Utils::Headers www_authenticate value for '$name' must be an HTTP quoted-string byte value"
-            unless $value =~ /\A[\x09\x20-\x7e\x80-\xff]*\z/;
-        $value =~ s/([\\"])/\\$1/g;
-        push @serialized, $name . '="' . $value . '"';
+        push @serialized, $name . '=' . _quote_header_value($value,
+            "www_authenticate value for '$name'");
     }
     return @serialized ? $scheme . ' ' . join(', ', @serialized) : $scheme;
+}
+
+sub parse_header_parameters {
+    my ($value, @args) = @_;
+    my $raise = _parser_options('parse_header_parameters', @args);
+    return undef unless defined $value;
+    croak 'PAGI::Utils::Headers parse_header_parameters value must be a scalar'
+        if ref($value);
+
+    pos($value) = 0;
+    return _malformed_parameters('parse_header_parameters', $raise)
+        unless $value =~ /\G[\x20\x09]*([^;]*)/gc;
+    my $leading = $1;
+    $leading =~ s/[\x20\x09]*\z//;
+    return _malformed_parameters('parse_header_parameters', $raise)
+        unless length($leading) && $leading =~ /\A[\x20-\x2b\x2d-\x3a\x3c-\x7e\x80-\xff]+\z/;
+
+    my @parameters;
+    while (pos($value) < length($value)) {
+        return _malformed_parameters('parse_header_parameters', $raise)
+            unless $value =~ /\G;[\x20\x09]*/gc;
+        next if pos($value) == length($value) || substr($value, pos($value), 1) eq ';';
+        return _malformed_parameters('parse_header_parameters', $raise)
+            unless $value =~ /\G($HTTP_TOKEN)[\x20\x09]*=[\x20\x09]*/gc;
+        my $name = _ascii_fold($1);
+        my $parameter;
+        if ($value =~ /\G"/gc) {
+            my $closed;
+            $parameter = '';
+            while (pos($value) < length($value)) {
+                if ($value =~ /\G"/gc) { $closed = 1; last }
+                if ($value =~ /\G\\([\x09\x20-\x7e\x80-\xff])/gc) {
+                    $parameter .= $1;
+                    next;
+                }
+                if ($value =~ /\G([\x09\x20-\x21\x23-\x5b\x5d-\x7e\x80-\xff]+)/gc) {
+                    $parameter .= $1;
+                    next;
+                }
+                last;
+            }
+            return _malformed_parameters('parse_header_parameters', $raise) unless $closed;
+        }
+        elsif ($value =~ /\G($HTTP_TOKEN)/gc) {
+            $parameter = $1;
+        }
+        else {
+            return _malformed_parameters('parse_header_parameters', $raise);
+        }
+        $value =~ /\G[\x20\x09]*/gc;
+        return _malformed_parameters('parse_header_parameters', $raise)
+            if pos($value) < length($value) && substr($value, pos($value), 1) ne ';';
+        push @parameters, $name, $parameter;
+    }
+    return { value => $leading, parameters => \@parameters };
+}
+
+sub format_header_parameters {
+    croak 'PAGI::Utils::Headers format_header_parameters leading value is required' unless @_;
+    my ($leading, @pairs) = @_;
+    croak 'PAGI::Utils::Headers format_header_parameters leading value must be a safe byte string'
+        unless defined($leading) && !ref($leading) && length($leading)
+            && $leading =~ /\A[\x20-\x2b\x2d-\x3a\x3c-\x7e\x80-\xff]+\z/
+            && $leading =~ /[^\x20]/;
+    croak 'PAGI::Utils::Headers format_header_parameters parameters must be name/value pairs'
+        if @pairs % 2;
+    my @formatted;
+    while (@pairs) {
+        my ($name, $value) = splice @pairs, 0, 2;
+        croak 'PAGI::Utils::Headers format_header_parameters parameter name must be an HTTP token'
+            unless defined($name) && !ref($name) && $name =~ /\A$HTTP_TOKEN\z/;
+        croak 'PAGI::Utils::Headers format_header_parameters parameter value must be a defined scalar'
+            unless defined($value) && !ref($value);
+        push @formatted, $name . '=' . ($value =~ /\A$HTTP_TOKEN\z/
+            ? $value : _quote_header_value($value, 'format_header_parameters value'));
+    }
+    return join('; ', $leading, @formatted);
+}
+
+sub quote_header_value {
+    croak 'PAGI::Utils::Headers quote_header_value requires one value' unless @_ == 1;
+    return _quote_header_value($_[0], 'quote_header_value');
+}
+
+sub _quote_header_value {
+    my ($value, $operation) = @_;
+    croak "PAGI::Utils::Headers $operation must be an HTTP quoted-string byte value"
+        unless defined($value) && !ref($value) && $value =~ /\A[\x09\x20-\x7e\x80-\xff]*\z/;
+    $value =~ s/([\\"])/\\$1/g;
+    return '"' . $value . '"';
+}
+
+sub _malformed_parameters {
+    my ($operation, $raise) = @_;
+    croak "PAGI::Utils::Headers $operation received a malformed parameterized value" if $raise;
+    return undef;
 }
 
 sub _parser_options {
@@ -135,11 +232,16 @@ PAGI::Utils::Headers - synchronous parsers and formatters for HTTP header values
 
   use PAGI::Utils::Headers qw(
       parse_authorization_bearer parse_authorization_basic www_authenticate
+      parse_header_parameters format_header_parameters quote_header_value
   );
 
   my $token = parse_authorization_bearer($value, raise_on_error => 1);
   my ($user, $password) = parse_authorization_basic($value);
   my $challenge = www_authenticate('Bearer', realm => 'api');
+  my $parsed = parse_header_parameters('attachment; filename="report; Q1.txt"');
+  # { value => 'attachment', parameters => [filename => 'report; Q1.txt'] }
+  my $field = format_header_parameters('attachment', filename => 'report; Q1.txt');
+  my $quoted = quote_header_value('report.txt');
 
 =head1 DESCRIPTION
 
@@ -180,5 +282,37 @@ must be HTTP tokens; names are unique case-insensitively. Values are quoted and
 quotes/backslashes are escaped. The function preserves pair order and always
 quotes parameters; it does not serialize scheme-specific forms such as unquoted
 Digest parameters.
+
+=head2 parse_header_parameters($value, %opts)
+
+Parses one parameterized field value and returns C<< { value =E<gt> $leading,
+parameters =E<gt> \@pairs } >>. The parameter array holds alternating,
+ASCII-lowercased names and raw value bytes in input order. It retains duplicate
+names and quoted empty values. Quoted semicolons and escaped quotes/backslashes
+are data; extended parameters such as C<filename*> are not percent-decoded.
+Empty semicolon slots are ignored.
+
+Missing input returns C<undef>. Malformed input, including a missing leading
+value, missing equals or value, unterminated quote, invalid byte, or leftover
+syntax, returns C<undef> by default. C<raise_on_error =E<gt> 1> raises for
+malformed input. Unknown and duplicate options are programming errors. The
+result is ordinary detached data: changing it does not change a stored header.
+
+=head2 format_header_parameters($leading, name =E<gt> $value, ...)
+
+Formats an already-selected leading value with ordered parameter pairs. For
+example, C<< format_header_parameters('attachment', filename =E<gt>
+'report; Q1.txt') >> returns C<< attachment; filename="report; Q1.txt" >>.
+Token values remain unquoted; other supported byte values are quoted and
+escaped. Repeated names are retained. The leading value must be nonempty and
+cannot contain comma, semicolon, control bytes, or wide characters. Invalid
+names, values, or pair shapes raise a programming error.
+
+=head2 quote_header_value($bytes)
+
+Always returns an HTTP quoted-string, escaping quotes and backslashes. It
+accepts HTTP quoted-string bytes, including HTAB and bytes above ASCII, but
+rejects other controls, wide characters, references, and undefined values.
+It does not encode characters or quote other grammars such as ETags.
 
 =cut

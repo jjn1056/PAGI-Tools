@@ -68,11 +68,8 @@ sub host {
 
 # Content-Type shortcut
 sub content_type {
-    my $self = shift;
-    my $ct = $self->header('content-type') // '';
-    # Strip parameters like charset
-    $ct =~ s/;.*//;
-    return $ct;
+    my ($self, @opts) = @_;
+    return $self->headers->content_type(@opts) // '';
 }
 
 # Content-Length shortcut
@@ -212,13 +209,13 @@ sub is_form {
     my $self = shift;
     my $ct = $self->content_type;
     return $ct eq 'application/x-www-form-urlencoded'
-        || $ct =~ m{^multipart/form-data};
+        || $ct eq 'multipart/form-data';
 }
 
 sub is_multipart {
     my $self = shift;
     my $ct = $self->content_type;
-    return $ct =~ m{^multipart/form-data};
+    return $ct eq 'multipart/form-data';
 }
 
 # Accept header check using Negotiate module
@@ -718,7 +715,11 @@ validated inbound Host authority.
 
 =head2 content_type
 
-Content-Type header value (without parameters).
+The normalized media type from one valid Content-Type field, without
+parameters. Returns C<''> when the field is absent, duplicated, or malformed.
+Accepts C<raise_on_error =E<gt> 1> to report duplicate or malformed input.
+Use C<< $request->header('Content-Type') >> for the raw last-value lookup;
+parsing does not alter the stored field.
 
 =head2 content_length
 

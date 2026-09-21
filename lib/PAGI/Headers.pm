@@ -75,6 +75,43 @@ duplicate, another-scheme, or malformed input by default. C<raise_on_error =E<gt
 1> raises for duplicates or malformed Basic credentials. Credential bytes are
 not decoded as characters or verified.
 
+=head2 content_type(%opts)
+
+Returns the lowercased media type from one valid C<Content-Type> field, such as
+C<text/html> from C<Text/HTML; charset=UTF-8>. The leading value must be
+C<token/token>. Missing, duplicate, or malformed fields return C<undef>.
+C<raise_on_error =E<gt> 1> raises for duplicate or malformed input, but not
+absence. Use C<get('Content-Type')> for the raw last-value lookup.
+
+=head2 content_type_parameters(%opts)
+
+Returns a hashref of parameters from one valid C<Content-Type> field; a valid
+field without parameters returns C<{}>. Names are ASCII-lowercased, while value
+bytes are preserved. For example, C<Text/HTML; charset=UTF-8> produces
+C<< { charset =E<gt> 'UTF-8' } >>. Case-insensitive duplicate parameter names
+make the whole field unusable. Unknown parameters remain available.
+
+=head2 content_disposition(%opts)
+
+Returns the lowercased disposition token from one valid C<Content-Disposition>
+field, such as C<attachment>. Missing, duplicate, or malformed fields return
+C<undef>, with the same C<raise_on_error> behavior as C<content_type>.
+Use C<get('Content-Disposition')> for the raw last-value lookup.
+
+=head2 content_disposition_parameters(%opts)
+
+Returns a hashref of parameters from one valid C<Content-Disposition> field;
+a valid field without parameters returns C<{}>. For example, C<< attachment;
+filename="report; Q1.txt" >> gives C<< { filename =E<gt> 'report; Q1.txt' } >>.
+Unknown names remain available, and C<filename*> stays distinct from
+C<filename> with its encoded bytes unchanged. Duplicate names, ignoring ASCII
+case, make the field unusable.
+
+All four named reads accept only C<raise_on_error>. They use the shared
+parameter grammar and do not rewrite fields or cache parsed values. Returned
+hashes are detached from the stored field; write a new value with C<set> and
+L<PAGI::Utils::Headers/format_header_parameters($leading, name =E<gt> $value, ...)>.
+
 =cut
 
 # ASCII-only lowercase for name keying. Field names are ASCII tokens (RFC 7230);
@@ -141,6 +178,68 @@ sub authorization_basic {
     my ($self, @args) = @_;
     my $value = $self->get_single('Authorization', @args);
     return PAGI::Utils::Headers::parse_authorization_basic($value, @args);
+}
+
+sub content_type {
+    my ($self, @args) = @_;
+    my $parsed = $self->_parameterized_field('content_type', 'Content-Type', 'media', @args);
+    return $parsed ? $parsed->{value} : undef;
+}
+
+sub content_type_parameters {
+    my ($self, @args) = @_;
+    my $parsed = $self->_parameterized_field('content_type_parameters', 'Content-Type', 'media', @args);
+    return $parsed ? $parsed->{parameters} : undef;
+}
+
+sub content_disposition {
+    my ($self, @args) = @_;
+    my $parsed = $self->_parameterized_field('content_disposition', 'Content-Disposition', 'token', @args);
+    return $parsed ? $parsed->{value} : undef;
+}
+
+sub content_disposition_parameters {
+    my ($self, @args) = @_;
+    my $parsed = $self->_parameterized_field('content_disposition_parameters', 'Content-Disposition', 'token', @args);
+    return $parsed ? $parsed->{parameters} : undef;
+}
+
+my $HTTP_TOKEN = qr/[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+/;
+
+sub _parameterized_field {
+    my ($self, $method, $field, $grammar, @args) = @_;
+    my $raise = _read_options($method, @args);
+    my @values = $self->get_all($field);
+    return undef unless @values;
+    if (@values > 1) {
+        croak "PAGI::Headers $method found multiple occurrences of $field" if $raise;
+        return undef;
+    }
+    my $value = $values[0];
+    my $parsed = PAGI::Utils::Headers::parse_header_parameters($value);
+    unless ($parsed) {
+        croak "PAGI::Headers $method received a malformed $field field" if $raise;
+        return undef;
+    }
+    my $leading = $parsed->{value};
+    my $valid = $grammar eq 'media'
+        ? $leading =~ /\A$HTTP_TOKEN\/$HTTP_TOKEN\z/
+        : $leading =~ /\A$HTTP_TOKEN\z/;
+    unless ($valid) {
+        croak "PAGI::Headers $method has an invalid $field leading value" if $raise;
+        return undef;
+    }
+    my (%parameters, %seen);
+    my @pairs = @{$parsed->{parameters}};
+    while (@pairs) {
+        my ($name, $parameter) = splice @pairs, 0, 2;
+        if ($seen{$name}++) {
+            croak "PAGI::Headers $method has duplicate $field parameters" if $raise;
+            return undef;
+        }
+        $parameters{$name} = $parameter;
+    }
+    return { value => _fold($leading), parameters => \%parameters };
 }
 
 sub has {
