@@ -9,19 +9,29 @@ does not treat that result as a clean suite pass or a new Server wire-level gate
 
 ## Work map and authority
 
-| Repository | Ticket | Branch | Base and current commit | Owned boundary | Push target |
+| Repository | Ticket | Branch | Base and reviewed commits | Owned boundary | Push target |
 | --- | --- | --- | --- | --- | --- |
-| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | Authentication v1; no external ticket | `feature/universal-connection-tools` | recorded implementation base `f731ea9ae7580063e836540a1386ce7f84ce1ce7`; first implementation commit `db4d51b615eca1ea42ea707f9f18f2ef23d31a01`; final reference-fix commit pending | local library, tests, examples, and public docs | none |
+| `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` | Authentication v1; no external ticket | `feature/universal-connection-tools` | implementation base `f731ea9ae7580063e836540a1386ce7f84ce1ce7`; initial reviewed tip `db4d51b615eca1ea42ea707f9f18f2ef23d31a01`; reviewed reference-fix commit `21931fa4f13fcd107709866c9c9c9b5812e87ac2` | local library, tests, examples, and public docs | none |
 
-The independent final review of `db4d51b` identified three public-reference
-issues; this handoff includes their bounded fixes. The final fix commit and
-scoped re-review verdict are pending the controller. PAGI and PAGI-Server were
+The independent final review through `db4d51b` found no core runtime blocker and
+identified three public-reference issues. Commit `21931fa` fixes all three;
+the scoped re-review confirms every finding addressed with no new breakage.
+Task 8 and the Auth implementation review are complete. The full-suite baseline
+limitation below remains. This final handoff update changes bookkeeping only.
+PAGI and PAGI-Server were
 read-only reference repositories. The canonical
 [Auth v1 spec](../specs/2026-09-17-authentication-backends-and-context-design.md)
 records the settled contract and earlier design discussion; this handoff and
 the [PAGI::Auth reference](../../../lib/PAGI/Auth.pm) identify what is
 implemented and tested. Earlier source-only statements in the spec retain their
 historical review context.
+
+## Recorded implementation ruling
+
+The plan's `as_app` spelling was corrected to the existing public
+`as_app_object` adapter after checking its implementation and reference.
+No alias was added. Reversing that decision would require example/test naming
+changes only. The local execution ledger and test logs are retained for recovery.
 
 ## Delivered behavior
 
