@@ -16,8 +16,9 @@ sub load_example {
     my ($filename, $package) = @_;
     my $path = "$Bin/../examples/auth-jwt-sandbox/$filename";
     my $source = "package $package; do q{$path}";
+    local $! = 0;
     my $app = eval $source;
-    my $error = $@ || $!;
+    my $error = $@ || (!defined($app) ? "$!" : '');
 
     ok(!$error, "$filename loads in its own package") or diag($error);
     isa_ok($app, 'PAGI::Compose');
@@ -86,6 +87,9 @@ sub exercise_shared_routes {
         Authorization => 'Basic Z3Vlc3Q6Z3Vlc3Q=',
     });
     is($unsupported->status, 401, "$label treats another scheme as a guest");
+    is($unsupported->json,
+        { error => 'Please sign in to access the vault.' },
+        "$label returns the public guest message for another scheme");
     is($unsupported->header('WWW-Authenticate'), 'Bearer realm="jwt-sandbox"',
         "$label does not report an unsupported scheme as rejected Bearer credentials");
 
@@ -116,6 +120,9 @@ sub exercise_shared_routes {
     my $expired_token = signed_token(sub => 'old_user', exp => time - 60);
     my $expired = $client->get('/protected', headers => bearer_headers($expired_token));
     is($expired->status, 401, "$label rejects an expired token");
+    is($expired->json,
+        { error => 'Please sign in to access the vault.' },
+        "$label returns the public rejection message for an expired token");
     like($expired->header('WWW-Authenticate'), qr/error="invalid_token"/,
         "$label challenges an expired token as invalid");
 
@@ -127,6 +134,9 @@ sub exercise_shared_routes {
     my $invalid_signature = $client->get('/protected',
         headers => bearer_headers($wrong_signature));
     is($invalid_signature->status, 401, "$label rejects an invalid signature");
+    is($invalid_signature->json,
+        { error => 'Please sign in to access the vault.' },
+        "$label returns the public rejection message for an invalid signature");
     like($invalid_signature->header('WWW-Authenticate'), qr/error="invalid_token"/,
         "$label challenges an invalid signature as invalid");
 
@@ -134,6 +144,9 @@ sub exercise_shared_routes {
     my $no_subject = $client->get('/protected',
         headers => bearer_headers($no_subject_token));
     is($no_subject->status, 401, "$label rejects a token without sub");
+    is($no_subject->json,
+        { error => 'Please sign in to access the vault.' },
+        "$label returns the public rejection message for a missing subject");
     like($no_subject->header('WWW-Authenticate'), qr/error="invalid_token"/,
         "$label challenges a missing subject as invalid credentials");
 
