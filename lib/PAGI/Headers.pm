@@ -5,6 +5,8 @@ use warnings;
 use Carp qw(croak);
 use PAGI::Utils::Headers ();
 
+my $HTTP_TOKEN = qr/[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+/;
+
 # Iterating @{$headers} yields the [name,value] pairs (the PAGI wire form), so
 # `@{$res->headers}` callers keep working. READ-ONLY: it returns a COPY, so
 # pushing onto it does not mutate the container -- use add(). Emission must use
@@ -57,6 +59,36 @@ C<$name> exists. Missing fields return C<undef>. Duplicate fields, even with
 identical values, also return C<undef> by default, or raise with
 C<raise_on_error =E<gt> 1>. The value is not trimmed, parsed, or rewritten.
 The only option is C<raise_on_error>; unknown or duplicate options are errors.
+
+=head2 tokens($name, %opts)
+
+Parses every occurrence of the named field as a comma-separated token list and
+returns one arrayref in field order, retaining original spelling and duplicates.
+Missing fields and empty lists return C<[]>; a malformed member in any occurrence
+returns C<undef> by default or raises with C<raise_on_error =E<gt> 1>. It uses
+L<PAGI::Utils::Headers/parse_header_tokens($value, %opts)> and does not rewrite
+stored fields. For example, two C<X-Flags> fields containing C<a, b> and C<a>
+produce C<['a', 'b', 'a']>. Unknown or duplicate options are errors.
+
+=head2 has_token($name, $token, %opts)
+
+Returns a boolean membership result for the combined token list. Comparison is
+exact by default; C<case_insensitive =E<gt> 1> uses ASCII case folding, so
+C<< $headers-E<gt>has_token('Connection', 'close', case_insensitive =E<gt> 1) >>
+also matches C<Close>. Missing, empty, and malformed lists return false by
+default. C<raise_on_error =E<gt> 1> raises for malformed lists. The candidate
+must be an HTTP token; unknown or duplicate options are errors. Reading does
+not deduplicate or change the stored fields.
+
+=head2 add_vary(@field_names)
+
+Merges every existing C<Vary> occurrence with the supplied field names and
+replaces those occurrences with one C<Vary> field. It returns the same Headers
+instance for chaining; with no existing values and no new names it makes no
+change. For example, C<< $headers-E<gt>add_vary('Accept-Encoding') >> adds the
+cache dependency once. First spelling and order are retained, and any wildcard
+normalizes to C<*>. A malformed existing member or invalid new name raises
+before the container is changed. Unrelated repeated fields remain separate.
 
 =head2 authorization_bearer(%opts)
 
@@ -168,6 +200,41 @@ sub get_single {
     return $values[0];
 }
 
+sub tokens {
+    my ($self, $name, @args) = @_;
+    my $raise = _read_options('tokens', @args);
+    croak 'PAGI::Headers tokens header name required'
+        unless defined($name) && !ref($name) && length($name);
+    my @tokens;
+    for my $value ($self->get_all($name)) {
+        my $parsed = PAGI::Utils::Headers::parse_header_tokens($value);
+        unless (defined $parsed) {
+            croak 'PAGI::Headers tokens received a malformed token list' if $raise;
+            return undef;
+        }
+        push @tokens, @$parsed;
+    }
+    return \@tokens;
+}
+
+sub has_token {
+    my ($self, $name, $token, @args) = @_;
+    croak 'PAGI::Headers has_token candidate must be an HTTP token'
+        unless defined($token) && !ref($token) && $token =~ /\A$HTTP_TOKEN\z/;
+    my %opts = _token_options('has_token', @args);
+    my $tokens = $self->tokens($name);
+    unless (defined $tokens) {
+        croak 'PAGI::Headers has_token received a malformed token list'
+            if $opts{raise_on_error};
+        return 0;
+    }
+    my $wanted = $opts{case_insensitive} ? _fold($token) : $token;
+    for my $item (@$tokens) {
+        return 1 if ($opts{case_insensitive} ? _fold($item) : $item) eq $wanted;
+    }
+    return 0;
+}
+
 sub authorization_bearer {
     my ($self, @args) = @_;
     my $value = $self->get_single('Authorization', @args);
@@ -203,8 +270,6 @@ sub content_disposition_parameters {
     my $parsed = $self->_parameterized_field('content_disposition_parameters', 'Content-Disposition', 'token', @args);
     return $parsed ? $parsed->{parameters} : undef;
 }
-
-my $HTTP_TOKEN = qr/[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+/;
 
 sub _parameterized_field {
     my ($self, $method, $field, $grammar, @args) = @_;
@@ -288,6 +353,14 @@ sub set_default {
     return $self->add($name, $value);
 }
 
+sub add_vary {
+    my ($self, @names) = @_;
+    my @existing = $self->get_all('Vary');
+    return $self unless @existing || @names;
+    my $value = PAGI::Utils::Headers::merge_vary(\@existing, @names);
+    return $self->set('Vary', $value);
+}
+
 sub remove {
     my ($self, $name) = @_;
     croak("header name required") unless defined $name;
@@ -351,6 +424,23 @@ sub _read_options {
         $opts{$name} = $value;
     }
     return $opts{raise_on_error} ? 1 : 0;
+}
+
+sub _token_options {
+    my ($method, @args) = @_;
+    croak "PAGI::Headers $method options must be key/value pairs" if @args % 2;
+    my %opts;
+    while (@args) {
+        my ($name, $value) = splice @args, 0, 2;
+        croak "PAGI::Headers $method option names must be defined scalars"
+            unless defined($name) && !ref($name);
+        croak "PAGI::Headers $method has unknown option '$name'"
+            unless $name eq 'raise_on_error' || $name eq 'case_insensitive';
+        croak "PAGI::Headers $method has duplicate option '$name'"
+            if exists $opts{$name};
+        $opts{$name} = $value;
+    }
+    return %opts;
 }
 
 # Debug/inspection only -- NOT a wire-emission helper. It does not validate or

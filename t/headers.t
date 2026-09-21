@@ -77,6 +77,15 @@ subtest 'dehop strips the fixed set AND Connection-named headers' => sub {
     is $h->has('x-keep'), 1, 'end-to-end header kept';
 };
 
+subtest 'dehop retains usable nominations in a malformed Connection list' => sub {
+    my $h = PAGI::Headers->new([
+        ['Connection', 'X-Secret, "bad", X-Other'],
+        ['X-Secret', 'one'], ['X-Other', 'two'], ['X-Keep', 'safe'],
+    ]);
+    $h->dehop;
+    is [$h->names], ['X-Keep'], 'usable nominations still remove their fields';
+};
+
 subtest 'output forms + clone independence' => sub {
     my $h = PAGI::Headers->new([['X-A','1'],['X-B','2']]);
     is $h->to_pairs, [['X-A','1'],['X-B','2']], 'to_pairs';
@@ -115,6 +124,55 @@ subtest 'get returns the LAST value and never comma-joins' => sub {
     isnt $h->get('vary'), 'Accept, Accept-Encoding',
         'get does NOT comma-join (divergence from HTTP::Headers / Mojo::Headers)';
     is [$h->get_all('vary')], ['Accept','Accept-Encoding'], 'get_all keeps values separate, in order';
+};
+
+subtest 'token lists and Vary composition preserve other repeated fields' => sub {
+    my $h = PAGI::Headers->new([
+        ['X-Tokens', 'Alpha, beta'], ['x-tokens', 'ALPHA,'],
+        ['Vary', 'Origin'], ['vary', 'accept-encoding'],
+        ['Set-Cookie', 'a=1'], ['Set-Cookie', 'b=2'],
+    ]);
+    is $h->tokens('X-Tokens'), ['Alpha', 'beta', 'ALPHA'],
+        'all occurrences are parsed in order';
+    ok $h->has_token('X-Tokens', 'Alpha'), 'membership is exact by default';
+    ok !$h->has_token('X-Tokens', 'alpha'), 'different case does not match by default';
+    ok $h->has_token('X-Tokens', 'alpha', case_insensitive => 1),
+        'ASCII-insensitive membership is opt in';
+    is $h->add_vary('Accept-Encoding', 'Accept'), $h, 'add_vary is chainable';
+    is [$h->get_all('Vary')], ['Origin, accept-encoding, Accept'],
+        'repeated Vary fields merge into one';
+    is [$h->get_all('Set-Cookie')], ['a=1', 'b=2'],
+        'unrelated repeated fields remain separate';
+    is [$h->get_all('X-Tokens')], ['Alpha, beta', 'ALPHA,'],
+        'reading tokens does not rewrite fields';
+
+    my $empty = PAGI::Headers->new;
+    is $empty->tokens('Absent'), [], 'missing field returns empty list';
+    is $empty->add_vary, $empty, 'empty add_vary is a no-op';
+    is $empty->to_pairs, [], 'empty add_vary adds no field';
+    $empty->add('X-Tokens', '');
+    is $empty->tokens('X-Tokens'), [], 'present empty list returns empty array';
+    ok !$empty->has_token('X-Tokens', 'anything'), 'empty list has no member';
+
+    $h->add('X-Tokens', '"bad"');
+    is $h->tokens('X-Tokens'), undef, 'one malformed occurrence invalidates the list';
+    ok !$h->has_token('X-Tokens', 'Alpha'), 'malformed list has no membership';
+    like dies { $h->tokens('X-Tokens', raise_on_error => 1) },
+        qr/tokens.*malformed/i, 'token reader can report malformed input';
+    like dies { $h->has_token('X-Tokens', 'Alpha', raise_on_error => 1) },
+        qr/has_token.*malformed/i, 'membership can report malformed input';
+    like dies { $h->has_token('X-Tokens', 'bad token') },
+        qr/has_token.*token/i, 'membership candidate must be a token';
+    like dies { $h->tokens('X-Tokens', case_insensitive => 1) },
+        qr/unknown option/i, 'case_insensitive is only a membership option';
+    like dies { $h->has_token('X-Tokens', 'Alpha', unknown => 1) },
+        qr/unknown option/i, 'unknown membership option is rejected';
+
+    my $bad = PAGI::Headers->new([['Vary', 'Origin, "bad"'], ['Set-Cookie', 'c=3']]);
+    my $before = $bad->to_pairs;
+    like dies { $bad->add_vary('Accept') }, qr/merge_vary.*malformed/i,
+        'bad existing Vary raises before mutation';
+    is $bad->to_pairs, $before, 'failed add_vary leaves all fields unchanged';
 };
 
 subtest 'named parameterized fields validate grammar and duplicates' => sub {

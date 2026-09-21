@@ -186,7 +186,11 @@ subtest 'CORS adds headers to actual requests' => sub {
         $start = {
             type    => 'http.response.start',
             status  => 200,
-            headers => [['content-type', 'application/json']],
+            headers => [
+                ['content-type', 'application/json'],
+                ['Vary', 'Accept-Encoding'], ['vary', 'origin'],
+                ['Set-Cookie', 'a=1'], ['Set-Cookie', 'b=2'],
+            ],
             extension_sentinel => 'kept',
         };
         $body = {
@@ -218,6 +222,10 @@ subtest 'CORS adds headers to actual requests' => sub {
     my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
     is $headers{'access-control-allow-origin'}, 'https://example.com', 'Origin header on response';
     is $headers{'access-control-allow-credentials'}, 'true', 'Credentials header present';
+    is [response_header_values($sent[0], 'Vary')], ['Accept-Encoding, origin'],
+        'CORS merges Origin with existing Vary fields';
+    is [response_header_values($sent[0], 'Set-Cookie')], ['a=1', 'b=2'],
+        'CORS preserves repeated Set-Cookie fields';
     is refaddr($sent[0]), refaddr($start),
         'credentialed CORS mutates literal response metadata in place';
     is refaddr($sent[1]), refaddr($body),

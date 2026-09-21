@@ -20,6 +20,7 @@ use PAGI::Response::HTML ();
 use PAGI::Response::JSON ();
 use PAGI::Response::Problem ();
 use PAGI::Response::Text ();
+use PAGI::Utils::Headers qw(merge_vary);
 
 our @EXPORT;
 our @EXPORT_OK = (
@@ -864,19 +865,9 @@ sub _problem_type_explicitly_rejected {
 
 sub _merge_vary_accept {
     my ($headers) = @_;
-    my (@tokens, %seen);
-    for my $value (_header_values($headers, 'Vary')) {
-        for my $token (split /,/, $value) {
-            $token =~ s/\A\s+//;
-            $token =~ s/\s+\z//;
-            next unless length $token;
-            my $key = lc $token;
-            next if $seen{$key}++;
-            push @tokens, $token;
-        }
-    }
-    push @tokens, 'Accept' unless $seen{accept};
-    return _replace_header($headers, 'Vary', join(', ', @tokens));
+    return _replace_header($headers, 'Vary', merge_vary(
+        [_header_values($headers, 'Vary')], 'Accept',
+    ));
 }
 
 sub _reject_future {
@@ -2024,7 +2015,9 @@ before response start when the application is invoked.
 Automatic negotiation offers HTML, JSON, and text. Errors use
 C<application/problem+json>; welcome and redirects use ordinary
 C<application/json>. Repeated Accept fields are combined in wire order.
-Automatic selection merges C<Accept> into C<Vary> case-insensitively; a fixed
+Automatic selection merges C<Accept> into all existing C<Vary> fields, keeping
+first spelling and order, deduplicating case-insensitively, and reducing any
+wildcard-containing value to C<*>. Malformed existing members raise. A fixed
 C<as> ignores Accept and does not add Vary. Missing Accept, C<*/*>, equal
 quality, and total rejection use the configured default.
 

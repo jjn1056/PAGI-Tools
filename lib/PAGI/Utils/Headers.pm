@@ -16,11 +16,63 @@ our @EXPORT_OK = qw(
     format_header_parameters
     quote_header_value
     content_disposition
+    parse_header_tokens
+    merge_vary
 );
 
 my $HTTP_TOKEN = qr/[!#\$%&'*+\-.\^_`|~0-9A-Za-z]+/;
 my $BEARER_TOKEN = qr/[A-Za-z0-9\-._~+\/]+={0,}/;
 my $BASE64 = qr/(?:[A-Za-z0-9+\/]{4})*(?:[A-Za-z0-9+\/]{2}==|[A-Za-z0-9+\/]{3}=)?/;
+
+sub parse_header_tokens {
+    my ($value, @args) = @_;
+    my $raise = _parser_options('parse_header_tokens', @args);
+    return [] unless defined $value;
+    croak 'PAGI::Utils::Headers parse_header_tokens value must be a scalar'
+        if ref($value);
+
+    my @tokens;
+    for my $part (split /,/, $value, -1) {
+        $part =~ s/\A[\x20\x09]+//;
+        $part =~ s/[\x20\x09]+\z//;
+        next unless length $part;
+        unless ($part =~ /\A$HTTP_TOKEN\z/) {
+            croak 'PAGI::Utils::Headers parse_header_tokens received a malformed token list'
+                if $raise;
+            return undef;
+        }
+        push @tokens, $part;
+    }
+    return \@tokens;
+}
+
+sub merge_vary {
+    croak 'PAGI::Utils::Headers merge_vary requires an arrayref of existing values'
+        unless @_ && ref($_[0]) eq 'ARRAY';
+    my ($existing, @names) = @_;
+    my @tokens;
+    for my $value (@$existing) {
+        croak 'PAGI::Utils::Headers merge_vary existing values must be scalars'
+            unless defined($value) && !ref($value);
+        my $parsed = parse_header_tokens($value);
+        croak 'PAGI::Utils::Headers merge_vary received a malformed Vary field'
+            unless defined $parsed;
+        push @tokens, @$parsed;
+    }
+    for my $name (@names) {
+        croak 'PAGI::Utils::Headers merge_vary field name must be an HTTP token or *'
+            unless defined($name) && !ref($name) && $name =~ /\A$HTTP_TOKEN\z/;
+        push @tokens, $name;
+    }
+    my (%seen, @unique);
+    for my $token (@tokens) {
+        my $key = _ascii_fold($token);
+        next if $seen{$key}++;
+        push @unique, $token;
+    }
+    return '*' if $seen{'*'};
+    return join(', ', @unique);
+}
 
 sub parse_authorization_bearer {
     my ($value, @args) = @_;
@@ -298,6 +350,7 @@ PAGI::Utils::Headers - synchronous parsers and formatters for HTTP header values
       parse_authorization_bearer parse_authorization_basic www_authenticate
       parse_header_parameters format_header_parameters quote_header_value
       content_disposition
+      parse_header_tokens merge_vary
   );
 
   my $token = parse_authorization_bearer($value, raise_on_error => 1);
@@ -308,6 +361,9 @@ PAGI::Utils::Headers - synchronous parsers and formatters for HTTP header values
   my $field = format_header_parameters('attachment', filename => 'report; Q1.txt');
   my $quoted = quote_header_value('report.txt');
   my $download = content_disposition('attachment', filename => 'résumé.pdf');
+  my $tokens = parse_header_tokens('gzip, br'); # ['gzip', 'br']
+  my $vary = merge_vary(['Origin'], 'Accept-Encoding');
+  # 'Origin, Accept-Encoding'
 
 =head1 DESCRIPTION
 
@@ -363,6 +419,31 @@ value, missing equals or value, unterminated quote, invalid byte, or leftover
 syntax, returns C<undef> by default. C<raise_on_error =E<gt> 1> raises for
 malformed input. Unknown and duplicate options are programming errors. The
 result is ordinary detached data: changing it does not change a stored header.
+
+=head2 parse_header_tokens($value, %opts)
+
+Parses one comma-separated list of HTTP tokens. It returns an arrayref in input
+order, retaining spelling and repeated members. Empty members are skipped;
+missing input and an empty list return C<[]>.
+
+Only surrounding SP and HTAB are trimmed. A nonempty member containing quotes,
+parameters, other delimiters, or invalid bytes makes the whole list unusable:
+the default return is C<undef>, while C<raise_on_error =E<gt> 1> raises. Unknown
+or duplicate options and reference input are programming errors. This function
+does not parse cookies, dates, or general HTTP lists.
+
+=head2 merge_vary(\@existing_values, @field_names)
+
+Composes all existing C<Vary> field values and added field names into one value.
+Names are deduplicated with ASCII case-insensitive comparison while first
+spelling and order are retained. If any member is C<*>, the result is C<*>;
+empty input returns an empty string. For example,
+C<< merge_vary(['Origin', 'accept-encoding'], 'Accept-Encoding', 'Accept') >>
+returns C<Origin, accept-encoding, Accept>.
+
+The first argument must be an arrayref of scalar values. Existing nonempty
+members and added names must be HTTP tokens. Malformed values and invalid
+arguments raise; the function never silently drops a cache dependency.
 
 =head2 format_header_parameters($leading, name =E<gt> $value, ...)
 
