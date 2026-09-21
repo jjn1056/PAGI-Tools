@@ -2,6 +2,10 @@ use v5.40;
 use PAGI::Auth qw(www_authenticate);
 use PAGI::Headers;
 use PAGI::Response qw(json_response);
+use PAGI::Utils::Headers qw(parse_authorization_bearer);
+
+# Independent utility functions also work without a Request or Headers object.
+say 'extracted: ', parse_authorization_bearer('Bearer accepted');
 
 my $formatted = www_authenticate('Bearer', realm => 'notes');
 say 'formatter: ', $formatted;

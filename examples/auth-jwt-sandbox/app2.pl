@@ -15,23 +15,17 @@ my $secret = 'learning-only-secret-not-for-production-0123456789';
 my $page = app_path('public', 'index.html');
 
 # Pass this callback directly, or supply an object with authenticate instead.
-my $jwt_backend = sub ($request) {
-    my @authorization = $request->header_all('Authorization');
-    return unauth_result() unless @authorization;
-
+sub jwt_backend ($request) {
     my $token;
-    if (@authorization == 1) {
-        my ($scheme) = $authorization[0] =~ /\A(\S+)/;
-        return unauth_result() if defined($scheme) && lc($scheme) ne 'bearer';
-        ($token) = $authorization[0] =~ /\ABearer +([A-Za-z0-9._~+\/-]+=*)\z/i;
-    }
-    # Never select a token from duplicate Authorization fields.
-    return unauth_result(
-        failure => {
-            code    => 'malformed_authorization',  # This application's convention.
-            message => 'Expected one Authorization header containing a Bearer token.',
-        },
-    ) unless defined $token;
+    my $parsed = eval {
+        $token = $request->bearer_token(raise_on_error => 1);
+        1;
+    };
+    return unauth_result(failure => {
+        code => 'malformed_authorization',
+        message => 'Expected one Authorization header containing a Bearer token.',
+    }) unless $parsed;
+    return unauth_result() unless defined $token;
 
     my $claims;
     my $verified = eval {
@@ -69,7 +63,7 @@ my $jwt_backend = sub ($request) {
         ),
         scopes => ['authenticated'],
     );
-};
+}
 
 sub login ($request) {
     # A real login would verify the caller's credentials before issuing a token.
@@ -124,7 +118,7 @@ compose(
     # Authentication establishes context; each endpoint decides whether to require it.
     middleware => [
         middleware('Authentication',
-            backend => $jwt_backend,
+            backend => \&jwt_backend,
         ),
     ],
     routes => [

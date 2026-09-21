@@ -92,6 +92,7 @@ is($export_me->json->{scopes}, ['notes:read'], 'authenticated user does not add 
 for my $headers (
     [['Authorization', 'Bearer alice-editor'], ['Authorization', 'Bearer alice-reader']],
     { Authorization => 'Bearer first second' },
+    { Authorization => "Bearer\talice-reader" },
 ) {
     my $res = $client->get('/me', headers => $headers);
     is($res->status, 400, 'duplicate or malformed Authorization uses application 400');
@@ -104,18 +105,18 @@ is($other->header('WWW-Authenticate'), 'Bearer realm="notes"', 'another scheme r
 # Use the actual backend outside Compose to see failed Futures before its 500 boundary.
 my $authentication = build_authentication($store);
 my $backend_reads = 0;
-my $header_all = PAGI::Request->can('header_all');
+my $bearer_token = PAGI::Request->can('bearer_token');
 my $direct = $authentication->wrap(sub { Future->done });
 my $receive = sub { Future->done({type => 'http.request', body => '', more_body => 0}) };
 my $send = sub { die 'authentication failure must not emit HTTP' };
 {
     no warnings qw(redefine once);
-    local *PAGI::Request::header_all = sub { ++$backend_reads; $header_all->(@_) };
+    local *PAGI::Request::bearer_token = sub { ++$backend_reads; $bearer_token->(@_) };
     for my $headers ([], [['authorization', 'Bearer unknown']]) {
         $direct->({type => 'http', headers => $headers}, $receive, $send)->get;
     }
 }
-is($backend_reads, 2, 'actual backend reads headers for missing and rejected credentials');
+is($backend_reads, 2, 'actual backend delegates extraction for missing and rejected credentials');
 {
     no warnings qw(redefine once);
     local *NotesDemo::TokenStore::find_active = sub { Future->fail('token storage unavailable', 'storage') };

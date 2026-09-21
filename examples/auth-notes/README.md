@@ -4,8 +4,9 @@ A small Authentication v1 example: public notes, an identity endpoint, publishin
 and a permission-restricted bulk export. All notes are public. Export restrictions
 control bulk access and do not imply confidentiality.
 
-The backend receives a Request, interprets its Authorization fields, awaits the
-application-owned token store, and returns `auth_result` or `unauth_result`.
+The backend receives a Request, extracts Bearer credentials with
+`bearer_token(raise_on_error => 1)`, awaits the application-owned token store,
+and returns `auth_result` or `unauth_result`.
 Authentication installs that context and continues, even for rejected tokens.
 Each protected handler explicitly checks the user or credentials and constructs
 an ordinary response. The only shared response builder creates the authentication

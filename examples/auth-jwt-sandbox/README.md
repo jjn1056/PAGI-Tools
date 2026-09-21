@@ -14,9 +14,9 @@ the Request and own parsing as well as verification, including missing credentia
 Malformed Bearer syntax and duplicate Authorization headers are reported with
 this application's `malformed_authorization` failure code. Protected response
 code handles that case explicitly as 400 `invalid_request`; token verification
-failures remain 401 `invalid_token`. General Headers/request validation is separate
-work. The dedicated integration test exercises these responses through both
-real applications.
+failures remain 401 `invalid_token`. The Request Bearer helper parses the field;
+the application decides how failures become responses. The dedicated integration
+test exercises these responses through both real applications.
 
 In `app.pl`, application-owned `require_login` middleware protects two routes.
 It either sends an ordinary response or explicitly calls the downstream app.
@@ -85,11 +85,21 @@ The `backend` option accepts exactly a coderef or an object implementing
 directly:
 
 ```perl
-my $jwt_backend = sub ($request) {
-    # Read credentials from the Request, verify them, and return an Auth result.
-};
+sub jwt_backend ($request) {
+    my $token;
+    my $parsed = eval {
+        $token = $request->bearer_token(raise_on_error => 1);
+        1;
+    };
+    return unauth_result(failure => {
+        code => 'malformed_authorization',
+        message => 'Expected one Authorization header containing a Bearer token.',
+    }) unless $parsed;
+    return unauth_result() unless defined $token;
+    # Verify $token outside the parsing eval, then return an Auth result.
+}
 
-middleware('Authentication', backend => $jwt_backend);
+middleware('Authentication', backend => \&jwt_backend);
 ```
 
 For an application-owned class loaded with `use MyApp::JWTBackend`, pass its
@@ -114,9 +124,9 @@ implicit construction. The application owns its closures, instances, and sharing
 The existing `middleware(...)` descriptor retains its normal behavior.
 
 The sole argument is the existing PAGI::Request, with raw scope available via
-`->scope`. The backend reads `header_all('Authorization')`, accepts exactly one
-well-formed Bearer value, and extracts its token before JWT verification. Missing
-headers and unsupported schemes return a guest without failure; malformed Bearer
+`->scope`. The backend calls `bearer_token(raise_on_error => 1)` to read exactly
+one well-formed Bearer value before JWT verification. Missing headers and
+unsupported schemes return a guest without failure; malformed Bearer
 syntax or duplicates return the local `malformed_authorization` failure code.
 Generic middleware does not inspect Authorization, choose a scheme, or read the
 body. OAuth acquisition, registration, discovery, and refresh remain separate.
@@ -125,7 +135,7 @@ Completed results also expose `user`, `credentials`, and `failure` directly.
 A backend unit test or wrapper can inspect its result without installing a scope:
 
 ```perl
-my $result = $jwt_backend->($request);  # This sandbox backend is synchronous.
+my $result = jwt_backend($request);  # This sandbox backend is synchronous.
 my $user = $result->user;
 my $failure = $result->failure;
 ```
@@ -171,7 +181,7 @@ check. The relevant composition in `app.pl` is:
 mount('/protected',
     middleware => [
         middleware('Authentication',
-            backend => $jwt_backend,
+            backend => \&jwt_backend,
         ),
         middleware(\&require_login),
     ],

@@ -379,11 +379,21 @@ fail before reading protocol events.
   # Get single header (case-insensitive)
   my $user_agent = $req->header('user-agent') // 'Unknown';
 
-  # Get content type
+  # Normalized media type; use header('Content-Type') for raw bytes.
   my $ct = $req->content_type;
 
-  # Get bearer token from Authorization: Bearer <token>
+  # Get bearer token from Authorization: Bearer <token>.
   my $token = $req->bearer_token;
+
+  # Basic credentials are returned as username/password bytes in list context.
+  my ($username, $password) = $req->basic_auth;
+
+Missing fields and unsupported schemes return undef (or two undefs for Basic).
+Malformed credentials do the same by default. Pass C<raise_on_error =E<gt> 1>
+when the application needs to distinguish malformed presentation from absence;
+then catch only extraction errors and keep verification outside that C<eval>.
+Neither helper verifies credentials or chooses the response. Use
+C<< $req->header_all('Authorization') >> for deliberate raw field handling.
 
 =head3 Query Parameters
 

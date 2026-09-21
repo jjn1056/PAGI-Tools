@@ -2,6 +2,22 @@
 
 0.002003 - UNRELEASED
 
+  [Shared HTTP header helpers]
+  - NEW: PAGI::Utils::Headers provides independent parsers and formatters for
+    Basic/Bearer credentials, parameterized fields, token lists, Vary, entity
+    tags, and conditional tag lists. PAGI::Headers adds corresponding named
+    readers and Vary composition; Request delegates Basic/Bearer extraction.
+  - Request authentication parsing now rejects malformed Bearer/Basic syntax
+    and duplicate Authorization fields in strict mode. Its normalized
+    Content-Type reader accepts one valid media type with parameters; raw
+    header access remains available through header/header_all.
+  - Multipart boundary and disposition readers use the shared parameter
+    grammar. File download disposition uses UTF-8 extended filenames, and
+    Pages/CORS/GZip compose Vary through the shared helper. File and
+    ConditionalGet use complete entity-tag lists and weak If-None-Match
+    comparison for eligible GET/HEAD responses, including quoted commas and
+    wildcard representation matching.
+
   [Protocol refusal applications]
   - WebSocket `deny` and SSE `decline` now document and demonstrate concrete
     Responses, synchronous and async Request handlers, negotiated Pages

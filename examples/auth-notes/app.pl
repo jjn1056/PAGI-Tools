@@ -12,20 +12,16 @@ use PAGI::Routing qw(route middleware);
 sub build_authentication ($token_store) {
     return PAGI::Middleware::Authentication->new(
         backend => async sub ($request) {
-            my @authorization = $request->header_all('Authorization');
-            return unauth_result() unless @authorization;
-
             my $token;
-            if (@authorization == 1) {
-                my ($scheme) = $authorization[0] =~ /\A(\S+)/;
-                return unauth_result() if defined($scheme) && lc($scheme) ne 'bearer';
-                ($token) = $authorization[0] =~ /\ABearer +([A-Za-z0-9._~+\/-]+=*)\z/i;
-            }
-            # Application convention, shared with the JWT examples.
+            my $parsed = eval {
+                $token = $request->bearer_token(raise_on_error => 1);
+                1;
+            };
             return unauth_result(failure => {
                 code => 'malformed_authorization',
                 message => 'Expected one Authorization header containing a Bearer token.',
-            }) unless defined $token;
+            }) unless $parsed;
+            return unauth_result() unless defined $token;
 
             # A failed store Future propagates; it is not a rejected credential.
             my $record = await $token_store->find_active($token);

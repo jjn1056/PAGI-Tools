@@ -14,17 +14,19 @@ use PAGI::Routing qw(route middleware);
     }
     sub authenticate {
         my ($self, $request) = @_;
-        my @values = $request->header_all('Authorization');
-        return PAGI::Auth::unauth_result() unless @values;
+        my ($username, $password);
+        my $parsed = eval {
+            ($username, $password) = $request->basic_auth(raise_on_error => 1);
+            1;
+        };
         return PAGI::Auth::unauth_result(failure => {
-            code => 'malformed_authorization', message => 'Supply one Authorization field.',
-        }) unless @values == 1;
-        return PAGI::Auth::unauth_result() unless $values[0] =~ /\ABasic(?: |\z)/i;
-        my ($username, $password) = $request->basic_auth;
+            code => 'malformed_authorization', message => 'Supply one valid Basic credential.',
+        }) unless $parsed;
+        return PAGI::Auth::unauth_result() unless defined($username) && defined($password);
+        # This fixture additionally accepts printable ASCII identity/password bytes.
         return PAGI::Auth::unauth_result(failure => {
             message => 'Credentials were not accepted.',
-        }) unless defined($username) && defined($password)
-            && $username !~ /[^\x20-\x7e]/ && $password !~ /[^\x20-\x7e]/;
+        }) if $username =~ /[^\x20-\x7e]/ || $password =~ /[^\x20-\x7e]/;
         return PAGI::Auth::unauth_result(failure => {
             message => 'Credentials were not accepted.',
         }) unless $self->{verify}->($username, $password);

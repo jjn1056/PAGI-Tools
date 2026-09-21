@@ -13,7 +13,8 @@ my $refusal = request_response(sub ($request) {
 
 compose(
     middleware => [middleware('Authentication', backend => sub ($request) {
-        return ($request->header('Authorization') // '') eq 'Bearer accepted'
+        my $token = $request->bearer_token;
+        return defined($token) && $token eq 'accepted'
             ? auth_result(user => PAGI::Auth::SimpleUser->new(identity => 'alice'))
             : unauth_result(failure => { message => 'An access token is required.' });
     })],

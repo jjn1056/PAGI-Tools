@@ -62,6 +62,7 @@ my @load_modules = qw(
     PAGI::SSE
     PAGI::Lifespan
     PAGI::Utils
+    PAGI::Utils::Headers
     PAGI::Utils::Middleware
     PAGI::Utils::AppObject
     PAGI::Utils::Scope

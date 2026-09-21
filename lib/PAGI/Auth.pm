@@ -134,9 +134,9 @@ PAGI::Auth - authentication results, installed context, and challenge formatting
 
   my $backend = sub {
       my ($request) = @_;
-      my $token = $request->header('Authorization') // '';
-      return unauth_result() unless $token =~ /\ABearer (.+)\z/;
-      my $claims = verify_application_jwt($1); # application-owned verifier
+      my $token = $request->bearer_token;
+      return unauth_result() unless defined $token;
+      my $claims = verify_application_jwt($token); # application-owned verifier
       return unauth_result(failure => {
           message => 'The token was not accepted.',
       }) unless $claims;
@@ -263,9 +263,9 @@ This complete recipe installs Authentication before an application-owned HTTP
 check. Both protected routes share it; C</public> sits outside the group.
 The wrapper delegates lifespan and other non-HTTP scopes before reading auth,
 awaits the next application, and invokes an ordinary response directly for a
-guest or rejection. The backend examines every Authorization field and never
-selects one from duplicates. The fixed token is only a teaching fixture;
-replace it with application-owned verification.
+guest or rejection. The backend delegates Authorization parsing to Request;
+duplicates are rejected without selecting a token. The fixed token is only a
+teaching fixture; replace it with application-owned verification.
 
   use v5.40;
   use Future::AsyncAwait;
@@ -277,20 +277,16 @@ replace it with application-owned verification.
   use PAGI::Utils qw(invoke_app);
 
   my $backend = sub ($request) {
-      my @authorization = $request->header_all('Authorization');
-      return unauth_result() unless @authorization;
       my $token;
-      if (@authorization == 1) {
-          my ($scheme) = $authorization[0] =~ /\A(\S+)/;
-          return unauth_result()
-              if defined($scheme) && lc($scheme) ne 'bearer';
-          ($token) = $authorization[0]
-              =~ /\ABearer +([A-Za-z0-9._~+\/-]+=*)\z/i;
-      }
+      my $parsed = eval {
+          $token = $request->bearer_token(raise_on_error => 1);
+          1;
+      };
       return unauth_result(failure => {
           message => 'Malformed Authorization header.',
           code    => 'malformed_authorization',
-      }) unless defined $token;
+      }) unless $parsed;
+      return unauth_result() unless defined $token;
       return auth_result(
           user => PAGI::Auth::SimpleUser->new(identity => 'alice'),
       ) if $token eq 'accepted';

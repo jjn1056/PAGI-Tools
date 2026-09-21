@@ -1594,6 +1594,88 @@ errors belong to the selected application.
 F<examples/protocol-refusal/app.pl> is the maintained executable version, with
 all twelve routes exercised through L<PAGI::Test::Client>.
 
+=head1 HEADER RECIPES
+
+=head2 Extract credentials and keep response policy in the application
+
+For a backend that distinguishes malformed presentation from a missing or
+unsupported scheme, raise only during extraction. Verification remains outside
+that exception handler. The backend returns a result; a protected handler maps
+its failure code to an explicit 400 or 401 response and Bearer challenge.
+
+  my $token;
+  my $parsed = eval {
+      $token = $request->bearer_token(raise_on_error => 1);
+      1;
+  };
+  return unauth_result(failure => {
+      code => 'malformed_authorization',
+      message => 'Supply one valid Bearer credential.',
+  }) unless $parsed;
+  return unauth_result() unless defined $token;
+  # Verify $token here; a rejected token has a different failure.
+
+C<< $request->basic_auth(raise_on_error =E<gt> 1) >> similarly returns
+C<(username, password)> in list context. The default read instead returns
+C<undef> for unusable Bearer input (or C<(undef, undef)> for Basic), so it
+cannot distinguish a malformed credential from an absent one. Neither helper
+verifies a credential or constructs a response. See L<PAGI::Request/AUTH HELPERS>.
+
+=head2 Read upload parameters and write download parameters
+
+The request reader separates a normalized media type from raw parameter bytes.
+An empty parameter hash is a valid field without parameters. Multipart upload
+C<filename*> remains separate from C<filename> and is not decoded as a
+download name.
+
+  my $media = $request->headers->content_type;
+  my $params = $request->headers->content_type_parameters;
+  if (defined($media) && $media eq 'multipart/form-data' && $params) {
+      my $boundary = $params->{boundary};
+      # The multipart reader also uses this boundary while parsing the body.
+  }
+
+For a download, the formatter accepts a Perl character filename and emits a
+byte header; a non-ASCII name becomes UTF-8 C<filename*>. No fallback name
+is invented. A caller may supply an explicit ASCII C<filename> fallback and
+an already-formatted C<filename*> when both are required.
+
+  use PAGI::Utils::Headers qw(content_disposition);
+  $response->headers->set('Content-Disposition',
+      content_disposition('attachment', filename => 'résumé.pdf'));
+
+=head2 Compose Vary across middleware
+
+Use the mutating Headers method when several components add cache dependencies.
+It combines repeated Vary fields, deduplicates names without regard to case,
+and retains unrelated headers. A wildcard remains a wildcard.
+
+  $response->headers->add_vary('Accept-Encoding');
+  $response->headers->add_vary('Origin');
+
+The independent C<merge_vary(\@existing_values, @names)> function returns a
+single value when no Headers container is available. Both paths reject a
+malformed Vary field instead of silently dropping an existing dependency.
+
+=head2 Compare conditional entity tags
+
+For an existing representation selected by a successful GET or HEAD, read all
+C<If-None-Match> occurrences and compare them weakly with its current ETag.
+Quoted commas are part of a tag, and malformed conditions return C<undef> by
+default. A present condition takes precedence over C<If-Modified-Since>; do
+not use a date fallback merely because this condition is unusable.
+
+  use PAGI::Utils::Headers qw(etag_matches);
+  my $condition = $request->headers->if_none_match;
+  if (defined($condition) && etag_matches($condition, $current_etag, weak => 1)) {
+      # Send the eligible representation's bodyless 304 with its validators.
+  }
+
+If the representation exists without a current ETag, inspect
+C<< $condition->{any} >> for the wildcard case instead of calling
+C<etag_matches>. The File and ConditionalGet integrations handle their own
+eligibility, response metadata, and range policy.
+
 =head1 AUTHENTICATION & SESSIONS
 
 L<PAGI::Auth> constructs authentication results, reads the installed context,
@@ -1859,7 +1941,6 @@ that hashref with a convenient (and typo-catching) API.
 
   use strict;
   use warnings;
-  use MIME::Base64 qw(decode_base64);
   use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
   use PAGI::Middleware::Builder;
   use PAGI::Response qw(text_response);
@@ -1880,11 +1961,18 @@ that hashref with a convenient (and typo-catching) API.
   my $app = builder {
       enable 'Authentication', backend => sub {
           my ($request) = @_;
-          my $value = $request->header('authorization') // '';
-          return unauth_result() unless $value =~ /\ABasic\s+(.+)\z/i;
-          my ($username, $password) = split /:/, decode_base64($1), 2;
+          my ($username, $password);
+          my $parsed = eval {
+              ($username, $password) = $request->basic_auth(raise_on_error => 1);
+              1;
+          };
+          return unauth_result(failure => {
+              code => 'malformed_authorization',
+              message => 'Supply one valid Basic credential.',
+          }) unless $parsed;
+          return unauth_result() unless defined($username) && defined($password);
           return unauth_result(failure => { message => 'Credentials were not accepted.' })
-              unless defined($password) && $username eq 'admin' && $password eq 'secret';
+              unless $username eq 'admin' && $password eq 'secret';
           return auth_result(user => MyApp::User->new($username));
       };
       $routing;
@@ -1906,9 +1994,16 @@ that hashref with a convenient (and typo-catching) API.
       my $result = auth($request);
       return json_response({ user => $result->user->identity })
           if $result->user->is_authenticated;
-      my $response = json_response({ error => 'authentication_required' }, status => 401);
+      my $failure = $result->failure;
+      my $malformed = $failure
+          && ($failure->code // '') eq 'malformed_authorization';
+      my @challenge = (realm => 'api');
+      push @challenge, error => ($malformed ? 'invalid_request' : 'invalid_token')
+          if $failure;
+      my $response = json_response({ error => 'authentication_required' },
+          status => $malformed ? 400 : 401);
       $response->headers->set('WWW-Authenticate',
-          www_authenticate('Bearer', realm => 'api'));
+          www_authenticate('Bearer', @challenge));
       return $response;
   }),
   ]);
@@ -1917,9 +2012,17 @@ that hashref with a convenient (and typo-catching) API.
   my $app = builder {
       enable 'Authentication', backend => sub {
           my ($request) = @_;
-          my $value = $request->header('authorization') // '';
-          return unauth_result() unless $value =~ /\ABearer\s+(.+)\z/i;
-          my $claims = eval { decode_jwt(token => $1, key => 'configured verification key') };
+          my $token;
+          my $parsed = eval {
+              $token = $request->bearer_token(raise_on_error => 1);
+              1;
+          };
+          return unauth_result(failure => {
+              code => 'malformed_authorization',
+              message => 'Supply one valid Bearer credential.',
+          }) unless $parsed;
+          return unauth_result() unless defined $token;
+          my $claims = eval { decode_jwt(token => $token, key => 'configured verification key') };
           return unauth_result(failure => { message => 'The token was not accepted.' })
               unless $claims;
           return auth_result(user => MyApp::User->new($claims->{sub}));

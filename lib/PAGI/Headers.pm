@@ -33,6 +33,64 @@ plain-hash snapshot with C<to_hash>.
 
 =head1 METHODS
 
+=head2 new($pairs)
+
+C<< PAGI::Headers->new([[Accept => 'text/plain'], [Accept => 'text/html']]) >>
+copies an optional arrayref of C<[name, value]> pairs into an ordered container;
+omitting it starts empty. The pair arrays are copied. Fields are not parsed or
+normalized. Header values are HTTP wire bytes; application code must encode
+characters before storing them.
+
+=head2 get($name) and get_all($name)
+
+C<< $headers->get('Accept') >> returns the last value, or C<undef> when absent.
+C<< $headers->get_all('Accept') >> returns all values in order as a list, or
+an empty list when absent. Both reads use ASCII case-insensitive names and
+leave stored fields untouched. Use C<get_single> when duplicates must be
+rejected rather than resolved by last-value lookup.
+
+=head2 has($name), names, count, and is_empty
+
+C<has> returns a boolean for any matching field. C<names> returns distinct
+names in first-seen order and casing; C<count> counts pairs, including repeated
+names, and C<is_empty> tests for zero pairs. For example, two C<Accept> fields
+make C<< $headers->count >> return C<2> and C<< $headers->names >> return one
+name. These methods do not mutate the container.
+
+=head2 set($name, @values), add($name, @values), and set_default($name, $value)
+
+C<set> removes all matching occurrences and appends the supplied values in
+order; no values removes the field. C<add> appends without removing earlier
+values. C<set_default> adds only when the field is absent. Each returns the
+same Headers instance. For example, C<< $headers->add('Set-Cookie', 'a=1')
+->add('Set-Cookie', 'b=2') >> keeps two fields. Values must be defined; callers
+supply wire bytes. These raw writes do not escape or validate field contents.
+
+=head2 remove($name), clear, and remove_content_headers
+
+C<remove> deletes every matching occurrence and returns their values as a
+list in original order. C<clear> removes all fields and returns the instance.
+C<remove_content_headers> removes fields with names beginning C<Content-> and
+returns a new Headers container holding the removed pairs. For example,
+C<< my @old = $headers->remove('Vary') >> captures all previous Vary values.
+
+=head2 clone, to_pairs, flatten, and to_hash
+
+C<clone> returns an independent Headers container. C<to_pairs> returns a
+detached arrayref of ordered C<[name, value]> pairs; C<flatten> returns the
+ordered flat C<(name, value, ...)> list used by response headers. C<to_hash>
+is the lossy last-value snapshot described below; C<to_hash(1)> keeps each
+name's values in an arrayref. None of these output methods mutate fields.
+Array dereference also returns a copy of the pair list, so use C<add> or C<set>
+to make a change.
+
+=head2 dehop
+
+Removes standard hop-by-hop fields and fields nominated by C<Connection>;
+returns the same instance. Use C<< $headers->clone->dehop >> if the original
+fields must remain available. This raw forwarding aid does not parse other
+field grammars.
+
 =head2 to_hash
 
     my $flat  = $headers->to_hash;     # { Name => last-value }
@@ -57,8 +115,11 @@ data.
 Returns a raw field value only when exactly one case-insensitive occurrence of
 C<$name> exists. Missing fields return C<undef>. Duplicate fields, even with
 identical values, also return C<undef> by default, or raise with
-C<raise_on_error =E<gt> 1>. The value is not trimmed, parsed, or rewritten.
-The only option is C<raise_on_error>; unknown or duplicate options are errors.
+C<raise_on_error =E<gt> 1>. An empty present value remains an empty string;
+the value is not trimmed, parsed, or rewritten. The only option is
+C<raise_on_error>; unknown or duplicate options are errors. For example,
+C<< $headers->get_single('Authorization', raise_on_error => 1) >> rejects two
+Authorization occurrences.
 
 =head2 tokens($name, %opts)
 
@@ -97,7 +158,8 @@ fields, duplicate fields, another identifiable scheme, and malformed input
 return C<undef> by default. C<raise_on_error =E<gt> 1> raises for duplicates or
 malformed Bearer credentials. Parsing uses the shared
 L<PAGI::Utils::Headers/parse_authorization_bearer($value, %opts)> rules and does
-not verify or decode the token.
+not verify or decode the token. For example, one C<Authorization: Bearer
+accepted> field yields C<accepted>.
 
 =head2 authorization_basic(%opts)
 
@@ -105,7 +167,8 @@ Reads a single Authorization field and returns C<(username, password)> in list
 context after shared Basic parsing. It returns C<(undef, undef)> for missing,
 duplicate, another-scheme, or malformed input by default. C<raise_on_error =E<gt>
 1> raises for duplicates or malformed Basic credentials. Credential bytes are
-not decoded as characters or verified.
+not decoded as characters or verified. One C<Authorization: Basic
+YWRhOnRlc3Q=> field yields C<('ada', 'test')> in list context.
 
 =head2 content_type(%opts)
 
@@ -121,7 +184,8 @@ Returns a hashref of parameters from one valid C<Content-Type> field; a valid
 field without parameters returns C<{}>. Names are ASCII-lowercased, while value
 bytes are preserved. For example, C<Text/HTML; charset=UTF-8> produces
 C<< { charset =E<gt> 'UTF-8' } >>. Case-insensitive duplicate parameter names
-make the whole field unusable. Unknown parameters remain available.
+make the whole field unusable. Missing and unusable fields return C<undef>.
+Unknown parameters remain available.
 
 =head2 content_disposition(%opts)
 
@@ -137,7 +201,7 @@ a valid field without parameters returns C<{}>. For example, C<< attachment;
 filename="report; Q1.txt" >> gives C<< { filename =E<gt> 'report; Q1.txt' } >>.
 Unknown names remain available, and C<filename*> stays distinct from
 C<filename> with its encoded bytes unchanged. Duplicate names, ignoring ASCII
-case, make the field unusable.
+case, make the field unusable. Missing and unusable fields return C<undef>.
 
 All four named reads accept only C<raise_on_error>. They use the shared
 parameter grammar and do not rewrite fields or cache parsed values. Returned
@@ -149,6 +213,8 @@ L<PAGI::Utils::Headers/format_header_parameters($leading, name =E<gt> $value, ..
 Parses exactly one C<ETag> occurrence as C<< { value =E<gt> $opaque_bytes,
 weak =E<gt> 0|1 } >>. Missing, duplicate, or malformed fields return C<undef>.
 C<raise_on_error =E<gt> 1> reports duplicates and malformed fields, not absence.
+For example, C<< ETag: W/"v1" >> yields
+C<< { value =E<gt> 'v1', weak =E<gt> 1 } >>.
 
 =head2 if_none_match(%opts) and if_match(%opts)
 
@@ -157,7 +223,9 @@ C<< { any =E<gt> 0, tags =E<gt> \@tags } >> or
 C<< { any =E<gt> 1, tags =E<gt> [] } >> for a wildcard. Absence returns
 C<undef>; a present empty list has an empty C<tags> array. Malformed syntax
 returns C<undef> by default or raises with C<raise_on_error =E<gt> 1>.
-All three readers leave raw fields untouched and reject unknown options.
+All three readers leave raw fields untouched and reject unknown options. Two
+C<If-None-Match> fields holding C<< "old" >> and C<< W/"a,b" >> produce two
+tags, keeping the comma inside the second tag.
 
 =cut
 
