@@ -74,7 +74,7 @@ C<remove_content_headers> removes fields with names beginning C<Content-> and
 returns a new Headers container holding the removed pairs. For example,
 C<< my @old = $headers->remove('Vary') >> captures all previous Vary values.
 
-=head2 clone, to_pairs, flatten, and to_hash
+=head2 clone, to_pairs, flatten, to_hash, and to_string
 
 C<clone> returns an independent Headers container. C<to_pairs> returns a
 detached arrayref of ordered C<[name, value]> pairs; C<flatten> returns the
@@ -83,6 +83,11 @@ is the lossy last-value snapshot described below; C<to_hash(1)> keeps each
 name's values in an arrayref. None of these output methods mutate fields.
 Array dereference also returns a copy of the pair list, so use C<add> or C<set>
 to make a change.
+
+C<to_string> joins the stored pairs as raw C<"Name: value\r\n"> lines for
+debugging and inspection only. It does not validate or remove C<CR> or C<LF>
+from values, so its output is unsafe for untrusted fields. Use C<to_pairs> for
+PAGI wire emission.
 
 =head2 dehop
 

@@ -1640,6 +1640,7 @@ byte header; a non-ASCII name becomes UTF-8 C<filename*>. No fallback name
 is invented. A caller may supply an explicit ASCII C<filename> fallback and
 an already-formatted C<filename*> when both are required.
 
+  use utf8;
   use PAGI::Utils::Headers qw(content_disposition);
   $response->headers->set('Content-Disposition',
       content_disposition('attachment', filename => 'résumé.pdf'));

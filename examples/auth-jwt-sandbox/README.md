@@ -2,14 +2,16 @@
 
 This runnable example is the PAGI version of the Starlette JWT learning
 application from the design discussion. It uses the version 1 Auth API and the
-generic `Authentication` middleware. JWT parsing, verification, and response
-policy remain ordinary application code.
+generic `Authentication` middleware. The Request Bearer helper parses the
+Authorization header; JWT decoding, verification, and response policy remain
+ordinary application code.
 
 This revision follows the spec's **constrained result constructors**, **explicit
 HTTP responses**, and **ordinary middleware composition**. `auth_result` requires
 an authenticated user; `unauth_result` supplies a fresh unauthenticated user and
 empty scopes by default. Both produce the same result type. Backends receive only
-the Request and own parsing as well as verification, including missing credentials.
+the Request, use its helper to parse Authorization, and own JWT decoding and
+verification, including the policy for missing credentials.
 
 Malformed Bearer syntax and duplicate Authorization headers are reported with
 this application's `malformed_authorization` failure code. Protected response
