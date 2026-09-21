@@ -5,6 +5,7 @@ use warnings;
 use Future::AsyncAwait;
 use HTTP::MultiPartParser;
 use Hash::MultiValue;
+use PAGI::Headers;
 use PAGI::Request::Upload;
 use PAGI::Request::_BodyInput ();
 use File::Temp qw(tempfile);
@@ -55,6 +56,7 @@ async sub parse {
 
     # Current part state
     my $current_headers;
+    my $current_disposition;
     my $current_data = '';
     my $current_fh;
     my $current_temp_path;
@@ -64,7 +66,7 @@ async sub parse {
     my $finish_part = sub {
         return unless $current_headers;
 
-        my $disposition = _parse_content_disposition($current_headers);
+        my $disposition = $current_disposition;
         my $name = $disposition->{name} // '';
         my $filename = $disposition->{filename};
         my $content_type = $current_headers->{'content-type'} // 'text/plain';
@@ -105,6 +107,7 @@ async sub parse {
 
         # Reset state
         $current_headers = undef;
+        $current_disposition = undef;
         $current_data = '';
         $current_fh = undef;
         $current_temp_path = undef;
@@ -129,9 +132,8 @@ async sub parse {
                     }
                 }
 
-                # Detect if this part is a file upload (has filename in Content-Disposition)
-                my $cd = $current_headers->{'content-disposition'} // '';
-                $current_is_file = ($cd =~ /filename=/i) ? 1 : 0;
+                $current_disposition = _parse_content_disposition($current_headers);
+                $current_is_file = defined $current_disposition->{filename} ? 1 : 0;
             },
 
             on_body => sub {
@@ -218,20 +220,10 @@ async sub parse {
 
 sub _parse_content_disposition {
     my ($headers) = @_;
-    my $cd = $headers->{'content-disposition'} // '';
-
-    my %result;
-
-    # Parse name="value" pairs
-    while ($cd =~ /(\w+)="([^"]*)"/g) {
-        $result{$1} = $2;
-    }
-    # Also handle unquoted values
-    while ($cd =~ /(\w+)=([^;\s"]+)/g) {
-        $result{$1} //= $2;
-    }
-
-    return \%result;
+    my $value = $headers->{'content-disposition'};
+    return {} unless defined $value;
+    my $fields = PAGI::Headers->new([['Content-Disposition', $value]]);
+    return $fields->content_disposition_parameters // {};
 }
 
 1;
@@ -279,6 +271,8 @@ Protects against oversized text field submissions.
 Maximum size for file uploads. Default: 10MB.
 
 Applies to parts with a C<filename> in the Content-Disposition header.
+Quoted filenames (including an empty string) count as uploads; C<filename*>
+alone does not. Malformed disposition parameters provide no part metadata.
 
 =item max_files => $count
 

@@ -345,9 +345,8 @@ sub multipart_stream {
         || $self->{scope}{'pagi.request.body.stream.created'};
     croak "multipart_stream() requires a multipart/form-data request" unless $self->is_multipart;
 
-    my $ct = $self->header('content-type') // '';
-    my ($boundary) = $ct =~ /boundary=([^;\s]+)/;
-    $boundary =~ s/^["']|["']$//g if defined $boundary;  # Strip quotes
+    my $parameters = $self->headers->content_type_parameters;
+    my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
     croak "No boundary found in Content-Type" unless defined $boundary && length $boundary;
 
     $self->{scope}{'pagi.request.body.stream.created'} = 1;  # latch: lock out buffered readers
@@ -523,12 +522,9 @@ async sub _parse_multipart_form {
     return $self->{scope}{'pagi.request.form'}
         if $self->{scope}{'pagi.request.form'} && $self->{scope}{'pagi.request.uploads'};
 
-    # Extract boundary from content-type
-    my $ct = $self->header('content-type') // '';
-    my ($boundary) = $ct =~ /boundary=([^;\s]+)/;
-    $boundary =~ s/^["']|["']$//g if $boundary;  # Strip quotes
-
-    die "No boundary found in Content-Type" unless $boundary;
+    my $parameters = $self->headers->content_type_parameters;
+    my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
+    die "No boundary found in Content-Type" unless defined($boundary) && length($boundary);
 
     my $handler = PAGI::Request::MultiPartHandler->new(
         boundary        => $boundary,
@@ -956,6 +952,11 @@ where each one goes:
         }
     }
 
+The C<boundary> parameter is read from C<Content-Type> with normal quoted
+parameter syntax. The underlying C<HTTP::MultiPartParser> accepts only
+alphanumeric boundary characters and C<'()+_,-./:=?>; it rejects spaces even
+when the C<Content-Type> value is correctly quoted.
+
 Each part is a L<PAGI::Request::Part> exposing its metadata (C<name>,
 C<filename>, C<content_type>, C<headers>, C<is_file>) and methods to consume
 its body: C<next_chunk> (pull raw bytes), C<value> (buffer the whole part as
@@ -1031,6 +1032,12 @@ Parse body as JSON. Dies on parse error.
     my $form = await $req->form_params(raw => 1);     # Skip UTF-8 decoding
 
 Parse URL-encoded or multipart form data, returning a L<Hash::MultiValue>.
+Multipart boundary parameters use the same quoted parameter parsing as
+C<multipart_stream>, subject to the parser's boundary character restriction
+described above. Part C<Content-Disposition> parameters handle quoted escapes,
+including C<filename="a\"b.txt">. A quoted empty C<filename> is a file
+upload. C<filename*> alone remains distinct from C<filename> and does not
+make the part a file upload.
 
 B<Options:>
 

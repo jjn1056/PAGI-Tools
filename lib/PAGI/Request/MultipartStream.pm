@@ -5,6 +5,7 @@ use warnings;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use HTTP::MultiPartParser;
+use PAGI::Headers;
 use PAGI::Request::_BodyInput ();
 
 =head1 NAME
@@ -160,20 +161,10 @@ sub _disposition {
 
 sub _parse_content_disposition {
     my ($headers) = @_;
-    my $cd = $headers->{'content-disposition'} // '';
-
-    my %result;
-
-    # Parse name="value" pairs
-    while ($cd =~ /(\w+)="([^"]*)"/g) {
-        $result{$1} = $2;
-    }
-    # Also handle unquoted values
-    while ($cd =~ /(\w+)=([^;\s"]+)/g) {
-        $result{$1} //= $2;
-    }
-
-    return \%result;
+    my $value = $headers->{'content-disposition'};
+    return {} unless defined $value;
+    my $fields = PAGI::Headers->new([['Content-Disposition', $value]]);
+    return $fields->content_disposition_parameters // {};
 }
 
 sub _build_parser {
@@ -359,7 +350,9 @@ The part's form field name, taken from its C<Content-Disposition> header.
     my $filename = $part->filename;
 
 The part's filename from C<Content-Disposition>, or C<undef> for non-file
-(field) parts.
+(field) parts. Quoted escapes are parsed, and an empty quoted C<filename>
+still identifies a file part. C<filename*> alone does not become a filename.
+If the disposition is malformed, the part has no parsed name or filename.
 
 =head2 content_type
 

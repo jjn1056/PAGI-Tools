@@ -175,4 +175,18 @@ subtest 'file upload uses file limit not field limit' => sub {
     ok($uploads->get('file1'), 'large file accepted using max_file_size');
 };
 
+subtest 'spaced filename parameter uses the file size limit' => sub {
+    my $boundary = 'SpacedFilename';
+    my $body = "--$boundary\r\nContent-Disposition: form-data; name=upload; filename = \"report.txt\"\r\n\r\n";
+    $body .= 'x' x 500;
+    $body .= "\r\n--$boundary--\r\n";
+    my $handler = PAGI::Request::MultiPartHandler->new(
+        boundary => $boundary, receive => mock_receive($body),
+        max_field_size => 100, max_file_size => 1000,
+    );
+    my ($form, $uploads) = $handler->parse->get;
+    is $uploads->get('upload')->filename, 'report.txt', 'classified as an upload';
+    is $uploads->get('upload')->size, 500, 'file limit allowed the body';
+};
+
 done_testing;
