@@ -55,15 +55,45 @@ PAGI::Test::Client->run($app, sub {
     my ($client) = @_;
     $client_after_stop = $client;
     is $client->state->{ready}, 1, 'startup callback ran';
-    is $client->get('/one')->status, 401, 'first route refuses a guest';
+    my $missing = $client->get('/one');
+    is $missing->status, 401, 'first route refuses a guest';
+    is $missing->header('WWW-Authenticate'), 'Bearer realm="example"',
+        'missing credentials have no Bearer error';
     is $client->get('/two')->status, 401, 'second route refuses a guest';
     is $client->get('/public')->status, 200, 'public route stays open';
+    my $unsupported = $client->get('/one', headers => {
+        Authorization => 'Basic YWRhOnRlc3Q=',
+    });
+    is $unsupported->status, 401, 'unsupported scheme remains a guest';
+    is $unsupported->header('WWW-Authenticate'), 'Bearer realm="example"',
+        'unsupported scheme has no Bearer error';
     for my $path (qw(/one /two)) {
         is $client->get($path, headers => { Authorization => 'Bearer accepted' })->status,
             200, "$path accepts the documented credential";
-        is $client->get($path, headers => { Authorization => 'Bearer rejected' })->status,
+        my $rejected = $client->get($path, headers => {
+            Authorization => 'Bearer rejected',
+        });
+        is $rejected->status,
             401, "$path refuses rejected credentials";
+        is $rejected->header('WWW-Authenticate'),
+            'Bearer realm="example", error="invalid_token"',
+            "$path identifies rejected Bearer credentials";
     }
+    my $malformed = $client->get('/one', headers => {
+        Authorization => 'Bearer first second',
+    });
+    is $malformed->status, 400, 'malformed Bearer syntax is a bad request';
+    is $malformed->header('WWW-Authenticate'),
+        'Bearer realm="example", error="invalid_request"',
+        'malformed syntax receives invalid_request';
+    my $duplicate = $client->get('/one', headers => [
+        ['Authorization', 'Bearer rejected'],
+        ['Authorization', 'Bearer accepted'],
+    ]);
+    is $duplicate->status, 400, 'duplicate fields cannot select accepted token';
+    is $duplicate->header('WWW-Authenticate'),
+        'Bearer realm="example", error="invalid_request"',
+        'duplicate fields receive invalid_request';
 });
 is $client_after_stop->state->{ready}, 0, 'shutdown callback ran';
 

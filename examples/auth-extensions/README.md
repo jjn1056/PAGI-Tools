@@ -117,7 +117,11 @@ Content-Type: application/json
 The formatter returns one challenge string. File 06 shows repeated
 `WWW-Authenticate` fields through `PAGI::Headers`, and direct Response header
 mutation. A raw opaque challenge such as `Negotiate YWJj` stays raw. Digest's
-`qop` list is a single quoted parameter value.
+`qop` list is a single quoted parameter value. The formatter quotes every
+parameter and does not validate scheme-specific serialization. Digest
+`algorithm` and `stale` require unquoted values; file 06 sets the complete raw
+header value `Digest realm="notes", nonce="example-nonce", qop="auth", algorithm=SHA-256, stale=true`
+through `PAGI::Headers` instead of passing those fields to the formatter.
 
 The `resource_metadata` example only constructs a header value. It does not
 serve discovery, acquire tokens, or implement OAuth or MCP methods:

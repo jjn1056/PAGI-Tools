@@ -268,7 +268,14 @@ scheme. Missing or invalid scheme, odd pairs, duplicate or invalid names, and
 undefined, reference, or invalid-byte values are errors. This formatter does
 not choose status, send a response, or validate an application's auth policy.
 Use repeated ordinary response header fields for multiple challenges; a raw
-opaque challenge can also be supplied directly.
+opaque challenge can also be supplied directly. Every formatter parameter is
+quoted, and the formatter does not validate scheme-specific serialization.
+Digest C<algorithm> and C<stale> need unquoted values, so construct the complete
+header value explicitly through an ordinary response or Headers API:
+
+  my $digest = 'Digest realm="api", nonce="example-nonce", qop="auth", '
+      . 'algorithm=SHA-256, stale=true';
+  $response->headers->set('WWW-Authenticate', $digest);
 
 =head2 Protecting a group of endpoints
 
@@ -276,8 +283,9 @@ This complete recipe installs Authentication before an application-owned HTTP
 check. Both protected routes share it; C</public> sits outside the group.
 The wrapper delegates lifespan and other non-HTTP scopes before reading auth,
 awaits the next application, and invokes an ordinary response directly for a
-guest or rejection. The fixed token is only a teaching fixture; replace the
-backend with application-owned verification.
+guest or rejection. The backend examines every Authorization field and never
+selects one from duplicates. The fixed token is only a teaching fixture;
+replace it with application-owned verification.
 
   use v5.40;
   use Future::AsyncAwait;
@@ -289,14 +297,26 @@ backend with application-owned verification.
   use PAGI::Utils qw(invoke_app);
 
   my $backend = sub ($request) {
-      my $value = $request->header('Authorization') // '';
+      my @authorization = $request->header_all('Authorization');
+      return unauth_result() unless @authorization;
+      my $token;
+      if (@authorization == 1) {
+          my ($scheme) = $authorization[0] =~ /\A(\S+)/;
+          return unauth_result()
+              if defined($scheme) && lc($scheme) ne 'bearer';
+          ($token) = $authorization[0]
+              =~ /\ABearer +([A-Za-z0-9._~+\/-]+=*)\z/i;
+      }
+      return unauth_result(failure => {
+          message => 'Malformed Authorization header.',
+          code    => 'malformed_authorization',
+      }) unless defined $token;
       return auth_result(
           user => PAGI::Auth::SimpleUser->new(identity => 'alice'),
-      ) if $value eq 'Bearer accepted';
+      ) if $token eq 'accepted';
       return unauth_result(failure => {
           message => 'Credential rejected', code => 'invalid_token',
-      }) if length $value;
-      return unauth_result();
+      });
   };
 
   sub require_login ($next) {
@@ -305,10 +325,19 @@ backend with application-owned verification.
               await $next->($scope, $receive, $send);
               return;
           }
-          unless (auth($scope)->user->is_authenticated) {
-              my $response = text_response('Sign in', status => 401,
+          my $result = auth($scope);
+          unless ($result->user->is_authenticated) {
+              my $failure = $result->failure;
+              my $malformed = $failure
+                  && ($failure->code // '') eq 'malformed_authorization';
+              my @params = (realm => 'example');
+              push @params, error => ($malformed
+                  ? 'invalid_request' : 'invalid_token') if $failure;
+              my $response = text_response(
+                  $malformed ? 'Malformed Authorization header.' : 'Sign in',
+                  status => $malformed ? 400 : 401,
                   headers => ['WWW-Authenticate' =>
-                      www_authenticate('Bearer', realm => 'example')]);
+                      www_authenticate('Bearer', @params)]);
               await invoke_app($response, $scope, $receive, $send);
               return;
           }
@@ -338,6 +367,25 @@ backend with application-owned verification.
           shutdown => sub { $_[0]{ready} = 0; return },
       },
   );
+
+The group policy is an ordinary middleware factory. The same policy can live
+in an object whose C<wrap($next)> method returns that wrapper. If the following
+class is in F<MyApp/RequireLogin.pm>, both an object descriptor and a class
+descriptor are equivalent to C<middleware(\&require_login)> above:
+
+  package MyApp::RequireLogin;
+  use v5.40;
+  sub new ($class, %config) { bless \%config, $class }
+  sub wrap ($self, $next) { $self->{policy}->($next) }
+  1;
+
+  # In the application, after loading MyApp::RequireLogin:
+  middleware(MyApp::RequireLogin->new(policy => \&require_login));
+  middleware('+MyApp::RequireLogin', policy => \&require_login);
+
+The class descriptor constructs its configured object during application
+assembly; both descriptors use the ordinary C<wrap> contract. Place either
+one after Authentication in the group middleware list.
 
 =head1 SEE ALSO
 

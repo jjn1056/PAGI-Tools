@@ -15,6 +15,10 @@ say 'repeated: ', join(' | ', $headers->get_all('WWW-Authenticate'));
 $headers->set('WWW-Authenticate', 'Negotiate YWJj');
 say 'opaque: ', $headers->get('WWW-Authenticate');
 say 'digest: ', www_authenticate('Digest', realm => 'notes', qop => 'auth,auth-int');
+# Digest algorithm and stale are unquoted, so use a complete raw field value.
+$headers->set('WWW-Authenticate',
+    'Digest realm="notes", nonce="example-nonce", qop="auth", algorithm=SHA-256, stale=true');
+say 'digest raw: ', $headers->get('WWW-Authenticate');
 
 # This constructs a resource_metadata header only; it does not implement
 # discovery, token acquisition, OAuth, or MCP methods.

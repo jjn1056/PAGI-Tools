@@ -145,6 +145,9 @@ subtest 'header primitives script' => sub {
     like($output, qr/^repeated: Basic realm="staff" \| Bearer realm="notes"$/m, 'repeated fields run');
     like($output, qr/^opaque: Negotiate YWJj$/m, 'opaque raw challenge preserved');
     like($output, qr/^digest: Digest realm="notes", qop="auth,auth-int"$/m, 'Digest value is quoted');
+    like($output,
+        qr/^digest raw: Digest realm="notes", nonce="example-nonce", qop="auth", algorithm=SHA-256, stale=true$/m,
+        'raw Digest challenge keeps algorithm and stale unquoted');
     like($output, qr/resource_metadata="https:\/\/notes\.example\/\.well-known\/oauth-protected-resource\/mcp"/, 'resource metadata is header only');
     like($output, qr/^insufficient: 403; Bearer realm="notes", error="insufficient_scope", scope="notes:read"$/m,
         'application constructs explicit scope refusal');
