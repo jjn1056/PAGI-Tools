@@ -171,7 +171,7 @@ a larger framework:
 
 =item * L<PAGI::Auth> for authentication results, installed context, and challenge formatting
 
-=item * L<PAGI::Middleware::Auth::Basic> and L<PAGI::Middleware::Auth::Bearer> for legacy credential middleware
+=item * L<PAGI::Middleware::Authentication> for request-based application authentication backends
 
 =item * L<PAGI::State>, L<PAGI::Stash>, L<PAGI::Session>, L<PAGI::CSRF>, and L<PAGI::Transport>
 

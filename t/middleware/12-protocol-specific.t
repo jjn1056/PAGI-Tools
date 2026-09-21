@@ -6,10 +6,11 @@ use Future;
 use Future::AsyncAwait;
 use File::Temp qw(tempdir);
 use IO::Async::Loop;
+use Scalar::Util qw(refaddr);
 
 use PAGI::Middleware::SSE::Retry;
-use PAGI::Middleware::Auth::Basic;
-use PAGI::Middleware::Auth::Bearer;
+use PAGI::Auth qw(unauth_result);
+use PAGI::Middleware::Authentication;
 use PAGI::Middleware::CSRF;
 use PAGI::Middleware::ContentNegotiation;
 use PAGI::Middleware::FormBody;
@@ -103,16 +104,6 @@ subtest 'SSE::Retry - passes through non-SSE' => sub {
 subtest 'HTTP policy middleware preserves non-HTTP event streams and send settlement' => sub {
     my $static_root = tempdir(CLEANUP => 1);
     my @cases = (
-        ['Auth::Basic', sub {
-            PAGI::Middleware::Auth::Basic->new(
-                authenticator => sub { 0 },
-            );
-        }],
-        ['Auth::Bearer', sub {
-            PAGI::Middleware::Auth::Bearer->new(
-                validator => sub { undef },
-            );
-        }],
         ['CSRF', sub {
             PAGI::Middleware::CSRF->new(secret => 'test-secret');
         }],
@@ -198,6 +189,33 @@ subtest 'HTTP policy middleware preserves non-HTTP event streams and send settle
                 "$name does not cancel the server-owned send Future";
         };
     }
+};
+
+subtest 'Authentication supports request protocols and passes lifespan through' => sub {
+    for my $type (qw(http websocket sse)) {
+        my ($backend_calls, $saw_auth) = (0, 0);
+        my $app = PAGI::Middleware::Authentication->new(backend => sub {
+            ++$backend_calls;
+            return unauth_result;
+        })->wrap(sub {
+            $saw_auth = exists $_[0]{'pagi.auth'};
+            return Future->done;
+        });
+        $app->({ type => $type, headers => [] }, sub { Future->done }, sub { Future->done })->get;
+        is $backend_calls, 1, "$type invokes authentication";
+        ok $saw_auth, "$type receives authentication context";
+    }
+
+    my $backend_calls = 0;
+    my $outer = { type => 'lifespan' };
+    my $seen;
+    my $app = PAGI::Middleware::Authentication->new(backend => sub {
+        ++$backend_calls;
+        return unauth_result;
+    })->wrap(sub { $seen = $_[0]; return Future->done });
+    $app->($outer, sub { Future->done }, sub { Future->done })->get;
+    is $backend_calls, 0, 'lifespan bypasses authentication';
+    is refaddr($seen), refaddr($outer), 'lifespan scope is passed through unchanged';
 };
 
 done_testing;

@@ -1859,26 +1859,34 @@ that hashref with a convenient (and typo-catching) API.
 
   use strict;
   use warnings;
+  use MIME::Base64 qw(decode_base64);
+  use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
   use PAGI::Middleware::Builder;
   use PAGI::Response qw(text_response);
   use PAGI::Routing qw(route router);
 
   my $routing = router(routes => [
-
-  route('/' => sub {
-      my ($request) = @_;
-      return text_response('Protected content');
-  }),
+      route('/' => sub {
+          my ($request) = @_;
+          return text_response('Protected content')
+              if auth($request)->user->is_authenticated;
+          my $response = text_response('Credentials required', status => 401);
+          $response->headers->set('WWW-Authenticate',
+              www_authenticate('Basic', realm => 'Admin Area'));
+          return $response;
+      }),
   ]);
 
-  # Protect every route with Basic Auth
   my $app = builder {
-      enable 'Auth::Basic',
-          realm         => 'Admin Area',
-          authenticator => sub {
-              my ($username, $password) = @_;
-              return $username eq 'admin' && $password eq 'secret';
-          };
+      enable 'Authentication', backend => sub {
+          my ($request) = @_;
+          my $value = $request->header('authorization') // '';
+          return unauth_result() unless $value =~ /\ABasic\s+(.+)\z/i;
+          my ($username, $password) = split /:/, decode_base64($1), 2;
+          return unauth_result(failure => { message => 'Credentials were not accepted.' })
+              unless defined($password) && $username eq 'admin' && $password eq 'secret';
+          return auth_result(user => MyApp::User->new($username));
+      };
       $routing;
   };
 
@@ -1886,6 +1894,7 @@ that hashref with a convenient (and typo-catching) API.
 
   use strict;
   use warnings;
+  use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
   use PAGI::Middleware::Builder;
   use PAGI::Response qw(json_response);
   use PAGI::Routing qw(route router);
@@ -1894,24 +1903,27 @@ that hashref with a convenient (and typo-catching) API.
 
   route('/api/me' => sub {
       my ($request) = @_;
-
-      # Claims from the validated token: the middleware stores
-      # { type => 'bearer', token => ..., claims => ... } under 'pagi.auth'
-      my $claims = $request->scope->{'pagi.auth'}{claims};
-
-      return json_response({ user => $claims });
+      my $result = auth($request);
+      return json_response({ user => $result->user->identity })
+          if $result->user->is_authenticated;
+      my $response = json_response({ error => 'authentication_required' }, status => 401);
+      $response->headers->set('WWW-Authenticate',
+          www_authenticate('Bearer', realm => 'api'));
+      return $response;
   }),
   ]);
 
-  # Verify Bearer tokens with a custom validator (returns claims or undef).
-  # When the validator returns undef the middleware sends 401 itself, so the
-  # handler above only runs for valid tokens.
+  # Parsing, JWT verification, and safe rejection messages belong to the backend.
   my $app = builder {
-      enable 'Auth::Bearer',
-          validator => sub {
-              my ($token) = @_;
-              return decode_jwt($token);  # Your JWT decode logic
-          };
+      enable 'Authentication', backend => sub {
+          my ($request) = @_;
+          my $value = $request->header('authorization') // '';
+          return unauth_result() unless $value =~ /\ABearer\s+(.+)\z/i;
+          my $claims = eval { decode_jwt(token => $1, key => 'configured verification key') };
+          return unauth_result(failure => { message => 'The token was not accepted.' })
+              unless $claims;
+          return auth_result(user => MyApp::User->new($claims->{sub}));
+      };
       $routing;
   };
 

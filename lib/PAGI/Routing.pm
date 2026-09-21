@@ -390,7 +390,7 @@ Core lists contain these descriptions only:
 Class names may be short, nested short, already PAGI-qualified, or exact:
 
     middleware('RequestId')
-    middleware('Auth::Basic')
+    middleware('Authentication', backend => $backend)
     middleware('PAGI::Middleware::RequestId')
     middleware('+MyApp::Middleware::Audit')
 

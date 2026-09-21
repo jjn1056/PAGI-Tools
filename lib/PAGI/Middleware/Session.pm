@@ -131,10 +131,11 @@ no-op (the client manages header-based transport).
 
 =item L<PAGI::Middleware::Session::State::Bearer>
 
-Convenience subclass of State::Header that reads an opaque bearer token from
-the C<Authorization: Bearer E<lt>tokenE<gt>> header. Intended for opaque
-session tokens, B<not> JWTs. For JWT authentication, use
-L<PAGI::Middleware::Auth::Bearer> instead.
+Convenience subclass of State::Header that reads an opaque session identifier
+from the C<Authorization: Bearer E<lt>tokenE<gt>> header. Session restores the
+application-owned record associated with that identifier; it does not establish
+authentication context automatically. Use L<PAGI::Middleware::Authentication>
+with an application backend when the restored record should identify a user.
 
     PAGI::Middleware::Session::State::Bearer->new();
 

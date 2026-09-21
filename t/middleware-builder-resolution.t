@@ -4,7 +4,7 @@
 # Test: Middleware Builder class name resolution
 #
 # Tests the Plack-familiar leading + convention for exact class names and
-# ensures nested namespace middleware (like Auth::Basic) works correctly.
+# ensures nested namespace middleware (like SSE::Retry) works correctly.
 # =============================================================================
 
 use strict;
@@ -32,14 +32,9 @@ subtest 'middleware class resolution' => sub {
         'PAGI::Middleware::ContentLength',
         'ContentLength gets prefix';
 
-    # Nested namespaces also get prefixed (the bug fix)
-    is $builder->_resolve_middleware('Auth::Basic'),
-        'PAGI::Middleware::Auth::Basic',
-        'Auth::Basic gets PAGI::Middleware:: prefix';
-
-    is $builder->_resolve_middleware('Auth::Bearer'),
-        'PAGI::Middleware::Auth::Bearer',
-        'Auth::Bearer gets PAGI::Middleware:: prefix';
+    is $builder->_resolve_middleware('Authentication'),
+        'PAGI::Middleware::Authentication',
+        'Authentication gets PAGI::Middleware:: prefix';
 
     is $builder->_resolve_middleware('RequestId'),
         'PAGI::Middleware::RequestId',
@@ -90,9 +85,9 @@ subtest 'loading real nested middleware' => sub {
     my $builder = PAGI::Middleware::Builder->new;
 
     # These should resolve and load correctly
-    my $class1 = $builder->_resolve_middleware('Auth::Basic');
-    is $class1, 'PAGI::Middleware::Auth::Basic', 'Auth::Basic resolves correctly';
-    ok $class1->can('wrap'), 'Auth::Basic class loaded and has wrap method';
+    my $class1 = $builder->_resolve_middleware('SSE::Retry');
+    is $class1, 'PAGI::Middleware::SSE::Retry', 'SSE::Retry resolves correctly';
+    ok $class1->can('wrap'), 'SSE::Retry class loaded and has wrap method';
 
     my $class2 = $builder->_resolve_middleware('RequestId');
     is $class2, 'PAGI::Middleware::RequestId', 'RequestId resolves correctly';
