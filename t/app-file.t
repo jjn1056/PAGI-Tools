@@ -188,6 +188,29 @@ subtest 'stock file errors negotiate through Pages without changing file outcome
     ], 'not-modified file');
 };
 
+subtest 'conditional file responses require exact GET or HEAD methods' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $file = File::Spec->catfile($root, 'sample.txt');
+    open my $fh, '>', $file or die "cannot create $file: $!";
+    print {$fh} 'sample';
+    close $fh or die "cannot close $file: $!";
+
+    my $component = PAGI::App::File->new(root => $root);
+    my $headers = [['if-none-match', '*']];
+    for my $method (qw(GET HEAD)) {
+        my $events = run_native($component, $method, '/sample.txt', $headers);
+        is($events->[0]{status}, 304,
+            "exact $method honors If-None-Match wildcard");
+    }
+    for my $method (qw(get gEt head hEaD)) {
+        my $events = run_native($component, $method, '/sample.txt', $headers);
+        is($events->[0]{status}, 405,
+            "$method is rejected before conditional file planning");
+        is(event_header($events->[0], 'allow'), 'GET, HEAD',
+            "$method advertises the exact supported methods");
+    }
+};
+
 subtest 'single byte ranges have strict grammar and exact suffix semantics' => sub {
     my $root = tempdir(CLEANUP => 1);
     my $file = File::Spec->catfile($root, 'sample.txt');

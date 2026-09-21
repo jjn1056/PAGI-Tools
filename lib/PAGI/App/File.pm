@@ -367,7 +367,7 @@ sub _scope_method {
     my ($scope) = @_;
     my $method = $scope->{method};
     return '' unless defined($method) && !ref($method);
-    return uc($method);
+    return $method;
 }
 
 async sub serve {
@@ -382,12 +382,9 @@ async sub serve {
             && $result->isa('PAGI::App::File::Result');
 
     my $method = _scope_method($scope);
-    my $boundary_scope = $scope;
-    $boundary_scope = { %$scope, method => $method }
-        if defined($scope->{method}) && !ref($scope->{method})
-            && $scope->{method} ne $method;
+    my $boundary_scope;
     ($boundary_scope, $send)
-        = PAGI::Routing::HeadBoundary->prepare($boundary_scope, $send);
+        = PAGI::Routing::HeadBoundary->prepare($scope, $send);
 
     return await _respond_page(
         $boundary_scope, $send, 'method_not_allowed',
@@ -513,7 +510,8 @@ Stock 403, 404, 405, and 416 errors are rendered by L<PAGI::Pages> and negotiate
 among HTML, problem JSON, and plain text from the request C<Accept> header.
 Unsafe, hidden, or unreadable paths are 403; missing paths and unintercepted
 directories are 404; and unsupported methods are 405. These defaults are
-non-cacheable; 405 responses advertise C<GET, HEAD>, and 416 responses include
+non-cacheable. Only exact uppercase C<GET> and C<HEAD> methods are supported;
+405 responses advertise C<GET, HEAD>, and 416 responses include
 the known representation length. After safe selection, successful file
 metadata, MIME selection, streaming, caching, and range planning are delegated
 to L<PAGI::Response::File>. This component retains its C<default_type> seam for
