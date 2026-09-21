@@ -472,6 +472,7 @@ PAGI::Utils::Headers - synchronous parsers and formatters for HTTP header values
 
 =head1 SYNOPSIS
 
+  use utf8;
   use PAGI::Utils::Headers qw(
       parse_authorization_bearer parse_authorization_basic www_authenticate
       parse_header_parameters format_header_parameters quote_header_value
