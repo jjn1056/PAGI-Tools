@@ -18,8 +18,8 @@ they need the resulting native coderef at another application boundary.
 ## Requirements
 
 - Perl 5.18+ with `Future::AsyncAwait` for the distribution and most examples;
-  `15-large-application` and `starlette-apples` deliberately require Perl
-  5.40+ for signatures
+  `15-large-application`, `starlette-apples`, `auth-notes`, and
+  `auth-jwt-sandbox` require Perl 5.40+ for signatures
 - A PAGI server to run examples against:
   ```
   cpanm PAGI::Server
@@ -72,6 +72,9 @@ Each example has its own `README.md` explaining how to run it.
 
 ## Authentication examples
 
+- [auth-notes](auth-notes/README.md) — introductory opaque-token API with public
+  notes, identity checks, explicit read/write grants, and ordinary challenge
+  responses. Includes fixed in-memory services and an acceptance-test matrix.
 - [auth-jwt-sandbox](auth-jwt-sandbox/README.md) — two runnable JWT learning
   applications using Authentication v1: an inline three-route comparison and a
   group-protected variant with a shared browser walkthrough. Crypt::JWT is an
