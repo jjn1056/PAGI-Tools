@@ -22,6 +22,8 @@ Execution: [Implementation plan](2026-09-21-header-helpers-plan.md).
 
 ## Verification
 
+**Current result after the user-requested test cleanup: PASS, 242 files / 2,936 tests.** The server startup probes and their server/loop imports were removed from `t/integration-pages-example.t`. Its Pages HTTP and Compose lifecycle coverage still runs through Test::Client. Four optional server/release suites still skip, and the existing Future warnings remain. The full host-access run is recorded in `/tmp/pagi-headers-no-server-startup.log`.
+
 Task-specific red/green tests covered grammar, multiplicity, byte/character boundaries, multipart limits/metadata, Vary composition and real conditional responses. Task reviews caught and corrected explicit filename* charset grammar, App::File method normalization, the parser's regex-position side effect, and the Unicode documentation recipe.
 
 The complete host-access command was:
@@ -30,9 +32,9 @@ The complete host-access command was:
 perlbrew exec --with perl-5.40.0@default prove -lr t
 ```
 
-At `561956c`: 242 files, 2,930 tests, no failing assertions. Overall exit status is nonzero because the pre-existing `t/integration-pages-example.t` cannot compile without `PAGI::Server` on the Perl include path. Four optional server/release suites skip. The initial unchanged baseline had the same missing dependency. This file unconditionally imports the server for two auto/on startup-policy probes calling its private `_run_lifespan_startup`; the remaining Pages example coverage only uses Test::Client. Separating those server-policy probes is a test-organization follow-up, not a new runtime requirement introduced here. Socket tests pass with host access. Existing Future lost-sequence warnings remain.
+Before that cleanup, at `561956c`: 242 files, 2,930 tests, no failing assertions. Overall exit status was nonzero because the pre-existing `t/integration-pages-example.t` could not compile without `PAGI::Server` on the Perl include path. The initial unchanged baseline had the same missing dependency. The file unconditionally imported the server for two auto/on startup-policy probes calling its private `_run_lifespan_startup`; those are the probes subsequently removed at the user's request. Socket tests pass with host access.
 
-The subsequent `8dd51f9` changes only documentation. Its focused cookbook/JWT checks pass (3 files, 39 tests), as do POD checks. The broader example gate passed (14 files, 280 tests), including JWT verification tests without an optional-dependency skip. The final `a1a6867` edit only adds `use utf8;` to the Utils POD synopsis; POD and scoped review pass. Whitespace checks pass. This is not a claim of a fully green default repository gate.
+The subsequent `8dd51f9` changes only documentation. Its focused cookbook/JWT checks pass (3 files, 39 tests), as do POD checks. The broader example gate passed (14 files, 280 tests), including JWT verification tests without an optional-dependency skip. The final `a1a6867` edit only adds `use utf8;` to the Utils POD synopsis; POD and scoped review pass. Whitespace checks pass. The current full-suite result above supersedes the earlier missing-server failure.
 
 Local execution evidence is in `.superpowers/sdd/2026-09-21-header-helpers-plan/`; full-suite logs are `/tmp/pagi-headers-baseline.log` and `/tmp/pagi-headers-final.log`. These are local scratch artifacts, not release files.
 
