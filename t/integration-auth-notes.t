@@ -1,6 +1,12 @@
 use strict;
 use warnings;
 use Test2::V0;
+BEGIN {
+    if ($] < 5.040) {
+        plan skip_all => 'examples/auth-notes requires Perl 5.40';
+        exit;
+    }
+}
 use FindBin qw($Bin);
 use lib "$Bin/../examples/auth-notes/lib";
 use Future;
