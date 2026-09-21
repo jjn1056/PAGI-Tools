@@ -11,7 +11,12 @@ my @load_modules = qw(
     PAGI::Authority
     PAGI::Auth
     PAGI::Auth::Challenge
+    PAGI::Auth::Credentials
+    PAGI::Auth::Failure
     PAGI::Auth::Outcomes
+    PAGI::Auth::Result
+    PAGI::Auth::SimpleUser
+    PAGI::Auth::UnauthenticatedUser
     PAGI::Routing
     PAGI::Routing::Router
     PAGI::Routing::Route
