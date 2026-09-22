@@ -193,7 +193,6 @@ for my $kind (qw(websocket sse)) {
         ok($f->is_ready, 'refusal return observes send settlement');
         is(scalar @calls, 0, 'refusal return does not publish hooks');
         ok(!$h->is_closed, 'successful refusal return still awaits connection terminal');
-        $conn->_set_peer_close(1006, undef) if $kind eq 'websocket';
         $conn->_mark_complete;
         ok($h->is_closed, 'terminal completion closes helper');
         is(scalar @calls, 1, 'one terminal cleanup');

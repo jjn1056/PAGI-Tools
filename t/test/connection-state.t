@@ -70,6 +70,43 @@ sub still_pending_after {
     is $future->get, 'client_closed', 'resolves with the disconnect reason';
 }
 
+subtest 'completion preserves WebSocket Close metadata and terminal outcome' => sub {
+    my $http = PAGI::Test::ConnectionState->new;
+    $http->_mark_complete;
+    is_deeply [$http->close_code, $http->close_reason], [undef, undef],
+        'ordinary non-WebSocket completion has no Close metadata';
+
+    my $peer = PAGI::Test::ConnectionState->new(websocket => 1);
+    $peer->_set_peer_close(1000, 'bye');
+    $peer->_mark_complete;
+    is_deeply [$peer->close_code, $peer->close_reason], [1000, 'bye'],
+        'supplied peer Close survives clean completion';
+
+    my $c = PAGI::Test::ConnectionState->new(websocket => 1);
+    my ($complete, $end) = (0, 0);
+    $c->on_complete(sub { ++$complete });
+    $c->on_end(sub { ++$end });
+    $c->_mark_disconnected('client_closed');
+    $c->_mark_complete;
+    $c->_mark_complete;
+    is_deeply [$c->close_code, $c->close_reason, $c->disconnect_reason,
+               $c->response_complete ? 1 : 0, $complete, $end],
+              [1006, undef, 'client_closed', 0, 0, 1],
+              'late completion cannot replace abnormal termination';
+
+    my $refusal = PAGI::Test::ConnectionState->new(websocket => 1);
+    my ($refusal_complete, $refusal_end) = (0, 0);
+    $refusal->on_complete(sub { ++$refusal_complete });
+    $refusal->on_end(sub { ++$refusal_end });
+    $refusal->_mark_complete;
+    $refusal->_mark_complete;
+    is_deeply [$refusal->close_code, $refusal->close_reason,
+               $refusal->disconnect_reason, $refusal->response_complete,
+               $refusal_complete, $refusal_end],
+              [1006, undef, undef, 1, 1, 1],
+              'WebSocket completion records no-peer metadata and notifies once';
+};
+
 # (b) requested after an abnormal disconnect already happened: an
 # already-resolved Future.
 {

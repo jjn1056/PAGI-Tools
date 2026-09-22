@@ -1146,6 +1146,24 @@ emission, and Stream retains its own abort and cleanup behavior. Connection
 C<on_end> owns close callbacks, including asynchronous cleanup after application
 return.
 
+A successfully delivered HTTP refusal completes the PAGI scope normally:
+C<on_complete> runs and C<disconnect_reason> is undefined. Its WebSocket
+C<close_code> is nevertheless C<1006>, with an undefined C<close_reason>,
+because no peer Close frame was received. This value is local metadata; no
+WebSocket Close frame is sent. Use scope completion to distinguish successful
+refusal delivery from an interrupted response.
+
+    use PAGI::Response qw(text_response);
+    my $connection = $scope->{'pagi.connection'};
+    $connection->on_complete(sub {
+        # The HTTP refusal completed successfully.
+    });
+    $ws->on_close(sub {
+        my ($code, $reason, $detail) = @_;
+        # After this refusal: 1006, undef, undef.
+    });
+    await $ws->deny(text_response('Access denied', status => 403));
+
 The sending environment requires WebSocket refusal status 300 or greater.
 Request metadata is available, but WebSocket Request body APIs reject access
 without consuming protocol events.
@@ -1181,6 +1199,7 @@ never substitute the application's outgoing Close. A peer Close with no code
 is C<1005>/C<undef>; a terminal scope without a peer Close is C<1006>/C<undef>,
 including refusal. Peer Close metadata is meaningful as a peer handshake
 result only on an accepted socket.
+See L</deny> for successful refusal completion metadata.
 
 =head2 disconnect_reason, disconnect_detail
 

@@ -1,6 +1,7 @@
 use strict; use warnings; use Test2::V0; use Future::AsyncAwait;
 use PAGI::Test::Client;
 use PAGI::Pages;
+use PAGI::Response qw(text_response);
 use PAGI::WebSocket;
 
 async sub try_send {
@@ -162,11 +163,37 @@ subtest 'ordinary HTTP refusal returns a WebSocket object with a decoded respons
     is $ws->response->status, 401, 'status';
     is $ws->response->header('www-authenticate'), 'Bearer', 'headers';
     is $ws->response->content, 'nope', 'body';
-    is $ws->close_code, undef, 'HTTP refusal has no WebSocket close code';
+    is $ws->close_code, undef, 'client wire Close accessor remains unset for an HTTP refusal';
     is \@after_end, [
         { type => 'http.disconnect' },
         { type => 'http.disconnect' },
     ], 'receives after completed refusal report the HTTP end';
+};
+
+subtest 'production helper observes clean refusal completion metadata' => sub {
+    my ($conn, @closed, @complete, @ended);
+    my $disconnected = 0;
+    my $client = PAGI::Test::Client->new(app => async sub {
+        my ($scope, $receive, $send) = @_;
+        $conn = $scope->{'pagi.connection'};
+        $conn->on_complete(sub { push @complete, $conn->close_code });
+        $conn->on_end(sub { push @ended, $conn->close_code });
+        $conn->on_disconnect(sub { ++$disconnected });
+        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+        $ws->on_close(sub { push @closed, [@_]; return });
+        await $ws->deny(text_response('Access denied', status => 403));
+    });
+    my $session = $client->websocket('/ws');
+    ok $session->refused, 'handshake refused';
+    is $session->response->status, 403, 'HTTP status preserved';
+    is $session->response->content, 'Access denied', 'body preserved';
+    is \@complete, [1006], 'complete observer sees code';
+    is \@ended, [1006], 'end observer sees code';
+    is \@closed, [[1006, undef, undef]], 'production helper reads supplied metadata';
+    is $disconnected, 0, 'successful refusal is not a disconnect failure';
+    ok $conn->response_complete, 'response complete';
+    is $conn->disconnect_reason, undef, 'no abnormal outcome';
+    is $conn->end_future->get, undef, 'successful end future';
 };
 
 subtest 'direct Pages application denies a WebSocket handshake' => sub {
@@ -200,9 +227,11 @@ subtest 'direct Pages application denies a WebSocket handshake' => sub {
 subtest 'refusal response uses the captured response decoder for fh bodies and trailers' => sub {
     my $bytes = 'prefix-refusal-bytes-suffix';
     open my $fh, '<', \$bytes or die "open scalar fh: $!";
+    my ($conn, @snapshots);
 
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
+        $conn = $scope->{'pagi.connection'};
         await $receive->();
         await $send->({
             type => 'http.response.start', status => 403, headers => [], trailers => 1,
@@ -210,14 +239,18 @@ subtest 'refusal response uses the captured response decoder for fh bodies and t
         await $send->({
             type => 'http.response.body', fh => $fh, offset => 7, length => 13,
         });
+        push @snapshots, [$conn->close_code, $conn->close_reason, $conn->response_complete];
         await $send->({
             type => 'http.response.trailers', headers => [['x-finished', 'yes']],
         });
+        push @snapshots, [$conn->close_code, $conn->close_reason, $conn->response_complete];
     };
 
     my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
     is $ws->response->content, 'refusal-bytes', 'fh window decoded by Test::Response';
     ok $ws->response->body_complete, 'captured terminal body is complete';
+    is \@snapshots, [[undef, undef, 0], [1006, undef, 1]],
+        'refusal metadata appears only on terminal trailer completion';
 };
 
 subtest 'websocket.close before accept is rejected by strict send validation' => sub {

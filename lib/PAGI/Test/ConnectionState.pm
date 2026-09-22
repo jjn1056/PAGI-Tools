@@ -259,6 +259,10 @@ sub _mark_response_started { $_[0]->{_response_started} = 1; return }
 sub _mark_complete {
     my ($self) = @_;
     return unless $self->{_connected};
+    if ($self->{_websocket} && !defined $self->{_close_code}) {
+        $self->{_close_code} = 1006;
+        $self->{_close_reason} = undef;
+    }
     $self->{_connected} = 0;
     $self->{_completed} = 1;                 # clean completion (distinguishes from disconnect)
     delete $self->{_on_abort};
@@ -273,7 +277,7 @@ sub _mark_disconnected {
     $self->{_connected}         = 0;
     $self->{_reason}            = $reason // 'unknown';   # coerce like production
     $self->{_detail}            = $detail;
-    # An accepted WebSocket without a peer Close ends with RFC 6455 1006.
+    # A WebSocket without a peer Close ends with RFC 6455 1006.
     if ($self->{_websocket} && !defined $self->{_close_code}) {
         $self->{_close_code} = 1006;
         $self->{_close_reason} = undef;
