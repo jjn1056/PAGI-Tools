@@ -179,7 +179,7 @@ subtest 'deny adapts the complete concrete Response matrix exactly' => sub {
                 'successful WebSocket refusal uses a legal status');
             is(\@sent, $expected, 'maps start/body fields, order, and more exactly');
             ok($ws->is_closed, 'denial closes the handshake');
-            is($ws->close_code, undef, 'HTTP denial has no WebSocket close code');
+            is($ws->close_code, 1006, 'HTTP denial records local no-peer Close metadata');
         };
     }
 };
