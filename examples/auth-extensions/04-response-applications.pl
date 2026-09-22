@@ -24,13 +24,17 @@ my $ok = sub ($request) {
     return json_response({ identity => auth($request)->user->identity });
 };
 my $notice = sub ($request) {
-    return json_response({ error => auth($request)->failure->message }, status => 401);
+    return json_response({ error => auth($request)->failure->message },
+        status => 401,
+        headers => ['WWW-Authenticate' => www_authenticate('Bearer', realm => 'demo')]);
 };
 
 my $group = sub ($next) {
     return async sub ($scope, $receive, $send) {
         unless (auth($scope)->user->is_authenticated) {
-            await invoke_app(json_response({ error => 'Group sign-in required.' }, status => 401),
+            await invoke_app(json_response({ error => 'Group sign-in required.' },
+                status => 401,
+                headers => ['WWW-Authenticate' => www_authenticate('Bearer', realm => 'demo')]),
                 $scope, $receive, $send);
             return;
         }
@@ -51,7 +55,9 @@ compose(
             return $ok->($request);
         }),
         route('/response' => sub ($request) {
-            return json_response({ error => 'Concrete Response' }, status => 401)
+            return json_response({ error => 'Concrete Response' },
+                status => 401,
+                headers => ['WWW-Authenticate' => www_authenticate('Bearer', realm => 'demo')])
                 unless auth($request)->user->is_authenticated;
             return $ok->($request);
         }),

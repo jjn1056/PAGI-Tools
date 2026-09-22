@@ -1,14 +1,14 @@
 # Upgrading PAGI-Tools
 
 This guide is the standalone handoff for existing applications moving to the
-current PAGI::Tools release. It covers the shipped routing-composition and
+upcoming PAGI::Tools release. It covers the implemented routing-composition and
 application-error boundaries, the rooted file-serving security contract, and
 the removal of the two mutable Router frontends. Contracts shown in clearly
 labelled Before examples have been removed. There is no compatibility mode and
 there are no compatibility aliases.
 
-Each After example uses behavior shipped by the current release. Examples use
-ordinary synchronous subs where asynchronous work is not relevant; handlers
+Each After example uses behavior implemented on this branch for that release.
+Examples use ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
 ## Authentication v1
@@ -191,7 +191,7 @@ coderefs, and configured wrapper objects directly.
 middleware => ['RequestId', \&audit, $object]
 ```
 
-**After (shipped):** make each core entry an explicit description.
+**After (current):** make each core entry an explicit description.
 
 ```perl
 middleware => [
@@ -273,7 +273,7 @@ Response-like duck types are not application values.
 route('/native', raw => $native_app);
 ```
 
-**After (shipped):** a bare Route CODE is always a one-argument handler. Wrap
+**After (current):** a bare Route CODE is always a one-argument handler. Wrap
 a native CODE with `as_app_object`; pass an app object directly.
 
 ```perl
@@ -326,7 +326,7 @@ croak unless is_response($result);
 await $result->respond($scope, $receive, $send);
 ```
 
-**After (shipped):** an HTTP Route CODE receives exactly one
+**After (current):** an HTTP Route CODE receives exactly one
 `PAGI::Request`. It may return an immediate or Future-backed native CODE or an
 instantiated object with `to_app`. Response and Pages applications are the
 ordinary choices.
@@ -368,7 +368,7 @@ croak unless is_response($response);
 await $response->respond($scope, $receive, $send);
 ```
 
-**After (shipped):** use the application protocol for every application value.
+**After (current):** use the application protocol for every application value.
 
 ```perl
 use PAGI::Response qw(json_response);
@@ -400,7 +400,7 @@ return not_found_page($request, detail => 'Missing');
 http_default => request_app(\&not_found_page);
 ```
 
-**After (shipped):** class methods, configured-instance methods, and opt-in
+**After (current):** class methods, configured-instance methods, and opt-in
 exports are source-free factories for deferred HTTP applications.
 
 ```perl
@@ -469,9 +469,9 @@ copy.
 
 Stream HEAD requests still run the GET producer before the outer HEAD boundary
 suppresses body events, which can be expensive. Declare an earlier lightweight
-HEAD Route when that work should be avoided. File retains its deliberate
-`protocol_response_capability` opt-out because WebSocket denial and SSE decline
-cannot translate PAGI `file` or `fh` body events.
+HEAD Route when that work should be avoided. File responses can also serve
+WebSocket denials and SSE declines: both use ordinary HTTP response events,
+including the PAGI `file` and `fh` body forms.
 
 ## Breaking: direct WebSocket and SSE `state` matches Request
 
@@ -489,7 +489,7 @@ raw hashref or fabricated an empty hashref.
 my $db = $websocket->state->{db};
 ```
 
-**After (shipped):** check optional state and use the same strict facade as an
+**After (current):** check optional state and use the same strict facade as an
 HTTP Request.
 
 ```perl
@@ -559,8 +559,8 @@ There are no compatibility aliases for the removed forms.
 | `PAGI::App::File->app_path('static')` | `PAGI::App::File->from_app_path('static')`; the utility function `app_path(...)` continues to return a path string |
 | Pages factory called with a Request/scope | call the source-free factory and use its application value directly |
 | `http_default` wrapped around a Pages handler | `http_default => PAGI::Pages->not_found(...)` |
-| `$ws->deny(status => ..., body => ...)` | `$ws->deny($response)` |
-| `$sse->decline(status => ..., body => ...)` | `$sse->decline($response)` |
+| `$ws->deny(status => ..., body => ...)` | `$ws->deny($handler_or_app)`; bare CODE receives one Request, objects implement `to_app` |
+| `$sse->decline(status => ..., body => ...)` | `$sse->decline($handler_or_app)`; same handler/application contract as `deny` |
 
 Package-name strings are still not application values. Load a package,
 construct the component explicitly, and pass the object or coderef required by
@@ -576,7 +576,7 @@ my $response = $request->response;
 return $response->status(201)->json($item);
 ```
 
-**After (shipped):** choose the class at construction.
+**After (current):** choose the class at construction.
 
 ```perl
 use PAGI::Response qw(json_response);
@@ -623,7 +623,7 @@ my $response = PAGI::Response->new($scope)
 await $response->respond($send);
 ```
 
-**After (shipped):** construction is request-independent; invocation state is
+**After (current):** construction is request-independent; invocation state is
 supplied only through application delegation.
 
 ```perl
@@ -658,7 +658,7 @@ return text_response('ok')->cors(
 );
 ```
 
-**After (shipped):** wrap the application with CORS middleware.
+**After (current):** wrap the application with CORS middleware.
 
 ```perl
 use PAGI::Middleware::Builder;
@@ -729,8 +729,8 @@ must perform explicit `-f`/`-r` checks during startup or lifespan handling.
 `offset` and `length` define the physical window backing one complete logical
 representation. The ordinary response is 200 with that logical length and no
 Content-Range. Only a valid client Range is measured within the logical window
-and produces 206. File uses an opaque PAGI `file` event and therefore opts out
-of protocol denial adaptation.
+and produces 206. File uses a server-owned PAGI `file` event, which is also
+legal in a WebSocket denial or SSE decline.
 
 ### Pages factories return native apps
 
@@ -764,32 +764,48 @@ Route('/*path')   explicit real catchall leaf
 Mount('/x')       selected owner of /x and its complete subtree
 ```
 
-### Deny WebSocket/SSE handshakes with Responses
+### Refuse WebSocket/SSE with Request handlers or applications
 
 ```perl
+use PAGI::Auth qw(www_authenticate);
 use PAGI::Response qw(problem_response);
 
 await $websocket->deny(
-    problem_response({ title => 'Unauthorized', status => 401 }),
+    problem_response({ title => 'Unauthorized', status => 401 },
+        headers => ['WWW-Authenticate' => www_authenticate('Bearer', realm => 'api')]),
 );
 
-await $sse->decline(
-    problem_response({ title => 'Not Found', status => 404 }),
-);
+await $sse->decline(sub {
+    my ($request) = @_;
+    return problem_response({
+        title => 'Not Found', status => 404, detail => $request->path,
+    });
+});
 ```
 
-Base, finite subclasses, Empty, Redirect, Stream, and subclasses preserving the
-inherited `body-events-v1` event vocabulary are eligible. Buffering is a
-separate concern. File is rejected before start because PAGI Www denial bodies
-allow ordinary body events and explicitly exclude `file`/`fh`.
+Both methods take exactly one Request handler or instantiated `to_app` object.
+Response values (including File and Stream), Pages applications, and custom
+application objects work directly. A bare coderef receives one Request and
+returns an application value, directly or through a Future. Wrap a native
+three-argument coderef with `PAGI::Utils::as_app_object` to pass it directly.
 
-WebSocket still owns extension support and the policy-close fallback. SSE
-decline is valid only before start and discards deferred keepalive when mapped
-start commits. Mapped-start settlement commits the response slot, meaning the
-server accepted/settled the event, not that the client received it. A pending
-body send at disconnect resolves normally under PAGI 0.002007; post-commit cleanup
-follows protocol/connection state and disconnect watchers rather than inferred
-send failure. Genuine send failures still propagate.
+The application receives the original scope, receive, and send channels; the
+scope type stays `websocket` or `sse`. It sends ordinary `http.response.*`
+events, including supported file/fh bodies and declared trailers. There is no
+response-class capability check, event translation, extension gate, or
+policy-close fallback. Applications own their protocol compatibility and must
+choose a status of at least 300 for WebSocket refusal; SSE permits any status.
+
+Call `deny` before acceptance or `decline` before starting the stream, while
+the connection is live and no response has started. Both require the public
+`pagi.connection` capabilities documented by the helpers. SSE decline discards
+deferred keepalive once its HTTP response starts. Awaiting either method means
+the application finished; connection completion and close cleanup are observed
+through the connection contract. Application errors propagate, and cancellation
+follows the invoked application's behavior.
+
+The [Cookbook refusal examples](lib/PAGI/Tools/Cookbook.pod) show the complete
+handler, Pages, custom object, and native application forms for both methods.
 
 HTTP Stream is a finite request's response body. WebSocket and live SSE own
 their independent long-lived protocols, event formatting, keepalive, and
@@ -822,7 +838,8 @@ value boundaries:
 - HTTP handlers receive `PAGI::Request` and return an immediate or
   Future-backed application value, commonly a concrete `PAGI::Response`.
 - WebSocket/SSE handlers receive their direct protocol objects. Pre-start
-  rejection passes a concrete Response to `deny`/`decline`.
+  rejection passes a Request handler or `to_app` object to `deny`/`decline`;
+  use `as_app_object` for a native three-argument coderef.
 - If Thunderhorse accepts ordinary Perl return values, its own controller layer
   must select/serialize them into an explicit Response class. PAGI-Tools does
   not infer a response type from return shape.
@@ -833,9 +850,9 @@ value boundaries:
   package-name strings as applications.
 - Helper ownership follows Request/protocol/native scope. Never make Response a
   scope source or cache a per-request Response accumulator.
-- Use `ref($response)`/`isa` for representation policy, `is_buffered` for memory
-  strategy, and `protocol_response_capability` for denial event vocabulary;
-  those are independent questions.
+- Use `ref($response)`/`isa` for representation policy and `is_buffered` for
+  memory strategy. Refusal invokes the public application interface; it does
+  not inspect Response classes or a private emission capability.
 - Thunderhorse may retain its own Controller/Router URL builder. PAGI::Tools URL
   helpers use `pagi.routing` frames, but a higher layer need not manufacture
   those frames for its own routing model.
@@ -872,7 +889,7 @@ async sub on_connect { my ($self, $ctx) = @_; ... }
 sub on_disconnect    { my ($self, $ctx) = @_; ... }
 ```
 
-**After (shipped):** use `PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE`
+**After (current):** use `PAGI::Request`, `PAGI::WebSocket`, and `PAGI::SSE`
 directly.
 
 ```perl
@@ -934,7 +951,7 @@ await $ctx->respond($response);
 were reachable through `response`; they were never Context
 response-construction shortcuts.
 
-**After (shipped):** construct and return one complete concrete Response. In
+**After (current):** construct and return one complete concrete Response. In
 an explicit native application, delegate with all three invocation channels.
 
 ```perl
@@ -976,7 +993,7 @@ my $sse_raw_send = $ctx->raw_send;
 await $sse_raw_send->($event);
 ```
 
-**After (shipped):** native applications and middleware already receive the
+**After (current):** native applications and middleware already receive the
 raw channel lexically and call it directly. Normal WebSocket and SSE handlers
 use their direct protocol object's typed methods; `PAGI::SSE->send($data)`
 retains the former SSE data-only behavior.
@@ -1006,7 +1023,7 @@ return $ctx->text('Forbidden', status => 403)
 $ctx->on_drain(\&resume);
 ```
 
-**After (shipped):** pass the direct protocol object to the owning helper.
+**After (current):** pass the direct protocol object to the owning helper.
 
 ```perl
 use PAGI::CSRF qw(csrf);
@@ -1061,7 +1078,7 @@ handler => sub {
 }
 ```
 
-**After (shipped):** it receives `($request, $error)`. Return a complete
+**After (current):** it receives `($request, $error)`. Return a complete
 Response value; ErrorHandler applies its fallback status only when the returned
 value retained the default status.
 
@@ -1107,7 +1124,7 @@ $ctx->on('app.notify' => \&notify);
 await $ctx->run;
 ```
 
-**After (shipped):** Endpoint construction is fixed to the direct Request,
+**After (current):** Endpoint construction is fixed to the direct Request,
 WebSocket, and SSE objects. Use their typed send/receive methods. A custom
 protocol supplies and documents its own object, while a native application or
 middleware continues to own the raw channels explicitly:
@@ -1147,7 +1164,7 @@ never took that branch. Application code written against the documented
 contract but only ever tested against the mock could reach production having
 never actually exercised its disconnect-race path.
 
-**After (shipped):** `disconnect_future` is modeled fully on the optional
+**After (current):** `disconnect_future` is modeled fully on the optional
 `pagi.connection` handle: it resolves with the reason on an
 abnormal disconnect, and stays pending forever if first requested *after* a
 clean completion, since there is no disconnect left to report.
@@ -1175,7 +1192,7 @@ returned without reaching a legal terminal state hard-died with a generic
 "forgot to await" message instead of being reported the way a live server
 reports it.
 
-**After (shipped):** every `PAGI::Test::*` `$send` now fails the returned
+**After (current):** every `PAGI::Test::*` `$send` now fails the returned
 `Future` for an illegal event, mirroring the shared `PAGI::Utils::_SendValidation`
 core also used by the development `Lint` middleware. An app that returns
 without reaching a legal terminal state is now reported as an abnormal
@@ -1200,31 +1217,27 @@ synthetic 500 -- nothing on the wire was corrupted, so nothing is replaced.
 An exception before the response is complete keeps the existing 500 +
 `server_error` behavior.
 
-The strictness pass also tightened several `PAGI::Test::WebSocket`/
-`PAGI::Test::SSE` behaviors that hit test-writing users directly -- a test
-that used to rely on the old lenient shape now hangs or fails instead of
-silently passing:
+The test kit also follows the current WebSocket/SSE terminal-event contract:
 
-- **`Test::WebSocket`'s synthesized `websocket.disconnect` is delivered
-  exactly once**, with a truthful `code` and `reason` (previously repeated
-  on every subsequent `receive` call, with the reason dropped). A test app
-  that keeps calling `receive` after disconnect now hangs -- correctly,
-  since a real transport has gone silent -- instead of getting a phantom
-  disconnect on every call.
+- **`Test::WebSocket` preserves the terminal `websocket.disconnect` event**,
+  including its code and reason. Later `receive` calls resolve with that same
+  event; a receive loop must stop when it observes disconnect.
 - **An app `websocket.send` after the app's own `websocket.close` now fails
   the Future** (was silently appended to the client's readable stream). A
   send after the *test/peer* side closed is now a tolerated no-op instead --
   dropped, not delivered, but does not fail the app's Future.
-- **`websocket.close` sent before `websocket.accept` (a portable denial) no
-  longer croaks** `"WebSocket connection not accepted"`; `Test::WebSocket`
-  reports the closed/denied state instead.
-- **`Test::SSE` recognizes an app's decline** (`sse.http.response.start` /
-  `.body`) instead of croaking `"SSE connection not started"` -- `sse`
-  returns a `Test::Response` with the declined status/body, and no
-  `sse.disconnect` is delivered (the stream never started).
-- **`Test::SSE`'s synthesized `sse.disconnect` is delivered exactly once**,
-  with an explicit `reason` (default `client_closed`), instead of being
-  repeated reason-less on every subsequent `receive` call.
+- **Pre-accept WebSocket refusal uses `http.response.start` and `.body`**
+  with a status of at least 300. `websocket.close` before acceptance is
+  rejected; it is not a refusal shortcut. `Test::WebSocket` reports
+  `refused` and exposes the captured HTTP response through `response`.
+- **SSE decline also uses ordinary `http.response.start` and `.body`**,
+  before `sse.start`. The test client's `sse` method returns a
+  `Test::Response` with the declined status/body. A receive after a completed
+  refusal resolves with `sse.disconnect` without a reason; after a completed
+  WebSocket refusal it resolves with `http.disconnect`.
+- **`Test::SSE` preserves the terminal `sse.disconnect` event** for later
+  receive calls. An abnormal end includes its reason (the test peer's close
+  defaults to `client_closed`); clean completion carries no reason.
 
 ### The rest of this release's breaking changes
 
@@ -1239,7 +1252,7 @@ rest are covered only here.
 - **Removed middleware and apps.** `PAGI::Middleware::WebSocket::RateLimit`,
   `PAGI::App::SSE::Pubsub`, `PAGI::App::WebSocket::Broadcast`, and
   `PAGI::App::WebSocket::Chat` are removed outright, with no replacement
-  shipped in this release -- they impersonated server lifecycle events they
+  included in this release -- they impersonated server lifecycle events they
   could not keep faithful, or taught a send pattern (holding and calling
   another scope's `send`) the PAGI spec now rules out. See the Cookbook's
   "In-Loop WebSocket Rate Limiting" recipe for the in-loop replacement and
@@ -1283,7 +1296,7 @@ my $file = "$root/$path";
 open my $fh, '<:raw', $file or die $!;
 ```
 
-**After (shipped default):** give conventional static-file ownership to one
+**After (current default):** give conventional static-file ownership to one
 `PAGI::App::File`.
 
 ```perl
@@ -1295,7 +1308,7 @@ my $app = PAGI::App::File->from_app_path('public')->to_app;
 It owns validation, index and MIME selection, conditional and Range requests,
 streaming `file` events, and negotiated stock errors.
 
-**After (shipped custom native boundary):** when authorization or response headers
+**After (current custom native boundary):** when authorization or response headers
 require a custom handler, validate before any filesystem policy and emit only
 the returned lexical path.
 
@@ -1354,7 +1367,7 @@ physical confinement.
 PAGI::App::Directory->new(root => $root, show_hidden => 1);
 ```
 
-**After (shipped):**
+**After (current):**
 
 ```perl
 PAGI::App::Directory->new(root => $root, allow_hidden => 1);
@@ -1430,7 +1443,7 @@ returns a deferred HTTP application. It never changes meaning by arity.
 PAGI::App::NotFound->new->to_app;
 ```
 
-**After (shipped):**
+**After (current):**
 
 ```perl
 use PAGI::Pages qw(not_found);
@@ -1460,7 +1473,7 @@ PAGI::App::Redirect->new(
 )->to_app;
 ```
 
-**After (shipped):**
+**After (current):**
 
 ```perl
 use PAGI::Pages qw(redirect);
@@ -1495,7 +1508,7 @@ representation.
 middleware('ErrorHandler', content_type => 'text/html');
 ```
 
-**After (shipped):**
+**After (current):**
 
 ```perl
 use PAGI::Response qw(html_response);
@@ -1517,7 +1530,7 @@ middleware('ErrorHandler',
 middleware('ErrorHandler', content_type => 'application/json');
 ```
 
-**After (shipped):**
+**After (current):**
 
 ```perl
 use PAGI::Response qw(problem_response);
@@ -1539,7 +1552,7 @@ middleware('ErrorHandler',
 middleware('ErrorHandler', content_type => 'text/plain');
 ```
 
-**After (shipped):**
+**After (current):**
 
 ```perl
 use PAGI::Response qw(text_response);
@@ -1691,7 +1704,7 @@ my $routing = router(
 );
 ```
 
-**After (shipped):** configure the Router's HTTP-only default. Method Not
+**After (current):** configure the Router's HTTP-only default. Method Not
 Allowed remains Router-owned.
 
 ```perl
@@ -1731,7 +1744,7 @@ without sending any response.
 my $app = $routing->to_app;
 ```
 
-**After (shipped):** direct compilation sends the Router's own 404 and 405 and
+**After (current):** direct compilation sends the Router's own 404 and 405 and
 installs its own HeadBoundary. Compose supplies a separate outer, idempotent
 application-root HEAD boundary plus root safety and lifecycle.
 
@@ -1795,7 +1808,7 @@ resumes later route scanning. Every Mount now has exactly one named target:
 mount('/legacy' => $legacy_router->to_app)
 ```
 
-**After (shipped, inspectable Router application):** retain the immutable
+**After (current, inspectable Router application):** retain the immutable
 Router object under `app`. Its 404/405 responses remain child-owned and its
 names remain visible to the parent resolver.
 
@@ -1820,7 +1833,7 @@ mount(
 )
 ```
 
-**After (shipped, intentionally opaque):** pass a native app coderef or another
+**After (current, intentionally opaque):** pass a native app coderef or another
 app object through the same `app` option.
 
 ```perl
@@ -1845,7 +1858,7 @@ my $map = PAGI::App::URLMap->new;
 $map->mount('/api' => $api_router->to_app);
 ```
 
-**After (also shipped):** the spelling remains valid because URLMap has its
+**After (also current):** the spelling remains valid because URLMap has its
 own opaque two-argument API.
 
 ```perl
@@ -1869,7 +1882,7 @@ my $routing = PAGI::App::Cascade->new(
 );
 ```
 
-**After (shipped):** the spelling stays valid and there is one rule: an
+**After (current):** the spelling stays valid and there is one rule: an
 explicit non-final response advances only when its status appears in `catch`.
 
 ```perl
@@ -1898,7 +1911,7 @@ normal completion even though the response was incomplete.
 await $wrapped->($scope, $receive, $send);
 ```
 
-**After (shipped):** ErrorHandler awaits reporting, emits no replacement
+**After (current):** ErrorHandler awaits reporting, emits no replacement
 response, and rethrows the original exception for the server to abort the
 stream.
 
@@ -1949,7 +1962,7 @@ to manufacture the application's missing-page response.
 route('/*path' => \&missing_page, methods => ['GET'])
 ```
 
-**After (shipped application policy):** use the owning Router's HTTP default.
+**After (current application policy):** use the owning Router's HTTP default.
 
 ```perl
 my $routing = router(

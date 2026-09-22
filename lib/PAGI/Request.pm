@@ -1143,8 +1143,9 @@ the receive queue.
 
     my $conn = $req->connection;
 
-Returns the L<PAGI::Server::ConnectionState> object for this request, or
-C<undef> if not provided by the server.
+Returns the server-supplied object under C<pagi.connection>, or C<undef> if
+absent. Its interface is defined by the PAGI specification; callers use those
+public methods rather than requiring a particular server's connection class.
 
 =head2 is_disconnected
 

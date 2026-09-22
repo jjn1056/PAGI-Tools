@@ -2,6 +2,12 @@
 
 0.002003 - UNRELEASED
 
+  [Test client]
+  - HTTP requests now deliver deferred connection notifications while holding
+    the application Future, before consuming its result. Applications awaiting
+    end_future after a terminal send resume normally, and subsequent application
+    errors follow raise_app_exceptions instead of being lost.
+
   [Shared HTTP header helpers]
   - NEW: PAGI::Utils::Headers provides independent parsers and formatters for
     Basic/Bearer credentials, parameterized fields, token lists, Vary, entity

@@ -82,4 +82,99 @@ subtest 'websocket and SSE scopes advertise core 0.5 and WWW 0.6' => sub {
     is_deeply \@ev, ['disc:server_error'], 'on_disconnect(server_error) fires, on_complete does not';
 }
 
+subtest 'HTTP completion wakes a suspended application outside send' => sub {
+    for my $case (
+        ['get', 0, 0, 0], # observer requested after the terminal body
+        ['get', 1, 1, 0], # observer requested before sending
+        ['get', 1, 0, 1], # declared trailers delay completion
+        ['head', 1, 0, 0],
+    ) {
+        my ($method, $raise, $early, $trailers) = @$case;
+        my (@events, @warnings);
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        my $app = async sub {
+            my ($scope, $receive, $send) = @_;
+            my $conn = $scope->{'pagi.connection'};
+            my $cancelled = $conn->end_future;
+            $cancelled->cancel;
+            my $end = $early ? $conn->end_future : undef;
+            $conn->on_complete(sub { push @events, 'complete' });
+            $conn->on_end(sub { push @events, 'end' });
+            await $send->({ type => 'http.response.start', status => 200,
+                headers => [], trailers => $trailers });
+            await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
+            if ($trailers) {
+                ok !$conn->response_complete, 'body does not finish declared trailers';
+                await $send->({ type => 'http.response.trailers', headers => [], more => 0 });
+            }
+            ok $conn->response_complete, 'completion fact is synchronous';
+            is_deeply \@events, [], 'callbacks are still deferred after terminal send';
+            push @events, 'sent';
+            my $reason = await ($end || $conn->end_future);
+            is $reason, undef, 'clean end carries no abnormal reason';
+            push @events, 'resumed';
+        };
+        my $client = PAGI::Test::Client->new(app => $app, raise_app_exceptions => $raise);
+        my $response = eval { $client->$method('/') };
+        is $@, '', "$method completion wait succeeds (early=$early, trailers=$trailers)";
+        is $response && $response->status, 200, 'response preserved';
+        is_deeply \@events, [qw(sent complete end resumed)],
+            'callbacks and application finish exactly once';
+        is_deeply \@warnings, [], 'no lost Future or spurious application exception';
+    }
+};
+
+subtest 'errors after the terminal send preserve completion and exception policy' => sub {
+    for my $await_end (0, 1) {
+        for my $raise (0, 1) {
+            my (@warnings, $completed);
+            local $SIG{__WARN__} = sub { push @warnings, @_ };
+            my $app = async sub {
+                my ($scope, $receive, $send) = @_;
+                my $conn = $scope->{'pagi.connection'};
+                $conn->on_complete(sub { ++$completed });
+                await $send->({ type => 'http.response.start', status => 200, headers => [] });
+                await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
+                await $conn->end_future if $await_end;
+                die "application cleanup failed\n";
+            };
+            my $client = PAGI::Test::Client->new(app => $app, raise_app_exceptions => $raise);
+            my $response = eval { $client->get('/') };
+            my $error = $@;
+            is $completed, 1, 'clean completion notification survives application failure';
+            if ($raise) {
+                is $error, "application cleanup failed\n", 'original application error propagates';
+                is_deeply \@warnings, [], 'no spurious Future warnings';
+            } else {
+                is $error, '', 'default exception policy returns response';
+                is $response && $response->status, 200, 'completed response is not replaced';
+                is scalar @warnings, 1, 'only the application exception is warned';
+                like $warnings[0], qr/exception after response completed: application cleanup failed/,
+                    'warning reports the actual application failure';
+            }
+        }
+    }
+};
+
+subtest 'a failing completion callback cannot strand the awaiting application' => sub {
+    my (@events, @warnings);
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    my $client = PAGI::Test::Client->new(raise_app_exceptions => 1, app => async sub {
+        my ($scope, $receive, $send) = @_;
+        my $conn = $scope->{'pagi.connection'};
+        $conn->on_complete(sub { die "callback failed\n" });
+        $conn->on_end(sub { push @events, 'end' });
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => 'ok', more => 0 });
+        await $conn->end_future;
+        push @events, 'resumed';
+    });
+    my $response = eval { $client->get('/') };
+    is $@, '', 'callback failure is isolated from application';
+    is $response && $response->status, 200, 'response remains successful';
+    is_deeply \@events, [qw(end resumed)], 'other notifications and application proceed';
+    is scalar @warnings, 1, 'only callback error is warned';
+    like $warnings[0], qr/pagi.connection callback error: callback failed/, 'callback warning preserved';
+};
+
 done_testing;

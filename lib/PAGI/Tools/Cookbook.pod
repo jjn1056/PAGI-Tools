@@ -1981,12 +1981,22 @@ that hashref with a convenient (and typo-catching) API.
 
 =head2 Bearer Token (JWT)
 
+This example accepts HS256 tokens with a valid C<exp> and a nonempty C<sub>.
+Configure C<JWT_SECRET> with the shared signing secret used by your issuer.
+L<Crypt::JWT> recommends pinning C<accepted_alg>; C<verify_exp =E<gt> 1>
+requires expiration, whereas its default only checks C<exp> when present.
+These are this application's token rules, not policy imposed by PAGI::Auth.
+
   use strict;
   use warnings;
+  use Crypt::JWT qw(decode_jwt);
   use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
+  use PAGI::Auth::SimpleUser;
   use PAGI::Middleware::Builder;
   use PAGI::Response qw(json_response);
   use PAGI::Routing qw(route router);
+
+  my $secret = $ENV{JWT_SECRET} // die 'Configure JWT_SECRET';
 
   my $routing = router(routes => [
 
@@ -2023,10 +2033,19 @@ that hashref with a convenient (and typo-catching) API.
               message => 'Supply one valid Bearer credential.',
           }) unless $parsed;
           return unauth_result() unless defined $token;
-          my $claims = eval { decode_jwt(token => $token, key => 'configured verification key') };
+          my $claims = eval {
+              decode_jwt(
+                  token        => $token,
+                  key          => $secret,
+                  accepted_alg => 'HS256',
+                  verify_exp   => 1,
+              );
+          };
           return unauth_result(failure => { message => 'The token was not accepted.' })
-              unless $claims;
-          return auth_result(user => MyApp::User->new($claims->{sub}));
+              unless ref($claims) eq 'HASH'
+                  && defined($claims->{sub}) && !ref($claims->{sub})
+                  && length($claims->{sub});
+          return auth_result(user => PAGI::Auth::SimpleUser->new(identity => $claims->{sub}));
       };
       $routing;
   };

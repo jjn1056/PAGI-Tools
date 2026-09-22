@@ -180,7 +180,11 @@ sub _request {
     # Call app (with exception handling like real server)
     my $exception;
     eval {
-        $self->{app}->($scope, $receive, $send)->get;
+        my $app_future = $self->{app}->($scope, $receive, $send);
+        # Own the suspended application while delivering terminal signals,
+        # outside its send call. It may be awaiting one of those signals.
+        $scope->{'pagi.connection'}->_deliver_notifications;
+        $app_future->get;
     };
     my $app_error = $@;
     $scope->{'pagi.connection'}->_deliver_notifications;

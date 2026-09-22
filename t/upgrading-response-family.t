@@ -6,6 +6,7 @@ use warnings;
 use Encode qw(encode);
 use File::Find qw(find);
 use Future;
+use Future::AsyncAwait;
 use IPC::Open3 qw(open3);
 use JSON::MaybeXS qw(decode_json);
 use Symbol qw(gensym);
@@ -250,21 +251,25 @@ subtest 'WebSocket denial and SSE decline take public applications' => sub {
     }
 };
 
-subtest 'live decline examples construct concrete Responses' => sub {
-    my @documents = (
-        ['UPGRADING.md', qr/await \$sse->decline\(\s*problem_response\(/s],
-        ['lib/PAGI/Tools/Tutorial.pod',
-            qr/await \$sse->decline\(\s*problem_response\(/s],
-    );
-
-    for my $document (@documents) {
-        open my $handle, '<', $document->[0]
-            or die "Cannot read $document->[0]: $!";
-        my $source = do { local $/; <$handle> };
-        close $handle or die "Cannot close $document->[0]: $!";
-        like($source, $document->[1],
-            "$document->[0] passes a concrete Response to SSE decline");
-    }
+subtest 'migration refusal example runs as documented' => sub {
+    open my $handle, '<', 'UPGRADING.md' or die $!;
+    my $source = do { local $/; <$handle> };
+    my ($snippet) = $source =~ /### Refuse WebSocket\/SSE with Request handlers or applications\n.*?```perl\n(.*?)```/s;
+    die 'Missing migration refusal example' unless defined $snippet;
+    my $ws_harness = PAGITest::RefusalHarness->new('websocket');
+    my $sse_harness = PAGITest::RefusalHarness->new('sse');
+    my ($websocket, $sse) = ($ws_harness->{helper}, $sse_harness->{helper});
+    my $run = eval "async sub { $snippet }";
+    die $@ unless $run;
+    $run->()->get;
+    is($ws_harness->{events}[0]{status}, 401, 'WebSocket gets the documented refusal');
+    ok(grep({ lc($_->[0]) eq 'www-authenticate' && $_->[1] eq 'Bearer realm="api"' }
+        @{$ws_harness->{events}[0]{headers}}), '401 includes the applicable challenge');
+    is($sse_harness->{events}[0]{status}, 404, 'SSE gets the documented refusal');
+    is(decode_json(body_from($sse_harness->{events}))->{detail}, '/refuse',
+        'Request handler reads the original request path');
+    $ws_harness->deliver;
+    $sse_harness->deliver;
 };
 
 subtest 'JSON migration asserts values, never object member order' => sub {

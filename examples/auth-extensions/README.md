@@ -81,7 +81,10 @@ routes return a Response from Request handlers. `/response` returns a concrete
 Response; `/pages` lets Pages negotiate a problem representation; `/object`
 returns an object with `to_app`; `/native` adapts a native three-argument CODE
 with `as_app_object`. A group wrapper explicitly awaits `invoke_app` for either
-its chosen refusal or the downstream app. For example:
+its chosen refusal or the downstream app. Every 401 explicitly includes
+`WWW-Authenticate: Bearer realm="demo"`; authentication middleware does not
+add it. This follows [RFC 9110's 401 contract](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.5.2).
+For example:
 
 ```http
 GET /pages HTTP/1.1
@@ -107,6 +110,7 @@ GET /events HTTP/1.1
 Host: localhost:5000
 
 HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer realm="demo"
 Content-Type: application/json
 
 {"error":"An access token is required."}
