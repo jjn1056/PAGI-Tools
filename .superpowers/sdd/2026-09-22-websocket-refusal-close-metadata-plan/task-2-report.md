@@ -59,3 +59,28 @@ Result: the focused suite passed: 7 files, 108 tests, result `PASS`.
 `t/websocket/15-connection-cleanup.t` emits pre-existing “lost a sequence
 Future” diagnostics during its passing run. The focused suite still exits
 successfully; this task does not change that cleanup machinery.
+
+## Full-suite fix round 1
+
+The full Tools suite found one remaining stale expectation in
+`t/websocket/denial-response.t`: all eight concrete Response refusal cases
+already observed local `1006` metadata, but the test still expected `undef`.
+Only that assertion and its description were updated.
+
+Before the update, this command failed in the complete concrete Response
+matrix with `GOT 1006` and `CHECK undef`:
+
+```sh
+perlbrew exec --with perl-5.40.0@default prove -lv t/websocket/denial-response.t t/websocket/deny-close-code.t
+```
+
+After the update, the same command passed: 2 files, 13 tests, result `PASS`.
+This report addition is intentionally left unstaged for this fix-round commit.
+
+## Final verification
+
+Tools full regular suite passed: 242 files, 2941 tests, Perl 5.40.0.
+Server full regular suite passed: 169 files, 1193 tests, Perl 5.42.2.
+The subsequent Server test-only review delta passed the affected t/71 file.
+Final cross-repository review approved; no runtime/spec changes beyond the design.
+Both branches remain local and unmerged.
