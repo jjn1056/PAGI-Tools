@@ -11,6 +11,29 @@ Each After example uses behavior implemented on this branch for that release.
 Examples use ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Breaking: `PAGI::App::Loader` is removed
+
+`PAGI::App::Loader` has no replacement class. To serve an application file,
+pass it to the server: `pagi-server --app ./app.pl`. To load one inside Perl,
+use `do` with an explicit path (a bare `app.pl` is not searched for in `.` on
+Perl 5.26 and later):
+
+```perl
+# Before
+my $app = PAGI::App::Loader->new(file => 'app.pl')->to_app;
+
+# After
+my $file = './app.pl';
+my $app  = do $file;
+die "Cannot load $file: $@" if $@;
+die "Cannot read $file: $!\n" unless defined $app;
+die "$file did not return a code reference\n" unless ref $app eq 'CODE';
+```
+
+The `reload` option has no equivalent. Reloading only the top-level file left
+modules it loaded cached and skipped lifespan startup; restart the server
+process to pick up changes.
+
 ## Authentication v1
 
 The unreleased `PAGI::Auth::Challenge`, `PAGI::Auth::Outcomes`, and
@@ -1614,7 +1637,6 @@ and cache fields may change through consistent negotiation and encoding.
 | `PAGI::App::Directory` | listing `opendir` permission 403 plus inherited File 403, 404, 405, and 416 | File owns request-path policy, location Results, indexes, and delegated responses; Directory owns only eligible listing rendering and listing I/O |
 | `PAGI::App::URLMap` | no-default HTTP 404 | mount selection and opaque ownership remain local |
 | `PAGI::App::Proxy` | backend-connect 502 | connection decision and demo warning remain local |
-| `PAGI::App::Loader` | HTTP load-failure 500 | loading, warnings, and reload policy remain local |
 | `PAGI::App::WrapCGI` | HTTP process-start 500 | CGI execution and parsed CGI responses remain literal |
 | `PAGI::App::Throttle` | default HTTP 429 | `retry_after`, enabled rate-limit fields, and `on_limit` |
 | `PAGI::Middleware::Static` | 403, 404, 416 | pass-through remains local; 416 supplies selected file length |

@@ -2,6 +2,13 @@
 
 0.002003 - UNRELEASED
 
+  [App::Loader]
+  - BREAKING: Removed PAGI::App::Loader. Its relative `file` paths failed on
+    Perl 5.26+ (`do` no longer searches `.`), and `reload` re-read only the
+    top-level file: modules it loaded stayed cached, and a reloaded
+    application never received lifespan startup. Serve an application file
+    with `pagi-server --app`, or load it with `do` as shown in UPGRADING.md.
+
   [Test client]
   - HTTP requests now deliver deferred connection notifications while holding
     the application Future, before consuming its result. Applications awaiting

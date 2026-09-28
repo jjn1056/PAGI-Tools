@@ -5,13 +5,11 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use IO::Async::Loop;
-use File::Temp qw(tempfile);
 use JSON::MaybeXS ();
 
 use lib 'lib';
 
 use PAGI::App::Healthcheck;
-use PAGI::App::Loader;
 use PAGI::App::Throttle;
 
 my $loop = IO::Async::Loop->new;
@@ -137,95 +135,6 @@ subtest 'App::Healthcheck' => sub {
         is $sent[0]{status}, 503, 'returns 503';
         my $body = JSON::MaybeXS::decode_json($sent[1]{body});
         like $body->{checks}{broken}{message}, qr/Connection failed/, 'error message captured';
-    };
-};
-
-# =============================================================================
-# Test: PAGI::App::Loader
-# =============================================================================
-
-subtest 'App::Loader loads app from file' => sub {
-
-    subtest 'loads valid app file' => sub {
-        my ($fh, $filename) = tempfile(SUFFIX => '.pl', UNLINK => 1);
-        print $fh q{
-            use strict;
-            use warnings;
-            use Future::AsyncAwait;
-
-            async sub {
-                my ($scope, $receive, $send) = @_;
-                await $send->({ type => 'http.response.start', status => 200, headers => [] });
-                await $send->({ type => 'http.response.body', body => 'Loaded!', more => 0 });
-            };
-        };
-        close $fh;
-
-        my $app = PAGI::App::Loader->new(file => $filename)->to_app;
-
-        my @sent;
-        run_async(async sub {
-            await $app->(
-                { type => 'http', path => '/' },
-                async sub { { type => 'http.disconnect' } },
-                async sub  {
-        my ($event) = @_; push @sent, $event },
-            );
-        });
-
-        is $sent[0]{status}, 200, 'loaded app responds';
-        is $sent[1]{body}, 'Loaded!', 'correct response';
-    };
-
-    subtest 'invalid HTTP app negotiates a Pages 500' => sub {
-        my @warnings;
-        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
-
-        my $app = PAGI::App::Loader->new(file => '/nonexistent/app.pl')->to_app;
-
-        my @sent;
-        run_async(async sub {
-            await $app->(
-                {
-                    type    => 'http',
-                    path    => '/',
-                    headers => [['Accept', 'application/json']],
-                },
-                async sub { { type => 'http.disconnect' } },
-                async sub  {
-        my ($event) = @_; push @sent, $event },
-            );
-        });
-
-        is $sent[0]{status}, 500, 'returns 500 for invalid file';
-        my %headers = map { lc($_->[0]) => $_->[1] } @{$sent[0]{headers}};
-        is $headers{'content-type'}, 'application/problem+json',
-            'load failure negotiates problem JSON';
-        is $headers{'cache-control'}, 'no-store', 'load failure is not stored';
-        my $problem = JSON::MaybeXS::decode_json($sent[1]{body});
-        is $problem->{status}, 500, 'problem status matches the wire status';
-        is $problem->{title}, 'Internal Server Error',
-            'problem document uses the stock title';
-        like "@warnings", qr/Error loading|did not return a coderef/,
-            'load failure is logged (captured, not leaked to STDERR)';
-    };
-
-    subtest 'invalid non-HTTP app croaks without HTTP events' => sub {
-        my @warnings;
-        local $SIG{__WARN__} = sub { push @warnings, $_[0] };
-
-        my $app = PAGI::App::Loader->new(file => '/nonexistent/app.pl')->to_app;
-        my @sent;
-
-        like dies {
-            $app->(
-                { type => 'websocket', path => '/' },
-                async sub { { type => 'websocket.disconnect' } },
-                async sub { my ($event) = @_; push @sent, $event },
-            )->get;
-        }, qr/^application could not be loaded for scope type 'websocket'/,
-            'failure names the unsupported scope type';
-        is \@sent, [], 'load failure emits no HTTP events on a non-HTTP scope';
     };
 };
 
