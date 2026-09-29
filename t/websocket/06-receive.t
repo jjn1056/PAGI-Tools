@@ -7,7 +7,9 @@ use Future;
 use JSON::MaybeXS;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::WebSocket;
+use PAGITest::Connected qw(ws_scope receive_from);
 
 subtest 'receive returns raw event' => sub {
     my @events = (
@@ -15,11 +17,9 @@ subtest 'receive returns raw event' => sub {
         { type => 'websocket.receive', text => 'Hello' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -33,11 +33,9 @@ subtest 'receive returns undef on disconnect' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.disconnect', code => 1000, reason => 'Bye' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -53,11 +51,9 @@ subtest 'receive_text returns text content' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.receive', text => 'Hello, World!' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -71,11 +67,9 @@ subtest 'receive_text skips binary frames' => sub {
         { type => 'websocket.receive', bytes => "\x00\x01" },
         { type => 'websocket.receive', text => 'Text message' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -89,11 +83,9 @@ subtest 'receive_bytes returns binary content' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.receive', bytes => $binary },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -108,11 +100,9 @@ subtest 'receive_json decodes JSON text' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.receive', text => $json },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -125,11 +115,9 @@ subtest 'receive_json dies on invalid JSON' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.receive', text => 'not valid json{' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -144,14 +132,17 @@ subtest 'receive methods return undef when closed' => sub {
     my @events = (
         { type => 'websocket.connect' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
     $ws->close->get;
+
+    # The peer answers the Close and the server completes the connection.
+    my $connection = $scope->{'pagi.connection'};
+    $connection->_set_peer_close(1000, '');
+    $connection->_mark_complete;
 
     is($ws->receive->get, undef, 'receive returns undef when closed');
     is($ws->receive_text->get, undef, 'receive_text returns undef when closed');

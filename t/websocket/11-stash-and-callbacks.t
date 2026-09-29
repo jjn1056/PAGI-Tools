@@ -6,8 +6,10 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::WebSocket;
 use PAGI::Stash;
+use PAGITest::Connected qw(ws_scope receive_from);
 
 # Helper to create connected WebSocket with message queue
 # Each call creates a fresh scope to avoid singleton caching issues
@@ -15,7 +17,6 @@ sub create_ws {
     my (%opts) = @_;
     my @sent;
     my @messages = @{$opts{messages} // []};
-    my $msg_idx = 0;
 
     my $send = sub {
         push @sent, $_[0];
@@ -23,22 +24,12 @@ sub create_ws {
     };
 
     # Fresh scope for each call (important for singleton caching)
-    my $scope = { type => 'websocket', headers => [] };
-    my $receive = sub {
-        if ($msg_idx == 0) {
-            $msg_idx++;
-            return Future->done({ type => 'websocket.connect' });
-        }
-        if ($msg_idx <= @messages) {
-            my $msg = $messages[$msg_idx - 1];
-            $msg_idx++;
-            return Future->done({
-                type => 'websocket.receive',
-                text => $msg,
-            });
-        }
-        return Future->done({ type => 'websocket.disconnect' });
-    };
+    my $scope = ws_scope();
+    my $receive = receive_from($scope,
+        { type => 'websocket.connect' },
+        (map { { type => 'websocket.receive', text => $_ } } @messages),
+        { type => 'websocket.disconnect' },
+    );
 
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
@@ -203,8 +194,8 @@ subtest 'run() triggers error handlers on exception' => sub {
         push @errors, $error;
     });
 
-    $ws->run->get;
-
+    like dies { $ws->run->get }, qr/Callback explosion/,
+        'run() re-raises the message error after on_error';
     is(scalar @errors, 1, 'error handler called');
     like($errors[0], qr/Callback explosion/, 'error message captured');
 };

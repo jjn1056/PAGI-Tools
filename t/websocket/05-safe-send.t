@@ -6,7 +6,9 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::WebSocket;
+use PAGITest::Connected qw(ws_scope);
 
 # Helper to create connected WebSocket
 sub create_ws {
@@ -24,7 +26,7 @@ sub create_ws {
         return Future->done;
     };
 
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     my $receive = sub { Future->done({ type => 'websocket.connect' }) };
 
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
