@@ -9,7 +9,6 @@ use Exporter qw(import);
 use Future;
 use Future::AsyncAwait;
 use PAGI::Headers ();
-use PAGI::Utils qw(request_ended_abnormally);
 use Scalar::Util qw(blessed);
 use Socket ();
 
