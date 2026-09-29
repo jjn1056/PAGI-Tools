@@ -2,6 +2,21 @@
 
 0.002003 - UNRELEASED
 
+  [Error reporting]
+  - BREAKING: ErrorHandler, including Compose's built-in one, re-raises the
+    original exception after the error response for a server error (status
+    500 or above) is complete, so the server reports it (PAGI::Spec::Www,
+    "Exceptions after the terminal event"). The rendered page is unchanged.
+    Compose no longer warns "PAGI application error: ..." itself. A handled
+    exception claiming a 4xx status is rendered and not re-raised, and is no
+    longer reported as an application error. See UPGRADING.md.
+  - on_error receives the request scope as a second argument.
+  - A failure to resolve PAGI_ENV for Compose's error page is a configuration
+    warning ("PAGI ErrorHandler could not resolve development mode: ...").
+  - An exception object whose overloads throw is re-raised as a fixed safe
+    message, because a failed Future cannot carry it. This also applies to
+    the existing re-raise after response start.
+
   [App::Loader]
   - BREAKING: Removed PAGI::App::Loader. Its relative `file` paths failed on
     Perl 5.26+ (`do` no longer searches `.`), and `reload` re-read only the

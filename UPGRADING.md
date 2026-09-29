@@ -11,6 +11,56 @@ Each After example uses behavior implemented on this branch for that release.
 Examples use ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Breaking: ErrorHandler re-raises server errors
+
+ErrorHandler — Compose's built-in one and any you install — still renders the
+same error page, but after a **server error** (status 500 or above) is
+complete it now re-raises the original exception so the server reports it.
+Compose no longer warns `PAGI application error: ...` itself.
+
+What an operator sees for an application that dies with
+`database unreachable`:
+
+```text
+# Before: a bare warn from inside PAGI-Tools
+PAGI application error: database unreachable
+
+# After: PAGI::Server's own log, at level error
+PAGI application error (after response complete): database unreachable
+```
+
+The new line is governed by the server's `log_level` and reaches a replaced
+`logger`. PAGI::Server closes the connection after it, as uvicorn does.
+
+- An exception claiming a 4xx `status_code` (e.g. 404) is a handled outcome:
+  rendered and not re-raised. Before, Compose also warned
+  `PAGI application error: My::NotFound=HASH(...)` for it; now nothing is
+  logged.
+- `on_error` still runs before rendering, and now receives
+  `($error, $scope)`; existing one-argument callbacks are unaffected.
+- Failing to resolve `PAGI_ENV` for Compose's error page is now a
+  configuration warning,
+  `PAGI ErrorHandler could not resolve development mode: ...`, instead of a
+  second `PAGI application error:` line.
+
+Tests: `PAGI::Test::Client` treats the re-raised exception as a server would.
+With the default `raise_app_exceptions => 0` it warns
+`exception after response completed: ...`; capture that warning where a test
+provokes a 500 deliberately:
+
+```perl
+my @warnings;
+my $response = do {
+    local $SIG{__WARN__} = sub { push @warnings, @_ };
+    PAGI::Test::Client->new(app => $app)->get('/boom');
+};
+is $response->status, 500;
+like $warnings[0], qr/^exception after response completed: database unreachable/;
+```
+
+Code that calls an ErrorHandler-wrapped application directly now sees the
+returned Future fail after the 500 is sent, where it used to succeed.
+
 ## Breaking: `PAGI::App::Loader` is removed
 
 `PAGI::App::Loader` has no replacement class. To serve an application file,
@@ -1960,8 +2010,9 @@ my $errors = middleware(
 );
 ```
 
-Before response start, a database throw or failed Future is reported and then
-rendered by the custom or built-in handler. After response start, the renderer
+Before response start, a database throw or failed Future is reported, rendered
+by the custom or built-in handler, and then re-raised for the server to log
+(see "ErrorHandler re-raises server errors" above). After response start, the renderer
 is never called: `on_error` must settle first, its own failure is contained,
 and the original database exception is rethrown unchanged. Tests that formerly
 expected normal completion must now expect that failure and exactly one

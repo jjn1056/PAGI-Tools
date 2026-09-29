@@ -221,10 +221,16 @@ subtest 'ErrorHandler custom renderers return concrete Responses' => sub {
         },
     )->wrap(sub { die "database failed\n" });
     my $client = PAGI::Test::Client->new(app => $app);
-    my $response = eval { $client->get('/') };
+    my @warnings;
+    my $response = eval {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        $client->get('/');
+    };
 
     ok($response, 'the documented ErrorHandler renderer integration completes')
         or diag($@);
+    is(\@warnings, ["exception after response completed: database failed\n"],
+        'the server error is re-raised after the custom response');
     is($response && $response->status, 500,
         'the custom Response keeps the error status');
     is($response && $response->header('content-type'),

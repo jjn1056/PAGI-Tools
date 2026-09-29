@@ -6,7 +6,7 @@ use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
 use FindBin qw($Bin);
 use lib "$Bin/lib";
-use ComposeTest qw(scope run_scope);
+use ComposeTest qw(scope run_scope run_scope_raising);
 use PAGI::Compose qw(compose);
 use PAGI::Pages;
 use PAGI::Response::Text ();
@@ -342,7 +342,9 @@ subtest 'author ErrorHandler response crosses only earlier middleware' => sub {
         ],
     )->to_app;
 
-    my $events = run_scope($app, scope(path => '/explode'));
+    my ($events, $error) = run_scope_raising($app, scope(path => '/explode'));
+    is($error, "author target failed\n",
+        'after rendering, the server error is re-raised for the server to log');
     is([grep { /ErrorHandler/ } @trace], [
         'author ErrorHandler report', 'author ErrorHandler render',
     ], 'author ErrorHandler reports before rendering');

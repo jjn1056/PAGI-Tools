@@ -150,7 +150,14 @@ subtest 'ErrorHandler receives Request and preserves explicit status' => sub {
         },
     )->wrap(sub { die $error });
 
-    my $response = PAGI::Test::Client->new(app => $app)->get('/');
+    my (@warnings, $response);
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        $response = PAGI::Test::Client->new(app => $app)->get('/');
+    }
+    is(scalar @warnings, 1, 'the 503 server error is re-raised once');
+    like($warnings[0], qr/^exception after response completed: Local::UpgradeStatusError=/,
+        'Test::Client reports the re-raised error as a server would');
     isa_ok($request_seen, 'PAGI::Request');
     is($error_seen, exact_ref($error), 'callback receives the original error');
     is($response->status, 409,

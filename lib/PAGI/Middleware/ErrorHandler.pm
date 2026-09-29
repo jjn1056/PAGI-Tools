@@ -26,7 +26,9 @@ PAGI::Middleware::ErrorHandler - Exception handling middleware
         enable 'ErrorHandler',
             development => 1,
             on_error    => sub  {
-        my ($error) = @_; warn "App error: $error" };
+                my ($error, $scope) = @_;
+                $tracker->capture($error, path => $scope->{path});
+            };
         $my_app;
     };
 
@@ -36,6 +38,15 @@ PAGI::Middleware::ErrorHandler catches exceptions thrown by the inner
 application and converts them to appropriate HTTP error responses. Its built-in
 renderer delegates to L<PAGI::Pages>, so request C<Accept> fields negotiate
 HTML, problem JSON, or text. Custom handlers retain full response ownership.
+
+ErrorHandler converts exceptions into responses; it does not report them.
+After the error response for a B<server error> (status 500 or above) is
+complete, the original exception is re-raised so the server reports it through
+its own log, as L<PAGI::Spec::Www> "Exceptions after the terminal event"
+describes. A handled exception whose C<status_code> claims a 4xx status is
+rendered and not re-raised: it is a response, not an error. Use C<on_error> for
+reporting of your own, such as an error tracker; see
+L<PAGI::Tools::Cookbook/Who reports an application error>.
 
 =head1 CONFIGURATION
 
@@ -49,12 +60,19 @@ construction never consults C<PAGI_ENV>.
 
 =item * on_error (default: undef)
 
-Callback invoked with the original error when an exception is caught. Useful
-for logging. Immediate values and Futures are both accepted and awaited.
+Callback invoked as C<< $on_error->($error, $scope) >> when an exception is
+caught: the original error, then the request scope, so a reporter can record
+the path or a C<request_id> (present when L<PAGI::Middleware::RequestId> is
+installed). Immediate values and Futures are both accepted and awaited.
 Callback failures are contained and never replace the application error.
 
+It is for reporting of your own, in addition to the server's: a server error
+is still re-raised to the server after rendering (see L</DESCRIPTION>).
+
     on_error => sub  {
-        my ($error) = @_; $logger->error($error) }
+        my ($error, $scope) = @_;
+        $tracker->capture($error, request_id => $scope->{request_id});
+    }
 
 =item * status (default: 500)
 
@@ -152,11 +170,11 @@ sub wrap {
 
         # Handle error if one occurred
         unless ($completed) {
-            await $self->_report_error($error);
+            await $self->_report_error($error, $scope);
 
             # If response already started, we can't send error page
             if ($response_started) {
-                die $error;
+                _reraise($error);
             }
 
             my $status = $self->_status_for_error($error);
@@ -194,6 +212,7 @@ sub wrap {
                 };
                 unless ($rendered) {
                     await $self->_send_last_resort($wrapped_send);
+                    _reraise($error) if $status >= 500;
                     return;
                 }
             }
@@ -204,14 +223,29 @@ sub wrap {
                 $receive,
                 $wrapped_send,
             );
+
+            # The response is complete. A server error still belongs to the
+            # server, which logs it; a handled 4xx exception does not.
+            _reraise($error) if $status >= 500;
         }
     };
 }
 
+# A failed Future must carry a true exception, and Future tests it for
+# truth, so an object whose overloads throw or report false cannot travel.
+# Such an object is replaced by a safe message rather than letting its
+# overload replace the error with an unrelated one.
+sub _reraise {
+    my ($error) = @_;
+    my $usable = eval { $error ? 1 : 0 };
+    die $error if $usable;
+    die "PAGI ErrorHandler: the application raised an exception that cannot be used as a value\n";
+}
+
 async sub _report_error {
-    my ($self, $error) = @_;
+    my ($self, $error, $scope) = @_;
     return unless $self->{on_error};
-    eval { await Future->wrap($self->{on_error}->($error)); 1 };
+    eval { await Future->wrap($self->{on_error}->($error, $scope)); 1 };
     return;
 }
 
@@ -228,8 +262,13 @@ async sub _development_for_request {
         1;
     };
     unless ($resolved) {
-        my $resolver_error = $@;
-        await $self->_report_error($resolver_error);
+        # A configuration problem in ErrorHandler itself, not the application's
+        # error, so it is a diagnostic like a rejected status claim.
+        chomp(my $reason = $@);
+        eval {
+            warn "PAGI ErrorHandler could not resolve development mode: $reason\n";
+            1;
+        };
         return 0;
     }
     return $development ? 1 : 0;
@@ -365,7 +404,11 @@ selected. Router NONE and PARTIAL are already ordinary 404/405 responses, not
 exceptions; customize NONE with Router C<http_default>.
 
 If a database call throws or returns a failed Future before response start,
-C<on_error> settles before the custom or built-in renderer runs. If the same
+C<on_error> settles before the custom or built-in renderer runs, and once the
+500 is complete the database exception is re-raised for the server to log.
+When ErrorHandlers are nested, the outer one sees the inner one's complete
+500 as a started response and re-raises in turn, so an C<on_error> configured
+on each of them runs for the same error. If the same
 failure happens after a streaming start but B<before> the response reaches a
 legal terminal state, rendering is no longer safe: ErrorHandler settles
 C<on_error>, emits no second start, and rethrows the original database
@@ -396,6 +439,16 @@ claims fall back to 500 without replacing the original exception:
     # In app:
     die My::Exception->new(404, 'Resource not found');
 
+A preserved 4xx claim is a handled outcome: the response is sent and the
+exception is not re-raised. Any status of 500 or above, including a claim that
+fell back to 500, is a server error and is re-raised after the response.
+
+An exception object whose boolean or string overload throws cannot be carried
+by a failed Future. After the response, such an exception is re-raised as the
+fixed message C<PAGI ErrorHandler: the application raised an exception that
+cannot be used as a value>, so the server still records that an error
+happened.
+
 =head1 NOTES
 
 =over 4
@@ -409,7 +462,8 @@ cache headers.
 =item * If built-in Pages construction fails before response start, the
 middleware emits one hardcoded UTF-8 plain-text 500 with C<no-store>. That last
 resort contains no exception or renderer data. A failure while sending it
-propagates without another response attempt.
+propagates without another response attempt. After it is sent, a server error
+is re-raised as after any other error response.
 
 =item * If the response has already started when an error occurs, no renderer
 is invoked and no replacement response is started. The middleware awaits

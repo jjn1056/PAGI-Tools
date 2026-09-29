@@ -7,7 +7,7 @@ use Scalar::Util qw(refaddr);
 use bytes ();
 use FindBin qw($Bin);
 use lib "$Bin/lib";
-use ComposeTest qw(scope run_scope capture_send);
+use ComposeTest qw(scope run_scope run_scope_raising capture_send);
 use PAGI::Compose qw(compose);
 use PAGI::Response::Empty ();
 use PAGI::Response::Text ();
@@ -167,17 +167,20 @@ subtest 'Router outcomes and root errors retain derived headers under HEAD' => s
             compose(routes => [route('/' => as_app_object(sub { die "HEAD error\n" }))])->to_app,
             scope(method => 'GET'),
             scope(method => 'HEAD'),
+            "HEAD error\n",   # a server error is re-raised after the 500
         ],
     );
 
     for my $case (@cases) {
-        my ($label, $app, $get_scope, $head_scope) = @$case;
-        my ($get, $head);
+        my ($label, $app, $get_scope, $head_scope, $raises) = @$case;
+        my ($get, $head, $get_error, $head_error);
         {
             local $SIG{__WARN__} = sub { return };
-            $get = run_scope($app, $get_scope);
-            $head = run_scope($app, $head_scope);
+            ($get, $get_error)   = run_scope_raising($app, $get_scope);
+            ($head, $head_error) = run_scope_raising($app, $head_scope);
         }
+        is($get_error, $raises, "$label GET raises only a server error");
+        is($head_error, $raises, "$label HEAD raises only a server error");
         my $get_length = response_header($get, 'Content-Length');
         like($get_length, qr/\A(?:0|[1-9][0-9]*)\z/,
             "$label GET carries a valid representation length");

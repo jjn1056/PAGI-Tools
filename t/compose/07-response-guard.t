@@ -399,10 +399,11 @@ subtest 'compiled Compose response-guard state is lexical under interleaving' =>
     $one->get;
 
     my @warnings;
+    my $two_error;
     {
         local $SIG{__WARN__} = sub { push @warnings, @_ };
         $done_for{'/two'}->done;
-        $two->get;
+        $two_error = dies { $two->get };
     }
     is($events_one, [
         { type => 'http.response.start', status => 200, headers => [] },
@@ -412,9 +413,9 @@ subtest 'compiled Compose response-guard state is lexical under interleaving' =>
         'silent second request receives its own safe 500');
     is(scalar(grep { ($_->{type} // '') eq 'http.response.start' } @$events_two),
         1, 'second request receives exactly one independent response start');
-    is(scalar @warnings, 1, 'only the silent request is reported');
-    like($warnings[0], qr/completed without starting a response/,
-        'second request retains its independent before-start stage');
+    is(\@warnings, [], 'Compose itself reports nothing');
+    like($two_error, qr/completed without starting a response/,
+        'only the silent request is re-raised, with its own before-start stage');
 };
 
 done_testing;

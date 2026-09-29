@@ -495,23 +495,26 @@ application into a routing miss.
 Normal completion without a valid response lifecycle throws
 L<PAGI::Exception::IncompleteResponse>. Before response start, that exception,
 request-target failures, failed Futures, author-middleware failures, and author
-renderer failures are reported and converted to one negotiated, no-store Pages
-500. A selected silent native application is therefore guarded as 500. Pages
+renderer failures are converted to one negotiated, no-store Pages 500. A
+selected silent native application is therefore guarded as 500. Pages
 construction itself is protected by ErrorHandler's final hardcoded
-UTF-8 text 500 path.
-The internal reporter warns C<PAGI application error: $error>. Explicit
+UTF-8 text 500 path. Compose does not report the failure itself: once that 500
+is complete it re-raises the original exception, and the server reports it
+(L<PAGI::Spec::Www>, "Exceptions after the terminal event"). Explicit
 application responses, including matched 404, 405, and 500, pass unchanged and
-are neither reported nor reinterpreted.
+are neither raised nor reinterpreted.
 
 The root ErrorHandler resolves C<PAGI_ENV> only while rendering an error.
 Development responses may include the error diagnostic; production responses
-remain generic. If environment resolution itself fails, that failure is also
-reported and the response uses safe production output. A normally complete
-native response does not consult the environment or warn.
+remain generic. If environment resolution itself fails, the response uses safe
+production output and ErrorHandler warns
+C<PAGI ErrorHandler could not resolve development mode: ...>, a configuration
+diagnostic. A normally complete native response does not consult the
+environment or warn.
 
 After response start, a thrown error or missing terminal body cannot be
-replaced safely. Compose reports it, sends no second response start, and
-rethrows the original value so the server can abort the incomplete stream.
+replaced safely. Compose sends no second response start and rethrows the
+original value so the server can abort the incomplete stream.
 The completion guard never replaces an inner exception.
 
 Install ordinary author middleware for the application's official error

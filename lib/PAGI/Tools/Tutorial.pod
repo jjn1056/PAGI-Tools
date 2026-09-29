@@ -1170,7 +1170,10 @@ The wrapper may inspect C<$error> to choose
 safe response fields; the Response factory does not consume the exception
 implicitly.
 C<on_error> is awaited reporting, not rendering; reporter failure is contained.
-Before response start, ErrorHandler reports and renders. After start it reports,
+It receives C<($error, $scope)>.
+Before response start, ErrorHandler reports and renders, then re-raises a
+server error (500 or above) so the server logs it; a handled 4xx exception is
+not re-raised. After start it reports,
 emits no replacement response, and rethrows the original exception so the
 server can abort the incomplete stream. Built-in bodies are byte-correct UTF-8
 and carry C<Cache-Control: no-store>.

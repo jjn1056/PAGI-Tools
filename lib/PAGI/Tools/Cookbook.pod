@@ -617,9 +617,10 @@ converts pre-start silence into its production-safe 500.
   )->to_app;
 
 For example, a database failed Future before response start is awaited by the
-author ErrorHandler, reported through C<on_error>, and rendered by
-C<server_error>. C<on_error> may return immediately or through a Future; its
-failure is contained. If the database fails after a streaming response has
+author ErrorHandler, reported through C<on_error>, rendered by
+C<server_error>, and then re-raised so the server logs it too (see
+L</Who reports an application error>). C<on_error> may return immediately or
+through a Future; its failure is contained. If the database fails after a streaming response has
 started, ErrorHandler awaits reporting, calls no renderer, emits no second
 start, and rethrows the original database exception so the server can abort.
 
@@ -646,6 +647,50 @@ applications; this custom ErrorHandler seam deliberately retains its concrete
 Response contract.
 
 A custom renderer remains authoritative for its own content and headers.
+
+=head3 Who reports an application error
+
+PAGI-Tools turns an exception into a response; it does not report it. The
+server does. Given
+
+  compose(routes => [
+      route('/boom'    => sub { die "database unreachable\n" }),
+      route('/missing' => sub { die My::NotFound->new }),  # status_code() is 404
+  ]);
+
+C</boom> gets a 500 page, and after that page is complete Compose re-raises
+the exception. PAGI::Server logs it through its own log, where C<log_level>
+governs it and a replaced C<logger> receives it:
+
+  PAGI application error (after response complete): database unreachable
+
+C</missing> gets a 404 page and nothing is logged: an exception that claims a
+4xx status is a handled outcome, not an error. The same holds for an
+ErrorHandler you install yourself. Behind a server other than PAGI::Server,
+the re-raised exception reaches whatever that server does with an application
+failure after a complete response.
+
+This keeps one place responsible for operational errors: the server, which
+the operator already configures. Add C<on_error> when you want B<more> than
+the server's log, such as an error tracker or paging:
+
+  middleware('ErrorHandler',
+      on_error => sub {
+          my ($error, $scope) = @_;
+          $tracker->capture($error,
+              path       => $scope->{path},
+              request_id => $scope->{request_id});  # with RequestId installed
+          return;
+      }),
+
+C<on_error> runs before the 500 is rendered; the server still logs the error
+afterwards. If ErrorHandlers are nested, an C<on_error> on each of them runs
+for the same error, because each one re-raises it.
+
+In tests, L<PAGI::Test::Client> plays the server's part: by default it warns
+C<exception after response completed: ...> for a re-raised error, or raises it
+with C<< raise_app_exceptions => 1 >>. A test that deliberately provokes a 500
+should capture that warning.
 
 =head2 Real Catch-All Routes
 
