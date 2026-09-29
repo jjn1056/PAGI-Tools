@@ -2,6 +2,14 @@
 
 0.002003 - UNRELEASED
 
+  [Www 0.6 required for SSE and WebSocket]
+  - BREAKING: PAGI::SSE and PAGI::WebSocket require the scope's
+    pagi.connection object, which PAGI::Spec::Www 0.6 requires every server
+    to provide; the constructor dies naming the server's advertised
+    spec_version when it is missing or incomplete. PAGI::Server provides it.
+    Tests that build scopes by hand add one with PAGI::Test::ConnectionState.
+    See UPGRADING.md.
+
   [Error reporting]
   - BREAKING: ErrorHandler, including Compose's built-in one, re-raises the
     original exception after the error response for a server error (status

@@ -546,8 +546,11 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                     await $protocol->close(1000, 'selected');
                 }
                 elsif ($case->{cache_at} eq 'incoming') {
-                    await $protocol->run;
-                    $received_from = $protocol->disconnect_reason;
+                    # SSE never reads receive on the Www 0.6 path, so which
+                    # receive it holds is unobservable; the client leaves.
+                    await $protocol->start;
+                    $protocol->scope->{'pagi.connection'}
+                        ->_mark_disconnected('client_closed');
                 }
                 elsif ($case->{kind} eq 'websocket') {
                     await $protocol->accept;
@@ -604,10 +607,6 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
             my $incoming = scope(
                 type => $case->{kind}, path => $path, raw_path => $path,
             );
-            # With a connection SSE learns its disconnect from the connection,
-            # never from receive, so the incoming SSE case's receive-callback
-            # check exists only without one.
-            delete $incoming->{'pagi.connection'} if $case->{id} eq 'incoming-sse';
             my $receive = sub {
                 return Future->done(
                     $case->{kind} eq 'websocket'
@@ -615,12 +614,7 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                         : { type => 'sse.disconnect', reason => 'selected' },
                 );
             };
-            my $wire_send = $incoming->{'pagi.connection'}
-                ? send_to($incoming, \@wire_events)
-                : sub {
-                    push @wire_events, $_[0];
-                    return Future->done;
-                };
+            my $wire_send = send_to($incoming, \@wire_events);
 
             if ($case->{cache_at} eq 'incoming') {
                 my $old_receive = sub {
@@ -659,7 +653,7 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                 'handler object sees the selected routing frame');
             is($received_from, 'selected',
                 'an incoming stale cache cannot retain the old receive callback')
-                if $case->{cache_at} eq 'incoming';
+                if $case->{cache_at} eq 'incoming' && $case->{kind} eq 'websocket';
             is(\@old_events, [],
                 'handler emits nothing through the inherited callback');
             my @expected = $case->{kind} eq 'websocket'

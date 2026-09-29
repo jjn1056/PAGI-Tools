@@ -163,4 +163,12 @@ subtest 'defaults for optional scope keys' => sub {
     is($ws->subprotocols, [], 'subprotocols defaults to empty array');
 };
 
+subtest 'a websocket scope without pagi.connection is refused' => sub {
+    like(
+        dies { PAGI::WebSocket->new({ type => 'websocket', headers => [] }, sub {}, sub {}) },
+        qr/^PAGI::WebSocket requires pagi\.connection capabilities /,
+        'PAGI::Spec::Www 0.6 requires the connection object',
+    );
+};
+
 done_testing;

@@ -23,6 +23,8 @@ sub new {
         unless $send && ref($send) eq 'CODE';
     croak "PAGI::SSE requires scope type 'sse', got '$scope->{type}'"
         unless ($scope->{type} // '') eq 'sse';
+    # PAGI::Spec::Www 0.6: servers provide pagi.connection on every scope.
+    PAGI::Common::require_connection($scope, 'PAGI::SSE');
 
     # Return existing SSE object if one was already created for this scope
     # This ensures consistent state (is_started, is_closed, callbacks) if
@@ -1042,7 +1044,9 @@ Creates a new SSE wrapper. Requires:
 
 =over 4
 
-=item * C<$scope> - PAGI scope hashref with C<< type => 'sse' >>
+=item * C<$scope> - PAGI scope hashref with C<< type => 'sse' >> and the
+C<pagi.connection> object that L<PAGI::Spec::Www> 0.6 requires servers to
+provide
 
 =item * C<$receive> - Async coderef returning Futures for events
 
@@ -1050,7 +1054,16 @@ Creates a new SSE wrapper. Requires:
 
 =back
 
-Dies if scope type is not 'sse'.
+Dies if scope type is not 'sse', or if C<pagi.connection> is missing or lacks
+a required method (C<PAGI::SSE requires pagi.connection capabilities ...>,
+naming the server's advertised C<spec_version>). A scope built by hand, as in
+tests, supplies one with L<PAGI::Test::ConnectionState>:
+
+    my $scope = {
+        type              => 'sse',
+        headers           => [],
+        'pagi.connection' => PAGI::Test::ConnectionState->new,
+    };
 
 B<Cached per scope (while referenced):> The SSE object is cached in
 C<< $scope->{'pagi.sse'} >>, so calling C<new()> again with the same scope

@@ -84,4 +84,12 @@ subtest 'header accessors' => sub {
     isa_ok($sse->headers, ['PAGI::Headers'], 'headers returns PAGI::Headers');
 };
 
+subtest 'an sse scope without pagi.connection is refused' => sub {
+    like(
+        dies { PAGI::SSE->new({ type => 'sse', headers => [] }, sub {}, sub {}) },
+        qr/^PAGI::SSE requires pagi\.connection capabilities /,
+        'PAGI::Spec::Www 0.6 requires the connection object',
+    );
+};
+
 done_testing;

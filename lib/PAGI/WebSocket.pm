@@ -23,6 +23,8 @@ sub new {
         unless $send && ref($send) eq 'CODE';
     croak "PAGI::WebSocket requires scope type 'websocket', got '$scope->{type}'"
         unless ($scope->{type} // '') eq 'websocket';
+    # PAGI::Spec::Www 0.6: servers provide pagi.connection on every scope.
+    PAGI::Common::require_connection($scope, 'PAGI::WebSocket');
 
     # Return existing WebSocket object if one was already created for this scope
     # This ensures consistent state (is_connected, is_closed, callbacks) if
@@ -914,7 +916,9 @@ Creates a new WebSocket wrapper. Requires:
 
 =over 4
 
-=item * C<$scope> - PAGI scope hashref with C<< type => 'websocket' >>
+=item * C<$scope> - PAGI scope hashref with C<< type => 'websocket' >> and the
+C<pagi.connection> object that L<PAGI::Spec::Www> 0.6 requires servers to
+provide
 
 =item * C<$receive> - Async coderef returning Futures for events
 
@@ -922,7 +926,16 @@ Creates a new WebSocket wrapper. Requires:
 
 =back
 
-Dies if scope type is not 'websocket'.
+Dies if scope type is not 'websocket', or if C<pagi.connection> is missing or
+lacks a required method (C<PAGI::WebSocket requires pagi.connection
+capabilities ...>, naming the server's advertised C<spec_version>). A scope
+built by hand, as in tests, supplies one with L<PAGI::Test::ConnectionState>:
+
+    my $scope = {
+        type              => 'websocket',
+        headers           => [],
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+    };
 
 B<Singleton pattern:> The WebSocket object is cached in C<< $scope->{'pagi.websocket'} >>.
 If you call C<new()> multiple times with the same scope, you get the same

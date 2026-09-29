@@ -191,15 +191,6 @@ subtest 'decline emits File directly with an ordinary HTTP file body' => sub {
     is($sent[1]{file}, $path, 'file body is preserved');
 };
 
-subtest 'streaming decline reports missing pagi.connection through its Future' => sub {
-    my $scope = sse_scope();
-    delete $scope->{'pagi.connection'};
-    my $sse = sse($scope, sub { Future->done });
-    like dies { $sse->decline(PAGI::Response::Stream->new(sub {}))->get },
-        qr/SSE decline.*pagi\.connection.*current connection contract required/,
-        'missing connection is diagnosed when awaiting the Future';
-};
-
 subtest 'one Response value can be reused for independent declines' => sub {
     my $response = PAGI::Response::Text->new('reused', status => 401);
     my @invocations;

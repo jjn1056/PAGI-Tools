@@ -26,16 +26,22 @@ immediately; each Future observer is cancellation-isolated.
 =head2 new
 
     my $conn = PAGI::Test::ConnectionState->new(
-        on_abort => sub {
+        websocket => 1,
+        on_abort  => sub {
             my ($conn, $detail) = @_;
             ...
         },
     );
 
-Creates a connection state object. C<on_abort> is an optional test-client
-transport teardown hook; L</abort> invokes it at most once, after recording
-the abnormal outcome required by
+Creates a connection state object. Pass a true C<websocket> for a
+C<websocket> scope, so that an ending without a peer Close reports close code
+1006 as L<PAGI::Spec::Www> requires; omit it for C<http> and C<sse> scopes.
+C<on_abort> is an optional test-client transport teardown hook; L</abort>
+invokes it at most once, after recording the abnormal outcome required by
 L<PAGI::Spec::Www/"Connection Object Interface">.
+
+A scope built by hand for L<PAGI::WebSocket> or L<PAGI::SSE> must carry one
+of these as C<pagi.connection>.
 
 =cut
 

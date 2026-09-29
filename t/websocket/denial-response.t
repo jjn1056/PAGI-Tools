@@ -197,15 +197,6 @@ subtest 'deny emits File directly with an ordinary HTTP file body' => sub {
     is($sent[1]{file}, $path, 'file body is preserved');
 };
 
-subtest 'streaming denial reports missing pagi.connection through its Future' => sub {
-    my $scope = ws_scope();
-    delete $scope->{'pagi.connection'};
-    my $ws = websocket($scope, sub { Future->done });
-    like dies { $ws->deny(PAGI::Response::Stream->new(sub {}))->get },
-        qr/WebSocket deny.*pagi\.connection.*current connection contract required/,
-        'missing connection is diagnosed when awaiting the Future';
-};
-
 subtest 'one Response value can be reused for independent denials' => sub {
     my $response = PAGI::Response::Text->new('reused', status => 401);
     my @invocations;

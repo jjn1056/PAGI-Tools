@@ -11,6 +11,49 @@ Each After example uses behavior implemented on this branch for that release.
 Examples use ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Breaking: `PAGI::SSE` and `PAGI::WebSocket` require `pagi.connection`
+
+PAGI::Spec::Www 0.6 requires every server to put a `pagi.connection` object in
+each `http`, `websocket` and `sse` scope; PAGI::Server does. `PAGI::SSE` and
+`PAGI::WebSocket` now require it and die without it:
+
+```text
+PAGI::WebSocket requires pagi.connection capabilities response_started, ...
+(server reports spec_version unspecified; current connection contract required)
+```
+
+Applications served by PAGI::Server need no change. Tests that build scopes by
+hand add a connection:
+
+```perl
+# Before
+my $scope = { type => 'websocket', headers => [] };
+
+# After
+use PAGI::Test::ConnectionState;
+my $scope = {
+    type              => 'websocket',
+    headers           => [],
+    'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+};
+```
+
+Terminal state now comes from that connection, as it does under a server, so
+tests that faked it need to drive the connection instead:
+
+- A client disconnect is recorded on the connection before the application
+  sees it: `$conn->_mark_disconnected('client_closed')` for an abnormal end,
+  or, for a WebSocket peer Close, `$conn->_set_peer_close($code, $reason)`
+  followed by `$conn->_mark_complete`. Feeding a `*.disconnect` event through
+  `receive` alone no longer closes the helper.
+- A local `close()` starts closing (state `closing`); `on_close` runs when the
+  connection ends. SSE `close()` also waits for that end, so the test's send
+  must record `sse.close` on the connection (`$conn->_mark_complete`).
+- A dying `on_message` (WebSocket `run`) or `each`/`every` callback (SSE) is
+  re-raised after `on_error` runs.
+
+`PAGI::Test::Client` builds its own connection and needs no change.
+
 ## Breaking: ErrorHandler re-raises server errors
 
 ErrorHandler — Compose's built-in one and any you install — still renders the
