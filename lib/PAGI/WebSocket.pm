@@ -865,18 +865,14 @@ provide
 
 =back
 
-Dies if scope type is not 'websocket'; if C<< $scope->{pagi}{spec_version} >>
-is below 0.6, an omitted one meaning 0.1 (C<PAGI::WebSocket requires
-PAGI::Spec::Www 0.6 or later; server reports spec_version ...>); or if
-C<pagi.connection> is missing or lacks a required method (C<PAGI::WebSocket
-requires pagi.connection capabilities ...>). A scope built by hand, as in
-tests, advertises the version and supplies a connection with
-L<PAGI::Test::ConnectionState>:
+Dies if scope type is not 'websocket', or if C<pagi.connection> is missing or
+lacks a required method (C<PAGI::WebSocket requires pagi.connection
+capabilities ...>, naming the server's advertised C<spec_version>). A scope
+built by hand, as in tests, supplies one with L<PAGI::Test::ConnectionState>:
 
     my $scope = {
         type              => 'websocket',
         headers           => [],
-        pagi              => { spec_version => '0.6' },
         'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
     };
 

@@ -106,9 +106,9 @@ subtest 'explicit descriptions run across Route Mount Router and protocols' => s
 
     run_scope($app, scope(path => '/api/item', raw_path => '/api/item'));
     run_connected($app, scope(type => 'websocket', path => '/socket', raw_path => '/socket',
-        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1)));
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1)));
     run_connected($app, scope(type => 'sse', path => '/events', raw_path => '/events',
-        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new));
+        'pagi.connection' => PAGI::Test::ConnectionState->new));
     is(\@trace, [
         'router:http', 'mount:http', 'route:http', 'handler:http',
         'router:websocket', 'websocket:websocket', 'handler:websocket',

@@ -163,16 +163,11 @@ subtest 'defaults for optional scope keys' => sub {
     is($ws->subprotocols, [], 'subprotocols defaults to empty array');
 };
 
-subtest 'a websocket scope below Www 0.6 or without pagi.connection is refused' => sub {
+subtest 'a websocket scope without pagi.connection is refused' => sub {
     like(
         dies { PAGI::WebSocket->new({ type => 'websocket', headers => [] }, sub {}, sub {}) },
-        qr/^PAGI::WebSocket requires PAGI::Spec::Www 0\.6 or later; server reports spec_version none \(0\.1\)/,
-        'an omitted spec_version means 0.1',
-    );
-    like(
-        dies { PAGI::WebSocket->new({ type => 'websocket', headers => [], pagi => { spec_version => '0.6' } }, sub {}, sub {}) },
         qr/^PAGI::WebSocket requires pagi\.connection capabilities /,
-        'a 0.6 scope must carry the connection object',
+        'PAGI::Spec::Www 0.6 requires the connection object',
     );
 };
 

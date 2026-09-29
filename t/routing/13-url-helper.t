@@ -67,7 +67,7 @@ sub _scope {
     return {
         # A server gives every WebSocket and SSE scope its connection.
         ($type eq 'websocket' || $type eq 'sse'
-            ? (pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket'))
+            ? ('pagi.connection' => PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket'))
             : ()),
         type           => $type,
         method         => 'GET',

@@ -31,7 +31,7 @@ sub ws_scope {
         extensions => {},
         state      => { shared => 'state' },
         marker     => ['nested'],
-        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
         %changes,
     };
 }
@@ -380,7 +380,7 @@ subtest 'disconnect during a backpressured ordinary body settles normally' => su
         my ($writer) = @_;
         await $writer->write('pending');
     }, status => 403);
-    my $ws = websocket(ws_scope(pagi => { spec_version => '0.6' }, 'pagi.connection' => $connection), sub {
+    my $ws = websocket(ws_scope('pagi.connection' => $connection), sub {
         push @sent, $_[0];
         return Future->done if $_[0]{type} eq 'http.response.start';
         $body_send = Future->new;

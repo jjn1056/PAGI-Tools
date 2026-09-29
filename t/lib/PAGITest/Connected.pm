@@ -1,8 +1,7 @@
 package PAGITest::Connected;
 
-# Scopes for PAGI::WebSocket and PAGI::SSE unit tests. Every scope advertises
-# spec_version 0.6 and carries pagi.connection, as PAGI::Spec::Www requires of
-# a 0.6 server. A receive built by
+# Scopes for PAGI::WebSocket and PAGI::SSE unit tests. Every scope carries
+# pagi.connection, as PAGI::Spec::Www requires of a server. A receive built by
 # receive_from records a terminal event on that connection before handing it
 # out, in the order a server does, so helpers read the same terminal facts
 # they would under PAGI::Server. The mapping follows PAGI::Test::WebSocket and
@@ -32,7 +31,6 @@ sub ws_scope {
     return {
         type    => 'websocket',
         headers => [],
-        pagi    => { spec_version => '0.6' },
         %extra,
         'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
     };
@@ -43,7 +41,6 @@ sub sse_scope {
     return {
         type    => 'sse',
         headers => [],
-        pagi    => { spec_version => '0.6' },
         %extra,
         'pagi.connection' => PAGI::Test::ConnectionState->new,
     };

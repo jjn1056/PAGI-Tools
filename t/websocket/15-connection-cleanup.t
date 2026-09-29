@@ -15,7 +15,7 @@ for my $kind (qw(websocket sse)) {
     subtest "$kind terminal facts precede retained ordered cleanup" => sub {
         my $conn = PAGI::Test::ConnectionState->new(websocket => $kind eq 'websocket');
         my @sent;
-        my $scope = {type => $kind, pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn};
+        my $scope = {type => $kind, 'pagi.connection' => $conn};
         my $helper = $class->new($scope, sub { die 'competing receive' }, sub {push @sent, $_[0]; Future->done});
         my $gate = Future->new;
         my @calls;
@@ -63,7 +63,7 @@ for my $kind (qw(websocket sse)) {
     };
     subtest "$kind constructor terminal and send settlement cannot resurrect" => sub {
         my $conn = PAGI::Test::ConnectionState->new(websocket => $kind eq 'websocket');
-        my $h = $class->new({type => $kind, pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
+        my $h = $class->new({type => $kind, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
             local $conn->{_defer_notifications} = 1;
             $conn->_mark_disconnected('peer_closed', 'gone');
             Future->done;
@@ -74,7 +74,7 @@ for my $kind (qw(websocket sse)) {
         is($h->close_reason, undef, 'no peer text') if $kind eq 'websocket';
         $conn->_deliver_notifications;
         undef $h;
-        $h = $class->new({type => $kind, pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {die 'send'});
+        $h = $class->new({type => $kind, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {die 'send'});
         ok($h->is_closed, 'constructor observes terminal connection');
         like(dies {$h->on_close(sub {})}, qr/on_close.*cleanup|cleanup.*on_close/, 'constructor-time end closes registration');
     };
@@ -83,7 +83,7 @@ subtest 'WebSocket concurrent close joins send and rejects every data form while
     my $conn = PAGI::Test::ConnectionState->new(websocket => 1);
     my $pending = Future->new;
     my @sent;
-    my $ws = PAGI::WebSocket->new({type => 'websocket', pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
+    my $ws = PAGI::WebSocket->new({type => 'websocket', 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
         push @sent, $_[0]{type};
         $_[0]{type} eq 'websocket.close' ? $pending : Future->done;
     });
@@ -115,7 +115,7 @@ subtest 'SSE first close joins cleanup but calls after cleanup starts settle wit
     my $gate = Future->new;
     my ($hook_close, $calls);
     my @sent;
-    my $sse = PAGI::SSE->new({type => 'sse', pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {push @sent, $_[0]{type}; Future->done});
+    my $sse = PAGI::SSE->new({type => 'sse', 'pagi.connection' => $conn}, sub {die 'receive'}, sub {push @sent, $_[0]{type}; Future->done});
     $sse->on_close(sub { ++$calls; $hook_close = $sse->close; return $gate });
     $sse->start->get;
     my $first = $sse->close;
@@ -138,7 +138,7 @@ subtest 'SSE first close joins cleanup but calls after cleanup starts settle wit
 subtest 'SSE run waits for terminal cleanup without consuming receive' => sub {
     my $conn = PAGI::Test::ConnectionState->new;
     my $gate = Future->new;
-    my $sse = PAGI::SSE->new({type => 'sse', pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {Future->done});
+    my $sse = PAGI::SSE->new({type => 'sse', 'pagi.connection' => $conn}, sub {die 'receive'}, sub {Future->done});
     my @args;
     $sse->on_close(sub { @args = @_; $gate });
     my $run = $sse->run;
@@ -153,7 +153,7 @@ subtest 'connection-backed receive and handler errors stay errors until server e
     for my $kind (qw(websocket sse)) {
         my $conn = PAGI::Test::ConnectionState->new(websocket => $kind eq 'websocket');
         my $class = $kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE';
-        my $h = $class->new({type => $kind, pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {Future->fail("receive failed\n")}, sub {Future->done});
+        my $h = $class->new({type => $kind, 'pagi.connection' => $conn}, sub {Future->fail("receive failed\n")}, sub {Future->done});
         my $calls = 0;
         $h->on_close(sub {++$calls});
         if ($kind eq 'websocket') {
@@ -173,7 +173,7 @@ for my $kind (qw(websocket sse)) {
         my $body = Future->new;
         my @events;
         my $class = $kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE';
-        my $h = $class->new({type => $kind, pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
+        my $h = $class->new({type => $kind, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
             $conn->_mark_response_started if $_[0]{type} eq 'http.response.start';
             push @events, $_[0]{type};
             $_[0]{type} eq 'http.response.body' ? $body : Future->done;
@@ -203,7 +203,7 @@ for my $kind (qw(websocket sse)) {
 subtest 'WebSocket message callback error remains an application failure' => sub {
     my $conn = PAGI::Test::ConnectionState->new(websocket => 1);
     my $calls = 0;
-    my $ws = PAGI::WebSocket->new({type => 'websocket', pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {
+    my $ws = PAGI::WebSocket->new({type => 'websocket', 'pagi.connection' => $conn}, sub {
         return ++$calls == 1 ? Future->done({type => 'websocket.receive', text => 'hello'}) : Future->new;
     }, sub {Future->done});
     my ($cleanup, $errors) = (0, 0);
@@ -221,7 +221,7 @@ subtest 'WebSocket message callback error remains an application failure' => sub
 subtest 'receive sees authoritative metadata before deferred terminal notification' => sub {
     my $conn = PAGI::Test::ConnectionState->new(websocket => 1);
     my $calls = 0;
-    my $ws = PAGI::WebSocket->new({type => 'websocket', pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {
+    my $ws = PAGI::WebSocket->new({type => 'websocket', 'pagi.connection' => $conn}, sub {
         local $conn->{_defer_notifications} = 1;
         $conn->_set_peer_close(1001, 'peer text');
         $conn->_mark_disconnected('close_incomplete', 'reply write failed');
@@ -254,7 +254,7 @@ for my $case (
         my $body = Future->new;
         my @events;
         my $class = $kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE';
-        my $helper = $class->new({type => $kind, pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
+        my $helper = $class->new({type => $kind, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
             $conn->_mark_response_started if $_[0]{type} eq 'http.response.start';
             push @events, $_[0]{type};
             return $_[0]{type} eq 'http.response.body' ? $body : Future->done;

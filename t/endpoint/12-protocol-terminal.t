@@ -42,7 +42,7 @@ for my $kind (qw(websocket sse)) {
                 my $endpoint = ($kind eq 'websocket' ? 'T::TerminalWS' : 'T::TerminalSSE')->new(handler => $handler);
                 my $app = $boundary eq 'endpoint' ? $endpoint->to_app
                     : router(routes => [$kind eq 'websocket' ? websocket('/' => $handler) : sse('/' => $handler)])->to_app;
-                my $future = $app->({type => $kind, path => '/', pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
+                my $future = $app->({type => $kind, path => '/', 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
                     my ($e) = @_;
                     push @events, $e->{type};
                     # SSE callback delivery is an explicit scheduling boundary
@@ -68,7 +68,7 @@ for my $kind (qw(websocket sse)) {
             connect => sub { $conn->_mark_disconnected('peer_closed', 'during connect'); return Future->done },
             disconnect => sub { push @calls, [@_]; $gate },
         );
-        my $f = $endpoint->to_app->({type => $kind, pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub { die 'receive' }, sub {die 'send'});
+        my $f = $endpoint->to_app->({type => $kind, 'pagi.connection' => $conn}, sub { die 'receive' }, sub {die 'send'});
         is(scalar @calls, 1, 'cleanup observed end during connect');
         my $h = $calls[0][0];
         $h->on_error(sub {}); # object remains usable while cleanup is parked

@@ -24,7 +24,7 @@ sub scope {
         query_string => '',
         http_version => '1.1',
         ($type eq 'websocket' || $type eq 'sse'
-            ? (pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket'))
+            ? ('pagi.connection' => PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket'))
             : ()),
     };
 }
@@ -335,7 +335,7 @@ subtest 'materialization gives policy a shallow real-protocol metadata view with
         headers                => $headers,
         state                  => $nested,
         'pagi.request.headers' => $protocol_cache,
-        pagi => { spec_version => '0.6' },      'pagi.connection'      => PAGI::Test::ConnectionState->new(websocket => 1),
+        'pagi.connection'      => PAGI::Test::ConnectionState->new(websocket => 1),
     };
     my @source_keys = sort keys %$source;
 
@@ -374,7 +374,7 @@ subtest 'materialization gives policy a shallow real-protocol metadata view with
         type    => 'sse',
         headers => [],
         state   => $nested,
-        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new,
+        'pagi.connection' => PAGI::Test::ConnectionState->new,
     };
     $application->response_for($methodless);
     my $methodless_metadata = $Local::CountingPages::RESPONSE_SCOPES[-1];

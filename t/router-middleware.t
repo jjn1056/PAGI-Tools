@@ -354,9 +354,9 @@ subtest 'route middleware is uniform for normal WebSocket and SSE handlers' => s
     my $app = $routing->to_app;
 
     request($app, type => 'websocket', method => undef, path => '/ws',
-        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1))->get;
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1))->get;
     request($app, type => 'sse', method => undef, path => '/events',
-        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new)->get;
+        'pagi.connection' => PAGI::Test::ConnectionState->new)->get;
     is(\@trace, [
         'protocol before', 'handler PAGI::WebSocket', 'protocol after',
         'protocol before', 'handler PAGI::SSE', 'protocol after',

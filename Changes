@@ -11,12 +11,11 @@
     UPGRADING.md.
 
   [Www 0.6 required for SSE and WebSocket]
-  - BREAKING: PAGI::SSE and PAGI::WebSocket require a PAGI::Spec::Www 0.6
-    scope: $scope->{pagi}{spec_version} of 0.6 or later (omitted means 0.1,
-    per the specification) and a complete pagi.connection object. The
-    constructor dies naming the server's advertised spec_version otherwise.
-    PAGI::Server provides both on websocket and sse scopes from 0.002014;
-    upgrade it with this release.
+  - BREAKING: PAGI::SSE and PAGI::WebSocket require the scope's
+    pagi.connection object, which PAGI::Spec::Www 0.6 requires every server
+    to provide; the constructor dies naming the server's advertised
+    spec_version when it is missing or incomplete. PAGI::Server provides it
+    on websocket and sse scopes from 0.002014; upgrade it with this release.
     Tests that build scopes by hand add one with PAGI::Test::ConnectionState.
     See UPGRADING.md.
 

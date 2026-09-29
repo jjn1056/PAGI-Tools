@@ -247,7 +247,7 @@ subtest 'parked refusal producers retain existing terminal cleanup through Authe
             });
             my $running = $app->({
                 type => $type, method => 'GET', headers => [], path => '/',
-                pagi => { spec_version => '0.6' }, 'pagi.connection' => $connection,
+                'pagi.connection' => $connection,
             }, sub {
                 return Future->done($type eq 'websocket'
                     ? { type => 'websocket.connect' }

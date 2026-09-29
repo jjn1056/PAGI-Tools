@@ -262,23 +262,22 @@ for my $kind (qw(websocket sse)) {
             PAGI::Response::File->new('/unused/refusal-file', status => 503),
             PAGI::Response::Stream->new(sub { ++$calls }, status => 503),
         );
-        subtest 'a pre-0.6 scope is refused at construction' => sub {
+        subtest 'a scope without pagi.connection is refused at construction' => sub {
             my $scope = {type => $kind, pagi => {spec_version => '0.2'}};
             like(dies {
                 ($kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE')->new($scope, sub { Future->new }, sub { ++$calls; Future->done });
-            }, qr/requires PAGI::Spec::Www 0\.6 or later; server reports spec_version 0\.2/, 'the diagnostic names the advertised version');
+            }, qr/pagi\.connection.*0\.2/, 'the diagnostic names the advertised version');
         };
         is($calls, 0, 'no factories handlers apps or sends invoked');
         is($targets[5]{calls}, 0, 'no to_app conversion');
         for my $target (@targets) {
             for my $missing (qw(response_started is_connected on_end disconnect_reason disconnect_detail), ($kind eq 'websocket' ? qw(close_code close_reason) : ())) {
                 my $connection = bless {missing => $missing}, 'T::MissingCapability';
-                # A 0.6 claim is not proof: the capabilities are still checked.
-                my $scope = {type => $kind, pagi => {spec_version => '0.6'}, 'pagi.connection' => $connection};
+                my $scope = {type => $kind, pagi => {spec_version => '0.2'}, 'pagi.connection' => $connection};
                 like(dies {
                     my $helper = ($kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE')->new($scope, sub { Future->new }, sub { ++$calls });
                     $helper->$method($target)->get;
-                }, qr/pagi\.connection.*$missing.*0\.6/, "missing $missing diagnosed");
+                }, qr/pagi\.connection.*$missing.*0\.2/, "missing $missing diagnosed");
             }
         }
         is($calls, 0, 'invalid connection prevents all user execution');

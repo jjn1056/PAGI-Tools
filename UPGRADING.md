@@ -34,24 +34,21 @@ my $data    = await $request->json;          # dies on invalid JSON
 Body-size limits come from the server (`max_body_size` in PAGI::Server) and
 from `PAGI::Request`'s own read limits.
 
-## Breaking: `PAGI::SSE` and `PAGI::WebSocket` require a Www 0.6 scope
+## Breaking: `PAGI::SSE` and `PAGI::WebSocket` require `pagi.connection`
 
-PAGI::Spec::Www 0.6 lets frameworks rely on a `pagi.connection` object on
-every scope that advertises `$scope->{pagi}{spec_version}` 0.6 or later (an
-omitted `spec_version` means 0.1). `PAGI::SSE` and `PAGI::WebSocket` now
-require both the version and a complete connection, and die otherwise.
-PAGI::Server provides them on websocket and sse scopes from **0.002014**;
-earlier releases do not, so upgrade PAGI::Server to 0.002014 or later together
-with this release:
+PAGI::Spec::Www 0.6 requires every server to put a `pagi.connection` object in
+each `http`, `websocket` and `sse` scope. PAGI::Server does so on websocket
+and sse scopes from **0.002014**; earlier releases do not. `PAGI::SSE` and
+`PAGI::WebSocket` now require it and die without it, so upgrade PAGI::Server
+to 0.002014 or later together with this release:
 
 ```text
-PAGI::WebSocket requires PAGI::Spec::Www 0.6 or later; server reports spec_version 0.5
 PAGI::WebSocket requires pagi.connection capabilities response_started, ...
-(server reports spec_version 0.6; current connection contract required)
+(server reports spec_version unspecified; current connection contract required)
 ```
 
 Applications served by PAGI::Server 0.002014 or later need no change. Tests
-that build scopes by hand advertise the version and add a connection:
+that build scopes by hand add a connection:
 
 ```perl
 # Before
@@ -62,7 +59,6 @@ use PAGI::Test::ConnectionState;
 my $scope = {
     type              => 'websocket',
     headers           => [],
-    pagi              => { spec_version => '0.6' },
     'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
 };
 ```
