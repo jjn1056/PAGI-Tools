@@ -421,6 +421,9 @@ sub close {
     return $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
         if $self->{_close_send};
     return Future->done if $self->is_closed;
+    # Before accept the scope is an HTTP exchange: refusing it is deny's job.
+    croak 'WebSocket close is only valid after accept; use deny'
+        if $self->{_state} eq 'connecting';
     croak "WebSocket close requires an active accepted/started connection"
         unless $self->is_connected;
     $self->{_state} = 'closing';
@@ -1086,6 +1089,10 @@ one close-send operation and return when that send settles. They do not await
 the peer's Close or terminal cleanup. State is C<closing> until the connection
 records its terminal outcome; further data sends are rejected. Cancelling a
 close observer does not cancel the server's send.
+
+Before C<accept>, the scope is still an HTTP exchange, so C<close> croaks
+C<WebSocket close is only valid after accept; use deny> and sends nothing;
+refuse the handshake with L</deny>.
 
 The router and endpoint C<to_app> boundary send a missing close on successful
 handler return only for an accepted, still-active socket. Handler exceptions

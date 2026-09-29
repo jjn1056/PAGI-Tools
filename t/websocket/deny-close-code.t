@@ -6,6 +6,7 @@ use PAGI::WebSocket;
 use PAGI::Response::Text;
 use lib 't/lib';
 use PAGITest::RefusalHarness;
+use PAGITest::Connected qw(ws_scope);
 
 # An ordinary HTTP denial sends a response, not a WebSocket close frame. Once
 # complete, its local metadata reports 1006 because no peer Close was received.
@@ -28,7 +29,7 @@ subtest 'deny() with denial-response support: closed with local no-peer metadata
 
 subtest 'close() before accept croaks and sends nothing' => sub {
     my ($send, $sent) = recorder();
-    my $scope = { type => 'websocket', path => '/ws', headers => [] };   # no extension
+    my $scope = ws_scope(path => '/ws');
     my $ws = PAGI::WebSocket->new($scope, sub { Future->done }, $send);
 
     like dies { $ws->close(1008, 'policy')->get },
