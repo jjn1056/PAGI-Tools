@@ -11,14 +11,14 @@ use Scalar::Util qw(refaddr weaken);
 use Time::HiRes qw(time);
 use FindBin;
 use lib "$FindBin::Bin/../../lib";
+use lib "$FindBin::Bin/../lib";
+use PAGITest::CurrentServer qw(current_server_unavailable);
 
 BEGIN {
-    eval { require PAGI::Server; require PAGI::Server::Connection;
-        require PAGI::Server::ConnectionState;
-        require Future::IO::Impl::IOAsync; 1 }
+    my $server_unavailable = current_server_unavailable();
+    plan skip_all => $server_unavailable if $server_unavailable;
+    eval { require PAGI::Server::Connection; require Future::IO::Impl::IOAsync; 1 }
         or plan skip_all => "optional real-server dependencies unavailable: $@";
-    PAGI::Server::ConnectionState->can('on_end')
-        or plan skip_all => 'server lacks Www terminal connection API';
 }
 use PAGI::Server::Protocol::HTTP1;
 use PAGI::WebSocket;

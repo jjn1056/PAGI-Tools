@@ -4,6 +4,8 @@ use Test2::V0;
 use IO::Async::Loop;
 use FindBin;
 use lib "$FindBin::Bin/../../lib";
+use lib "$FindBin::Bin/../lib";
+use PAGITest::CurrentServer qw(current_server_unavailable);
 
 # Cross-repo smoke test: a PAGI-Tools SSE route must drive the real PAGI::Server
 # to return one concrete Response through PAGI::SSE->decline, instead of
@@ -11,19 +13,14 @@ use lib "$FindBin::Bin/../../lib";
 # the whole chain (Response emits HTTP events on the original SSE scope ->
 # server returns a real HTTP response -> client reads a 404).
 #
-# Skips unless PAGI::Server is on @INC, so PAGI-Tools' standalone suite stays
-# independent. Run it with:
+# Skips unless the current PAGI::Server release line is on @INC, so
+# PAGI-Tools' standalone suite stays independent. Run it with:
 #   prove -I <PAGI-Server>/lib -lr t/integration/sse-decline-end-to-end.t
 #
 eval { require Future::IO::Impl::IOAsync; 1 }
     or plan skip_all => 'Future::IO::Impl::IOAsync required for SSE tests';
-eval { require PAGI::Server; 1 }
-    or plan skip_all => 'PAGI::Server not on @INC; run with -I <PAGI-Server>/lib';
-eval { require PAGI::Server::ConnectionState; 1 }
-    or plan skip_all => 'PAGI::Server connection-state API unavailable';
-plan skip_all => 'PAGI::Server lacks the Www 0.6 terminal connection API'
-    unless PAGI::Server::ConnectionState->can('on_end')
-        && PAGI::Server::ConnectionState->can('end_future');
+my $server_unavailable = current_server_unavailable();
+plan skip_all => $server_unavailable if $server_unavailable;
 plan skip_all => "Server integration tests not supported on Windows" if $^O eq 'MSWin32';
 
 use PAGI::Endpoint::SSE;
