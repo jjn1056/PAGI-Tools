@@ -52,7 +52,9 @@ sub new {
         # owns asynchronous cleanup until all registered hooks have settled.
         $connection->on_end(sub {
             $self->_refresh_connection;
-            $self->_run_close_callbacks;
+            # Nobody awaits cleanup here, so keep its Future until it settles
+            # rather than dropping it while a hook is still suspended.
+            $self->_run_close_callbacks->retain;
             return;
         });
         $self->_refresh_connection;
