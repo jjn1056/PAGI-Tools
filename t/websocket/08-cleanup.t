@@ -6,18 +6,18 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::WebSocket;
+use PAGITest::Connected qw(ws_scope receive_from);
 
 subtest 'on_close callback runs on disconnect' => sub {
     my @events = (
         { type => 'websocket.connect' },
         { type => 'websocket.disconnect', code => 1000, reason => 'Bye' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -43,11 +43,9 @@ subtest 'on_close runs after each_* loops' => sub {
         { type => 'websocket.receive', text => 'msg' },
         { type => 'websocket.disconnect', code => 1001 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -64,11 +62,9 @@ subtest 'multiple on_close callbacks run in order' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -82,15 +78,13 @@ subtest 'multiple on_close callbacks run in order' => sub {
     is(\@order, [1, 2, 3], 'callbacks run in registration order');
 };
 
-subtest 'on_close runs on explicit close()' => sub {
+subtest 'on_close runs once an explicit close() completes' => sub {
     my @events = (
         { type => 'websocket.connect' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -98,8 +92,14 @@ subtest 'on_close runs on explicit close()' => sub {
     $ws->on_close(async sub { $cleanup_ran = 1 });
 
     $ws->close(1000, 'Goodbye')->get;
+    ok(!$cleanup_ran, 'a local close only starts the closing handshake');
 
-    ok($cleanup_ran, 'on_close ran on explicit close');
+    # The peer answers the Close and the server completes the connection.
+    my $connection = $scope->{'pagi.connection'};
+    $connection->_set_peer_close(1000, 'Goodbye');
+    $connection->_mark_complete;
+
+    ok($cleanup_ran, 'on_close ran when the connection ended');
 };
 
 subtest 'on_close only runs once' => sub {
@@ -107,11 +107,9 @@ subtest 'on_close only runs once' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -130,11 +128,9 @@ subtest 'on_close exception does not prevent other callbacks' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -158,11 +154,9 @@ subtest 'on_close works with sync callbacks' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.disconnect', code => 1000, reason => 'Normal' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -190,10 +184,9 @@ subtest 'async on_error callback is awaited' => sub {
         { type => 'websocket.receive', text => 'hello' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send    = sub { Future->done };
-    my $scope   = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
 
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
@@ -202,24 +195,19 @@ subtest 'async on_error callback is awaited' => sub {
     $ws->on_error(async sub { push @fired, 'async-error' });
     $ws->on_message(sub { die "message handler error\n" });
 
-    $ws->run->get;
-
+    is dies { $ws->run->get }, "message handler error\n",
+        'run() re-raises the message error after on_error';
     is \@fired, ['async-error'], 'async on_error callback was awaited';
 };
 
 subtest 'with no on_error, a message callback error is re-raised, not warned' => sub {
-    require PAGI::Test::ConnectionState;
     my @events = (
         { type => 'websocket.connect' },
         { type => 'websocket.receive', text => '{not json' },
     );
-    my $idx = 0;
-    my $scope = {
-        type => 'websocket', headers => [],
-        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
-    };
+    my $scope = ws_scope();
     my $ws = PAGI::WebSocket->new(
-        $scope, sub { Future->done($events[$idx++]) }, sub { Future->done },
+        $scope, receive_from($scope, @events), sub { Future->done },
     );
     $ws->accept->get;
     $ws->on_message(sub { die "bad json\n" });
@@ -239,10 +227,9 @@ subtest 'async on_error exception does not prevent other callbacks' => sub {
         { type => 'websocket.receive', text => 'hello' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send    = sub { Future->done };
-    my $scope   = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
 
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
@@ -256,8 +243,8 @@ subtest 'async on_error exception does not prevent other callbacks' => sub {
     $ws->on_error(sub { push @fired, 'second' });
     $ws->on_message(sub { die "message error\n" });
 
-    $ws->run->get;
-
+    is dies { $ws->run->get }, "message error\n",
+        'run() re-raises the message error after on_error';
     is \@fired, ['second'], 'second on_error ran despite async first dying';
     ok scalar @warnings, 'async exception in on_error callback was warned';
     like $warnings[0], qr/async error handler exploded/, 'warning contains error text';
@@ -268,10 +255,9 @@ subtest 'callback arrays cleared after close (breaks cycles)' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send    = sub { Future->done };
-    my $scope   = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
 
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
@@ -293,10 +279,9 @@ subtest 'WebSocket GCd after close when callback captured object' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx   = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send    = sub { Future->done };
-    my $scope   = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
 
     my $weak;
     {
