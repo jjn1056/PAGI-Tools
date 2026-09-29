@@ -2,6 +2,14 @@
 
 0.002003 - UNRELEASED
 
+  [FormBody and JSONBody removed]
+  - BREAKING: Removed PAGI::Middleware::FormBody and
+    PAGI::Middleware::JSONBody. Body parsing belongs to PAGI::Request
+    (form_params, json), which works on the raw protocol; the middleware
+    duplicated it with different parsers (URL-encoded only, a different shape
+    for repeated keys) and nothing read the scope keys they wrote. See
+    UPGRADING.md.
+
   [Www 0.6 required for SSE and WebSocket]
   - BREAKING: PAGI::SSE and PAGI::WebSocket require a PAGI::Spec::Www 0.6
     scope: $scope->{pagi}{spec_version} of 0.6 or later (omitted means 0.1,

@@ -11,6 +11,29 @@ Each After example uses behavior implemented on this branch for that release.
 Examples use ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Breaking: `PAGI::Middleware::FormBody` and `PAGI::Middleware::JSONBody` are removed
+
+Body parsing belongs to `PAGI::Request`, which works on the raw PAGI protocol
+without any other part of PAGI-Tools. The middleware buffered the whole body
+into `$scope->{'pagi.parsed_body'}` / `'pagi.raw_body'` with its own parsers:
+URL-encoded only (no multipart), and a repeated key became a scalar or an
+array reference, unlike `form_params`.
+
+```perl
+# Before
+enable 'FormBody';          # or 'JSONBody'
+my $data = $scope->{'pagi.parsed_body'};
+
+# After
+use PAGI::Request;
+my $request = PAGI::Request->new($scope, $receive);
+my $form    = await $request->form_params;   # Hash::MultiValue; also multipart
+my $data    = await $request->json;          # dies on invalid JSON
+```
+
+Body-size limits come from the server (`max_body_size` in PAGI::Server) and
+from `PAGI::Request`'s own read limits.
+
 ## Breaking: `PAGI::SSE` and `PAGI::WebSocket` require a Www 0.6 scope
 
 PAGI::Spec::Www 0.6 lets frameworks rely on a `pagi.connection` object on
@@ -1743,8 +1766,8 @@ and cache fields may change through consistent negotiation and encoding.
 | `PAGI::Middleware::Auth::Bearer` (removed in Auth v1) | former default 401 | superseded by application-owned responses after generic Authentication |
 | `PAGI::Middleware::CSRF` | enforced default 403 | validation and `enforce => 'app'` application responses |
 | `PAGI::Middleware::ContentNegotiation` | strict-mode 406 | supported-type detail and existing scope metadata |
-| `PAGI::Middleware::FormBody` | body-limit 413 | limit and request consumption remain local |
-| `PAGI::Middleware::JSONBody` | body-limit 413; invalid-JSON 400 | parsing decision remains local; decoder exception text is no longer exposed |
+| `PAGI::Middleware::FormBody` (removed) | former body-limit 413 | superseded by `PAGI::Request` body parsing |
+| `PAGI::Middleware::JSONBody` (removed) | former body-limit 413; invalid-JSON 400 | superseded by `PAGI::Request` body parsing |
 | `PAGI::Middleware::Maintenance` | built-in 503 | `retry_after` and bypass/enabled decisions; explicit `body` or `content_type` keeps the literal branch |
 | `PAGI::Middleware::RateLimit` | default 429 | `retry_after` and `X-RateLimit-*` fields |
 | `PAGI::Middleware::ReverseProxy` | forwarded-authority 400 | trust and normalization decisions remain local |
@@ -1755,8 +1778,7 @@ and cache fields may change through consistent negotiation and encoding.
 
 File's automatic 405 now includes its required `Allow: GET, HEAD`. File and
 Static invalid-range responses now include `Content-Range: bytes */N` when the
-selected representation length is known. JSONBody's stable client detail is
-`The request body is not valid JSON.` rather than the raw decoder diagnostic.
+selected representation length is known.
 
 ContentNegotiation now uses `PAGI::Request::Negotiate` for the same effective
 quality rules as Pages. An exact `q=0` exclusion overrides less-specific

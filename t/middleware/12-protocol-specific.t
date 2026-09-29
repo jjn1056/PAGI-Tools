@@ -13,8 +13,6 @@ use PAGI::Auth qw(unauth_result);
 use PAGI::Middleware::Authentication;
 use PAGI::Middleware::CSRF;
 use PAGI::Middleware::ContentNegotiation;
-use PAGI::Middleware::FormBody;
-use PAGI::Middleware::JSONBody;
 use PAGI::Middleware::Maintenance;
 use PAGI::Middleware::RateLimit;
 use PAGI::Middleware::TrustedHosts;
@@ -113,8 +111,6 @@ subtest 'HTTP policy middleware preserves non-HTTP event streams and send settle
                 strict          => 1,
             );
         }],
-        ['FormBody', sub { PAGI::Middleware::FormBody->new }],
-        ['JSONBody', sub { PAGI::Middleware::JSONBody->new }],
         ['Maintenance', sub {
             PAGI::Middleware::Maintenance->new(enabled => 1);
         }],
