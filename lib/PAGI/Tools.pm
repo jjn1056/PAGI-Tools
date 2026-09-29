@@ -58,8 +58,9 @@ advertises C<< $scope->{pagi}{spec_version} >> as C<0.6>. L<PAGI::Server>, the
 reference implementation, does so from 0.002014.
 
 L<PAGI::WebSocket> and L<PAGI::SSE> enforce this: their constructors die when
-the scope lacks a complete connection object, naming the server's advertised
-C<spec_version>. The HTTP helpers do not check yet.
+the scope advertises a C<spec_version> below 0.6 (an omitted one means 0.1,
+as the specification says) or lacks a complete connection object. The HTTP
+helpers do not check yet.
 
 =head1 THE APPLICATION TOPOLOGY
 

@@ -30,7 +30,7 @@ sub sse_scope {
         headers => [],
         state   => { shared => 'state' },
         marker  => ['nested'],
-        'pagi.connection' => PAGI::Test::ConnectionState->new,
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new,
         %changes,
     };
 }
@@ -393,7 +393,7 @@ subtest 'disconnect during a backpressured ordinary body settles normally and cl
         my ($writer) = @_;
         await $writer->write('pending');
     });
-    my $sse = sse(sse_scope('pagi.connection' => $connection), sub {
+    my $sse = sse(sse_scope(pagi => { spec_version => '0.6' }, 'pagi.connection' => $connection), sub {
         push @sent, $_[0];
         return Future->done if $_[0]{type} eq 'http.response.start';
         $body_send = Future->new;

@@ -84,11 +84,16 @@ subtest 'header accessors' => sub {
     isa_ok($sse->headers, ['PAGI::Headers'], 'headers returns PAGI::Headers');
 };
 
-subtest 'an sse scope without pagi.connection is refused' => sub {
+subtest 'an sse scope below Www 0.6 or without pagi.connection is refused' => sub {
     like(
         dies { PAGI::SSE->new({ type => 'sse', headers => [] }, sub {}, sub {}) },
+        qr/^PAGI::SSE requires PAGI::Spec::Www 0\.6 or later; server reports spec_version none \(0\.1\)/,
+        'an omitted spec_version means 0.1',
+    );
+    like(
+        dies { PAGI::SSE->new({ type => 'sse', headers => [], pagi => { spec_version => '0.6' } }, sub {}, sub {}) },
         qr/^PAGI::SSE requires pagi\.connection capabilities /,
-        'PAGI::Spec::Www 0.6 requires the connection object',
+        'a 0.6 scope must carry the connection object',
     );
 };
 

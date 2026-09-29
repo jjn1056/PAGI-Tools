@@ -58,7 +58,7 @@ sub protocol_scope {
         scheme       => $type eq 'websocket' ? 'ws' : 'http',
         headers      => [],
         server       => ['testserver', 80],
-        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket'),
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket'),
         %args,
     };
 }
@@ -108,7 +108,7 @@ subtest 'Request construction is strict and state has an explicit HashRef escape
         'Request requires the receive channel');
     my $websocket_scope = {
         %$scope, type => 'websocket',
-        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
     };
     my $websocket_request = PAGI::Request->new($websocket_scope, \&receive_empty);
     is($websocket_request->scope, $websocket_scope,

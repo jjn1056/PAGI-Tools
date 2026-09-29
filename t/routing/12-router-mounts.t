@@ -652,14 +652,14 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
 
     is(run_connected($app, scope(
         type => 'websocket', method => undef,
-        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
         path => '/api/socket', raw_path => '/api/socket',
     )), [{ type => 'websocket.accept' },
          { type => 'websocket.close', code => 1000, reason => 'child' }],
         'the mounted child WebSocket owns its exact emitted event');
     is(run_connected($app, scope(
         type => 'sse', method => undef,
-        'pagi.connection' => PAGI::Test::ConnectionState->new,
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new,
         path => '/api/events', raw_path => '/api/events',
     )), [
         { type => 'sse.start', status => 202 },
@@ -669,7 +669,7 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
 
     is(run_connected($app, scope(
         type => 'websocket', method => undef,
-        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
         path => '/api/missing', raw_path => '/api/missing',
         extensions => {},
     )), [
@@ -683,7 +683,7 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
     ], 'a mounted unmatched WebSocket owns its HTTP denial without rewriting');
     is(run_connected($app, scope(
         type => 'websocket', method => undef,
-        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
         path => '/api/missing', raw_path => '/api/missing',
     )), [
         { type => 'http.response.start', status => 404,
@@ -692,7 +692,7 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
     ], 'a mounted unmatched WebSocket owns its ordinary HTTP outcome');
     is(run_connected($app, scope(
         type => 'sse', method => undef,
-        'pagi.connection' => PAGI::Test::ConnectionState->new,
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new,
         path => '/api/missing', raw_path => '/api/missing',
     )), [
         {

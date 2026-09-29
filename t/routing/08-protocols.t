@@ -94,10 +94,13 @@ sub scope {
         headers     => [],
         %changes,
     };
-    # A server gives every WebSocket and SSE scope its connection.
-    $scope->{'pagi.connection'} = PAGI::Test::ConnectionState->new(
-        websocket => $scope->{type} eq 'websocket',
-    ) if $scope->{type} eq 'websocket' || $scope->{type} eq 'sse';
+    # A Www 0.6 server gives every WebSocket and SSE scope its connection.
+    if ($scope->{type} eq 'websocket' || $scope->{type} eq 'sse') {
+        $scope->{pagi}{spec_version} //= '0.6';
+        $scope->{'pagi.connection'} = PAGI::Test::ConnectionState->new(
+            websocket => $scope->{type} eq 'websocket',
+        );
+    }
     return $scope;
 }
 

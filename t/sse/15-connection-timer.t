@@ -11,7 +11,7 @@ subtest 'every observes end after multiple timer wins without consuming receive'
     no warnings qw(redefine once);
     local *Future::IO::sleep = sub { my $f = Future->new; push @timers, $f; return $f };
     my $conn = PAGI::Test::ConnectionState->new;
-    my $sse = PAGI::SSE->new({type => 'sse', 'pagi.connection' => $conn}, sub {die 'competing receive'}, sub {Future->done});
+    my $sse = PAGI::SSE->new({type => 'sse', pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'competing receive'}, sub {Future->done});
     my ($ticks, $cleaned) = (0, 0);
     $sse->on_close(sub { ++$cleaned });
     my $every = $sse->every(1, sub { ++$ticks; Future->done });
@@ -28,7 +28,7 @@ subtest 'every observes end after multiple timer wins without consuming receive'
 
 subtest 'SSE send errors do not publish connection terminal facts' => sub {
     my $conn = PAGI::Test::ConnectionState->new;
-    my $sse = PAGI::SSE->new({type => 'sse', 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
+    my $sse = PAGI::SSE->new({type => 'sse', pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {
         $_[0]{type} eq 'sse.start' ? Future->done : Future->fail("resource error\n");
     });
     my ($errors, $cleanup) = (0, 0);
@@ -45,7 +45,7 @@ subtest 'SSE send errors do not publish connection terminal facts' => sub {
 subtest 'SSE local close prevents data and keepalive while terminal is pending' => sub {
     my $conn = PAGI::Test::ConnectionState->new;
     my @sent;
-    my $sse = PAGI::SSE->new({type => 'sse', 'pagi.connection' => $conn}, sub {die 'receive'}, sub {push @sent, $_[0]{type}; Future->done});
+    my $sse = PAGI::SSE->new({type => 'sse', pagi => { spec_version => '0.6' }, 'pagi.connection' => $conn}, sub {die 'receive'}, sub {push @sent, $_[0]{type}; Future->done});
     $sse->start->get;
     my $close = $sse->close;
     for my $method (qw(send send_json send_comment)) {

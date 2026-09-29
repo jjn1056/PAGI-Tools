@@ -41,7 +41,8 @@ invokes it at most once, after recording the abnormal outcome required by
 L<PAGI::Spec::Www/"Connection Object Interface">.
 
 A scope built by hand for L<PAGI::WebSocket> or L<PAGI::SSE> must carry one
-of these as C<pagi.connection>.
+of these as C<pagi.connection> and advertise C<< pagi => { spec_version =>
+'0.6' } >>.
 
 =cut
 

@@ -856,14 +856,14 @@ subtest 'WebSocket and SSE leaves publish protocol-specific effective metadata' 
         method => undef,
         path => '/api/socket/lobby',
         raw_path => '/api/socket/lobby',
-        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
     ));
     run_scope($app, scope(
         type => 'sse',
         method => undef,
         path => '/api/events/news',
         raw_path => '/api/events/news',
-        'pagi.connection' => PAGI::Test::ConnectionState->new,
+        pagi => { spec_version => '0.6' }, 'pagi.connection' => PAGI::Test::ConnectionState->new,
     ));
 
     is($seen[0]{match}, {
