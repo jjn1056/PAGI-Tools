@@ -12,6 +12,7 @@ use PAGI::Pages::Application;
 use PAGI::Request;
 use PAGI::SSE;
 use PAGI::WebSocket;
+use PAGI::Test::ConnectionState;
 
 sub scope {
     my ($type, %args) = @_;
@@ -22,6 +23,9 @@ sub scope {
         headers      => $args{headers} || [],
         query_string => '',
         http_version => '1.1',
+        ($type eq 'websocket' || $type eq 'sse'
+            ? ('pagi.connection' => PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket'))
+            : ()),
     };
 }
 
@@ -331,6 +335,7 @@ subtest 'materialization gives policy a shallow real-protocol metadata view with
         headers                => $headers,
         state                  => $nested,
         'pagi.request.headers' => $protocol_cache,
+        'pagi.connection'      => PAGI::Test::ConnectionState->new(websocket => 1),
     };
     my @source_keys = sort keys %$source;
 
@@ -369,6 +374,7 @@ subtest 'materialization gives policy a shallow real-protocol metadata view with
         type    => 'sse',
         headers => [],
         state   => $nested,
+        'pagi.connection' => PAGI::Test::ConnectionState->new,
     };
     $application->response_for($methodless);
     my $methodless_metadata = $Local::CountingPages::RESPONSE_SCOPES[-1];

@@ -13,7 +13,18 @@ use Exporter 'import';
 use Future;
 use PAGI::Test::ConnectionState;
 
-our @EXPORT_OK = qw(ws_scope sse_scope receive_from send_to);
+our @EXPORT_OK = qw(ws_scope sse_scope receive_from send_to run_connected);
+
+# Runs $app on a connected $scope with an empty receive_from and a send_to,
+# and returns the sent events.
+sub run_connected {
+    my ($app, $scope) = @_;
+    my @events;
+    Future->wrap($app->(
+        $scope, receive_from($scope), send_to($scope, \@events),
+    ))->get;
+    return \@events;
+}
 
 sub ws_scope {
     my (%extra) = @_;

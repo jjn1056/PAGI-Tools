@@ -11,6 +11,9 @@ use PAGI::Response::Text ();
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::URL qw(path_for);
 use PAGI::Utils qw(as_app_object);
+use lib 't/lib';
+use PAGI::Test::ConnectionState;
+use PAGITest::Connected qw(run_connected);
 
 sub scope {
     my (%changes) = @_;
@@ -39,6 +42,9 @@ sub run_scope {
     $app->($request_scope, $receive, $send)->get;
     return \@events;
 }
+
+# Runs a WebSocket or SSE scope whose send records on the scope's connection
+# what a server records, so the protocol helper sees the same terminal facts.
 
 sub run_app {
     my ($app, %changes) = @_;
@@ -644,14 +650,16 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
         }),
     ])->to_app;
 
-    is(run_scope($app, scope(
+    is(run_connected($app, scope(
         type => 'websocket', method => undef,
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
         path => '/api/socket', raw_path => '/api/socket',
     )), [{ type => 'websocket.accept' },
          { type => 'websocket.close', code => 1000, reason => 'child' }],
         'the mounted child WebSocket owns its exact emitted event');
-    is(run_scope($app, scope(
+    is(run_connected($app, scope(
         type => 'sse', method => undef,
+        'pagi.connection' => PAGI::Test::ConnectionState->new,
         path => '/api/events', raw_path => '/api/events',
     )), [
         { type => 'sse.start', status => 202 },
@@ -659,8 +667,9 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
         { type => 'sse.close' },
     ], 'the mounted child SSE owns its exact emitted events');
 
-    is(run_scope($app, scope(
+    is(run_connected($app, scope(
         type => 'websocket', method => undef,
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
         path => '/api/missing', raw_path => '/api/missing',
         extensions => {},
     )), [
@@ -672,16 +681,18 @@ subtest 'mounted Routers own WebSocket and SSE success and miss outcomes' => sub
             type => 'http.response.body', body => 'Not Found', more => 0,
         },
     ], 'a mounted unmatched WebSocket owns its HTTP denial without rewriting');
-    is(run_scope($app, scope(
+    is(run_connected($app, scope(
         type => 'websocket', method => undef,
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
         path => '/api/missing', raw_path => '/api/missing',
     )), [
         { type => 'http.response.start', status => 404,
           headers => [['content-type', 'text/plain']] },
         { type => 'http.response.body', body => 'Not Found', more => 0 },
     ], 'a mounted unmatched WebSocket owns its ordinary HTTP outcome');
-    is(run_scope($app, scope(
+    is(run_connected($app, scope(
         type => 'sse', method => undef,
+        'pagi.connection' => PAGI::Test::ConnectionState->new,
         path => '/api/missing', raw_path => '/api/missing',
     )), [
         {

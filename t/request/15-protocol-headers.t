@@ -9,12 +9,13 @@ use lib 'lib';
 use PAGI::Request;
 use PAGI::SSE;
 use PAGI::WebSocket;
+use lib 't/lib';
+use PAGITest::Connected qw(ws_scope sse_scope);
 
 subtest 'WebSocket uses the shared PAGI header container' => sub {
-    my $scope = {
-        type    => 'websocket',
+    my $scope = ws_scope(
         headers => [['X-Trace', 'one'], ['x-trace', 'two']],
-    };
+    );
     my $websocket = PAGI::WebSocket->new(
         $scope,
         sub { die 'unexpected receive' },
@@ -29,10 +30,9 @@ subtest 'WebSocket uses the shared PAGI header container' => sub {
 };
 
 subtest 'SSE uses the shared PAGI header container' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         headers => [['X-Trace', 'one'], ['x-trace', 'two']],
-    };
+    );
     my $sse = PAGI::SSE->new(
         $scope,
         sub { die 'unexpected receive' },
@@ -47,12 +47,11 @@ subtest 'SSE uses the shared PAGI header container' => sub {
 };
 
 subtest 'Request and WebSocket share headers when Request reads first' => sub {
-    my $scope = {
-        type    => 'websocket',
+    my $scope = ws_scope(
         scheme  => 'ws',
         path    => '/socket',
         headers => [['X-Trace', 'one'], ['x-trace', 'two']],
-    };
+    );
     my $receive = sub { die 'metadata must not receive' };
     my $request = PAGI::Request->new($scope, $receive);
     my $cached = $request->headers;
@@ -66,12 +65,11 @@ subtest 'Request and WebSocket share headers when Request reads first' => sub {
 };
 
 subtest 'Request and WebSocket share headers when WebSocket reads first' => sub {
-    my $scope = {
-        type    => 'websocket',
+    my $scope = ws_scope(
         scheme  => 'wss',
         path    => '/socket',
         headers => [['X-Trace', 'one'], ['x-trace', 'two']],
-    };
+    );
     my $receive = sub { die 'metadata must not receive' };
     my $websocket = PAGI::WebSocket->new(
         $scope, $receive, sub { die 'unexpected send' },
@@ -88,12 +86,11 @@ subtest 'Request and WebSocket share headers when WebSocket reads first' => sub 
 
 subtest 'Request and SSE share headers in both access orders' => sub {
     for my $request_first (0, 1) {
-        my $scope = {
-            type    => 'sse',
+        my $scope = sse_scope(
             scheme  => 'https',
             path    => '/events',
             headers => [['X-Trace', 'one'], ['x-trace', 'two']],
-        };
+        );
         my $receive = sub { die 'metadata must not receive' };
         my $request = PAGI::Request->new($scope, $receive);
         my $sse = PAGI::SSE->new(

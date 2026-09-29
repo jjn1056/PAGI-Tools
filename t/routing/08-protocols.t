@@ -13,6 +13,9 @@ use PAGI::Routing::URL qw(path_for);
 use PAGI::SSE;
 use PAGI::WebSocket;
 use PAGI::Utils qw(as_app_object);
+use PAGI::Test::ConnectionState;
+use lib 't/lib';
+use PAGITest::Connected qw(send_to);
 
 sub ProtocolProvider { return qr/accepted/ }
 
@@ -81,7 +84,7 @@ sub named_websocket_handler {
 
 sub scope {
     my (%changes) = @_;
-    return {
+    my $scope = {
         type        => 'http',
         method      => 'GET',
         path        => '/',
@@ -91,16 +94,24 @@ sub scope {
         headers     => [],
         %changes,
     };
+    # A server gives every WebSocket and SSE scope its connection.
+    $scope->{'pagi.connection'} = PAGI::Test::ConnectionState->new(
+        websocket => $scope->{type} eq 'websocket',
+    ) if $scope->{type} eq 'websocket' || $scope->{type} eq 'sse';
+    return $scope;
 }
 
 sub run_scope {
     my ($app, $request_scope, %channels) = @_;
     my @events;
     my $receive = $channels{receive} || sub { Future->done({ type => 'unused.receive' }) };
-    my $send = $channels{send} || sub {
-        push @events, $_[0];
-        return Future->done;
-    };
+    # With a connection, send records on it what a server records.
+    my $send = $channels{send} || ($request_scope->{'pagi.connection'}
+        ? send_to($request_scope, \@events)
+        : sub {
+            push @events, $_[0];
+            return Future->done;
+        });
 
     $app->($request_scope, $receive, $send)->get;
     return \@events;
@@ -315,23 +326,23 @@ subtest 'normal WebSocket and SSE handlers use direct cached protocol objects' =
 
     my (@ws_events, @sse_events);
     my $ws_receive = sub { return Future->done({ type => 'websocket.connect' }) };
-    my $ws_send = sub { push @ws_events, $_[0]; return Future->done };
-    $app->(scope(
+    my $ws_scope = scope(
         type        => 'websocket',
         path        => '/api/acme/socket/lobby',
         root_path   => '/edge',
         raw_path    => '/edge/api/acme/socket/lobby',
         path_params => { retained => 'yes' },
-    ), $ws_receive, $ws_send)->get;
+    );
+    $app->($ws_scope, $ws_receive, send_to($ws_scope, \@ws_events))->get;
     my $sse_receive = sub { return Future->done({ type => 'sse.disconnect' }) };
-    my $sse_send = sub { push @sse_events, $_[0]; return Future->done };
-    $app->(scope(
+    my $sse_scope = scope(
         type        => 'sse',
         path        => '/api/acme/events/news',
         root_path   => '/edge',
         raw_path    => '/edge/api/acme/events/news',
         path_params => { retained => 'yes' },
-    ), $sse_receive, $sse_send)->get;
+    );
+    $app->($sse_scope, $sse_receive, send_to($sse_scope, \@sse_events))->get;
 
     is([map {
         my $record = $_;
@@ -543,6 +554,7 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                     await $protocol->close(1000, 'selected');
                 }
                 else {
+                    await $protocol->start;
                     await $protocol->close(reason => 'selected');
                 }
                 return;
@@ -592,6 +604,10 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
             my $incoming = scope(
                 type => $case->{kind}, path => $path, raw_path => $path,
             );
+            # With a connection SSE learns its disconnect from the connection,
+            # never from receive, so the incoming SSE case's receive-callback
+            # check exists only without one.
+            delete $incoming->{'pagi.connection'} if $case->{id} eq 'incoming-sse';
             my $receive = sub {
                 return Future->done(
                     $case->{kind} eq 'websocket'
@@ -599,10 +615,12 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                         : { type => 'sse.disconnect', reason => 'selected' },
                 );
             };
-            my $wire_send = sub {
-                push @wire_events, $_[0];
-                return Future->done;
-            };
+            my $wire_send = $incoming->{'pagi.connection'}
+                ? send_to($incoming, \@wire_events)
+                : sub {
+                    push @wire_events, $_[0];
+                    return Future->done;
+                };
 
             if ($case->{cache_at} eq 'incoming') {
                 my $old_receive = sub {
@@ -646,7 +664,9 @@ subtest 'normal protocol leaves discard live caches inherited from outer scopes'
                 'handler emits nothing through the inherited callback');
             my @expected = $case->{kind} eq 'websocket'
                 ? ({ type => 'websocket.accept' }, $case->{event})
-                : ($case->{event});
+                : $case->{cache_at} eq 'incoming'
+                    ? ($case->{event})
+                    : ({ type => 'sse.start', status => 200 }, $case->{event});
             is(\@selected_events, \@expected,
                 'handler emits through the selected callback');
             is(\@wire_events, \@expected,
@@ -745,6 +765,7 @@ subtest 'handler and native protocols apply inline providers and explicit constr
             constraints => { id => Local::ProtocolPathCheck->new('accepted') }),
         sse('/predicate-sse/{id}' => async sub {
             push @normal_sse, $_[0]->path_param('id');
+            await $_[0]->start;
             await $_[0]->close;
         }, name => 'predicate-sse',
             constraints => { id => sub { return $_[0] eq 'accepted' } }),
@@ -764,7 +785,7 @@ subtest 'handler and native protocols apply inline providers and explicit constr
         [{ type => 'websocket.close', code => 1001, reason => 'native predicate' }],
         'native WebSocket dispatch accepts an explicit check object');
     is(run_scope($app, scope(type => 'sse', path => '/predicate-sse/accepted')),
-        [{ type => 'sse.close' }],
+        [{ type => 'sse.start', status => 200 }, { type => 'sse.close' }],
         'normal SSE dispatch accepts an explicit predicate');
     is(run_scope($app, scope(type => 'sse', path => '/provider-sse/accepted')),
         [{ type => 'sse.close' }],
@@ -880,6 +901,7 @@ subtest 'protocol selection is declaration ordered, protocol local, and mount aw
         }),
         sse('/shared' => async sub {
             push @trace, 'sse';
+            await $_[0]->start;
             await $_[0]->close;
         }),
         mount('/blocked/{tenant}', routes => [
@@ -897,6 +919,7 @@ subtest 'protocol selection is declaration ordered, protocol local, and mount aw
         mount('/nested', routes => [
             sse('/events' => async sub {
                 push @trace, 'nested sse';
+                await $_[0]->start;
                 await $_[0]->close;
             }, middleware => [$route_middleware]),
         ], middleware => [$mount_middleware]),
@@ -952,6 +975,7 @@ subtest 'the first prefix Mount owns every protocol and middleware boundary' => 
             await $_[0]->close(1000, 'first websocket');
         }),
         sse('/events' => async sub {
+            await $_[0]->start;
             await $_[0]->close;
         }),
     ]);
@@ -984,7 +1008,7 @@ subtest 'the first prefix Mount owns every protocol and middleware boundary' => 
         { type => 'websocket.accept' },
         { type => 'websocket.close', code => 1000, reason => 'first websocket' },
     ], 'the first same-prefix Mount owns WebSocket');
-    is($sse, [{ type => 'sse.close' }],
+    is($sse, [{ type => 'sse.start', status => 200 }, { type => 'sse.close' }],
         'the first same-prefix Mount owns SSE');
 
     is(run_scope($app, scope(
@@ -1229,6 +1253,7 @@ subtest 'standalone protocol leaves and mounts compile as complete applications'
         await $_[0]->close(1000, 'standalone');
     })->to_app;
     my $sse_app = sse('/events' => async sub {
+        await $_[0]->start;
         await $_[0]->close;
     })->to_app;
 
@@ -1241,6 +1266,7 @@ subtest 'standalone protocol leaves and mounts compile as complete applications'
     is(run_scope($ws_app, scope(type => 'sse', path => '/missing'))->[0]{type},
         'http.response.start', 'a standalone WebSocket application retains SSE fallback behavior');
     is(run_scope($sse_app, scope(type => 'sse', path => '/events')), [
+        { type => 'sse.start', status => 200 },
         { type => 'sse.close' },
     ], 'the standalone SSE application dispatches its leaf');
     is(run_scope($sse_app, scope(type => 'websocket', path => '/missing'))->[0]{type},

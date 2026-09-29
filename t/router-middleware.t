@@ -9,6 +9,7 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::Response::Text ();
 use PAGI::Routing qw(middleware mount route router sse websocket);
+use PAGI::Test::ConnectionState;
 
 async sub request {
     my ($app, %changes) = @_;
@@ -352,8 +353,10 @@ subtest 'route middleware is uniform for normal WebSocket and SSE handlers' => s
     ]);
     my $app = $routing->to_app;
 
-    request($app, type => 'websocket', method => undef, path => '/ws')->get;
-    request($app, type => 'sse', method => undef, path => '/events')->get;
+    request($app, type => 'websocket', method => undef, path => '/ws',
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1))->get;
+    request($app, type => 'sse', method => undef, path => '/events',
+        'pagi.connection' => PAGI::Test::ConnectionState->new)->get;
     is(\@trace, [
         'protocol before', 'handler PAGI::WebSocket', 'protocol after',
         'protocol before', 'handler PAGI::SSE', 'protocol after',

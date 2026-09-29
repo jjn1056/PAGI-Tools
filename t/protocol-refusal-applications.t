@@ -262,14 +262,16 @@ for my $kind (qw(websocket sse)) {
             PAGI::Response::File->new('/unused/refusal-file', status => 503),
             PAGI::Response::Stream->new(sub { ++$calls }, status => 503),
         );
-        for my $target (@targets) {
-            my $scope = {type => $kind, pagi => {spec_version => '0.2'}};
-            my $helper = ($kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE')->new($scope, sub { Future->new }, sub { ++$calls; Future->done });
-            my $operation;
-            ok(lives { $operation = $helper->$method($target) }, 'missing connection returns a Future');
-            ok($operation->is_failed, 'admission error is a failed Future');
-            like(dies { $operation->get }, qr/pagi\.connection.*0\.2/, 'connection diagnostic includes advertised version');
-        }
+        subtest 'a scope without pagi.connection is diagnosed' => sub {
+            for my $target (@targets) {
+                my $scope = {type => $kind, pagi => {spec_version => '0.2'}};
+                my $helper = ($kind eq 'websocket' ? 'PAGI::WebSocket' : 'PAGI::SSE')->new($scope, sub { Future->new }, sub { ++$calls; Future->done });
+                my $operation;
+                ok(lives { $operation = $helper->$method($target) }, 'missing connection returns a Future');
+                ok($operation->is_failed, 'admission error is a failed Future');
+                like(dies { $operation->get }, qr/pagi\.connection.*0\.2/, 'connection diagnostic includes advertised version');
+            }
+        };
         is($calls, 0, 'no factories handlers apps or sends invoked');
         is($targets[5]{calls}, 0, 'no to_app conversion');
         for my $target (@targets) {

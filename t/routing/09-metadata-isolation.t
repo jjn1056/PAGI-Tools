@@ -11,6 +11,7 @@ use PAGI::Response::Text ();
 use PAGI::Routing qw(router route websocket sse mount middleware);
 use PAGI::Routing::Resolver;
 use PAGI::Routing::URL qw(path_for);
+use PAGI::Test::ConnectionState;
 
 our $CONCURRENT_PROVIDER_CALLS = 0;
 sub ConcurrentId {
@@ -855,12 +856,14 @@ subtest 'WebSocket and SSE leaves publish protocol-specific effective metadata' 
         method => undef,
         path => '/api/socket/lobby',
         raw_path => '/api/socket/lobby',
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
     ));
     run_scope($app, scope(
         type => 'sse',
         method => undef,
         path => '/api/events/news',
         raw_path => '/api/events/news',
+        'pagi.connection' => PAGI::Test::ConnectionState->new,
     ));
 
     is($seen[0]{match}, {

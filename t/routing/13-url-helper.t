@@ -11,6 +11,7 @@ use PAGI::Request;
 use PAGI::Response::Text ();
 use PAGI::WebSocket;
 use PAGI::SSE;
+use PAGI::Test::ConnectionState;
 use PAGI::Middleware::ReverseProxy;
 use PAGI::Middleware::TrustedHosts;
 use PAGI::Routing qw(mount route router sse websocket);
@@ -64,6 +65,10 @@ sub _frame {
 sub _scope {
     my ($type, $resolver, %changes) = @_;
     return {
+        # A server gives every WebSocket and SSE scope its connection.
+        ($type eq 'websocket' || $type eq 'sse'
+            ? ('pagi.connection' => PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket'))
+            : ()),
         type           => $type,
         method         => 'GET',
         path           => '/',

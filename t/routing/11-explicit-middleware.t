@@ -6,6 +6,9 @@ use Future;
 use Future::AsyncAwait;
 use PAGI::Response::Text ();
 use PAGI::Routing qw(router route websocket sse mount middleware);
+use lib 't/lib';
+use PAGI::Test::ConnectionState;
+use PAGITest::Connected qw(run_connected);
 
 {
     package Local::ConfiguredMiddleware;
@@ -37,6 +40,9 @@ sub run_scope {
     )->get;
     return \@events;
 }
+
+# Runs a WebSocket or SSE scope whose send records on the scope's connection
+# what a server records, so the protocol helper sees the same terminal facts.
 
 sub tracing_factory {
     my ($label, $trace) = @_;
@@ -99,8 +105,10 @@ subtest 'explicit descriptions run across Route Mount Router and protocols' => s
     )->to_app;
 
     run_scope($app, scope(path => '/api/item', raw_path => '/api/item'));
-    run_scope($app, scope(type => 'websocket', path => '/socket', raw_path => '/socket'));
-    run_scope($app, scope(type => 'sse', path => '/events', raw_path => '/events'));
+    run_connected($app, scope(type => 'websocket', path => '/socket', raw_path => '/socket',
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1)));
+    run_connected($app, scope(type => 'sse', path => '/events', raw_path => '/events',
+        'pagi.connection' => PAGI::Test::ConnectionState->new));
     is(\@trace, [
         'router:http', 'mount:http', 'route:http', 'handler:http',
         'router:websocket', 'websocket:websocket', 'handler:websocket',

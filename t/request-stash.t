@@ -7,6 +7,8 @@ use PAGI::Request;
 use PAGI::Stash;
 use PAGI::WebSocket;
 use PAGI::SSE;
+use lib 't/lib';
+use PAGITest::Connected qw(ws_scope sse_scope);
 
 my $receive = sub { Future->done({ type => 'http.request', body => '' }) };
 my $stash_factory = PAGI::Stash->can('stash') ? \&PAGI::Stash::stash : undef;
@@ -136,15 +138,13 @@ subtest 'path_param only returns path params, not query params' => sub {
 
 subtest 'protocol objects retain direct default path parameter access' => sub {
     my @cases = (
-        ['WebSocket', 'websocket', sub { PAGI::WebSocket->new($_[0], sub {}, sub {}) }],
-        ['SSE', 'sse', sub { PAGI::SSE->new($_[0], sub {}, sub {}) }],
+        ['WebSocket', \&ws_scope, sub { PAGI::WebSocket->new($_[0], sub {}, sub {}) }],
+        ['SSE', \&sse_scope, sub { PAGI::SSE->new($_[0], sub {}, sub {}) }],
     );
 
     for my $case (@cases) {
-        my ($name, $type, $build) = @{$case};
-        my $source = $build->({
-            type => $type, headers => [], path_params => { room => 'lobby' },
-        });
+        my ($name, $scope_for, $build) = @{$case};
+        my $source = $build->($scope_for->(path_params => { room => 'lobby' }));
         is($source->path_params, { room => 'lobby' }, "$name returns direct path parameters");
         is($source->path_param('room'), 'lobby', "$name returns a present path parameter");
         is($source->path_param('missing'), undef, "$name defaults a missing path parameter to undef");

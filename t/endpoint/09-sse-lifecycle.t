@@ -9,6 +9,17 @@ use Scalar::Util qw(refaddr);
 use lib 'lib';
 use PAGI::Endpoint::SSE;
 use PAGI::Routing qw(router sse);
+use lib 't/lib';
+use PAGITest::Connected qw(sse_scope receive_from);
+
+# Runs an SSE app until it parks on its stream, then ends the connection as a
+# server does when the client goes away.
+sub run_until_client_leaves {
+    my ($app, $scope, $send) = @_;
+    my $running = $app->($scope, receive_from($scope), $send // sub { Future->done });
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+    return $running->get;
+}
 
 package MetricsEndpoint {
     use parent 'PAGI::Endpoint::SSE';
@@ -77,15 +88,9 @@ subtest 'lifecycle via to_app' => sub {
     my $app = MetricsEndpoint->to_app;
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $receive = sub { Future->done({ type => 'sse.disconnect' }) };
+    my $scope = sse_scope(path => '/events');
 
-    my $scope = {
-        type    => 'sse',
-        path    => '/events',
-        headers => [],
-    };
-
-    $app->($scope, $receive, $send)->get;
+    run_until_client_leaves($app, $scope, $send);
 
     is($MetricsEndpoint::log[0], 'connect', 'on_connect called');
     is($MetricsEndpoint::log[1], 'disconnect', 'on_disconnect called');
@@ -106,11 +111,7 @@ subtest 'configured endpoint to_app retains the exact object across connections'
     my $app = $configured->to_app;
 
     for my $connection (1, 2) {
-        $app->(
-            { type => 'sse', path => "/events/$connection", headers => [] },
-            sub { Future->done({ type => 'sse.disconnect' }) },
-            sub { Future->done },
-        )->get;
+        run_until_client_leaves($app, sse_scope(path => "/events/$connection"));
     }
 
     is $Local::ConfiguredSSE::NEW_CALLS, 1,
@@ -133,20 +134,15 @@ subtest 'overlapping streams retain the endpoint and isolate stream objects' => 
 
     my $endpoint = Local::OverlappingConfiguredSSE->new(bus => {});
     my $app = $endpoint->to_app;
-    my $first_scope = {
-        type => 'sse', path => '/events/first', headers => [],
-    };
-    my $second_scope = {
-        type => 'sse', path => '/events/second', headers => [],
-    };
-    my $receive = sub { Future->done({ type => 'sse.disconnect' }) };
+    my $first_scope  = sse_scope(path => '/events/first');
+    my $second_scope = sse_scope(path => '/events/second');
 
-    my $first = $app->($first_scope, $receive, sub { Future->done });
+    my $first = $app->($first_scope, receive_from($first_scope), sub { Future->done });
     ok(!$first->is_ready, 'the first stream is held inside on_connect');
     is scalar(@Local::OverlappingConfiguredSSE::RECEIVER_IDS), 1,
         'the first stream entered the endpoint before the second began';
 
-    my $second = $app->($second_scope, $receive, sub { Future->done });
+    my $second = $app->($second_scope, receive_from($second_scope), sub { Future->done });
     ok(!$second->is_ready,
         'the second stream overlaps the first inside on_connect');
     is \@Local::OverlappingConfiguredSSE::RECEIVER_IDS,
@@ -161,6 +157,8 @@ subtest 'overlapping streams retain the endpoint and isolate stream objects' => 
 
     $first_gate->done;
     $second_gate->done;
+    $_->{'pagi.connection'}->_mark_disconnected('client_closed')
+        for $first_scope, $second_scope;
     is $first->get, undef, 'the released first stream completes cleanly';
     is $second->get, undef, 'the released second stream completes cleanly';
 };
@@ -171,10 +169,8 @@ subtest 'events are sent' => sub {
     my $app = MetricsEndpoint->to_app;
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $receive = sub { Future->done({ type => 'sse.disconnect' }) };
 
-    $app->({ type => 'sse', path => '/events', headers => [] },
-           $receive, $send)->get;
+    run_until_client_leaves($app, sse_scope(path => '/events'), $send);
 
     my @types = map { $_->{type} } @sent;
     my ($start_idx) = grep { $types[$_] eq 'sse.start' } 0 .. $#types;
@@ -188,10 +184,8 @@ subtest 'default lifecycle starts the stream without an on_connect hook' => sub 
     my $app = PAGI::Endpoint::SSE->to_app;
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $receive = sub { Future->done({ type => 'sse.disconnect' }) };
 
-    $app->({ type => 'sse', path => '/events', headers => [] },
-           $receive, $send)->get;
+    run_until_client_leaves($app, sse_scope(path => '/events'), $send);
 
     is([map { $_->{type} } @sent], ['sse.start'],
         'the default lifecycle starts one stream');
@@ -216,11 +210,7 @@ subtest 'sse route accepts a configured endpoint object' => sub {
         sse('/events' => $configured),
     ])->to_app;
 
-    $app->(
-        { type => 'sse', path => '/events', headers => [] },
-        sub { Future->done({ type => 'sse.disconnect' }) },
-        sub { Future->done },
-    )->get;
+    run_until_client_leaves($app, sse_scope(path => '/events'));
 
     is \@RoutedConfiguredSSE::hubs, [$hub],
         'sse route uses the configured endpoint object';
@@ -244,10 +234,8 @@ subtest 'immediate on_connect results are normalized' => sub {
     my $app = ImmediateSSEEndpoint->to_app;
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $receive = sub { Future->done({ type => 'sse.disconnect' }) };
 
-    $app->({ type => 'sse', path => '/events', headers => [] },
-           $receive, $send)->get;
+    run_until_client_leaves($app, sse_scope(path => '/events'), $send);
 
     is($ImmediateSSEEndpoint::seen, 'PAGI::SSE',
         'direct callback accepts an immediate return value');
@@ -261,10 +249,11 @@ subtest 'failed on_connect Future propagates through the endpoint app' => sub {
         sub on_connect { Future->fail("connect hook failed\n") }
     }
 
+    my $scope = sse_scope(path => '/events');
     like(dies {
         FailingSSEEndpoint->to_app->(
-            { type => 'sse', path => '/events', headers => [] },
-            sub { Future->done({ type => 'sse.disconnect' }) },
+            $scope,
+            receive_from($scope),
             sub { Future->done },
         )->get;
     }, qr/connect hook failed/, 'failed connect Future is not swallowed');
@@ -286,12 +275,12 @@ subtest 'on_disconnect Future is awaited by cleanup' => sub {
 
     $SynchronousDisconnectEndpoint::returned = Future->new;
     $SynchronousDisconnectEndpoint::called = 0;
+    my $scope = sse_scope(path => '/events');
     my $running = SynchronousDisconnectEndpoint->to_app->(
-        { type => 'sse', path => '/events', headers => [] },
-        sub { Future->done({ type => 'sse.disconnect' }) },
-        sub { Future->done },
+        $scope, receive_from($scope), sub { Future->done },
     );
-    ok(!$running->is_ready, 'legacy receive cleanup awaits disconnect hook');
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+    ok(!$running->is_ready, 'cleanup awaits disconnect hook');
     is($SynchronousDisconnectEndpoint::called, 1, 'disconnect hook was called');
     ok(!$SynchronousDisconnectEndpoint::returned->is_ready,
         'disconnect return Future is pending');

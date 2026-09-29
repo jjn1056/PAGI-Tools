@@ -6,6 +6,8 @@ use PAGI::Transport qw(transport);
 use PAGI::Request;
 use PAGI::WebSocket;
 use PAGI::SSE;
+use lib 't/lib';
+use PAGITest::Connected qw(ws_scope sse_scope);
 
 {
     package Local::Transport::NoDefault;
@@ -195,19 +197,15 @@ subtest 'strict source normalization supports protocol objects' => sub {
     is(transport($request)->buffered_amount, 101,
         'strict Request source resolves its scope');
 
-    my $websocket = PAGI::WebSocket->new({
-        type             => 'websocket',
-        headers          => [],
+    my $websocket = PAGI::WebSocket->new(ws_scope(
         'pagi.transport' => MockTransport->new(102, 200, 50),
-    }, $receive, $send);
+    ), $receive, $send);
     is(transport($websocket)->buffered_amount, 102,
         'WebSocket source resolves its scope');
 
-    my $sse = PAGI::SSE->new({
-        type             => 'sse',
-        headers          => [],
+    my $sse = PAGI::SSE->new(sse_scope(
         'pagi.transport' => MockTransport->new(103, 200, 50),
-    }, $receive, $send);
+    ), $receive, $send);
     is(transport($sse)->buffered_amount, 103, 'SSE source resolves its scope');
 
     my $raw_scope = {
@@ -230,13 +228,13 @@ subtest 'WebSocket and SSE retain transport convenience' => sub {
     my @cases = (
         ['PAGI::WebSocket', sub {
             my ($handle) = @_;
-            my $scope = { type => 'websocket', headers => [] };
+            my $scope = ws_scope();
             $scope->{'pagi.transport'} = $handle if defined $handle;
             return PAGI::WebSocket->new($scope, $receive, $send);
         }],
         ['PAGI::SSE', sub {
             my ($handle) = @_;
-            my $scope = { type => 'sse', headers => [] };
+            my $scope = sse_scope();
             $scope->{'pagi.transport'} = $handle if defined $handle;
             return PAGI::SSE->new($scope, $receive, $send);
         }],
