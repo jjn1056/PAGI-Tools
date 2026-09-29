@@ -14,16 +14,18 @@ may still return a `Future` when their protocol operation is asynchronous.
 ## Breaking: `PAGI::SSE` and `PAGI::WebSocket` require `pagi.connection`
 
 PAGI::Spec::Www 0.6 requires every server to put a `pagi.connection` object in
-each `http`, `websocket` and `sse` scope; PAGI::Server does. `PAGI::SSE` and
-`PAGI::WebSocket` now require it and die without it:
+each `http`, `websocket` and `sse` scope. PAGI::Server does so on websocket
+and sse scopes from **0.002014**; earlier releases do not. `PAGI::SSE` and
+`PAGI::WebSocket` now require it and die without it, so upgrade PAGI::Server
+to 0.002014 or later together with this release:
 
 ```text
 PAGI::WebSocket requires pagi.connection capabilities response_started, ...
 (server reports spec_version unspecified; current connection contract required)
 ```
 
-Applications served by PAGI::Server need no change. Tests that build scopes by
-hand add a connection:
+Applications served by PAGI::Server 0.002014 or later need no change. Tests
+that build scopes by hand add a connection:
 
 ```perl
 # Before

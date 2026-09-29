@@ -153,7 +153,9 @@ wrapper. Construct the serving application separately with the returned path.
 =head1 DESCRIPTION
 
 PAGI-Tools collects application-side tools that are useful without requiring
-a larger framework:
+a larger framework. L<PAGI::WebSocket> and L<PAGI::SSE> need a server that
+implements L<PAGI::Spec::Www> 0.6, which puts a C<pagi.connection> object in
+every scope; for L<PAGI::Server> that is 0.002014 or later.
 
 =over 4
 

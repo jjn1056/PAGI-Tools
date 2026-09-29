@@ -6,7 +6,8 @@
   - BREAKING: PAGI::SSE and PAGI::WebSocket require the scope's
     pagi.connection object, which PAGI::Spec::Www 0.6 requires every server
     to provide; the constructor dies naming the server's advertised
-    spec_version when it is missing or incomplete. PAGI::Server provides it.
+    spec_version when it is missing or incomplete. PAGI::Server provides it
+    on websocket and sse scopes from 0.002014; upgrade it with this release.
     Tests that build scopes by hand add one with PAGI::Test::ConnectionState.
     See UPGRADING.md.
 
