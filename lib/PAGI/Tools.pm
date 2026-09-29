@@ -49,6 +49,18 @@ For an ordinary HTTP application:
 Pass C<$app> to a PAGI server, or call C<< $app->to_app >> when an explicit
 native coderef is required.
 
+=head1 REQUIREMENTS
+
+PAGI-Tools targets L<PAGI::Spec::Www> B<0.6>. It depends on the specification,
+not on any one server: it needs a server that implements Www 0.6, which puts a
+C<pagi.connection> object in every C<http>, C<websocket> and C<sse> scope and
+advertises C<< $scope->{pagi}{spec_version} >> as C<0.6>. L<PAGI::Server>, the
+reference implementation, does so from 0.002014.
+
+L<PAGI::WebSocket> and L<PAGI::SSE> enforce this: their constructors die when
+the scope lacks a complete connection object, naming the server's advertised
+C<spec_version>. The HTTP helpers do not check yet.
+
 =head1 THE APPLICATION TOPOLOGY
 
 PAGI-Tools has one routing-construction API, L<PAGI::Routing>. Its layers have
@@ -153,9 +165,7 @@ wrapper. Construct the serving application separately with the returned path.
 =head1 DESCRIPTION
 
 PAGI-Tools collects application-side tools that are useful without requiring
-a larger framework. L<PAGI::WebSocket> and L<PAGI::SSE> need a server that
-implements L<PAGI::Spec::Www> 0.6, which puts a C<pagi.connection> object in
-every scope; for L<PAGI::Server> that is 0.002014 or later.
+a larger framework (see L</REQUIREMENTS> for the PAGI specification version):
 
 =over 4
 
