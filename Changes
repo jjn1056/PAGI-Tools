@@ -18,6 +18,11 @@
     on websocket and sse scopes from 0.002014; upgrade it with this release.
     Tests that build scopes by hand add one with PAGI::Test::ConnectionState.
     See UPGRADING.md.
+  - A streamed response (PAGI::Response::Stream and its Writer) checks the
+    scope's pagi.connection for the methods it will call before sending
+    anything: is_connected, disconnect_reason, disconnect_detail,
+    on_disconnect, and abort. A connection missing any of them is named in
+    the error. A scope with no pagi.connection still streams.
 
   [Error reporting]
   - BREAKING: ErrorHandler, including Compose's built-in one, re-raises the

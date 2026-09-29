@@ -236,4 +236,48 @@ subtest 'Stream validates construction and the native HTTP triplet before sendin
         qr/send.*coderef/i, 'send must be a coderef');
 };
 
+{
+    # A connection offering every method a stream uses except the ones named.
+    package T::PartialConnection;
+    my @ALL = qw(is_connected disconnect_reason disconnect_detail on_disconnect
+                 response_started response_complete abort);
+    sub new {
+        my ($class, @without) = @_;
+        my %skip = map { $_ => 1 } @without;
+        my $package = join '::', 'T::PartialConnection', @without ? @without : 'Full';
+        no strict 'refs';
+        @{"${package}::ISA"} = ();
+        for my $method (grep { !$skip{$_} } @ALL) {
+            *{"${package}::$method"} = $method eq 'is_connected' ? sub { 1 } : sub { return };
+        }
+        return bless {}, $package;
+    }
+}
+
+subtest 'a stream checks the connection methods it will use before sending' => sub {
+    for my $case (
+        ['disconnect_detail', qr/pagi\.connection must provide disconnect_detail/],
+        ['abort',             qr/pagi\.connection must provide abort to cancel a streamed response/],
+    ) {
+        my ($missing, $message) = @$case;
+        my @events;
+        like(dies {
+            stream_response(sub { })->to_app->(
+                http_scope('pagi.connection' => T::PartialConnection->new($missing)),
+                receive(),
+                sub { push @events, $_[0]; Future->done },
+            )->get;
+        }, $message, "a connection without $missing is named");
+        is(\@events, [], "nothing is sent when $missing is missing");
+    }
+
+    my @events;
+    stream_response(sub { my ($writer) = @_; $writer->write('ok') })->to_app->(
+        http_scope('pagi.connection' => T::PartialConnection->new),
+        receive(),
+        sub { push @events, $_[0]; Future->done },
+    )->get;
+    is($events[0]{type}, 'http.response.start', 'a complete connection streams normally');
+};
+
 done_testing;

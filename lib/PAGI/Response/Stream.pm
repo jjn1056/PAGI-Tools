@@ -105,6 +105,14 @@ sub _stream_delivery_plan {
 sub _emit {
     my ($self, $scope, $receive, $send) = @_;
     PAGI::Response::_validate_http_triplet($scope, $receive, $send);
+
+    # Check the connection methods this stream will use before anything is
+    # sent: the Writer's, and abort for cancellation.
+    my $connection = $scope->{'pagi.connection'};
+    PAGI::Response::Writer::_check_connection($connection);
+    croak 'pagi.connection must provide abort to cancel a streamed response'
+        if $connection && !$connection->can('abort');
+
     my $plan = $self->_stream_delivery_plan;
 
     my $control = {

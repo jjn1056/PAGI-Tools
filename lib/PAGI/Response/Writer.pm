@@ -45,19 +45,28 @@ backpressure.
 
 =cut
 
+# The connection methods a Writer calls. It checks for them before use, as a
+# capability check rather than a version check: a missing connection is
+# tolerated, an incomplete one is named.
+my @CONNECTION_METHODS = qw(is_connected disconnect_reason disconnect_detail on_disconnect);
+
+sub _check_connection {
+    my ($connection) = @_;
+    return unless defined $connection;
+    my @missing = blessed($connection)
+        ? grep { !$connection->can($_) } @CONNECTION_METHODS
+        : @CONNECTION_METHODS;
+    croak 'pagi.connection must provide ' . join(', ', @missing) if @missing;
+    return;
+}
+
 sub _new {
     my ($class, %args) = @_;
     my $send = $args{send};
     croak 'Writer send must be a coderef' unless ref($send) eq 'CODE';
 
     my $connection = $args{connection};
-    if (defined $connection) {
-        croak 'pagi.connection must provide is_connected, disconnect_reason, and on_disconnect'
-            unless blessed($connection)
-                && $connection->can('is_connected')
-                && $connection->can('disconnect_reason')
-                && $connection->can('on_disconnect');
-    }
+    _check_connection($connection);
 
     my $transport = $args{transport};
     if (defined $transport) {
