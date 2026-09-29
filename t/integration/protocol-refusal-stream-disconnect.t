@@ -121,6 +121,10 @@ sub transport {
         if ($client) { my $out = $client->mem_send; $sock->syswrite($out) if length $out }
     };
     return {
+        # The server owns only connections it accepts. The h2 connection is
+        # built by hand, so the transport holds it; otherwise its weakened
+        # read handler drops every frame once this sub returns.
+        connection => $connection,
         pump => $pump,
         response => sub { return ($headers{':status'}, $body) if $version eq '2';
             my ($status) = $wire =~ m{HTTP/1\.1 (\d+)}; return ($status, $wire) },
