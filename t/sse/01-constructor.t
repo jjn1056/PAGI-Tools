@@ -5,8 +5,10 @@ use Test2::V0;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
 use PAGI::Stash;
+use PAGITest::Connected qw(sse_scope);
 
 subtest 'constructor requires scope, receive, send' => sub {
     like(
@@ -35,13 +37,12 @@ subtest 'constructor validates scope type' => sub {
         'dies with wrong scope type'
     );
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, sub {});
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, sub {});
     isa_ok($sse, 'PAGI::SSE');
 };
 
 subtest 'basic accessors' => sub {
-    my $scope = {
-        type         => 'sse',
+    my $scope = sse_scope(
         path         => '/events',
         query_string => 'token=abc',
         scheme       => 'https',
@@ -49,7 +50,7 @@ subtest 'basic accessors' => sub {
             ['last-event-id', '42'],
             ['authorization', 'Bearer xyz'],
         ],
-    };
+    );
     my $receive = sub { Future->done };
     my $send = sub { Future->done };
 
@@ -64,14 +65,13 @@ subtest 'basic accessors' => sub {
 };
 
 subtest 'header accessors' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         headers => [
             ['last-event-id', '42'],
             ['cookie', 'a=1'],
             ['cookie', 'b=2'],
         ],
-    };
+    );
 
     my $sse = PAGI::SSE->new($scope, sub {}, sub {});
 

@@ -1,16 +1,17 @@
 use strict;
 use warnings;
 use Test2::V0;
+use lib 't/lib';
+use PAGITest::Connected qw(sse_scope);
 
 require PAGI::SSE;
 
 subtest 'state facade reads from scope' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         path    => '/events',
         headers => [],
         state => { db => 'test-connection', room => 'lobby' },
-    };
+    );
 
     my $sse = PAGI::SSE->new($scope, sub { }, sub { });
 
@@ -22,11 +23,10 @@ subtest 'state facade reads from scope' => sub {
 };
 
 subtest 'state facade is absent when not set' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         path    => '/events',
         headers => [],
-    };
+    );
 
     my $missing = PAGI::SSE->new($scope, sub { }, sub { });
 
@@ -35,10 +35,9 @@ subtest 'state facade is absent when not set' => sub {
 };
 
 subtest 'malformed state is rejected' => sub {
-    my $malformed = PAGI::SSE->new({
-        type  => 'sse',
+    my $malformed = PAGI::SSE->new(sse_scope(
         state => [],
-    }, sub { }, sub { });
+    ), sub { }, sub { });
 
     like(
         dies { $malformed->has_state },
@@ -53,11 +52,10 @@ subtest 'malformed state is rejected' => sub {
 };
 
 subtest 'connection_state for internal state' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         path    => '/events',
         headers => [],
-    };
+    );
 
     my $sse = PAGI::SSE->new($scope, sub { }, sub { });
 

@@ -4,15 +4,16 @@ use warnings;
 use Test2::V0;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope);
 
 subtest 'last_event_id returns header value' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         headers => [
             ['last-event-id', '42'],
         ],
-    };
+    );
 
     my $sse = PAGI::SSE->new($scope, sub {}, sub {});
 
@@ -20,12 +21,11 @@ subtest 'last_event_id returns header value' => sub {
 };
 
 subtest 'last_event_id is case-insensitive' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         headers => [
             ['Last-Event-ID', 'abc-123'],
         ],
-    };
+    );
 
     my $sse = PAGI::SSE->new($scope, sub {}, sub {});
 
@@ -33,10 +33,9 @@ subtest 'last_event_id is case-insensitive' => sub {
 };
 
 subtest 'last_event_id returns undef when missing' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         headers => [],
-    };
+    );
 
     my $sse = PAGI::SSE->new($scope, sub {}, sub {});
 
@@ -44,12 +43,11 @@ subtest 'last_event_id returns undef when missing' => sub {
 };
 
 subtest 'query helpers preserve decoded raw values and HTTP metadata' => sub {
-    my $sse = PAGI::SSE->new({
-        type         => 'sse',
+    my $sse = PAGI::SSE->new(sse_scope(
         query_string => 'name=caf%C3%A9&tag=one&tag=two&raw=%FF',
         http_version => '2',
         headers      => [],
-    }, sub {}, sub {});
+    ), sub {}, sub {});
 
     is($sse->query_param('name'), "caf\x{e9}",
         'query_param decodes a UTF-8 value');

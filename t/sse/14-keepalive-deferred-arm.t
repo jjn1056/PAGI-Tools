@@ -9,6 +9,7 @@ use lib 'lib';
 use PAGI::Response::Text;
 use PAGI::SSE;
 use lib 't/lib';
+use PAGITest::Connected qw(sse_scope);
 use PAGITest::RefusalHarness;
 
 # DEVIATION D-1 (signed off by John 2026-08-25): sse.keepalive sent before
@@ -22,7 +23,7 @@ use PAGITest::RefusalHarness;
 subtest 'keepalive before start records but sends nothing' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->keepalive(25)->get;
 
@@ -33,7 +34,7 @@ subtest 'keepalive before start records but sends nothing' => sub {
 subtest 'start() arms a pending keepalive immediately after sse.start' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->keepalive(25, 'ping')->get;
     $sse->start->get;
@@ -48,7 +49,7 @@ subtest 'start() arms a pending keepalive immediately after sse.start' => sub {
 subtest 'keepalive(0) before start clears any pending record -- start() arms nothing' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->keepalive(25)->get;   # record interval 25
     $sse->keepalive(0)->get;    # explicitly disable -- clears the record
@@ -61,7 +62,7 @@ subtest 'keepalive(0) before start clears any pending record -- start() arms not
 subtest 'start() with no keepalive ever requested arms nothing' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->start->get;
 
@@ -71,7 +72,7 @@ subtest 'start() with no keepalive ever requested arms nothing' => sub {
 subtest 'keepalive after start still sends immediately (unchanged: legal from the streaming state)' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->start->get;
     $sse->keepalive(30)->get;

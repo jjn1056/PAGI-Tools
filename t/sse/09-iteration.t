@@ -6,13 +6,15 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope);
 
 subtest 'each iterates over arrayref' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     my @items = ('one', 'two', 'three');
@@ -30,7 +32,7 @@ subtest 'each with transformer returns event spec' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     my @items = ({ name => 'Alice' }, { name => 'Bob' });
@@ -54,7 +56,7 @@ subtest 'each with coderef iterator' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     my @items = (1, 2, 3);
@@ -73,11 +75,12 @@ subtest 'each with coderef iterator' => sub {
     is(\@data_sent, ['item: 1', 'item: 2', 'item: 3'], 'coderef iterator works');
 };
 
-subtest 'each() runs on_close when callback dies (cleanup-then-rethrow)' => sub {
+subtest 'each() re-raises when callback dies; on_close runs when the connection ends' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $scope = sse_scope();
+    my $sse = PAGI::SSE->new($scope, sub {}, $send);
     $sse->start->get;
 
     my $cleanup_ran = 0;
@@ -97,20 +100,25 @@ subtest 'each() runs on_close when callback dies (cleanup-then-rethrow)' => sub 
         'exception still propagates'
     );
 
-    ok($cleanup_ran, 'on_close ran despite each() callback dying');
+    ok(!$cleanup_ran, 'on_close waits for the connection to end');
+
+    # The application died; the server ends the connection.
+    $scope->{'pagi.connection'}->_mark_disconnected('server_error');
+    ok($cleanup_ran, 'on_close ran once the connection ended');
 
     my @data_sent = map { $_->{data} } grep { $_->{type} eq 'sse.send' } @sent;
     is(\@data_sent, ['one'], 'iteration stopped at the failing item');
 };
 
-subtest 'every() re-raises and runs on_close when callback dies (no longer swallowed)' => sub {
+subtest 'every() re-raises when callback dies; on_close runs when the connection ends' => sub {
     unless (eval { require Future::IO::Impl::IOAsync; 1 }) {
         skip_all('Future::IO::Impl::IOAsync required for every() tests');
     }
 
     my @sent;
+    my $scope = sse_scope();
     my $sse = PAGI::SSE->new(
-        { type => 'sse' },
+        $scope,
         sub { Future->new },    # receive: never resolves
         sub { push @sent, $_[0]; Future->done },
     );
@@ -127,7 +135,11 @@ subtest 'every() re-raises and runs on_close when callback dies (no longer swall
         'exception now propagates instead of being swallowed'
     );
 
-    ok($cleanup_ran, 'on_close ran when the every() callback died');
+    ok(!$cleanup_ran, 'on_close waits for the connection to end');
+
+    # The application died; the server ends the connection.
+    $scope->{'pagi.connection'}->_mark_disconnected('server_error');
+    ok($cleanup_ran, 'on_close ran once the connection ended');
 };
 
 subtest 'every(): a callback that throws does not cancel the live protocol receive' => sub {

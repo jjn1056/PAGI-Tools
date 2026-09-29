@@ -6,13 +6,15 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope);
 
 subtest 'start sends sse.start event' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
 
     $sse->start->get;
 
@@ -26,7 +28,7 @@ subtest 'start with custom status and headers' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
 
     $sse->start(
         status  => 201,
@@ -41,7 +43,7 @@ subtest 'start is idempotent' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
 
     $sse->start->get;
     $sse->start->get;

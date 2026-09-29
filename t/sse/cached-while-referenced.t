@@ -3,7 +3,9 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 use Scalar::Util qw(refaddr);
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope);
 
 # Characterizes the real PAGI::SSE caching contract: you get the SAME object
 # back from the scope cache as long as you hold a strong reference to it. The
@@ -12,7 +14,7 @@ use PAGI::SSE;
 # describe it as "cached while referenced", not "singleton".
 
 subtest 'same object returned while a strong reference is held' => sub {
-    my $scope = { type => 'sse', path => '/events', headers => [] };
+    my $scope = sse_scope(path => '/events');
     my $send  = sub { Future->done };
     my $recv  = sub { Future->new };
 

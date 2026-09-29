@@ -3,7 +3,9 @@ use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
 
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope receive_from);
 use PAGI::Stash;
 use PAGI::Routing qw(router sse);
 
@@ -24,11 +26,10 @@ my $receive = sub {
 };
 
 subtest 'stash accessor' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         path    => '/events',
         headers => [],
-    };
+    );
     my $sse = PAGI::SSE->new($scope, $receive, $send);
     my $stash = PAGI::Stash->new($sse);
 
@@ -39,11 +40,10 @@ subtest 'stash accessor' => sub {
 };
 
 subtest 'stash lives in scope' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         path    => '/events',
         headers => [],
-    };
+    );
     my $sse = PAGI::SSE->new($scope, $receive, $send);
     my $stash = PAGI::Stash->new($sse);
 
@@ -53,12 +53,11 @@ subtest 'stash lives in scope' => sub {
 };
 
 subtest 'param and params read from scope' => sub {
-    my $scope_with_params = {
-        type    => 'sse',
+    my $scope_with_params = sse_scope(
         path    => '/events',
         headers => [],
         path_params => { channel => 'news', format => 'json' },
-    };
+    );
     my $sse = PAGI::SSE->new($scope_with_params, $receive, $send);
 
     is($sse->path_param('channel'), 'news', 'param returns route param from scope');
@@ -68,11 +67,10 @@ subtest 'param and params read from scope' => sub {
 };
 
 subtest 'param returns undef when no route params in scope' => sub {
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         path    => '/events',
         headers => [],
-    };
+    );
     my $sse = PAGI::SSE->new($scope, $receive, $send);
     is($sse->path_param('anything'), undef, 'param returns undef when no params');
     is($sse->path_params, {}, 'params returns empty hash when no params');
@@ -88,9 +86,10 @@ subtest 'Router supplies captures to an ordinary SSE object handler' => sub {
         }),
     ]);
 
+    my $scope = sse_scope(path => '/events/news', headers => []);
     $router->to_app->(
-        { type => 'sse', path => '/events/news', headers => [] },
-        sub { Future->done({ type => 'sse.disconnect' }) },
+        $scope,
+        receive_from($scope, { type => 'sse.disconnect' }),
         sub { Future->done },
     )->get;
 
