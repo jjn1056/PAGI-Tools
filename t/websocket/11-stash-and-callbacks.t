@@ -101,15 +101,16 @@ subtest 'on_error multiple callbacks' => sub {
     is(scalar @log2, 1, 'second callback called');
 };
 
-subtest 'on_error warns if no handlers' => sub {
+subtest 'with no on_error handlers nothing is printed' => sub {
     my ($ws) = create_ws();
     my @warnings;
 
     local $SIG{__WARN__} = sub { push @warnings, $_[0] };
     $ws->_trigger_error("Unhandled error");
 
-    is(scalar @warnings, 1, 'warning emitted');
-    like($warnings[0], qr/Unhandled error/, 'warning contains error');
+    # run() re-raises the error for the server to report; a warn here would
+    # report it twice.
+    is(\@warnings, [], 'no warning');
 };
 
 subtest 'on_message registers message callback' => sub {

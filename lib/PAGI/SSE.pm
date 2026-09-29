@@ -592,11 +592,6 @@ async sub _trigger_error {
             warn "PAGI::SSE on_error callback error: $@";
         }
     }
-
-    # If no error handlers registered, warn
-    if (!@{$self->{_on_error}}) {
-        warn "PAGI::SSE error: $error";
-    }
 }
 
 # Register close callback
@@ -1595,7 +1590,7 @@ regular subs or async subs — async results are automatically awaited.
 Multiple callbacks run in registration order. Exceptions are caught
 and warned but do not prevent other callbacks.
 
-Callbacks receive three arguments:
+Callbacks receive two arguments:
 
 =over 4
 
@@ -1605,7 +1600,9 @@ Callbacks receive three arguments:
 
 =back
 
-If no error handlers are registered, the error is warned to STDERR.
+If no error handlers are registered, nothing is printed: the C<try_send*>
+method's false return value is the signal, and a failed send is usually a
+routine client disconnect.
 
 Returns C<$self> for chaining.
 

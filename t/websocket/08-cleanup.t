@@ -207,6 +207,32 @@ subtest 'async on_error callback is awaited' => sub {
     is \@fired, ['async-error'], 'async on_error callback was awaited';
 };
 
+subtest 'with no on_error, a message callback error is re-raised, not warned' => sub {
+    require PAGI::Test::ConnectionState;
+    my @events = (
+        { type => 'websocket.connect' },
+        { type => 'websocket.receive', text => '{not json' },
+    );
+    my $idx = 0;
+    my $scope = {
+        type => 'websocket', headers => [],
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+    };
+    my $ws = PAGI::WebSocket->new(
+        $scope, sub { Future->done($events[$idx++]) }, sub { Future->done },
+    );
+    $ws->accept->get;
+    $ws->on_message(sub { die "bad json\n" });
+
+    my @warnings;
+    my $error = do {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        dies { $ws->run->get };
+    };
+    is $error, "bad json\n", 'run() re-raises the error for the server to report';
+    is \@warnings, [], 'so nothing is also warned';
+};
+
 subtest 'async on_error exception does not prevent other callbacks' => sub {
     my @events = (
         { type => 'websocket.connect' },

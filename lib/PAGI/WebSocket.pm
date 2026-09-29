@@ -390,11 +390,6 @@ async sub _trigger_error {
             warn "PAGI::WebSocket on_error callback error: $@";
         }
     }
-
-    # If no error handlers registered, warn
-    if (!@{$self->{_on_error}}) {
-        warn "PAGI::WebSocket error: $error";
-    }
 }
 
 # Accept the WebSocket connection
@@ -1394,7 +1389,9 @@ subs — async results are automatically awaited. Multiple callbacks
 run in registration order. Exceptions in callbacks are caught and
 warned but do not prevent other callbacks.
 
-If no error handlers are registered, errors are warned to STDERR.
+After the callbacks run, C<run()> re-raises the error, so the server reports
+it as an application error. With no error handlers registered, nothing else
+is printed.
 
 Returns C<$self> for chaining.
 

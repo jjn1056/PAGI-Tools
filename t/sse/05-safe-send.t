@@ -31,14 +31,13 @@ subtest 'try_send returns false on send error' => sub {
     # Mark as started to avoid auto-start
     $sse->_set_state('started');
 
-    # No on_error registered; suppress expected fallback warn
     my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, $_[0] };
 
     my $result = $sse->try_send("Hello")->get;
     ok(!$result, 'try_send returns false on error');
     ok($sse->is_closed, 'connection marked as closed after error');
-    ok scalar @warnings, 'unhandled error produced warning';
+    is \@warnings, [], 'with no on_error, the false return is the only signal';
 };
 
 subtest 'try_send_json works' => sub {
@@ -146,7 +145,7 @@ subtest 'async on_error exception does not prevent other callbacks' => sub {
     like $warnings[0], qr/async error handler exploded/, 'warning contains error text';
 };
 
-subtest 'no on_error registered warns to STDERR' => sub {
+subtest 'no on_error registered prints nothing' => sub {
     my $send = sub { Future->fail("send failure") };
     my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
     $sse->_set_state('started');
@@ -154,10 +153,10 @@ subtest 'no on_error registered warns to STDERR' => sub {
     my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, $_[0] };
 
-    $sse->try_send("Hello")->get;
+    my $ok = $sse->try_send("Hello")->get;
 
-    ok scalar @warnings, 'unhandled error was warned';
-    like $warnings[0], qr/send failure/, 'warning contains error text';
+    ok !$ok, 'the failure is reported by the return value';
+    is \@warnings, [], 'a routine send failure is not warned';
 };
 
 done_testing;
