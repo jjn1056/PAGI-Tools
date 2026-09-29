@@ -10,6 +10,11 @@
     for repeated keys) and nothing read the scope keys they wrote. See
     UPGRADING.md.
 
+  [Testing against a real server]
+  - PAGI::Server is no longer a develop prerequisite. The real-server tests
+    run against a PAGI-Server checkout (prove -I <checkout>/lib) and skip
+    unless PAGI::Server 0.002014 or later is on @INC.
+
   [Www 0.6 required for SSE and WebSocket]
   - BREAKING: PAGI::SSE and PAGI::WebSocket require the scope's
     pagi.connection object, which PAGI::Spec::Www 0.6 requires every server
