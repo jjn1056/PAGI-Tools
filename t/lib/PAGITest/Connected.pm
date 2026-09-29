@@ -13,7 +13,7 @@ use Exporter 'import';
 use Future;
 use PAGI::Test::ConnectionState;
 
-our @EXPORT_OK = qw(ws_scope sse_scope receive_from);
+our @EXPORT_OK = qw(ws_scope sse_scope receive_from send_to);
 
 sub ws_scope {
     my (%extra) = @_;
@@ -43,6 +43,30 @@ sub receive_from {
         my $event = shift @events;
         _record_terminal($connection, $event) if $event;
         return Future->done($event);
+    };
+}
+
+# Returns a send coderef that pushes each event onto @$sent and records on the
+# scope's connection what a server records: websocket.accept and sse.start
+# start the response, sse.close completes it, and an HTTP refusal completes
+# with its final body. An application's websocket.close changes nothing: the
+# server waits for the peer to answer it.
+sub send_to {
+    my ($scope, $sent) = @_;
+    my $connection = $scope->{'pagi.connection'};
+    return sub {
+        my ($event) = @_;
+        push @$sent, $event;
+        my $type = $event->{type} // '';
+        if ($type eq 'websocket.accept' || $type eq 'sse.start'
+            || $type eq 'http.response.start') {
+            $connection->_mark_response_started;
+        }
+        elsif ($type eq 'sse.close'
+            || ($type eq 'http.response.body' && !$event->{more})) {
+            $connection->_mark_complete;
+        }
+        return Future->done;
     };
 }
 
