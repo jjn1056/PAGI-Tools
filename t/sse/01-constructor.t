@@ -92,4 +92,25 @@ subtest 'an sse scope without pagi.connection is refused' => sub {
     );
 };
 
+{
+    # A connection offering every method SSE uses except end_future.
+    package T::NoEndFuture;
+    sub new { bless {}, shift }
+    for my $method (qw(response_started is_connected on_end disconnect_reason disconnect_detail)) {
+        no strict 'refs';
+        *{"T::NoEndFuture::$method"} = sub { return };
+    }
+}
+
+subtest 'an sse connection without end_future is refused at construction' => sub {
+    like(
+        dies {
+            PAGI::SSE->new({ type => 'sse', headers => [], 'pagi.connection' => T::NoEndFuture->new },
+                sub {}, sub {})
+        },
+        qr/^PAGI::SSE requires pagi\.connection capabilities end_future /,
+        'every() races end_future, so admission names it',
+    );
+};
+
 done_testing;

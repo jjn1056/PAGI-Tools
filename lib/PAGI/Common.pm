@@ -14,6 +14,7 @@ sub require_connection {
     my $version = $scope->{pagi}{spec_version} // 'unspecified';
     my @required = qw(response_started is_connected on_end disconnect_reason disconnect_detail);
     push @required, qw(close_code close_reason) if $scope->{type} eq 'websocket';
+    push @required, qw(end_future) if $scope->{type} eq 'sse';   # every() races it
     my @missing = blessed($connection)
         ? grep { !$connection->can($_) } @required : @required;
     croak "$operation requires pagi.connection capabilities " . join(', ', @missing)
