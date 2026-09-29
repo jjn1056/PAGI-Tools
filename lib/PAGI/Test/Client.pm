@@ -139,10 +139,8 @@ sub _request {
 
         my %captured = %$event;
 
-        if (my $conn = $scope->{'pagi.connection'}) {
-            $conn->_mark_response_started
-                if ($captured{type} // '') eq 'http.response.start';
-        }
+        $scope->{'pagi.connection'}->_mark_response_started
+            if ($captured{type} // '') eq 'http.response.start';
 
         if (($captured{type} // '') eq 'http.response.start') {
             # PAGI spec — this mock is H1-flavored (see http_version above):
@@ -172,9 +170,7 @@ sub _request {
 
         $response->_capture_event(\%captured);
 
-        if (my $conn = $scope->{'pagi.connection'}) {
-            $conn->_mark_complete if $sv->complete;
-        }
+        $scope->{'pagi.connection'}->_mark_complete if $sv->complete;
     };
 
     # Call app (with exception handling like real server)
@@ -204,18 +200,15 @@ sub _request {
             # any declared trailers) before the app threw -- mirror the
             # server: the response stands and this is a clean completion,
             # not a disconnect.
-            if (my $conn = $scope->{'pagi.connection'}) {
-                $conn->_mark_complete;
-            }
+            $scope->{'pagi.connection'}->_mark_complete;
             warn "exception after response completed: $exception";
             return $self->_finish_response($response);
         }
 
         # Mimic server behavior: return 500 response
-        if (my $conn = $scope->{'pagi.connection'}) {
-            $conn->_mark_response_started;            # the 500 IS a response
-            $conn->_mark_disconnected('server_error');# abnormal end — not on_complete
-        }
+        my $conn = $scope->{'pagi.connection'};
+        $conn->_mark_response_started;            # the 500 IS a response
+        $conn->_mark_disconnected('server_error');# abnormal end — not on_complete
         return PAGI::Test::Response->new(
             events => [
                 {
@@ -238,9 +231,7 @@ sub _request {
     # declared trailers never sent) is an abnormal disconnect, not a clean
     # completion.
     if (my $err = $sv->finalize) {
-        if (my $conn = $scope->{'pagi.connection'}) {
-            $conn->_mark_disconnected('server_error');
-        }
+        $scope->{'pagi.connection'}->_mark_disconnected('server_error');
         warn "incomplete response: $err\n";
 
         unless ($sv->started) {
@@ -266,9 +257,7 @@ sub _request {
         return $self->_finish_response($response);
     }
 
-    if (my $conn = $scope->{'pagi.connection'}) {
-        $conn->_mark_complete;
-    }
+    $scope->{'pagi.connection'}->_mark_complete;
 
     return $self->_finish_response($response);
 }
