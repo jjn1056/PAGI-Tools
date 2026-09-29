@@ -48,25 +48,22 @@ sub new {
     Scalar::Util::weaken($scope->{'pagi.websocket'});
 
     $self->{_cleanup_future} = Future->new;
-    if (my $connection = $scope->{'pagi.connection'}) {
-        PAGI::Common::require_connection($scope, 'PAGI::WebSocket');
-        # The connection owns this helper until end; the retained worker then
-        # owns asynchronous cleanup until all registered hooks have settled.
-        $connection->on_end(sub {
-            $self->_refresh_connection;
-            # Nobody awaits cleanup here, so keep its Future until it settles
-            # rather than dropping it while a hook is still suspended.
-            $self->_run_close_callbacks->retain;
-            return;
-        });
+    # The connection owns this helper until end; the retained worker then
+    # owns asynchronous cleanup until all registered hooks have settled.
+    $scope->{'pagi.connection'}->on_end(sub {
         $self->_refresh_connection;
-    }
+        # Nobody awaits cleanup here, so keep its Future until it settles
+        # rather than dropping it while a hook is still suspended.
+        $self->_run_close_callbacks->retain;
+        return;
+    });
+    $self->_refresh_connection;
     return $self;
 }
 
 sub _refresh_connection {
     my ($self) = @_;
-    my $connection = $self->{scope}{'pagi.connection'} or return;
+    my $connection = $self->{scope}{'pagi.connection'};
     $self->{_disconnect_reason} = $connection->disconnect_reason;
     $self->{_disconnect_detail} = $connection->disconnect_detail;
     $self->{_close_code} = $connection->close_code;
@@ -80,8 +77,8 @@ sub _refresh_connection {
 sub _response_claimed_before_start {
     my ($self) = @_;
     $self->_refresh_connection;
-    my $connection = $self->{scope}{'pagi.connection'} or return 0;
-    return $self->{_state} eq 'connecting' && $connection->response_started;
+    return $self->{_state} eq 'connecting'
+        && $self->{scope}{'pagi.connection'}->response_started;
 }
 
 sub disconnect_detail {
@@ -282,17 +279,10 @@ sub is_writable {
     return $t->buffered_amount < $high ? 1 : 0;
 }
 
-# Internal state setters
+# Internal state setter
 sub _set_state {
     my ($self, $state) = @_;
     $self->{_state} = $state;
-}
-
-sub _set_closed {
-    my ($self, $code, $reason) = @_;
-    $self->{_state} = 'closed';
-    $self->{_close_code} = $code // 1005;
-    $self->{_close_reason} = $reason // '';
 }
 
 # Register callback to run on disconnect/close
@@ -333,17 +323,12 @@ async sub _close_callbacks_worker {
     return;
 }
 
-# Internal: mark closed and fire on_close callbacks for a disconnect that
-# arrived directly off the wire (not via close()). Used by receive() and run()
-# when either consumes the terminal event. Does NOT send a websocket.close wire
-# event -- the peer is already gone.
+# Internal: a disconnect event arrived off the wire. The connection already
+# recorded the terminal outcome (and runs on_close from its on_end), so only
+# the helper's view of it is refreshed. Sends nothing: the peer is gone.
 async sub _note_disconnected {
-    my ($self, $code, $reason) = @_;
-    if ($self->{scope}{'pagi.connection'}) { $self->_refresh_connection; return }
-
-    # 1005 = No Status Rcvd (RFC 6455)
-    $self->_set_closed($code // 1005, $reason // '');
-    await $self->_run_close_callbacks;
+    my ($self) = @_;
+    $self->_refresh_connection;
     return;
 }
 
@@ -418,7 +403,6 @@ async sub accept {
 # Close the WebSocket connection
 sub close {
     my ($self, @args) = @_;
-    return $self->_legacy_close(@args) unless $self->{scope}{'pagi.connection'};
     return Future->done($self) if $self->_response_claimed_before_start;
     return $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
         if $self->{_close_send};
@@ -446,29 +430,6 @@ sub close {
         });
     }
     return $settled->without_cancel->then(sub { Future->done($self) })->retain;
-}
-
-async sub _legacy_close {
-    my ($self, $code, $reason) = @_;
-
-    croak 'WebSocket close is only valid after accept; use deny'
-        if $self->{_state} eq 'connecting';
-    # Idempotent - don't send close twice
-    return if $self->is_closed;
-
-    $code //= 1000;
-    $reason //= '';
-
-    await $self->{send}->({
-        type   => 'websocket.close',
-        code   => $code,
-        reason => $reason,
-    });
-
-    $self->_set_closed($code, $reason);
-    await $self->_run_close_callbacks;
-
-    return $self;
 }
 
 # Delegate the handshake refusal to a public PAGI application. Valid only
@@ -628,7 +589,7 @@ async sub receive {
         my $event = await $self->{receive}->();
 
         if (!defined($event) || $event->{type} eq 'websocket.disconnect' || $event->{type} eq 'http.disconnect') {
-            await $self->_note_disconnected($event->{code}, $event->{reason});
+            await $self->_note_disconnected;
             return undef;
         }
 
@@ -683,32 +644,15 @@ async sub receive_json {
     return JSON::MaybeXS::decode_json($text);
 }
 
-# Iteration helpers
-
-# Internal: run one per-message callback, running on_close cleanup before
-# re-raising if it dies (idempotent; _run_close_callbacks may already have run).
-# Takes a thunk so each caller's varying callback arg list stays at the call
-# site; awaits the thunk's Future and returns its value for callers that use it.
-async sub _guarded_dispatch {
-    my ($self, $thunk) = @_;
-
-    my $result;
-    my $ok = eval { $result = await $thunk->(); 1 };
-    unless ($ok) {
-        my $err = $@;
-        await $self->_run_close_callbacks unless $self->{scope}{'pagi.connection'};
-        die $err;                             # re-raise: caller still sees the error
-    }
-
-    return $result;
-}
+# Iteration helpers. A callback that dies propagates; on_close runs when the
+# connection ends.
 
 async sub each_message {
     my ($self, $callback) = @_;
 
     while (my $event = await $self->receive) {
         next unless $event->{type} eq 'websocket.receive';
-        await $self->_guarded_dispatch(sub { $callback->($event) });
+        await $callback->($event);
     }
 
     return;
@@ -718,7 +662,7 @@ async sub each_text {
     my ($self, $callback) = @_;
 
     while (my $text = await $self->receive_text) {
-        await $self->_guarded_dispatch(sub { $callback->($text) });
+        await $callback->($text);
     }
 
     return;
@@ -728,7 +672,7 @@ async sub each_bytes {
     my ($self, $callback) = @_;
 
     while (my $bytes = await $self->receive_bytes) {
-        await $self->_guarded_dispatch(sub { $callback->($bytes) });
+        await $callback->($bytes);
     }
 
     return;
@@ -742,7 +686,7 @@ async sub each_json {
         last unless defined $text;
 
         my $data = JSON::MaybeXS::decode_json($text);
-        await $self->_guarded_dispatch(sub { $callback->($data) });
+        await $callback->($data);
     }
 
     return;
@@ -753,12 +697,7 @@ async sub run {
     my ($self) = @_;
 
     while (1) {
-        my $event = eval { await $self->receive };
-        if (my $err = $@) {
-            die $err if $self->{scope}{'pagi.connection'};
-            warn "PAGI::WebSocket receive error: $err";
-            last;
-        }
+        my $event = await $self->receive;
         last unless $event;
 
         next unless $event->{type} eq 'websocket.receive';
@@ -775,7 +714,7 @@ async sub run {
             };
             if (my $err = $@) {
                 await $self->_trigger_error($err);
-                die $err if $self->{scope}{'pagi.connection'};
+                die $err;
             }
         }
     }
@@ -1388,9 +1327,7 @@ closure, use C<Scalar::Util::weaken> to avoid a memory leak:
 The connection retains the helper until terminal notification. One retained
 worker runs all hooks in order, survives handler return and cancellation of
 cleanup observers, and releases hooks and helper references when cleanup
-finishes. There is no background receive watcher. These guarantees require a
-complete Www 0.6 connection object; manually constructed triplets without it
-retain the legacy receive/close-driven behavior.
+finishes. There is no background receive watcher.
 
 =head2 on_error
 
