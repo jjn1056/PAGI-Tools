@@ -825,6 +825,7 @@ PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections
 
 =head1 SYNOPSIS
 
+    use Future;
     use Future::AsyncAwait;
     use PAGI::Compose qw(compose);
     use PAGI::Routing qw(sse);
@@ -845,18 +846,21 @@ PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections
 
             # Comment lines keep idle proxies from closing the stream.
             await $sse->keepalive(25);
+            await $sse->start;
 
             $sse->on_close(sub {
                 my ($sse, $reason) = @_;    # undef after an explicit close
                 delete $subscribers{"$sse"};
             });
 
-            # Replay what a reconnecting client missed, then go live.
+            # Replay what a reconnecting client missed, then go live. Sends go
+            # out in the order they are made, so making the replay sends and
+            # subscribing in one step (no await between) puts anything
+            # published meanwhile after the replay: nothing missed or reordered.
             my $seen = $sse->last_event_id // 0;
-            for my $event (@history[$seen .. $#history]) {
-                await $sse->send_event(%$event);
-            }
+            my @replay = map { $sse->send_event(%$_) } @history[$seen .. $#history];
             $subscribers{"$sse"} = $sse;
+            await Future->needs_all(@replay);
 
             await $sse->run;    # until the client disconnects
         }),

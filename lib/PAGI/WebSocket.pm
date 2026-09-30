@@ -787,7 +787,8 @@ PAGI::WebSocket - Convenience wrapper for PAGI WebSocket connections
             $online{$user} = $ws;
             $ws->on_close(sub {
                 my ($code, $reason) = @_;    # the peer's, when it sent a Close
-                delete $online{$user};
+                # Only if a newer connection for this user has not replaced it.
+                delete $online{$user} if ($online{$user} // 0) == $ws;
             });
 
             await $ws->accept;
