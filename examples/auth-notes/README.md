@@ -150,7 +150,6 @@ Compose may render it as 500 at its outer error boundary. It never becomes a
 | [Acceptance test](../../t/integration-auth-notes.t) | Route matrix, absence still invoking the backend, no publishing on denial, and direct propagation of store failure |
 | [JWT companions](../auth-jwt-sandbox/README.md) | Inline and grouped authentication checks with an application-owned JWT verifier |
 | [Extension companions](../auth-extensions/README.md) | Executable coverage index for custom users, Basic backend, context placement, response forms, protocol admission, and challenge headers |
-| [Notes design companion](../../docs/superpowers/specs/2026-09-19-auth-notes-example.md) | Preserved coverage requirements for the focused Task 7 extension examples |
 
 The extension companions keep custom users/factories, Basic verification,
 context composition, Pages/native response forms, header values, and

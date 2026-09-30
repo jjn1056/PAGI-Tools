@@ -17,9 +17,8 @@ Root separately owns the application Compose and lifespan boundary. This file
 records the repetition as evidence; it did not propose or approve a base
 class.
 
-The separate approved design at
-`docs/superpowers/specs/2026-08-06-pagi-app-base-design.md` defines an optional
-route-component base class. Its implementation remains deferred and must be
+A separate approved design (kept with the project's local design documents,
+not in this distribution) defines an optional route-component base class. Its implementation remains deferred and must be
 rechecked against the completed Router-mount contract before planning. The
 application-local `MyApp::View` helper already removes unrelated HTML
 document-shell duplication.

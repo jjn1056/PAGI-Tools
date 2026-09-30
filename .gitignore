@@ -61,6 +61,7 @@ TODO*.md
 docs/plans/
 docs/research/
 docs/superpowers/
+.superpowers/
 .worktrees
 
 # Files the contact-form example saves at run time

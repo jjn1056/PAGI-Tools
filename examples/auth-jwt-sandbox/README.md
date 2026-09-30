@@ -76,7 +76,7 @@ then adds a second protected route to demonstrate group protection:
 The `role` claim is retained from the Python example. It does not automatically
 grant permissions: the backend deliberately supplies only `authenticated`.
 The shared wrapper checks `user->is_authenticated`, not a scope of that name. The
-[Notes example](../../docs/superpowers/specs/2026-09-19-auth-notes-example.md)
+[Notes example](../auth-notes/README.md)
 separately explores single/any/all scope checks and compound authorization;
 its executable extension companions cover the remaining Auth interfaces.
 
