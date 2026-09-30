@@ -108,6 +108,12 @@ subtest 'context and placement app' => sub {
 
 subtest 'response applications app' => sub {
     my $client = load_app('04-response-applications.pl') or return;
+    my $source = do {
+        open my $fh, '<', "$examples/04-response-applications.pl" or die $!;
+        local $/; <$fh>;
+    };
+    unlike($source, qr/\bas_app_object\b/,
+        'a handler returns a native application as bare CODE; no adapter needed');
     for my $path (qw(sync async response pages object native group)) {
         my $missing = $client->get("/$path");
         is($missing->status, 401, "$path chooses refusal");
