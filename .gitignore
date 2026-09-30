@@ -63,6 +63,7 @@ docs/research/
 docs/superpowers/
 .superpowers/
 .worktrees
+.playwright-mcp/
 
 # Files the contact-form example saves at run time
 examples/contact-form/uploads/
