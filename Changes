@@ -17,6 +17,14 @@
     warned "Suspended async sub ... lost its returning future", and callers
     needed ->retain. PAGI::SSE documents try_send_comment.
 
+  [PAGI::Test::Client follows the Lifespan state contract]
+  - Each HTTP, WebSocket and SSE scope now receives a shallow copy of the
+    lifespan state, as PAGI::Spec::Lifespan requires and servers do. The
+    client used to hand every request the same hash, so an application that
+    counted in a top-level key passed its tests and then failed under a
+    server. Tests that relied on that must share through a value stored at
+    startup (a hash or object), as the spec prescribes.
+
   [Documentation and examples]
   - The PAGI::WebSocket and PAGI::SSE SYNOPSIS show the helpers as route
     handlers receive them, and run as published (t/00-pod/helper-synopsis.t).

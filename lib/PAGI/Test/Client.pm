@@ -305,7 +305,7 @@ sub _build_scope {
     };
 
     # Add state if lifespan is enabled
-    $scope->{state} = $self->{state} if $self->{state};
+    $scope->{state} = $self->_state_copy if $self->{state};
 
     return $scope;
 }
@@ -394,7 +394,7 @@ sub websocket {
         'pagi.connection' => $connection,
     };
 
-    $scope->{state} = $self->{state} if $self->{state};
+    $scope->{state} = $self->_state_copy if $self->{state};
 
     my $ws = PAGI::Test::WebSocket->new(app => $self->{app}, scope => $scope, close_mode => $opts{close_mode});
     my $weak_ws = $ws;
@@ -502,7 +502,7 @@ sub sse {
         'pagi.connection' => $connection,
     };
 
-    $scope->{state} = $self->{state} if $self->{state};
+    $scope->{state} = $self->_state_copy if $self->{state};
 
     my $sse = PAGI::Test::SSE->new(
         app => $self->{app}, scope => $scope,
@@ -683,6 +683,10 @@ sub _await_lifespan_phase {
 }
 
 sub state { shift->{state} // {} }
+
+# PAGI::Spec::Lifespan, "Lifespan State": each connection scope gets a
+# shallow copy of the lifespan state -- its own top-level keys, shared values.
+sub _state_copy { my ($self) = @_; return { %{ $self->{state} } } }
 
 sub run {
     my ($class, $app, $callback) = @_;
@@ -1382,7 +1386,11 @@ error.
 
     my $state = $client->state;
 
-Returns the shared state hashref from lifespan.
+Returns the lifespan scope's state hashref. As a server does, the client gives
+each HTTP, WebSocket and SSE scope a I<shallow copy> of it: a handler that
+assigns a top-level key changes only its own copy, while changes made through
+a shared value (a hash or object stored at startup) are seen everywhere,
+including here.
 
 =head2 run
 
