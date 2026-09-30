@@ -18,20 +18,22 @@ my @cases = (
         name  => 'endpoint demo',
         file  => "$Bin/../examples/endpoint-demo/app.pl",
         title => qr/PAGI Endpoint Demo/,
-        shape => qr{mount\('/'\s*=>\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\s*,?\s*\)},
+        shape => qr{route\('/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
         class => 'PAGI::Compose',
     },
     {
         name  => 'SSE dashboard',
         file  => "$Bin/../examples/sse-dashboard/app.pl",
         title => qr/PAGI Live Dashboard/,
-        shape => qr{PAGI::App::File->from_app_path\('public'\)->to_app},
+        shape => qr{route\('/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
+        class => 'PAGI::Compose',
     },
     {
         name  => 'contact form',
-        file  => "$Bin/../examples/13-contact-form/app.pl",
+        file  => "$Bin/../examples/contact-form/app.pl",
         title => qr/Contact Form/,
-        shape => qr{PAGI::App::File->from_app_path\('public'\)->to_app},
+        shape => qr{route\('/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
+        class => 'PAGI::Compose',
     },
 );
 
@@ -56,7 +58,7 @@ for my $case (@cases) {
         }
 
         SKIP: {
-            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 17 : 2)
+            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 23 : 2)
                 unless ref($app) eq 'CODE'
                     || ($case->{class} && ref($app) eq $case->{class});
             my $client = PAGI::Test::Client->new(app => $app);
@@ -66,8 +68,8 @@ for my $case (@cases) {
 
             if ($case->{name} eq 'endpoint demo') {
                 like($source,
-                    qr{mount\('/'\s*=>\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\s*,?\s*\)},
-                    'endpoint demo mounts its static fallback directly');
+                    qr{route\('/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
+                    'endpoint demo serves static files from an HTTP catch-all route');
                 unlike($source, qr/PAGI::App::Router|->to_app\b/,
                     'endpoint demo has no mutable Router or manual endpoint application');
                 unlike($source,
@@ -86,6 +88,18 @@ for my $case (@cases) {
                     qr/package MessageEvents \{.*?async sub on_connect \{\n        my \(\$self, \$sse\) = \@_;.*?stash\(\$sse\)->set\(sub_id => \$id\);.*?sub on_disconnect \{\n        my \(\$self, \$sse\) = \@_;.*?stash\(\$sse\)->get/s,
                     'SSE hooks name and use their direct SSE object and stash');
 
+                my $ws_miss = eval { $client->websocket('/ws/missing') };
+                ok($ws_miss && $ws_miss->is_closed,
+                    'a WebSocket to an unknown path is refused, not an exception')
+                    or diag($@);
+                my $sse_miss = eval { $client->sse('/events/missing') };
+                is($sse_miss && $sse_miss->status, 404,
+                    'an SSE request to an unknown path is declined with 404')
+                    or diag($@);
+                unlike($source,
+                    qr/websocket\('\/ws\/echo'[^)]*\$access_log/s,
+                    'AccessLog, which logs HTTP only, is not put on the WebSocket route');
+
                 my $missing = $client->get('/not-a-static-file');
                 is($missing->status, 404,
                     'unresolved endpoint-demo root request is complete');
@@ -94,7 +108,23 @@ for my $case (@cases) {
                 is($missing->content_length, length($missing->content),
                     'unresolved root response advertises its complete body');
 
-                my $unsupported = $client->post('/api/messages');
+                # The API route's AccessLog middleware writes one line per
+                # request to STDERR.
+                my $access_log = '';
+                my ($unsupported, $messages, $created);
+                {
+                    local *STDERR;
+                    open STDERR, '>', \$access_log or die $!;
+                    $unsupported = $client->post('/api/messages');
+                    $messages = $client->get('/api/messages');
+                    $created = $client->post('/api/messages', json => {
+                        text => 'Direct request object',
+                    });
+                }
+                like($access_log,
+                    qr{\APOST /api/messages 415 \S+\nGET /api/messages 200 \S+\nPOST /api/messages 201 \S+\n\z},
+                    'AccessLog records each API request');
+
                 is($unsupported->status, 415,
                     'message API rejects a request without JSON content type');
                 is($unsupported->content_type, 'application/problem+json',
@@ -106,16 +136,12 @@ for my $case (@cases) {
                     detail => 'Content-Type must be application/json',
                 }, 'content-type rejection uses the shared Pages representation');
 
-                my $messages = $client->get('/api/messages');
                 is($messages->status, 200, 'message API lists messages');
                 is($messages->json, [
                     { id => 1, text => 'Hello, World!' },
                     { id => 2, text => 'Welcome to PAGI Endpoints' },
                 ], 'message API lists its initial JSON messages');
 
-                my $created = $client->post('/api/messages', json => {
-                    text => 'Direct request object',
-                });
                 is($created->status, 201, 'message API creates a JSON message');
                 is($created->json, {
                     id   => 3,
@@ -133,15 +159,7 @@ unlike($endpoint, qr/File::Basename|File::Spec|dirname\s*\(/,
 my $bidirectional = source_text("$Bin/../examples/websocket-bidirectional/app.pl");
 unlike($bidirectional, qr/\$ctx\b|PAGI::Context/,
     'bidirectional WebSocket example has no Context dependency');
-like($bidirectional,
-    qr/use PAGI::WebSocket;.*?my \$websocket = PAGI::WebSocket->new\(\$scope, \$receive, \$send\);.*?await \$websocket->accept;/s,
-    'bidirectional WebSocket example constructs and accepts one direct object');
-like($bidirectional,
-    qr/my \$incoming = \$websocket->each_text\(async sub \{/,
-    'bidirectional receive loop uses the direct WebSocket object');
-like($bidirectional,
-    qr/await \$websocket->send_text_if_connected.*?while \(\$websocket->is_connected\)/s,
-    'bidirectional send queue and loop use the direct WebSocket object');
+# websocket-bidirectional's shape and behaviour: t/example-websocket-bidirectional.t
 
 my $dashboard = source_text($cases[1]{file});
 unlike($dashboard, qr/File::Basename|File::Spec|dirname\s*\(/,

@@ -394,7 +394,7 @@ async sub accept {
     $event->{subprotocol} = $opts{subprotocol} if exists $opts{subprotocol};
     $event->{headers} = $opts{headers} if exists $opts{headers};
 
-    await $self->{send}->($event);
+    await PAGI::Common::send_in_order($self, $event);
     $self->_set_state('connected') unless $self->is_closed;
 
     return $self;
@@ -417,7 +417,7 @@ sub close {
     my $send;
     my $ok = eval {
         my ($code, $reason) = @args;
-        $send = Future->wrap($self->{send}->({type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
+        $send = Future->wrap(PAGI::Common::send_in_order($self, {type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
         1;
     };
     if (!$ok) { $settled->fail($@) }
@@ -451,7 +451,7 @@ async sub send_text {
 
     croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type => 'websocket.send',
         text => $text,
     });
@@ -465,7 +465,7 @@ async sub send_bytes {
 
     croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type  => 'websocket.send',
         bytes => $bytes,
     });
@@ -481,7 +481,7 @@ async sub send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type => 'websocket.send',
         text => $json,
     });
@@ -491,12 +491,17 @@ async sub send_json {
 
 # Safe send methods - return bool instead of throwing
 
-async sub try_send_text {
+# Best-effort sends never throw, so broadcast loops may make one and drop
+# the Future. Each keeps itself alive until it settles, so a send waiting
+# its turn behind another still goes out and is not reported as lost.
+sub try_send_text { my $self = shift; return $self->_try_send_text(@_)->retain }
+
+async sub _try_send_text {
     my ($self, $text) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             text => $text,
         });
@@ -512,12 +517,14 @@ async sub try_send_text {
     return 1;
 }
 
-async sub try_send_bytes {
+sub try_send_bytes { my $self = shift; return $self->_try_send_bytes(@_)->retain }
+
+async sub _try_send_bytes {
     my ($self, $bytes) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             bytes => $bytes,
         });
@@ -533,13 +540,15 @@ async sub try_send_bytes {
     return 1;
 }
 
-async sub try_send_json {
+sub try_send_json { my $self = shift; return $self->_try_send_json(@_)->retain }
+
+async sub _try_send_json {
     my ($self, $data) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             text => $json,
         });
@@ -736,7 +745,7 @@ async sub keepalive {
     };
     $event->{timeout} = $timeout if defined $timeout;
 
-    await $self->{send}->($event);
+    await PAGI::Common::send_in_order($self, $event);
 
     return $self;
 }
@@ -753,73 +762,61 @@ PAGI::WebSocket - Convenience wrapper for PAGI WebSocket connections
 
 =head1 SYNOPSIS
 
-    use PAGI::WebSocket;
     use Future::AsyncAwait;
+    use PAGI::Compose qw(compose);
+    use PAGI::Routing qw(websocket);
 
-    # Simple echo server
-    async sub app {
-        my ($scope, $receive, $send) = @_;
+    our %online;    # user => PAGI::WebSocket, shared by every connection
 
-        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-        await $ws->accept;
+    my $app = compose(routes => [
+        # A websocket route's handler receives one PAGI::WebSocket.
+        websocket('/echo' => async sub {
+            my ($ws) = @_;
+            await $ws->accept;
+            await $ws->each_text(async sub {
+                my ($text) = @_;
+                await $ws->send_text("Echo: $text");
+            });
+        }),
 
-        await $ws->each_text(async sub {
-            my ($text) = @_;
-            await $ws->send_text("Echo: $text");
-        });
-    }
+        # A JSON protocol with cleanup. on_close is registered before
+        # accept, so it runs however the connection ends.
+        websocket('/json' => async sub {
+            my ($ws) = @_;
+            my $user = $ws->query('user') // 'anonymous';
+            $online{$user} = $ws;
+            $ws->on_close(sub {
+                my ($code, $reason) = @_;    # the peer's, when it sent a Close
+                # Only if a newer connection for this user has not replaced it.
+                delete $online{$user} if ($online{$user} // 0) == $ws;
+            });
 
-    # JSON API with cleanup
-    async sub json_app {
-        my ($scope, $receive, $send) = @_;
+            await $ws->accept;
+            await $ws->each_json(async sub {
+                my ($data) = @_;
+                await $ws->send_json({ type => 'pong' })
+                    if $data->{type} eq 'ping';
+            });
+        }),
 
-        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-        await $ws->accept(subprotocol => 'json');
+        # Callback style, an alternative to the each_* loops.
+        websocket('/callbacks' => async sub {
+            my ($ws) = @_;
+            $ws->on(message => async sub {
+                my ($text) = @_;
+                await $ws->send_text("Echo: $text");
+            });
+            $ws->on(error => sub {
+                my ($error) = @_;
+                warn "WebSocket error: $error";
+            });
 
-        my $user_id = generate_id();
+            await $ws->accept;
+            await $ws->run;
+        }),
+    ]);
 
-        # Cleanup runs on any disconnect
-        $ws->on_close(async sub {
-            my ($code, $reason) = @_;
-            await remove_user($user_id);
-            log_disconnect($user_id, $code);
-        });
-
-        await $ws->each_json(async sub {
-            my ($data) = @_;
-
-            if ($data->{type} eq 'ping') {
-                await $ws->send_json({ type => 'pong' });
-            }
-        });
-    }
-
-    # Callback-based style (alternative to iteration)
-    async sub callback_app {
-        my ($scope, $receive, $send) = @_;
-
-        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-
-        my $stash = PAGI::Stash->new($ws);
-        $stash->set(user => 'anonymous');
-
-        $ws->on(message => sub {
-            my ($data) = @_;
-            $ws->send_text("Echo: $data");
-        });
-
-        $ws->on(error => sub {
-            my ($error) = @_;
-            warn "WebSocket error: $error";
-        });
-
-        $ws->on(close => sub {
-            print "User disconnected\n";
-        });
-
-        await $ws->accept;
-        await $ws->run;
-    }
+    # pagi-server --app app.pl, with $app as the file's last value.
 
 =head1 DESCRIPTION
 
@@ -1198,6 +1195,15 @@ methods), the callbacks are quiet no-ops and C<is_writable> is true.
 
 Send a message. Dies if connection is closed.
 
+B<Sends go out one at a time.> PAGI::Spec::Www requires that an application
+not issue a send before the previous one has resolved. This object does that
+for you: a send made while another is still in flight waits for it, whatever
+its outcome, so several producers -- a reply racing a broadcast from another
+connection, a server tick racing an echo -- can each call C<send_*> or
+C<try_send_*> directly, with no queue of their own. A send whose caller
+cancels it before it goes out is skipped; one already handed to the server is
+never cancelled. Code that calls the raw C<$send> itself still owns the rule.
+
 =head2 try_send_text, try_send_bytes, try_send_json
 
     my $sent = await $ws->try_send_json($data);
@@ -1226,6 +1232,10 @@ and this still returns true. "Sent" means "the send call did not fail," not "the
 client received it."
 
 =back
+
+You may make one and drop the returned Future -- the usual shape of a
+broadcast loop. The send keeps itself alive until it settles, so it still goes
+out even when it must wait behind a send already in flight.
 
 If you need more than best-effort, reach for the right tool instead of inspecting
 this return value:

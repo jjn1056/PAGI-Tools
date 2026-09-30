@@ -122,18 +122,19 @@ sub source_text {
 
 local $ENV{PAGI_ENV} = 'production';
 
-subtest 'background-task example limits native dispatch to response-first routes' => sub {
+subtest 'background-task example uses ordinary handlers throughout' => sub {
     my $file = "$Bin/../examples/background-tasks/app.pl";
     my $source = source_text($file);
     like($source,
         qr{compose\(routes\s*=>\s*\[.*?route\('/'\s*=>\s*sub\s*\{}s,
         'background-task root uses an ordinary Request handler in Compose');
-    my $native_routes = () = $source =~ /\bas_app_object\s*\(/g;
-    is($native_routes, 3,
-        'only routes that perform work after response emission use as_app_object');
+    # Ruled by John 2026-09-30: raw applications belong in the PAGI spec's
+    # examples; Tools examples start background work from ordinary handlers.
+    unlike($source, qr/\bas_app_object\b/,
+        'no background-task route needs as_app_object');
     like($source,
-        qr{mount\('/ws'\s*,\s*app\s*=>\s*async sub}s,
-        'background-task WebSocket remains a direct native Mount application');
+        qr{websocket\('/ws'\s*=>\s*\\&messages\)}s,
+        'background-task WebSocket is a one-$ws handler');
     unlike($source, qr/PAGI::App::Router|\$router->(?:get|post|websocket|sse|mount)\b|->to_router/,
         'background-task example has no mutable frontend or snapshot conversion');
     my $app = do $file;

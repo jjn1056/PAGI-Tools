@@ -276,4 +276,58 @@ subtest 'B11: stop() dies when the app reports lifespan.shutdown.failed' => sub 
     ok $elapsed < 2, sprintf('fails promptly (%.3fs), not a ~5s silent deadline spin', $elapsed);
 };
 
+subtest 'each request, WebSocket and SSE scope gets a shallow copy of state' => sub {
+    # PAGI::Spec::Lifespan, "Lifespan State": top-level keys are private to
+    # each copy; values (containers, objects) are shared.
+    my @seen;
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        if ($scope->{type} eq 'lifespan') {
+            while (1) {
+                my $event = await $receive->();
+                if ($event->{type} eq 'lifespan.startup') {
+                    $scope->{state}{count} = 0;
+                    $scope->{state}{shared} = { count => 0 };
+                    await $send->({ type => 'lifespan.startup.complete' });
+                }
+                elsif ($event->{type} eq 'lifespan.shutdown') {
+                    await $send->({ type => 'lifespan.shutdown.complete' });
+                    return;
+                }
+            }
+        }
+        my $state = $scope->{state};
+        push @seen, [$scope->{type}, $state->{count}++, $state->{shared}{count}++];
+        if ($scope->{type} eq 'http') {
+            await $send->({ type => 'http.response.start', status => 204, headers => [] });
+            await $send->({ type => 'http.response.body', body => '' });
+        }
+        elsif ($scope->{type} eq 'websocket') {
+            await $receive->();
+            await $send->({ type => 'websocket.accept' });
+            await $send->({ type => 'websocket.close', code => 1000 });
+        }
+        else {
+            await $send->({ type => 'sse.start', status => 200, headers => [] });
+        }
+    };
+
+    PAGI::Test::Client->run($app, sub {
+        my ($client) = @_;
+        $client->get('/');
+        $client->get('/');
+        eval { $client->websocket('/', sub { }) };
+        eval { $client->sse('/', sub { }) };
+        is($client->state->{count}, 0, 'the lifespan state keeps its own top-level keys');
+        is($client->state->{shared}{count}, scalar(@seen), 'and sees changes made through shared values');
+    });
+
+    is(\@seen, [
+        ['http',      0, 0],
+        ['http',      0, 1],
+        ['websocket', 0, 2],
+        ['sse',       0, 3],
+    ], 'every scope starts from the lifespan values; only shared containers carry changes');
+};
+
 done_testing;

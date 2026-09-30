@@ -278,7 +278,19 @@ sub _set_state {
 }
 
 # Start the SSE stream
-async sub start {
+# Calls made while the stream is starting share that start, so sends from
+# several producers before the first sse.start goes out issue it once.
+sub start {
+    my ($self, %opts) = @_;
+    return $self->{_starting} if $self->{_starting};
+    my $starting = $self->_start(%opts);
+    return $starting if $starting->is_ready;
+    $self->{_starting} = $starting;
+    $starting->on_ready(sub { delete $self->{_starting} });
+    return $starting;
+}
+
+async sub _start {
     my ($self, %opts) = @_;
     if ($self->_response_claimed_before_start) {
         delete $self->{_pending_keepalive};
@@ -294,7 +306,7 @@ async sub start {
     };
     $event->{headers} = $opts{headers} if exists $opts{headers};
 
-    await $self->{send}->($event);
+    await PAGI::Common::send_in_order($self, $event);
     $self->_set_state('started') unless $self->is_closed;
     return $self if $self->is_closed;
 
@@ -302,7 +314,7 @@ async sub start {
     # keepalive()'s deferred-arm note below) -- illegal before sse.start,
     # now legal immediately after it.
     if (my $pending = delete $self->{_pending_keepalive}) {
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type     => 'sse.keepalive',
             interval => $pending->{interval},
             comment  => $pending->{comment},
@@ -346,7 +358,7 @@ async sub keepalive {
         return $self;
     }
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type     => 'sse.keepalive',
         interval => $interval,
         comment  => $comment,
@@ -405,7 +417,7 @@ async sub send {
     # Auto-start if not started
     await $self->start unless $self->is_started;
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type => 'sse.send',
         data => $data,
     });
@@ -424,7 +436,7 @@ async sub send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type => 'sse.send',
         data => $json,
     });
@@ -457,19 +469,24 @@ async sub send_event {
     $event->{id}    = "$opts{id}"  if defined $opts{id};
     $event->{retry} = int($opts{retry}) if defined $opts{retry};
 
-    await $self->{send}->($event);
+    await PAGI::Common::send_in_order($self, $event);
 
     return $self;
 }
 
 # Safe send - returns bool instead of throwing
-async sub try_send {
+# Best-effort sends never throw, so broadcast loops may make one and drop
+# the Future. Each keeps itself alive until it settles, so a send waiting
+# its turn behind another still goes out and is not reported as lost.
+sub try_send { my $self = shift; return $self->_try_send(@_)->retain }
+
+async sub _try_send {
     my ($self, $data) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'sse.send',
             data => $data,
         });
@@ -481,14 +498,16 @@ async sub try_send {
     return 1;
 }
 
-async sub try_send_json {
+sub try_send_json { my $self = shift; return $self->_try_send_json(@_)->retain }
+
+async sub _try_send_json {
     my ($self, $data) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
         my $json = JSON::MaybeXS::encode_json($data);
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'sse.send',
             data => $json,
         });
@@ -509,7 +528,7 @@ async sub send_comment {
 
     await $self->start unless $self->is_started;
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type    => 'sse.comment',
         comment => $comment,
     });
@@ -517,13 +536,15 @@ async sub send_comment {
     return $self;
 }
 
-async sub try_send_comment {
+sub try_send_comment { my $self = shift; return $self->_try_send_comment(@_)->retain }
+
+async sub _try_send_comment {
     my ($self, $comment) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->start unless $self->is_started;
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type    => 'sse.comment',
             comment => $comment,
         });
@@ -535,7 +556,9 @@ async sub try_send_comment {
     return 1;
 }
 
-async sub try_send_event {
+sub try_send_event { my $self = shift; return $self->_try_send_event(@_)->retain }
+
+async sub _try_send_event {
     my ($self, %opts) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
@@ -555,7 +578,7 @@ async sub try_send_event {
         $event->{id}    = "$opts{id}"  if defined $opts{id};
         $event->{retry} = int($opts{retry}) if defined $opts{retry};
 
-        await $self->{send}->($event);
+        await PAGI::Common::send_in_order($self, $event);
     };
     if (my $err = $@) {
         await $self->_trigger_error($err);
@@ -660,7 +683,7 @@ sub close {
     my $send;
     my $ok = eval {
         my %opts = @args;
-        $send = Future->wrap($self->{send}->({type => 'sse.close', (defined $opts{reason} ? (reason => $opts{reason}) : ())}));
+        $send = Future->wrap(PAGI::Common::send_in_order($self, {type => 'sse.close', (defined $opts{reason} ? (reason => $opts{reason}) : ())}));
         1;
     };
     if (!$ok) { $settled->fail($@) }
@@ -802,46 +825,48 @@ PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections
 
 =head1 SYNOPSIS
 
-    use PAGI::SSE;
+    use Future;
     use Future::AsyncAwait;
+    use PAGI::Compose qw(compose);
+    use PAGI::Routing qw(sse);
 
-    # Simple notification stream
-    async sub app {
-        my ($scope, $receive, $send) = @_;
+    our @history;        # every event published, for reconnecting clients
+    our %subscribers;    # open streams, shared by every connection
 
-        my $sse = PAGI::SSE->new($scope, $receive, $send);
-
-        # Enable keepalive for proxy compatibility
-        await $sse->keepalive(25);
-
-        # Per-connection state
-        use PAGI::Stash;
-        my $stash = PAGI::Stash->new($sse);
-
-        # Cleanup on disconnect - with reason for logging
-        $sse->on_close(sub {
-            my ($sse, $reason) = @_;
-            remove_subscriber($stash->get('sub_id'));
-            log_disconnect($reason);  # 'client_closed', 'write_error', etc.
-        });
-
-        # Handle reconnection
-        if (my $last_id = $sse->last_event_id) {
-            my @missed = get_events_since($last_id);
-            for my $event (@missed) {
-                await $sse->send_event(%$event);
-            }
-        }
-
-        # Subscribe to updates
-        $stash->set(sub_id => add_subscriber(sub {
-            my ($event) = @_;
-            $sse->try_send_json($event);
-        }));
-
-        # Wait for disconnect
-        await $sse->run;
+    sub publish {
+        my (%event) = @_;
+        push @history, { %event, id => scalar(@history) + 1 };
+        $_->try_send_event(%{ $history[-1] }) for values %subscribers;
     }
+
+    my $app = compose(routes => [
+        # An sse route's handler receives one PAGI::SSE.
+        sse('/events' => async sub {
+            my ($sse) = @_;
+
+            # Comment lines keep idle proxies from closing the stream.
+            await $sse->keepalive(25);
+            await $sse->start;
+
+            $sse->on_close(sub {
+                my ($sse, $reason) = @_;    # undef after an explicit close
+                delete $subscribers{"$sse"};
+            });
+
+            # Replay what a reconnecting client missed, then go live. Sends go
+            # out in the order they are made, so making the replay sends and
+            # subscribing in one step (no await between) puts anything
+            # published meanwhile after the replay: nothing missed or reordered.
+            my $seen = $sse->last_event_id // 0;
+            my @replay = map { $sse->send_event(%$_) } @history[$seen .. $#history];
+            $subscribers{"$sse"} = $sse;
+            await Future->needs_all(@replay);
+
+            await $sse->run;    # until the client disconnects
+        }),
+    ]);
+
+    # Elsewhere: publish(event => 'news', data => { title => 'Hello' });
 
 =head1 DESCRIPTION
 
@@ -1036,7 +1061,9 @@ false only when it is absent; malformed present state croaks.
     await $sse->start(status => 200, headers => [...]);
 
 Starts the SSE stream. Called automatically on first send.
-Idempotent - only sends sse.start once.
+Idempotent - only sends sse.start once. A call made while the stream is
+starting returns the same Future, so several sends made before the stream
+starts produce one sse.start.
 
 If L</keepalive> was called before C<start> (for example
 L<PAGI::Endpoint::SSE>'s C<keepalive_interval>, which is configured before
@@ -1206,6 +1233,15 @@ methods), the callbacks are quiet no-ops and C<is_writable> is true.
 
 Sends a data-only event.
 
+B<Sends go out one at a time.> PAGI::Spec::Www requires that an application
+not issue a send before the previous one has resolved. This object does that
+for you: a send made while another is still in flight waits for it, whatever
+its outcome, so several producers -- a live broadcast racing a periodic
+C<every> callback -- can each call C<send*> or C<try_send*> directly, with no
+queue of their own. A send whose caller cancels it before it goes out is
+skipped; one already handed to the server is never cancelled. Code that calls
+the raw C<$send> itself still owns the rule.
+
 =head2 send_json
 
     await $sse->send_json({ type => 'update', data => $payload });
@@ -1228,15 +1264,21 @@ connection">) after terminal notification, including after L</decline>. While
 a refusal response has started but the connection is still live, these methods
 return C<$self> without emitting an SSE start or data event.
 
-=head2 try_send, try_send_json, try_send_event
+=head2 try_send, try_send_json, try_send_comment, try_send_event
 
     my $ok = await $sse->try_send_json($data);
     if (!$ok) {
         # Client disconnected
     }
 
+    $_->try_send_event(event => 'news', data => $item) for @subscribers;
+
 Returns true on success, false on failure. Does not throw.
 Useful for broadcasting to multiple clients.
+
+You may make one and drop the returned Future -- the usual shape of a
+broadcast loop. The send keeps itself alive until it settles, so it still goes
+out even when it must wait behind a send already in flight.
 
 =head1 KEEPALIVE
 

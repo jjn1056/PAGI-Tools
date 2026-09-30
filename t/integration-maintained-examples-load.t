@@ -17,13 +17,13 @@ sub source_text {
 }
 
 my @examples = (
-    ['09-psgi-bridge',          'CODE'],
+    ['psgi-bridge',          'APP'],
     ['background-tasks',        'APP'],
-    ['full-demo',               'CODE'],
-    ['sse-close',               'CODE'],
+    ['full-demo',               'APP'],
+    ['sse-close',               'APP'],
     ['test-lifespan-shutdown',  'CODE'],
-    ['websocket-bidirectional', 'CODE'],
-    ['websocket-echo-v2',       'CODE'],
+    ['websocket-bidirectional', 'APP'],
+    ['websocket-echo',       'APP'],
 );
 my %loaded_apps;
 
@@ -39,17 +39,16 @@ for my $case (@examples) {
             unlike($source, qr/\$router->(?:get|post|websocket|sse|mount)\b/,
                 'background tasks has no mutable route declarations');
             like($source,
-                qr/use PAGI::Routing qw\(route mount\);/,
+                qr/use PAGI::Routing qw\(route websocket\);/,
                 'background tasks imports immutable route declarations');
             like($source,
                 qr/route\('\/'\s*=>\s*sub\s*\{/s,
                 'background tasks uses an ordinary Request handler for its index');
-            my $native_routes = () = $source =~ /\bas_app_object\s*\(/g;
-            is($native_routes, 3,
-                'only response-first background-task routes remain native applications');
+            unlike($source, qr/\bas_app_object\b/,
+                'every background-task route is an ordinary handler (John, 2026-09-30)');
             like($source,
-                qr/mount\('\/ws'\s*,\s*app\s*=>\s*async sub/s,
-                'background tasks mounts its native WebSocket application directly');
+                qr/websocket\('\/ws'\s*=>\s*\\&messages\)/,
+                'background tasks declares its WebSocket as a one-$ws handler');
         }
         if ($directory eq 'full-demo') {
             my $source = source_text($file);
@@ -131,15 +130,15 @@ subtest 'endpoint demo declares endpoint objects directly' => sub {
         'HTTP endpoint is a direct route with its existing middleware');
     like($source,
         qr/websocket\('\/ws\/echo'\s*=>\s*EchoWS->new,\s*
-            middleware\s*=>\s*\[middleware\(\$access_log\),\s*middleware\(\$timing\)\]/x,
-        'WebSocket endpoint is a direct route with its existing middleware');
+            middleware\s*=>\s*\[middleware\(\$timing\)\]/x,
+        'WebSocket endpoint uses protocol-neutral middleware (AccessLog logs HTTP only)');
     like($source,
         qr/sse\('\/events'\s*=>\s*MessageEvents->new,\s*
             middleware\s*=>\s*\[middleware\(\$timing\)\]/x,
         'SSE endpoint is a direct route with its existing middleware');
     like($source,
-        qr/mount\('\/'\s*=>\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)/,
-        'static files remain the final direct fallback mount');
+        qr/route\('\/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)/,
+        'static files are the final HTTP-only catch-all route');
 };
 
 done_testing;

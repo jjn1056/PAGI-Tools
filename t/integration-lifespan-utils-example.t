@@ -6,7 +6,7 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib";
 use PAGI::Test::Client;
 
-my $app_file = "$Bin/../examples/14-lifespan-utils/app.pl";
+my $app_file = "$Bin/../examples/lifespan-utils/app.pl";
 my $app = do $app_file;
 my $load_error = $@ || $!;
 ok(!$load_error, 'lifespan-utils example loads cleanly') or diag($load_error);

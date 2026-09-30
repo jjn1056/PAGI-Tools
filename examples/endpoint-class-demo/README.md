@@ -159,7 +159,7 @@ use PAGI::Utils qw(app_path);
 
 sub public_root { return app_path('public') }
 
-mount('/', app => PAGI::App::File->new(root => $self->public_root))
+route('/*path' => PAGI::App::File->new(root => $self->public_root))
 ```
 
 Because `MyApp::Main` lives under `lib/MyApp/Main.pm`, `app_path('public')`

@@ -2189,17 +2189,14 @@ Server-Sent Events are ideal for real-time dashboards:
 
       # Subscribe to metrics updates (your pub/sub system). The callback
       # comes from an external, synchronous pub/sub API, so it can't await
-      # here -- handle the returned Future explicitly (on_fail + retain)
-      # instead of firing it and forgetting it.
+      # here. try_send_event is the best-effort send for exactly this: it
+      # never throws, and it needs no await.
       my $sub_id = subscribe_metrics(sub {
           my ($metrics) = @_;
           $sse->try_send_event(
               event => 'metrics',
               data  => $metrics,
-          )->on_fail(sub {
-              my ($error) = @_;
-              warn "metrics send failed: $error";
-          })->retain;
+          );
       });
 
       $sse->on_close(sub { unsubscribe_metrics($sub_id) });

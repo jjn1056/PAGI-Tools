@@ -6,7 +6,7 @@ use PAGI::Compose qw(compose);
 use PAGI::Pages;
 use PAGI::Response qw(json_response);
 use PAGI::Routing qw(route mount middleware router);
-use PAGI::Utils qw(as_app_object invoke_app);
+use PAGI::Utils qw(invoke_app);
 
 {
     package AuthExtensions::NoticeApp;
@@ -75,10 +75,12 @@ compose(
             return $ok->($request);
         }),
         route('/native' => sub ($request) {
-            return as_app_object(async sub ($scope, $receive, $send) {
+            # A native application is returned as bare CODE: a handler's
+            # return value is always an application, so no adapter is needed.
+            return async sub ($scope, $receive, $send) {
                 await invoke_app($notice->($request), $scope, $receive, $send);
                 return;
-            }) unless auth($request)->user->is_authenticated;
+            } unless auth($request)->user->is_authenticated;
             return $ok->($request);
         }),
         mount('/group', app => router(routes => [

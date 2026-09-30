@@ -13,7 +13,7 @@ sub source_text {
     return $source;
 }
 
-my $app_file = "$Bin/../examples/app-01-file/app.pl";
+my $app_file = "$Bin/../examples/static-files/app.pl";
 my $source = source_text($app_file);
 
 like($source,

@@ -15,7 +15,7 @@ use PAGI::App::File;
 use PAGI::Compose qw(compose);
 use PAGI::Middleware::AccessLog;
 use PAGI::Pages;
-use PAGI::Routing qw(middleware mount route sse websocket);
+use PAGI::Routing qw(middleware route sse websocket);
 use PAGI::Utils qw(invoke_app);
 
 
@@ -191,16 +191,20 @@ my $require_json = sub {
 # Main Routes - Unified routing for all protocols
 #---------------------------------------------------------
 
-# API endpoint with middleware:
-# - $access_log: logs each request (PAGI::Middleware instance)
+# Middleware per route:
+# - $access_log: logs each HTTP request (PAGI::Middleware instance). It logs
+#   HTTP only, so it goes on HTTP routes.
 # - $require_json: validates Content-Type for POST (coderef middleware)
+# - $timing: works for any protocol, so the WebSocket and SSE routes use it
 compose(routes => [
     route('/api/messages' => MessageAPI->new,
         middleware => [middleware($access_log), middleware($require_json)]),
     websocket('/ws/echo' => EchoWS->new,
-        middleware => [middleware($access_log), middleware($timing)]),
+        middleware => [middleware($timing)]),
     sse('/events' => MessageEvents->new,
         middleware => [middleware($timing)]),
-    # Static files as the final fallback for everything else (no middleware).
-    mount('/' => app => PAGI::App::File->from_app_path('public')),
+    # Static files for every other HTTP path (no middleware). A Route is
+    # HTTP-only, so a WebSocket or SSE request to an unknown path gets the
+    # Router's refusal instead of reaching the file application.
+    route('/*path' => PAGI::App::File->from_app_path('public')),
 ]);

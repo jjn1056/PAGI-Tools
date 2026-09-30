@@ -3,14 +3,14 @@ use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
 use Scalar::Util qw(refaddr);
-use lib "$Bin/../examples/15-large-application/lib";
+use lib "$Bin/../examples/large-application/lib";
 use PAGI::Test::Client;
 
 local $ENV{PAGI_HOME};
 delete $ENV{PAGI_HOME};
 
 if ($] < 5.040) {
-    plan skip_all => 'examples/15-large-application requires Perl 5.40';
+    plan skip_all => 'examples/large-application requires Perl 5.40';
     exit 0;
 }
 
@@ -56,7 +56,7 @@ sub _source_text {
 }
 
 subtest 'example sources require Perl 5.40 and use signatures' => sub {
-    my $root = "$Bin/../examples/15-large-application";
+    my $root = "$Bin/../examples/large-application";
     my @sources = (
         "$root/app.pl",
         "$root/lib/MyApp/Data.pm",
@@ -276,12 +276,12 @@ subtest 'component routing publishes the canonical composed address map' => sub 
 
 subtest 'legacy URL helper is absent' => sub {
     my $url_module = join '/',
-        "$Bin/../examples/15-large-application/lib", 'MyApp', 'URL' . '.pm';
+        "$Bin/../examples/large-application/lib", 'MyApp', 'URL' . '.pm';
     ok(!-e $url_module, 'the legacy URL helper file is no longer present');
 };
 
 subtest 'component handlers keep application hrefs behind URL helper calls' => sub {
-    my $component_root = "$Bin/../examples/15-large-application/lib/MyApp";
+    my $component_root = "$Bin/../examples/large-application/lib/MyApp";
     my @components = (
         ['Root', "$component_root/Root.pm", 0],
         ['Person', "$component_root/Person.pm", 0],
@@ -324,7 +324,7 @@ subtest 'Root composes lifespan, Router links, and owned outcomes' => sub {
     my $direct_app = MyApp::Root->to_app;
     isa_ok($direct_app, 'PAGI::Compose');
 
-    my $app_file = "$Bin/../examples/15-large-application/app.pl";
+    my $app_file = "$Bin/../examples/large-application/app.pl";
     my $app = do $app_file;
     my $load_error = $@ || $!;
     ok(!$load_error, 'minimal app.pl loads cleanly') or diag($load_error);

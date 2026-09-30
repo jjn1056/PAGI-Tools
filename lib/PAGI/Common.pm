@@ -2,9 +2,41 @@ package PAGI::Common;
 use strict;
 use warnings;
 use Carp qw(croak);
+use Future;
 use Scalar::Util qw(blessed);
 use PAGI::Utils ();
 use PAGI::Routing::RequestResponse;
+
+# PAGI::Spec::Www, "Sends Are Sequential": one send in flight per connection.
+# Every send a protocol helper makes comes through here, so code with several
+# producers on one connection needs no queue of its own. A send issued while
+# another is outstanding waits for it to settle, whatever its outcome. The
+# returned Future reports this send alone. Cancelling it before the send is
+# issued skips the send; cancelling it afterwards leaves the server's send
+# Future alone, and the next send still waits for that one to settle.
+sub send_in_order {
+    my ($owner, $event) = @_;
+    my $result = Future->new;
+    my $previous = $owner->{_send_tail} // Future->done;
+    $owner->{_send_tail} = $previous->followed_by(sub {
+        return Future->done if $result->is_cancelled;
+        my $sent = eval { Future->wrap($owner->{send}->($event)) };
+        $sent //= Future->fail($@);
+        # on_ready, unlike followed_by, also fires for a cancelled send, so
+        # the next send never waits on one that will not complete.
+        my $next = Future->new;
+        $sent->on_ready(sub {
+            my ($settled) = @_;
+            $next->done;
+            return if $result->is_ready;
+            if    ($settled->is_failed)    { $result->fail($settled->failure) }
+            elsif ($settled->is_cancelled) { $result->cancel }
+            else                           { $result->done($settled->get) }
+        });
+        return $next;
+    });
+    return $result;
+}
 
 # Admission and helper cleanup use these public capabilities. A version string
 # is diagnostic context, not proof that the connection implements the contract.

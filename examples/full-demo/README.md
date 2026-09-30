@@ -1,6 +1,7 @@
 # PAGI Full Demo
 
-A comprehensive example demonstrating all major PAGI features in a single application.
+A comprehensive example demonstrating all major PAGI features in a single
+application -- the runnable companion to the QUICK TOUR in `PAGI::Tools`.
 
 ## Features
 
@@ -8,6 +9,8 @@ A comprehensive example demonstrating all major PAGI features in a single applic
 - **HTTP GET** - Hello World endpoint
 - **HTTP POST** - Request body echo
 - **HTTP Streaming** - Chunked response with delays
+- **NDJSON** - One JSON record per line, written as produced
+- **Route names** - Links built with `path_for` / `url_for`
 - **WebSocket** - Bidirectional echo server
 - **SSE** - Server-Sent Events stream
 
@@ -24,6 +27,8 @@ pagi-server --app examples/full-demo/app.pl --port 5000
 | `/` | GET | Returns "Hello, World!" |
 | `/echo` | POST | Echoes back the request body |
 | `/stream` | GET | Streams 5 chunks with 0.5s delays |
+| `/export` | GET | NDJSON: three records, one per line |
+| `/routes` | GET | Every route's path, looked up by name |
 | `/ws/echo` | WebSocket | Echoes text and binary frames |
 | `/events` | SSE | Sends 10 tick events, 1 per second |
 
@@ -56,6 +61,18 @@ curl http://localhost:5000/stream
 # Chunk 2: Working...
 # Chunk 3: Almost done...
 # Stream complete!
+```
+
+### NDJSON and route names
+
+```bash
+curl http://localhost:5000/export
+# {"at":1704384000,"n":1}
+# {"at":1704384000,"n":2}
+# {"at":1704384000,"n":3}
+
+curl http://localhost:5000/routes
+# {"export_url":"http://localhost:5000/export","paths":{"echo":"/echo",...}}
 ```
 
 ### Server-Sent Events
@@ -125,7 +142,7 @@ compose(
         startup  => async sub { ... },
         shutdown => async sub { ... },
     },
-)->to_app;
+);
 ```
 
 The demo uses the ordinary high-level handler contracts: HTTP receives a
@@ -145,21 +162,28 @@ The lifespan startup hook initializes shared state accessible to all requests:
 ```perl
 startup => async sub {
     my ($state) = @_;
-    $state->{request_counter} = 0;
+    $state->{stats} = { requests => 0 };
     $state->{started_at} = time();
     # Initialize DB connections, caches, etc. here
 }
 ```
 
-Note: Avoid using `Future::IO->sleep` in lifespan hooks as the event loop
-may not be fully initialized. Use synchronous initialization or the
-`maybe_sleep` helper pattern shown in the example.
+The handlers' pauses use `Future::IO->sleep`; `pagi-server` binds the
+Future::IO implementation before it loads the application, so the example
+names no event loop.
 
 Access in HTTP handlers through the Request's state facade:
 
 ```perl
-my $counter = $request->state->data->{request_counter}++;
+my $counter = $request->state->data->{stats}{requests}++;
 ```
+
+Each request receives a *shallow copy* of the lifespan state (see
+`PAGI::Spec::Lifespan`, "Lifespan State"). Changing a top-level key --
+`$request->state->data->{request_counter}++` -- would change only that
+request's copy, so every request would report `#0`. Values requests change
+live in a container stored once at startup and are changed through its
+reference.
 
 ## See Also
 

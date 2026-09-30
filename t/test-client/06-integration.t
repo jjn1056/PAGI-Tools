@@ -19,7 +19,9 @@ my $app = async sub {
     if ($type eq 'lifespan') {
         my $event = await $receive->();
         if ($event->{type} eq 'lifespan.startup') {
-            $scope->{state}{counter} = 0;
+            # Each request gets a shallow copy of state, so a count shared
+            # across requests lives in a container stored once here.
+            $scope->{state}{ids} = { counter => 0 };
             await $send->({ type => 'lifespan.startup.complete' });
         }
         $event = await $receive->();
@@ -59,8 +61,8 @@ my $app = async sub {
         my $data = JSON::MaybeXS::decode_json($event->{body});
 
         # Increment counter if lifespan state available
-        my $id = ($scope->{state} && exists $scope->{state}{counter})
-            ? ++$scope->{state}{counter}
+        my $id = ($scope->{state} && $scope->{state}{ids})
+            ? ++$scope->{state}{ids}{counter}
             : 1;
 
         await $send->({ type => 'http.response.start', status => 201, headers => [['content-type', 'application/json']] });
