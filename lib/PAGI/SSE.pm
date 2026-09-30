@@ -294,7 +294,7 @@ async sub start {
     };
     $event->{headers} = $opts{headers} if exists $opts{headers};
 
-    await $self->{send}->($event);
+    await PAGI::Common::send_in_order($self, $event);
     $self->_set_state('started') unless $self->is_closed;
     return $self if $self->is_closed;
 
@@ -302,7 +302,7 @@ async sub start {
     # keepalive()'s deferred-arm note below) -- illegal before sse.start,
     # now legal immediately after it.
     if (my $pending = delete $self->{_pending_keepalive}) {
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type     => 'sse.keepalive',
             interval => $pending->{interval},
             comment  => $pending->{comment},
@@ -346,7 +346,7 @@ async sub keepalive {
         return $self;
     }
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type     => 'sse.keepalive',
         interval => $interval,
         comment  => $comment,
@@ -405,7 +405,7 @@ async sub send {
     # Auto-start if not started
     await $self->start unless $self->is_started;
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type => 'sse.send',
         data => $data,
     });
@@ -424,7 +424,7 @@ async sub send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type => 'sse.send',
         data => $json,
     });
@@ -457,7 +457,7 @@ async sub send_event {
     $event->{id}    = "$opts{id}"  if defined $opts{id};
     $event->{retry} = int($opts{retry}) if defined $opts{retry};
 
-    await $self->{send}->($event);
+    await PAGI::Common::send_in_order($self, $event);
 
     return $self;
 }
@@ -469,7 +469,7 @@ async sub try_send {
 
     eval {
         await $self->start unless $self->is_started;
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'sse.send',
             data => $data,
         });
@@ -488,7 +488,7 @@ async sub try_send_json {
     eval {
         await $self->start unless $self->is_started;
         my $json = JSON::MaybeXS::encode_json($data);
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'sse.send',
             data => $json,
         });
@@ -509,7 +509,7 @@ async sub send_comment {
 
     await $self->start unless $self->is_started;
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type    => 'sse.comment',
         comment => $comment,
     });
@@ -523,7 +523,7 @@ async sub try_send_comment {
 
     eval {
         await $self->start unless $self->is_started;
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type    => 'sse.comment',
             comment => $comment,
         });
@@ -555,7 +555,7 @@ async sub try_send_event {
         $event->{id}    = "$opts{id}"  if defined $opts{id};
         $event->{retry} = int($opts{retry}) if defined $opts{retry};
 
-        await $self->{send}->($event);
+        await PAGI::Common::send_in_order($self, $event);
     };
     if (my $err = $@) {
         await $self->_trigger_error($err);
@@ -660,7 +660,7 @@ sub close {
     my $send;
     my $ok = eval {
         my %opts = @args;
-        $send = Future->wrap($self->{send}->({type => 'sse.close', (defined $opts{reason} ? (reason => $opts{reason}) : ())}));
+        $send = Future->wrap(PAGI::Common::send_in_order($self, {type => 'sse.close', (defined $opts{reason} ? (reason => $opts{reason}) : ())}));
         1;
     };
     if (!$ok) { $settled->fail($@) }
@@ -1205,6 +1205,15 @@ methods), the callbacks are quiet no-ops and C<is_writable> is true.
     await $sse->send("Hello world");
 
 Sends a data-only event.
+
+B<Sends go out one at a time.> PAGI::Spec::Www requires that an application
+not issue a send before the previous one has resolved. This object does that
+for you: a send made while another is still in flight waits for it, whatever
+its outcome, so several producers -- a live broadcast racing a periodic
+C<every> callback -- can each call C<send*> or C<try_send*> directly, with no
+queue of their own. A send whose caller cancels it before it goes out is
+skipped; one already handed to the server is never cancelled. Code that calls
+the raw C<$send> itself still owns the rule.
 
 =head2 send_json
 

@@ -1,5 +1,15 @@
 # Revision history for PAGI-Tools
 
+0.002004 - UNRELEASED
+
+  [Sequential sends in the protocol helpers]
+  - PAGI::WebSocket and PAGI::SSE send one message at a time, as
+    PAGI::Spec::Www requires ("Sends Are Sequential"). A send made while
+    another is in flight waits for it, whatever its outcome, so handlers with
+    several producers on one connection need no queue of their own. A send
+    whose caller cancels it before it goes out is skipped; a caller's cancel
+    no longer reaches a send the server already holds.
+
 0.002003 - 2026-09-30
 
   [FormBody and JSONBody removed]

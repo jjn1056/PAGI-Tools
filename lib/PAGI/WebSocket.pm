@@ -394,7 +394,7 @@ async sub accept {
     $event->{subprotocol} = $opts{subprotocol} if exists $opts{subprotocol};
     $event->{headers} = $opts{headers} if exists $opts{headers};
 
-    await $self->{send}->($event);
+    await PAGI::Common::send_in_order($self, $event);
     $self->_set_state('connected') unless $self->is_closed;
 
     return $self;
@@ -417,7 +417,7 @@ sub close {
     my $send;
     my $ok = eval {
         my ($code, $reason) = @args;
-        $send = Future->wrap($self->{send}->({type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
+        $send = Future->wrap(PAGI::Common::send_in_order($self, {type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
         1;
     };
     if (!$ok) { $settled->fail($@) }
@@ -451,7 +451,7 @@ async sub send_text {
 
     croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type => 'websocket.send',
         text => $text,
     });
@@ -465,7 +465,7 @@ async sub send_bytes {
 
     croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type  => 'websocket.send',
         bytes => $bytes,
     });
@@ -481,7 +481,7 @@ async sub send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
 
-    await $self->{send}->({
+    await PAGI::Common::send_in_order($self, {
         type => 'websocket.send',
         text => $json,
     });
@@ -496,7 +496,7 @@ async sub try_send_text {
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             text => $text,
         });
@@ -517,7 +517,7 @@ async sub try_send_bytes {
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             bytes => $bytes,
         });
@@ -539,7 +539,7 @@ async sub try_send_json {
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
-        await $self->{send}->({
+        await PAGI::Common::send_in_order($self, {
             type => 'websocket.send',
             text => $json,
         });
@@ -736,7 +736,7 @@ async sub keepalive {
     };
     $event->{timeout} = $timeout if defined $timeout;
 
-    await $self->{send}->($event);
+    await PAGI::Common::send_in_order($self, $event);
 
     return $self;
 }
@@ -1197,6 +1197,15 @@ methods), the callbacks are quiet no-ops and C<is_writable> is true.
     await $ws->send_json({ action => 'greet', name => 'Alice' });
 
 Send a message. Dies if connection is closed.
+
+B<Sends go out one at a time.> PAGI::Spec::Www requires that an application
+not issue a send before the previous one has resolved. This object does that
+for you: a send made while another is still in flight waits for it, whatever
+its outcome, so several producers -- a reply racing a broadcast from another
+connection, a server tick racing an echo -- can each call C<send_*> or
+C<try_send_*> directly, with no queue of their own. A send whose caller
+cancels it before it goes out is skipped; one already handed to the server is
+never cancelled. Code that calls the raw C<$send> itself still owns the rule.
 
 =head2 try_send_text, try_send_bytes, try_send_json
 
