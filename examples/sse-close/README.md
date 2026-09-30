@@ -14,9 +14,12 @@ events, then a `done` sentinel, then calls `close(reason => 'job_complete')`.
 What it shows:
 
 - **`close(reason => ...)`** ends the stream immediately (decoupled from
-  returning) and runs `on_close`. The `reason` is **server-side only** — printed
-  to STDERR (`SSE stream closed: reason=job_complete`) and **never sent to the
-  client**, because SSE has no close frame on the wire.
+  returning) and runs `on_close`. The stream has *completed*, so `on_close`
+  receives an undefined reason (the example prints `SSE stream closed:
+  completed`); had the client left first it would receive a token such as
+  `client_closed`. The `reason` passed to `close` is metadata for the server's
+  logging and metrics, **never sent to the client**, because SSE has no close
+  frame on the wire.
 - **Client-facing "why" is a normal event.** The browser can't observe the
   close reason, so the app sends a `done` sentinel event; the client listens for
   it and calls `es.close()` to suppress the automatic reconnect.

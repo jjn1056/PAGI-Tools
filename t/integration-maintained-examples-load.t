@@ -20,7 +20,7 @@ my @examples = (
     ['09-psgi-bridge',          'CODE'],
     ['background-tasks',        'APP'],
     ['full-demo',               'CODE'],
-    ['sse-close',               'CODE'],
+    ['sse-close',               'APP'],
     ['test-lifespan-shutdown',  'CODE'],
     ['websocket-bidirectional', 'APP'],
     ['websocket-echo-v2',       'CODE'],
