@@ -1092,12 +1092,16 @@ Access via C<$scope-E<gt>{'pagi.cookies'}>.
 
 =item * L<PAGI::Middleware::Session>
 
-Server-side sessions with signed cookies:
+Sessions: a random session ID in a cookie, the data in a store (by default
+this process's memory):
 
   enable 'Session',
-      secret      => 'your-secret-key',
-      cookie_name => 'session',
-      expire      => 86400;
+      secret => 'your-secret-key',
+      state  => PAGI::Middleware::Session::State::Cookie->new(
+          cookie_name => 'session',
+          expire      => 86400,
+      ),
+      expire => 86400;
 
 Access via C<$scope-E<gt>{'pagi.session'}>.
 

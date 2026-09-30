@@ -87,7 +87,7 @@ no server-side storage:
     middleware('Session',
         secret => $ENV{SESSION_SECRET},
         store  => PAGI::Middleware::Session::Store::Cookie->new(
-            secret => $ENV{SESSION_SECRET},
+            secret => $ENV{STORE_SECRET},
         ),
     )
 
@@ -96,9 +96,11 @@ revoked on the server before it expires. For larger or revocable sessions, use
 a shared server-side store; see L<PAGI::Middleware::Session/STORE CLASSES>.
 
 B<How the session ID travels is the middleware's State.> By default it is a
-cookie (L<PAGI::Middleware::Session::State::Cookie>), which most applications
-keep and configure through the middleware's C<cookie_name>, C<cookie_options>
-and C<expire>. Header-based states exist for clients that are not browsers,
+cookie (L<PAGI::Middleware::Session::State::Cookie>) with sensible defaults;
+to change the cookie (its name, C<Secure>, its lifetime), build a
+State::Cookie and pass it to the middleware as C<state>. The middleware's own
+C<expire> is only the server-side idle timeout. Header-based states exist for
+clients that are not browsers,
 with real limits (the application must hand out the ID, and C<regenerate>
 does not work with them); see L<PAGI::Middleware::Session/STATE CLASSES>.
 

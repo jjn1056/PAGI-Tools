@@ -8,6 +8,7 @@ use IO::Async::Loop;
 
 use PAGI::Middleware::Cookie;
 use PAGI::Middleware::Session;
+use PAGI::Middleware::Session::State::Cookie;
 
 my $loop = IO::Async::Loop->new;
 
@@ -87,7 +88,8 @@ for my $case (['default', undef, qr/SameSite=Lax/], ['custom', 'Strict', qr/Same
     subtest "Session middleware - $name SameSite cookie" => sub {
         PAGI::Middleware::Session->clear_sessions;
         my %options = $samesite
-            ? (cookie_options => { httponly => 1, path => '/', samesite => $samesite }) : ();
+            ? (state => PAGI::Middleware::Session::State::Cookie->new(
+                cookie_options => { httponly => 1, path => '/', samesite => $samesite })) : ();
         my $app = PAGI::Middleware::Session->new(secret => 'test-secret', %options)->wrap(async sub {
             my ($scope, $receive, $send) = @_;
             await $send->({ type => 'http.response.start', status => 200, headers => [] });

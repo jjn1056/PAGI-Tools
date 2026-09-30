@@ -1936,6 +1936,7 @@ that hashref with a convenient (and typo-catching) API.
   use strict;
   use warnings;
   use PAGI::Middleware::Builder;
+  use PAGI::Middleware::Session::State::Cookie;
   use PAGI::Session qw(session);
   use PAGI::Response qw(text_response);
   use PAGI::Routing qw(route router);
@@ -1977,9 +1978,12 @@ that hashref with a convenient (and typo-catching) API.
   # Wrap the Router with the session middleware
   my $app = builder {
       enable 'Session',
-          secret      => 'your-secret-key-here',
-          cookie_name => 'session_id',
-          expire      => 86400;  # 1 day
+          secret => 'your-secret-key-here',
+          state  => PAGI::Middleware::Session::State::Cookie->new(
+              cookie_name => 'session_id',
+              expire      => 86400,   # the cookie lasts 1 day
+          ),
+          expire => 86400;            # and so does the session on the server
       $routing;
   };
 

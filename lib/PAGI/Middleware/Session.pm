@@ -36,18 +36,23 @@ PAGI::Middleware::Session - Session management middleware with pluggable State/S
 
     # Several workers, or sessions that survive a restart: keep the whole
     # session encrypted in the cookie (distribution
-    # PAGI-Middleware-Session-Store-Cookie), and configure the cookie.
+    # PAGI-Middleware-Session-Store-Cookie). To change the cookie itself,
+    # configure the State and pass it; nothing on the middleware reaches it.
+    use PAGI::Middleware::Session::State::Cookie;
     use PAGI::Middleware::Session::Store::Cookie;
 
     my $production = compose(
         middleware => [
             middleware('Session',
-                secret         => $ENV{SESSION_SECRET},
-                store          => PAGI::Middleware::Session::Store::Cookie->new(
-                    secret => $ENV{SESSION_SECRET},
+                secret => $ENV{SESSION_SECRET},
+                state  => PAGI::Middleware::Session::State::Cookie->new(
+                    cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
+                    expire         => 8 * 3600,    # the cookie's Max-Age
                 ),
-                cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
-                expire         => 8 * 3600,
+                store  => PAGI::Middleware::Session::Store::Cookie->new(
+                    secret => $ENV{STORE_SECRET},
+                ),
+                expire => 8 * 3600,                # the server-side idle timeout
             ),
         ],
         routes => [route('/visits' => \&visits)],
@@ -89,14 +94,20 @@ Secret key used for session ID generation.
 
 =item * expire (default: 3600)
 
-Session expiration time in seconds.
+Server-side idle timeout in seconds: a session whose last recorded access is
+older than this is treated as absent and a new one is started. It does
+B<not> set the cookie's lifetime -- that is the C<expire> of the
+L<PAGI::Middleware::Session::State::Cookie> you pass as C<state> (default
+also 3600). Change one and you almost always want to change the other.
 
 =item * state (optional)
 
 A L<PAGI::Middleware::Session::State> object that implements C<extract($scope)>
-and C<inject(\@headers, $id, \%options)>. If not provided, a
-L<PAGI::Middleware::Session::State::Cookie> instance is created using
-C<cookie_name>, C<cookie_options>, and C<expire>.
+and C<inject(\@headers, $id, \%options)>. If not provided,
+C<< PAGI::Middleware::Session::State::Cookie->new >> is used with its own
+defaults (cookie C<pagi_session>; C<HttpOnly>, C<Path=/>, C<SameSite=Lax>;
+C<Max-Age> 3600). To change the cookie, build a State::Cookie and pass it
+here; see L</STATE CLASSES>.
 
 =item * store (optional)
 
@@ -104,24 +115,11 @@ A L<PAGI::Middleware::Session::Store> object that implements async C<get($id)>,
 C<set($id, $data)>, and C<delete($id)>. If not provided, a
 L<PAGI::Middleware::Session::Store::Memory> instance is created.
 
-=item * cookie_name (default: 'pagi_session')
-
-Name of the session cookie. Only used when C<state> defaults to
-L<PAGI::Middleware::Session::State::Cookie>.
-
-=item * cookie_options (default: { httponly => 1, path => '/', samesite => 'Lax' })
-
-Options for the session cookie. Only used when C<state> defaults to
-L<PAGI::Middleware::Session::State::Cookie>. The hashref B<replaces> the
-default set rather than adding to it, so restate the defaults you want to
-keep. For production HTTPS deployments:
-
-    cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
-
-Passing only C<< { secure => 1 } >> would drop C<HttpOnly>, C<Path> and
-C<SameSite>.
-
 =back
+
+C<cookie_name> and C<cookie_options> are not options of this middleware:
+they belong to L<PAGI::Middleware::Session::State::Cookie>, and passing them
+here dies with a message saying so.
 
 =head1 STATE CLASSES
 
@@ -130,16 +128,25 @@ request and how a new or changed one is sent back. (Where the session I<data>
 lives is the Store, below.) All implement the
 L<PAGI::Middleware::Session::State> interface.
 
-Most applications keep the default, L<PAGI::Middleware::Session::State::Cookie>,
-and configure it through this middleware's C<cookie_name>, C<cookie_options>
-and C<expire> rather than building a State object:
+Most applications use the default, L<PAGI::Middleware::Session::State::Cookie>.
+To configure the cookie -- its name, attributes such as C<Secure>, its
+lifetime -- build one and pass it as C<state>:
+
+    use PAGI::Middleware::Session::State::Cookie;
 
     middleware('Session',
-        secret         => $ENV{SESSION_SECRET},
-        cookie_name    => 'myapp_session',
-        cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
-        expire         => 8 * 3600,
+        secret => $ENV{SESSION_SECRET},
+        state  => PAGI::Middleware::Session::State::Cookie->new(
+            cookie_name    => 'myapp_session',
+            cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
+            expire         => 8 * 3600,    # the cookie's Max-Age
+        ),
+        expire => 8 * 3600,                # the server-side idle timeout
     )
+
+C<cookie_options> B<replaces> State::Cookie's default attributes rather than
+adding to them, so restate the ones you keep: passing only
+C<< { secure => 1 } >> would drop C<HttpOnly>, C<Path> and C<SameSite>.
 
 The other states read the ID from a request header instead, for clients that
 are not browsers. B<They never send an ID back> (their C<inject> is a no-op),
@@ -226,11 +233,12 @@ the server before it expires. Its C<secret> should be a long random value:
 
     use PAGI::Middleware::Session::Store::Cookie;
 
-    enable 'Session',
+    middleware('Session',
         secret => $ENV{SESSION_SECRET},
         store  => PAGI::Middleware::Session::Store::Cookie->new(
-            secret => $ENV{SESSION_SECRET},
-        );
+            secret => $ENV{STORE_SECRET},
+        ),
+    )
 
 =item External stores
 
@@ -362,20 +370,20 @@ sub _init {
     $self->{expire} = $config->{expire} // 3600;
     $self->{_json}  = JSON::MaybeXS->new(canonical => 1);
 
+    # The cookie belongs to the State object: configure it there and pass it
+    # as `state`. Nothing on the middleware reaches the default state.
+    for my $moved (qw(cookie_name cookie_options)) {
+        die "'$moved' is not a Session option; configure the cookie on "
+            . "PAGI::Middleware::Session::State::Cookie->new(...) and pass it as 'state'"
+            if exists $config->{$moved};
+    }
+
     # State: pluggable session ID transport
     if ($config->{state}) {
         $self->{state} = $config->{state};
     } else {
         require PAGI::Middleware::Session::State::Cookie;
-        $self->{state} = PAGI::Middleware::Session::State::Cookie->new(
-            cookie_name    => $config->{cookie_name} // 'pagi_session',
-            cookie_options => $config->{cookie_options} // {
-                httponly => 1,
-                path     => '/',
-                samesite => 'Lax',
-            },
-            expire => $self->{expire},
-        );
+        $self->{state} = PAGI::Middleware::Session::State::Cookie->new;
     }
 
     # Store: pluggable async session storage

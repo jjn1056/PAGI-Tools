@@ -11,6 +11,44 @@ Each After example uses behavior implemented on this branch for that release.
 Examples use ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Breaking: the Session cookie is configured on `State::Cookie`, not on the middleware
+
+`PAGI::Middleware::Session` no longer takes `cookie_name` or
+`cookie_options`; passing either dies with a message naming the new place.
+The session cookie belongs to `PAGI::Middleware::Session::State::Cookie`:
+build one and pass it as `state`. The defaults are unchanged -- with no
+`state` you get a `pagi_session` cookie with `HttpOnly`, `Path=/`,
+`SameSite=Lax` and `Max-Age` 3600.
+
+The middleware's `expire` is now only the server-side idle timeout. It no
+longer sets the cookie's `Max-Age`; that is `State::Cookie`'s own `expire`.
+An application that set `expire` on the middleware to change how long the
+cookie lasts must now set it on the State as well.
+
+```perl
+# Before
+enable 'Session',
+    secret         => $secret,
+    cookie_name    => 'myapp_session',
+    cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
+    expire         => 86400;
+
+# After
+use PAGI::Middleware::Session::State::Cookie;
+
+enable 'Session',
+    secret => $secret,
+    state  => PAGI::Middleware::Session::State::Cookie->new(
+        cookie_name    => 'myapp_session',
+        cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
+        expire         => 86400,    # the cookie's Max-Age
+    ),
+    expire => 86400;                # the server-side idle timeout
+```
+
+`cookie_options` replaces State::Cookie's default attributes rather than
+adding to them, so restate the ones you keep.
+
 ## Breaking: `PAGI::Middleware::FormBody` and `PAGI::Middleware::JSONBody` are removed
 
 Body parsing belongs to `PAGI::Request`, which works on the raw PAGI protocol

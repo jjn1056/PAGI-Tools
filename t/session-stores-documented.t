@@ -5,6 +5,7 @@ use FindBin qw($Bin);
 use lib "$Bin/../lib";
 
 use PAGI::Compose qw(compose);
+use PAGI::Middleware::Session;
 use PAGI::Middleware::Session::Store::Memory;
 use PAGI::Response qw(json_response);
 use PAGI::Routing qw(middleware route);
@@ -64,17 +65,32 @@ subtest 'the cookie store keeps the session in the cookie' => sub {
 # State: how the session ID travels. Documented in PAGI::Middleware::Session
 # ("STATE CLASSES") and pointed to from PAGI::Session.
 
-subtest 'default cookie state: cookie_options replaces the defaults' => sub {
+subtest 'the cookie is configured on State::Cookie, not on the middleware' => sub {
+    require PAGI::Middleware::Session::State::Cookie;
     my $set_cookie = sub {
         my (%config) = @_;
         return PAGI::Test::Client->new(app => app_with(%config))
             ->get('/visits')->header('set-cookie');
     };
-    like($set_cookie->(), qr/HttpOnly/, 'by default the cookie is HttpOnly');
-    unlike($set_cookie->(cookie_options => { secure => 1 }), qr/HttpOnly/,
-        'cookie_options without httponly drops it: restate the defaults you keep');
-    like($set_cookie->(cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 }),
-        qr/HttpOnly.*Secure.*SameSite=Lax/, 'restated defaults plus secure');
+
+    my $default = $set_cookie->(expire => 7200);
+    like($default, qr/^pagi_session=.*HttpOnly.*SameSite=Lax/, 'the default state keeps its defaults');
+    like($default, qr/Max-Age=3600\b/,
+        "and its own lifetime: the middleware's expire (7200) is not passed to it");
+
+    my $configured = $set_cookie->(state => PAGI::Middleware::Session::State::Cookie->new(
+        cookie_name    => 'myapp_session',
+        cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
+        expire         => 7200,
+    ));
+    like($configured, qr/^myapp_session=.*HttpOnly.*Secure.*SameSite=Lax.*Max-Age=7200\b/,
+        'a State::Cookie passed as state sets name, attributes and lifetime');
+
+    for my $moved (qw(cookie_name cookie_options)) {
+        like(dies { PAGI::Middleware::Session->new(secret => $SECRET, $moved => 'x') },
+            qr/'$moved' is not a Session option.*PAGI::Middleware::Session::State::Cookie/,
+            "$moved on the middleware dies naming where it goes");
+    }
 };
 
 subtest 'header state: the application hands the client its session ID' => sub {
