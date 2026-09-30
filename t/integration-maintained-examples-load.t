@@ -17,7 +17,7 @@ sub source_text {
 }
 
 my @examples = (
-    ['09-psgi-bridge',          'CODE'],
+    ['09-psgi-bridge',          'APP'],
     ['background-tasks',        'APP'],
     ['full-demo',               'APP'],
     ['sse-close',               'APP'],
