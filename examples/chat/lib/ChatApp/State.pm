@@ -458,15 +458,15 @@ sub add_system_event {
         shift @system_events;
     }
 
-    # Push it to every connected SSE subscriber now. try_send_event never
-    # dies; a subscriber that has gone is removed by its own on_close. The
-    # caller cannot await here, so each send's Future is retained until done.
+    # Push it to every connected SSE subscriber now. try_send_event is
+    # best-effort and needs no await; a subscriber that has gone is removed
+    # by its own on_close.
     for my $subscriber (values %sse_subscribers) {
         $subscriber->{sse}->try_send_event(
             event => $event->{type},
             data  => $event->{data},
             id    => $event->{id},
-        )->retain;
+        );
     }
 
     return $event;

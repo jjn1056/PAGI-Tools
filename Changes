@@ -11,6 +11,11 @@
     no longer reaches a send the server already holds.
   - PAGI::SSE: sends made before the stream starts share one start, so
     several producers no longer issue sse.start more than once.
+  - try_send_* (PAGI::WebSocket and PAGI::SSE) may be made and their Future
+    dropped, the usual shape of a broadcast loop: each keeps itself alive
+    until it settles. Previously a dropped best-effort send that had to wait
+    warned "Suspended async sub ... lost its returning future", and callers
+    needed ->retain. PAGI::SSE documents try_send_comment.
 
   [Documentation and examples]
   - The PAGI::WebSocket and PAGI::SSE SYNOPSIS show the helpers as route

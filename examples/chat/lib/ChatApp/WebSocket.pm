@@ -38,17 +38,14 @@ async sub chat {
             for my $other (@{ get_room_users($room_name) }) {
                 my $other_session = get_session($other->{id});
                 next unless $other_session && $other_session->{send_cb};
-                # Runs when the grace period ends, outside any await, so the
-                # send's Future is handled explicitly.
+                # Best-effort: runs when the grace period ends, outside any
+                # await, and a recipient that has gone is simply skipped.
                 $other_session->{send_cb}->({
                     type  => 'user_left',
                     room  => $room_name,
                     user  => $username,
                     users => get_room_users($room_name),
-                })->on_fail(sub {
-                    my ($error) = @_;
-                    warn "Failed to notify $other->{id} that $username left $room_name: $error\n";
-                })->retain;
+                });
             }
         };
         set_session_disconnected($session_id, $broadcast_leave) if $session;
@@ -61,7 +58,7 @@ async sub chat {
 
     if ($session) {
         # Resume an existing session and send what it missed.
-        set_session_connected($session_id, sub { $ws->send_json($_[0]) });
+        set_session_connected($session_id, sub { $ws->try_send_json($_[0]) });
 
         my %missed_messages;
         for my $room_name (keys %{$session->{rooms}}) {
@@ -80,7 +77,7 @@ async sub chat {
         my $username = sanitize_username($raw_name || 'Anonymous');
         $session_id ||= _generate_session_id();
 
-        $session = create_session($session_id, $username, sub { $ws->send_json($_[0]) });
+        $session = create_session($session_id, $username, sub { $ws->try_send_json($_[0]) });
 
         await $ws->send_json({
             type       => 'connected',
@@ -359,14 +356,12 @@ async sub _handle_private_message {
     }
 
     if ($target->{send_cb}) {
-        eval {
-            await $target->{send_cb}->({
-                type => 'pm',
-                from => $session->{name},
-                text => $text,
-                ts   => time(),
-            });
-        };
+        await $target->{send_cb}->({
+            type => 'pm',
+            from => $session->{name},
+            text => $text,
+            ts   => time(),
+        });
     }
 
     await $ws->send_json({
@@ -455,7 +450,9 @@ async sub _broadcast_to_room {
         my $session = get_session($room_user->{id});
         next unless $session && $session->{send_cb};
 
-        eval { await $session->{send_cb}->($data) };
+        # Best-effort and not awaited, so one slow client does not hold
+        # up the rest of the room.
+        $session->{send_cb}->($data);
     }
 }
 

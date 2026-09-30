@@ -491,7 +491,12 @@ async sub send_json {
 
 # Safe send methods - return bool instead of throwing
 
-async sub try_send_text {
+# Best-effort sends never throw, so broadcast loops may make one and drop
+# the Future. Each keeps itself alive until it settles, so a send waiting
+# its turn behind another still goes out and is not reported as lost.
+sub try_send_text { my $self = shift; return $self->_try_send_text(@_)->retain }
+
+async sub _try_send_text {
     my ($self, $text) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
@@ -512,7 +517,9 @@ async sub try_send_text {
     return 1;
 }
 
-async sub try_send_bytes {
+sub try_send_bytes { my $self = shift; return $self->_try_send_bytes(@_)->retain }
+
+async sub _try_send_bytes {
     my ($self, $bytes) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
@@ -533,7 +540,9 @@ async sub try_send_bytes {
     return 1;
 }
 
-async sub try_send_json {
+sub try_send_json { my $self = shift; return $self->_try_send_json(@_)->retain }
+
+async sub _try_send_json {
     my ($self, $data) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
@@ -1222,6 +1231,10 @@ and this still returns true. "Sent" means "the send call did not fail," not "the
 client received it."
 
 =back
+
+You may make one and drop the returned Future -- the usual shape of a
+broadcast loop. The send keeps itself alive until it settles, so it still goes
+out even when it must wait behind a send already in flight.
 
 If you need more than best-effort, reach for the right tool instead of inspecting
 this return value:

@@ -475,7 +475,12 @@ async sub send_event {
 }
 
 # Safe send - returns bool instead of throwing
-async sub try_send {
+# Best-effort sends never throw, so broadcast loops may make one and drop
+# the Future. Each keeps itself alive until it settles, so a send waiting
+# its turn behind another still goes out and is not reported as lost.
+sub try_send { my $self = shift; return $self->_try_send(@_)->retain }
+
+async sub _try_send {
     my ($self, $data) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
@@ -493,7 +498,9 @@ async sub try_send {
     return 1;
 }
 
-async sub try_send_json {
+sub try_send_json { my $self = shift; return $self->_try_send_json(@_)->retain }
+
+async sub _try_send_json {
     my ($self, $data) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
@@ -529,7 +536,9 @@ async sub send_comment {
     return $self;
 }
 
-async sub try_send_comment {
+sub try_send_comment { my $self = shift; return $self->_try_send_comment(@_)->retain }
+
+async sub _try_send_comment {
     my ($self, $comment) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
@@ -547,7 +556,9 @@ async sub try_send_comment {
     return 1;
 }
 
-async sub try_send_event {
+sub try_send_event { my $self = shift; return $self->_try_send_event(@_)->retain }
+
+async sub _try_send_event {
     my ($self, %opts) = @_;
     return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
@@ -1249,15 +1260,21 @@ connection">) after terminal notification, including after L</decline>. While
 a refusal response has started but the connection is still live, these methods
 return C<$self> without emitting an SSE start or data event.
 
-=head2 try_send, try_send_json, try_send_event
+=head2 try_send, try_send_json, try_send_comment, try_send_event
 
     my $ok = await $sse->try_send_json($data);
     if (!$ok) {
         # Client disconnected
     }
 
+    $_->try_send_event(event => 'news', data => $item) for @subscribers;
+
 Returns true on success, false on failure. Does not throw.
 Useful for broadcasting to multiple clients.
+
+You may make one and drop the returned Future -- the usual shape of a
+broadcast loop. The send keeps itself alive until it settles, so it still goes
+out even when it must wait behind a send already in flight.
 
 =head1 KEEPALIVE
 

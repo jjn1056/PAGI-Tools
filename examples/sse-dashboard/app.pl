@@ -45,8 +45,8 @@ sub start_broadcaster {
             };
             for my $sub_id (keys %subscribers) {
                 # A broadcast cannot await each client. try_send_event never
-                # dies; a send that fails means the client has gone, so it is
-                # unsubscribed here, and the Future is retained until done.
+                # dies and needs no await; a send that fails means the client
+                # has gone, so it is unsubscribed here.
                 $subscribers{$sub_id}->try_send_event(
                     event => 'metrics',
                     data  => $metrics,
@@ -54,7 +54,7 @@ sub start_broadcaster {
                 )->on_done(sub {
                     my ($ok) = @_;
                     delete $subscribers{$sub_id} unless $ok;
-                })->retain;
+                });
             }
         }
         undef $broadcaster;
