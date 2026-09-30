@@ -14,42 +14,44 @@ PAGI::Middleware::Session - Session management middleware with pluggable State/S
 
 =head1 SYNOPSIS
 
-    use PAGI::Middleware::Builder;
+    use PAGI::Compose qw(compose);
+    use PAGI::Response qw(json_response);
+    use PAGI::Routing qw(middleware route);
+    use PAGI::Session qw(session);
 
-    # Default (cookie-based, in-memory store)
-    my $app = builder {
-        enable 'Session', secret => 'your-secret-key';
-        $my_app;
-    };
+    # Default: the session ID travels in a cookie and the data lives in this
+    # process's memory -- fine for development and a single process.
+    my $app = compose(
+        middleware => [middleware('Session', secret => $ENV{SESSION_SECRET})],
+        routes     => [route('/visits' => \&visits)],
+    );
 
-    # Explicit state and store
-    use PAGI::Middleware::Session::State::Header;
-    use PAGI::Middleware::Session::Store::Memory;
-
-    my $app = builder {
-        enable 'Session',
-            secret => 'your-secret-key',
-            state  => PAGI::Middleware::Session::State::Header->new(
-                header_name => 'X-Session-ID',
-            ),
-            store  => PAGI::Middleware::Session::Store::Memory->new;
-        $my_app;
-    };
-
-    # In your app:
-    async sub app {
-        my ($scope, $receive, $send) = @_;
-
-        # Raw hashref access
-        my $session = $scope->{'pagi.session'};
-        $session->{user_id} = 123;
-
-        # Or use the PAGI::Session helper
-        use PAGI::Session;
-        my $s = PAGI::Session->new($scope);
-        $s->set('user_id', 123);
-        my $uid = $s->get('user_id');  # dies if key missing
+    # Handlers use PAGI::Session (or the raw $scope->{'pagi.session'} hashref).
+    sub visits {
+        my ($request) = @_;
+        my $session = session($request);
+        $session->set(visits => $session->get('visits', 0) + 1);
+        return json_response({ visits => $session->get('visits') });
     }
+
+    # Several workers, or sessions that survive a restart: keep the whole
+    # session encrypted in the cookie (distribution
+    # PAGI-Middleware-Session-Store-Cookie), and configure the cookie.
+    use PAGI::Middleware::Session::Store::Cookie;
+
+    my $production = compose(
+        middleware => [
+            middleware('Session',
+                secret         => $ENV{SESSION_SECRET},
+                store          => PAGI::Middleware::Session::Store::Cookie->new(
+                    secret => $ENV{SESSION_SECRET},
+                ),
+                cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
+                expire         => 8 * 3600,
+            ),
+        ],
+        routes => [route('/visits' => \&visits)],
+    );
 
 =head1 DESCRIPTION
 
