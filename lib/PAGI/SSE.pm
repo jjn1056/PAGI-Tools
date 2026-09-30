@@ -802,46 +802,44 @@ PAGI::SSE - Convenience wrapper for PAGI Server-Sent Events connections
 
 =head1 SYNOPSIS
 
-    use PAGI::SSE;
     use Future::AsyncAwait;
+    use PAGI::Compose qw(compose);
+    use PAGI::Routing qw(sse);
 
-    # Simple notification stream
-    async sub app {
-        my ($scope, $receive, $send) = @_;
+    our @history;        # every event published, for reconnecting clients
+    our %subscribers;    # open streams, shared by every connection
 
-        my $sse = PAGI::SSE->new($scope, $receive, $send);
+    sub publish {
+        my (%event) = @_;
+        push @history, { %event, id => scalar(@history) + 1 };
+        $_->try_send_event(%{ $history[-1] }) for values %subscribers;
+    }
 
-        # Enable keepalive for proxy compatibility
-        await $sse->keepalive(25);
+    my $app = compose(routes => [
+        # An sse route's handler receives one PAGI::SSE.
+        sse('/events' => async sub {
+            my ($sse) = @_;
 
-        # Per-connection state
-        use PAGI::Stash;
-        my $stash = PAGI::Stash->new($sse);
+            # Comment lines keep idle proxies from closing the stream.
+            await $sse->keepalive(25);
 
-        # Cleanup on disconnect - with reason for logging
-        $sse->on_close(sub {
-            my ($sse, $reason) = @_;
-            remove_subscriber($stash->get('sub_id'));
-            log_disconnect($reason);  # 'client_closed', 'write_error', etc.
-        });
+            $sse->on_close(sub {
+                my ($sse, $reason) = @_;    # undef after an explicit close
+                delete $subscribers{"$sse"};
+            });
 
-        # Handle reconnection
-        if (my $last_id = $sse->last_event_id) {
-            my @missed = get_events_since($last_id);
-            for my $event (@missed) {
+            # Replay what a reconnecting client missed, then go live.
+            my $seen = $sse->last_event_id // 0;
+            for my $event (@history[$seen .. $#history]) {
                 await $sse->send_event(%$event);
             }
-        }
+            $subscribers{"$sse"} = $sse;
 
-        # Subscribe to updates
-        $stash->set(sub_id => add_subscriber(sub {
-            my ($event) = @_;
-            $sse->try_send_json($event);
-        }));
+            await $sse->run;    # until the client disconnects
+        }),
+    ]);
 
-        # Wait for disconnect
-        await $sse->run;
-    }
+    # Elsewhere: publish(event => 'news', data => { title => 'Hello' });
 
 =head1 DESCRIPTION
 

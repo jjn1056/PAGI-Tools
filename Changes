@@ -10,6 +10,21 @@
     whose caller cancels it before it goes out is skipped; a caller's cancel
     no longer reaches a send the server already holds.
 
+  [Documentation and examples]
+  - The PAGI::WebSocket and PAGI::SSE SYNOPSIS show the helpers as route
+    handlers receive them, and run as published (t/00-pod/helper-synopsis.t).
+  - The examples use one-object handlers throughout; as_app_object remains
+    only in protocol-refusal, whose subject is the application forms.
+    10-chat-showcase and websocket-chat-v2 merge into examples/chat; the
+    remaining example directories are named by topic, without numbers
+    (09-psgi-bridge is psgi-bridge, 13-contact-form is contact-form,
+    14-lifespan-utils is lifespan-utils, 15-large-application is
+    large-application, app-01-file is static-files, websocket-echo-v2 is
+    websocket-echo).
+  - endpoint-demo and endpoint-class-demo serve static files from an
+    HTTP-only catch-all route, so a WebSocket or SSE request to an unknown
+    path is refused instead of dying in PAGI::App::File.
+
 0.002003 - 2026-09-30
 
   [FormBody and JSONBody removed]

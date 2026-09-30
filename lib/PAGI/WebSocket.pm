@@ -753,73 +753,60 @@ PAGI::WebSocket - Convenience wrapper for PAGI WebSocket connections
 
 =head1 SYNOPSIS
 
-    use PAGI::WebSocket;
     use Future::AsyncAwait;
+    use PAGI::Compose qw(compose);
+    use PAGI::Routing qw(websocket);
 
-    # Simple echo server
-    async sub app {
-        my ($scope, $receive, $send) = @_;
+    our %online;    # user => PAGI::WebSocket, shared by every connection
 
-        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-        await $ws->accept;
+    my $app = compose(routes => [
+        # A websocket route's handler receives one PAGI::WebSocket.
+        websocket('/echo' => async sub {
+            my ($ws) = @_;
+            await $ws->accept;
+            await $ws->each_text(async sub {
+                my ($text) = @_;
+                await $ws->send_text("Echo: $text");
+            });
+        }),
 
-        await $ws->each_text(async sub {
-            my ($text) = @_;
-            await $ws->send_text("Echo: $text");
-        });
-    }
+        # A JSON protocol with cleanup. on_close is registered before
+        # accept, so it runs however the connection ends.
+        websocket('/json' => async sub {
+            my ($ws) = @_;
+            my $user = $ws->query('user') // 'anonymous';
+            $online{$user} = $ws;
+            $ws->on_close(sub {
+                my ($code, $reason) = @_;    # the peer's, when it sent a Close
+                delete $online{$user};
+            });
 
-    # JSON API with cleanup
-    async sub json_app {
-        my ($scope, $receive, $send) = @_;
+            await $ws->accept;
+            await $ws->each_json(async sub {
+                my ($data) = @_;
+                await $ws->send_json({ type => 'pong' })
+                    if $data->{type} eq 'ping';
+            });
+        }),
 
-        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-        await $ws->accept(subprotocol => 'json');
+        # Callback style, an alternative to the each_* loops.
+        websocket('/callbacks' => async sub {
+            my ($ws) = @_;
+            $ws->on(message => async sub {
+                my ($text) = @_;
+                await $ws->send_text("Echo: $text");
+            });
+            $ws->on(error => sub {
+                my ($error) = @_;
+                warn "WebSocket error: $error";
+            });
 
-        my $user_id = generate_id();
+            await $ws->accept;
+            await $ws->run;
+        }),
+    ]);
 
-        # Cleanup runs on any disconnect
-        $ws->on_close(async sub {
-            my ($code, $reason) = @_;
-            await remove_user($user_id);
-            log_disconnect($user_id, $code);
-        });
-
-        await $ws->each_json(async sub {
-            my ($data) = @_;
-
-            if ($data->{type} eq 'ping') {
-                await $ws->send_json({ type => 'pong' });
-            }
-        });
-    }
-
-    # Callback-based style (alternative to iteration)
-    async sub callback_app {
-        my ($scope, $receive, $send) = @_;
-
-        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-
-        my $stash = PAGI::Stash->new($ws);
-        $stash->set(user => 'anonymous');
-
-        $ws->on(message => sub {
-            my ($data) = @_;
-            $ws->send_text("Echo: $data");
-        });
-
-        $ws->on(error => sub {
-            my ($error) = @_;
-            warn "WebSocket error: $error";
-        });
-
-        $ws->on(close => sub {
-            print "User disconnected\n";
-        });
-
-        await $ws->accept;
-        await $ws->run;
-    }
+    # pagi-server --app app.pl, with $app as the file's last value.
 
 =head1 DESCRIPTION
 
