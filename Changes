@@ -1,6 +1,6 @@
 # Revision history for PAGI-Tools
 
-0.002004 - UNRELEASED
+0.002003 - 2026-09-30
 
   [Sequential sends in the protocol helpers]
   - PAGI::WebSocket and PAGI::SSE send one message at a time, as
@@ -39,8 +39,6 @@
   - endpoint-demo and endpoint-class-demo serve static files from an
     HTTP-only catch-all route, so a WebSocket or SSE request to an unknown
     path is refused instead of dying in PAGI::App::File.
-
-0.002003 - 2026-09-30
 
   [FormBody and JSONBody removed]
   - BREAKING: Removed PAGI::Middleware::FormBody and
