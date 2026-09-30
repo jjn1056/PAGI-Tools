@@ -8,7 +8,10 @@
 #   1. Async I/O (non-blocking) - Use fire-and-forget Futures with on_fail + retain
 #   2. Blocking/CPU work - Use IO::Async::Function (runs in subprocess)
 #
-# Run: pagi-server examples/background-tasks/app.pl --port 5000
+# Every route is an ordinary handler: it starts its background work, then
+# returns its Response.
+#
+# Run: pagi-server --app examples/background-tasks/app.pl --port 5000
 #
 # Test:
 #   curl http://localhost:5000/async      # Fire-and-forget async I/O
@@ -20,20 +23,11 @@
 use strict;
 use warnings;
 use Future::AsyncAwait;
-
-# Try to load Future::IO for loop-agnostic sleep, fall back to immediate if not available
-my $HAS_FUTURE_IO = eval { require Future::IO; 1 };
-
-sub maybe_sleep {
-    my ($seconds) = @_;
-    return $HAS_FUTURE_IO ? Future::IO->sleep($seconds) : Future->done;
-}
+use Future::IO;    # pagi-server binds the implementation
 
 use PAGI::Compose qw(compose);
-use PAGI::Routing qw(route mount);
+use PAGI::Routing qw(route websocket);
 use PAGI::Response qw(html_response json_response);
-use PAGI::Request;
-use PAGI::Utils qw(as_app_object invoke_app);
 
 #---------------------------------------------------------
 # PATTERN 1: Async I/O (Non-Blocking)
@@ -53,7 +47,7 @@ async sub send_welcome_email {
 
     # This is NON-BLOCKING - yields to event loop while "waiting"
     # In real code: await $http_client->post_async($email_api, ...)
-    await maybe_sleep(2);
+    await Future::IO->sleep(2);
 
     warn "[async] Email sent to $email!\n";
 }
@@ -62,7 +56,7 @@ async sub send_welcome_email {
 async sub log_to_analytics {
     my ($event, $data) = @_;
     warn "[async] Logging '$event' to analytics...\n";
-    await maybe_sleep(1);
+    await Future::IO->sleep(1);
     warn "[async] Analytics logged!\n";
 }
 
@@ -124,12 +118,11 @@ sub run_blocking_task {
 }
 
 #---------------------------------------------------------
-# PATTERN 3: Quick Sync Work (after await)
+# PATTERN 3: Quick Sync Work
 #
-# For very fast synchronous operations that just need to
-# run after the response is sent. Since we use async/await,
-# code after `await invoke_app(...)` already runs after the
-# response is sent. Just call your sync function directly.
+# For very fast synchronous bookkeeping. It runs in the
+# handler, just before the Response is returned, so it
+# delays that response by however long it takes.
 #
 # Must be FAST (<10ms) - blocking calls block ALL requests!
 #---------------------------------------------------------
@@ -141,11 +134,84 @@ sub quick_sync_task {
 }
 
 #---------------------------------------------------------
-# HTTP Endpoints
+# Handlers
 #
-# The index is an ordinary Request handler. The task routes are native PAGI
-# applications because they send the response before starting follow-up work.
+# Each starts its background work and returns its Response. Background work is
+# asynchronous or runs in a subprocess, so the response is not held up by it.
 #---------------------------------------------------------
+
+# GOOD: Fire-and-forget async I/O
+sub async_tasks {
+    my ($request) = @_;
+
+    # Fire-and-forget with error logging (on_fail + retain pattern)
+    fire_and_forget(send_welcome_email('user@example.com'));
+    fire_and_forget(log_to_analytics('page_view', { path => '/' }));
+
+    quick_sync_task("Logging request");
+
+    return json_response({
+        status  => 'ok',
+        message => 'Response sent! Async tasks running in background.',
+    });
+}
+
+# GOOD: CPU-bound work in subprocess
+sub blocking_tasks {
+    my ($request) = @_;
+
+    # Fire-and-forget: runs in child processes, doesn't block the event loop
+    run_blocking_task("heavy_computation", 3);
+    run_blocking_task("image_processing", 2);
+
+    return json_response({
+        status  => 'ok',
+        message => 'Response sent! Heavy computation running in subprocess.',
+    });
+}
+
+# Real-world example: user signup with background tasks
+async sub signup {
+    my ($request) = @_;
+
+    my $data = await $request->json;
+    my $email = $data->{email} // 'unknown@example.com';
+
+    # The user does not wait for the email: it is sent in the background.
+    fire_and_forget(send_welcome_email($email));
+    fire_and_forget(log_to_analytics('signup', { email => $email }));
+
+    quick_sync_task("New signup: $email");
+
+    # For CPU-intensive work (e.g., generating PDF):
+    # run_blocking_task("generate_welcome_pdf", 5);
+
+    return json_response({
+        status  => 'created',
+        message => "Account created! Check $email for welcome email.",
+    }, status => 201);
+}
+
+# WebSocket with background processing
+async sub messages {
+    my ($ws) = @_;
+
+    await $ws->accept;
+    await $ws->send_text('Connected! Send a message.');
+
+    await $ws->each_text(async sub {
+        my ($text) = @_;
+
+        # The reply is part of the conversation, so it is awaited.
+        await $ws->try_send_text("Got: $text");
+
+        # Background work is not: fire-and-forget (on_fail + retain).
+        fire_and_forget(log_to_analytics('ws_message', { text => $text }));
+
+        # For CPU-intensive processing (e.g., NLP, image analysis):
+        # run_blocking_task("analyze_message", 1);
+    });
+}
 
 compose(routes => [
 
@@ -189,96 +255,8 @@ document.getElementById('signup').onsubmit = async (e) => {
 HTML
 }),
 
-# GOOD: Fire-and-forget async I/O
-route('/async' => as_app_object(async sub {
-    my ($scope, $receive, $send) = @_;
-
-    # Response goes out immediately
-    my $response = json_response({
-        status => 'ok',
-        message => 'Response sent! Async tasks running in background.',
-    });
-    await invoke_app($response, $scope, $receive, $send);
-
-    # Fire-and-forget with error logging (on_fail + retain pattern)
-    fire_and_forget(send_welcome_email('user@example.com'));
-    fire_and_forget(log_to_analytics('page_view', { path => '/' }));
-
-    # Quick sync work - runs after response is sent (we already awaited above)
-    quick_sync_task("Logging request");
-})),
-
-# GOOD: CPU-bound work in subprocess
-route('/blocking' => as_app_object(async sub {
-    my ($scope, $receive, $send) = @_;
-
-    # Response goes out immediately
-    my $response = json_response({
-        status => 'ok',
-        message => 'Response sent! Heavy computation running in subprocess.',
-    });
-    await invoke_app($response, $scope, $receive, $send);
-
-    # Fire-and-forget: runs in child process, doesn't block event loop
-    run_blocking_task("heavy_computation", 3);
-    run_blocking_task("image_processing", 2);
-})),
-
-# Real-world example: User signup with background tasks
-route('/signup' => as_app_object(async sub {
-    my ($scope, $receive, $send) = @_;
-    my $req = PAGI::Request->new($scope, $receive);
-
-    my $data = await $req->json;
-    my $email = $data->{email} // 'unknown@example.com';
-
-    # Respond immediately - user doesn't wait for email
-    my $response = json_response({
-        status => 'created',
-        message => "Account created! Check $email for welcome email.",
-    }, status => 201);
-    await invoke_app($response, $scope, $receive, $send);
-
-    # Fire-and-forget async tasks (non-blocking)
-    fire_and_forget(send_welcome_email($email));
-    fire_and_forget(log_to_analytics('signup', { email => $email }));
-
-    # Quick sync logging - runs after response (we already awaited above)
-    quick_sync_task("New signup: $email");
-
-    # For CPU-intensive work (e.g., generating PDF):
-    # run_blocking_task("generate_welcome_pdf", 5);
-}), methods => ['POST']),
-
-# WebSocket with background processing
-mount('/ws', app => async sub {
-    my ($scope, $receive, $send) = @_;
-    return unless $scope->{type} eq 'websocket';
-
-    require PAGI::WebSocket;
-    my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-
-    await $ws->accept;
-    await $ws->send_text('Connected! Send a message.');
-
-    await $ws->each_text(async sub {
-        my ($text) = @_;
-
-        # Respond -- awaited, unlike the background tasks below. This is a
-        # PAGI protocol send on the live socket, not background work: each_text
-        # only serializes this callback against the next incoming message if
-        # the callback itself awaits what it sends, otherwise a second
-        # message could arrive and fire its own reply while this one is
-        # still in flight, overlapping sends on the same socket.
-        await $ws->try_send_text("Got: $text");
-
-        # For async I/O processing (genuinely fire-and-forget: this is
-        # background work, not a protocol send, so on_fail + retain is the
-        # right call here):
-        fire_and_forget(log_to_analytics('ws_message', { text => $text }));
-
-        # For CPU-intensive processing (e.g., NLP, image analysis):
-        # run_blocking_task("analyze_message", 1);
-    });
-}),
+route('/async'    => \&async_tasks),
+route('/blocking' => \&blocking_tasks),
+route('/signup'   => \&signup, methods => ['POST']),
+websocket('/ws'   => \&messages),
 ]);

@@ -1,23 +1,28 @@
 # Background Tasks Example
 
-Patterns for running work after sending a response.
+Patterns for starting background work from a request without making the
+client wait for it.
 
-The index is an ordinary Route handler: it receives `PAGI::Request`, returns an
-application value, and leaves invocation to the shared routing compiler. The
-three task routes deliberately send their responses before starting follow-up
-work, so only those routes wrap native three-channel applications with
-`as_app_object`.
-
-The native WebSocket application is a Mount application and is passed directly:
+Every route is an ordinary handler. An HTTP handler receives one
+`PAGI::Request`, starts its background work -- asynchronous I/O, or a
+subprocess for blocking work -- and returns its Response; the WebSocket
+handler receives one `PAGI::WebSocket`. The background work runs on after the
+handler has returned, so the response is not held up by it:
 
 ```perl
-mount('/ws', app => async sub { ... });
-```
+async sub signup {
+    my ($request) = @_;
+    my $data = await $request->json;
+    fire_and_forget(send_welcome_email($data->{email}));
+    return json_response({ status => 'created' }, status => 201);
+}
 
-The HTTP declarations retain their written order inside Compose. Only Route
-endpoints that must know response emission has completed use `as_app_object` and own
-the live protocol channels. The WebSocket Mount already occupies a native
-application position and needs no wrapper.
+compose(routes => [
+    route('/signup' => \&signup, methods => ['POST']),
+    websocket('/ws' => \&messages),
+    ...
+]);
+```
 
 ## Run
 
@@ -41,7 +46,8 @@ Always use `->on_fail()` before `->retain()` to avoid silently swallowing errors
 
 ### 2. Blocking/CPU Work (Subprocess)
 
-For CPU-intensive or blocking operations, use `IO::Async::Function`:
+For CPU-intensive or blocking operations, use `IO::Async::Function` (this
+pattern ties the application to IO::Async, the loop `pagi-server` runs):
 
 ```perl
 run_blocking_task("heavy_computation", 3);
@@ -51,18 +57,20 @@ Runs in a child process, doesn't block the event loop.
 
 ### 3. Quick Sync Work
 
-For very fast operations (<10ms) after response - just call directly after `await`:
+For very fast bookkeeping (<10ms), call it in the handler before returning.
+It delays that response by however long it takes:
 
 ```perl
-my $response = json_response({ status => 'ok' });
-await invoke_app($response, $scope, $receive, $send);
-quick_sync_task("log");  # runs after response is sent
+quick_sync_task("log");
+return json_response({ status => 'ok' });
 ```
 
-**Warning:** Any blocking here blocks ALL requests!
+**Warning:** Any blocking here blocks ALL requests! Anything slower belongs
+in pattern 1 or 2.
 
 ## Endpoints
 
 - `GET /async` - Fire-and-forget async I/O
 - `GET /blocking` - CPU work in subprocess
 - `POST /signup` - Real-world example with background email
+- `WS /ws` - WebSocket replies, with background analytics per message

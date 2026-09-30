@@ -39,17 +39,16 @@ for my $case (@examples) {
             unlike($source, qr/\$router->(?:get|post|websocket|sse|mount)\b/,
                 'background tasks has no mutable route declarations');
             like($source,
-                qr/use PAGI::Routing qw\(route mount\);/,
+                qr/use PAGI::Routing qw\(route websocket\);/,
                 'background tasks imports immutable route declarations');
             like($source,
                 qr/route\('\/'\s*=>\s*sub\s*\{/s,
                 'background tasks uses an ordinary Request handler for its index');
-            my $native_routes = () = $source =~ /\bas_app_object\s*\(/g;
-            is($native_routes, 3,
-                'only response-first background-task routes remain native applications');
+            unlike($source, qr/\bas_app_object\b/,
+                'every background-task route is an ordinary handler (John, 2026-09-30)');
             like($source,
-                qr/mount\('\/ws'\s*,\s*app\s*=>\s*async sub/s,
-                'background tasks mounts its native WebSocket application directly');
+                qr/websocket\('\/ws'\s*=>\s*\\&messages\)/,
+                'background tasks declares its WebSocket as a one-$ws handler');
         }
         if ($directory eq 'full-demo') {
             my $source = source_text($file);
