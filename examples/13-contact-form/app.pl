@@ -6,15 +6,14 @@ use Future::AsyncAwait;
 use File::Basename qw(dirname);
 use File::Spec;
 
-use PAGI::Request;
-use PAGI::Response qw(json_response);
 use PAGI::App::File;
-use PAGI::Utils qw(invoke_app);
+use PAGI::Compose qw(compose);
+use PAGI::Response qw(json_response);
+use PAGI::Routing qw(route);
 
+# Writable uploads keep an explicit path beside this file; only the read-only
+# public/ directory uses the application-relative file constructor.
 my $UPLOAD_DIR = File::Spec->catdir(dirname(__FILE__), 'uploads');
-
-# Static file server for public directory
-my $static_app = PAGI::App::File->from_app_path('public')->to_app;
 
 # Allowed MIME types for attachments
 my %ALLOWED_TYPES = (
@@ -25,29 +24,8 @@ my %ALLOWED_TYPES = (
     'text/plain'      => 'txt',
 );
 
-my $app = async sub {
-    my ($scope, $receive, $send) = @_;
-
-    return await _handle_lifespan($scope, $receive, $send)
-        if $scope->{type} eq 'lifespan';
-
-    die "Unsupported: $scope->{type}" unless $scope->{type} eq 'http';
-
-    my $req = PAGI::Request->new($scope, $receive);
-    my $path = $req->path;
-    my $method = $req->method;
-
-    # Route: POST /submit - handle form
-    if ($method eq 'POST' && $path eq '/submit') {
-        my $response = await _handle_submit($req);
-        return await invoke_app($response, $scope, $receive, $send);
-    }
-
-    # All other requests: serve static files from public/
-    return await $static_app->($scope, $receive, $send);
-};
-
-async sub _handle_submit {
+# POST /submit: one PAGI::Request in, one JSON Response out.
+async sub submit {
     my ($req) = @_;
 
     # 5MB per-file limit; applies to the whole multipart parse (uploads included)
@@ -125,27 +103,22 @@ async sub _handle_submit {
     });
 }
 
-async sub _handle_lifespan {
-    my ($scope, $receive, $send) = @_;
-
-    while (1) {
-        my $event = await $receive->();
-        if ($event->{type} eq 'lifespan.startup') {
-            # Ensure upload directory exists
+compose(
+    routes => [
+        route('/submit' => \&submit, methods => ['POST']),
+        route('/*path' => PAGI::App::File->from_app_path('public')),
+    ],
+    lifespan => {
+        startup => async sub {
             mkdir $UPLOAD_DIR unless -d $UPLOAD_DIR;
             print STDERR "[lifespan] Contact form app started\n";
             print STDERR "[lifespan] Upload directory: $UPLOAD_DIR\n";
-            await $send->({ type => 'lifespan.startup.complete' });
-        }
-        elsif ($event->{type} eq 'lifespan.shutdown') {
+        },
+        shutdown => async sub {
             print STDERR "[lifespan] Shutting down\n";
-            await $send->({ type => 'lifespan.shutdown.complete' });
-            last;
-        }
-    }
-}
-
-$app;
+        },
+    },
+);
 
 __END__
 
@@ -155,7 +128,7 @@ Contact Form Example - PAGI::Request Demo
 
 =head1 SYNOPSIS
 
-    pagi-server examples/13-contact-form/app.pl --port 5000
+    pagi-server --app examples/13-contact-form/app.pl --port 5000
 
 Then visit http://localhost:5000/
 

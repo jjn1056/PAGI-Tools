@@ -18,11 +18,22 @@ Visit http://localhost:5000/
 - JSON API responses
 - Static file serving from `public/`
 
+The whole application is one `compose`:
+
 ```perl
-my $static_app = PAGI::App::File->from_app_path('public')->to_app;
+compose(
+    routes => [
+        route('/submit' => \&submit, methods => ['POST']),   # one PAGI::Request in, a JSON Response out
+        route('/*path' => PAGI::App::File->from_app_path('public')),
+    ],
+    lifespan => { startup => async sub { mkdir $UPLOAD_DIR ... }, ... },
+);
 ```
 
-Only `public` uses the component constructor; writable uploads retain their explicit filesystem path.
+`submit` validates the fields and the attachment and returns
+`json_response(...)`, with status 400 and every error named when anything is
+wrong. Only `public` uses the application-relative file constructor; writable
+uploads keep an explicit path beside `app.pl`, created by the startup hook.
 
 ## Upload Limits
 

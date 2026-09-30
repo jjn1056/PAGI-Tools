@@ -32,7 +32,8 @@ my @cases = (
         name  => 'contact form',
         file  => "$Bin/../examples/13-contact-form/app.pl",
         title => qr/Contact Form/,
-        shape => qr{PAGI::App::File->from_app_path\('public'\)->to_app},
+        shape => qr{route\('/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
+        class => 'PAGI::Compose',
     },
 );
 
