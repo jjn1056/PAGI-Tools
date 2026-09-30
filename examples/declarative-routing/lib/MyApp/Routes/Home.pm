@@ -3,7 +3,6 @@ package MyApp::Routes::Home;
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use PAGI::Pages ();
 use PAGI::Response qw(html_response json_response);
 use PAGI::Routing::URL qw(path_for url_for);
 
@@ -21,12 +20,6 @@ async sub show_item {
         path => path_for($request, '/api/item', { id => $id }),
         url  => url_for($request, '/api/item', { id => $id }),
     });
-}
-
-async sub not_found {
-    my ($request) = @_;
-    return PAGI::Pages->not_found(
-        detail => 'No route matched');
 }
 
 1;
