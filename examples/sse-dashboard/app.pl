@@ -1,11 +1,16 @@
 #!/usr/bin/env perl
 #
-# Live Dashboard using PAGI::SSE
+# Live dashboard over Server-Sent Events.
 #
-# Demonstrates real-time server metrics streaming with:
-# - Automatic keepalive for proxy compatibility
-# - Reconnection support via Last-Event-ID
-# - Multiple event types
+# - One broadcaster pushes the same metrics, with the same event id, to every
+#   connected client every two seconds.
+# - The SSE route's handler receives one PAGI::SSE: it welcomes the client,
+#   tells a reconnecting one which id it last saw (Last-Event-ID), subscribes
+#   it, and unsubscribes it on close.
+# - Protocol keepalive keeps proxies from closing an idle stream.
+#
+# The broadcaster sleeps with Future::IO; pagi-server binds the
+# implementation, so no event loop is named here.
 #
 # Run: pagi-server --app examples/sse-dashboard/app.pl --port 5000
 # Open: http://localhost:5000/
@@ -14,139 +19,81 @@
 use strict;
 use warnings;
 use Future::AsyncAwait;
-use IO::Async::Loop;
-use IO::Async::Timer::Periodic;
+use Future::IO;
 
-use PAGI::SSE;
 use PAGI::App::File;
+use PAGI::Compose qw(compose);
+use PAGI::Routing qw(route sse);
 
-# Shared state
-my %subscribers;
-my $next_id = 1;
+my %subscribers;    # subscriber id => PAGI::SSE
+my $next_id  = 1;
 my $event_id = 0;
-my $loop;
+my $broadcaster;
 
-# Metrics timer
-my $metrics_timer;
-
-sub start_metrics_broadcaster {
-    return if $metrics_timer;
-
-    $loop //= IO::Async::Loop->new;
-
-    $metrics_timer = IO::Async::Timer::Periodic->new(
-        interval => 2,
-        on_tick  => sub {
-            $event_id++;
-
+# Runs while anyone is subscribed, and starts again with the next subscriber.
+sub start_broadcaster {
+    return if $broadcaster;
+    $broadcaster = (async sub {
+        while (%subscribers) {
+            await Future::IO->sleep(2);
+            my $id = ++$event_id;
             my $metrics = {
-                cpu     => 20 + int(rand(60)),
-                memory  => 40 + int(rand(40)),
-                requests => int(rand(1000)),
+                cpu       => 20 + int(rand(60)),
+                memory    => 40 + int(rand(40)),
+                requests  => int(rand(1000)),
                 timestamp => time(),
             };
-
-            # on_tick is a plain synchronous IO::Async callback, not an async
-            # sub, so these sends can't be awaited here -- each try_send_event
-            # returns a Future that must still be handled, not fired and
-            # forgotten. try_send_event never dies (it always resolves 0 or
-            # 1), but a failed send does NOT run on_close, so broadcast
-            # reaping has to be Future-aware: check the result and reap a
-            # dead subscriber right here instead of leaving it in
-            # %subscribers forever. ->retain keeps the Future from warning
-            # about being dropped unawaited.
             for my $sub_id (keys %subscribers) {
-                my $sub = $subscribers{$sub_id};
-                $sub->{sse}->try_send_event(
+                # A broadcast cannot await each client. try_send_event never
+                # dies; a send that fails means the client has gone, so it is
+                # unsubscribed here, and the Future is retained until done.
+                $subscribers{$sub_id}->try_send_event(
                     event => 'metrics',
                     data  => $metrics,
-                    id    => $event_id,
+                    id    => $id,
                 )->on_done(sub {
                     my ($ok) = @_;
-                    return if $ok;
-                    delete $subscribers{$sub_id};
-                    stop_metrics_broadcaster();
+                    delete $subscribers{$sub_id} unless $ok;
                 })->retain;
             }
-        },
-    );
-
-    $loop->add($metrics_timer);
-    $metrics_timer->start;
-}
-
-sub stop_metrics_broadcaster {
-    return unless $metrics_timer && !%subscribers;
-
-    $metrics_timer->stop;
-    $loop->remove($metrics_timer);
-    $metrics_timer = undef;
-}
-
-# Static file serving via PAGI::App::File
-my $static_app = PAGI::App::File->from_app_path('public')->to_app;
-
-# Main app
-my $app = async sub {
-    my ($scope, $receive, $send) = @_;
-    my $type = $scope->{type} // '';
-    my $path = $scope->{path} // '/';
-
-    # SSE endpoint
-    if ($type eq 'sse' && $path eq '/events') {
-        my $sse = PAGI::SSE->new($scope, $receive, $send);
-
-        my $sub_id = $next_id++;
-        $subscribers{$sub_id} = { sse => $sse };
-
-        # Cleanup on disconnect
-        $sse->on_close(sub {
-            delete $subscribers{$sub_id};
-            stop_metrics_broadcaster();
-            print STDERR "SSE client $sub_id disconnected\n";
-        });
-
-        # Enable keepalive
-        $sse->keepalive(25);
-
-        # Send welcome event
-        await $sse->send_event(
-            event => 'connected',
-            data  => {
-                subscriber_id => $sub_id,
-                server_time   => time(),
-            },
-        );
-
-        return if $sse->is_closed;
-
-        # Handle reconnection
-        if (my $last_id = $sse->last_event_id) {
-            await $sse->send_event(
-                event => 'reconnected',
-                data  => { last_id => $last_id },
-            );
         }
+        undef $broadcaster;
+    })->();
+}
 
+async sub events {
+    my ($sse) = @_;
+    my $sub_id = $next_id++;
+
+    # Registered before the first send, so a client that leaves at once is
+    # still cleaned up.
+    $sse->on_close(sub {
+        delete $subscribers{$sub_id};
+        print STDERR "SSE client $sub_id disconnected\n";
+    });
+
+    await $sse->start;
+    return if $sse->is_closed;    # the client may leave at any await
+    await $sse->keepalive(25);
+    await $sse->send_event(
+        event => 'connected',
+        data  => { subscriber_id => $sub_id, server_time => time() },
+    );
+    return if $sse->is_closed;
+
+    if (my $last_id = $sse->last_event_id) {
+        await $sse->send_event(event => 'reconnected', data => { last_id => $last_id });
         return if $sse->is_closed;
-
-        # Start broadcaster if first subscriber
-        start_metrics_broadcaster();
-
-        print STDERR "SSE client $sub_id connected\n";
-
-        # Wait for disconnect
-        await $sse->run;
-        return;
     }
 
-    # HTTP - serve static files
-    if ($type eq 'http') {
-        await $static_app->($scope, $receive, $send);
-        return;
-    }
+    $subscribers{$sub_id} = $sse;
+    start_broadcaster();
+    print STDERR "SSE client $sub_id connected\n";
 
-    die "Unsupported scope type: $type";
-};
+    await $sse->run;    # until the client goes
+}
 
-$app;
+compose(routes => [
+    sse('/events' => \&events),
+    route('/*path' => PAGI::App::File->from_app_path('public')),
+]);

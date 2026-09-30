@@ -19,14 +19,14 @@ subtest 'chat cleanup is registered before accept can end connection' => sub {
     diag($future->failure) if $future->is_failed;
 };
 
-subtest 'dashboard cleanup is registered before welcome send can end connection' => sub {
+subtest 'dashboard cleanup is registered before its first send can end connection' => sub {
     my $app = do "$Bin/../../examples/sse-dashboard/app.pl";
     die $@ || $! unless $app;
     my $conn = PAGI::Test::ConnectionState->new;
     my $stderr = '';
     local *STDERR;
     open STDERR, '>', \$stderr or die $!;
-    my $future = $app->({type => 'sse', path => '/events', 'pagi.connection' => $conn}, sub {die 'receive after end'}, sub {
+    my $future = $app->to_app->({type => 'sse', path => '/events', headers => [], 'pagi.connection' => $conn}, sub {die 'receive after end'}, sub {
         $conn->_mark_disconnected('peer_closed', 'during welcome');
         return Future->done;
     });

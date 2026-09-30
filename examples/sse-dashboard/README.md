@@ -25,24 +25,38 @@ Visit http://localhost:5000/
 
 ## Key Concepts
 
+The application is one `compose`; the SSE route's handler receives one
+`PAGI::SSE`:
+
 ```perl
-# Register cleanup before awaited I/O
-$sse->on_close(sub { ... });
+async sub events {
+    my ($sse) = @_;
+    $sse->on_close(sub { ... });     # registered before any awaited I/O
 
-# Keepalive for proxies
-$sse->keepalive(25);
+    await $sse->start;
+    return if $sse->is_closed;       # the client may leave at any await
+    await $sse->keepalive(25);       # protocol keepalive for proxies
+    await $sse->send_event(event => 'connected', data => {...});
 
-# Handle reconnection
-if (my $last_id = $sse->last_event_id) {
-    await $sse->send_event(event => 'reconnected', ...);
+    if (my $last_id = $sse->last_event_id) {    # a reconnect
+        await $sse->send_event(event => 'reconnected', data => {...});
+    }
+
+    ...subscribe...
+    await $sse->run;                 # until the client goes
 }
 
-# Wait for disconnect
-await $sse->run;
+compose(routes => [
+    sse('/events' => \&events),
+    route('/*path' => PAGI::App::File->from_app_path('public')),
+]);
 ```
 
-Static files are served through a compiled application:
+One broadcaster sends the same metrics, with the same event id, to every
+subscriber. It sleeps with `Future::IO`, which `pagi-server` binds, so no
+event loop is named in the application. Each client is sent with
+`try_send_event`, which never dies; a failed send unsubscribes that client.
 
-```perl
-my $static_app = PAGI::App::File->from_app_path('public')->to_app;
-```
+Static files sit on an HTTP catch-all `route`, not a `mount('/')`: a Route
+is HTTP-only, so an SSE request to an unknown path still gets the Router's
+404 instead of reaching the file application.

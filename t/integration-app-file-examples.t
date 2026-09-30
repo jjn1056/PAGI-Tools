@@ -25,7 +25,8 @@ my @cases = (
         name  => 'SSE dashboard',
         file  => "$Bin/../examples/sse-dashboard/app.pl",
         title => qr/PAGI Live Dashboard/,
-        shape => qr{PAGI::App::File->from_app_path\('public'\)->to_app},
+        shape => qr{route\('/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
+        class => 'PAGI::Compose',
     },
     {
         name  => 'contact form',
