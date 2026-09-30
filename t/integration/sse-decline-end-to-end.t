@@ -66,6 +66,7 @@ sub create_server {
     my ($app) = @_;
     my $server = PAGI::Server->new(
         app => $app, host => '127.0.0.1', port => 0, quiet => 1, shutdown_timeout => 1,
+        access_log => undef,
     );
     $loop->add($server);
     $server->listen->get;

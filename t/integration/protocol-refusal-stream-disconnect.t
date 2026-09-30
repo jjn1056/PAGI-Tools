@@ -31,8 +31,8 @@ my $h2 = eval { require PAGI::Server::Protocol::HTTP2;
     require Net::HTTP2::nghttp2::Session;
     PAGI::Server::Protocol::HTTP2->available };
 my $loop = IO::Async::Loop->new;
-diag "server=$INC{'PAGI/Server.pm'}; Tools=$INC{'PAGI/WebSocket.pm'}";
-diag 'h2=' . ($h2 ? $INC{'Net/HTTP2/nghttp2/Session.pm'} : 'unavailable');
+note "server=$INC{'PAGI/Server.pm'}; Tools=$INC{'PAGI/WebSocket.pm'}";
+note 'h2=' . ($h2 ? $INC{'Net/HTTP2/nghttp2/Session.pm'} : 'unavailable');
 
 sub until_ready {
     my ($condition, $pump) = @_;
