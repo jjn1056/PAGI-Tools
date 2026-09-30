@@ -162,7 +162,7 @@ The lifespan startup hook initializes shared state accessible to all requests:
 ```perl
 startup => async sub {
     my ($state) = @_;
-    $state->{request_counter} = 0;
+    $state->{stats} = { requests => 0 };
     $state->{started_at} = time();
     # Initialize DB connections, caches, etc. here
 }
@@ -175,8 +175,15 @@ names no event loop.
 Access in HTTP handlers through the Request's state facade:
 
 ```perl
-my $counter = $request->state->data->{request_counter}++;
+my $counter = $request->state->data->{stats}{requests}++;
 ```
+
+Each request receives a *shallow copy* of the lifespan state (see
+`PAGI::Spec::Lifespan`, "Lifespan State"). Changing a top-level key --
+`$request->state->data->{request_counter}++` -- would change only that
+request's copy, so every request would report `#0`. Values requests change
+live in a container stored once at startup and are changed through its
+reference.
 
 ## See Also
 

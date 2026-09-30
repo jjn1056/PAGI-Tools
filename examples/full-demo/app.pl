@@ -40,7 +40,8 @@ route('/echo' => async sub {
 # HTTP Streaming - sends chunks with delays
 route('/stream' => sub {
     my ($request) = @_;
-    my $counter = $request->state->data->{request_counter}++;
+    # Mutate the shared container; each request's state is a shallow copy.
+    my $counter = $request->state->data->{stats}{requests}++;
 
     my @chunks = (
         "Stream started (request #$counter)\n",
@@ -153,8 +154,9 @@ compose(
             my ($state) = @_;
             warn "[STARTUP] Initializing application...\n";
 
-            # Initialize shared state
-            $state->{request_counter} = 0;
+            # Shared state. Each request gets a shallow copy of $state, so a
+            # value requests change lives in a container stored once here.
+            $state->{stats} = { requests => 0 };
             $state->{started_at} = time();
 
             # Initialize resources here (DB connections, caches, etc.)
@@ -163,7 +165,7 @@ compose(
         shutdown => async sub {
             my ($state) = @_;
             my $uptime = time() - ($state->{started_at} // time());
-            my $requests = $state->{request_counter} // 0;
+            my $requests = $state->{stats}{requests} // 0;
             warn "[SHUTDOWN] Shutting down after ${uptime}s, handled $requests requests\n";
 
             # Cleanup resources here
