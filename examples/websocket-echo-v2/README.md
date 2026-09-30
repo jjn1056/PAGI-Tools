@@ -1,8 +1,10 @@
-# WebSocket Echo (v2)
+# WebSocket Echo
 
-Clean WebSocket echo server using PAGI::WebSocket.
+The smallest PAGI-Tools WebSocket application: one route whose handler
+receives one `PAGI::WebSocket`.
 
-Compare with `examples/04-websocket-echo/` which uses the raw PAGI protocol.
+Compare the raw PAGI protocol version, `examples/04-websocket-echo/` in the
+PAGI distribution.
 
 ## Run
 
@@ -18,18 +20,22 @@ websocat ws://localhost:5000/
 ## Code
 
 ```perl
-my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-await $ws->accept;
+async sub echo {
+    my ($ws) = @_;
 
-$ws->on_close(sub {
-    my ($code) = @_;
-    print "Client disconnected: $code\n";
-});
+    $ws->on_close(sub {
+        my ($code) = @_;
+        print STDERR 'Client disconnected: ', ($code // 'no close frame'), "\n";
+    });
 
-await $ws->each_text(async sub {
-    my ($text) = @_;
-    await $ws->send_text("echo: $text");
-});
+    await $ws->accept;
+    await $ws->each_text(async sub {
+        my ($text) = @_;
+        await $ws->send_text("echo: $text");
+    });
+}
+
+compose(routes => [websocket('/' => \&echo)]);
 ```
 
 ## vs Raw Protocol
