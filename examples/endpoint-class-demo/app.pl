@@ -1,7 +1,8 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
-use lib 'lib';
+use File::Basename qw(dirname);
+use lib dirname(__FILE__) . '/lib';
 
 use MyApp::Main;
 use MyApp::API;

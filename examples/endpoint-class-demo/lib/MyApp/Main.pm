@@ -29,7 +29,9 @@ sub routes {
         mount('/api', app => $self->{api}->routing, name => 'api'),
         websocket('/status' => MyApp::StatusSocket->new,
             name => 'status_socket'),
-        mount('/', app => PAGI::App::File->new(root => $self->public_root)),
+        # HTTP-only catch-all: WebSocket and SSE misses get the Router's
+        # refusal instead of reaching the file application.
+        route('/*path' => PAGI::App::File->new(root => $self->public_root)),
     ];
 }
 

@@ -91,7 +91,7 @@ subtest 'ordinary assemblers expose immutable configured endpoint leaves' => sub
         /events/stream /index /show /tools/status
     )], 'Main mounts the API object configured as one immutable Router');
     isa_ok($status_socket->endpoint, 'MyApp::StatusSocket');
-    isa_ok($static->app, 'PAGI::App::File');
+    isa_ok($static->endpoint, 'PAGI::App::File');
 
     my ($index, $show, $tools, $event_mount) = @{$api_routing->routes};
     is(ref($index->endpoint), 'CODE', 'API index uses an explicit binding closure');
@@ -144,6 +144,13 @@ subtest 'the nested class demo preserves HTTP, WebSocket, SSE, and lifespan beha
         my $home = $client->get('/');
         is($home->status, 200, 'home responds through Main');
         like($home->text, qr{href="(/api/index)"}, 'home generates the API link');
+
+        my $ws_miss = eval { $client->websocket('/not-a-socket') };
+        ok($ws_miss && $ws_miss->is_closed,
+            'a WebSocket to an unknown path is refused, not an exception') or diag($@);
+        my $sse_miss = eval { $client->sse('/not-a-stream') };
+        is($sse_miss && $sse_miss->status, 404,
+            'an SSE request to an unknown path is declined with 404') or diag($@);
 
         my $static = $client->get('/index.html');
         is($static->status, 200, 'mounted public file responds');
