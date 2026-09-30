@@ -9,7 +9,7 @@ PAGI distribution.
 ## Run
 
 ```bash
-pagi-server --app examples/websocket-echo-v2/app.pl --port 5000
+pagi-server --app examples/websocket-echo/app.pl --port 5000
 ```
 
 Test with:

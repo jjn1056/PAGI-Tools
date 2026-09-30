@@ -5,7 +5,7 @@
 # One route whose handler receives one PAGI::WebSocket. Compare the raw
 # protocol version in the PAGI distribution's examples/04-websocket-echo.
 #
-# Run: pagi-server --app examples/websocket-echo-v2/app.pl --port 5000
+# Run: pagi-server --app examples/websocket-echo/app.pl --port 5000
 # Test: websocat ws://localhost:5000/
 #
 use strict;

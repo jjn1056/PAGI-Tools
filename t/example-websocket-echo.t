@@ -7,7 +7,7 @@ use PAGI::Test::Client;
 
 # The smallest WebSocket application: one route, one handler, one $ws.
 
-my $file = "$Bin/../examples/websocket-echo-v2/app.pl";
+my $file = "$Bin/../examples/websocket-echo/app.pl";
 my $source = do { open my $fh, '<', $file or die "$file: $!"; local $/; <$fh> };
 
 like($source, qr/websocket\('\/'\s*=>\s*\\&echo\)/, 'a WebSocket route takes the one-$ws handler');

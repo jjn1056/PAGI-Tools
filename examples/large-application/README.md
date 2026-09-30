@@ -18,7 +18,7 @@ From the PAGI-Tools checkout, use the currently shipped file loader:
 `MyApp::Root` can be loaded.
 
 ```bash
-pagi-server --app examples/15-large-application/app.pl --port 5000
+pagi-server --app examples/large-application/app.pl --port 5000
 ```
 
 Then open <http://localhost:5000/>.

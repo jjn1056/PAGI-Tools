@@ -1,4 +1,4 @@
-# 14 – Lifespan Hooks via PAGI::Utils
+# Lifespan Hooks via PAGI::Utils
 
 Minimal app that uses `PAGI::Utils::handle_lifespan` for startup/shutdown hooks
 and `PAGI::Pages` for its plain-text welcome response.
@@ -11,7 +11,7 @@ and `PAGI::Pages` for its plain-text welcome response.
 ## Quick Start
 
 ```bash
-pagi-server --app examples/14-lifespan-utils/app.pl --port 5000
+pagi-server --app examples/lifespan-utils/app.pl --port 5000
 ```
 
 ## Demo

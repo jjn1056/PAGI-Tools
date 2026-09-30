@@ -10,7 +10,7 @@ use PAGI::Test::Client;
 # returns a JSON Response, static files on an HTTP catch-all route, and the
 # upload directory created by a Compose lifespan hook.
 
-my $dir    = "$Bin/../examples/13-contact-form";
+my $dir    = "$Bin/../examples/contact-form";
 my $file   = "$dir/app.pl";
 my $source = do { open my $fh, '<', $file or die "$file: $!"; local $/; <$fh> };
 

@@ -5,7 +5,7 @@ Demonstrates PAGI::Request form handling and file uploads.
 ## Run
 
 ```bash
-pagi-server --app examples/13-contact-form/app.pl --port 5000
+pagi-server --app examples/contact-form/app.pl --port 5000
 ```
 
 Visit http://localhost:5000/

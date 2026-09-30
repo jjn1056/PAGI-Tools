@@ -128,7 +128,7 @@ Contact Form Example - PAGI::Request Demo
 
 =head1 SYNOPSIS
 
-    pagi-server --app examples/13-contact-form/app.pl --port 5000
+    pagi-server --app examples/contact-form/app.pl --port 5000
 
 Then visit http://localhost:5000/
 

@@ -21,7 +21,7 @@ rejected before the diagnostic boundary do not inspect `PAGI_ENV`.
 ## Run
 
 ```bash
-pagi-server --app examples/app-01-file/app.pl --port 5000
+pagi-server --app examples/static-files/app.pl --port 5000
 ```
 
 ## Features

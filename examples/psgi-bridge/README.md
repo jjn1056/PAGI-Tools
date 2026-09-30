@@ -1,4 +1,4 @@
-# 09 – PSGI Bridge Demo
+# PSGI Bridge Demo
 
 Runs a legacy PSGI application inside a PAGI-Tools application, beside native
 routes:
@@ -26,7 +26,7 @@ over time.
 ## Quick Start
 
 ```bash
-pagi-server --app examples/09-psgi-bridge/app.pl --port 5000
+pagi-server --app examples/psgi-bridge/app.pl --port 5000
 ```
 
 ```bash

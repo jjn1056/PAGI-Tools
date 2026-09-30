@@ -18,7 +18,7 @@ they need the resulting native coderef at another application boundary.
 ## Requirements
 
 - Perl 5.18+ with `Future::AsyncAwait` for the distribution and most examples;
-  `15-large-application`, `starlette-apples`, `auth-notes`, and
+  `large-application`, `starlette-apples`, `auth-notes`, and
   `auth-jwt-sandbox` require Perl 5.40+ for signatures
 - A PAGI server to run examples against:
   ```
@@ -40,12 +40,12 @@ raw PAGI protocol details that belong alongside the server implementation.
 
 ## Example List
 
-1. `09-psgi-bridge` - wraps a PSGI app for PAGI use (via `PAGI::App::WrapPSGI`)
+1. `psgi-bridge` - wraps a PSGI app for PAGI use (via `PAGI::App::WrapPSGI`)
 2. `chat` - multi-user chat over HTTP, WebSocket and SSE: one-object handlers on declarative routes, a JSON API Router mounted at `/api`, live SSE notifications, application-wide logging
-3. `13-contact-form` - form parsing and file uploads
-4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
-5. `15-large-application` - Perl 5.40+ Compose-rooted modular HTML application with named Person/Blogs Router application mounts, cross-component links, boundary-specific Router defaults, an opaque static-file mount, lifespan data, and a deferred-work ledger
-6. `app-01-file` - static file serving with `PAGI::App::File`
+3. `contact-form` - form parsing and file uploads
+4. `lifespan-utils` - lifespan hooks via `PAGI::Utils`
+5. `large-application` - Perl 5.40+ Compose-rooted modular HTML application with named Person/Blogs Router application mounts, cross-component links, boundary-specific Router defaults, an opaque static-file mount, lifespan data, and a deferred-work ledger
+6. `static-files` - static file serving with `PAGI::App::File`
 7. `auth-cookie-login` - explicit application login policy with demo credentials, session-ID regeneration, logout destruction, and redirect flow
 8. `background-tasks` - running background work from within a PAGI app
 9. `compose` - optional application root combining declarative routes, request-ID middleware, server-owned lifecycle state, automatic HEAD, and verified shutdown
@@ -61,7 +61,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 19. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints, Router-owned routing outcomes, and a PAGI-only NDJSON export canary
 20. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
 21. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::WebSocket`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
-23. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
+23. `websocket-echo` - WebSocket echo using `PAGI::Endpoint::WebSocket`
 
 
 Each example has its own `README.md` explaining how to run it.

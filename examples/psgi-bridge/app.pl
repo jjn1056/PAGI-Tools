@@ -7,7 +7,7 @@
 # as a PSGI app expects; the route is HTTP-only, so WebSocket and SSE requests
 # never reach it.
 #
-# Run: pagi-server --app examples/09-psgi-bridge/app.pl --port 5000
+# Run: pagi-server --app examples/psgi-bridge/app.pl --port 5000
 #
 use strict;
 use warnings;

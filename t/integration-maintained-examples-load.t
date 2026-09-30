@@ -17,13 +17,13 @@ sub source_text {
 }
 
 my @examples = (
-    ['09-psgi-bridge',          'APP'],
+    ['psgi-bridge',          'APP'],
     ['background-tasks',        'APP'],
     ['full-demo',               'APP'],
     ['sse-close',               'APP'],
     ['test-lifespan-shutdown',  'CODE'],
     ['websocket-bidirectional', 'APP'],
-    ['websocket-echo-v2',       'APP'],
+    ['websocket-echo',       'APP'],
 );
 my %loaded_apps;
 

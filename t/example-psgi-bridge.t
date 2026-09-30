@@ -8,7 +8,7 @@ use PAGI::Test::Client;
 # A legacy PSGI application running inside a PAGI-Tools application: wrapped
 # once, then placed on an ordinary route beside native routes.
 
-my $file = "$Bin/../examples/09-psgi-bridge/app.pl";
+my $file = "$Bin/../examples/psgi-bridge/app.pl";
 my $source = do { open my $fh, '<', $file or die "$file: $!"; local $/; <$fh> };
 
 like($source, qr/compose\(/, 'the PSGI app is part of a compose');

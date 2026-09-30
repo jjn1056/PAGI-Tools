@@ -3,7 +3,7 @@ use warnings;
 use PAGI::App::File;
 
 # PAGI::App::File Example
-# Run with: pagi-server ./examples/app-01-file/app.pl --port 5000
+# Run with: pagi-server ./examples/static-files/app.pl --port 5000
 #
 # Features demonstrated:
 #   - Static file serving from a root directory
