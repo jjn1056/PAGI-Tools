@@ -168,11 +168,14 @@ sub set_session_connected {
     return $session;
 }
 
+# $send_cb identifies the closing connection. A session another connection
+# has since resumed belongs to that one, so this close leaves it alone.
 sub set_session_disconnected {
-    my ($session_id, $broadcast_callback) = @_;
+    my ($session_id, $broadcast_callback, $send_cb) = @_;
     $broadcast_callback //= undef;
 
     my $session = $sessions{$session_id} or return;
+    return unless ($session->{send_cb} // 0) == ($send_cb // 0);
 
     $session->{connected} = 0;
     $session->{disconnected_at} = time();

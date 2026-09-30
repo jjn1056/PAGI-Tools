@@ -66,6 +66,25 @@ subtest 'system events reach SSE subscribers live, not only on reconnect' => sub
     like($sent[0]{id}, qr/\A\d+\z/, 'and its id, for Last-Event-ID catch-up');
 };
 
+subtest 'a closing connection only disconnects the session it still owns' => sub {
+    require ChatApp::State;
+    my $first  = sub { 'first' };
+    my $second = sub { 'second' };
+    ChatApp::State::create_session('owner-test', 'owner', $first);
+    ChatApp::State::set_session_connected('owner-test', $second);    # resumed elsewhere
+
+    ChatApp::State::set_session_disconnected('owner-test', undef, $first);
+    ok(ChatApp::State::is_session_connected('owner-test'),
+        'the old connection closing leaves the resumed session connected');
+    is(ChatApp::State::get_session('owner-test')->{send_cb}, $second,
+        'and still delivering to the connection that resumed it');
+
+    ChatApp::State::set_session_disconnected('owner-test', undef, $second);
+    ok(!ChatApp::State::is_session_connected('owner-test'),
+        'the owning connection closing disconnects it');
+    ChatApp::State::remove_session('owner-test');
+};
+
 my $app = do "$dir/app.pl";
 my $load_error = $@ || $!;
 ok(!$load_error, 'chat app loads cleanly') or diag($load_error);

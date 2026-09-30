@@ -29,6 +29,9 @@ async sub chat {
     my $last_msg_id = int($ws->query('lastMsgId') // 0);
 
     my $session;
+    # This connection's delivery callback; it also identifies the connection
+    # that owns the session.
+    my $send_cb = sub { $ws->try_send_json($_[0]) };
 
     # Runs on any disconnect. Other users hear "user left" only if this one
     # does not reconnect within the grace period (see ChatApp::State).
@@ -48,7 +51,7 @@ async sub chat {
                 });
             }
         };
-        set_session_disconnected($session_id, $broadcast_leave) if $session;
+        set_session_disconnected($session_id, $broadcast_leave, $send_cb) if $session;
     });
 
     await $ws->accept;
@@ -58,7 +61,7 @@ async sub chat {
 
     if ($session) {
         # Resume an existing session and send what it missed.
-        set_session_connected($session_id, sub { $ws->try_send_json($_[0]) });
+        set_session_connected($session_id, $send_cb);
 
         my %missed_messages;
         for my $room_name (keys %{$session->{rooms}}) {
@@ -77,7 +80,7 @@ async sub chat {
         my $username = sanitize_username($raw_name || 'Anonymous');
         $session_id ||= _generate_session_id();
 
-        $session = create_session($session_id, $username, sub { $ws->try_send_json($_[0]) });
+        $session = create_session($session_id, $username, $send_cb);
 
         await $ws->send_json({
             type       => 'connected',

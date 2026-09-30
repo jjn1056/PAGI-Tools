@@ -149,17 +149,19 @@
     }
 
     // ===== Session Management =====
+    // The chat session belongs to one tab: sessionStorage survives a reload
+    // (so a reconnect resumes it) but is not shared, so two tabs are two users.
     function getOrCreateSessionId() {
-        let sessionId = localStorage.getItem('chat-session-id');
+        let sessionId = sessionStorage.getItem('chat-session-id');
         if (!sessionId) {
             sessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-            localStorage.setItem('chat-session-id', sessionId);
+            sessionStorage.setItem('chat-session-id', sessionId);
         }
         return sessionId;
     }
 
     function clearSession() {
-        localStorage.removeItem('chat-session-id');
+        sessionStorage.removeItem('chat-session-id');
         state.sessionId = '';
         state.lastMsgId = 0;
     }
@@ -263,7 +265,7 @@
                 state.userId = data.user_id;
                 state.sessionId = data.session_id;
                 state.username = data.name;
-                localStorage.setItem('chat-session-id', data.session_id);
+                sessionStorage.setItem('chat-session-id', data.session_id);
                 updateUserInfo();
                 updateRoomsList(data.rooms.map(name => ({ name, users: 0 })));
                 break;
@@ -273,7 +275,7 @@
                 state.userId = data.session_id;  // session_id is the user_id
                 state.sessionId = data.session_id;
                 state.username = data.name;
-                localStorage.setItem('chat-session-id', data.session_id);
+                sessionStorage.setItem('chat-session-id', data.session_id);
                 updateUserInfo();
 
                 // Restore room state
