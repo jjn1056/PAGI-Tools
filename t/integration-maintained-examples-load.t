@@ -130,15 +130,15 @@ subtest 'endpoint demo declares endpoint objects directly' => sub {
         'HTTP endpoint is a direct route with its existing middleware');
     like($source,
         qr/websocket\('\/ws\/echo'\s*=>\s*EchoWS->new,\s*
-            middleware\s*=>\s*\[middleware\(\$access_log\),\s*middleware\(\$timing\)\]/x,
-        'WebSocket endpoint is a direct route with its existing middleware');
+            middleware\s*=>\s*\[middleware\(\$timing\)\]/x,
+        'WebSocket endpoint uses protocol-neutral middleware (AccessLog logs HTTP only)');
     like($source,
         qr/sse\('\/events'\s*=>\s*MessageEvents->new,\s*
             middleware\s*=>\s*\[middleware\(\$timing\)\]/x,
         'SSE endpoint is a direct route with its existing middleware');
     like($source,
-        qr/mount\('\/'\s*=>\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)/,
-        'static files remain the final direct fallback mount');
+        qr/route\('\/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)/,
+        'static files are the final HTTP-only catch-all route');
 };
 
 done_testing;

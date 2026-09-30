@@ -92,23 +92,28 @@ Successful endpoint payloads remain application-owned JSON. `PAGI::Pages`
 handles only the generic HTTP failure.
 
 The three endpoint objects are direct Compose route leaves. Their middleware is
-wrapped explicitly with `middleware`, and the `/` static-file mount remains
-last because the shared routing engine preserves written order and a matched
-mount prefix owns dispatch immediately:
+wrapped explicitly with `middleware`, and the static-file route comes last
+because the shared routing engine preserves written order:
 
 ```perl
-use PAGI::Routing qw(middleware mount route sse websocket);
+use PAGI::Routing qw(middleware route sse websocket);
 
 compose(routes => [
     route('/api/messages' => MessageAPI->new,
         middleware => [middleware($access_log), middleware($require_json)]),
     websocket('/ws/echo' => EchoWS->new,
-        middleware => [middleware($access_log), middleware($timing)]),
+        middleware => [middleware($timing)]),
     sse('/events' => MessageEvents->new,
         middleware => [middleware($timing)]),
-    mount('/' => app => PAGI::App::File->from_app_path('public')),
+    route('/*path' => PAGI::App::File->from_app_path('public')),
 ]);
 ```
+
+`PAGI::Middleware::AccessLog` logs HTTP requests only, so it sits on the HTTP
+route; the timing middleware works for any protocol. Static files use an HTTP
+catch-all `route` rather than `mount('/')`: a Route is HTTP-only, so a
+WebSocket or SSE request to an unknown path gets the Router's refusal instead
+of reaching the file application, which serves HTTP only.
 
 `route`, `websocket`, and `sse` retain each configured endpoint object for the
 compiled application's lifetime. The same object may serve concurrent work,

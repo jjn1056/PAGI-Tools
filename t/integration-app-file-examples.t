@@ -18,7 +18,7 @@ my @cases = (
         name  => 'endpoint demo',
         file  => "$Bin/../examples/endpoint-demo/app.pl",
         title => qr/PAGI Endpoint Demo/,
-        shape => qr{mount\('/'\s*=>\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\s*,?\s*\)},
+        shape => qr{route\('/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
         class => 'PAGI::Compose',
     },
     {
@@ -68,8 +68,8 @@ for my $case (@cases) {
 
             if ($case->{name} eq 'endpoint demo') {
                 like($source,
-                    qr{mount\('/'\s*=>\s*app\s*=>\s*PAGI::App::File->from_app_path\('public'\)\s*,?\s*\)},
-                    'endpoint demo mounts its static fallback directly');
+                    qr{route\('/\*path'\s*=>\s*PAGI::App::File->from_app_path\('public'\)\)},
+                    'endpoint demo serves static files from an HTTP catch-all route');
                 unlike($source, qr/PAGI::App::Router|->to_app\b/,
                     'endpoint demo has no mutable Router or manual endpoint application');
                 unlike($source,
@@ -87,6 +87,18 @@ for my $case (@cases) {
                 like($source,
                     qr/package MessageEvents \{.*?async sub on_connect \{\n        my \(\$self, \$sse\) = \@_;.*?stash\(\$sse\)->set\(sub_id => \$id\);.*?sub on_disconnect \{\n        my \(\$self, \$sse\) = \@_;.*?stash\(\$sse\)->get/s,
                     'SSE hooks name and use their direct SSE object and stash');
+
+                my $ws_miss = eval { $client->websocket('/ws/missing') };
+                ok($ws_miss && $ws_miss->is_closed,
+                    'a WebSocket to an unknown path is refused, not an exception')
+                    or diag($@);
+                my $sse_miss = eval { $client->sse('/events/missing') };
+                is($sse_miss && $sse_miss->status, 404,
+                    'an SSE request to an unknown path is declined with 404')
+                    or diag($@);
+                unlike($source,
+                    qr/websocket\('\/ws\/echo'[^)]*\$access_log/s,
+                    'AccessLog, which logs HTTP only, is not put on the WebSocket route');
 
                 my $missing = $client->get('/not-a-static-file');
                 is($missing->status, 404,
