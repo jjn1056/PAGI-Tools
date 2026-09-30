@@ -6,6 +6,7 @@ use Future;
 use FindBin qw($Bin);
 use lib "$Bin/../lib";
 use lib "$Bin/../examples/chat/lib";
+use lib "$Bin/lib";
 use PAGI::Test::Client;
 
 # The chat example is the showcase for HTTP, WebSocket and SSE together, so it
@@ -83,6 +84,43 @@ subtest 'a closing connection only disconnects the session it still owns' => sub
     ok(!ChatApp::State::is_session_connected('owner-test'),
         'the owning connection closing disconnects it');
     ChatApp::State::remove_session('owner-test');
+};
+
+subtest 'a reconnecting SSE client gets missed and live events once, in order' => sub {
+    require ChatApp::State;
+    require ChatApp::SSE;
+    require PAGI::SSE;
+    require PAGITest::Connected;
+
+    my $before = ChatApp::State::get_recent_system_events(0);
+    my $seen = @$before ? $before->[-1]{id} : 0;
+    ChatApp::State::add_room("order-$_", 'tester') for 1, 2;    # two missed events
+
+    my @issued;
+    my $send = sub {
+        push @issued, { event => $_[0], future => Future->new };
+        return $issued[-1]{future};
+    };
+    my $sse = PAGI::SSE->new(PAGITest::Connected::sse_scope(), sub { Future->new }, $send);
+    my $starting = $sse->start;
+    $issued[0]{future}->done;
+    $starting->get;
+
+    my $caught_up = ChatApp::SSE::catch_up($sse, 'order-test', $seen);
+    ChatApp::State::add_room('order-3', 'tester');    # happens while the replay waits
+    while (my ($pending) = grep { !$_->{future}->is_ready } @issued) {
+        $pending->{future}->done;
+    }
+    ok($caught_up->is_done, 'the catch-up completes');
+
+    my @ids = map { $_->{event}{id} } @issued[1 .. $#issued];
+    my $events = ChatApp::State::get_recent_system_events($seen);
+    is(\@ids, [map { "$_->{id}" } @$events],
+        'every event after the last one seen, once, in id order');
+    is(scalar(@ids), 3, 'the two it missed and the one that happened meanwhile');
+
+    ChatApp::State::remove_sse_subscriber('order-test');
+    ChatApp::State::remove_room("order-$_") for 1 .. 3;
 };
 
 my $app = do "$dir/app.pl";

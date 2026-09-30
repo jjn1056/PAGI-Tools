@@ -8,6 +8,7 @@ package ChatApp::SSE;
 use strict;
 use warnings;
 
+use Future;
 use Future::AsyncAwait;
 
 use ChatApp::State qw(
@@ -31,23 +32,27 @@ async sub events {
         ['x-accel-buffering', 'no'],    # disable nginx buffering
     ]);
 
-    # Take the catch-up list, then subscribe, then replay: an event that
-    # happens during the replay is pushed live instead of being missed.
-    my $missed = get_recent_system_events($last_event_id);
-    add_sse_subscriber($subscriber_id, $sse, $last_event_id);
-    for my $event (@$missed) {
-        await $sse->send_event(
-            event => $event->{type},
-            data  => $event->{data},
-            id    => $event->{id},
-        );
-    }
+    await catch_up($sse, $subscriber_id, $last_event_id);
 
     # Statistics now and every STATS_INTERVAL seconds until the client goes
     # (every() runs its callback first, then waits).
     await $sse->every(STATS_INTERVAL, async sub {
         await $sse->send_event(event => 'stats', data => get_stats());
     });
+}
+
+# Replay what the client missed, then go live. PAGI::SSE sends in the order
+# sends are made, so making every replay send and subscribing in one step
+# (no await between them) puts each event published later after the replay:
+# none is missed, and none overtakes an older one -- which matters because the
+# client reconnects from the last id it saw.
+async sub catch_up {
+    my ($sse, $subscriber_id, $last_event_id) = @_;
+    my @replay = map {
+        $sse->send_event(event => $_->{type}, data => $_->{data}, id => $_->{id})
+    } @{ get_recent_system_events($last_event_id) };
+    add_sse_subscriber($subscriber_id, $sse, $last_event_id);
+    await Future->needs_all(@replay);
 }
 
 1;
