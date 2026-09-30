@@ -36,43 +36,102 @@ For an ordinary HTTP application:
 Pass `$app` to a PAGI server, or call `$app->to_app` when an explicit
 native coderef is required.
 
-# REQUIREMENTS
+# DESCRIPTION
 
-PAGI-Tools targets [PAGI::Spec::Www](https://metacpan.org/pod/PAGI%3A%3ASpec%3A%3AWww) **0.6**. It depends on the specification,
-not on any one server: it needs a server that implements Www 0.6, which puts a
-`pagi.connection` object in every `http`, `websocket` and `sse` scope and
-advertises `$scope->{pagi}{spec_version}` as `0.6`. [PAGI::Server](https://metacpan.org/pod/PAGI%3A%3AServer), the
-reference implementation, does so from 0.002014.
+PAGI-Tools collects application-side tools that are useful without requiring
+a larger framework:
 
-Tools checks the connection's capabilities where it uses them, not the version
-number. [PAGI::WebSocket](https://metacpan.org/pod/PAGI%3A%3AWebSocket) and [PAGI::SSE](https://metacpan.org/pod/PAGI%3A%3ASSE) die at construction when the scope
-lacks a complete connection object, naming the server's advertised
-`spec_version`. A streamed HTTP response ([PAGI::Response::Stream](https://metacpan.org/pod/PAGI%3A%3AResponse%3A%3AStream)) names any
-connection method it needs and lacks before sending. Code that only observes
-a request, such as access logging, works without a connection object.
+- [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::WebSocket](https://metacpan.org/pod/PAGI%3A%3AWebSocket), and [PAGI::SSE](https://metacpan.org/pod/PAGI%3A%3ASSE)
+- [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting) and [PAGI::Routing::URL](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3AURL)
+- [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) and [PAGI::Lifespan](https://metacpan.org/pod/PAGI%3A%3ALifespan)
+- [PAGI::Middleware](https://metacpan.org/pod/PAGI%3A%3AMiddleware) and the `PAGI::Middleware::*` suite
+- [PAGI::App::File](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3AFile), proxies, health checks, and other ready-made applications
+- [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) for conventional negotiated HTTP applications
+- [PAGI::Auth](https://metacpan.org/pod/PAGI%3A%3AAuth) for authentication results, installed context, and challenge formatting
+- [PAGI::Middleware::Authentication](https://metacpan.org/pod/PAGI%3A%3AMiddleware%3A%3AAuthentication) for request-based application authentication backends
+- [PAGI::State](https://metacpan.org/pod/PAGI%3A%3AState), [PAGI::Stash](https://metacpan.org/pod/PAGI%3A%3AStash), [PAGI::Session](https://metacpan.org/pod/PAGI%3A%3ASession), [PAGI::CSRF](https://metacpan.org/pod/PAGI%3A%3ACSRF), and [PAGI::Transport](https://metacpan.org/pod/PAGI%3A%3ATransport)
+- [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and related in-process testing tools
 
-# THE APPLICATION TOPOLOGY
+The toolkit stays below application conventions and dependency assembly.
+Higher-level frameworks can add those policies without maintaining another
+core Router grammar.
 
-PAGI-Tools has one routing-construction API, [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting). Its layers have
-separate jobs:
+New to PAGI? Start with [PAGI::Tools::Tutorial](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ATutorial); [PAGI::Tools::Cookbook](https://metacpan.org/pod/PAGI%3A%3ATools%3A%3ACookbook)
+has recipes for common tasks.
 
-    Endpoint::HTTP/WebSocket/SSE  optional behavior for one exact route
-    Route                         exact path and HTTP method policy
-    Mount                         prefix ownership and app composition
-    Router                        ordered children and NONE/PARTIAL outcomes
-    Compose                       root lifespan, middleware, and safety
+# A QUICK TOUR
 
-A `Route` matches one complete leaf. A `Mount` selects and owns a prefix,
-rewrites the child path, and delegates to one application. A `Router` scans
-its children in declaration order and owns exhausted-match 404 and
-method-mismatch 405 outcomes. `Compose` constructs the deployed root Router
-and surrounds it with application middleware, lifespan, error handling, HEAD
-handling, and response-completion safety.
+Handlers receive one object for the protocol they serve and return a value.
+An HTTP handler gets a [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) and returns a Response; a WebSocket
+handler gets a [PAGI::WebSocket](https://metacpan.org/pod/PAGI%3A%3AWebSocket); an SSE handler gets a [PAGI::SSE](https://metacpan.org/pod/PAGI%3A%3ASSE):
 
-The route-level [PAGI::Endpoint::HTTP](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AHTTP), [PAGI::Endpoint::WebSocket](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AWebSocket), and
-[PAGI::Endpoint::SSE](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ASSE) classes are optional behavior helpers for a single
-leaf. They do not construct or own route trees. An ordinary class that owns a
-reusable subtree can return an immutable Router:
+    use Future::AsyncAwait;
+    use PAGI::Compose qw(compose);
+    use PAGI::Response qw(json_response ndjson_response);
+    use PAGI::Routing qw(route websocket);
+
+    async sub user {
+        my ($request) = @_;
+        return json_response({ id => $request->path_param('id') });
+    }
+
+    # Stream records as they are produced. Each write waits for the
+    # client to keep up, and the loop stops if the client goes away.
+    async sub export {
+        my ($request) = @_;
+        return ndjson_response(async sub {
+            my ($writer) = @_;
+            for my $n (1 .. 3) {
+                last if $writer->is_disconnected;
+                await $writer->write_item({ n => $n });
+            }
+        });
+    }
+
+    async sub echo {
+        my ($ws) = @_;
+        await $ws->accept;
+        await $ws->each_text(async sub {
+            my ($text) = @_;
+            await $ws->send_text("echo: $text");
+        });
+    }
+
+    my $app = compose(
+        routes => [
+            route('/people/{id}' => \&user),
+            route('/export'      => \&export),
+            websocket('/echo'    => \&echo),
+        ],
+    );
+
+An unmatched path answers 404, and a matched path with the wrong method
+answers 405 with an `Allow` header. HEAD, disconnects and backpressure are
+handled for you.
+
+# HOW THE PIECES FIT
+
+[PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting) is the one way to build routes. Five pieces, each with one
+job:
+
+    Route     one path, the methods it answers, and what handles it
+    Mount     hands every path under a prefix to another application
+    Router    an ordered list of Routes and Mounts
+    Compose   the top of the application
+    Endpoint  optional classes for the behavior of a single Route
+
+A [Router](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3ARouter) tries its children in order. When nothing
+matches it answers 404; when a path matches but not its method it answers 405
+with the `Allow` header, and it answers HEAD and OPTIONS for you.
+[Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) builds the top Router from your routes and wraps it
+with application middleware, lifespan startup and shutdown, an error page for
+exceptions, HEAD handling, and a guard that finishes a response the
+application left incomplete.
+
+[PAGI::Endpoint::HTTP](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AHTTP), [PAGI::Endpoint::WebSocket](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3AWebSocket) and
+[PAGI::Endpoint::SSE](https://metacpan.org/pod/PAGI%3A%3AEndpoint%3A%3ASSE) are for when one route's behavior is big enough to
+want a class; they do not build routes. A class that owns a group of routes
+returns a Router instead, and the parent mounts it:
 
     package MyApp::People;
     use PAGI::Routing qw(route router);
@@ -85,51 +144,43 @@ reusable subtree can return an immutable Router:
         ]);
     }
 
-The parent mounts `$people->routing` directly. This keeps route names
-inspectable for `path_for` and `url_for` without another frontend or a
-mutable snapshot step.
+    # in the parent: mount('/people', app => $people->routing)
 
-# ROUTE AND APPLICATION VALUES
+Route names stay visible to [PAGI::Routing::URL](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3AURL)'s `path_for` and
+`url_for`.
 
-Callable meaning is determined by its position:
+# HANDLERS AND APPLICATIONS
 
-    HTTP Route endpoint / http_default CODE  -> one Request handler
-    HTTP Route endpoint / http_default object -> app object via to_app
-    WebSocket Route endpoint CODE             -> one WebSocket handler
-    WebSocket Route endpoint object           -> app object via to_app
-    SSE Route endpoint CODE                   -> one SSE handler
-    SSE Route endpoint object                 -> app object via to_app
-    Mount app CODE                       -> native PAGI application
-    Mount app object                     -> app object via to_app
+A PAGI **application** is either an `async` sub taking
+`($scope, $receive, $send)`, or an object with a `to_app` method that
+returns one. Perl has no callable objects, so what a plain sub means depends
+on the slot it is given to:
 
-An **app object** is an instantiated object with a `to_app` method. Route
-therefore accepts either a one-argument Request/WebSocket/SSE handler or an app
-object.
+    Slot                                A sub is...          An object is...
+    Route endpoint (http/websocket/sse) a handler taking     an application
+    Compose/Router http_default         one Request,         (via to_app)
+                                        WebSocket or SSE
+    Mount app                           an application       an application
+                                        ($scope, $receive,   (via to_app)
+                                        $send)
 
-A native three-channel coderef used at a Route or `http_default` must be
-marked with ["as\_app\_object" in PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils#as_app_object). Mount `app` CODE is already a native
-application position. A bare `http_default` CODE receives one Request; use
-`request_response($handler)` only when adapting that handler into Mount
-`app`. The wrapper is a narrow escape hatch for special protocol handling or
-an existing native PAGI coderef; ordinary Route handlers use their direct
-Request, WebSocket, or SSE object.
-`request_response($handler, request_factory => $factory)` also lets a
-project build an ordinary Route around its own [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) subclass
-without adding a new router node type.
+So Mount always takes an application, and a Route takes a handler or an
+application object. Two small adapters cross between the slots:
 
-For HTTP app objects that implement `allowed_methods`, Route calls
-that capability once at construction and snapshots the normalized methods.
-A finite `methods` option must be a restriction of that capability. The
-Router then owns PARTIAL matching, automatic HEAD, OPTIONS participation, and
-the authoritative `Allow` union. Scalar `methods => '*'` bypasses Route
-method qualification and leaves method dispatch and 405 handling to the
-endpoint. WebSocket and SSE routes never inspect this HTTP capability.
+- `as_app_object($app)` ([PAGI::Utils](https://metacpan.org/pod/PAGI%3A%3AUtils)) marks an existing
+three-argument application so it can sit in a Route or `http_default`.
+- `request_response($handler)` ([PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting)) wraps a one-Request
+handler so it can be given to Mount. Its `request_factory` option builds a
+[PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest) subclass of your own for that handler.
 
-Configured Endpoint objects are retained exactly once per compiled
-application. The same instance may serve concurrent requests or connections,
-so keep only configuration and long-lived services on it. Request,
-WebSocket, SSE, writer, and other connection-local state belongs to the
-protocol object created for each invocation.
+Methods: for an HTTP application object that implements `allowed_methods`,
+Route asks once, when it is built, and a `methods` option may only narrow
+that list. `methods => '*'` hands all method handling, 405 included, to
+the application. WebSocket and SSE routes ignore `allowed_methods`.
+
+An Endpoint object is created once and serves every request or connection on
+its route, concurrently. Keep only configuration and long-lived services on
+it; per-request state belongs on the Request, WebSocket or SSE object.
 
 # ROOTED STATIC FILES
 
@@ -152,25 +203,20 @@ call it directly from the module that owns the asset directory:
 Do not hide that caller-sensitive lookup behind an inherited base-class
 wrapper. Construct the serving application separately with the returned path.
 
-# DESCRIPTION
+# REQUIREMENTS
 
-PAGI-Tools collects application-side tools that are useful without requiring
-a larger framework (see ["REQUIREMENTS"](#requirements) for the PAGI specification version):
+PAGI-Tools targets [PAGI::Spec::Www](https://metacpan.org/pod/PAGI%3A%3ASpec%3A%3AWww) **0.6**. It depends on the specification,
+not on any one server: it needs a server that implements Www 0.6, which puts a
+`pagi.connection` object in every `http`, `websocket` and `sse` scope and
+advertises `$scope->{pagi}{spec_version}` as `0.6`. [PAGI::Server](https://metacpan.org/pod/PAGI%3A%3AServer), the
+reference implementation, does so from 0.002014.
 
-- [PAGI::Request](https://metacpan.org/pod/PAGI%3A%3ARequest), [PAGI::Response](https://metacpan.org/pod/PAGI%3A%3AResponse), [PAGI::WebSocket](https://metacpan.org/pod/PAGI%3A%3AWebSocket), and [PAGI::SSE](https://metacpan.org/pod/PAGI%3A%3ASSE)
-- [PAGI::Routing](https://metacpan.org/pod/PAGI%3A%3ARouting) and [PAGI::Routing::URL](https://metacpan.org/pod/PAGI%3A%3ARouting%3A%3AURL)
-- [PAGI::Compose](https://metacpan.org/pod/PAGI%3A%3ACompose) and [PAGI::Lifespan](https://metacpan.org/pod/PAGI%3A%3ALifespan)
-- [PAGI::Middleware](https://metacpan.org/pod/PAGI%3A%3AMiddleware) and the `PAGI::Middleware::*` suite
-- [PAGI::App::File](https://metacpan.org/pod/PAGI%3A%3AApp%3A%3AFile), proxies, health checks, and other ready-made applications
-- [PAGI::Pages](https://metacpan.org/pod/PAGI%3A%3APages) for conventional negotiated HTTP applications
-- [PAGI::Auth](https://metacpan.org/pod/PAGI%3A%3AAuth) for authentication results, installed context, and challenge formatting
-- [PAGI::Middleware::Authentication](https://metacpan.org/pod/PAGI%3A%3AMiddleware%3A%3AAuthentication) for request-based application authentication backends
-- [PAGI::State](https://metacpan.org/pod/PAGI%3A%3AState), [PAGI::Stash](https://metacpan.org/pod/PAGI%3A%3AStash), [PAGI::Session](https://metacpan.org/pod/PAGI%3A%3ASession), [PAGI::CSRF](https://metacpan.org/pod/PAGI%3A%3ACSRF), and [PAGI::Transport](https://metacpan.org/pod/PAGI%3A%3ATransport)
-- [PAGI::Test::Client](https://metacpan.org/pod/PAGI%3A%3ATest%3A%3AClient) and related in-process testing tools
-
-The toolkit stays below application conventions and dependency assembly.
-Higher-level frameworks can add those policies without maintaining another
-core Router grammar.
+Tools checks the connection's capabilities where it uses them, not the version
+number. [PAGI::WebSocket](https://metacpan.org/pod/PAGI%3A%3AWebSocket) and [PAGI::SSE](https://metacpan.org/pod/PAGI%3A%3ASSE) die at construction when the scope
+lacks a complete connection object, naming the server's advertised
+`spec_version`. A streamed HTTP response ([PAGI::Response::Stream](https://metacpan.org/pod/PAGI%3A%3AResponse%3A%3AStream)) names any
+connection method it needs and lacks before sending. Code that only observes
+a request, such as access logging, works without a connection object.
 
 # SEE ALSO
 
