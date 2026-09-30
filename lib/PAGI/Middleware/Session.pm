@@ -110,16 +110,57 @@ L<PAGI::Middleware::Session::State::Cookie>.
 =item * cookie_options (default: { httponly => 1, path => '/', samesite => 'Lax' })
 
 Options for the session cookie. Only used when C<state> defaults to
-L<PAGI::Middleware::Session::State::Cookie>. For production HTTPS
-deployments, add C<< secure => 1 >>.
+L<PAGI::Middleware::Session::State::Cookie>. The hashref B<replaces> the
+default set rather than adding to it, so restate the defaults you want to
+keep. For production HTTPS deployments:
+
+    cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
+
+Passing only C<< { secure => 1 } >> would drop C<HttpOnly>, C<Path> and
+C<SameSite>.
 
 =back
 
 =head1 STATE CLASSES
 
-State classes control how the session ID is extracted from requests and
-injected into responses. All implement the L<PAGI::Middleware::Session::State>
-interface.
+State classes control how the session ID travels: how it is read from each
+request and how a new or changed one is sent back. (Where the session I<data>
+lives is the Store, below.) All implement the
+L<PAGI::Middleware::Session::State> interface.
+
+Most applications keep the default, L<PAGI::Middleware::Session::State::Cookie>,
+and configure it through this middleware's C<cookie_name>, C<cookie_options>
+and C<expire> rather than building a State object:
+
+    middleware('Session',
+        secret         => $ENV{SESSION_SECRET},
+        cookie_name    => 'myapp_session',
+        cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
+        expire         => 8 * 3600,
+    )
+
+The other states read the ID from a request header instead, for clients that
+are not browsers. B<They never send an ID back> (their C<inject> is a no-op),
+which has consequences:
+
+=over 4
+
+=item * The application must hand the client its session ID -- read it with
+C<< PAGI::Session->id >> or C<< $scope->{'pagi.session_id'} >> and return it,
+say, in a login response -- and the client must send it on every request.
+
+=item * C<regenerate> does not work with them. The new ID is made as the
+response is sent, after the handler has run, so the application cannot hand
+it out; the client's old ID then finds no session.
+
+=item * The cookie store (L</STORE CLASSES>) cannot be used with them: its
+session travels in the value the state sends back.
+
+=item * An ID in C<Authorization: Bearer> (State::Bearer) looks like an
+authentication credential but is only a session key. If what you need is to
+identify a user from a token, use L<PAGI::Middleware::Authentication> instead.
+
+=back
 
 =over 4
 

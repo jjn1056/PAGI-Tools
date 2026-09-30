@@ -61,4 +61,52 @@ subtest 'the cookie store keeps the session in the cookie' => sub {
     is(count($elsewhere), 3, 'and any process holding the secret continues it from the cookie alone');
 };
 
+# State: how the session ID travels. Documented in PAGI::Middleware::Session
+# ("STATE CLASSES") and pointed to from PAGI::Session.
+
+subtest 'default cookie state: cookie_options replaces the defaults' => sub {
+    my $set_cookie = sub {
+        my (%config) = @_;
+        return PAGI::Test::Client->new(app => app_with(%config))
+            ->get('/visits')->header('set-cookie');
+    };
+    like($set_cookie->(), qr/HttpOnly/, 'by default the cookie is HttpOnly');
+    unlike($set_cookie->(cookie_options => { secure => 1 }), qr/HttpOnly/,
+        'cookie_options without httponly drops it: restate the defaults you keep');
+    like($set_cookie->(cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 }),
+        qr/HttpOnly.*Secure.*SameSite=Lax/, 'restated defaults plus secure');
+};
+
+subtest 'header state: the application hands the client its session ID' => sub {
+    require PAGI::Middleware::Session::State::Header;
+    my $issued;
+    my $app = compose(
+        middleware => [middleware('Session', secret => $SECRET,
+            state => PAGI::Middleware::Session::State::Header->new(header_name => 'X-Session-ID'))],
+        routes => [
+            route('/visits' => sub {
+                my ($request) = @_;
+                my $session = session($request);
+                $issued = $session->id;
+                $session->set(visits => $session->get('visits', 0) + 1);
+                return json_response({ visits => $session->get('visits') });
+            }),
+            route('/login' => sub {
+                my ($request) = @_;
+                session($request)->regenerate;
+                return json_response({ ok => 1 });
+            }, methods => ['POST']),
+        ],
+    );
+    my $client = PAGI::Test::Client->new(app => $app);
+    my $res = $client->get('/visits');
+    is($res->header('set-cookie'), undef, 'nothing carries the new session ID back');
+    my $id = $issued;
+    ok($id, 'but the handler can read it');
+    my $with_id = sub { $client->get('/visits', headers => { 'X-Session-ID' => $id })->json->{visits} };
+    is($with_id->(), 2, 'a client that sends it back continues the session');
+    $client->post('/login', headers => { 'X-Session-ID' => $id });
+    is($with_id->(), 1, 'regenerate replaces the ID where the handler cannot see it, so the old one starts over');
+};
+
 done_testing;

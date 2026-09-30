@@ -95,6 +95,13 @@ Its limits are those of a cookie: about 4KB of data, and a session cannot be
 revoked on the server before it expires. For larger or revocable sessions, use
 a shared server-side store; see L<PAGI::Middleware::Session/STORE CLASSES>.
 
+B<How the session ID travels is the middleware's State.> By default it is a
+cookie (L<PAGI::Middleware::Session::State::Cookie>), which most applications
+keep and configure through the middleware's C<cookie_name>, C<cookie_options>
+and C<expire>. Header-based states exist for clients that are not browsers,
+with real limits (the application must hand out the ID, and C<regenerate>
+does not work with them); see L<PAGI::Middleware::Session/STATE CLASSES>.
+
 The strict C<get()> method dies when a key does not exist, catching
 typos at runtime. Use the two-argument form C<get($key, $default)>
 for keys that may or may not be present.

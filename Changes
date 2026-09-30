@@ -31,6 +31,13 @@
     middleware point to PAGI::Middleware::Session::Store::Cookie
     (PAGI-Middleware-Session-Store-Cookie) as the smallest store that works
     across workers and restarts.
+  - PAGI::Middleware::Session explains what its State classes are for: most
+    applications keep the cookie state and configure it (cookie_name,
+    cookie_options, expire); the header-based states never send an ID back,
+    so the application hands it out, regenerate does not work with them and
+    the cookie store cannot be used with them. It also corrects the
+    cookie_options advice: the hashref replaces the defaults, so adding only
+    secure => 1 dropped HttpOnly, Path and SameSite.
   - The PAGI::WebSocket and PAGI::SSE SYNOPSIS show the helpers as route
     handlers receive them, and run as published (t/00-pod/helper-synopsis.t).
   - The examples use one-object handlers throughout; as_app_object remains
