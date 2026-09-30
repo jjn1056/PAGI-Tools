@@ -22,14 +22,18 @@ sub send_in_order {
         return Future->done if $result->is_cancelled;
         my $sent = eval { Future->wrap($owner->{send}->($event)) };
         $sent //= Future->fail($@);
+        # on_ready, unlike followed_by, also fires for a cancelled send, so
+        # the next send never waits on one that will not complete.
+        my $next = Future->new;
         $sent->on_ready(sub {
             my ($settled) = @_;
+            $next->done;
             return if $result->is_ready;
             if    ($settled->is_failed)    { $result->fail($settled->failure) }
             elsif ($settled->is_cancelled) { $result->cancel }
             else                           { $result->done($settled->get) }
         });
-        return $sent->followed_by(sub { Future->done });
+        return $next;
     });
     return $result;
 }

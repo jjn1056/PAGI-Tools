@@ -9,6 +9,8 @@
     several producers on one connection need no queue of their own. A send
     whose caller cancels it before it goes out is skipped; a caller's cancel
     no longer reaches a send the server already holds.
+  - PAGI::SSE: sends made before the stream starts share one start, so
+    several producers no longer issue sse.start more than once.
 
   [Documentation and examples]
   - The PAGI::WebSocket and PAGI::SSE SYNOPSIS show the helpers as route

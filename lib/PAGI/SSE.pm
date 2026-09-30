@@ -278,7 +278,19 @@ sub _set_state {
 }
 
 # Start the SSE stream
-async sub start {
+# Calls made while the stream is starting share that start, so sends from
+# several producers before the first sse.start goes out issue it once.
+sub start {
+    my ($self, %opts) = @_;
+    return $self->{_starting} if $self->{_starting};
+    my $starting = $self->_start(%opts);
+    return $starting if $starting->is_ready;
+    $self->{_starting} = $starting;
+    $starting->on_ready(sub { delete $self->{_starting} });
+    return $starting;
+}
+
+async sub _start {
     my ($self, %opts) = @_;
     if ($self->_response_claimed_before_start) {
         delete $self->{_pending_keepalive};
@@ -1034,7 +1046,9 @@ false only when it is absent; malformed present state croaks.
     await $sse->start(status => 200, headers => [...]);
 
 Starts the SSE stream. Called automatically on first send.
-Idempotent - only sends sse.start once.
+Idempotent - only sends sse.start once. A call made while the stream is
+starting returns the same Future, so several sends made before the stream
+starts produce one sse.start.
 
 If L</keepalive> was called before C<start> (for example
 L<PAGI::Endpoint::SSE>'s C<keepalive_interval>, which is configured before

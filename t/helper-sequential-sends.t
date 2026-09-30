@@ -115,6 +115,32 @@ for my $class (sort keys %helper) {
         $issued->[1]{future}->done;
         is($bodies->($issued), ['one', 'two'], 'before going out');
     };
+
+    subtest "$class: a send cancelled downstream does not block the next" => sub {
+        my ($send, $issued) = controlled_send();
+        my $conn = $h->{open}->($send, $issued);
+        my $first  = $h->{send}->($conn, 'one');
+        my $second = $h->{send}->($conn, 'two');
+        $issued->[1]{future}->cancel;    # e.g. a wrapper around $send
+        like($first->failure, qr/cancelled/, 'the cancellation reaches its own caller');
+        is($bodies->($issued), ['one', 'two'], 'the next send is still issued');
+        $issued->[2]{future}->done;
+        ok($second->is_done, 'and completes');
+    };
 }
+
+subtest 'PAGI::SSE: sends made before the stream starts issue one sse.start' => sub {
+    my ($send, $issued) = controlled_send();
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
+    my $first  = $sse->send_event(data => 'one');
+    my $second = $sse->send_event(data => 'two');
+    # Settle each send as it is issued, until none is left waiting.
+    while (my ($pending) = grep { !$_->{future}->is_ready } @$issued) {
+        $pending->{future}->done;
+    }
+    is([map { $_->{event}{type} } @$issued], ['sse.start', 'sse.send', 'sse.send'],
+        'one start, then both events in order');
+    ok($first->is_done && $second->is_done, 'both sends complete');
+};
 
 done_testing;
