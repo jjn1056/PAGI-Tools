@@ -10,7 +10,7 @@ You see the server's ticks interleaved with echoes of whatever you type — both
 directions live at once.
 
 This is the same demo as the raw-protocol
-[`examples/18-bidirectional-websocket`](../../../PAGI/examples/18-bidirectional-websocket)
+[`examples/18-bidirectional-websocket`](https://github.com/jjn1056/pagi/tree/main/examples/18-bidirectional-websocket)
 in the `PAGI` distribution, written with PAGI-Tools: a WebSocket route whose
 handler receives one **`PAGI::WebSocket`**.
 

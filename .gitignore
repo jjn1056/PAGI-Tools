@@ -62,3 +62,6 @@ docs/plans/
 docs/research/
 docs/superpowers/
 .worktrees
+
+# Files the contact-form example saves at run time
+examples/contact-form/uploads/
