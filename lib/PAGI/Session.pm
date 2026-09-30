@@ -16,7 +16,24 @@ PAGI::Session - Standalone helper object for session data access
 
 =head1 SYNOPSIS
 
+    use PAGI::Compose qw(compose);
+    use PAGI::Response qw(json_response);
+    use PAGI::Routing qw(middleware route);
     use PAGI::Session qw(session);
+
+    # PAGI::Session reads the session PAGI::Middleware::Session loads, so the
+    # middleware goes in front of every route that uses it.
+    my $app = compose(
+        middleware => [middleware('Session', secret => $ENV{SESSION_SECRET})],
+        routes     => [route('/visits' => \&visits)],
+    );
+
+    sub visits {
+        my ($request) = @_;
+        my $session = session($request);
+        $session->set(visits => $session->get('visits', 0) + 1);
+        return json_response({ visits => $session->get('visits') });
+    }
 
     # Construct from scope or request object
     my $session = session($scope);
@@ -48,6 +65,35 @@ PAGI::Session - Standalone helper object for session data access
 PAGI::Session wraps the raw session data hashref and provides a clean
 accessor interface with strict key checking. It is a standalone helper
 that is not attached to any request or protocol object.
+
+B<It requires L<PAGI::Middleware::Session>.> The middleware loads the session
+into the scope before your handler runs and saves it after; PAGI::Session only
+reads and changes what the middleware loaded. Without the middleware in front
+of the route, C<session()> and C<new> die with "PAGI::Session requires Session
+middleware (missing pagi.session)". (L</from_data> is the exception, for
+tests.)
+
+B<Where the data lives is the middleware's store.> By default that is
+L<PAGI::Middleware::Session::Store::Memory>: this process's memory. Sessions
+are not shared between workers and are lost on restart, so the default suits
+development and single-process deployments only. The smallest step up is
+L<PAGI::Middleware::Session::Store::Cookie> (distribution
+PAGI-Middleware-Session-Store-Cookie), which keeps the whole session encrypted
+in the cookie itself, so any worker can read it and it survives restarts, with
+no server-side storage:
+
+    use PAGI::Middleware::Session::Store::Cookie;
+
+    middleware('Session',
+        secret => $ENV{SESSION_SECRET},
+        store  => PAGI::Middleware::Session::Store::Cookie->new(
+            secret => $ENV{SESSION_SECRET},
+        ),
+    )
+
+Its limits are those of a cookie: about 4KB of data, and a session cannot be
+revoked on the server before it expires. For larger or revocable sessions, use
+a shared server-side store; see L<PAGI::Middleware::Session/STORE CLASSES>.
 
 The strict C<get()> method dies when a key does not exist, catching
 typos at runtime. Use the two-argument form C<get($key, $default)>
@@ -304,6 +350,9 @@ __END__
 
 =head1 SEE ALSO
 
-L<PAGI::Middleware::Session> - Session management middleware
+L<PAGI::Middleware::Session> - Session management middleware, and its stores
+
+L<PAGI::Middleware::Session::Store::Cookie> - Encrypted cookie store
+(distribution PAGI-Middleware-Session-Store-Cookie)
 
 =cut

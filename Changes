@@ -26,6 +26,11 @@
     startup (a hash or object), as the spec prescribes.
 
   [Documentation and examples]
+  - PAGI::Session says it requires PAGI::Middleware::Session and that the
+    middleware's default store is per-process memory; both it and the
+    middleware point to PAGI::Middleware::Session::Store::Cookie
+    (PAGI-Middleware-Session-Store-Cookie) as the smallest store that works
+    across workers and restarts.
   - The PAGI::WebSocket and PAGI::SSE SYNOPSIS show the helpers as route
     handlers receive them, and run as published (t/00-pod/helper-synopsis.t).
   - The examples use one-object handlers throughout; as_app_object remains

@@ -59,14 +59,23 @@ storage (Store).
 
 The B<State> layer controls how the session ID travels between client and
 server (cookies, headers, bearer tokens, or custom logic). The B<Store>
-layer controls where session data is persisted (memory, Redis, database).
+layer controls where session data is persisted (memory, the client's cookie,
+Redis, a database).
 
 By default, sessions use cookie-based IDs and in-memory storage.
 
 B<Warning:> The default in-memory store is suitable for development and
 single-process deployments only. Sessions are not shared between workers
 and are lost on restart. For production multi-worker deployments, provide
-a C<store> object backed by Redis, a database, or another shared storage.
+a C<store>. The smallest step up is
+L<PAGI::Middleware::Session::Store::Cookie> (distribution
+PAGI-Middleware-Session-Store-Cookie), which keeps the session encrypted in
+the cookie and needs no server-side storage; for larger or revocable
+sessions, use a store backed by Redis, a database, or other shared storage.
+See L</STORE CLASSES>.
+
+Handlers read and change the session through L<PAGI::Session> (or the raw
+C<pagi.session> hashref); both need this middleware in front of them.
 
 =head1 CONFIGURATION
 
@@ -163,6 +172,22 @@ objects for async compatibility.
 
 Default. In-memory hash storage. Not shared across workers or restarts.
 Suitable for development and testing only.
+
+=item L<PAGI::Middleware::Session::Store::Cookie>
+
+Separate distribution, PAGI-Middleware-Session-Store-Cookie. Keeps the whole
+session in the cookie, encrypted and authenticated with AES-256-GCM, so every
+worker can read it, it survives restarts, and no server-side storage is
+needed. Limits: about 4KB of session data, and a session cannot be revoked on
+the server before it expires. Its C<secret> should be a long random value:
+
+    use PAGI::Middleware::Session::Store::Cookie;
+
+    enable 'Session',
+        secret => $ENV{SESSION_SECRET},
+        store  => PAGI::Middleware::Session::Store::Cookie->new(
+            secret => $ENV{SESSION_SECRET},
+        );
 
 =item External stores
 
@@ -598,6 +623,9 @@ emits a transport, regardless of whether its session was mutated.
 =head1 SEE ALSO
 
 L<PAGI::Session> - Standalone session helper object
+
+L<PAGI::Middleware::Session::Store::Cookie> - Encrypted cookie store
+(distribution PAGI-Middleware-Session-Store-Cookie)
 
 L<PAGI::Middleware::Session::State> - Base class for session ID transport
 
