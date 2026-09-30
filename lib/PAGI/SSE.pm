@@ -1259,10 +1259,19 @@ JSON-encodes data before sending.
 
 Sends a full SSE event with all fields.
 
-C<send>, C<send_json>, and C<send_event> croak (C<"Cannot send on closed SSE
-connection">) after terminal notification, including after L</decline>. While
-a refusal response has started but the connection is still live, these methods
-return C<$self> without emitting an SSE start or data event.
+=head2 send_comment
+
+    await $sse->send_comment('heartbeat');
+
+Sends an SSE comment line (C<: heartbeat>). Clients ignore comments, so they
+carry no data; they keep an idle connection open through proxies. For
+periodic comments, L</keepalive> asks the server to send them for you.
+
+C<send>, C<send_json>, C<send_event>, and C<send_comment> croak (C<"Cannot send
+on closed SSE connection">) after terminal notification, including after
+L</decline>. While a refusal response has started but the connection is still
+live, these methods return C<$self> without emitting an SSE start or data
+event.
 
 =head2 try_send, try_send_json, try_send_comment, try_send_event
 
