@@ -57,9 +57,12 @@ C<pagi.connection> object in every C<http>, C<websocket> and C<sse> scope and
 advertises C<< $scope->{pagi}{spec_version} >> as C<0.6>. L<PAGI::Server>, the
 reference implementation, does so from 0.002014.
 
-L<PAGI::WebSocket> and L<PAGI::SSE> enforce this: their constructors die when
-the scope lacks a complete connection object, naming the server's advertised
-C<spec_version>. The HTTP helpers do not check yet.
+Tools checks the connection's capabilities where it uses them, not the version
+number. L<PAGI::WebSocket> and L<PAGI::SSE> die at construction when the scope
+lacks a complete connection object, naming the server's advertised
+C<spec_version>. A streamed HTTP response (L<PAGI::Response::Stream>) names any
+connection method it needs and lacks before sending. Code that only observes
+a request, such as access logging, works without a connection object.
 
 =head1 THE APPLICATION TOPOLOGY
 
