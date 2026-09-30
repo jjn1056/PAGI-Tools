@@ -1,6 +1,6 @@
 # Revision history for PAGI-Tools
 
-0.002003 - UNRELEASED
+0.002003 - 2026-09-30
 
   [FormBody and JSONBody removed]
   - BREAKING: Removed PAGI::Middleware::FormBody and
