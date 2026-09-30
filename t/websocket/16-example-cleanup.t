@@ -3,16 +3,18 @@ use warnings;
 use Test2::V0;
 use Future;
 use FindBin qw($Bin);
-use lib "$Bin/../../examples/websocket-chat-v2/lib";
+use lib "$Bin/../../examples/chat/lib";
 use PAGI::Test::ConnectionState;
+use PAGI::WebSocket;
 use ChatApp::WebSocket;
 
 subtest 'chat cleanup is registered before accept can end connection' => sub {
     my $conn = PAGI::Test::ConnectionState->new(websocket => 1);
-    my $future = ChatApp::WebSocket::handler()->({type => 'websocket', 'pagi.connection' => $conn}, sub {die 'receive after end'}, sub {
+    my $ws = PAGI::WebSocket->new({type => 'websocket', 'pagi.connection' => $conn}, sub {die 'receive after end'}, sub {
         $conn->_mark_disconnected('peer_closed', 'during accept');
         return Future->done;
     });
+    my $future = ChatApp::WebSocket::chat($ws);
     ok($future->is_ready && !$future->is_failed, 'early terminal accept returns without late registration or session/timer creation');
     diag($future->failure) if $future->is_failed;
 };

@@ -1,27 +1,13 @@
 package ChatApp::WebSocket;
 
-#
-# WebSocket Chat Handler using PAGI::WebSocket
-#
-# Compare with examples/10-chat-showcase/lib/ChatApp/WebSocket.pm
-# to see how PAGI::WebSocket simplifies the code:
-#
-# - No manual websocket.connect/accept handling (just $ws->accept)
-# - No manual websocket.disconnect handling (use $ws->on_close)
-# - No manual JSON encoding (use $ws->send_json, each_json)
-# - Cleaner message loop (each_json instead of raw receive loop)
-#
+# The chat's WebSocket route. The Router hands chat() one PAGI::WebSocket, so
+# there is no protocol plumbing here: accept, send_json, each_json and
+# on_close do it.
 
 use strict;
 use warnings;
 
 use Future::AsyncAwait;
-use URI::Escape qw(uri_unescape);
-use IO::Async::Loop;
-use IO::Async::Timer::Periodic;
-use Scalar::Util qw(weaken);
-
-use PAGI::WebSocket;
 
 use ChatApp::State qw(
     get_session create_session update_session
@@ -30,140 +16,93 @@ use ChatApp::State qw(
     get_room add_room get_all_rooms
     add_user_to_room remove_user_from_room get_room_users
     add_message get_room_messages get_messages_since
-    sanitize_username sanitize_room_name set_event_loop
+    sanitize_username sanitize_room_name
 );
 
-sub handler {
-    return async sub {
-        my ($scope, $receive, $send) = @_;
+async sub chat {
+    my ($ws) = @_;
 
-        # Create WebSocket wrapper - handles all protocol details
-        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+    # A reconnecting browser sends its session id and the last message it
+    # saw, so it can be caught up.
+    my $session_id  = $ws->query('session') // '';
+    my $raw_name    = $ws->query('name')    // '';
+    my $last_msg_id = int($ws->query('lastMsgId') // 0);
 
-        # Set up the event loop reference for State module
-        my $loop = IO::Async::Loop->new;
-        set_event_loop($loop);
+    my $session;
 
-        # Extract session info from query string
-        my $qs = $scope->{query_string} // '';
-        my ($session_id) = $qs =~ /(?:^|&)session=([^&]*)/;
-        my ($raw_name) = $qs =~ /(?:^|&)name=([^&]*)/;
-        my ($last_msg_id) = $qs =~ /(?:^|&)lastMsgId=(\d+)/;
-
-        $session_id = uri_unescape($session_id // '');
-        $raw_name = uri_unescape($raw_name // '');
-        $last_msg_id = int($last_msg_id // 0);
-
-        my $session;
-        my $connected = 1;
-        my $ping_timer;
-
-        # Register cleanup callback - runs on ANY disconnect
-        # This replaces manual disconnect handling in the message loop
-        $ws->on_close(sub {
-            my ($code, $reason) = @_;
-            $connected = 0;
-            if ($ping_timer) {
-                $ping_timer->stop;
-                $loop->remove($ping_timer);
+    # Runs on any disconnect. Other users hear "user left" only if this one
+    # does not reconnect within the grace period (see ChatApp::State).
+    $ws->on_close(sub {
+        my $broadcast_leave = sub {
+            my ($room_name, $username) = @_;
+            for my $other (@{ get_room_users($room_name) }) {
+                my $other_session = get_session($other->{id});
+                next unless $other_session && $other_session->{send_cb};
+                # Runs when the grace period ends, outside any await, so the
+                # send's Future is handled explicitly.
+                $other_session->{send_cb}->({
+                    type  => 'user_left',
+                    room  => $room_name,
+                    user  => $username,
+                    users => get_room_users($room_name),
+                })->on_fail(sub {
+                    my ($error) = @_;
+                    warn "Failed to notify $other->{id} that $username left $room_name: $error\n";
+                })->retain;
             }
+        };
+        set_session_disconnected($session_id, $broadcast_leave) if $session;
+    });
 
-            # Broadcast leave callback for grace period
-            my $broadcast_leave = sub {
-                my ($room_name, $username) = @_;
-                my $room_users = get_room_users($room_name);
-                for my $other (@$room_users) {
-                    my $other_session = get_session($other->{id});
-                    next unless $other_session && $other_session->{send_cb};
-                    # Runs from the grace-period timer's on_expire (a plain
-                    # synchronous callback), so it can't await -- handle the
-                    # returned Future explicitly instead of firing it bare.
-                    $other_session->{send_cb}->({
-                        type  => 'user_left',
-                        room  => $room_name,
-                        user  => $username,
-                        users => get_room_users($room_name),
-                    })->on_fail(sub {
-                        my ($error) = @_;
-                        warn "Failed to notify $other->{id} that $username left $room_name: $error\n";
-                    })->retain;
-                }
-            };
+    await $ws->accept;
+    return if $ws->is_closed;
 
-            set_session_disconnected($session_id, $broadcast_leave) if $session;
-        });
+    $session = $session_id ? get_session($session_id) : undef;
 
-        # Accept connection - one line vs manual protocol handling
-        await $ws->accept;
-        return if $ws->is_closed;
+    if ($session) {
+        # Resume an existing session and send what it missed.
+        set_session_connected($session_id, sub { $ws->send_json($_[0]) });
 
-        $session = $session_id ? get_session($session_id) : undef;
-
-        if ($session) {
-            # Resume existing session
-            set_session_connected($session_id, sub { $ws->send_json($_[0]) });
-
-            # Send resumed message with missed messages
-            my %missed_messages;
-            for my $room_name (keys %{$session->{rooms}}) {
-                $missed_messages{$room_name} = get_messages_since($room_name, $last_msg_id);
-            }
-
-            await $ws->send_json({
-                type           => 'resumed',
-                session_id     => $session_id,
-                name           => $session->{name},
-                rooms          => [keys %{$session->{rooms}}],
-                missedMessages => \%missed_messages,
-            });
-        }
-        else {
-            # New session
-            my $username = sanitize_username($raw_name || 'Anonymous');
-            $session_id ||= _generate_session_id();
-
-            $session = create_session($session_id, $username, sub { $ws->send_json($_[0]) });
-
-            await $ws->send_json({
-                type       => 'connected',
-                session_id => $session_id,
-                name       => $username,
-                rooms      => [sort keys %{get_all_rooms()}],
-            });
-
-            return if $ws->is_closed;
-
-            # Auto-join general room
-            await _join_room($ws, $session_id, 'general');
+        my %missed_messages;
+        for my $room_name (keys %{$session->{rooms}}) {
+            $missed_messages{$room_name} = get_messages_since($room_name, $last_msg_id);
         }
 
+        await $ws->send_json({
+            type           => 'resumed',
+            session_id     => $session_id,
+            name           => $session->{name},
+            rooms          => [keys %{$session->{rooms}}],
+            missedMessages => \%missed_messages,
+        });
+    }
+    else {
+        my $username = sanitize_username($raw_name || 'Anonymous');
+        $session_id ||= _generate_session_id();
+
+        $session = create_session($session_id, $username, sub { $ws->send_json($_[0]) });
+
+        await $ws->send_json({
+            type       => 'connected',
+            session_id => $session_id,
+            name       => $username,
+            rooms      => [sort keys %{get_all_rooms()}],
+        });
         return if $ws->is_closed;
 
-        # Set up ping timer
-        my $weak_ws = $ws;
-        weaken($weak_ws);
+        await _join_room($ws, $session_id, 'general');
+    }
+    return if $ws->is_closed;
 
-        $ping_timer = IO::Async::Timer::Periodic->new(
-            interval => 25,
-            on_tick  => sub {
-                return unless $connected && $weak_ws;
-                # on_tick is a plain synchronous IO::Async callback, so this
-                # can't be awaited. try_send_json never dies, but the
-                # returned Future still needs handling rather than being
-                # fired bare (a dropped, unawaited Future warns).
-                $weak_ws->try_send_json({ type => 'ping', ts => time() })->retain;
-            },
-        );
-        $loop->add($ping_timer);
-        $ping_timer->start;
+    # Protocol-level pings keep proxies from closing an idle connection. The
+    # server runs the timer; the browser also sends its own application
+    # 'ping' messages, answered below with 'pong'.
+    await $ws->keepalive(25);
 
-        # Message loop - each_json handles JSON decode and disconnect
-        # Compare to raw: while(1) { my $event = await $receive->(); ... }
-        await $ws->each_json(async sub {
-            my ($msg) = @_;
-            await _handle_message($ws, $session_id, $msg);
-        });
-    };
+    await $ws->each_json(async sub {
+        my ($msg) = @_;
+        await _handle_message($ws, $session_id, $msg);
+    });
 }
 
 sub _generate_session_id {
@@ -526,22 +465,22 @@ __END__
 
 # NAME
 
-ChatApp::WebSocket - WebSocket chat handler using PAGI::WebSocket
+ChatApp::WebSocket - the chat's WebSocket handler
+
+# SYNOPSIS
+
+    use PAGI::Routing qw(websocket);
+    websocket('/ws/chat' => \&ChatApp::WebSocket::chat);
 
 # DESCRIPTION
 
-This module handles WebSocket connections for real-time chat using the
-PAGI::WebSocket convenience wrapper. Compare with the original at
-`examples/10-chat-showcase/lib/ChatApp/WebSocket.pm` to see how
-PAGI::WebSocket simplifies the code.
+`chat($ws)` receives one PAGI::WebSocket from the Router:
 
-## Key Improvements
-
-- **No manual protocol handling** - `$ws->accept` replaces waiting for websocket.connect and sending websocket.accept
-- **Clean disconnect handling** - `$ws->on_close` callback runs on any disconnect, no need to handle websocket.disconnect in the message loop
-- **JSON methods** - `$ws->send_json` and `$ws->each_json` handle encoding/decoding automatically
-- **try_send_json** - Safe send that returns false on closed connection instead of throwing
+- `$ws->query` reads the session id, name and last message id from the URL.
+- `$ws->on_close` runs cleanup on any disconnect, before or after accept.
+- `$ws->send_json` and `$ws->each_json` handle JSON both ways.
+- `$ws->keepalive` asks the server for protocol pings; no timer in app code.
 
 # SEE ALSO
 
-PAGI::WebSocket, examples/10-chat-showcase/lib/ChatApp/WebSocket.pm
+PAGI::WebSocket, PAGI::Routing

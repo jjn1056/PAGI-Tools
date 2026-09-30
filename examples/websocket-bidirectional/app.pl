@@ -26,8 +26,8 @@
 # than calling $websocket->send_text_if_connected directly. This is the canonical
 # shape for a full-duplex handler with more than one send-producer; the other
 # examples that face the same problem (sse-dashboard, endpoint-demo,
-# background-tasks, 10-chat-showcase, websocket-chat-v2) reference this
-# pattern instead of inventing their own variant.
+# background-tasks) reference this pattern instead of inventing their own
+# variant.
 #
 # Run:  pagi-server --app examples/websocket-bidirectional/app.pl --port 5000
 # Test: websocat ws://localhost:5000/

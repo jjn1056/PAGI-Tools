@@ -41,7 +41,7 @@ raw PAGI protocol details that belong alongside the server implementation.
 ## Example List
 
 1. `09-psgi-bridge` - wraps a PSGI app for PAGI use (via `PAGI::App::WrapPSGI`)
-2. `10-chat-showcase` - Compose-rooted chat demo with application-wide logging and direct immutable HTTP/WebSocket/SSE declarations
+2. `chat` - multi-user chat over HTTP, WebSocket and SSE: one-object handlers on declarative routes, a JSON API Router mounted at `/api`, live SSE notifications, application-wide logging
 3. `13-contact-form` - form parsing and file uploads
 4. `14-lifespan-utils` - lifespan hooks via `PAGI::Utils`
 5. `15-large-application` - Perl 5.40+ Compose-rooted modular HTML application with named Person/Blogs Router application mounts, cross-component links, boundary-specific Router defaults, an opaque static-file mount, lifespan data, and a deferred-work ledger
@@ -61,12 +61,8 @@ raw PAGI protocol details that belong alongside the server implementation.
 19. `starlette-apples` - Perl 5.40 single-file apples CRUD application for direct comparison with the original Starlette version, using `Types::Standard` path constraints, Router-owned routing outcomes, and a PAGI-only NDJSON export canary
 20. `test-lifespan-shutdown` - testing graceful lifespan shutdown hooks
 21. `websocket-bidirectional` - full-duplex WebSocket with `PAGI::WebSocket`: a receive-loop (`each_text`) and an unsolicited server send-loop running concurrently, both routed through one serializing send queue -- the canonical pattern for any handler with more than one send-producer on the same socket
-22. `websocket-chat-v2` - WebSocket chat using `PAGI::Endpoint::WebSocket`
 23. `websocket-echo-v2` - WebSocket echo using `PAGI::Endpoint::WebSocket`
 
-**Note on `websocket-chat-v2/public`:** the v2 example carries ordinary copies
-of the shared chat frontend assets so it remains runnable from CPAN tarballs,
-which cannot preserve the source checkout's former directory symlink.
 
 Each example has its own `README.md` explaining how to run it.
 

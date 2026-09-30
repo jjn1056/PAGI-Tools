@@ -68,9 +68,8 @@ producer against a slow or backpressured connection.
 
 This is **the** pattern for a full-duplex handler with more than one
 send-producer — every other example in this repo that faces the same
-problem (`sse-dashboard`, `endpoint-demo`, `background-tasks`,
-`10-chat-showcase`, `websocket-chat-v2`) points back to this same queue
-shape rather than inventing its own variant.
+problem (`sse-dashboard`, `endpoint-demo`, `background-tasks`) points back
+to this same queue shape rather than inventing its own variant.
 
 ## Run
 

@@ -1,18 +1,15 @@
 #!/usr/bin/env perl
 
-# Multi-User Chat Showcase Application
+# Multi-user chat: HTTP, WebSocket and SSE in one application.
 #
-# This application demonstrates PAGI's capabilities:
-# - HTTP: Static file serving and REST API
-# - WebSocket: Real-time bidirectional chat
-# - SSE: System-wide event notifications
-# - Lifespan: Application startup/shutdown handling
+# - HTTP: a JSON API (a Router mounted at /api) and the static frontend
+# - WebSocket: real-time chat, one PAGI::WebSocket per connection
+# - SSE: system notifications, one PAGI::SSE per client
+# - Lifespan: startup and shutdown hooks
 #
 # Run with:
-#   perl -Ilib -Iexamples/10-chat-showcase/lib bin/pagi-server \
-#     --app examples/10-chat-showcase/app.pl --port 5000
-#
-# Then open http://localhost:5000 in your browser
+#   pagi-server -I lib --app examples/chat/app.pl --port 5000
+# Then open http://localhost:5000
 
 use strict;
 use warnings;
@@ -21,35 +18,31 @@ use Future::AsyncAwait;
 use File::Basename qw(dirname);
 use lib dirname(__FILE__) . '/lib';
 
+use PAGI::App::File;
 use PAGI::Compose qw(compose);
-use PAGI::Routing qw(middleware route sse websocket);
-use PAGI::Utils qw(as_app_object);
+use PAGI::Routing qw(middleware mount route sse websocket);
 
 use ChatApp::State qw(get_stats);
 use ChatApp::HTTP;
 use ChatApp::WebSocket;
 use ChatApp::SSE;
 
-# Pre-instantiate handlers
-my $http_handler = ChatApp::HTTP::handler();
-my $ws_handler   = ChatApp::WebSocket::handler();
-my $sse_handler  = ChatApp::SSE::handler();
-
-# Simple request logging middleware
+# Logs every HTTP request, WebSocket and SSE connection, and the lifespan
+# loop. PAGI::Middleware::AccessLog covers HTTP only, so this one is written
+# out; it is also a compact example of wrapping send to watch responses.
 sub with_logging {
     my ($app) = @_;
 
-    return async sub  {
+    return async sub {
         my ($scope, $receive, $send) = @_;
         my $start = time();
         my $type = $scope->{type};
         my $path = $scope->{path} // '-';
         my $method = $scope->{method} // '-';
 
-        # Wrap send to capture response status
         my $status = '-';
-        my $wrapped_send = async sub  {
-        my ($event) = @_;
+        my $wrapped_send = async sub {
+            my ($event) = @_;
             if ($event->{type} =~ /\.start$/ && defined $event->{status}) {
                 $status = $event->{status};
             }
@@ -71,15 +64,14 @@ sub with_logging {
     };
 }
 
-# Route by protocol and path with declarative PAGI::Routing nodes. WebSocket
-# and SSE endpoints are first-class routes; the final HTTP catch-all Route
-# sends static files and the REST API to ChatApp::HTTP.
-
 compose(
     routes => [
-        websocket('/ws/chat' => as_app_object($ws_handler)),
-        sse('/events' => as_app_object($sse_handler)),
-        route('/*path' => as_app_object($http_handler), methods => '*'),
+        websocket('/ws/chat' => \&ChatApp::WebSocket::chat),
+        sse('/events' => \&ChatApp::SSE::events),
+        mount('/api', app => ChatApp::HTTP::routing()),
+        # A Route is HTTP-only, so WebSocket and SSE misses still get the
+        # Router's refusals rather than reaching the file application.
+        route('/*path' => PAGI::App::File->from_app_path('public')),
     ],
     middleware => [middleware(\&with_logging)],
     lifespan => {
@@ -103,12 +95,13 @@ __END__
 
 =head1 NAME
 
-Multi-User Chat Showcase - PAGI Demo Application
+Multi-User Chat - HTTP, WebSocket and SSE in one PAGI-Tools application
 
 =head1 SYNOPSIS
 
-    perl -Ilib -Iexamples/10-chat-showcase/lib bin/pagi-server \
-        --app examples/10-chat-showcase/app.pl --port 5000
+    pagi-server -I lib --app examples/chat/app.pl --port 5000
+
+Then open http://localhost:5000 in a browser (two tabs to chat with yourself).
 
 =head1 DESCRIPTION
 
@@ -145,6 +138,10 @@ Lists all chat rooms with user counts
 
 Gets message history for a room
 
+=item GET /api/room/{name}/users
+
+Lists the users in a room
+
 =item GET /api/stats
 
 Server statistics (uptime, users, messages)
@@ -167,7 +164,8 @@ WebSocket endpoint for chat. Connect with C<?name=Username> query parameter.
 
 =item /events
 
-Server-Sent Events stream for system notifications
+Server-Sent Events stream: system notifications as they happen, recent ones
+replayed on reconnect (C<Last-Event-ID>), and statistics every 10 seconds
 
 =back
 

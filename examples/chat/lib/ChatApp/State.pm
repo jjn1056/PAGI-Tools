@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use Future::IO;
 use Time::HiRes qw(time);
 use Scalar::Util qw(weaken);
 
@@ -17,30 +18,21 @@ our @EXPORT_OK = qw(
     add_sse_subscriber remove_sse_subscriber get_sse_subscribers
     add_system_event get_recent_system_events
     get_stats generate_id sanitize_username sanitize_room_name
-    set_event_loop
 );
 
 # Shared state across all connections
 my %sessions;        # session_id => { id, name, rooms => {}, send_cb, connected, disconnected_at, disconnect_timer, last_seen, last_message_id }
 my %rooms;           # room_name => { name, users => {}, messages => [], created_at, created_by }
-my %sse_subscribers; # client_id => { send_cb, last_event_id }
+my %sse_subscribers; # client_id => { sse, last_event_id }
 my @system_events;   # Recent system events for SSE catch-up
 my $message_counter = 0;
 my $event_counter = 0;
 my $start_time = time();
-my $event_loop;      # IO::Async loop reference for timers
 
 use constant MAX_MESSAGES_PER_ROOM => 100;
 use constant MAX_SYSTEM_EVENTS => 50;
 use constant PRESENCE_GRACE_PERIOD => 30;  # seconds before broadcasting "user left"
 use constant SESSION_EXPIRY => 86400;       # 24 hours
-
-# Set the event loop reference (called from WebSocket handler)
-sub set_event_loop {
-    my ($loop) = @_;
-
-    $event_loop = $loop;
-}
 
 # Initialize default rooms
 sub init_default_rooms {
@@ -118,11 +110,7 @@ sub create_session {
         delete $existing->{disconnected_at};
 
         # Cancel any pending disconnect timer
-        if ($existing->{disconnect_timer}) {
-            $existing->{disconnect_timer}->stop;
-            $event_loop->remove($existing->{disconnect_timer}) if $event_loop;
-            delete $existing->{disconnect_timer};
-        }
+        cancel_disconnect_timer($session_id);
 
         return $existing;
     }
@@ -190,21 +178,15 @@ sub set_session_disconnected {
     $session->{disconnected_at} = time();
     $session->{send_cb} = undef;
 
-    # Start grace period timer
-    if ($event_loop && !$session->{disconnect_timer}) {
-        require IO::Async::Timer::Countdown;
-
-        my $timer = IO::Async::Timer::Countdown->new(
-            delay     => PRESENCE_GRACE_PERIOD,
-            on_expire => sub {
-                # Grace period expired - user didn't reconnect
-                _finalize_disconnect($session_id, $broadcast_callback);
-            },
-        );
-
-        $event_loop->add($timer);
-        $timer->start;
-        $session->{disconnect_timer} = $timer;
+    # Grace period: if the user has not reconnected when it ends, they left.
+    # Future::IO keeps this module free of any one event loop.
+    unless ($session->{disconnect_timer}) {
+        my $grace = Future::IO->sleep(PRESENCE_GRACE_PERIOD);
+        $grace->on_done(sub {
+            # Grace period expired - user didn't reconnect
+            _finalize_disconnect($session_id, $broadcast_callback);
+        });
+        $session->{disconnect_timer} = $grace;
     }
 
     return $session;
@@ -215,10 +197,8 @@ sub cancel_disconnect_timer {
 
     my $session = $sessions{$session_id} or return;
 
-    if ($session->{disconnect_timer}) {
-        $session->{disconnect_timer}->stop;
-        $event_loop->remove($session->{disconnect_timer}) if $event_loop;
-        delete $session->{disconnect_timer};
+    if (my $grace = delete $session->{disconnect_timer}) {
+        $grace->cancel unless $grace->is_ready;
     }
 }
 
@@ -439,12 +419,13 @@ sub get_messages_since {
 }
 
 # SSE subscriber management
+# $sse is the subscriber's PAGI::SSE; system events are pushed to it live.
 sub add_sse_subscriber {
-    my ($id, $send_cb, $last_event_id) = @_;
+    my ($id, $sse, $last_event_id) = @_;
     $last_event_id //= 0;
 
     $sse_subscribers{$id} = {
-        send_cb       => $send_cb,
+        sse           => $sse,
         last_event_id => $last_event_id,
     };
     return $sse_subscribers{$id};
@@ -475,6 +456,17 @@ sub add_system_event {
 
     if (@system_events > MAX_SYSTEM_EVENTS) {
         shift @system_events;
+    }
+
+    # Push it to every connected SSE subscriber now. try_send_event never
+    # dies; a subscriber that has gone is removed by its own on_close. The
+    # caller cannot await here, so each send's Future is retained until done.
+    for my $subscriber (values %sse_subscribers) {
+        $subscriber->{sse}->try_send_event(
+            event => $event->{type},
+            data  => $event->{data},
+            id    => $event->{id},
+        )->retain;
     }
 
     return $event;
