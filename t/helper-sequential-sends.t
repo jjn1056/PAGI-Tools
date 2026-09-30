@@ -58,8 +58,10 @@ for my $class (sort keys %helper) {
     subtest "$class: an idle connection sends at once" => sub {
         my ($send, $issued) = controlled_send();
         my $conn = $h->{open}->($send, $issued);
-        $h->{send}->($conn, 'one');
+        my $sent = $h->{send}->($conn, 'one');
         is($bodies->($issued), ['one'], 'issued without waiting');
+        $issued->[1]{future}->done;
+        ok($sent->is_done, 'and completes when the server settles it');
     };
 
     subtest "$class: a second send waits for the first to settle" => sub {
@@ -92,12 +94,14 @@ for my $class (sort keys %helper) {
     subtest "$class: a waiting send its caller cancels is never issued" => sub {
         my ($send, $issued) = controlled_send();
         my $conn = $h->{open}->($send, $issued);
-        $h->{send}->($conn, 'one');
+        my $first  = $h->{send}->($conn, 'one');
         my $second = $h->{send}->($conn, 'two');
         my $third  = $h->{send}->($conn, 'three');
         $second->cancel;
         $issued->[1]{future}->done;
         is($bodies->($issued), ['one', 'three'], 'the cancelled send is skipped, order kept');
+        $issued->[2]{future}->done;
+        ok($first->is_done && $third->is_done, 'the others complete');
     };
 
     subtest "$class: an issued send is never cancelled by its caller" => sub {

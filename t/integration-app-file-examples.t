@@ -58,7 +58,7 @@ for my $case (@cases) {
         }
 
         SKIP: {
-            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 17 : 2)
+            skip 'example did not load', ($case->{name} eq 'endpoint demo' ? 23 : 2)
                 unless ref($app) eq 'CODE'
                     || ($case->{class} && ref($app) eq $case->{class});
             my $client = PAGI::Test::Client->new(app => $app);
@@ -108,7 +108,23 @@ for my $case (@cases) {
                 is($missing->content_length, length($missing->content),
                     'unresolved root response advertises its complete body');
 
-                my $unsupported = $client->post('/api/messages');
+                # The API route's AccessLog middleware writes one line per
+                # request to STDERR.
+                my $access_log = '';
+                my ($unsupported, $messages, $created);
+                {
+                    local *STDERR;
+                    open STDERR, '>', \$access_log or die $!;
+                    $unsupported = $client->post('/api/messages');
+                    $messages = $client->get('/api/messages');
+                    $created = $client->post('/api/messages', json => {
+                        text => 'Direct request object',
+                    });
+                }
+                like($access_log,
+                    qr{\APOST /api/messages 415 \S+\nGET /api/messages 200 \S+\nPOST /api/messages 201 \S+\n\z},
+                    'AccessLog records each API request');
+
                 is($unsupported->status, 415,
                     'message API rejects a request without JSON content type');
                 is($unsupported->content_type, 'application/problem+json',
@@ -120,16 +136,12 @@ for my $case (@cases) {
                     detail => 'Content-Type must be application/json',
                 }, 'content-type rejection uses the shared Pages representation');
 
-                my $messages = $client->get('/api/messages');
                 is($messages->status, 200, 'message API lists messages');
                 is($messages->json, [
                     { id => 1, text => 'Hello, World!' },
                     { id => 2, text => 'Welcome to PAGI Endpoints' },
                 ], 'message API lists its initial JSON messages');
 
-                my $created = $client->post('/api/messages', json => {
-                    text => 'Direct request object',
-                });
                 is($created->status, 201, 'message API creates a JSON message');
                 is($created->json, {
                     id   => 3,

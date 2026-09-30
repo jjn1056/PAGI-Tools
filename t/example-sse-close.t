@@ -32,11 +32,18 @@ is($client->get('/')->status, 200, 'and the same Response value serves it again'
 # handler's Future::IO sleeps; it checks the stream's start here. The whole
 # sequence (four progress events, done, close with its logged reason) is
 # exercised under pagi-server.
-$client->sse('/jobs', sub {
-    my ($sse) = @_;
-    my $first = $sse->receive_event;
-    is($first->{event}, 'progress', 'the stream starts with a progress event');
-    like($first->{data}, qr/"pct":\s*25/, 'at 25%');
-});
+my $closed = '';
+{
+    local *STDERR;
+    open STDERR, '>', \$closed or die $!;
+    $client->sse('/jobs', sub {
+        my ($sse) = @_;
+        my $first = $sse->receive_event;
+        is($first->{event}, 'progress', 'the stream starts with a progress event');
+        like($first->{data}, qr/"pct":\s*25/, 'at 25%');
+    });
+}
+is($closed, "SSE stream closed: client_closed\n",
+    'a client leaving early is reported with the server-supplied reason');
 
 done_testing;
