@@ -133,15 +133,7 @@ unlike($endpoint, qr/File::Basename|File::Spec|dirname\s*\(/,
 my $bidirectional = source_text("$Bin/../examples/websocket-bidirectional/app.pl");
 unlike($bidirectional, qr/\$ctx\b|PAGI::Context/,
     'bidirectional WebSocket example has no Context dependency');
-like($bidirectional,
-    qr/use PAGI::WebSocket;.*?my \$websocket = PAGI::WebSocket->new\(\$scope, \$receive, \$send\);.*?await \$websocket->accept;/s,
-    'bidirectional WebSocket example constructs and accepts one direct object');
-like($bidirectional,
-    qr/my \$incoming = \$websocket->each_text\(async sub \{/,
-    'bidirectional receive loop uses the direct WebSocket object');
-like($bidirectional,
-    qr/await \$websocket->send_text_if_connected.*?while \(\$websocket->is_connected\)/s,
-    'bidirectional send queue and loop use the direct WebSocket object');
+# websocket-bidirectional's shape and behaviour: t/example-websocket-bidirectional.t
 
 my $dashboard = source_text($cases[1]{file});
 unlike($dashboard, qr/File::Basename|File::Spec|dirname\s*\(/,

@@ -22,7 +22,7 @@ my @examples = (
     ['full-demo',               'CODE'],
     ['sse-close',               'CODE'],
     ['test-lifespan-shutdown',  'CODE'],
-    ['websocket-bidirectional', 'CODE'],
+    ['websocket-bidirectional', 'APP'],
     ['websocket-echo-v2',       'CODE'],
 );
 my %loaded_apps;
