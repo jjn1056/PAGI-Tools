@@ -90,7 +90,7 @@ sub builder (&) {
 =head2 enable
 
     enable 'MiddlewareName', %config;
-    enable 'Auth::Basic', %config;        # PAGI::Middleware::Auth::Basic
+    enable 'Authentication', %config;     # PAGI::Middleware::Authentication
     enable '+My::Custom::Middleware';     # My::Custom::Middleware (no prefix)
     enable(PAGI::Middleware::GZip->new(level => 9));  # pre-configured instance
 
@@ -306,7 +306,7 @@ sub _resolve_middleware {
     # leading + for exact package names.
     # Examples:
     #   'GZIP'           -> 'PAGI::Middleware::GZIP'
-    #   'Auth::Basic'    -> 'PAGI::Middleware::Auth::Basic'
+    #   'SSE::Retry'     -> 'PAGI::Middleware::SSE::Retry'
     #   '+My::Custom'    -> 'My::Custom' (prefix removed)
     #   'PAGI::Middleware::GZIP' -> 'PAGI::Middleware::GZIP'
     my $class = $name;

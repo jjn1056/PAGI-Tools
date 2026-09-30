@@ -4,35 +4,27 @@ use Test2::V0;
 use IO::Async::Loop;
 use FindBin;
 use lib "$FindBin::Bin/../../lib";
+use lib "$FindBin::Bin/../lib";
+use PAGITest::CurrentServer qw(current_server_unavailable);
 
 # Cross-repo smoke test: a PAGI-Tools SSE route must drive the real PAGI::Server
 # to return one concrete Response through PAGI::SSE->decline, instead of
 # starting an event stream. Each repo is unit-tested in isolation; this proves
-# the whole chain (Response emits HTTP events -> SSE maps decline events ->
+# the whole chain (Response emits HTTP events on the original SSE scope ->
 # server returns a real HTTP response -> client reads a 404).
 #
-# Skips unless PAGI::Server is on @INC, so PAGI-Tools' standalone suite stays
-# independent. Run it with:
+# Skips unless the current PAGI::Server release line is on @INC, so
+# PAGI-Tools' standalone suite stays independent. Run it with:
 #   prove -I <PAGI-Server>/lib -lr t/integration/sse-decline-end-to-end.t
 #
-# Requires PAGI::Server >= 0.002005: that release added the sse.http.response.*
-# decline protocol this test exercises (PAGI-Server Changes, "0.002005 -
-# 2026-06-30" / Features). Older servers don't recognize
-# 'sse.http.response.start' and crash the connection with a 500 instead of
-# returning 404 (CPAN Testers FAIL against 0.001012, PAGI-Tools 0.002001).
-use constant MIN_SSE_DECLINE_SERVER_VERSION => '0.002005';
-
 eval { require Future::IO::Impl::IOAsync; 1 }
     or plan skip_all => 'Future::IO::Impl::IOAsync required for SSE tests';
-eval { require PAGI::Server; 1 }
-    or plan skip_all => 'PAGI::Server not on @INC; run with -I <PAGI-Server>/lib';
-plan skip_all => "PAGI::Server $PAGI::Server::VERSION does not support the sse.http.response.* "
-                . "decline protocol; need >= " . MIN_SSE_DECLINE_SERVER_VERSION
-    unless eval { PAGI::Server->VERSION(MIN_SSE_DECLINE_SERVER_VERSION); 1 };
-
+my $server_unavailable = current_server_unavailable();
+plan skip_all => $server_unavailable if $server_unavailable;
 plan skip_all => "Server integration tests not supported on Windows" if $^O eq 'MSWin32';
 
 use PAGI::Endpoint::SSE;
+use PAGI::Pages;
 use PAGI::Response::Text;
 use PAGI::Routing qw(router sse);
 use IO::Socket::INET;
@@ -45,9 +37,26 @@ use IO::Socket::INET;
         my ($self, $sse) = @_;
         ++$self->{connections};
         $self->{protocol_class} = ref($sse);
+        $self->{advertised_www_version} = $sse->scope->{pagi}{spec_version};
+        $self->{connection} = $sse->scope->{'pagi.connection'};
         return $sse->decline(
             PAGI::Response::Text->new('Not Found', status => 404),
         );
+    }
+}
+
+{
+    package Local::PagesDecliningSSEEndpoint;
+    use parent 'PAGI::Endpoint::SSE';
+
+    sub on_connect {
+        my ($self, $sse) = @_;
+        $self->{scope} = $sse->scope;
+        $self->{connection} = $sse->scope->{'pagi.connection'};
+        $sse->on_close(sub { ++$self->{cleanup}; return });
+        return $sse->decline(PAGI::Pages->service_unavailable(
+            detail => 'Scheduled maintenance', as => 'text',
+        ));
     }
 }
 
@@ -98,11 +107,39 @@ subtest 'concrete SSE decline Response returns a real HTTP 404 over the real ser
     like($wire, qr/Not Found/,             'decline body delivered');
     unlike($wire, qr{text/event-stream},   'NOT an event stream');
     ok($eof, 'connection closed');
+    is($endpoint->{advertised_www_version}, '0.6', 'server advertises Www 0.6');
+    ok($endpoint->{connection}, 'scope exposes a connection object');
+    ok($endpoint->{connection}->can('on_end')
+        && $endpoint->{connection}->can('end_future'),
+        'connection object exposes the required public terminal API');
     is([$endpoint->{connections}, $endpoint->{protocol_class}],
         [1, 'PAGI::SSE'],
         'declarative dispatch retains the configured endpoint and direct protocol object');
 
     $server->shutdown->get;
+};
+
+subtest 'direct Pages application returns a clean HTTP refusal through an SSE endpoint' => sub {
+    my $endpoint = Local::PagesDecliningSSEEndpoint->new;
+    my $routing = router(routes => [
+        sse('/maintenance' => $endpoint),
+    ]);
+
+    my $server = create_server($routing->to_app);
+    my ($wire, $eof) = sse_get($server->port, '/maintenance');
+
+    like($wire, qr{HTTP/1\.1 503}, 'Pages application controls the HTTP status');
+    like($wire, qr/Scheduled maintenance/, 'Pages application body reaches the client');
+    unlike($wire, qr{text/event-stream}, 'no SSE stream is started');
+    ok($eof, 'connection closed after the refusal');
+    is($endpoint->{scope}{type}, 'sse', 'endpoint retains the original SSE scope');
+    ok($endpoint->{connection}->response_complete, 'connection records clean completion');
+    is($endpoint->{connection}->disconnect_reason, undef,
+        'clean refusal has no disconnect reason');
+    is($endpoint->{cleanup}, 1, 'terminal callback runs once');
+
+    $server->shutdown->get;
+    is($endpoint->{cleanup}, 1, 'shutdown does not duplicate terminal cleanup');
 };
 
 done_testing;

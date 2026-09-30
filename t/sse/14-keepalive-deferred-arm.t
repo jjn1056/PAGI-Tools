@@ -8,6 +8,9 @@ use Future;
 use lib 'lib';
 use PAGI::Response::Text;
 use PAGI::SSE;
+use lib 't/lib';
+use PAGITest::Connected qw(sse_scope);
+use PAGITest::RefusalHarness;
 
 # DEVIATION D-1 (signed off by John 2026-08-25): sse.keepalive sent before
 # sse.start is illegal (both PAGI::Utils::_SendValidation and the reference server's
@@ -20,7 +23,7 @@ use PAGI::SSE;
 subtest 'keepalive before start records but sends nothing' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->keepalive(25)->get;
 
@@ -31,7 +34,7 @@ subtest 'keepalive before start records but sends nothing' => sub {
 subtest 'start() arms a pending keepalive immediately after sse.start' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->keepalive(25, 'ping')->get;
     $sse->start->get;
@@ -46,7 +49,7 @@ subtest 'start() arms a pending keepalive immediately after sse.start' => sub {
 subtest 'keepalive(0) before start clears any pending record -- start() arms nothing' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->keepalive(25)->get;   # record interval 25
     $sse->keepalive(0)->get;    # explicitly disable -- clears the record
@@ -59,7 +62,7 @@ subtest 'keepalive(0) before start clears any pending record -- start() arms not
 subtest 'start() with no keepalive ever requested arms nothing' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->start->get;
 
@@ -69,7 +72,7 @@ subtest 'start() with no keepalive ever requested arms nothing' => sub {
 subtest 'keepalive after start still sends immediately (unchanged: legal from the streaming state)' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub { Future->new }, $send);
 
     $sse->start->get;
     $sse->keepalive(30)->get;
@@ -80,35 +83,52 @@ subtest 'keepalive after start still sends immediately (unchanged: legal from th
 };
 
 subtest 'decline clears a recorded-but-never-armed pending keepalive' => sub {
-    my @sent;
-    my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $h = PAGITest::RefusalHarness->new('sse');
+    my $sse = $h->{helper};
+    my $sent = $h->{events};
 
     $sse->keepalive(25)->get;               # recorded, not yet sent (pre-start)
     $sse->decline(PAGI::Response::Text->new('Unauthorized', status => 401))->get;
 
     # No sse.keepalive ever reaches the wire -- it was never armed, so
     # there is nothing to disarm either.
-    my @keepalive_events = grep { $_->{type} eq 'sse.keepalive' } @sent;
+    my @keepalive_events = grep { $_->{type} eq 'sse.keepalive' } @$sent;
     is(scalar @keepalive_events, 0, 'no keepalive event at all -- recorded state was simply dropped');
 
-    is(scalar @sent, 2, 'only the decline response events were sent');
-    is($sent[0]{type}, 'sse.http.response.start', 'decline start');
-    is($sent[1]{type}, 'sse.http.response.body', 'decline body');
+    is(scalar @$sent, 2, 'only the decline response events were sent');
+    is($sent->[0]{type}, 'http.response.start', 'decline start');
+    is($sent->[1]{type}, 'http.response.body', 'decline body');
 };
 
 subtest 'start() after decline does not resurrect a cleared pending keepalive' => sub {
-    my @sent;
-    my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub { Future->new }, $send);
+    my $h = PAGITest::RefusalHarness->new('sse');
+    my $sse = $h->{helper};
+    my $sent = $h->{events};
 
     $sse->keepalive(25)->get;
     $sse->decline(PAGI::Response::Text->new('Unauthorized', status => 401))->get;
-    my $before = scalar @sent;
+    my $before = scalar @$sent;
 
     $sse->start->get;   # safe no-op per Task 8 -- must not arm anything either
 
-    is(scalar @sent, $before, 'start() after decline is still a full no-op');
+    is(scalar @$sent, $before, 'start() after decline is still a full no-op');
+};
+
+subtest 'in-flight normal start preserves deferred keepalive through public refresh' => sub {
+    my $start = Future->new;
+    my $h = PAGITest::RefusalHarness->new('sse', send => sub {
+        return $_[0]{type} eq 'sse.start' ? $start : Future->done;
+    });
+    $h->{helper}->keepalive(25, 'ping')->get;
+    my $operation = $h->{helper}->start;
+    ok($h->{connection}->response_started, 'server already claimed the normal start');
+    is($h->{helper}->connection_state, 'pending', 'helper awaits start settlement');
+    $start->done;
+    $operation->get;
+    is([map { $_->{type} } @{$h->{events}}], ['sse.start', 'sse.keepalive'], 'saved keepalive arms after normal start settles');
+    is($h->{events}[1]{interval}, 25, 'saved interval preserved');
+    $h->{connection}->_mark_disconnected('client_closed');
+    $h->deliver;
 };
 
 done_testing;

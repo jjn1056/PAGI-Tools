@@ -88,4 +88,20 @@ subtest 'empty form_params' => sub {
     is([$form->keys], [], 'empty form has no keys');
 };
 
+subtest 'form predicates use normalized Content-Type' => sub {
+    my $req = PAGI::Request->new({
+        type => 'http', method => 'POST',
+        headers => [['Content-Type', 'Application/X-WWW-Form-Urlencoded; charset=UTF-8']],
+    }, mock_receive(''));
+    ok($req->is_form, 'mixed-case urlencoded media type is recognized');
+    ok(!$req->is_multipart, 'urlencoded media type is not multipart');
+    $req->headers->set('Content-Type', 'MULTIPART/FORM-DATA; boundary="abc;def"');
+    ok($req->is_form, 'multipart with quoted delimiter is a form');
+    ok($req->is_multipart, 'multipart with quoted delimiter is multipart');
+    $req->headers->set('Content-Type', 'multipart/form-data-extra');
+    ok(!$req->is_multipart, 'different subtype does not match by prefix');
+    $req->headers->set('Content-Type', 'multipart/form-data; boundary=');
+    ok(!$req->is_form, 'malformed parameters invalidate media type for predicates');
+};
+
 done_testing;

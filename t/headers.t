@@ -77,6 +77,15 @@ subtest 'dehop strips the fixed set AND Connection-named headers' => sub {
     is $h->has('x-keep'), 1, 'end-to-end header kept';
 };
 
+subtest 'dehop retains usable nominations in a malformed Connection list' => sub {
+    my $h = PAGI::Headers->new([
+        ['Connection', 'X-Secret, "bad", X-Other'],
+        ['X-Secret', 'one'], ['X-Other', 'two'], ['X-Keep', 'safe'],
+    ]);
+    $h->dehop;
+    is [$h->names], ['X-Keep'], 'usable nominations still remove their fields';
+};
+
 subtest 'output forms + clone independence' => sub {
     my $h = PAGI::Headers->new([['X-A','1'],['X-B','2']]);
     is $h->to_pairs, [['X-A','1'],['X-B','2']], 'to_pairs';
@@ -115,6 +124,146 @@ subtest 'get returns the LAST value and never comma-joins' => sub {
     isnt $h->get('vary'), 'Accept, Accept-Encoding',
         'get does NOT comma-join (divergence from HTTP::Headers / Mojo::Headers)';
     is [$h->get_all('vary')], ['Accept','Accept-Encoding'], 'get_all keeps values separate, in order';
+};
+
+subtest 'token lists and Vary composition preserve other repeated fields' => sub {
+    my $h = PAGI::Headers->new([
+        ['X-Tokens', 'Alpha, beta'], ['x-tokens', 'ALPHA,'],
+        ['Vary', 'Origin'], ['vary', 'accept-encoding'],
+        ['Set-Cookie', 'a=1'], ['Set-Cookie', 'b=2'],
+    ]);
+    is $h->tokens('X-Tokens'), ['Alpha', 'beta', 'ALPHA'],
+        'all occurrences are parsed in order';
+    ok $h->has_token('X-Tokens', 'Alpha'), 'membership is exact by default';
+    ok !$h->has_token('X-Tokens', 'alpha'), 'different case does not match by default';
+    ok $h->has_token('X-Tokens', 'alpha', case_insensitive => 1),
+        'ASCII-insensitive membership is opt in';
+    is $h->add_vary('Accept-Encoding', 'Accept'), $h, 'add_vary is chainable';
+    is [$h->get_all('Vary')], ['Origin, accept-encoding, Accept'],
+        'repeated Vary fields merge into one';
+    is [$h->get_all('Set-Cookie')], ['a=1', 'b=2'],
+        'unrelated repeated fields remain separate';
+    is [$h->get_all('X-Tokens')], ['Alpha, beta', 'ALPHA,'],
+        'reading tokens does not rewrite fields';
+
+    my $empty = PAGI::Headers->new;
+    is $empty->tokens('Absent'), [], 'missing field returns empty list';
+    is $empty->add_vary, $empty, 'empty add_vary is a no-op';
+    is $empty->to_pairs, [], 'empty add_vary adds no field';
+    $empty->add('X-Tokens', '');
+    is $empty->tokens('X-Tokens'), [], 'present empty list returns empty array';
+    ok !$empty->has_token('X-Tokens', 'anything'), 'empty list has no member';
+
+    $h->add('X-Tokens', '"bad"');
+    is $h->tokens('X-Tokens'), undef, 'one malformed occurrence invalidates the list';
+    ok !$h->has_token('X-Tokens', 'Alpha'), 'malformed list has no membership';
+    like dies { $h->tokens('X-Tokens', raise_on_error => 1) },
+        qr/tokens.*malformed/i, 'token reader can report malformed input';
+    like dies { $h->has_token('X-Tokens', 'Alpha', raise_on_error => 1) },
+        qr/has_token.*malformed/i, 'membership can report malformed input';
+    like dies { $h->has_token('X-Tokens', 'bad token') },
+        qr/has_token.*token/i, 'membership candidate must be a token';
+    like dies { $h->tokens('X-Tokens', case_insensitive => 1) },
+        qr/unknown option/i, 'case_insensitive is only a membership option';
+    like dies { $h->has_token('X-Tokens', 'Alpha', unknown => 1) },
+        qr/unknown option/i, 'unknown membership option is rejected';
+
+    my $bad = PAGI::Headers->new([['Vary', 'Origin, "bad"'], ['Set-Cookie', 'c=3']]);
+    my $before = $bad->to_pairs;
+    like dies { $bad->add_vary('Accept') }, qr/merge_vary.*malformed/i,
+        'bad existing Vary raises before mutation';
+    is $bad->to_pairs, $before, 'failed add_vary leaves all fields unchanged';
+};
+
+subtest 'named parameterized fields validate grammar and duplicates' => sub {
+    my $h = PAGI::Headers->new([['Content-Type', 'Text/HTML; charset=UTF-8']]);
+    is $h->content_type, 'text/html', 'named leading value normalized';
+    is $h->content_type_parameters, { charset => 'UTF-8' }, 'value case retained';
+    is $h->get('Content-Type'), 'Text/HTML; charset=UTF-8', 'raw field remains intact';
+    my $parameters = $h->content_type_parameters;
+    $parameters->{charset} = 'changed';
+    is $h->content_type_parameters, { charset => 'UTF-8' }, 'parsed hash is detached';
+    $h->set('Content-Type', 'text/plain; Charset=a; charset=b');
+    is $h->content_type_parameters, undef, 'named reader rejects duplicate parameters';
+    like dies { $h->content_type(raise_on_error => 1) }, qr/content_type.*duplicate/i,
+        'duplicate can be reported';
+    $h->set('Content-Type', 'application/json');
+    is $h->content_type_parameters, {}, 'valid no-parameter field has empty hash';
+    $h->set('Content-Type', 'text/plain', 'application/json');
+    is $h->content_type, undef, 'duplicate fields are unusable';
+    like dies { $h->content_type(raise_on_error => 1) }, qr/content_type.*multiple/i,
+        'duplicate fields identify the named reader';
+
+    my $d = PAGI::Headers->new([['Content-Disposition',
+        'Attachment; filename="quarterly; report.txt"; filename*=UTF-8\'\'caf%C3%A9.txt; X-Note=Hi']]);
+    is $d->content_disposition, 'attachment', 'disposition token normalized';
+    is $d->content_disposition_parameters,
+        { filename => 'quarterly; report.txt', 'filename*' => "UTF-8''caf%C3%A9.txt", 'x-note' => 'Hi' },
+        'unknown and extended parameters retained raw';
+    $d->set('Content-Disposition', 'attachment/file; x=y');
+    is $d->content_disposition, undef, 'disposition requires one token';
+    $h->set('Content-Type', 'text; charset=utf-8');
+    is $h->content_type, undef, 'media type requires token slash token';
+    $h->remove('Content-Type');
+    is $h->content_type, undef, 'absent field is undef';
+    is $h->content_type_parameters, undef, 'absent parameters are undef';
+    is $h->content_type(raise_on_error => 1), undef, 'absence is not error';
+};
+
+subtest 'get_single requires exactly one field occurrence' => sub {
+    my $one = PAGI::Headers->new([['X-One', 'value']]);
+    is $one->get_single('x-one'), 'value', 'one occurrence returns its raw value';
+    is $one->get_single('missing'), undef, 'missing field returns undef';
+
+    my $duplicate = PAGI::Headers->new([['X-One', 'first'], ['x-one', 'second']]);
+    is $duplicate->get('X-One'), 'second', 'raw get keeps its last-value contract';
+    is $duplicate->get_single('X-One'), undef, 'duplicates are not selected';
+    like dies { $duplicate->get_single('X-One', raise_on_error => 1) },
+        qr/single|multiple|occurrence/i, 'raise_on_error reports duplicate fields';
+    like dies { $one->get_single('X-One', unknown => 1) }, qr/unknown option/i,
+        'unknown options are programming errors';
+};
+
+subtest 'entity-tag named readers keep occurrence semantics and raw fields' => sub {
+    my $h = PAGI::Headers->new([
+        ['ETag', 'W/"current"'],
+        ['If-None-Match', '"old", W/"a,b"'],
+        ['if-none-match', '"old"'],
+        ['If-Match', '*'],
+    ]);
+    my $before = $h->to_pairs;
+    is $h->etag, { value => 'current', weak => 1 }, 'ETag is parsed as one tag';
+    is $h->if_none_match, { any => 0, tags => [
+        { value => 'old', weak => 0 }, { value => 'a,b', weak => 1 },
+        { value => 'old', weak => 0 },
+    ] }, 'conditional occurrences are combined in field order';
+    is $h->if_match, { any => 1, tags => [] }, 'If-Match wildcard is parsed';
+    is $h->to_pairs, $before, 'reads do not rewrite fields';
+
+    $h->add('etag', 'W/"current"');
+    is $h->etag, undef, 'duplicate ETag is unusable even when identical';
+    like dies { $h->etag(raise_on_error => 1) }, qr/etag.*multiple/i,
+        'duplicate ETag can raise';
+    $h->set('ETag', 'w/"bad"');
+    is $h->etag, undef, 'malformed ETag is unusable';
+    like dies { $h->etag(raise_on_error => 1) }, qr/etag.*malformed/i,
+        'malformed ETag can raise';
+    $h->add('If-Match', '"other"');
+    is $h->if_match, undef, 'wildcard mixed across occurrences is unusable';
+    like dies { $h->if_match(raise_on_error => 1) }, qr/if_match.*malformed/i,
+        'malformed If-Match can raise';
+    $h->set('If-None-Match', '"ok", bad');
+    is $h->if_none_match, undef, 'malformed member invalidates condition';
+    like dies { $h->if_none_match(raise_on_error => 1) }, qr/if_none_match.*malformed/i,
+        'malformed If-None-Match can raise';
+
+    my $absent = PAGI::Headers->new;
+    is $absent->etag(raise_on_error => 1), undef, 'missing ETag is not error';
+    is $absent->if_match(raise_on_error => 1), undef, 'missing If-Match is absent';
+    $absent->add('If-Match', '');
+    is $absent->if_match, { any => 0, tags => [] }, 'present empty condition is distinct';
+    like dies { $absent->if_match(unknown => 1) }, qr/unknown option/i,
+        'named reader rejects unknown option';
 };
 
 subtest 'header values are opaque bytes: CR/LF/NUL/whitespace pass through' => sub {

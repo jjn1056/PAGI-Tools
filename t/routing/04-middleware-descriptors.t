@@ -155,7 +155,7 @@ subtest 'a configured object is used by identity' => sub {
 subtest 'class names auto-load, receive config, and follow naming rules' => sub {
     my @cases = (
         ['RequestId', 'PAGI::Middleware::RequestId'],
-        ['Auth::Basic', 'PAGI::Middleware::Auth::Basic'],
+        ['Authentication', 'PAGI::Middleware::Authentication'],
         ['PAGI::Middleware::RequestId', 'PAGI::Middleware::RequestId'],
         ['+Local::ExactMiddleware', 'Local::ExactMiddleware'],
     );

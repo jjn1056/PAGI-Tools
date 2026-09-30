@@ -12,7 +12,12 @@ use PAGI::Compose qw(compose);
 use PAGI::Pages ();
 use PAGI::Response::Text ();
 use PAGI::Routing qw(mount route websocket sse router middleware);
+use PAGI::Test::ConnectionState;
 use PAGI::Utils qw(as_app_object);
+use PAGITest::Connected qw(run_connected);
+
+# Runs a WebSocket or SSE scope whose send records on the scope's connection
+# what a server records, so the protocol helper sees the same terminal facts.
 
 sub recording_middleware {
     my ($label, $seen) = @_;
@@ -73,12 +78,14 @@ subtest 'routes mode dispatches HTTP WebSocket and SSE' => sub {
     is($http->[1],
         { type => 'http.response.body', body => 'home', more => 0 },
         'HTTP route emits its returned response body');
-    is(run_scope($app, scope(type => 'websocket', path => '/ws')), [
+    is(run_connected($app, scope(type => 'websocket', path => '/ws',
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1))), [
         { type => 'websocket.accept' },
         { type => 'websocket.send', text => 'hello' },
         { type => 'websocket.close', code => 1000, reason => '' },
     ], 'WebSocket route receives its direct protocol object');
-    is(run_scope($app, scope(type => 'sse', path => '/events')), [
+    is(run_connected($app, scope(type => 'sse', path => '/events',
+        'pagi.connection' => PAGI::Test::ConnectionState->new)), [
         { type => 'sse.start', status => 200 },
         { type => 'sse.send', data => 'ready' },
         { type => 'sse.close' },

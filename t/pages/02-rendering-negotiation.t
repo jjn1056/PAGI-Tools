@@ -336,17 +336,25 @@ subtest 'fixed representation ignores Accept and does not add Vary' => sub {
 
 subtest 'auto Vary merge is case-insensitive and duplicate-free' => sub {
     my $events = send_response(PAGI::Pages->not_found(
-        headers => ['Vary' => 'Origin, accept', 'vary' => 'User-Agent, ACCEPT'],
+        headers => ['Vary' => 'Origin, accept', 'vary' => 'User-Agent, ACCEPT',
+                    'Set-Cookie' => 'a=1', 'Set-Cookie' => 'b=2'],
     ), http_scope(accept => 'text/plain'));
     my @vary_fields = header_values($events, 'Vary');
-    is(scalar @vary_fields, 1, 'Vary is normalized to one field');
-    my @tokens = map {
-        my $token = $_;
-        $token =~ s/^\s+|\s+$//g;
-        lc $token;
-    } split /,/, $vary_fields[0];
-    is([sort @tokens], [sort qw(origin accept user-agent)],
-        'existing Vary tokens are retained without duplicate Accept tokens');
+    is \@vary_fields, ['Origin, accept, User-Agent'],
+        'Vary keeps first spelling and order with one field';
+    is [header_values($events, 'Set-Cookie')], ['a=1', 'b=2'],
+        'Pages retains separate Set-Cookie fields';
+};
+
+subtest 'auto Vary wildcard collapses all dependencies' => sub {
+    my $events = send_response(PAGI::Pages->not_found(
+        headers => ['Vary' => 'Origin, *', 'Set-Cookie' => 'a=1',
+                    'Set-Cookie' => 'b=2'],
+    ), http_scope(accept => 'text/plain'));
+    is [header_values($events, 'Vary')], ['*'],
+        'wildcard existing Vary remains the sole value';
+    is [header_values($events, 'Set-Cookie')], ['a=1', 'b=2'],
+        'wildcard merge leaves cookies separate';
 };
 
 subtest 'configured policy negotiates only when the deferred app is invoked' => sub {

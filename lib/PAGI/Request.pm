@@ -6,7 +6,6 @@ use PAGI::Headers ();
 use PAGI::Authority ();
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Cookie::Baker qw(crush_cookie);
-use MIME::Base64 qw(decode_base64);
 use Future::AsyncAwait;
 use JSON::MaybeXS qw(decode_json);
 use Carp qw(croak carp);
@@ -15,6 +14,7 @@ use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::Request::Negotiate;
 use PAGI::Request::BodyStream;
+use PAGI::Request::_BodyInput ();
 
 sub new {
     croak 'PAGI::Request->new requires exactly scope and receive arguments'
@@ -25,8 +25,8 @@ sub new {
     my $type = $scope->{type};
     croak 'PAGI::Request scope type is required'
         unless defined($type) && !ref($type) && length($type);
-    croak "PAGI::Request requires HTTP scope; received '$type'"
-        unless $type eq 'http';
+    croak "PAGI::Request requires HTTP, WebSocket, or SSE scope; received '$type'"
+        unless $type eq 'http' || $type eq 'websocket' || $type eq 'sse';
     croak 'PAGI::Request requires a receive coderef'
         unless ref($receive) eq 'CODE';
     return bless { scope => $scope, receive => $receive }, $class;
@@ -37,7 +37,7 @@ sub method       { shift->{scope}{method} }
 sub path         { shift->{scope}{path} }
 sub raw_path     { my $s = shift; $s->{scope}{raw_path} // $s->{scope}{path} }
 sub query_string { shift->{scope}{query_string} // '' }
-sub scheme       { shift->{scope}{scheme} // 'http' }
+sub scheme       { my $s = shift; $s->{scope}{scheme} // ($s->{scope}{type} eq 'websocket' ? 'ws' : 'http') }
 sub http_version { shift->{scope}{http_version} // '1.1' }
 sub client       { shift->{scope}{client} }
 sub server       { shift->{scope}{server} }
@@ -68,11 +68,8 @@ sub host {
 
 # Content-Type shortcut
 sub content_type {
-    my $self = shift;
-    my $ct = $self->header('content-type') // '';
-    # Strip parameters like charset
-    $ct =~ s/;.*//;
-    return $ct;
+    my ($self, @opts) = @_;
+    return $self->headers->content_type(@opts) // '';
 }
 
 # Content-Length shortcut
@@ -212,13 +209,13 @@ sub is_form {
     my $self = shift;
     my $ct = $self->content_type;
     return $ct eq 'application/x-www-form-urlencoded'
-        || $ct =~ m{^multipart/form-data};
+        || $ct eq 'multipart/form-data';
 }
 
 sub is_multipart {
     my $self = shift;
     my $ct = $self->content_type;
-    return $ct =~ m{^multipart/form-data};
+    return $ct eq 'multipart/form-data';
 }
 
 # Accept header check using Negotiate module
@@ -241,24 +238,14 @@ sub preferred_type {
 
 # Extract Bearer token from Authorization header
 sub bearer_token {
-    my $self = shift;
-    my $auth = $self->header('authorization') // '';
-    if ($auth =~ /^Bearer\s+(.+)$/i) {
-        return $1;
-    }
-    return undef;
+    my ($self, @opts) = @_;
+    return $self->headers->authorization_bearer(@opts);
 }
 
 # Extract Basic auth credentials
 sub basic_auth {
-    my $self = shift;
-    my $auth = $self->header('authorization') // '';
-    if ($auth =~ /^Basic\s+(.+)$/i) {
-        my $decoded = decode_base64($1);
-        my ($user, $pass) = split /:/, $decoded, 2;
-        return ($user, $pass);
-    }
-    return (undef, undef);
+    my ($self, @opts) = @_;
+    return $self->headers->authorization_basic(@opts);
 }
 
 # Path parameters - captured from URL path by router
@@ -296,6 +283,14 @@ sub path_param {
 
 sub scope { shift->{scope} }
 
+sub _require_body_scope {
+    my ($self) = @_;
+    my $type = $self->{scope}{type};
+    croak 'body input requires HTTP or SSE scope'
+        unless $type eq 'http' || $type eq 'sse';
+    return $type;
+}
+
 # Application state (injected by PAGI::Lifespan, read-only)
 sub has_state {
     my $self = shift;
@@ -314,6 +309,7 @@ sub state {
 # Body streaming - mutually exclusive with buffered body methods
 sub body_stream {
     my ($self, %opts) = @_;
+    my $scope_type = $self->_require_body_scope;
 
     croak "Body already consumed; streaming not available" if $self->{scope}{'pagi.request.body.read'};
     croak "Body streaming already started" if $self->{scope}{'pagi.request.body.stream.created'};
@@ -336,20 +332,21 @@ sub body_stream {
         limit_name => $limit_name,
         decode     => $opts{decode},
         strict     => $opts{strict},
+        _scope_type => $scope_type,
     );
 }
 
 # Streaming multipart - mutually exclusive with buffered body methods
 sub multipart_stream {
     my ($self, %opts) = @_;
+    my $scope_type = $self->_require_body_scope;
     croak "Body already consumed; multipart_stream() not available"
         if $self->{scope}{'pagi.request.body.read'}
         || $self->{scope}{'pagi.request.body.stream.created'};
     croak "multipart_stream() requires a multipart/form-data request" unless $self->is_multipart;
 
-    my $ct = $self->header('content-type') // '';
-    my ($boundary) = $ct =~ /boundary=([^;\s]+)/;
-    $boundary =~ s/^["']|["']$//g if defined $boundary;  # Strip quotes
+    my $parameters = $self->headers->content_type_parameters;
+    my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
     croak "No boundary found in Content-Type" unless defined $boundary && length $boundary;
 
     $self->{scope}{'pagi.request.body.stream.created'} = 1;  # latch: lock out buffered readers
@@ -358,6 +355,7 @@ sub multipart_stream {
     return PAGI::Request::MultipartStream->new(
         receive  => $self->{receive},
         boundary => $boundary,
+        _scope_type => $scope_type,
         map { defined $opts{$_} ? ($_ => $opts{$_}) : () }
             qw(max_files max_fields max_field_size max_file_size max_request_body),
     );
@@ -366,6 +364,7 @@ sub multipart_stream {
 # Read raw body bytes (async, cached in scope)
 async sub body {
     my $self = shift;
+    my $scope_type = $self->_require_body_scope;
 
     croak "Body streaming already started; buffered helpers unavailable"
         if $self->{scope}{'pagi.request.body.stream.created'};
@@ -388,8 +387,8 @@ async sub body {
     my $body = '';
     while (1) {
         my $message = await $receive->();
-        last unless $message && $message->{type};
-        if ($message->{type} eq 'http.disconnect') {
+        my $kind = PAGI::Request::_BodyInput::event_kind($scope_type, $message);
+        if ($kind eq 'disconnect') {
             last unless length $body;  # no bytes ever arrived -- an empty body, not a truncation
             $self->{scope}{'pagi.request.body.truncated'} = 1;
             my $connection = $self->connection;
@@ -429,6 +428,7 @@ async sub json {
 # Options: strict => 1 (croak on invalid UTF-8), raw => 1 (skip UTF-8 decoding)
 async sub form_params {
     my ($self, %opts) = @_;
+    $self->_require_body_scope;
     my $strict = delete $opts{strict} // 0;
     my $raw    = delete $opts{raw}    // 0;
 
@@ -513,6 +513,7 @@ async sub raw_form_param {
 # Parse multipart form (internal, cached in scope)
 async sub _parse_multipart_form {
     my ($self, %opts) = @_;
+    my $scope_type = $self->_require_body_scope;
 
     croak "Body streaming already started; buffered helpers unavailable"
         if $self->{scope}{'pagi.request.body.stream.created'};
@@ -521,16 +522,14 @@ async sub _parse_multipart_form {
     return $self->{scope}{'pagi.request.form'}
         if $self->{scope}{'pagi.request.form'} && $self->{scope}{'pagi.request.uploads'};
 
-    # Extract boundary from content-type
-    my $ct = $self->header('content-type') // '';
-    my ($boundary) = $ct =~ /boundary=([^;\s]+)/;
-    $boundary =~ s/^["']|["']$//g if $boundary;  # Strip quotes
-
-    die "No boundary found in Content-Type" unless $boundary;
+    my $parameters = $self->headers->content_type_parameters;
+    my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
+    die "No boundary found in Content-Type" unless defined($boundary) && length($boundary);
 
     my $handler = PAGI::Request::MultiPartHandler->new(
         boundary        => $boundary,
         receive         => $self->{receive},
+        _scope_type     => $scope_type,
         max_field_size  => $opts{max_field_size},
         max_file_size   => $opts{max_file_size},
         spool_threshold => $opts{spool_threshold},
@@ -551,6 +550,7 @@ async sub _parse_multipart_form {
 # Get all uploads as Hash::MultiValue (cached in scope)
 async sub uploads {
     my ($self, %opts) = @_;
+    $self->_require_body_scope;
 
     return $self->{scope}{'pagi.request.uploads'} if $self->{scope}{'pagi.request.uploads'};
 
@@ -643,6 +643,11 @@ the raw C<$scope> hashref and C<$receive> callback with convenient methods
 for accessing headers, query parameters, cookies, request body, and file
 uploads.
 
+HTTP, WebSocket, and SSE scopes are supported for metadata access. Request
+body input is available for HTTP and SSE scopes using each protocol's native
+request and disconnect events. WebSocket scopes reject body methods before
+reading from C<$receive> or changing body-consumption state.
+
 This is an optional convenience layer. Raw PAGI applications continue to
 work with C<$scope> and C<$receive> directly.
 
@@ -652,17 +657,19 @@ work with C<$scope> and C<$receive> directly.
 
     my $req = PAGI::Request->new($scope, $receive);
 
-Creates an HTTP request object. C<$scope> must be an unblessed hashref with
-C<< $scope->{type} eq 'http' >>, and C<$receive> must be a coderef. The
-receive callback is retained for deferred body consumption; construction never
-reads from it. These are the constructor's exact two arguments after the
-invocant; a C<$send> callback or any other extra argument is rejected.
+Creates a request object. C<$scope> must be an unblessed HTTP, WebSocket, or
+SSE scope hashref, and C<$receive> must be a coderef. The receive callback is
+retained for deferred HTTP or SSE body consumption; construction never reads
+from it. These are the constructor's exact two arguments after the invocant;
+a C<$send> callback or any other extra argument is rejected.
 
 =head1 PROPERTIES
 
 =head2 method
 
-HTTP method (GET, POST, PUT, etc.)
+Request method (GET, POST, PUT, etc.). A WebSocket scope may omit this value,
+in which case C<method> returns C<undef>; it does not guess GET for an extended
+CONNECT request.
 
 =head2 path
 
@@ -678,7 +685,8 @@ Raw query string (without leading ?).
 
 =head2 scheme
 
-C<http> or C<https>.
+C<http> or C<https> for HTTP and SSE scopes; C<ws> or C<wss> for WebSocket
+scopes.
 
 =head2 host
 
@@ -703,7 +711,11 @@ validated inbound Host authority.
 
 =head2 content_type
 
-Content-Type header value (without parameters).
+The normalized media type from one valid Content-Type field, without
+parameters. Returns C<''> when the field is absent, duplicated, or malformed.
+Accepts C<raise_on_error =E<gt> 1> to report duplicate or malformed input.
+Use C<< $request->header('Content-Type') >> for the raw last-value lookup;
+parsing does not alter the stored field.
 
 =head2 content_length
 
@@ -735,8 +747,9 @@ Get all values for a header.
 
 Returns the exact cached L<PAGI::Headers> object used by C<header>,
 C<header_all>, and header-derived accessors. Deliberate mutation through this
-object therefore affects later Request header reads. Call C<< $req->headers->clone >>
-when an isolated copy is required.
+object therefore affects later Request, WebSocket, or SSE header reads on the
+same scope. All three helpers share C<< $scope->{'pagi.request.headers'} >>.
+Call C<< $req->headers->clone >> when an isolated copy is required.
 
 =head1 QUERY PARAMETERS
 
@@ -874,6 +887,10 @@ Get a single cookie value.
 
 =head1 BODY METHODS (ASYNC)
 
+Body methods accept HTTP and SSE scopes and consume the matching native event
+family. They croak on WebSocket scopes without calling C<$receive>, even when
+a body, form, or upload cache is already present.
+
 =head2 body_stream
 
     my $stream = $req->body_stream;
@@ -934,6 +951,11 @@ where each one goes:
             my $value = await $part->value;  # raw bytes; you decode
         }
     }
+
+The C<boundary> parameter is read from C<Content-Type> with normal quoted
+parameter syntax. The underlying C<HTTP::MultiPartParser> accepts only
+alphanumeric boundary characters and C<'()+_,-./:=?>; it rejects spaces even
+when the C<Content-Type> value is correctly quoted.
 
 Each part is a L<PAGI::Request::Part> exposing its metadata (C<name>,
 C<filename>, C<content_type>, C<headers>, C<is_file>) and methods to consume
@@ -1010,6 +1032,12 @@ Parse body as JSON. Dies on parse error.
     my $form = await $req->form_params(raw => 1);     # Skip UTF-8 decoding
 
 Parse URL-encoded or multipart form data, returning a L<Hash::MultiValue>.
+Multipart boundary parameters use the same quoted parameter parsing as
+C<multipart_stream>, subject to the parser's boundary character restriction
+described above. Part C<Content-Disposition> parameters handle quoted escapes,
+including C<filename="a\"b.txt">. A quoted empty C<filename> is a file
+upload. C<filename*> alone remains distinct from C<filename> and does not
+make the part a file upload.
 
 B<Options:>
 
@@ -1115,8 +1143,9 @@ the receive queue.
 
     my $conn = $req->connection;
 
-Returns the L<PAGI::Server::ConnectionState> object for this request, or
-C<undef> if not provided by the server.
+Returns the server-supplied object under C<pagi.connection>, or C<undef> if
+absent. Its interface is defined by the PAGI specification; callers use those
+public methods rather than requiring a particular server's connection class.
 
 =head2 is_disconnected
 
@@ -1143,15 +1172,24 @@ integration truly requires the server's raw transport handle.
 
 =head2 bearer_token
 
-    my $token = $req->bearer_token;
+    my $token = $req->bearer_token(raise_on_error => 1);
 
-Extract Bearer token from Authorization header.
+Returns an RFC 6750 Bearer token only when exactly one Authorization field is
+present. Missing fields and another identifiable scheme return C<undef>.
+Malformed Bearer credentials, including the former permissive whitespace and
+partial-token forms, return C<undef> by default or raise with
+C<raise_on_error =E<gt> 1>. Unknown options are errors.
 
 =head2 basic_auth
 
-    my ($user, $pass) = $req->basic_auth;
+    my ($user, $pass) = $req->basic_auth(raise_on_error => 1);
 
-Decode Basic auth credentials.
+Returns Basic C<(username, password)> bytes in list context only when exactly
+one Authorization field contains a valid conventional padded Base64 credential.
+It splits at the first colon and does not decode character encodings or verify
+credentials. Missing, another scheme, duplicates, and malformed input return
+C<(undef, undef)> by default; C<raise_on_error =E<gt> 1> raises for duplicates
+or malformed Basic credentials. Unknown options are errors.
 
 =head2 scope
 

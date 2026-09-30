@@ -101,8 +101,8 @@ sub terminal_events {
 PAGI::Response->import('ndjson_response');
 my $factory = __PACKAGE__->can('ndjson_response');
 isa_ok($factory->(sub { }), 'PAGI::Response::NDJSON');
-is(PAGI::Response::NDJSON->new(sub { })->protocol_response_capability,
-    'body-events-v1');
+ok(!PAGI::Response::NDJSON->new(sub { })->is_buffered,
+    'NDJSON is a streaming Response');
 ok(T::ResponseAllImport->can('ndjson_response'),
     ':all imports the NDJSON response factory');
 

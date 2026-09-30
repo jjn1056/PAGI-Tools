@@ -63,12 +63,12 @@ set_session_disconnected($session_id, $broadcast_leave);
 ```perl
 my $ws = PAGI::WebSocket->new($scope, $receive, $send);
 
-await $ws->accept;
-
 $ws->on_close(sub {
     my ($code, $reason) = @_;
     set_session_disconnected($session_id, $broadcast_leave);
 });
+
+await $ws->accept;
 
 await $ws->each_json(async sub {
     my ($msg) = @_;

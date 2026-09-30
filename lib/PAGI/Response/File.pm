@@ -11,6 +11,7 @@ use Scalar::Util qw(blessed);
 
 use parent 'PAGI::Response';
 use PAGI::Response::File::Plan ();
+use PAGI::Utils::Headers ();
 
 =encoding UTF-8
 
@@ -49,12 +50,9 @@ pre-start application/resource failure, not App::File routing policy. If a
 deployment requires startup validation, perform explicit C<-f>/C<-r> checks in
 startup or lifespan code.
 
-File returns C<undef> from C<protocol_response_capability> and therefore cannot
-serve a WebSocket denial or SSE decline. This is the PAGI Www conformance
-boundary: denial response bodies permit only the ordinary C<body> form and do
-not use C<file> or C<fh>. See
-L<PAGI::Spec::Www/"WebSocket Denial Response (extension)"> and
-L<PAGI::Spec::Www/"Decline SSE - send event">.
+File may serve an ordinary HTTP WebSocket refusal or SSE decline. Because File
+is non-buffered, those scopes must provide C<pagi.connection> so disconnect and
+terminal state remain authoritative while the file send is in flight.
 
 =cut
 
@@ -133,8 +131,6 @@ sub default_content_type { return undef }
 
 sub is_buffered { return 0 }
 
-sub protocol_response_capability { return undef }
-
 sub body {
     croak 'File response has no buffered body';
 }
@@ -170,6 +166,8 @@ sub _plan_for_scope {
         scope         => $scope,
         handle_ranges => $self->{_handle_ranges} && $self->status == 200
             ? 1 : 0,
+        handle_conditionals => $self->status >= 200 && $self->status < 300
+            && $self->status != 204 && $self->status != 205 ? 1 : 0,
         etag          => $self->{_etag_policy},
     );
     push @args, offset => $self->{_offset} if exists $self->{_offset};
@@ -192,12 +190,11 @@ sub _wire_headers_for_plan {
     if (exists($self->{_filename}) || $self->{_inline}) {
         @$configured = grep { lc($_->[0]) ne 'content-disposition' }
             @$configured;
-        my $disposition = $self->{_inline} ? 'inline' : 'attachment';
-        if (exists $self->{_filename}) {
-            my $filename = $self->{_filename};
-            $filename =~ s/([\\"])/\\$1/g;
-            $disposition .= qq{; filename="$filename"};
-        }
+        my @parameters = exists($self->{_filename})
+            ? (filename => $self->{_filename}) : ();
+        my $disposition = PAGI::Utils::Headers::content_disposition(
+            $self->{_inline} ? 'inline' : 'attachment', @parameters,
+        );
         push @$configured, ['Content-Disposition', $disposition];
     }
 
@@ -310,8 +307,8 @@ status must be an integer from 100 through 599, but body-forbidden 1xx, 204,
 205, and 304 are rejected. File additionally rejects an explicit 206: only a
 valid request Range plan may select 206. Range handling is enabled only while
 the configured status is 200. A matched C<If-None-Match> plan can select 304
-for any configured status; when range handling is enabled, an invalid processed
-Range selects 416.
+for eligible 2xx representation statuses; when range handling is enabled, an
+invalid processed Range selects 416.
 
 =item * C<content_type>
 
@@ -333,16 +330,19 @@ replaces an application-supplied field of that name.
 
 =item * C<filename>
 
-Optional. It must be a defined non-reference scalar and may not contain bytes
-C<0x00> through C<0x1f> or C<0x7f>. It does not select or alter C<$path>.
+Optional. It must be a defined non-reference scalar and may not contain
+characters C<U+0000> through C<U+001F> or C<U+007F>. It does not select or alter C<$path>.
 Without true C<inline>, it generates an attachment Content-Disposition;
-backslash and double quote are escaped in the quoted filename parameter.
+ASCII filenames are emitted in a quoted C<filename> parameter, escaping
+backslash and double quote. Non-ASCII character filenames are emitted as a
+UTF-8 percent-encoded C<filename*> extended value, without an invented ASCII
+fallback. Callers with encoded text must decode it to Perl characters first.
 
 =item * C<inline>
 
 Optional exact boolean scalar C<0> or C<1>; the default is false. True emits an
-inline Content-Disposition, with a filename parameter when C<filename> is also
-present. False with no C<filename> emits no generated disposition.
+inline Content-Disposition, with C<filename> or C<filename*> when C<filename>
+is also present. False with no C<filename> emits no generated disposition.
 
 =item * C<offset>, C<length>
 
@@ -372,8 +372,11 @@ tags croak.
 
 =back
 
-C<If-None-Match> compares the first field value exactly with the selected
-ETag. File does not implement Last-Modified, If-Modified-Since, or If-Range.
+C<If-None-Match> reads all field values and uses weak comparison against the
+selected ETag for exact HTTP GET/HEAD requests. A wildcard matches an existing
+selected file even when ETag generation is disabled. Only eligible 2xx
+representation responses can become 304, and matching precedes Range delivery.
+File does not implement Last-Modified, If-Modified-Since, or If-Range.
 
 For example, C<offset =E<gt> 1024, length =E<gt> 65536> is advertised as one
 65536-byte 200 representation. C<Range: bytes=100-199> then produces logical
@@ -387,15 +390,7 @@ C<to_app> retains the exact File object. Each invocation performs all file
 inspection before response start, then awaits response start and the plan's one
 terminal body event. Later deliberate changes affect later invocations while
 each request keeps its complete pre-start plan. At an existing triplet boundary
-use L<PAGI::Utils/invoke_app>. C<is_buffered> returns false, C<body> croaks, and
-C<protocol_response_capability> returns C<undef>.
-
-The capability opt-out is independent of buffering: Stream remains eligible
-for protocol denial because it emits only ordinary body events. File opts out
-because a successful delivery plan may emit an opaque C<file> event from the
-C<file>/C<fh> vocabulary that PAGI Www explicitly excludes from WebSocket
-denial and SSE decline bodies; the fact that its 304/416 plans use ordinary
-empty bodies does not change that class-level capability.
+use L<PAGI::Utils/invoke_app>. C<is_buffered> returns false and C<body> croaks.
 
 =cut
 

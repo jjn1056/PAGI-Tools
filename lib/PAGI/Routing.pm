@@ -390,7 +390,7 @@ Core lists contain these descriptions only:
 Class names may be short, nested short, already PAGI-qualified, or exact:
 
     middleware('RequestId')
-    middleware('Auth::Basic')
+    middleware('Authentication', backend => $backend)
     middleware('PAGI::Middleware::RequestId')
     middleware('+MyApp::Middleware::Audit')
 
@@ -776,7 +776,7 @@ L<PAGI::Routing::HeadBoundary> removes the final HEAD body, including sendfile
 events, only after every Router/mount/route middleware has observed the
 unsuppressed GET representation. WebSocket and SSE retain their existing
 protocol ownership; Mounts do not adapt their events.
-See L<PAGI::Middleware::Helpers> for small channel wrappers that keep this
+See L<PAGI::Utils::Middleware> for small channel wrappers that keep this
 contract explicit.
 
 =head1 REVERSE ROUTING AND INSPECTION
@@ -987,8 +987,8 @@ downstream top-level additions.
 
 =head1 PROTOCOL OUTCOMES AND FAILURES
 
-Unmatched SSE routes emit an SSE HTTP-decline 404. Unmatched WebSockets use the
-HTTP-denial extension when advertised and otherwise close before acceptance.
+Unmatched SSE and WebSocket routes emit ordinary HTTP 404 responses on their
+original scopes before C<sse.start> or C<websocket.accept>.
 Routing itself ignores lifespan scopes. At the deployed application root, use
 L<PAGI::Compose> with the Router behind an explicit root Mount to combine that
 routing application, application middleware, and startup/shutdown callbacks.
@@ -1061,7 +1061,7 @@ future inspection seam without advertising an unshipped schema API.
 
 L<PAGI::Tools::Cookbook>, L<PAGI::Request>, L<PAGI::WebSocket>, L<PAGI::SSE>,
 L<PAGI::Authority>, L<PAGI::Compose>, L<PAGI::Pages>, L<PAGI::Response>,
-L<PAGI::Middleware::Helpers>, L<PAGI::Routing::Mount>,
+L<PAGI::Utils::Middleware>, L<PAGI::Routing::Mount>,
 L<PAGI::Routing::Router>, L<PAGI::Routing::URL>,
 L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>
 

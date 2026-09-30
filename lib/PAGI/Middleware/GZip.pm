@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Middleware::BufferedResponse qw(stream_transform_response);
 use Compress::Raw::Zlib qw(WANT_GZIP Z_OK Z_SYNC_FLUSH Z_FINISH);
+use PAGI::Headers;
 
 =head1 NAME
 
@@ -73,6 +74,11 @@ C<min_size> does not apply, because there is no size to compare.
 Either way, a C<Content-Length> the application set is replaced or removed,
 since it described the uncompressed representation.
 
+Compressed responses merge C<Accept-Encoding> into all existing C<Vary> fields;
+the first spelling and order are retained, duplicates are removed without
+regard to ASCII case, and a wildcard normalizes to C<*>. Malformed existing
+members raise rather than losing a cache dependency.
+
 Not compressed under any circumstances: a response that already carries a
 C<Content-Encoding>, one whose media type is outside C<mime_types>, and a
 C<206 Partial Content> or any response carrying C<Content-Range> -- a range's
@@ -129,8 +135,11 @@ sub wrap {
 
         # The application's Content-Length described the identity
         # representation, so it is wrong either way once encoded.
-        @$headers = grep { lc($_->[0]) ne 'content-length' } @$headers;
-        push @$headers, ['Content-Encoding', 'gzip'], ['Vary', 'Accept-Encoding'];
+        my $fields = PAGI::Headers->new($headers);
+        $fields->remove('Content-Length');
+        $fields->add('Content-Encoding', 'gzip');
+        $fields->add_vary('Accept-Encoding');
+        @$headers = @{$fields->to_pairs};
 
         # A terminal first body event IS the whole representation, so it can
         # be compressed here and the encoded length declared -- the response

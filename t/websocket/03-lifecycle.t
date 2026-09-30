@@ -6,11 +6,13 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::WebSocket;
+use PAGITest::Connected qw(ws_scope);
 
 subtest 'accept sends websocket.accept event' => sub {
     my @sent;
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     my $receive = sub { Future->done({ type => 'websocket.connect' }) };
     my $send = sub { push @sent, $_[0]; Future->done };
 
@@ -25,7 +27,7 @@ subtest 'accept sends websocket.accept event' => sub {
 
 subtest 'accept with subprotocol' => sub {
     my @sent;
-    my $scope = { type => 'websocket', headers => [], subprotocols => ['chat', 'json'] };
+    my $scope = ws_scope(subprotocols => ['chat', 'json']);
     my $receive = sub { Future->done({ type => 'websocket.connect' }) };
     my $send = sub { push @sent, $_[0]; Future->done };
 
@@ -38,7 +40,7 @@ subtest 'accept with subprotocol' => sub {
 
 subtest 'accept with headers' => sub {
     my @sent;
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     my $receive = sub { Future->done({ type => 'websocket.connect' }) };
     my $send = sub { push @sent, $_[0]; Future->done };
 
@@ -51,7 +53,7 @@ subtest 'accept with headers' => sub {
 
 subtest 'close sends websocket.close event' => sub {
     my @sent;
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     my $receive = sub { Future->done({ type => 'websocket.connect' }) };
     my $send = sub { push @sent, $_[0]; Future->done };
 
@@ -64,12 +66,19 @@ subtest 'close sends websocket.close event' => sub {
     is(scalar @sent, 1, 'one event sent');
     is($sent[0]{type}, 'websocket.close', 'sent websocket.close');
     is($sent[0]{code}, 1000, 'default close code is 1000');
-    ok($ws->is_closed, 'state is closed after close');
+    is($ws->connection_state, 'closing', 'state is closing after close');
+
+    # The peer answers the Close and the server completes the connection.
+    my $connection = $scope->{'pagi.connection'};
+    $connection->_set_peer_close(1000, '');
+    $connection->_mark_complete;
+
+    ok($ws->is_closed, 'state is closed once the connection ends');
 };
 
 subtest 'close with code and reason' => sub {
     my @sent;
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     my $receive = sub { Future->done({ type => 'websocket.connect' }) };
     my $send = sub { push @sent, $_[0]; Future->done };
 
@@ -81,13 +90,20 @@ subtest 'close with code and reason' => sub {
 
     is($sent[0]{code}, 4000, 'custom close code');
     is($sent[0]{reason}, 'Custom reason', 'custom close reason');
+    is($ws->close_code, undef, 'close_code awaits the peer Close');
+
+    # The peer echoes the Close and the server completes the connection.
+    my $connection = $scope->{'pagi.connection'};
+    $connection->_set_peer_close(4000, 'Custom reason');
+    $connection->_mark_complete;
+
     is($ws->close_code, 4000, 'close_code accessor updated');
     is($ws->close_reason, 'Custom reason', 'close_reason accessor updated');
 };
 
 subtest 'close is idempotent' => sub {
     my $send_count = 0;
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     my $receive = sub { Future->done({ type => 'websocket.connect' }) };
     my $send = sub { $send_count++; Future->done };
 
@@ -102,22 +118,19 @@ subtest 'close is idempotent' => sub {
     is($send_count, 1, 'close only sends once');
 };
 
-subtest 'run() resolves cleanly when receive fails' => sub {
-    my $scope = { type => 'websocket', headers => [] };
-    my $receive = sub { Future->fail("connection reset by peer") };
+subtest 'run() re-raises when receive fails' => sub {
+    my $scope = ws_scope();
+    my $receive = sub { Future->fail("connection reset by peer\n") };
     my $ws = PAGI::WebSocket->new($scope, $receive, sub { Future->done });
-    $ws->_set_state('connected');
+    $ws->accept->get;
 
     my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, $_[0] };
 
-    # Must resolve (not reject) — caller should not need to handle a failed Future
-    my $f = $ws->run;
-    ok !$f->is_failed, 'run() Future did not reject on receive failure';
-    $f->get;
-
-    ok scalar @warnings,                              'receive failure was warned';
-    like $warnings[0], qr/connection reset by peer/,  'warning contains error text';
+    # The server, not the helper, decides the terminal outcome.
+    is dies { $ws->run->get }, "connection reset by peer\n",
+        'run() re-raises the receive failure';
+    is \@warnings, [], 'receive failure was not warned';
 };
 
 done_testing;

@@ -6,6 +6,8 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
+use PAGITest::Connected qw(ws_scope receive_from);
 
 subtest 'can create websocket endpoint subclass' => sub {
     require PAGI::Endpoint::WebSocket;
@@ -71,9 +73,10 @@ subtest 'class to_app constructs its endpoint immediately and only once' => sub 
         'class to_app constructs the endpoint immediately';
 
     for my $connection (1, 2) {
+        my $scope = ws_scope(path => "/ws/$connection");
         $app->(
-            { type => 'websocket', path => "/ws/$connection", headers => [] },
-            sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+            $scope,
+            receive_from($scope, { type => 'websocket.disconnect', code => 1000 }),
             sub { Future->done },
         )->get;
     }

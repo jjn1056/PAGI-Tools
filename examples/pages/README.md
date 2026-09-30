@@ -79,7 +79,9 @@ startup/shutdown, error handling, and response completion; that root owns
 negotiated 404/405 and automatic HEAD behavior.
 
 A Pages application can also be the root directly, for example
-`PAGI::Pages->welcome`. Pages is intentionally HTTP-only: a server using
-automatic lifespan mode treats its lifespan exception as a clean decline,
-while strict `lifespan_mode => 'on'` rejects that root. Use Compose when the
-application must own lifecycle hooks, as this executable example does.
+`PAGI::Pages->welcome`. It can be invoked for HTTP or passed directly to a
+WebSocket `deny` or SSE `decline`; representation negotiation uses the real
+protocol scope. A server using automatic lifespan mode treats its lifespan
+exception as a clean decline, while strict `lifespan_mode => 'on'` rejects that
+root. Use Compose when the application must own lifecycle hooks, as this
+executable example does.

@@ -26,6 +26,9 @@ Visit http://localhost:5000/
 ## Key Concepts
 
 ```perl
+# Register cleanup before awaited I/O
+$sse->on_close(sub { ... });
+
 # Keepalive for proxies
 $sse->keepalive(25);
 
@@ -33,9 +36,6 @@ $sse->keepalive(25);
 if (my $last_id = $sse->last_event_id) {
     await $sse->send_event(event => 'reconnected', ...);
 }
-
-# Cleanup on disconnect
-$sse->on_close(sub { ... });
 
 # Wait for disconnect
 await $sse->run;

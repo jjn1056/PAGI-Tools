@@ -56,12 +56,13 @@ use PAGI::Transport qw(transport);
 }
 
 {
-    package T::PAGI05Connection;
+    package T::Connection;
 
     sub new {
         return bless {
             connected    => 1,
             reason       => undef,
+            detail       => undef,
             callbacks    => [],
             notification => 0,
             in_send      => 0,
@@ -70,31 +71,42 @@ use PAGI::Transport qw(transport);
 
     sub is_connected { return $_[0]{connected} ? 1 : 0 }
     sub disconnect_reason { return $_[0]{reason} }
+    sub disconnect_detail { return $_[0]{detail} }
 
     sub on_disconnect {
         my ($self, $callback) = @_;
         if ($self->{connected}) {
             push @{$self->{callbacks}}, $callback;
         } else {
-            $callback->($self->{reason});
+            $callback->($self->{reason}, $self->{detail});
         }
         return $self;
     }
 
     sub transition {
-        my ($self, $reason) = @_;
+        my ($self, $reason, $detail) = @_;
         return $self unless $self->{connected};
         $self->{connected} = 0;
         $self->{reason} = $reason;
+        $self->{detail} = $detail;
         $self->{notification} = 1;
         return $self;
+    }
+
+    # Www 0.6 abort: the scope ends abnormally as app_abort, then disconnect
+    # callbacks run outside any active send.
+    sub abort {
+        my ($self, $detail) = @_;
+        $self->transition(app_abort => $detail);
+        $self->deliver_disconnect unless $self->{in_send};
+        return;
     }
 
     sub deliver_disconnect {
         my ($self) = @_;
         die "on_disconnect delivered inside send\n" if $self->{in_send};
         return $self unless delete $self->{notification};
-        $_->($self->{reason}) for @{$self->{callbacks}};
+        $_->($self->{reason}, $self->{detail}) for @{$self->{callbacks}};
         return $self;
     }
 
@@ -431,7 +443,7 @@ subtest 'pipe_from propagates a Future-backed next_chunk failure after waiting' 
 };
 
 subtest 'disconnect before producer start completes quietly without consuming receive' => sub {
-    my $connection = T::PAGI05Connection->new;
+    my $connection = T::Connection->new;
     my $start = Future->new;
     my @events;
     my $receive_calls = 0;
@@ -563,7 +575,7 @@ subtest 'normal completion releases the private disconnect signal' => sub {
 };
 
 subtest 'disconnect cancels unrelated producer work and awaits exactly-once cleanup' => sub {
-    my $connection = T::PAGI05Connection->new;
+    my $connection = T::Connection->new;
     my $work = Future->new;
     my $cleanup_wait = Future->new;
     my $work_cancelled = 0;
@@ -591,7 +603,11 @@ subtest 'disconnect cancels unrelated producer work and awaits exactly-once clea
         },
     );
 
-    $connection->transition('client_gone');
+    $connection->transition('client_gone', 'peer reset upload');
+    my @late_disconnect;
+    $connection->on_disconnect(sub { @late_disconnect = @_ });
+    is(\@late_disconnect, ['client_gone', 'peer reset upload'],
+        'late connection callback receives reason and diagnostic detail');
     is($writer->is_disconnected, 1,
         'synchronous state is visible before deferred callback delivery');
     is($work_cancelled, 0,
@@ -600,6 +616,8 @@ subtest 'disconnect cancels unrelated producer work and awaits exactly-once clea
     is($work_cancelled, 1, 'disconnect requests cancellation of unrelated producer work');
     is($writer->is_disconnected, 1, 'Writer records the disconnection');
     is($writer->disconnect_reason, 'client_gone', 'Writer retains the connection reason');
+    is($writer->disconnect_detail, 'peer reset upload',
+        'Writer retains the connection diagnostic detail');
     ok(!$running->is_ready, 'runner awaits Future-backed cleanup');
     is(\@cleanup, ['first'], 'cleanup callbacks run sequentially');
     $work->done unless $work->is_ready || $work->is_cancelled;
@@ -613,10 +631,10 @@ subtest 'disconnect cancels unrelated producer work and awaits exactly-once clea
     is(\@cleanup, ['first', 'last'], 'cleanup remains exactly once after local close');
 };
 
-subtest 'PAGI 0.5 disconnect settles active sends without failing or cancelling Writer work' => sub {
+subtest 'disconnect settles active sends without failing or cancelling Writer work' => sub {
     for my $operation (qw(body terminal)) {
         subtest $operation => sub {
-            my $connection = T::PAGI05Connection->new;
+            my $connection = T::Connection->new;
             my $pending_send = Future->new;
             my $cleanup_wait = Future->new;
             my $send_cancelled = 0;
@@ -690,7 +708,7 @@ subtest 'PAGI 0.5 disconnect settles active sends without failing or cancelling 
 };
 
 subtest 'pipe_from stops before another pull after a discarded send settles' => sub {
-    my $connection = T::PAGI05Connection->new;
+    my $connection = T::Connection->new;
     my $pending_send = Future->new;
     my $send_cancelled = 0;
     my $source = T::Source->new('first', 'must not be pulled', undef);
@@ -727,7 +745,7 @@ subtest 'pipe_from stops before another pull after a discarded send settles' => 
 };
 
 subtest 'disconnect after accepted write settlement cancels only later producer work' => sub {
-    my $connection = T::PAGI05Connection->new;
+    my $connection = T::Connection->new;
     my $body_send = Future->new;
     my $later_work = Future->new;
     my $later_cancelled = 0;
@@ -764,7 +782,7 @@ subtest 'disconnect after accepted write settlement cancels only later producer 
 };
 
 subtest 'a controlled validation send failure stays an application failure' => sub {
-    my $connection = T::PAGI05Connection->new;
+    my $connection = T::Connection->new;
     my $body_send = Future->new;
     my $cleanup_calls = 0;
     my ($write, $writer);
@@ -797,7 +815,7 @@ subtest 'a controlled validation send failure stays an application failure' => s
 };
 
 subtest 'disconnect after normal completion is not retroactive' => sub {
-    my $connection = T::PAGI05Connection->new;
+    my $connection = T::Connection->new;
     my ($writer, $cleanup_calls) = (undef, 0);
     my @events;
     my $running = PAGI::Response::Stream->new(sub {

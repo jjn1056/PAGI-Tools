@@ -6,6 +6,7 @@ use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
 use PAGI::Response::Empty ();
 use PAGI::Utils ();
+use PAGI::Headers;
 
 =head1 NAME
 
@@ -37,6 +38,10 @@ CORS is request policy, not representation metadata, so it is deliberately not
 a Response method. Replace response-level C<cors(...)> calls with this
 middleware. For one unconditional literal C<Access-Control-*> field only, use
 the ordinary L<PAGI::Response/header> method instead.
+
+For allowed origins, existing C<Vary> fields are merged with C<Origin> into one
+field, retaining first spelling and order. A wildcard normalizes to C<*>.
+Malformed existing members raise rather than losing a cache dependency.
 
 =head1 CONFIGURATION
 
@@ -149,6 +154,7 @@ async sub _handle_preflight {
 
 sub _add_cors_headers {
     my ($self, $headers, $origin) = @_;
+    my $fields = PAGI::Headers->new($headers);
 
     # Determine origin to return
     my $allowed_origin;
@@ -158,18 +164,19 @@ sub _add_cors_headers {
         $allowed_origin = $origin;
     }
 
-    push @$headers, ['Access-Control-Allow-Origin', $allowed_origin];
+    $fields->add('Access-Control-Allow-Origin', $allowed_origin);
 
     if ($self->{credentials}) {
-        push @$headers, ['Access-Control-Allow-Credentials', 'true'];
+        $fields->add('Access-Control-Allow-Credentials', 'true');
     }
 
     if (@{$self->{expose_headers}}) {
-        push @$headers, ['Access-Control-Expose-Headers', join(', ', @{$self->{expose_headers}})];
+        $fields->add('Access-Control-Expose-Headers', join(', ', @{$self->{expose_headers}}));
     }
 
-    # Vary header for caching
-    push @$headers, ['Vary', 'Origin'];
+    $fields->add_vary('Origin');
+    # Replace the pair list only after the Vary composition succeeds.
+    @$headers = @{$fields->to_pairs};
 }
 
 sub _is_origin_allowed {

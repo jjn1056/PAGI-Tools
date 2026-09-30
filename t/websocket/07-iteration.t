@@ -7,7 +7,9 @@ use Future;
 use JSON::MaybeXS;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::WebSocket;
+use PAGITest::Connected qw(ws_scope receive_from);
 
 subtest 'each_message iterates until disconnect' => sub {
     my @events = (
@@ -17,11 +19,9 @@ subtest 'each_message iterates until disconnect' => sub {
         { type => 'websocket.receive', text => 'msg3' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -43,11 +43,9 @@ subtest 'each_text iterates text frames' => sub {
         { type => 'websocket.receive', text => 'world' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -68,10 +66,10 @@ subtest 'each_bytes iterates binary frames' => sub {
         { type => 'websocket.receive', bytes => "\xff" },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $index = 0;
+    my $scope = ws_scope();
     my $ws = PAGI::WebSocket->new(
-        { type => 'websocket', headers => [] },
-        sub { Future->done($events[$index++]) },
+        $scope,
+        receive_from($scope, @events),
         sub { Future->done },
     );
     $ws->accept->get;
@@ -90,11 +88,9 @@ subtest 'each_json iterates and decodes' => sub {
         { type => 'websocket.receive', text => '{"n":2}' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -113,12 +109,10 @@ subtest 'callback can send responses' => sub {
         { type => 'websocket.receive', text => 'ping' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
     my @sent;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { push @sent, $_[0]; Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
     @sent = ();
@@ -136,11 +130,9 @@ subtest 'exception in callback propagates' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.receive', text => 'trigger' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -155,16 +147,14 @@ subtest 'exception in callback propagates' => sub {
     );
 };
 
-subtest 'each_message runs on_close when callback dies (cleanup-then-rethrow)' => sub {
+subtest 'each_message: on_close runs when the connection ends after a callback dies' => sub {
     my @events = (
         { type => 'websocket.connect' },
         { type => 'websocket.receive', text => 'boom' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -179,19 +169,22 @@ subtest 'each_message runs on_close when callback dies (cleanup-then-rethrow)' =
         'exception still propagates'
     );
 
+    ok(!$cleanup_ran, 'a dying callback alone does not start cleanup');
+
+    # The handler died; the server ends the connection abnormally.
+    $scope->{'pagi.connection'}->_mark_disconnected('server_error');
+
     ok($cleanup_ran, 'on_close ran despite each_message callback dying');
 };
 
-subtest 'each_text runs on_close when callback dies (cleanup-then-rethrow)' => sub {
+subtest 'each_text: on_close runs when the connection ends after a callback dies' => sub {
     my @events = (
         { type => 'websocket.connect' },
         { type => 'websocket.receive', text => 'boom' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -206,19 +199,22 @@ subtest 'each_text runs on_close when callback dies (cleanup-then-rethrow)' => s
         'exception still propagates'
     );
 
+    ok(!$cleanup_ran, 'a dying callback alone does not start cleanup');
+
+    # The handler died; the server ends the connection abnormally.
+    $scope->{'pagi.connection'}->_mark_disconnected('server_error');
+
     ok($cleanup_ran, 'on_close ran despite each_text callback dying');
 };
 
-subtest 'each_bytes runs on_close when callback dies (cleanup-then-rethrow)' => sub {
+subtest 'each_bytes: on_close runs when the connection ends after a callback dies' => sub {
     my @events = (
         { type => 'websocket.connect' },
         { type => 'websocket.receive', bytes => "\x00\x01" },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -233,19 +229,22 @@ subtest 'each_bytes runs on_close when callback dies (cleanup-then-rethrow)' => 
         'exception still propagates'
     );
 
+    ok(!$cleanup_ran, 'a dying callback alone does not start cleanup');
+
+    # The handler died; the server ends the connection abnormally.
+    $scope->{'pagi.connection'}->_mark_disconnected('server_error');
+
     ok($cleanup_ran, 'on_close ran despite each_bytes callback dying');
 };
 
-subtest 'each_json runs on_close when callback dies (cleanup-then-rethrow)' => sub {
+subtest 'each_json: on_close runs when the connection ends after a callback dies' => sub {
     my @events = (
         { type => 'websocket.connect' },
         { type => 'websocket.receive', text => '{"n":1}' },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
     my $send = sub { Future->done };
-
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope   = ws_scope();
+    my $receive = receive_from($scope, @events);
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
     $ws->accept->get;
 
@@ -259,6 +258,11 @@ subtest 'each_json runs on_close when callback dies (cleanup-then-rethrow)' => s
         qr/boom in each_json/,
         'exception still propagates'
     );
+
+    ok(!$cleanup_ran, 'a dying callback alone does not start cleanup');
+
+    # The handler died; the server ends the connection abnormally.
+    $scope->{'pagi.connection'}->_mark_disconnected('server_error');
 
     ok($cleanup_ran, 'on_close ran despite each_json callback dying');
 };

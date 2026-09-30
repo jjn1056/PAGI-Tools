@@ -437,13 +437,16 @@ subtest 'custom HTTP default receives NONE only inside selected middleware bound
         type => 'websocket', method => undef,
         path => '/left/missing', raw_path => '/left/missing', headers => [],
     ));
-    is($websocket, [{ type => 'websocket.close' }],
-        'WebSocket NONE retains the stock close outcome');
+    is($websocket, [
+        { type => 'http.response.start', status => 404,
+          headers => [['content-type', 'text/plain']] },
+        { type => 'http.response.body', body => 'Not Found', more => 0 },
+    ], 'WebSocket NONE uses the stock ordinary HTTP outcome');
     my $sse = run_scope($app, scope(
         type => 'sse', method => undef,
         path => '/left/missing', raw_path => '/left/missing', headers => [],
     ));
-    is($sse->[0]{type}, 'sse.http.response.start',
+    is($sse->[0]{type}, 'http.response.start',
         'SSE NONE retains the stock response family');
     is($default_calls, $before, 'protocol NONE never invokes HTTP default');
 };

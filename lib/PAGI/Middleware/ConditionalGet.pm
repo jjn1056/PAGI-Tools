@@ -4,6 +4,8 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use PAGI::Headers ();
+use PAGI::Utils::Headers qw(etag_matches);
 
 =head1 NAME
 
@@ -24,8 +26,14 @@ PAGI::Middleware::ConditionalGet - Conditional GET/HEAD request handling
 PAGI::Middleware::ConditionalGet returns 304 Not Modified for GET/HEAD
 requests when the client's conditional headers match. Supports:
 
-- If-None-Match: Compare against ETag header
-- If-Modified-Since: Compare against Last-Modified header
+- If-None-Match: weakly compare every field value against a valid ETag;
+  wildcard matches an eligible representation even without an ETag
+- If-Modified-Since: compare against Last-Modified only when
+  If-None-Match is absent
+
+Malformed If-None-Match fields are ignored as a whole. Only eligible 2xx
+representation responses on exact HTTP GET/HEAD requests can become 304;
+204 and 205, errors, redirects, and other protocols pass through.
 
 =cut
 
@@ -40,18 +48,20 @@ sub wrap {
         }
 
         # Only handle GET and HEAD requests
-        my $method = uc($scope->{method} // '');
-        unless ($method eq 'GET' || $method eq 'HEAD') {
+        my $method = $scope->{method};
+        unless (defined($method) && !ref($method)
+                && ($method eq 'GET' || $method eq 'HEAD')) {
             await $app->($scope, $receive, $send);
             return;
         }
 
         # Get conditional request headers
-        my $if_none_match = $self->_get_header($scope, 'if-none-match');
-        my $if_modified_since = $self->_get_header($scope, 'if-modified-since');
+        my $request_headers = PAGI::Headers->new($scope->{headers} // []);
+        my $has_if_none_match = $request_headers->has('If-None-Match');
+        my $if_modified_since = $request_headers->get('If-Modified-Since');
 
         # No conditional headers? Pass through
-        unless (defined $if_none_match || defined $if_modified_since) {
+        unless ($has_if_none_match || defined $if_modified_since) {
             await $app->($scope, $receive, $send);
             return;
         }
@@ -73,16 +83,25 @@ sub wrap {
                 $response_status = $event->{status};
                 $response_headers = $event->{headers};
 
-                # Only handle 2xx responses
-                if ($response_status >= 200 && $response_status < 300) {
-                    my $etag = $self->_get_response_header($response_headers, 'etag');
-                    my $last_modified = $self->_get_response_header($response_headers, 'last-modified');
+                # Only successful responses with a selected representation.
+                if ($response_status >= 200 && $response_status < 300
+                        && $response_status != 204 && $response_status != 205) {
+                    my $headers = PAGI::Headers->new($response_headers // []);
+                    my $etag = $headers->get_single('ETag');
+                    $etag = undef if defined($etag) && !defined($headers->etag);
+                    my $last_modified = $headers->get('Last-Modified');
 
                     my $not_modified = 0;
 
                     # Check If-None-Match
-                    if (defined $if_none_match && defined $etag) {
-                        $not_modified = $self->_etag_matches($if_none_match, $etag);
+                    if ($has_if_none_match) {
+                        my $condition = $request_headers->if_none_match;
+                        if (defined $condition) {
+                            $not_modified = $condition->{any} ? 1
+                                : defined($etag)
+                                    ? etag_matches($condition, $etag, weak => 1)
+                                    : 0;
+                        }
                     }
                     # Check If-Modified-Since (only if no If-None-Match)
                     elsif (defined $if_modified_since && defined $last_modified) {
@@ -119,53 +138,6 @@ sub wrap {
 
         await $app->($scope, $receive, $wrapped_send);
     };
-}
-
-sub _get_header {
-    my ($self, $scope, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$scope->{headers} // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
-}
-
-sub _get_response_header {
-    my ($self, $headers, $name) = @_;
-
-    $name = lc($name);
-    for my $h (@{$headers // []}) {
-        return $h->[1] if lc($h->[0]) eq $name;
-    }
-    return;
-}
-
-sub _etag_matches {
-    my ($self, $if_none_match, $etag) = @_;
-
-    # Parse If-None-Match which can be comma-separated
-    # ETags can be weak (W/"...") or strong ("...")
-
-    # Handle * wildcard
-    return 1 if $if_none_match eq '*';
-
-    # Normalize ETags for comparison (weak comparison)
-    my $normalize = sub  {
-        my ($tag) = @_;
-        $tag =~ s/^\s+//;
-        $tag =~ s/\s+$//;
-        $tag =~ s/^W\///i;  # Remove weak prefix for comparison
-        return $tag;
-    };
-
-    my $normalized_etag = $normalize->($etag);
-
-    for my $tag (split /\s*,\s*/, $if_none_match) {
-        my $normalized_tag = $normalize->($tag);
-        return 1 if $normalized_tag eq $normalized_etag;
-    }
-    return 0;
 }
 
 sub _not_modified_since {

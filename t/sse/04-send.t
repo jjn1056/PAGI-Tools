@@ -7,13 +7,15 @@ use Future;
 use JSON::MaybeXS;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope);
 
 subtest 'send sends data-only event' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     $sse->send("Hello world")->get;
@@ -28,7 +30,7 @@ subtest 'send_json encodes as JSON' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     $sse->send_json({ message => "hello", count => 42 })->get;
@@ -42,7 +44,7 @@ subtest 'send_event with all fields' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     $sse->send_event(
@@ -65,7 +67,7 @@ subtest 'send_event with string data' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     $sse->send_event(data => "plain text")->get;
@@ -76,7 +78,7 @@ subtest 'send_event with string data' => sub {
 subtest 'send_comment sends a direct SSE comment event' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     $sse->send_comment('heartbeat')->get;
@@ -89,7 +91,7 @@ subtest 'send auto-starts if not started' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
 
     # Send without calling start first
     $sse->send("Hello")->get;
@@ -100,8 +102,9 @@ subtest 'send auto-starts if not started' => sub {
 };
 
 subtest 'send on closed connection dies' => sub {
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, sub { Future->done });
-    $sse->_set_closed;
+    my $scope = sse_scope();
+    my $sse = PAGI::SSE->new($scope, sub {}, sub { Future->done });
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
 
     like(
         dies { $sse->send("test")->get },

@@ -10,6 +10,8 @@ use lib 'lib';
 use PAGI::Endpoint::WebSocket;
 use PAGI::WebSocket;
 use PAGI::Routing qw(router websocket);
+use lib 't/lib';
+use PAGITest::Connected qw(ws_scope receive_from);
 
 {
     package Local::WrongWebSocketCache;
@@ -48,10 +50,9 @@ subtest 'app creates a WebSocket wrapper and calls handle' => sub {
         { type => 'websocket.connect' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
 
-    my $scope = { type => 'websocket', path => '/ws', headers => [] };
-    my $receive = sub { Future->done($events[$idx++]) };
+    my $scope   = ws_scope(path => '/ws');
+    my $receive = receive_from($scope, @events);
     my $send = sub { push @sent, $_[0]; Future->done };
 
     $app->($scope, $receive, $send)->get;
@@ -79,9 +80,10 @@ subtest 'websocket route accepts a configured endpoint object' => sub {
         websocket('/chat' => $configured),
     ])->to_app;
 
+    my $scope = ws_scope(path => '/chat');
     $app->(
-        { type => 'websocket', path => '/chat', headers => [] },
-        sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+        $scope,
+        receive_from($scope, { type => 'websocket.disconnect', code => 1000 }),
         sub { Future->done },
     )->get;
 
@@ -107,8 +109,8 @@ subtest 'app reuses only a compatible exact-scope WebSocket cache' => sub {
         'same scope WebSocket',
     ) {
         subtest $case => sub {
-            my $scope = { type => 'websocket', path => '/ws', headers => [] };
-            my $parent_scope = { type => 'websocket', path => '/parent', headers => [] };
+            my $scope = ws_scope(path => '/ws');
+            my $parent_scope = ws_scope(path => '/parent');
             my $parent = PAGI::WebSocket->new(
                 $parent_scope, sub { Future->done }, sub { Future->done },
             );
@@ -126,7 +128,7 @@ subtest 'app reuses only a compatible exact-scope WebSocket cache' => sub {
 
             CacheAwareEndpoint->to_app->(
                 $scope,
-                sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+                receive_from($scope, { type => 'websocket.disconnect', code => 1000 }),
                 sub { Future->done },
             )->get;
 

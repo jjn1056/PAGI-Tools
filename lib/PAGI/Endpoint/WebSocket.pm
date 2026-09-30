@@ -29,6 +29,7 @@ sub to_app {
         my $websocket = PAGI::WebSocket->new($scope, $receive, $send);
 
         await Future->wrap($endpoint->handle($websocket));
+        await $websocket->close if $websocket->is_connected;
         return;
     };
 }
@@ -41,6 +42,14 @@ sub new {
 async sub handle {
     my ($self, $websocket) = @_;
 
+    # Register disconnect callback
+    if ($self->can('on_disconnect')) {
+        $websocket->on_close(sub {
+            my ($code, $reason, $detail) = @_;
+            return $self->on_disconnect($websocket, $code, $reason, $detail);
+        });
+    }
+
     # Call on_connect if defined
     if ($self->can('on_connect')) {
         await Future->wrap($self->on_connect($websocket));
@@ -49,14 +58,7 @@ async sub handle {
         await $websocket->accept;
     }
 
-    # Register disconnect callback
-    if ($self->can('on_disconnect')) {
-        $websocket->on_close(sub {
-            my ($code, $reason) = @_;
-            $self->on_disconnect($websocket, $code, $reason);
-            return;
-        });
-    }
+    return if $websocket->is_closed;
 
     # Handle messages based on encoding
     eval {
@@ -165,7 +167,9 @@ the C<encoding()> setting.
         # Cleanup
     }
 
-Called when connection closes. This is synchronous (not async).
+Called at terminal connection notification. The hook may return a Future;
+cleanup awaits it and retains the endpoint until it settles. Arguments are
+C<($self, $websocket, $peer_code, $peer_reason, $disconnect_detail)>.
 
 =head1 CLASS METHODS
 

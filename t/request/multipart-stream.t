@@ -29,6 +29,26 @@ sub mp_body {                               # build a multipart body from [name,
 my $b = 'BOUND';
 my $body = mp_body($b, ['title',undef,undef,'Hello'], ['doc','a.txt','text/plain',"line1\nline2"]);
 
+subtest 'streaming disposition metadata follows complete parameter parse' => sub {
+    my @cases = (
+        ['form-data; name="upload"; filename="a\\"b.txt"', 'upload', 'a"b.txt', 1],
+        ['form-data; name="semi;colon"; filename = "report.txt"; x-extra=kept', 'semi;colon', 'report.txt', 1],
+        ['form-data; name="empty"; filename=""', 'empty', '', 1],
+        ["form-data; name=extended; filename*=UTF-8''report.txt", 'extended', undef, 0],
+        ['form-data; name="broken"; filename="partial.txt" junk', undef, undef, 0],
+    );
+    for my $case (@cases) {
+        my ($disposition, $name, $filename, $is_file) = @$case;
+        my $raw = "--$b\r\nContent-Disposition: $disposition\r\n\r\ndata\r\n--$b--\r\n";
+        my $stream = PAGI::Request::MultipartStream->new(receive => receiver($raw), boundary => $b);
+        my $part = $stream->next->get;
+        is $part->name, $name, "$disposition name";
+        is $part->filename, $filename, 'filename';
+        is $part->is_file, $is_file, 'file classification';
+        is $part->value->get, 'data', 'body stays readable';
+    }
+};
+
 subtest 'yields a field then a file across split chunks' => sub {
     my $half = int(length($body)/2);
     my $s = PAGI::Request::MultipartStream->new(

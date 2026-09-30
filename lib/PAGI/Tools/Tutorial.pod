@@ -354,7 +354,8 @@ uploads. It handles UTF-8 decoding and body parsing for you.
 
 =head2 3.1 PAGI::Request - Request Parsing
 
-L<PAGI::Request> parses HTTP requests and provides convenient accessors for headers, query parameters, cookies, and request bodies.
+L<PAGI::Request> exposes HTTP, WebSocket, and SSE request metadata and parses
+request bodies for HTTP and SSE.
 
 =head3 Creating a Request
 
@@ -362,14 +363,15 @@ L<PAGI::Request> parses HTTP requests and provides convenient accessors for head
 
 Normal Router handlers receive this object directly. Raw PAGI applications
 construct it only when they choose the Request API; construction requires an
-HTTP scope and a receive coderef.
+HTTP, WebSocket, or SSE scope and a receive coderef. WebSocket body methods
+fail before reading protocol events.
 
 =head3 Basic Properties
 
-  $req->method         # HTTP method (GET, POST, etc.)
+  $req->method         # method, or undef on a methodless WebSocket scope
   $req->path           # URL path (decoded UTF-8)
   $req->query_string   # Query string (raw bytes)
-  $req->scheme         # 'http' or 'https'
+  $req->scheme         # 'http'/'https' or WebSocket 'ws'/'wss'
   $req->host           # Host header value
 
 =head3 Headers
@@ -377,11 +379,21 @@ HTTP scope and a receive coderef.
   # Get single header (case-insensitive)
   my $user_agent = $req->header('user-agent') // 'Unknown';
 
-  # Get content type
+  # Normalized media type; use header('Content-Type') for raw bytes.
   my $ct = $req->content_type;
 
-  # Get bearer token from Authorization: Bearer <token>
+  # Get bearer token from Authorization: Bearer <token>.
   my $token = $req->bearer_token;
+
+  # Basic credentials are returned as username/password bytes in list context.
+  my ($username, $password) = $req->basic_auth;
+
+Missing fields and unsupported schemes return undef (or two undefs for Basic).
+Malformed credentials do the same by default. Pass C<raise_on_error =E<gt> 1>
+when the application needs to distinguish malformed presentation from absence;
+then catch only extraction errors and keep verification outside that C<eval>.
+Neither helper verifies credentials or chooses the response. Use
+C<< $req->header_all('Authorization') >> for deliberate raw field handling.
 
 =head3 Query Parameters
 
@@ -604,9 +616,10 @@ A native PAGI application owns all three channels and delegates explicitly:
       await invoke_app($response, $scope, $receive, $send);
   };
 
-C<to_app> exposes the exact Response as an HTTP-only native application. A
-non-HTTP scope fails before emission; controlled WebSocket denial and SSE
-decline use their protocol methods instead. Compose remains the deployed-root
+C<to_app> exposes the exact Response as a native application for HTTP,
+preaccept WebSocket refusal, or prestart SSE refusal. Controlled WebSocket
+denial and SSE decline pass the Response to their protocol methods so the
+helper owns admission and terminal cleanup. Compose remains the deployed-root
 owner for lifespan, errors, response completion, and final HEAD suppression.
 
 File construction validates option shape, not the filesystem. Existence,
@@ -635,7 +648,8 @@ lightweight explicit HEAD route before an expensive streaming GET route.
 
 Use L<PAGI::Pages> when the response is a conventional welcome, HTTP error, or
 redirect rather than an application-owned literal document. Its source-free
-factories return deferred HTTP applications:
+factories return deferred HTTP, WebSocket-refusal, and SSE-refusal
+applications:
 
   use PAGI::Pages qw(welcome gone);
   use PAGI::Response qw(json_response);
@@ -669,6 +683,8 @@ complete rewritten subtree. The same Pages value can be a Router
 C<http_default> directly. A bare Pages root declines lifespan in automatic
 server mode; strict lifespan rejects that decline. Pages does not handle
 lifespan, so use Compose when startup and shutdown ownership is required.
+The application can also be passed directly to C<< $ws->deny >> or
+C<< $sse->decline >>; explicit C<response_for> materialization is optional.
 
 Automatic representation selection negotiates HTML, RFC 9457 problem JSON for
 errors (ordinary JSON for welcome and redirects), and text. Use C<< as =>
@@ -688,6 +704,31 @@ Redirect query preservation is explicit and defaults off:
 Use a Pages instance or subclass explicitly when application presentation
 needs custom synchronous render hooks. Compose has no Pages configuration
 option.
+
+L<PAGI::Auth> constructs results, reads installed context, and formats challenge
+values without teaching a credential parser or provider. A missing token can
+return an ordinary 401 Pages application:
+
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
+
+  return PAGI::Pages->status(401,
+      headers => ['WWW-Authenticate' =>
+          www_authenticate('Bearer', realm => 'api')],
+      detail  => 'An access token is required.',
+  ) unless defined $identity;
+
+An authenticated identity without permission can return a 403 Pages application:
+
+  return PAGI::Pages->status(403,
+      detail => 'This action requires write access.')
+      unless $identity->may('write');
+
+Both values are reusable Pages applications. See
+L<PAGI::Tools::Cookbook/Authentication & Sessions> for Basic, Bearer,
+multi-challenge, WebSocket, SSE, native-app, custom presentation, concealment,
+and explicit login redirect recipes. The cookie-login example is application
+policy; it is not an alternate Auth renderer.
 
 =head1 PART 5: REAL-TIME & STREAMING
 
@@ -714,16 +755,34 @@ L<PAGI::WebSocket> simplifies WebSocket connections:
 
   await $ws->close(1000, 'Goodbye');
 
-Before C<accept>, a concrete finite or Stream Response can deny the handshake:
+Before C<accept>, a concrete Response or another application can deny the
+handshake:
 
   use PAGI::Response qw(text_response);
 
   await $ws->deny(
       text_response('Unauthorized', status => 401),
   );
+  return;
 
-The optional denial extension maps ordinary body events. File is rejected
-before start; without the extension WebSocket uses its policy-close fallback.
+The Response is emitted as an ordinary HTTP response on the original
+WebSocket scope. Every concrete Response is valid here, including File. Every
+refusal target, including buffered Responses, requires the current public Www
+0.6 universal C<pagi.connection> contract so cancellation and terminal cleanup
+remain observable.
+
+Await the Future returned by C<deny>. Cancelling it follows the invoked
+application's normal behavior; the helper does not keep abandoned application
+work running. A buffered Response protects an already-submitted server send
+while stopping later emission. Connection terminal notification separately
+drives helper cleanup. C<connection_state> continues to report only
+C<connecting>, C<connected>, C<closing>, or C<closed>; it does not enter a
+temporary refusal phase.
+
+A bare coderef in this position receives one L<PAGI::Request>; application
+objects such as Pages can be passed directly. See
+L<PAGI::Tools::Cookbook/Refusing WebSocket and SSE with applications> for the
+six complete forms and matching SSE routes.
 
 =head2 5.2 PAGI::SSE - Server-Sent Events Helper
 
@@ -755,6 +814,7 @@ Before C<start>, decline with the same Response vocabulary:
   await $sse->decline(
       problem_response({ title => 'Not Found', status => 404 }),
   );
+  return;
 
 Denial/decline start-send settlement commits the protocol response slot; it is
 server acceptance/settlement, not proof of client delivery. Pending body sends
@@ -762,6 +822,15 @@ at disconnect resolve normally under PAGI 0.002007. Cleanup follows protocol sta
 and disconnect watchers rather than an invented send failure. HTTP Stream is a
 finite request's body delivery mechanism; WebSocket and live SSE retain their
 own connection, event, keepalive, and reconnection lifecycles.
+
+SSE accepts the same Request-handler and application-object forms as
+WebSocket. It may decline with ordinary HTTP 200 or 204 as well as error
+statuses; see
+L<PAGI::Tools::Cookbook/Refusing WebSocket and SSE with applications>.
+Await C<decline> under the same ordinary cancellation rules. Its
+C<connection_state> values remain C<pending>, C<started>, C<closing>, and
+C<closed>; there is no temporary decline phase. After terminal notification,
+normal closed-helper behavior applies to later data sends.
 
 =head1 PART 6: MIDDLEWARE
 
@@ -1101,7 +1170,10 @@ The wrapper may inspect C<$error> to choose
 safe response fields; the Response factory does not consume the exception
 implicitly.
 C<on_error> is awaited reporting, not rendering; reporter failure is contained.
-Before response start, ErrorHandler reports and renders. After start it reports,
+It receives C<($error, $scope)>.
+Before response start, ErrorHandler reports and renders, then re-raises a
+server error (500 or above) so the server logs it; a handled 4xx exception is
+not re-raised. After start it reports,
 emits no replacement response, and rethrows the original exception so the
 server can abort the incomplete stream. Built-in bodies are byte-correct UTF-8
 and carry C<Cache-Control: no-store>.

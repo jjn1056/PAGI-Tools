@@ -214,9 +214,12 @@ subtest 'selected silent targets become production-safe 500 through Test Client'
             $label, $response, 500, 'Internal Server Error',
             'text/html; charset=utf-8',
         );
+        # Compose re-raises the guard failure; Test::Client, standing in for
+        # the server, reports it.
         is(scalar @warnings, 1, "$label is reported once");
-        like($warnings[0], qr/^PAGI application error: HTTP application completed /,
-            "$label reports the guard failure");
+        like($warnings[0],
+            qr/^exception after response completed: HTTP application completed /,
+            "$label guard failure reaches the server-side reporter");
     }
 };
 
@@ -299,17 +302,17 @@ subtest 'invalid PAGI_ENV is contained only when an error path consults it' => s
     ])->to_app;
     my ($throw_events, $throw_warnings, $throw_error)
         = run_request($throwing, scope(path => '/explode'));
-    is($throw_error, undef, 'throwing selected app remains contained');
+    is($throw_error, "native application failed\n",
+        'throwing selected app is rendered, then re-raised to the server');
     assert_pages_error(
         'invalid environment throwing native app', $throw_events, 500,
         'Internal Server Error', 'text/html; charset=utf-8',
     );
-    is(scalar @$throw_warnings, 2,
-        'application and resolver failures are both reported');
-    like($throw_warnings->[0], qr/native application failed/,
-        'the native application failure is reported first');
-    like($throw_warnings->[1], qr/Invalid PAGI_ENV 'invalid-compose-environment'/,
-        'the resolver failure is reported second');
+    is(scalar @$throw_warnings, 1,
+        'only the configuration problem is warned by Compose');
+    like($throw_warnings->[0],
+        qr/^PAGI ErrorHandler could not resolve development mode: Invalid PAGI_ENV 'invalid-compose-environment'/,
+        'the resolver failure is a configuration diagnostic');
 
     my $complete = compose(routes => [route('/complete' => as_app_object(sub {
         my ($request_scope, $receive, $send) = @_;
@@ -339,9 +342,7 @@ subtest 'post-start incomplete response is reported and rethrown without replace
     is(scalar @{starts($events)}, 1, 'only the application response start is emitted');
     is(starts($events)->[0]{status}, 200, 'the original start remains unchanged');
     is(bodies($events), [], 'no replacement response body is emitted');
-    is(scalar @$warnings, 1, 'post-start incompletion is reported once');
-    like($warnings->[0], qr/^PAGI application error: HTTP application completed after response start/,
-        'internal reporter receives the typed guard error');
+    is($warnings, [], 'Compose leaves reporting the rethrown error to the server');
 
     my (@client_warnings, $client_error);
     {
@@ -357,8 +358,8 @@ subtest 'post-start incomplete response is reported and rethrown without replace
     isa_ok($client_error, ['PAGI::Exception::IncompleteResponse']);
     is($client_error->stage, 'after_start',
         'Test Client receives the rethrown post-start exception');
-    is(scalar @client_warnings, 1,
-        'Test Client path reports the post-start failure once');
+    is(\@client_warnings, [],
+        'Test Client raises the post-start failure without Compose also warning');
 };
 
 subtest 'body before start becomes one clean automatic 500 response' => sub {
@@ -372,7 +373,9 @@ subtest 'body before start becomes one clean automatic 500 response' => sub {
     }))])->to_app;
     my ($events, $warnings, $error) = run_request($app, scope(path => '/invalid'));
 
-    is($error, undef, 'automatic ErrorHandler contains the guard exception');
+    isa_ok($error, ['PAGI::Exception::IncompleteResponse']);
+    like("$error", qr/^HTTP application sent a response body before response start/,
+        'automatic ErrorHandler renders a 500, then re-raises the guard exception');
     is([map { $_->{type} } @$events], [
         'http.response.start', 'http.response.body',
     ], 'wire receives only the replacement response pair');
@@ -380,9 +383,7 @@ subtest 'body before start becomes one clean automatic 500 response' => sub {
         'body-before-start guard failure', $events, 500,
         'Internal Server Error', 'text/html; charset=utf-8',
     );
-    is(scalar @$warnings, 1, 'body-before-start failure is reported once');
-    like($warnings->[0], qr/^PAGI application error: HTTP application sent a response body before response start/,
-        'internal reporter receives the typed guard diagnostic');
+    is($warnings, [], 'Compose itself reports nothing');
 };
 
 done_testing;

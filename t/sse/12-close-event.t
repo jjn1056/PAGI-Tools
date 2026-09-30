@@ -6,19 +6,23 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope send_to);
 
 # Step 4 of the sse.close rollout: the framework close() sends the sse.close
 # send-event (the server, merged separately, acts on it), carries an optional
-# server-side reason, surfaces that reason to on_close, and wakes a parked run()
-# so a close from deep in a helper actually ends the stream.
+# server-side reason (on_close sees the connection's terminal outcome, not that
+# reason), and wakes a parked run() so a close from deep in a helper actually
+# ends the stream.
 
 sub make_sse {
     my ($sent) = @_;
+    my $scope = sse_scope();
     return PAGI::SSE->new(
-        { type => 'sse' },
+        $scope,
         sub { Future->new },                         # receive: never resolves
-        sub { push @$sent, $_[0]; Future->done },    # send: record events
+        send_to($scope, $sent),                      # send: record events
     );
 }
 
@@ -44,16 +48,17 @@ subtest 'close() without a reason omits the reason field' => sub {
     ok(!exists $ev->{reason}, 'no reason key when none was given');
 };
 
-subtest 'on_close receives the close reason' => sub {
+subtest 'on_close sees a clean completion, not the close reason' => sub {
     my @sent;
     my $sse = make_sse(\@sent);
     $sse->start->get;
 
-    my $got;
-    $sse->on_close(sub { my ($s, $reason) = @_; $got = $reason });
+    my ($called, $got);
+    $sse->on_close(sub { my ($s, $reason) = @_; $called = 1; $got = $reason });
     $sse->close(reason => 'quota_exhausted')->get;
 
-    is($got, 'quota_exhausted', 'on_close was given the close reason');
+    ok($called, 'on_close ran once the stream completed');
+    is($got, undef, 'the close reason is server-side metadata; on_close sees clean completion');
 };
 
 subtest 'run() returns when close() is called from elsewhere' => sub {
@@ -61,7 +66,7 @@ subtest 'run() returns when close() is called from elsewhere' => sub {
     my $sse = make_sse(\@sent);
     $sse->start->get;
 
-    my $run_f = $sse->run;                  # parks awaiting receive (never resolves)
+    my $run_f = $sse->run;                  # parks until the connection ends
     ok(!$run_f->is_ready, 'run() is parked');
 
     $sse->close(reason => 'app_closed')->get;   # close from "a helper"

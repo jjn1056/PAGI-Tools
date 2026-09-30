@@ -7,7 +7,9 @@ use Future;
 use JSON::MaybeXS;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::WebSocket;
+use PAGITest::Connected qw(ws_scope);
 
 # Helper to create connected WebSocket
 sub create_ws {
@@ -15,7 +17,7 @@ sub create_ws {
     my @sent;
     $send_cb //= sub { push @sent, $_[0]; Future->done };
 
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     my $receive = sub { Future->done({ type => 'websocket.connect' }) };
 
     my $ws = PAGI::WebSocket->new($scope, $receive, $send_cb);

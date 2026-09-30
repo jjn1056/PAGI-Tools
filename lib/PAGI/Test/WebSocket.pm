@@ -7,6 +7,7 @@ use Future;
 use Carp qw(croak);
 
 use PAGI::Utils::_SendValidation;
+use PAGI::Test::Response;
 
 
 sub new {
@@ -15,6 +16,8 @@ sub new {
     croak "app is required" unless $args{app};
     croak "scope is required" unless $args{scope};
 
+    croak "close_mode must be cooperative or manual"
+        if defined $args{close_mode} && $args{close_mode} !~ /\A(?:cooperative|manual)\z/;
     return bless {
         app         => $args{app},
         scope       => $args{scope},
@@ -22,10 +25,13 @@ sub new {
         recv_queue  => [],      # Messages from app -> test
         closed      => 0,
         accepted    => 0,
+        close_mode  => $args{close_mode} // 'cooperative',
         close_code  => undef,
         close_reason => '',
+        refused     => 0,
+        response    => PAGI::Test::Response->new(events => []),
+        _end_event  => undef,
         _pending_receives => [],  # Pending receive futures
-        _disconnect_delivered => 0,
     }, $class;
 }
 
@@ -33,11 +39,8 @@ sub _start {
     my ($self) = @_;
 
     # extensions is the SAME hashref PAGI::Test::Client advertised on the
-    # scope's `extensions` key -- one source of truth, not two independently
-    # hardcoded lists that can drift (B10). PAGI::Test::Client always sets
-    # this to { 'websocket.http.response' => {} }; the // {} guards direct
-    # construction of this class (bypassing Test::Client) with a scope that
-    # omits the key.
+    # scope. Ordinary HTTP refusal events are core WWW 0.6 behavior and do
+    # not require an extension.
     my $sv = PAGI::Utils::_SendValidation->new(
         scope_type => 'websocket',
         extensions => $self->{scope}{extensions} // {},
@@ -45,6 +48,10 @@ sub _start {
 
     # Create receive coderef for the app
     my $receive = async sub {
+        if ($self->{_end_event}) {
+            return { %{$self->{_end_event}} };
+        }
+
         # First call returns websocket.connect
         if (!$self->{_connect_sent}) {
             $self->{_connect_sent} = 1;
@@ -54,19 +61,6 @@ sub _start {
         # Return queued message if available
         if (@{$self->{send_queue}}) {
             return shift @{$self->{send_queue}};
-        }
-
-        # Deliver the synthesized disconnect exactly once (truthful code and
-        # reason). Any receive after that stays pending forever -- matching
-        # a real transport that has gone silent; a hang is the correct
-        # diagnosis for an app that keeps calling receive() past disconnect.
-        if ($self->{closed} && !$self->{_disconnect_delivered}) {
-            $self->{_disconnect_delivered} = 1;
-            return {
-                type   => 'websocket.disconnect',
-                code   => $self->{close_code} // 1000,
-                reason => $self->{close_reason} // 'client_closed',
-            };
         }
 
         # Create a future that will be resolved when data arrives
@@ -82,6 +76,10 @@ sub _start {
     my $send = async sub {
         my ($event) = @_;
 
+        my $conn = $self->{scope}{'pagi.connection'};
+        local $conn->{_defer_notifications} = 1;
+        return if $conn && defined $conn->disconnect_reason && !$self->{_app_close};
+
         if (my $err = $sv->check($event)) {
             die $err->message . "\n";
         }
@@ -90,26 +88,39 @@ sub _start {
 
         if ($type eq 'websocket.accept') {
             $self->{accepted} = 1;
+            $conn->_mark_response_started if $conn;
         }
         elsif ($type eq 'websocket.send') {
             # If the peer (the test side) already closed -- not the app's
             # own websocket.close, which sv already rejected above -- a real
             # server just drops writes to a dead socket: tolerated no-op,
             # nothing reaches the client's readable stream.
-            push @{$self->{recv_queue}}, $event unless $self->{closed};
+            push @{$self->{recv_queue}}, $event unless $self->{closed} || $self->{_peer_close};
         }
         elsif ($type eq 'websocket.close') {
-            $self->{closed} = 1;
-            $self->{close_code} = $event->{code} // 1000;
-            $self->{close_reason} = $event->{reason} // '';
+            $self->{_app_close} = 1;
+            # The first app Close may race a peer Close already handled by
+            # the test transport. Validation still records the terminal send.
+            if ($conn->is_connected && !$self->{_peer_close}) {
+                $self->{close_code} = $event->{code} // 1000;
+                $self->{close_reason} = $event->{reason} // '';
+                if ($self->{close_mode} eq 'cooperative') {
+                    $self->close($self->{close_code}, $self->{close_reason});
+                }
+            }
         }
-        elsif ($type eq 'websocket.http.response.start' || $type eq 'websocket.http.response.body') {
-            # Extension denial (websocket.http.response extension): the app
-            # rejects the handshake with a real HTTP response instead of a
-            # close frame. No RFC6455 close code applies here; the
-            # connection is closed once the denial's terminal body chunk
-            # lands (sv tracks completion for us).
-            $self->{closed} = 1 if $sv->complete;
+        elsif ($type =~ /^http\.response\./) {
+            $self->{response}->_capture_event($event);
+            $conn->_mark_response_started
+                if $conn && $type eq 'http.response.start';
+
+            if ($sv->complete) {
+                $self->{closed} = 1;
+                $self->{refused} = 1;
+                $self->{_end_event} = { type => 'http.disconnect' };
+                $conn->_mark_complete if $conn;
+                $self->_wake_pending_receives;
+            }
         }
 
         return;
@@ -120,16 +131,36 @@ sub _start {
 
     # Wait for acceptance (the first two awaits in the app should complete immediately)
     # This is a bit hacky but works: we need to let the app run until it accepts
-    $self->_pump_app;
+    $self->pump;
 
-    unless ($self->{accepted}) {
-        # A denial (portable close-before-accept, or a completed extension
-        # denial) is not an error -- it moves straight to a legal terminal
-        # state without ever accepting. Only an app that neither accepted
-        # nor reached a legal terminal state is a real bug.
-        croak "WebSocket connection not accepted" unless $sv->complete;
+    $self->{app_future}->on_ready(sub {
+        my ($future) = @_;
+        my $conn = $self->{scope}{'pagi.connection'};
+        # Validator completion precedes body capture; a failed refusal read
+        # is not delivery. Only an app Close or peer Close may keep an active
+        # socket waiting for the manual transport outcome after app return.
+        if ($conn->is_connected && !$self->{_app_close} && !$self->{_peer_close}) {
+            my $detail = $future->is_failed ? scalar($future->failure) : undef;
+            $self->_transport_closed(code => 1011, reason => 'server_error', detail => $detail);
+        }
+        $conn->_deliver_notifications;
+    });
+    $self->pump;
+
+    unless ($self->{accepted} || $self->{refused}) {
+        # Surface an application/send failure instead of replacing it with a
+        # generic handshake error.
+        $self->{app_future}->get if $self->{app_future}->is_ready;
+        croak "WebSocket connection not accepted";
     }
 
+    return $self;
+}
+
+sub pump {
+    my ($self) = @_;
+    $self->_pump_app;
+    $self->{scope}{'pagi.connection'}->_deliver_notifications;
     return $self;
 }
 
@@ -144,19 +175,18 @@ sub _pump_app {
         $future->done($event);
     }
 
-    # If closed, resolve exactly one pending receive with the synthesized
-    # disconnect (truthful code and reason). Any later receive stays
-    # pending forever -- see the exactly-once contract on the receive
-    # coderef in _start.
-    if ($self->{closed} && !$self->{_disconnect_delivered} && @{$self->{_pending_receives}}) {
-        my $future = shift @{$self->{_pending_receives}};
-        $self->{_disconnect_delivered} = 1;
-        $future->done({
-            type   => 'websocket.disconnect',
-            code   => $self->{close_code} // 1000,
-            reason => $self->{close_reason} // 'client_closed',
-        });
+    $self->_wake_pending_receives if $self->{_end_event};
+}
+
+sub _wake_pending_receives {
+    my ($self) = @_;
+    return unless $self->{_end_event};
+
+    while (my $future = shift @{$self->{_pending_receives}}) {
+        $future->done({ %{$self->{_end_event}} }) unless $future->is_ready;
     }
+
+    return;
 }
 
 sub send_text {
@@ -170,7 +200,7 @@ sub send_text {
     };
 
     # Pump the app to process this message
-    $self->_pump_app;
+    $self->pump;
 
     return $self;
 }
@@ -186,7 +216,7 @@ sub send_bytes {
     };
 
     # Pump the app to process this message
-    $self->_pump_app;
+    $self->pump;
 
     return $self;
 }
@@ -202,6 +232,7 @@ sub send_json {
 
 sub receive_text {
     my ($self, $timeout) = @_;
+    $self->pump;
     $timeout //= 5;
 
     # Check if we have a text message already waiting
@@ -222,6 +253,7 @@ sub receive_text {
 
 sub receive_bytes {
     my ($self, $timeout) = @_;
+    $self->pump;
     $timeout //= 5;
 
     # Check if we have a bytes message waiting
@@ -251,32 +283,84 @@ sub receive_json {
 }
 
 sub close {
-    my ($self, $code, $reason) = @_;
-    return $self->_deliver_disconnect($code // 1000, $reason // 'client_closed');
+    my ($self, @args) = @_;
+    my $conn = $self->{scope}{'pagi.connection'};
+    return $self->pump unless $conn->is_connected;
+    return $self->pump if $self->{_peer_close};
+
+    # No arguments is an ordinary 1000 Close; explicit undef models an
+    # empty Close payload, whose peer metadata is 1005/undef.
+    my ($code, $reason) = @args ? @args : (1000, '');
+    $reason = defined $code ? ($reason // '') : undef;
+    $code //= 1005;
+    $self->{_peer_close} = 1;
+    $conn->_set_peer_close($code, $reason);
+    $self->{close_code} = $code;
+    $self->{close_reason} = $reason;
+    $self->{_end_event} = {
+        type => 'websocket.disconnect', code => $code,
+        (defined $reason ? (reason => $reason) : ()),
+    };
+    # A peer-initiated Close is answered by the test server automatically.
+    # Manual mode holds only transport completion for explicit resolution.
+    return $self->complete_close if $self->{close_mode} eq 'cooperative';
+    $self->_wake_pending_receives;
+    return $self->pump;
+}
+
+sub complete_close {
+    my ($self) = @_;
+    my $conn = $self->{scope}{'pagi.connection'};
+    return $self->pump unless $conn->is_connected;
+    croak "Cannot complete closing handshake without a peer Close" unless $self->{_peer_close};
+    $self->{closed} = 1;
+    $conn->_mark_complete;
+    $self->_wake_pending_receives;
+    return $self->pump;
+}
+
+sub simulate_close_timeout {
+    my ($self) = @_;
+    return $self->pump unless $self->{scope}{'pagi.connection'}->is_connected;
+    croak "Close timeout requires an app Close awaiting a peer" unless $self->{_app_close} && !$self->{_peer_close};
+    return $self->_transport_closed(reason => 'close_timeout');
 }
 
 sub simulate_abnormal_close {
     my ($self, %opts) = @_;
-    return $self->_deliver_disconnect($opts{code} // 1006, $opts{reason} // 'client_closed');
+    croak "close_incomplete requires a peer Close"
+        if ($opts{reason} // '') eq 'close_incomplete'
+            && $self->{scope}{'pagi.connection'}->is_connected
+            && !$self->{_peer_close};
+    return $self->_transport_closed(%opts);
 }
 
-# Shared by close() and simulate_abnormal_close(): marks the connection
-# closed with the given code/reason and lets the app observe it exactly
-# once, whichever way it's currently waiting (see the exactly-once
-# contract in _start/_pump_app).
-sub _deliver_disconnect {
-    my ($self, $code, $reason) = @_;
-
-    return $self if $self->{closed};
-
+sub _transport_closed {
+    my ($self, %opts) = @_;
+    return $self->pump if $self->{closed};
     $self->{closed} = 1;
-    $self->{close_code} = $code;
-    $self->{close_reason} = $reason;
+    my $conn = $self->{scope}{'pagi.connection'};
+    # This accessor is peer data, independent of a server-generated event.
+    $conn->_set_peer_close(1006, undef) unless defined $conn->close_code;
+    $conn->_mark_disconnected($opts{reason} // 'client_closed', $opts{detail})
+        if $conn->is_connected;
+    my $reason = $conn->disconnect_reason // $opts{reason} // 'client_closed';
+    unless ($self->{_peer_close}) {
+        $self->{close_code} = $opts{code} // 1006;
+        $self->{close_reason} = $reason;
+        $self->{_end_event} = {
+            type => 'websocket.disconnect', code => $self->{close_code}, reason => $reason,
+        };
+    }
+    $self->_wake_pending_receives;
+    return $self->pump;
+}
 
-    # Let the app process the disconnect if it's already waiting on receive
-    $self->_pump_app;
+sub refused { return $_[0]->{refused} ? 1 : 0 }
 
-    return $self;
+sub response {
+    my ($self) = @_;
+    return $self->{refused} ? $self->{response} : undef;
 }
 
 sub close_code {
@@ -347,21 +431,14 @@ L<PAGI::Utils::_SendValidation> and fails the returned Future (the app's C<await
 $send-E<gt>(...)> dies) for anything a real server would reject -- a
 C<websocket.send>/C<websocket.keepalive> before C<websocket.accept>, any
 event once C<websocket.close> has been sent, a second C<websocket.accept>,
-or a C<websocket.http.response.*> event out of place. A rejected event is
+or a C<http.response.*> refusal event out of place. A rejected event is
 never appended to the client's readable stream. There is no lenient mode --
 see L<PAGI::Utils::_SendValidation/RULES> for the exact websocket rule set.
 
-C<websocket.close> before C<websocket.accept> is a legal portable denial
-(no croak; the connection object reports the closed state -- see
-L</close_code>/L</close_reason>). The C<websocket.http.response> extension
-denial (C<websocket.http.response.start>/C<.body>) is recognized whenever the
-scope advertises it -- L<PAGI::Test::Client> always does (see
-L<PAGI::Test::Client/SCOPE EXTENSIONS>), so in practice the app can reject
-the handshake with a full HTTP response instead of a close frame without
-opting into anything further. A completed extension denial likewise sets
-L</is_closed> true without a croak, but -- unlike a portable denial -- does
-B<not> populate L</close_code> (there is no RFC 6455 close code for an HTTP
-response).
+C<websocket.close> before C<websocket.accept> is rejected. Refuse a handshake
+with ordinary C<http.response.start> and C<http.response.body> events.
+A completed refusal sets C<refused> and C<is_closed>; C<response> returns the
+captured L<PAGI::Test::Response>. It has no WebSocket Close metadata.
 
 An app that sends C<websocket.send> after the peer (the test side, via
 L</close> or L</simulate_abnormal_close>) has already closed sees the write
@@ -465,26 +542,51 @@ test against L<PAGI::Server> and a real WebSocket client.
     $ws->close($code);
     $ws->close($code, $reason);
 
-Closes the WebSocket connection from the test (peer) side. Default close
-code is 1000 (normal closure); default reason is C<client_closed>. Delivers
-a truthful C<websocket.disconnect> (carrying this code and reason) to the
-app exactly once -- whether the app is already waiting on C<receive> or
-calls it later. Idempotent: a second C<close> call is a no-op. See
-L</simulate_abnormal_close> to inject an abnormal close instead.
+Supplies a Close from the test peer. With no arguments the code is 1000
+and reason is an empty string. C<close(undef, undef)> models an empty Close
+payload (peer metadata C<1005>/C<undef>). Pending and later application
+receives report the Close. Repeated peer Close calls are harmless.
+
+=head2 Close outcome controls
+
+    my $ws = $client->websocket('/ws', close_mode => 'manual');
+    $ws->close(1008, 'peer policy');
+    $ws->complete_close;
+
+The default C<close_mode> is C<cooperative>: the simulated peer echoes an
+application Close and transport completion follows immediately. C<manual>
+holds closure open so a test can supply peer Close and transport outcomes
+separately. An application Close alone leaves the connection active and its
+peer metadata undefined. C<close> supplies peer metadata; the simulated
+server answers a peer-initiated Close automatically. C<complete_close>
+requires a peer Close and completes the transport cleanly.
+
+C<simulate_close_timeout> ends an application Close waiting for a peer with
+C<close_timeout>, peer code 1006 and undefined peer reason. It requires an
+application Close with no peer reply. No real timer runs.
 
 =head2 simulate_abnormal_close
 
-    $ws->simulate_abnormal_close;
-    $ws->simulate_abnormal_close(code => 1006, reason => 'keepalive_timeout');
+    $ws->simulate_abnormal_close(reason => 'read_error');
+    $ws->simulate_abnormal_close(reason => 'close_incomplete');
 
-Simulates the transport disappearing abruptly (a TCP reset, a keepalive
-timeout, or similar), rather than the test cleanly closing the connection.
-Mechanically identical to L</close> -- the app sees exactly one
-C<websocket.disconnect> carrying the given code and reason -- but defaults
-C<code> to C<1006> (RFC 6455 "abnormal closure") instead of C<1000>, and
-its default C<reason> is likewise C<client_closed>. This is the only way to
-exercise an app's handling of a specific abnormal-close reason token
-through this test double. Idempotent, like C<close>.
+Models a transport failure, preserving any observed peer Close metadata;
+without one the connection object reports 1006 and an undefined peer reason.
+Use C<close_incomplete> after a peer Close when transport closure cannot
+complete. The default reason is C<client_closed>. The optional C<code>
+controls a server-generated disconnect event, not peer metadata. Outcomes
+are immutable after completion. These controls model outcomes, not sockets,
+buffering, deadlines, or server configuration.
+
+=head2 pump
+
+    $ws->pump;
+
+Drains pending receives and deferred terminal notifications. Public client
+operations and application Future completion do this automatically. If a test
+resolves an external Future and the app then parks again after a terminal
+send, call C<pump> to deliver its queued notifications. Terminal facts are
+already readable before pumping. This in-process client has no event loop.
 
 =head2 close_code
 
@@ -538,9 +640,9 @@ STRICTNESS>), or the app via C<websocket.close>
 
 =back
 
-A denial -- C<websocket.close> before C<websocket.accept>, or a completed
-C<websocket.http.response.*> extension denial -- ends the connection
-without ever reaching step 2; see L</SEND STRICTNESS>.
+A refusal uses ordinary C<http.response.*> events and is exposed through
+C<refused> and C<response>. A C<websocket.close> before acceptance is illegal.
+After a completed refusal, pending and later receives report C<http.disconnect>.
 
 =head1 EXAMPLE
 

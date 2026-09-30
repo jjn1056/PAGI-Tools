@@ -6,7 +6,9 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope send_to);
 
 # Regression for S2: PAGI::SSE::close() is a synchronous method that drives the
 # async _run_close_callbacks via ->get (SSE.pm:550). An on_close callback that
@@ -17,7 +19,9 @@ use PAGI::SSE;
 # the public close() uses ->get. close() must await the callbacks too.
 
 subtest 'close() awaits a suspending async on_close instead of dying' => sub {
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, sub { Future->done });
+    my @sent;
+    my $scope = sse_scope();
+    my $sse = PAGI::SSE->new($scope, sub {}, send_to($scope, \@sent));
     $sse->start->get;
 
     my $gate = Future->new;          # pending: the async I/O the callback awaits
@@ -44,7 +48,6 @@ subtest 'close() awaits a suspending async on_close instead of dying' => sub {
 # flow. The app uses the forward-looking idiom `await $sse->close`.
 subtest 'an SSE app that closes after streaming, with async cleanup, does not crash' => sub {
     my @sent;
-    my $send    = sub { push @sent, $_[0]; Future->done };
     my $receive = sub { Future->new };   # client never disconnects on its own
 
     my $gate        = Future->new;       # the async cleanup's I/O
@@ -59,7 +62,8 @@ subtest 'an SSE app that closes after streaming, with async cleanup, does not cr
         await $sse->close;               # app is done; close the stream
     };
 
-    my $app_f = $app->({ type => 'sse' }, $receive, $send);
+    my $scope = sse_scope();
+    my $app_f = $app->($scope, $receive, send_to($scope, \@sent));
 
     # Release the cleanup's I/O so a correctly-awaiting close() can finish.
     $gate->done;

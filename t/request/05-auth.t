@@ -69,4 +69,22 @@ subtest 'basic_auth missing' => sub {
     is($pass, undef, 'no pass');
 };
 
+subtest 'auth shortcuts delegate singleton and error handling to Headers' => sub {
+    my $scope = {
+        type    => 'http',
+        method  => 'GET',
+        headers => [
+            ['Authorization', 'Bearer first'],
+            ['authorization', 'Bearer second'],
+        ],
+    };
+    my $req = PAGI::Request->new($scope, $no_body);
+
+    is $req->bearer_token, undef, 'duplicate Authorization fields are not selected';
+    like dies { $req->bearer_token(raise_on_error => 1) }, qr/single|duplicate|multiple/i,
+        'raise_on_error reaches the Headers helper';
+    like dies { $req->basic_auth(unknown => 1) }, qr/unknown option/i,
+        'argument validation reaches the Headers helper';
+};
+
 done_testing;

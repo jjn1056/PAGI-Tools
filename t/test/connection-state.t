@@ -70,6 +70,43 @@ sub still_pending_after {
     is $future->get, 'client_closed', 'resolves with the disconnect reason';
 }
 
+subtest 'completion preserves WebSocket Close metadata and terminal outcome' => sub {
+    my $http = PAGI::Test::ConnectionState->new;
+    $http->_mark_complete;
+    is_deeply [$http->close_code, $http->close_reason], [undef, undef],
+        'ordinary non-WebSocket completion has no Close metadata';
+
+    my $peer = PAGI::Test::ConnectionState->new(websocket => 1);
+    $peer->_set_peer_close(1000, 'bye');
+    $peer->_mark_complete;
+    is_deeply [$peer->close_code, $peer->close_reason], [1000, 'bye'],
+        'supplied peer Close survives clean completion';
+
+    my $c = PAGI::Test::ConnectionState->new(websocket => 1);
+    my ($complete, $end) = (0, 0);
+    $c->on_complete(sub { ++$complete });
+    $c->on_end(sub { ++$end });
+    $c->_mark_disconnected('client_closed');
+    $c->_mark_complete;
+    $c->_mark_complete;
+    is_deeply [$c->close_code, $c->close_reason, $c->disconnect_reason,
+               $c->response_complete ? 1 : 0, $complete, $end],
+              [1006, undef, 'client_closed', 0, 0, 1],
+              'late completion cannot replace abnormal termination';
+
+    my $refusal = PAGI::Test::ConnectionState->new(websocket => 1);
+    my ($refusal_complete, $refusal_end) = (0, 0);
+    $refusal->on_complete(sub { ++$refusal_complete });
+    $refusal->on_end(sub { ++$refusal_end });
+    $refusal->_mark_complete;
+    $refusal->_mark_complete;
+    is_deeply [$refusal->close_code, $refusal->close_reason,
+               $refusal->disconnect_reason, $refusal->response_complete,
+               $refusal_complete, $refusal_end],
+              [1006, undef, undef, 1, 1, 1],
+              'WebSocket completion records no-peer metadata and notifies once';
+};
+
 # (b) requested after an abnormal disconnect already happened: an
 # already-resolved Future.
 {
@@ -129,7 +166,7 @@ sub still_pending_after {
     my $c = PAGI::Test::ConnectionState->new;
     ok defined $c->response_complete, 'defined before the response starts (this mock always tracks completion)';
     is $c->response_complete, 0, '0 before the response is complete';
-    $c->_mark_response_complete;
+    $c->_mark_complete;
     ok defined $c->response_complete, 'still defined once complete';
     is $c->response_complete, 1, '1 once the response is complete';
 }
@@ -140,5 +177,46 @@ sub still_pending_after {
     ok defined $c->response_complete, 'defined while only started, not yet complete';
     is $c->response_complete, 0, 'still 0 after response_started alone (streaming, not complete)';
 }
+
+subtest 'disconnect_detail and two-argument on_disconnect' => sub {
+    my $cs = PAGI::Test::ConnectionState->new;
+    my @got;
+    $cs->on_disconnect(sub { push @got, [@_] });
+    is $cs->disconnect_detail, undef, 'undef while active';
+    $cs->_mark_disconnected('keepalive_timeout', 'no pong within 10s');
+    is $cs->disconnect_detail, 'no pong within 10s', 'accessor';
+    is_deeply \@got, [['keepalive_timeout', 'no pong within 10s']],
+        'callback arguments';
+    my @late;
+    $cs->on_disconnect(sub { push @late, [@_] });
+    is_deeply \@late, [['keepalive_timeout', 'no pong within 10s']],
+        'late registration';
+};
+
+subtest 'abort: hook once, app_abort with detail, idempotent, no-op after completion' => sub {
+    my @hook;
+    my $cs = PAGI::Test::ConnectionState->new(on_abort => sub { push @hook, [@_] });
+    my @cb;
+    $cs->on_disconnect(sub { push @cb, [@_] });
+    my $f = $cs->disconnect_future;
+    $cs->abort('quota');
+    is scalar @hook, 1, 'hook once';
+    is $hook[0][1], 'quota', 'hook detail';
+    is $cs->disconnect_reason, 'app_abort', 'token';
+    is $cs->disconnect_detail, 'quota', 'detail';
+    is $cs->response_complete, 0, 'abnormal terminal is not response complete';
+    ok $f->is_ready, 'future resolved';
+    is_deeply \@cb, [['app_abort', 'quota']], 'callback';
+    $cs->abort('again');
+    is scalar @hook, 1, 'idempotent';
+
+    my $done = PAGI::Test::ConnectionState->new(on_abort => sub { push @hook, 'never' });
+    $done->_mark_complete;
+    $done->abort('late');
+    is scalar @hook, 1, 'no hook after completion';
+    is $done->response_complete, 1, 'completion preserved';
+    is $done->disconnect_reason, undef, 'clean outcome preserved';
+    is $done->disconnect_detail, undef, 'clean completion has no detail';
+};
 
 done_testing;

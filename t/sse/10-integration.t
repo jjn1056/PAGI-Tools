@@ -6,26 +6,21 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
 use PAGI::Stash;
+use PAGITest::Connected qw(sse_scope);
 
 subtest 'complete SSE session' => sub {
-    my @events = (
-        { type => 'sse.disconnect' },
-    );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
-
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $scope = {
-        type    => 'sse',
+    my $scope = sse_scope(
         path    => '/events',
         headers => [['last-event-id', '5']],
-    };
+    );
 
-    my $sse = PAGI::SSE->new($scope, $receive, $send);
+    my $sse = PAGI::SSE->new($scope, sub {}, $send);
 
     # Check last event ID
     is($sse->last_event_id, '5', 'got last event id');
@@ -45,7 +40,9 @@ subtest 'complete SSE session' => sub {
     $sse->send_json({ type => 'hello' })->get;
 
     # Run until disconnect
-    $sse->run->get;
+    my $run = $sse->run;
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+    $run->get;
 
     ok($cleanup_ran, 'cleanup ran');
     ok($sse->is_closed, 'connection closed');
@@ -57,16 +54,12 @@ subtest 'complete SSE session' => sub {
 };
 
 subtest 'notification stream pattern' => sub {
-    my @events = ({ type => 'sse.disconnect' });
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
-
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $scope = { type => 'sse', path => '/notifications' };
+    my $scope = sse_scope(path => '/notifications');
 
-    my $sse = PAGI::SSE->new($scope, $receive, $send);
+    my $sse = PAGI::SSE->new($scope, sub {}, $send);
 
     # Simulate subscriber registration
     my $subscriber_id;
@@ -88,7 +81,9 @@ subtest 'notification stream pattern' => sub {
     }
 
     # Client disconnects
-    $sse->run->get;
+    my $run = $sse->run;
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+    $run->get;
 
     ok($unsubscribed, 'unsubscribe callback ran');
 

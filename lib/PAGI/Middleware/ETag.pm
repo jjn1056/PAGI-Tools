@@ -5,6 +5,7 @@ use warnings;
 use parent 'PAGI::Middleware';
 use Digest::MD5 qw(md5_hex);
 use PAGI::Middleware::BufferedResponse qw(buffer_whole_response);
+use PAGI::Utils::Headers qw(format_etag);
 
 =head1 NAME
 
@@ -70,11 +71,7 @@ sub wrap {
 sub _generate_etag {
     my ($self, $body) = @_;
 
-    my $hash = md5_hex($body);
-    if ($self->{weak}) {
-        return qq{W/"$hash"};
-    }
-    return qq{"$hash"};
+    return format_etag(md5_hex($body), weak => $self->{weak} ? 1 : 0);
 }
 
 1;

@@ -6,12 +6,14 @@ use warnings;
 use Encode qw(encode);
 use File::Find qw(find);
 use Future;
+use Future::AsyncAwait;
 use IPC::Open3 qw(open3);
 use JSON::MaybeXS qw(decode_json);
 use Symbol qw(gensym);
 use Test2::V0;
 
 use lib 'lib';
+use lib 't/lib';
 
 use PAGI::App::File;
 use PAGI::Middleware::CORS;
@@ -22,6 +24,7 @@ use PAGI::Routing qw(route);
 use PAGI::SSE;
 use PAGI::Utils qw(app_path invoke_app);
 use PAGI::WebSocket;
+use PAGITest::RefusalHarness;
 
 sub http_scope {
     my (%changes) = @_;
@@ -222,63 +225,51 @@ subtest 'Pages functions are source-free applications' => sub {
         'Pages application explicitly converts with to_app for native placement');
 };
 
-subtest 'WebSocket denial and SSE decline take concrete Responses' => sub {
-    my @ws_events;
-    my $ws = PAGI::WebSocket->new(
-        {
-            type => 'websocket', method => 'GET', path => '/socket', headers => [],
-            extensions => { 'websocket.http.response' => {} },
-        },
-        sub { Future->done({ type => 'websocket.connect' }) },
-        sub { push @ws_events, $_[0]; Future->done },
-    );
-    like(dies { $ws->deny(status => 401, body => 'no')->get },
-        qr/exactly one concrete PAGI::Response/i,
-        'removed WebSocket denial option list fails directly');
-    $ws->deny(text_response('no', status => 401))->get;
-    is([map { $_->{type} } @ws_events], [
-        'websocket.http.response.start', 'websocket.http.response.body',
-    ], 'Response-valued WebSocket denial executes');
+subtest 'WebSocket denial and SSE decline take public applications' => sub {
+    for my $kind (qw(websocket sse)) {
+        my $method = $kind eq 'websocket' ? 'deny' : 'decline';
+        my $h = PAGITest::RefusalHarness->new($kind);
 
-    my @sse_events;
-    my $sse = PAGI::SSE->new(
-        { type => 'sse', method => 'GET', path => '/events', headers => [] },
-        sub { Future->new },
-        sub { push @sse_events, $_[0]; Future->done },
-    );
-    like(dies { $sse->decline(status => 404, body => 'missing')->get },
-        qr/exactly one concrete PAGI::Response/i,
-        'removed SSE decline option list fails directly');
-    $sse->decline(problem_response({
-        title  => 'Not Found',
-        status => 404,
-    }))->get;
-    is([map { $_->{type} } @sse_events], [
-        'sse.http.response.start', 'sse.http.response.body',
-    ], 'Response-valued SSE decline executes');
-    is($sse_events[0]{status}, 404,
-        'the documented decline preserves the concrete Response status');
-    ok(grep({ lc($_->[0]) eq 'content-type'
-            && $_->[1] =~ m{\Aapplication/problem\+json\b} }
-            @{$sse_events[0]{headers}}),
-        'the documented decline preserves the concrete Response media type');
+        like(dies { $h->{helper}->$method(status => 401, body => 'no')->get },
+            qr/exactly one Request handler or app object/i,
+            "removed $kind option list fails against the application contract");
+
+        my $response = $kind eq 'websocket'
+            ? text_response('no', status => 401)
+            : problem_response({ title => 'Not Found', status => 404 });
+        $h->{helper}->$method($response)->get;
+        is([map { $_->{type} } @{$h->{events}}], [
+            'http.response.start', 'http.response.body',
+        ], "direct Response remains a valid $kind application");
+        is($h->{events}[0]{status}, $kind eq 'websocket' ? 401 : 404,
+            "direct Response preserves its $kind status");
+        ok(grep({ lc($_->[0]) eq 'content-type'
+                && $_->[1] =~ m{\Aapplication/problem\+json\b} }
+                @{$h->{events}[0]{headers}}),
+            'direct SSE problem Response preserves its media type') if $kind eq 'sse';
+        $h->deliver;
+    }
 };
 
-subtest 'live decline examples construct concrete Responses' => sub {
-    my @documents = (
-        ['UPGRADING.md', qr/await \$sse->decline\(\s*problem_response\(/s],
-        ['lib/PAGI/Tools/Tutorial.pod',
-            qr/await \$sse->decline\(\s*problem_response\(/s],
-    );
-
-    for my $document (@documents) {
-        open my $handle, '<', $document->[0]
-            or die "Cannot read $document->[0]: $!";
-        my $source = do { local $/; <$handle> };
-        close $handle or die "Cannot close $document->[0]: $!";
-        like($source, $document->[1],
-            "$document->[0] passes a concrete Response to SSE decline");
-    }
+subtest 'migration refusal example runs as documented' => sub {
+    open my $handle, '<', 'UPGRADING.md' or die $!;
+    my $source = do { local $/; <$handle> };
+    my ($snippet) = $source =~ /### Refuse WebSocket\/SSE with Request handlers or applications\n.*?```perl\n(.*?)```/s;
+    die 'Missing migration refusal example' unless defined $snippet;
+    my $ws_harness = PAGITest::RefusalHarness->new('websocket');
+    my $sse_harness = PAGITest::RefusalHarness->new('sse');
+    my ($websocket, $sse) = ($ws_harness->{helper}, $sse_harness->{helper});
+    my $run = eval "async sub { $snippet }";
+    die $@ unless $run;
+    $run->()->get;
+    is($ws_harness->{events}[0]{status}, 401, 'WebSocket gets the documented refusal');
+    ok(grep({ lc($_->[0]) eq 'www-authenticate' && $_->[1] eq 'Bearer realm="api"' }
+        @{$ws_harness->{events}[0]{headers}}), '401 includes the applicable challenge');
+    is($sse_harness->{events}[0]{status}, 404, 'SSE gets the documented refusal');
+    is(decode_json(body_from($sse_harness->{events}))->{detail}, '/refuse',
+        'Request handler reads the original request path');
+    $ws_harness->deliver;
+    $sse_harness->deliver;
 };
 
 subtest 'JSON migration asserts values, never object member order' => sub {

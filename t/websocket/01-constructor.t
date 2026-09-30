@@ -4,11 +4,12 @@ use warnings;
 use Test2::V0;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::WebSocket;
+use PAGITest::Connected qw(ws_scope);
 
 subtest 'constructor accepts scope, receive, send' => sub {
-    my $scope = {
-        type         => 'websocket',
+    my $scope = ws_scope(
         path         => '/ws',
         query_string => 'token=abc',
         headers      => [
@@ -17,7 +18,7 @@ subtest 'constructor accepts scope, receive, send' => sub {
         ],
         subprotocols => ['chat', 'echo'],
         client       => ['127.0.0.1', 54321],
-    };
+    );
     my $receive = sub { };
     my $send = sub { };
 
@@ -55,7 +56,7 @@ subtest 'dies without required parameters' => sub {
         'dies without scope'
     );
 
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     like(
         dies { PAGI::WebSocket->new($scope) },
         qr/receive/i,
@@ -77,7 +78,7 @@ subtest 'dies on invalid parameter types' => sub {
         'dies when scope is not a hashref'
     );
 
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     like(
         dies { PAGI::WebSocket->new($scope, "not_a_coderef", sub {}) },
         qr/receive.*coderef/i,
@@ -92,8 +93,7 @@ subtest 'dies on invalid parameter types' => sub {
 };
 
 subtest 'scope property accessors' => sub {
-    my $scope = {
-        type         => 'websocket',
+    my $scope = ws_scope(
         path         => '/chat/room1',
         raw_path     => '/chat/room1',
         query_string => 'token=abc&user=bob',
@@ -106,7 +106,7 @@ subtest 'scope property accessors' => sub {
         subprotocols => ['chat', 'json'],
         client       => ['192.168.1.1', 54321],
         server       => ['example.com', 443],
-    };
+    );
     my $receive = sub { };
     my $send = sub { };
 
@@ -124,8 +124,7 @@ subtest 'scope property accessors' => sub {
 };
 
 subtest 'header accessors' => sub {
-    my $scope = {
-        type    => 'websocket',
+    my $scope = ws_scope(
         headers => [
             ['host', 'example.com'],
             ['origin', 'https://example.com'],
@@ -133,7 +132,7 @@ subtest 'header accessors' => sub {
             ['x-custom', 'value1'],
             ['x-custom', 'value2'],
         ],
-    };
+    );
     my $receive = sub { };
     my $send = sub { };
 
@@ -147,15 +146,11 @@ subtest 'header accessors' => sub {
     my @customs = $ws->header_all('x-custom');
     is(\@customs, ['value1', 'value2'], 'header_all returns all values');
 
-    isa_ok($ws->headers, ['Hash::MultiValue'], 'headers returns Hash::MultiValue');
+    isa_ok($ws->headers, ['PAGI::Headers'], 'headers returns PAGI::Headers');
 };
 
 subtest 'defaults for optional scope keys' => sub {
-    my $scope = {
-        type    => 'websocket',
-        path    => '/ws',
-        headers => [],
-    };
+    my $scope = ws_scope(path => '/ws');
     my $receive = sub { };
     my $send = sub { };
 
@@ -166,6 +161,14 @@ subtest 'defaults for optional scope keys' => sub {
     is($ws->scheme, 'ws', 'scheme defaults to ws');
     is($ws->http_version, '1.1', 'http_version defaults to 1.1');
     is($ws->subprotocols, [], 'subprotocols defaults to empty array');
+};
+
+subtest 'a websocket scope without pagi.connection is refused' => sub {
+    like(
+        dies { PAGI::WebSocket->new({ type => 'websocket', headers => [] }, sub {}, sub {}) },
+        qr/^PAGI::WebSocket requires pagi\.connection capabilities /,
+        'PAGI::Spec::Www 0.6 requires the connection object',
+    );
 };
 
 done_testing;

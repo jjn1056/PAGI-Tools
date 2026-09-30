@@ -5,7 +5,7 @@ use v5.40;
 use Exporter qw(import);
 use Future::AsyncAwait;
 
-use PAGI::Middleware::Helpers qw(wrap_send);
+use PAGI::Utils::Middleware qw(wrap_send);
 
 our @EXPORT_OK = qw(with_apples_api_header);
 

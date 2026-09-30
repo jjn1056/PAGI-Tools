@@ -2,12 +2,15 @@
 use strict;
 use warnings;
 use Test2::V0;
+use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::WebSocket;
+use PAGITest::Connected qw(ws_scope receive_from);
 
 subtest 'initial state is connecting' => sub {
-    my $scope = { type => 'websocket', headers => [] };
+    my $scope = ws_scope();
     my $ws = PAGI::WebSocket->new($scope, sub {}, sub {});
 
     ok(!$ws->is_connected, 'not connected initially');
@@ -18,17 +21,18 @@ subtest 'initial state is connecting' => sub {
 };
 
 subtest 'state transitions' => sub {
-    my $scope = { type => 'websocket', headers => [] };
-    my $ws = PAGI::WebSocket->new($scope, sub {}, sub {});
+    my $scope = ws_scope();
+    my $ws = PAGI::WebSocket->new($scope, sub {}, sub { Future->done });
 
-    # Simulate internal state change (normally done by accept)
-    $ws->_set_state('connected');
+    $ws->accept->get;
     ok($ws->is_connected, 'is_connected after transition');
     ok(!$ws->is_closed, 'not closed after connect');
     is($ws->connection_state, 'connected', 'connection_state is connected');
 
-    # Simulate close
-    $ws->_set_closed(1000, 'Normal closure');
+    # The peer closes and the server completes the connection.
+    my $connection = $scope->{'pagi.connection'};
+    $connection->_set_peer_close(1000, 'Normal closure');
+    $connection->_mark_complete;
     ok(!$ws->is_connected, 'not connected after close');
     ok($ws->is_closed, 'is_closed after close');
     is($ws->connection_state, 'closed', 'connection_state is closed');
@@ -37,12 +41,15 @@ subtest 'state transitions' => sub {
 };
 
 subtest 'close_code defaults' => sub {
-    my $scope = { type => 'websocket', headers => [] };
-    my $ws = PAGI::WebSocket->new($scope, sub {}, sub {});
+    my $scope = ws_scope();
+    my $receive = receive_from($scope, { type => 'websocket.disconnect' });
+    my $ws = PAGI::WebSocket->new($scope, $receive, sub { Future->done });
+    $ws->accept->get;
 
-    $ws->_set_closed();  # No args
+    # The peer's Close carried no status code.
+    is($ws->receive->get, undef, 'receive returns undef on disconnect');
     is($ws->close_code, 1005, 'close_code defaults to 1005 (no status)');
-    is($ws->close_reason, '', 'close_reason defaults to empty string');
+    is($ws->close_reason, undef, 'close_reason is undef when the Close had no status');
 };
 
 done_testing;

@@ -17,6 +17,7 @@ use PAGI::Session qw(session);
 use PAGI::Stash qw(stash);
 use PAGI::State qw(app_state);
 use PAGI::Test::Client;
+use PAGI::Test::ConnectionState;
 use PAGI::Transport qw(transport);
 use PAGI::WebSocket;
 
@@ -57,6 +58,7 @@ sub protocol_scope {
         scheme       => $type eq 'websocket' ? 'ws' : 'http',
         headers      => [],
         server       => ['testserver', 80],
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket'),
         %args,
     };
 }
@@ -104,11 +106,13 @@ subtest 'Request construction is strict and state has an explicit HashRef escape
 
     like(dies { PAGI::Request->new($scope) }, qr/receive coderef/,
         'Request requires the receive channel');
-    like(
-        dies { PAGI::Request->new({ %$scope, type => 'websocket' }, \&receive_empty) },
-        qr/requires HTTP scope/,
-        'Request rejects a non-HTTP scope',
-    );
+    my $websocket_scope = {
+        %$scope, type => 'websocket',
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+    };
+    my $websocket_request = PAGI::Request->new($websocket_scope, \&receive_empty);
+    is($websocket_request->scope, $websocket_scope,
+        'Request accepts a WebSocket scope for shared metadata');
 
     my $compiled = eval q{
         package Local::UpgradeAppState;
@@ -222,10 +226,16 @@ subtest 'ErrorHandler custom renderers return concrete Responses' => sub {
         },
     )->wrap(sub { die "database failed\n" });
     my $client = PAGI::Test::Client->new(app => $app);
-    my $response = eval { $client->get('/') };
+    my @warnings;
+    my $response = eval {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        $client->get('/');
+    };
 
     ok($response, 'the documented ErrorHandler renderer integration completes')
         or diag($@);
+    is(\@warnings, ["exception after response completed: database failed\n"],
+        'the server error is re-raised after the custom response');
     is($response && $response->status, 500,
         'the custom Response keeps the error status');
     is($response && $response->header('content-type'),

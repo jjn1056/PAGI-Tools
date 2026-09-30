@@ -6,6 +6,8 @@ use IO::Socket::INET;
 use Scalar::Util ();
 use FindBin;
 use lib "$FindBin::Bin/../../lib";
+use lib "$FindBin::Bin/../lib";
+use PAGITest::CurrentServer qw(current_server_unavailable);
 
 # Cross-repo end-to-end test for examples/process-streaming: a child process's
 # stdout must reach the client byte-exactly through PAGI::Response::Stream's
@@ -16,16 +18,16 @@ use lib "$FindBin::Bin/../../lib";
 # test also proves the loop-agnostic source adapter works against the real
 # server rather than only against a mock.
 #
-# Skips unless PAGI::Server is on @INC, so PAGI-Tools' standalone suite stays
-# independent. Run it with:
+# Skips unless the current PAGI::Server release line is on @INC, so
+# PAGI-Tools' standalone suite stays independent. Run it with:
 #   prove -I <PAGI-Server>/lib -lr t/integration/process-streaming-end-to-end.t
 
 plan skip_all => 'example forks via open "-|", unsupported on Windows'
     if $^O eq 'MSWin32';
 eval { require Future::IO::Impl::IOAsync; 1 }
     or plan skip_all => 'Future::IO::Impl::IOAsync required';
-eval { require PAGI::Server; 1 }
-    or plan skip_all => 'PAGI::Server not on @INC; run with -I <PAGI-Server>/lib';
+my $server_unavailable = current_server_unavailable();
+plan skip_all => $server_unavailable if $server_unavailable;
 
 my $app_file = "$FindBin::Bin/../../examples/process-streaming/app.pl";
 plan skip_all => "example not found: $app_file" unless -f $app_file;

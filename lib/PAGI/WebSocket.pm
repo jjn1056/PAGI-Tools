@@ -7,7 +7,8 @@ use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
 use JSON::MaybeXS ();
-use PAGI::Response ();
+use PAGI::Headers ();
+use PAGI::Common ();
 use Scalar::Util qw(blessed);
 
 
@@ -22,6 +23,8 @@ sub new {
         unless $send && ref($send) eq 'CODE';
     croak "PAGI::WebSocket requires scope type 'websocket', got '$scope->{type}'"
         unless ($scope->{type} // '') eq 'websocket';
+    # PAGI::Spec::Www 0.6: servers provide pagi.connection on every scope.
+    PAGI::Common::require_connection($scope, 'PAGI::WebSocket');
 
     # Return existing WebSocket object if one was already created for this scope
     # This ensures consistent state (is_connected, is_closed, callbacks) if
@@ -32,7 +35,7 @@ sub new {
         scope   => $scope,
         receive => $receive,
         send    => $send,
-        _state  => 'connecting',  # connecting -> denying -> closed, or connected -> closed
+        _state  => 'connecting',  # connecting -> connected -> closed
         _close_code   => undef,
         _close_reason => undef,
         _on_close     => [],
@@ -44,7 +47,44 @@ sub new {
     $scope->{'pagi.websocket'} = $self;
     Scalar::Util::weaken($scope->{'pagi.websocket'});
 
+    $self->{_cleanup_future} = Future->new;
+    # The connection owns this helper until end; the retained worker then
+    # owns asynchronous cleanup until all registered hooks have settled.
+    $scope->{'pagi.connection'}->on_end(sub {
+        $self->_refresh_connection;
+        # Nobody awaits cleanup here, so keep its Future until it settles
+        # rather than dropping it while a hook is still suspended.
+        $self->_run_close_callbacks->retain;
+        return;
+    });
+    $self->_refresh_connection;
     return $self;
+}
+
+sub _refresh_connection {
+    my ($self) = @_;
+    my $connection = $self->{scope}{'pagi.connection'};
+    $self->{_disconnect_reason} = $connection->disconnect_reason;
+    $self->{_disconnect_detail} = $connection->disconnect_detail;
+    $self->{_close_code} = $connection->close_code;
+    $self->{_close_reason} = $connection->close_reason;
+    $self->{_state} = 'closed' unless $connection->is_connected;
+    return;
+}
+
+# An initial helper cannot claim a response slot already used by an application.
+# Accepted/started helpers continue to use their established protocol.
+sub _response_claimed_before_start {
+    my ($self) = @_;
+    $self->_refresh_connection;
+    return $self->{_state} eq 'connecting'
+        && $self->{scope}{'pagi.connection'}->response_started;
+}
+
+sub disconnect_detail {
+    my ($self) = @_;
+    $self->_refresh_connection;
+    return $self->{_disconnect_detail};
 }
 
 # Scope property accessors
@@ -161,51 +201,38 @@ sub raw_query {
 # Single header lookup (case-insensitive, returns last value)
 sub header {
     my ($self, $name) = @_;
-    $name = lc($name);
-    my $value;
-    for my $pair (@{$self->{scope}{headers} // []}) {
-        if (lc($pair->[0]) eq $name) {
-            $value = $pair->[1];
-        }
-    }
-    return $value;
+    return $self->headers->get($name);
 }
 
-# All headers as Hash::MultiValue (cached in scope)
+# All headers as PAGI::Headers (cached in scope)
 sub headers {
-    my $self = shift;
-    return $self->{scope}{'pagi.request.headers'} if $self->{scope}{'pagi.request.headers'};
-
-    my @pairs;
-    for my $pair (@{$self->{scope}{headers} // []}) {
-        push @pairs, lc($pair->[0]), $pair->[1];
-    }
-
-    $self->{scope}{'pagi.request.headers'} = Hash::MultiValue->new(@pairs);
-    return $self->{scope}{'pagi.request.headers'};
+    my ($self) = @_;
+    return $self->{scope}{'pagi.request.headers'}
+        //= PAGI::Headers->new($self->{scope}{headers} // []);
 }
 
 # All values for a header
 sub header_all {
     my ($self, $name) = @_;
-    return $self->headers->get_all(lc($name));
+    return $self->headers->get_all($name);
 }
 
 # State accessors
-sub connection_state { shift->{_state} }
+sub connection_state { my $self = shift; $self->_refresh_connection; return $self->{_state} }
 
 sub is_connected {
     my $self = shift;
-    return $self->{_state} eq 'connected';
+    return $self->connection_state eq 'connected';
 }
 
 sub is_closed {
     my $self = shift;
-    return $self->{_state} eq 'closed';
+    return $self->connection_state eq 'closed';
 }
 
-sub close_code   { shift->{_close_code} }
-sub close_reason { shift->{_close_reason} }
+sub close_code { my $self = shift; $self->_refresh_connection; return $self->{_close_code} }
+sub close_reason { my $self = shift; $self->_refresh_connection; return $self->{_close_reason} }
+sub disconnect_reason { my $self = shift; $self->_refresh_connection; return $self->{_disconnect_reason} }
 
 # Outbound flow-control introspection (delegates to the pagi.transport handle)
 sub buffered_amount {
@@ -252,66 +279,56 @@ sub is_writable {
     return $t->buffered_amount < $high ? 1 : 0;
 }
 
-# Internal state setters
+# Internal state setter
 sub _set_state {
     my ($self, $state) = @_;
     $self->{_state} = $state;
 }
 
-sub _set_closed {
-    my ($self, $code, $reason) = @_;
-    $self->{_state} = 'closed';
-    $self->{_close_code} = $code // 1005;
-    $self->{_close_reason} = $reason // '';
-}
-
 # Register callback to run on disconnect/close
 sub on_close {
     my ($self, $callback) = @_;
+    croak 'Cannot register on_close after cleanup begins' if $self->{_close_callbacks_ran};
     push @{$self->{_on_close}}, $callback;
     return $self;
 }
 
 # Internal: run all on_close callbacks exactly once
-async sub _run_close_callbacks {
+sub _run_close_callbacks {
     my ($self) = @_;
-
-    # Only run once
-    return if $self->{_close_callbacks_ran};
+    my $completion = $self->{_cleanup_future};
+    return $completion->without_cancel if $self->{_close_callbacks_ran};
     $self->{_close_callbacks_ran} = 1;
-
-    my $code = $self->close_code;
-    my $reason = $self->close_reason;
-
-    for my $cb (@{$self->{_on_close}}) {
-        eval {
-            my $r = $cb->($code, $reason);
-            # Only await if callback returns a Future
-            if (blessed($r) && $r->isa('Future')) {
-                await $r;
-            }
-        };
-        if ($@) {
-            warn "PAGI::WebSocket on_close callback error: $@";
-        }
-    }
-
-    # Clear all callback arrays to break any closure-based cycles
-    $self->{_on_close}   = [];
-    $self->{_on_error}   = [];
-    $self->{_on_message} = [];
+    my $worker = $self->_close_callbacks_worker;
+    $worker->on_ready(sub {
+        my ($ready) = @_;
+        $ready->is_failed ? $completion->fail($ready->failure) : $completion->done;
+    });
+    $worker->retain;
+    return $completion->without_cancel;
 }
 
-# Internal: mark closed and fire on_close callbacks for a disconnect that
-# arrived directly off the wire (not via close()). Used by receive() and run()
-# when either consumes the terminal event. Does NOT send a websocket.close wire
-# event -- the peer is already gone.
-async sub _note_disconnected {
-    my ($self, $code, $reason) = @_;
+async sub _close_callbacks_worker {
+    my ($self) = @_;
+    for my $cb (@{$self->{_on_close}}) {
+        eval {
+            my $result = $cb->($self->close_code, $self->close_reason, $self->disconnect_detail);
+            await $result if blessed($result) && $result->isa('Future');
+        };
+        warn "PAGI::WebSocket on_close callback error: $@" if $@;
+    }
+    $self->{_on_close} = [];
+    $self->{_on_error} = [];
+    $self->{_on_message} = [];
+    return;
+}
 
-    # 1005 = No Status Rcvd (RFC 6455)
-    $self->_set_closed($code // 1005, $reason // '');
-    await $self->_run_close_callbacks;
+# Internal: a disconnect event arrived off the wire. The connection already
+# recorded the terminal outcome (and runs on_close from its on_end), so only
+# the helper's view of it is refreshed. Sends nothing: the peer is gone.
+async sub _note_disconnected {
+    my ($self) = @_;
+    $self->_refresh_connection;
     return;
 }
 
@@ -362,19 +379,13 @@ async sub _trigger_error {
             warn "PAGI::WebSocket on_error callback error: $@";
         }
     }
-
-    # If no error handlers registered, warn
-    if (!@{$self->{_on_error}}) {
-        warn "PAGI::WebSocket error: $error";
-    }
 }
 
 # Accept the WebSocket connection
 async sub accept {
     my ($self, %opts) = @_;
+    return $self if $self->_response_claimed_before_start || $self->connection_state eq 'closing';
 
-    croak 'WebSocket denial response is pending'
-        if $self->{_state} eq 'denying';
     return $self if $self->is_closed;
 
     my $event = {
@@ -384,118 +395,61 @@ async sub accept {
     $event->{headers} = $opts{headers} if exists $opts{headers};
 
     await $self->{send}->($event);
-    $self->_set_state('connected');
+    $self->_set_state('connected') unless $self->is_closed;
 
     return $self;
 }
 
 # Close the WebSocket connection
-async sub close {
-    my ($self, $code, $reason) = @_;
-
-    croak 'WebSocket denial response is pending'
-        if $self->{_state} eq 'denying';
-    # Idempotent - don't send close twice
-    return if $self->is_closed;
-
-    $code //= 1000;
-    $reason //= '';
-
-    await $self->{send}->({
-        type   => 'websocket.close',
-        code   => $code,
-        reason => $reason,
-    });
-
-    $self->_set_closed($code, $reason);
-    await $self->_run_close_callbacks;
-
-    return $self;
-}
-
-# Whether the server advertised the WebSocket denial-response extension.
-# See L<PAGI::Spec::Www/"WebSocket Denial Response">.
-sub supports_denial_response {
-    my $self = shift;
-    my $extensions = $self->{scope}{extensions};
-    return 0 unless ref($extensions) eq 'HASH';
-    return $extensions->{'websocket.http.response'} ? 1 : 0;
-}
-
-# Reject the handshake with a concrete HTTP Response. Falls back to a policy
-# close when the server does not advertise the denial extension. Valid only
-# before accept.
-# See L<PAGI::Spec::Www/"WebSocket Denial Response">.
-sub deny {
+sub close {
     my ($self, @args) = @_;
-    croak 'WebSocket denial response is pending'
-        if $self->{_state} eq 'denying';
-    croak 'WebSocket deny is only valid before accept while connecting'
-        unless $self->{_state} eq 'connecting';
-    croak 'WebSocket deny requires exactly one concrete PAGI::Response'
-        unless @args == 1;
-    my $response = $args[0];
-    PAGI::Response::_validate_protocol_response($response, 'WebSocket denial');
+    return Future->done($self) if $self->_response_claimed_before_start;
+    return $self->{_close_send}->without_cancel->then(sub { Future->done($self) })->retain
+        if $self->{_close_send};
+    return Future->done if $self->is_closed;
+    # Before accept the scope is an HTTP exchange: refusing it is deny's job.
+    croak 'WebSocket close is only valid after accept; use deny'
+        if $self->{_state} eq 'connecting';
+    croak "WebSocket close requires an active accepted/started connection"
+        unless $self->is_connected;
+    $self->{_state} = 'closing';
+    my $settled = $self->{_close_send} = Future->new;
+    my $send;
+    my $ok = eval {
+        my ($code, $reason) = @args;
+        $send = Future->wrap($self->{send}->({type => 'websocket.close', code => $code // 1000, reason => $reason // ''}));
+        1;
+    };
+    if (!$ok) { $settled->fail($@) }
+    else {
+        $send->on_ready(sub {
+            my ($ready) = @_;
+            if ($ready->is_failed) { $settled->fail($ready->failure) }
+            elsif ($ready->is_cancelled) { $settled->fail("Close send was cancelled\n") }
+            else { $settled->done }
+        });
+    }
+    return $settled->without_cancel->then(sub { Future->done($self) })->retain;
+}
 
-    $self->{_state} = 'denying';
-    my $committed = 0;
-    my $lifecycle = async sub {
-        my $completed = eval {
-            if (!$self->supports_denial_response) {
-                await Future->wrap($self->{send}->({
-                    type => 'websocket.close', code => 1008, reason => '',
-                }));
-                $committed = 1;
-                $self->_set_closed(1008, '');
-            }
-            else {
-                await PAGI::Response::_respond_for_protocol(
-                    $response,
-                    $self->{scope},
-                    $self->{receive},
-                    $self->{send},
-                    'websocket.http.response',
-                    'WebSocket denial',
-                    sub {
-                        # The accepted HTTP start owns the handshake response
-                        # slot even while its body remains in flight. It is not
-                        # a WebSocket close frame, so the RFC 6455 close fields
-                        # remain undefined.
-                        $committed = 1;
-                        $self->{_state} = 'closed';
-                    },
-                );
-            }
-            1;
-        };
-        my $error = $@ unless $completed;
-
-        if (!$committed) {
-            $self->{_state} = 'connecting'
-                if $self->{_state} eq 'denying';
-            die $error unless $completed;
-        }
-
-        await $self->_run_close_callbacks if $committed;
-        die $error unless $completed;
-        return $self;
-    }->();
-
-    $self->{_response_lifecycle} = $lifecycle;
-    $lifecycle->on_ready(sub {
-        my ($ready) = @_;
-        delete $self->{_response_lifecycle}
-            if $self->{_response_lifecycle}
-                && $self->{_response_lifecycle} == $ready;
-    });
-    return $lifecycle->without_cancel;
+# Delegate the handshake refusal to a public PAGI application. Valid only
+# before accept.
+async sub deny {
+    my ($self, @targets) = @_;
+    my $app = PAGI::Common::prepare_refusal(
+        $self->{scope}, 'WebSocket deny', @targets,
+    );
+    await PAGI::Utils::invoke_app(
+        $app, $self->{scope}, $self->{receive}, $self->{send},
+    );
+    return $self;
 }
 
 # Send text message
 async sub send_text {
     my ($self, $text) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->is_closed;
+    croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->{send}->({
         type => 'websocket.send',
@@ -509,7 +463,7 @@ async sub send_text {
 async sub send_bytes {
     my ($self, $bytes) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->is_closed;
+    croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     await $self->{send}->({
         type  => 'websocket.send',
@@ -523,7 +477,7 @@ async sub send_bytes {
 async sub send_json {
     my ($self, $data) = @_;
 
-    croak "Cannot send on closed WebSocket" if $self->is_closed;
+    croak "Cannot send on closed WebSocket" if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     my $json = JSON::MaybeXS::encode_json($data);
 
@@ -539,7 +493,7 @@ async sub send_json {
 
 async sub try_send_text {
     my ($self, $text) = @_;
-    return 0 if $self->is_closed;
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->{send}->({
@@ -560,7 +514,7 @@ async sub try_send_text {
 
 async sub try_send_bytes {
     my ($self, $bytes) = @_;
-    return 0 if $self->is_closed;
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     eval {
         await $self->{send}->({
@@ -581,7 +535,7 @@ async sub try_send_bytes {
 
 async sub try_send_json {
     my ($self, $data) = @_;
-    return 0 if $self->is_closed;
+    return 0 if $self->_response_claimed_before_start || $self->is_closed || $self->connection_state eq 'closing';
 
     my $json = JSON::MaybeXS::encode_json($data);
     eval {
@@ -629,13 +583,13 @@ async sub send_json_if_connected {
 async sub receive {
     my ($self) = @_;
 
-    return undef if $self->is_closed;
+    return undef if $self->is_closed || $self->_response_claimed_before_start;
 
     while (1) {
         my $event = await $self->{receive}->();
 
-        if (!defined($event) || $event->{type} eq 'websocket.disconnect') {
-            await $self->_note_disconnected($event->{code}, $event->{reason});
+        if (!defined($event) || $event->{type} eq 'websocket.disconnect' || $event->{type} eq 'http.disconnect') {
+            await $self->_note_disconnected;
             return undef;
         }
 
@@ -690,32 +644,15 @@ async sub receive_json {
     return JSON::MaybeXS::decode_json($text);
 }
 
-# Iteration helpers
-
-# Internal: run one per-message callback, running on_close cleanup before
-# re-raising if it dies (idempotent; _run_close_callbacks may already have run).
-# Takes a thunk so each caller's varying callback arg list stays at the call
-# site; awaits the thunk's Future and returns its value for callers that use it.
-async sub _guarded_dispatch {
-    my ($self, $thunk) = @_;
-
-    my $result;
-    my $ok = eval { $result = await $thunk->(); 1 };
-    unless ($ok) {
-        my $err = $@;
-        await $self->_run_close_callbacks;    # idempotent; may already have run
-        die $err;                             # re-raise: caller still sees the error
-    }
-
-    return $result;
-}
+# Iteration helpers. A callback that dies propagates; on_close runs when the
+# connection ends.
 
 async sub each_message {
     my ($self, $callback) = @_;
 
     while (my $event = await $self->receive) {
         next unless $event->{type} eq 'websocket.receive';
-        await $self->_guarded_dispatch(sub { $callback->($event) });
+        await $callback->($event);
     }
 
     return;
@@ -725,7 +662,7 @@ async sub each_text {
     my ($self, $callback) = @_;
 
     while (my $text = await $self->receive_text) {
-        await $self->_guarded_dispatch(sub { $callback->($text) });
+        await $callback->($text);
     }
 
     return;
@@ -735,7 +672,7 @@ async sub each_bytes {
     my ($self, $callback) = @_;
 
     while (my $bytes = await $self->receive_bytes) {
-        await $self->_guarded_dispatch(sub { $callback->($bytes) });
+        await $callback->($bytes);
     }
 
     return;
@@ -749,7 +686,7 @@ async sub each_json {
         last unless defined $text;
 
         my $data = JSON::MaybeXS::decode_json($text);
-        await $self->_guarded_dispatch(sub { $callback->($data) });
+        await $callback->($data);
     }
 
     return;
@@ -760,11 +697,7 @@ async sub run {
     my ($self) = @_;
 
     while (1) {
-        my $event = eval { await $self->receive };
-        if (my $err = $@) {
-            warn "PAGI::WebSocket receive error: $err";
-            last;
-        }
+        my $event = await $self->receive;
         last unless $event;
 
         next unless $event->{type} eq 'websocket.receive';
@@ -781,6 +714,7 @@ async sub run {
             };
             if (my $err = $@) {
                 await $self->_trigger_error($err);
+                die $err;
             }
         }
     }
@@ -792,6 +726,7 @@ async sub run {
 # Sends websocket.keepalive event to server - loop-agnostic, server handles timers
 async sub keepalive {
     my ($self, $interval, $timeout) = @_;
+    return $self if $self->is_closed || $self->_response_claimed_before_start || $self->connection_state eq 'closing';
 
     $interval //= 0;
 
@@ -864,7 +799,6 @@ PAGI::WebSocket - Convenience wrapper for PAGI WebSocket connections
         my ($scope, $receive, $send) = @_;
 
         my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-        await $ws->accept;
 
         my $stash = PAGI::Stash->new($ws);
         $stash->set(user => 'anonymous');
@@ -883,6 +817,7 @@ PAGI::WebSocket - Convenience wrapper for PAGI WebSocket connections
             print "User disconnected\n";
         });
 
+        await $ws->accept;
         await $ws->run;
     }
 
@@ -920,7 +855,9 @@ Creates a new WebSocket wrapper. Requires:
 
 =over 4
 
-=item * C<$scope> - PAGI scope hashref with C<< type => 'websocket' >>
+=item * C<$scope> - PAGI scope hashref with C<< type => 'websocket' >> and the
+C<pagi.connection> object that L<PAGI::Spec::Www> 0.6 requires servers to
+provide
 
 =item * C<$receive> - Async coderef returning Futures for events
 
@@ -928,7 +865,16 @@ Creates a new WebSocket wrapper. Requires:
 
 =back
 
-Dies if scope type is not 'websocket'.
+Dies if scope type is not 'websocket', or if C<pagi.connection> is missing or
+lacks a required method (C<PAGI::WebSocket requires pagi.connection
+capabilities ...>, naming the server's advertised C<spec_version>). A scope
+built by hand, as in tests, supplies one with L<PAGI::Test::ConnectionState>:
+
+    my $scope = {
+        type              => 'websocket',
+        headers           => [],
+        'pagi.connection' => PAGI::Test::ConnectionState->new(websocket => 1),
+    };
 
 B<Singleton pattern:> The WebSocket object is cached in C<< $scope->{'pagi.websocket'} >>.
 If you call C<new()> multiple times with the same scope, you get the same
@@ -962,9 +908,9 @@ Client and server address info.
 
     my $origin = $ws->header('origin');
     my $all_cookies = $ws->header_all('cookie');
-    my $hmv = $ws->headers;            # Hash::MultiValue
+    my $headers = $ws->headers;        # PAGI::Headers
 
-Case-insensitive header access.
+Case-insensitive header access through L<PAGI::Headers>.
 
 =head2 Per-Connection Shared State
 
@@ -1090,67 +1036,98 @@ ordering either.
     await $ws->close(1000, 'Normal closure');
     await $ws->close(4000, 'Custom reason');
 
-Closes the connection. Default code is 1000 (normal closure).
-Idempotent - calling multiple times only sends close once.
+Requests closing with code 1000 by default. Concurrent and repeated calls join
+one close-send operation and return when that send settles. They do not await
+the peer's Close or terminal cleanup. State is C<closing> until the connection
+records its terminal outcome; further data sends are rejected. Cancelling a
+close observer does not cancel the server's send.
 
-=head2 supports_denial_response
+Before C<accept>, the scope is still an HTTP exchange, so C<close> croaks
+C<WebSocket close is only valid after accept; use deny> and sends nothing;
+refuse the handshake with L</deny>.
 
-    if ($ws->supports_denial_response) { ... }
-
-Returns true (1) if the server advertised the C<websocket.http.response>
-extension on the WebSocket scope, false (0) otherwise.
-
-See L<PAGI::Spec::Www/"WebSocket Denial Response">.
+The router and endpoint C<to_app> boundary send a missing close on successful
+handler return only for an accepted, still-active socket. Handler exceptions
+propagate to the server without publishing a synthetic terminal outcome.
 
 =head2 deny
 
+    use Future::AsyncAwait;
     use PAGI::Response qw(text_response);
 
-    await $ws->deny(text_response(
-        'Unauthorized',
-        status  => 401,
-        headers => ['www-authenticate' => 'Bearer'],
-    ));
+    async sub unavailable {
+        my ($ws) = @_;
+        await $ws->deny(text_response('Unavailable', status => 503));
+        return;
+    }
 
-Rejects the WebSocket handshake with one concrete L<PAGI::Response> instead of
-accepting it. Valid only before C<accept>. Marks the connection closed on
+    async sub unavailable_for_request {
+        my ($ws) = @_;
+        await $ws->deny(sub {
+            my ($request) = @_;
+            return text_response('Unavailable: ' . $request->path, status => 503);
+        });
+        return;
+    }
+
+Delegates the WebSocket handshake refusal to exactly one Request handler or
+instantiated application object with C<to_app>, before C<accept>. Concrete
+L<PAGI::Response> values, L<PAGI::Pages> applications, and custom application
+objects are accepted directly. A bare coderef receives exactly one
+L<PAGI::Request>; its immediate or Future-backed result must be an application
+object or native C<($scope, $receive, $send)> coderef. Use
+L<PAGI::Utils/as_app_object> to pass a native coderef directly.
+
+The application receives the original scope, receive, and send channels.
+The scope type stays unchanged. Applications own their protocol compatibility;
+this method neither inspects response contents nor substitutes a response for
+application errors. The current public C<pagi.connection> capabilities are
+required for every target, including buffered Responses. Missing capabilities
+fail before factories, handlers, or C<to_app> execute.
+
+Await the returned Future. Success resolves to this helper and means the
+application finished, not that the connection completed. The helper retains
+its initial protocol state until normal protocol progress or connection end;
+that state does not promise that a response slot is available. A settled
+attempt on a live connection with no response start permits sequential retry;
+after response start or termination another refusal fails. Application errors
+propagate through the returned Future.
+Applications must sequence answering operations; overlapping refusal and
+acceptance/start calls are unsupported.
+
+Cancelling the returned Future follows the invoked application's cancellation
+behavior; the helper does not keep abandoned application work running.
+Buffered Responses protect submitted server sends but stop subsequent
+emission, and Stream retains its own abort and cleanup behavior. Connection
+C<on_end> owns close callbacks, including asynchronous cleanup after application
 return.
 
-When the server advertises the C<websocket.http.response> extension
-(C<supports_denial_response()> is true), the Response must advertise the
-inheritable C<body-events-v1> protocol capability. Its HTTP start/body events
-are mapped incrementally in order to C<websocket.http.response.start> and
-C<websocket.http.response.body>, retaining multi-chunk C<more> values and send
-backpressure. Successful mapped-start settlement permanently owns the handshake
-response slot even while the body is pending or later fails. File returns no
-capability because PAGI Www permits only the body form and does not use
-C<file>/C<fh> for denial bodies; trailer and unknown events are also rejected.
-The concrete Response is invoked through its application contract; Response
-has no separate public emission method.
-When the extension is absent, the Response body is ignored and denial falls
-back to a C<websocket.close> with policy code 1008. See
-L<PAGI::Spec::Www/"WebSocket Denial Response (extension)">.
+A successfully delivered HTTP refusal completes the PAGI scope normally:
+C<on_complete> runs and C<disconnect_reason> is undefined. Its WebSocket
+C<close_code> is nevertheless C<1006>, with an undefined C<close_reason>,
+because no peer Close frame was received. This value is local metadata; no
+WebSocket Close frame is sent. Use scope completion to distinguish successful
+refusal delivery from an interrupted response.
 
-The Response is invoked with a shallow HTTP-scope clone whose C<type> is
-C<http> and C<method> is C<GET>; the live WebSocket scope and all nested
-references are left unchanged.
+    use PAGI::Response qw(text_response);
+    my $connection = $scope->{'pagi.connection'};
+    $connection->on_complete(sub {
+        # The HTTP refusal completed successfully.
+    });
+    $ws->on_close(sub {
+        my ($code, $reason, $detail) = @_;
+        # After this refusal: 1006, undef, undef.
+    });
+    await $ws->deny(text_response('Access denied', status => 403));
 
-"Successful settlement" means the PAGI server validated and consumed the
-mapped start event and accepted it into outbound processing, or finished
-discarding it after the connection ended. It does not mean the client received
-it. While that send is pending, C<connection_state> is C<denying> and no other
-first event may claim the response slot. A genuine start-send failure releases
-the reservation and leaves the WebSocket connecting. At settlement, denial
-commits and the object becomes closed; a later body failure cannot reopen the
-handshake. Cancelling the Future returned to the caller does not cancel a PAGI
-send or abandon the retained denial lifecycle and its cleanup.
+The sending environment requires WebSocket refusal status 300 or greater.
+Request metadata is available, but WebSocket Request body APIs reject access
+without consuming protocol events.
 
-A body send pending at disconnect resolves under the same PAGI 0.002007
-settlement rule rather than failing merely because the peer vanished. Disconnect cleanup
-therefore follows authoritative connection state and the protocol's disconnect
-watcher/event, never an inferred send failure. Genuine validation and resource
-send failures still propagate. C<deny> never starts a live WebSocket receive
-loop or introduces reconnection behavior.
+See L<PAGI::Tools::Cookbook/Refusing WebSocket and SSE with applications> for
+complete synchronous and async handlers, direct Pages applications, custom
+application objects, and wrapped native applications, with matching SSE call
+sites.
 
 See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
@@ -1160,17 +1137,31 @@ See L<PAGI::Spec::Www/"WebSocket Denial Response">.
 
     if ($ws->is_connected) { ... }
     if ($ws->is_closed) { ... }
-    my $state = $ws->connection_state; # connecting, denying, connected, closed
+    my $state = $ws->connection_state; # connecting, connected, closing, closed
+
+These are the complete protocol phase values. The former C<denying> phase is
+retired: invoking L</deny> does not mutate helper state. The initial
+C<connecting> value describes WebSocket progress, not availability of the HTTP
+response slot; refusal admission also reads the public connection facts.
 
 =head2 close_code, close_reason
 
     my $code = $ws->close_code;        # 1000, 1001, etc.
     my $reason = $ws->close_reason;    # 'Normal closure'
 
-Available after connection closes. A real close frame defaults to code=1005,
-reason=''. After an HTTP denial via C<deny> on a denial-response-capable server,
-C<close_code> is C<undef>: a denial sends an HTTP response, not a WebSocket
-close frame, so there is no RFC6455 close code.
+On a connection-backed scope these read the peer's Close metadata directly
+from C<pagi.connection>, including before deferred callback delivery. They
+never substitute the application's outgoing Close. A peer Close with no code
+is C<1005>/C<undef>; a terminal scope without a peer Close is C<1006>/C<undef>,
+including refusal. Peer Close metadata is meaningful as a peer handshake
+result only on an accepted socket.
+See L</deny> for successful refusal completion metadata.
+
+=head2 disconnect_reason, disconnect_detail
+
+Read the connection's lifecycle token and diagnostic detail, separately from
+peer Close text. Both are C<undef> for a clean end. Terminal accessors are
+synchronous and do not consume receive events.
 
 =head2 buffered_amount, high_water_mark, low_water_mark
 
@@ -1314,7 +1305,11 @@ Exceptions in callback propagate to caller.
         await cleanup_resources();
     });
 
-Registers cleanup callback that runs on disconnect or close().
+Registers cleanup for the connection's terminal C<on_end> notification.
+Arguments are C<($peer_code, $peer_reason, $disconnect_detail)>; lifecycle
+reason is available through C<disconnect_reason>. Register before awaited I/O:
+registration after cleanup has begun (including constructor-time terminal
+notification) croaks. A local C<close> request alone does not start cleanup.
 Callbacks can be regular subs or async subs — async results are
 automatically awaited. Multiple callbacks run in registration order.
 Exceptions are caught and warned but don't prevent other callbacks.
@@ -1329,9 +1324,10 @@ closure, use C<Scalar::Util::weaken> to avoid a memory leak:
     weaken($weak_ws);
     $ws->on_close(sub { $weak_ws->... if $weak_ws });
 
-The callback arrays are cleared after firing, so cycles via closures
-are broken at connection close, but C<weaken> prevents the object from
-being kept alive until that point.
+The connection retains the helper until terminal notification. One retained
+worker runs all hooks in order, survives handler return and cancellation of
+cleanup observers, and releases hooks and helper references when cleanup
+finishes. There is no background receive watcher.
 
 =head2 on_error
 
@@ -1352,7 +1348,9 @@ subs — async results are automatically awaited. Multiple callbacks
 run in registration order. Exceptions in callbacks are caught and
 warned but do not prevent other callbacks.
 
-If no error handlers are registered, errors are warned to STDERR.
+After the callbacks run, C<run()> re-raises the error, so the server reports
+it as an application error. With no error handlers registered, nothing else
+is printed.
 
 Returns C<$self> for chaining.
 
@@ -1397,7 +1395,8 @@ Returns C<$self> for chaining.
 
 Callback-based event loop (alternative to C<each_*> iteration).
 Runs until disconnect, dispatching messages to registered callbacks.
-Errors in callbacks are caught and passed to error handlers.
+Errors in callbacks are passed to error handlers and, on connection-backed
+scopes, propagate so the server can determine the terminal outcome.
 
 =head1 KEEPALIVE
 
@@ -1450,8 +1449,6 @@ Returns C<$self> for chaining.
         my ($scope, $receive, $send) = @_;
 
         my $ws = PAGI::WebSocket->new($scope, $receive, $send);
-        await $ws->accept;
-
         my $user_id = generate_id();
         $connections{$user_id} = $ws;
 
@@ -1460,6 +1457,8 @@ Returns C<$self> for chaining.
             await broadcast({ type => 'leave', user => $user_id });
         });
 
+        await $ws->accept;
+        return if $ws->is_closed;
         await broadcast({ type => 'join', user => $user_id });
 
         await $ws->each_json(async sub {

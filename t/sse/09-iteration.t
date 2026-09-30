@@ -6,13 +6,15 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope);
 
 subtest 'each iterates over arrayref' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     my @items = ('one', 'two', 'three');
@@ -30,7 +32,7 @@ subtest 'each with transformer returns event spec' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     my @items = ({ name => 'Alice' }, { name => 'Bob' });
@@ -54,7 +56,7 @@ subtest 'each with coderef iterator' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     my @items = (1, 2, 3);
@@ -73,11 +75,12 @@ subtest 'each with coderef iterator' => sub {
     is(\@data_sent, ['item: 1', 'item: 2', 'item: 3'], 'coderef iterator works');
 };
 
-subtest 'each() runs on_close when callback dies (cleanup-then-rethrow)' => sub {
+subtest 'each() re-raises when callback dies; on_close runs when the connection ends' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
 
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $scope = sse_scope();
+    my $sse = PAGI::SSE->new($scope, sub {}, $send);
     $sse->start->get;
 
     my $cleanup_ran = 0;
@@ -97,20 +100,25 @@ subtest 'each() runs on_close when callback dies (cleanup-then-rethrow)' => sub 
         'exception still propagates'
     );
 
-    ok($cleanup_ran, 'on_close ran despite each() callback dying');
+    ok(!$cleanup_ran, 'on_close waits for the connection to end');
+
+    # The application died; the server ends the connection.
+    $scope->{'pagi.connection'}->_mark_disconnected('server_error');
+    ok($cleanup_ran, 'on_close ran once the connection ended');
 
     my @data_sent = map { $_->{data} } grep { $_->{type} eq 'sse.send' } @sent;
     is(\@data_sent, ['one'], 'iteration stopped at the failing item');
 };
 
-subtest 'every() re-raises and runs on_close when callback dies (no longer swallowed)' => sub {
+subtest 'every() re-raises when callback dies; on_close runs when the connection ends' => sub {
     unless (eval { require Future::IO::Impl::IOAsync; 1 }) {
         skip_all('Future::IO::Impl::IOAsync required for every() tests');
     }
 
     my @sent;
+    my $scope = sse_scope();
     my $sse = PAGI::SSE->new(
-        { type => 'sse' },
+        $scope,
         sub { Future->new },    # receive: never resolves
         sub { push @sent, $_[0]; Future->done },
     );
@@ -127,67 +135,37 @@ subtest 'every() re-raises and runs on_close when callback dies (no longer swall
         'exception now propagates instead of being swallowed'
     );
 
-    ok($cleanup_ran, 'on_close ran when the every() callback died');
+    ok(!$cleanup_ran, 'on_close waits for the connection to end');
+
+    # The application died; the server ends the connection.
+    $scope->{'pagi.connection'}->_mark_disconnected('server_error');
+    ok($cleanup_ran, 'on_close ran once the connection ended');
 };
 
-subtest 'every(): a callback that throws does not cancel the live protocol receive' => sub {
+subtest 'every() learns of disconnect from the connection, never from receive' => sub {
     unless (eval { require Future::IO::Impl::IOAsync; 1 }) {
         skip_all('Future::IO::Impl::IOAsync required for every() tests');
     }
 
-    # _watch_for_disconnect awaits this receive future directly. If every()
-    # cancels its own disconnect-monitor Future while it is suspended here,
-    # Future::AsyncAwait's cancel propagation cascades into cancelling THIS
-    # future too -- the live protocol receive, which must never happen.
-    my $receive_cancelled = 0;
-    my $receive_future;
+    # A receive-based disconnect watcher could cancel the live protocol
+    # receive; the connection object makes one unnecessary.
+    my $receive_called = 0;
+    my $scope = sse_scope();
     my $sse = PAGI::SSE->new(
-        { type => 'sse' },
-        sub {
-            $receive_future = Future->new;
-            $receive_future->on_cancel(sub { $receive_cancelled = 1 });
-            return $receive_future;
-        },
-        sub { Future->done },
-    );
-    $sse->start->get;
-
-    like(
-        dies { $sse->every(0.01, async sub { die "boom in every\n" })->get; },
-        qr/boom in every/,
-        'the callback exception still propagates',
-    );
-
-    ok($receive_future, 'the disconnect monitor actually called receive');
-    ok(!$receive_cancelled, 'the live protocol receive was NOT cancelled');
-};
-
-subtest 'every(): loop-exit cleanup does not cancel the live protocol receive' => sub {
-    unless (eval { require Future::IO::Impl::IOAsync; 1 }) {
-        skip_all('Future::IO::Impl::IOAsync required for every() tests');
-    }
-
-    my $receive_cancelled = 0;
-    my $receive_future;
-    my $sse = PAGI::SSE->new(
-        { type => 'sse' },
-        sub {
-            $receive_future = Future->new;
-            $receive_future->on_cancel(sub { $receive_cancelled = 1 });
-            return $receive_future;
-        },
+        $scope,
+        sub { $receive_called++; return Future->new },
         sub { Future->done },
     );
     $sse->start->get;
 
     my $ticks = 0;
     $sse->every(0.01, async sub {
-        $ticks++;
-        await $sse->close(reason => 'done_ticking') if $ticks >= 2;
+        $scope->{'pagi.connection'}->_mark_disconnected('client_closed')
+            if ++$ticks >= 2;
     })->get;
 
-    ok($receive_future, 'the disconnect monitor actually called receive');
-    ok(!$receive_cancelled, 'the live protocol receive was NOT cancelled at loop exit');
+    is($ticks, 2, 'every() stopped once the connection ended');
+    is($receive_called, 0, 'receive was never read');
 };
 
 done_testing;

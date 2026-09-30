@@ -124,8 +124,12 @@ sub wrap {
         # driving (see PAGI::Utils::_SendValidation). Lifespan needs enter_phase
         # calls synced to the real driver, which a wrapping middleware
         # doesn't have visibility into, so it is left unwired here.
-        my $sv = (($scope->{type} // '') eq 'http')
-            ? PAGI::Utils::_SendValidation->new(scope_type => 'http', extensions => $scope->{extensions})
+        my $scope_type = $scope->{type} // '';
+        my $sv = ($scope_type eq 'http' || $scope_type eq 'websocket' || $scope_type eq 'sse')
+            ? PAGI::Utils::_SendValidation->new(
+                scope_type => $scope_type,
+                extensions => $scope->{extensions},
+            )
             : undef;
 
         my $in_flight = 0;
@@ -192,6 +196,14 @@ sub wrap {
                     $lint_context = "\n(Lint note: app exited without sending final http.response.body)";
                 } elsif (defined $diag && $diag eq 'trailers') {
                     $lint_context = "\n(Lint note: app exited after declaring trailers but never sending http.response.trailers)";
+                } elsif (defined $diag && $diag eq 'websocket_no_start') {
+                    $lint_context = "\n(Lint note: WebSocket app exited without accepting or refusing the handshake)";
+                } elsif (defined $diag && $diag eq 'websocket_no_close') {
+                    $lint_context = "\n(Lint note: WebSocket app exited without sending websocket.close or receiving websocket.disconnect)";
+                } elsif (defined $diag && $diag eq 'sse_no_start') {
+                    $lint_context = "\n(Lint note: SSE app exited without starting or refusing the stream)";
+                } elsif (defined $diag && $diag eq 'sse_no_close') {
+                    $lint_context = "\n(Lint note: SSE app exited without sending sse.close)";
                 }
             }
             die "$err$lint_context";
@@ -203,9 +215,12 @@ sub wrap {
             if (defined $diag && $diag eq 'disconnected') {
                 my $conn = $scope->{'pagi.connection'};
                 my $reason = $conn->disconnect_reason;
+                my $label = ($scope->{type} // 'http') eq 'websocket' ? 'WebSocket'
+                          : ($scope->{type} // 'http') eq 'sse'       ? 'SSE'
+                          : 'HTTP';
                 $self->_note(
-                    "HTTP app stopped after the client disconnected ($reason); "
-                  . "no terminal http.response.body was sent, which is correct."
+                    "$label app stopped after the connection disconnected abnormally ($reason); "
+                  . "omitting its remaining terminal event is correct."
                 );
             } elsif (defined $diag && $diag eq 'no_start') {
                 $self->_warn(
@@ -224,7 +239,27 @@ sub wrap {
                     "HTTP app completed after declaring trailers (trailers => 1 on "
                   . "http.response.start) but never sent http.response.trailers. Send it "
                   . "before returning, or drop the trailers => 1 declaration if this "
-                  . "response doesn't need trailers."
+                    . "response doesn't need trailers."
+                );
+            } elsif (defined $diag && $diag eq 'websocket_no_start') {
+                $self->_warn(
+                    "WebSocket app completed without accepting the handshake or sending "
+                  . "an HTTP refusal. Send websocket.accept or a complete ordinary HTTP response."
+                );
+            } elsif (defined $diag && $diag eq 'websocket_no_close') {
+                $self->_warn(
+                    "WebSocket app completed without sending websocket.close or receiving "
+                  . "websocket.disconnect. An accepted WebSocket needs one of those terminal events."
+                );
+            } elsif (defined $diag && $diag eq 'sse_no_start') {
+                $self->_warn(
+                    "SSE app completed without starting the stream or sending an HTTP refusal. "
+                  . "Send sse.start or a complete ordinary HTTP response."
+                );
+            } elsif (defined $diag && $diag eq 'sse_no_close') {
+                $self->_warn(
+                    "SSE app completed without sending sse.close. A started SSE stream needs "
+                  . "that terminal event."
                 );
             }
         }
@@ -376,6 +411,15 @@ sub _finalize_diagnosis {
     my $err = $sv->finalize;
     return undef unless $err;
 
+    # A peer-initiated WebSocket closing handshake is completed by the
+    # server. It can therefore be terminal without an outgoing close event
+    # visible to this send-only validator. The connection object is the
+    # public authority for that clean terminal fact (and for the equivalent
+    # already-clean terminal fact on every modern scope).
+    my $conn = $scope->{'pagi.connection'};
+    return undef
+        if $conn && $conn->can('response_complete') && $conn->response_complete;
+
     # Incomplete, and the client had already gone: legal silence, not a bug.
     return 'disconnected' if request_ended_abnormally($scope);
 
@@ -392,6 +436,16 @@ sub _finalize_diagnosis {
     # a reordering.
 
     return 'trailers' if $err->message =~ /trailers/;
+
+    my $type = $scope->{type} // 'http';
+    if ($type eq 'websocket') {
+        return 'no_body' if $err->message =~ /refusal/ && $sv->started;
+        return $sv->started ? 'websocket_no_close' : 'websocket_no_start';
+    }
+    if ($type eq 'sse') {
+        return 'no_body' if $err->message =~ /refusal/ && $sv->started;
+        return $sv->started ? 'sse_no_close' : 'sse_no_start';
+    }
     return $sv->started ? 'no_body' : 'no_start';
 }
 
@@ -466,6 +520,13 @@ L<PAGI::Utils::_SendValidation> core -- see L</Division of labor>. This is where
 C<http.response.body>'s C<more> key is actually interpreted: absent,
 false, or a C<file>/C<fh> body all mark a chunk terminal, and a further
 body event after that is rejected.
+
+The same core validates WebSocket and SSE sends, including ordinary HTTP
+refusals before accept/start, rejection of removed names, and each protocol's
+terminal event. Completion diagnostics name C<websocket.close>,
+C<websocket.disconnect>, or C<sse.close> as appropriate. A clean terminal
+C<pagi.connection> fact also satisfies completion when the server finished a
+peer-initiated closing handshake outside the app's send stream.
 
 =item * Connection-specific headers (C<connection>, C<transfer-encoding>)
 on C<http.response.start> are flagged as an app-side smell (see

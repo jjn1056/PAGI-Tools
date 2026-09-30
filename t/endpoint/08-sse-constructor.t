@@ -8,6 +8,17 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::SSE;
+use lib 't/lib';
+use PAGITest::Connected qw(sse_scope receive_from);
+
+# Runs an SSE app until it parks on its stream, then ends the connection as a
+# server does when the client goes away.
+sub run_until_client_leaves {
+    my ($app, $scope) = @_;
+    my $running = $app->($scope, receive_from($scope), sub { Future->done });
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
+    return $running->get;
+}
 
 {
     package Local::WrongSSECache;
@@ -74,11 +85,7 @@ subtest 'class to_app constructs its endpoint immediately and only once' => sub 
         'class to_app constructs the endpoint immediately';
 
     for my $connection (1, 2) {
-        $app->(
-            { type => 'sse', path => "/events/$connection", headers => [] },
-            sub { Future->done({ type => 'sse.disconnect' }) },
-            sub { Future->done },
-        )->get;
+        run_until_client_leaves($app, sse_scope(path => "/events/$connection"));
     }
 
     is $Local::ConstructionCountingSSE::NEW_CALLS, 1,
@@ -103,8 +110,8 @@ subtest 'app reuses only a compatible exact-scope SSE cache' => sub {
         'same scope SSE',
     ) {
         subtest $case => sub {
-            my $scope = { type => 'sse', path => '/events', headers => [] };
-            my $parent_scope = { type => 'sse', path => '/parent', headers => [] };
+            my $scope = sse_scope(path => '/events');
+            my $parent_scope = sse_scope(path => '/parent');
             my $parent = PAGI::SSE->new(
                 $parent_scope, sub { Future->done }, sub { Future->done },
             );
@@ -115,19 +122,13 @@ subtest 'app reuses only a compatible exact-scope SSE cache' => sub {
                     : $case eq 'throwing scope'
                         ? bless({}, 'PAGI::SSE')
                         : PAGI::SSE->new(
-                            $scope,
-                            sub { Future->done({ type => 'sse.disconnect' }) },
-                            sub { Future->done },
+                            $scope, receive_from($scope), sub { Future->done },
                         );
             $scope->{'pagi.sse'} = $cached;
             $CacheAwareEndpoint::seen = undef;
 
             my $run = sub {
-                CacheAwareEndpoint->to_app->(
-                    $scope,
-                    sub { Future->done({ type => 'sse.disconnect' }) },
-                    sub { Future->done },
-                )->get;
+                run_until_client_leaves(CacheAwareEndpoint->to_app, $scope);
             };
             if ($case eq 'throwing scope') {
                 no warnings 'redefine';

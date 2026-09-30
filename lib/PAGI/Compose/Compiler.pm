@@ -39,12 +39,8 @@ sub compile {
         $dispatcher,
     );
     my $http_app = PAGI::Compose::ResponseGuard->wrap($author_app);
+    # The failsafe renders the 500 and re-raises; the server reports it.
     $http_app = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
-        on_error => sub {
-            my ($error) = @_;
-            warn "PAGI application error: $error";
-            return;
-        },
         _development_resolver => sub { return PAGI::Utils::is_development() },
     )->wrap($http_app);
 

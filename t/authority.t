@@ -5,6 +5,7 @@ use PAGI::Authority;
 use PAGI::Request;
 use PAGI::WebSocket;
 use PAGI::SSE;
+use PAGI::Test::ConnectionState;
 
 subtest 'validate preserves accepted authority spellings' => sub {
     my @valid = (
@@ -143,6 +144,8 @@ subtest 'Request and protocol objects expose their raw scopes to Host validation
         my ($name, $build) = @{$case};
         my $type = $name eq 'Request' || $name eq 'raw scope' ? 'http' : lc $name;
         my $scope = { type => $type, method => 'GET', headers => [['Host', 'example.test:8443']] };
+        $scope->{'pagi.connection'} = PAGI::Test::ConnectionState->new(websocket => $type eq 'websocket')
+            if $type ne 'http';
         my $source = $build->($scope);
         my $source_scope = ref($source) eq 'HASH' ? $source : $source->scope;
         is(PAGI::Authority->host_from_scope($source_scope),

@@ -206,7 +206,7 @@ subtest 'B3: exception before any send still 500s (regression)' => sub {
 # B4: every scope type advertises pagi 0.4 / spec_version 0.3.
 # ---------------------------------------------------------------------------
 
-subtest 'B4: scopes advertise pagi.version 0.4 / spec_version 0.3' => sub {
+subtest 'B4: WWW scopes advertise core 0.5 / WWW 0.6; lifespan is unchanged' => sub {
     my $seen;
 
     my $http_app = async sub {
@@ -216,7 +216,7 @@ subtest 'B4: scopes advertise pagi.version 0.4 / spec_version 0.3' => sub {
         await $send->({ type => 'http.response.body', body => '', more => 0 });
     };
     PAGI::Test::Client->new(app => $http_app)->get('/');
-    is_deeply $seen, { version => '0.4', spec_version => '0.3' }, 'http scope';
+    is_deeply $seen, { version => '0.5', spec_version => '0.6' }, 'http scope';
 
     undef $seen;
     my $ws_app = async sub {
@@ -226,7 +226,7 @@ subtest 'B4: scopes advertise pagi.version 0.4 / spec_version 0.3' => sub {
         await $send->({ type => 'websocket.accept' });
     };
     PAGI::Test::Client->new(app => $ws_app)->websocket('/');
-    is_deeply $seen, { version => '0.4', spec_version => '0.3' }, 'websocket scope';
+    is_deeply $seen, { version => '0.5', spec_version => '0.6' }, 'websocket scope';
 
     undef $seen;
     my $sse_app = async sub {
@@ -235,7 +235,7 @@ subtest 'B4: scopes advertise pagi.version 0.4 / spec_version 0.3' => sub {
         await $send->({ type => 'sse.start', status => 200, headers => [] });
     };
     PAGI::Test::Client->new(app => $sse_app)->sse('/');
-    is_deeply $seen, { version => '0.4', spec_version => '0.3' }, 'sse scope';
+    is_deeply $seen, { version => '0.5', spec_version => '0.6' }, 'sse scope';
 
     undef $seen;
     my $lifespan_app = async sub {

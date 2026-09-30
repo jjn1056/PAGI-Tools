@@ -7,6 +7,8 @@ use PAGI::CSRF qw(csrf);
 use PAGI::Request;
 use PAGI::WebSocket;
 use PAGI::SSE;
+use lib 't/lib';
+use PAGITest::Connected qw(ws_scope sse_scope);
 
 {
     package Local::CSRF::NoDefault;
@@ -50,11 +52,11 @@ subtest 'scope and direct protocol sources expose the exact token' => sub {
         'strict Request source returns its scope token');
 
     for my $case (
-        ['WebSocket', 'websocket', sub { PAGI::WebSocket->new($_[0], sub {}, sub {}) }],
-        ['SSE', 'sse', sub { PAGI::SSE->new($_[0], sub {}, sub {}) }],
+        ['WebSocket', \&ws_scope, sub { PAGI::WebSocket->new($_[0], sub {}, sub {}) }],
+        ['SSE', \&sse_scope, sub { PAGI::SSE->new($_[0], sub {}, sub {}) }],
     ) {
-        my ($name, $type, $build) = @{$case};
-        my $source = $build->({ type => $type, headers => [], csrf_token => 'scope-token' });
+        my ($name, $scope_for, $build) = @{$case};
+        my $source = $build->($scope_for->(csrf_token => 'scope-token'));
         is(csrf($source)->token, 'scope-token', "$name source returns its scope token");
     }
 };

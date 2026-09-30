@@ -26,7 +26,13 @@ use PAGI::Routing::RequestResponse;
 }
 
 sub scope {
-    return { type => 'http', path => $_[0] // '/' };
+    my ($path, $type) = @_;
+    return {
+        type    => $type // 'http',
+        method  => 'POST',
+        path    => $path // '/',
+        headers => [],
+    };
 }
 
 sub quiet_receive {
@@ -131,17 +137,77 @@ subtest 'request_factory must return a Request instance or subclass' => sub {
     is($handler_called, 0, 'handler does not run with an invalid request object');
 };
 
-subtest 'non-HTTP scope is rejected before the handler runs' => sub {
+subtest 'non-request scopes are rejected before the factory and handler run' => sub {
+    my $factory_called = 0;
     my $called = 0;
-    my $app = request_response(sub {
-        ++$called;
-        return sub { return };
-    })->to_app;
+    my $app = request_response(
+        sub {
+            ++$called;
+            return sub { return };
+        },
+        request_factory => sub {
+            ++$factory_called;
+            return Local::CompanyRequest->new(@_);
+        },
+    )->to_app;
 
-    like(dies { $app->({ type => 'websocket' }, quiet_receive(), sub { Future->done })->get },
-        qr/requires HTTP scope/,
-        'non-HTTP scope is rejected');
-    is($called, 0, 'handler did not run for the rejected scope');
+    for my $type ('lifespan', 'example.custom') {
+        like(dies {
+            $app->({ type => $type }, quiet_receive(), sub { Future->done })->get;
+        }, qr/requires HTTP, WebSocket, or SSE scope.*\Q$type\E/i,
+            "$type scope is rejected");
+    }
+    is($factory_called, 0, 'request factory did not run for rejected scopes');
+    is($called, 0, 'handler did not run for rejected scopes');
+};
+
+subtest 'all request protocols preserve factory, handler, conversion, and triplet boundaries' => sub {
+    for my $type (qw(http websocket sse)) {
+        for my $mode (qw(immediate async)) {
+            my ($factory_calls, $handler_calls, $native_calls) = (0, 0, 0);
+            my $scope = scope("/$type/$mode", $type);
+            my $receive = quiet_receive();
+            my ($send, $events) = recorder();
+            my $native = sub {
+                ++$native_calls;
+                is([@_], [$scope, $receive, $send],
+                    "$type $mode result receives the exact original triplet");
+                return "$type $mode complete";
+            };
+            my $returned = $mode eq 'immediate'
+                ? $native : Local::ReturnedApp->new($native);
+            local $Local::ReturnedApp::TO_APP_CALLS = 0;
+            my $application = request_response(
+                sub {
+                    my ($request) = @_;
+                    ++$handler_calls;
+                    isa_ok($request, ['Local::CompanyRequest'],
+                        "$type $mode handler receives the custom Request subclass");
+                    is(refaddr($request->scope), refaddr($scope),
+                        "$type $mode handler Request retains the original scope");
+                    return $mode eq 'immediate'
+                        ? $returned : Future->done($returned);
+                },
+                request_factory => sub {
+                    my ($seen_scope, $seen_receive) = @_;
+                    ++$factory_calls;
+                    is([$seen_scope, $seen_receive], [$scope, $receive],
+                        "$type $mode factory receives the exact request boundary");
+                    return Local::CompanyRequest->new($seen_scope, $seen_receive);
+                },
+            );
+
+            is($application->to_app->($scope, $receive, $send)->get,
+                "$type $mode complete", "$type $mode handler result is invoked");
+            is($factory_calls, 1, "$type $mode request factory runs exactly once");
+            is($handler_calls, 1, "$type $mode handler runs exactly once");
+            is($Local::ReturnedApp::TO_APP_CALLS,
+                $mode eq 'async' ? 1 : 0,
+                "$type $mode result uses the expected conversion path");
+            is($native_calls, 1, "$type $mode native app runs exactly once");
+            is($events, [], "$type $mode native app remains valid without output");
+        }
+    }
 };
 
 subtest 'immediate handler result receives one Request and preserves the triplet' => sub {
@@ -202,6 +268,7 @@ subtest 'invalid and undefined handler results fail before application invocatio
     for my $case (
         ['undefined', undef],
         ['invalid scalar', 'not an application'],
+        ['invalid hash', {}],
     ) {
         my ($label, $value) = @$case;
         my $app = request_response(sub { return $value })->to_app;
@@ -273,6 +340,32 @@ subtest 'a returned application observes only receive events remaining after han
 
     is(\@seen, ['first', 'second'],
         'returned app receives the advanced original receive channel');
+};
+
+subtest 'SSE handler body consumption advances the receive stream without replay' => sub {
+    my @events = (
+        { type => 'sse.request', body => 'first', more => 1 },
+        { type => 'sse.request', body => 'second', more => 0 },
+    );
+    my $receive = sub { return Future->done(shift @events) };
+    my @seen;
+    my $scope = scope('/events', 'sse');
+    my $app = request_response(async sub {
+        my ($request) = @_;
+        push @seen, await $request->body_stream->next_chunk;
+        return async sub {
+            my ($returned_scope, $returned_receive) = @_;
+            is(refaddr($returned_scope), refaddr($scope),
+                'SSE returned app retains original scope identity');
+            my $event = await $returned_receive->();
+            push @seen, $event->{body};
+            return;
+        };
+    })->to_app;
+
+    $app->($scope, $receive, sub { Future->done })->get;
+    is(\@seen, ['first', 'second'],
+        'SSE returned app receives only the remaining original event');
 };
 
 done_testing;

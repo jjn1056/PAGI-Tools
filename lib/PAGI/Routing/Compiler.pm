@@ -289,22 +289,13 @@ sub _compile_mounted_app {
 
 async sub _send_protocol_not_found {
     my ($class, $scope, $send) = @_;
-    my $type = $scope->{type};
-
-    if ($type eq 'websocket'
-            && !exists(($scope->{extensions} // {})->{'websocket.http.response'})) {
-        await Future->wrap($send->({ type => 'websocket.close' }));
-        return;
-    }
-
-    my $prefix = "$type.http.response";
     await Future->wrap($send->({
-        type    => "$prefix.start",
+        type    => 'http.response.start',
         status  => 404,
         headers => [['content-type', 'text/plain']],
     }));
     await Future->wrap($send->({
-        type => "$prefix.body",
+        type => 'http.response.body',
         body => 'Not Found',
         more => 0,
     }));
@@ -344,6 +335,7 @@ sub _compile_protocol_leaf {
                 : PAGI::SSE->new($scope, $receive, $send);
             my $returned = $handler->($protocol);
             await Future->wrap($returned);
+            await $protocol->close if $protocol->is_connected;
             return;
         };
     }

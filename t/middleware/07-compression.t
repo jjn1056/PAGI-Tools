@@ -41,7 +41,11 @@ subtest 'GZip middleware - compresses when client accepts' => sub {
         await $send->({
             type    => 'http.response.start',
             status  => 200,
-            headers => [['Content-Type', 'text/html']],
+            headers => [
+                ['Content-Type', 'text/html'], ['Vary', 'Origin'],
+                ['vary', 'accept-encoding'],
+                ['Set-Cookie', 'a=1'], ['Set-Cookie', 'b=2'],
+            ],
         });
         await $send->({
             type => 'http.response.body',
@@ -66,7 +70,10 @@ subtest 'GZip middleware - compresses when client accepts' => sub {
     # Check for gzip headers
     my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
     is $headers{'content-encoding'}, 'gzip', 'has Content-Encoding: gzip';
-    ok exists $headers{'vary'}, 'has Vary header';
+    is [map { $_->[1] } grep { lc($_->[0]) eq 'vary' } @{$events[0]{headers}}],
+        ['Origin, accept-encoding'], 'GZip merges existing Vary fields';
+    is [map { $_->[1] } grep { lc($_->[0]) eq 'set-cookie' } @{$events[0]{headers}}],
+        ['a=1', 'b=2'], 'GZip preserves repeated Set-Cookie fields';
 
     # Decompress and verify
     my $compressed = $events[1]{body};

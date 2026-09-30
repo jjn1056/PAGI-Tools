@@ -6,7 +6,9 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope);
 
 # NOTE: these subtests call start() before keepalive() throughout. That's
 # required, not incidental -- sse.keepalive is illegal before sse.start (see
@@ -20,13 +22,13 @@ my $send = sub { push @sent, $_[0]; Future->done };
 my $receive = sub { Future->new };  # Never resolves
 
 subtest 'keepalive method exists' => sub {
-    my $sse = PAGI::SSE->new({ type => 'sse' }, $receive, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), $receive, $send);
     ok($sse->can('keepalive'), 'keepalive method exists');
 };
 
 subtest 'keepalive sends sse.keepalive event' => sub {
     @sent = ();
-    my $sse = PAGI::SSE->new({ type => 'sse' }, $receive, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), $receive, $send);
     $sse->start->get;
 
     $sse->keepalive(30)->get;
@@ -39,7 +41,7 @@ subtest 'keepalive sends sse.keepalive event' => sub {
 
 subtest 'keepalive with comment sends both interval and comment' => sub {
     @sent = ();
-    my $sse = PAGI::SSE->new({ type => 'sse' }, $receive, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), $receive, $send);
     $sse->start->get;
 
     $sse->keepalive(30, 'ping')->get;
@@ -51,7 +53,7 @@ subtest 'keepalive with comment sends both interval and comment' => sub {
 };
 
 subtest 'keepalive returns self for chaining' => sub {
-    my $sse = PAGI::SSE->new({ type => 'sse' }, $receive, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), $receive, $send);
     $sse->start->get;
     my $result = $sse->keepalive(25)->get;
     is(ref($result), ref($sse), 'returns same type');
@@ -60,7 +62,7 @@ subtest 'keepalive returns self for chaining' => sub {
 
 subtest 'keepalive with 0 interval disables keepalive' => sub {
     @sent = ();
-    my $sse = PAGI::SSE->new({ type => 'sse' }, $receive, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), $receive, $send);
     $sse->start->get;
 
     $sse->keepalive(0)->get;

@@ -2,7 +2,6 @@ use strict;
 use warnings;
 
 use Test2::V0;
-use version ();
 
 {
     package Local::CPANFileContract;
@@ -38,18 +37,11 @@ my $loaded = Local::CPANFileContract::load('./cpanfile');
 ok(defined $loaded, 'cpanfile executes as a prerequisite contract')
     or diag("cpanfile load failed: $@ $!");
 
-my $server_minimum
-    = $Local::CPANFileContract::PREREQUISITES{develop}{requires}{'PAGI::Server'};
-ok(
-    defined($server_minimum)
-        && version->parse($server_minimum) >= version->parse('0.002011'),
-    'develop prerequisites require cancellation-isolated PAGI::Server 0.002011 or newer',
-);
-
-ok(
-    !exists $Local::CPANFileContract::PREREQUISITES{runtime}{requires}{'PAGI::Server'}
-        && !exists $Local::CPANFileContract::PREREQUISITES{runtime}{recommends}{'PAGI::Server'},
-    'PAGI::Server remains outside runtime prerequisites',
-);
+# Tools targets the PAGI spec, not a server. The real-server tests run against
+# a PAGI-Server checkout on -I and skip otherwise, so no phase declares one.
+my @server_declarations = grep {
+    exists $_->{'PAGI::Server'}
+} map { values %$_ } values %Local::CPANFileContract::PREREQUISITES;
+is(scalar @server_declarations, 0, 'no prerequisite phase declares PAGI::Server');
 
 done_testing;

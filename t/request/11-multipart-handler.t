@@ -41,6 +41,33 @@ sub mock_receive {
     };
 }
 
+subtest 'disposition parameters are parsed as a complete field' => sub {
+    my $boundary = 'DispositionBoundary';
+    my @cases = (
+        ['form-data; name="upload"; filename="a\\"b.txt"', 'upload', 'a"b.txt', 1],
+        ['form-data; name="semi;colon"; filename = "report.txt"; x-extra=kept', 'semi;colon', 'report.txt', 1],
+        ['form-data; name="empty"; filename=""', 'empty', '', 1],
+        ["form-data; name=extended; filename*=UTF-8''report.txt", 'extended', undef, 0],
+        ['form-data; name="broken"; filename="partial.txt" junk', '', undef, 0],
+    );
+    for my $case (@cases) {
+        my ($disposition, $name, $filename, $is_file) = @$case;
+        my $body = "--$boundary\r\nContent-Disposition: $disposition\r\n\r\ndata\r\n--$boundary--\r\n";
+        my $handler = PAGI::Request::MultiPartHandler->new(
+            boundary => $boundary, receive => mock_receive($body),
+        );
+        my ($form, $uploads) = $handler->parse->get;
+        if ($is_file) {
+            my $upload = $uploads->get($name);
+            ok $upload, "$disposition is an upload";
+            is $upload->filename, $filename, 'decoded filename';
+        } else {
+            is $form->get($name), 'data', "$disposition is a field";
+            is [$uploads->keys], [], 'no partial upload metadata';
+        }
+    }
+};
+
 subtest 'parse simple form fields' => sub {
     my $boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW';
     my $body = build_multipart($boundary,

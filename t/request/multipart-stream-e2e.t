@@ -1,11 +1,15 @@
 use strict; use warnings;
 use Test2::V0;
 use Future::AsyncAwait;
+use lib 't/lib';
+use PAGITest::CurrentServer qw(current_server_unavailable);
 
 plan skip_all => 'set RELEASE_TESTING=1 to run the full-stack PAGI::Server e2e'
     unless $ENV{RELEASE_TESTING};
+my $server_unavailable = current_server_unavailable();
+plan skip_all => $server_unavailable if $server_unavailable;
 plan skip_all => "full-stack deps unavailable: $@"
-    unless eval { require PAGI::Server; require Net::Async::HTTP; require HTTP::Request::Common;
+    unless eval { require Net::Async::HTTP; require HTTP::Request::Common;
                   require IO::Async::Loop; require Digest::MD5; require JSON::MaybeXS; 1 };
 
 use PAGI::Request;

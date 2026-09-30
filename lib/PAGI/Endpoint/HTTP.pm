@@ -77,6 +77,11 @@ sub to_app {
 
     return async sub {
         my ($scope, $receive, $send) = @_;
+        my $type = ref($scope) eq 'HASH' ? $scope->{type} : undef;
+        croak 'PAGI::Endpoint::HTTP scope type is required'
+            unless defined($type) && !ref($type) && length($type);
+        croak "PAGI::Endpoint::HTTP requires HTTP scope; received '$type'"
+            unless $type eq 'http';
         my $request = PAGI::Request->new($scope, $receive);
         my $application = await $endpoint->dispatch($request);
         await invoke_app($application, $scope, $receive, $send);
@@ -219,6 +224,9 @@ Returns a PAGI-compatible async coderef that can be used directly
 with PAGI::Server or composed with middleware. Creates a single endpoint
 instance at construction time; that instance is reused for every request
 (singleton).
+
+The returned application accepts HTTP scopes only. Other protocol scopes are
+rejected before a handler runs or either I/O callback is invoked.
 
 Calling C<to_app> on an already configured endpoint instance retains that
 exact instance and reuses it for the returned application's lifetime.

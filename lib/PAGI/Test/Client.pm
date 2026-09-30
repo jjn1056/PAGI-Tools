@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use Carp qw(croak);
+use Scalar::Util qw(weaken);
 
 use PAGI::Utils::_SendValidation;
 use PAGI::Test::ConnectionState;
@@ -18,12 +19,11 @@ use PAGI::Utils ();
 # flushed to the transport" -- this mock has no transport to flush (everything
 # is captured synchronously in-process), so there is nothing genuine to honor;
 # advertising it would be decorative, not implemented (see LIMITATIONS).
-# websocket: the extension denial path (websocket.http.response.*) IS
-# concretely implemented -- PAGI::Test::WebSocket models its own denial/
-# denial_complete states -- so it is genuinely advertised.
+# WebSocket and SSE refusals use ordinary http.response.* events in WWW 0.6,
+# so neither needs an advertised extension.
 my %HTTP_EXTENSIONS      = ();
 my %SSE_EXTENSIONS       = ();
-my %WEBSOCKET_EXTENSIONS = ('websocket.http.response' => {});
+my %WEBSOCKET_EXTENSIONS = ();
 
 
 sub new {
@@ -128,16 +128,19 @@ sub _request {
     my $send = async sub {
         my ($event) = @_;
 
+        # An application's abort has already made the connection state
+        # terminal. Match a transport close by discarding later sends.
+        return if defined $scope->{'pagi.connection'}->disconnect_reason;
+        local $scope->{'pagi.connection'}{_defer_notifications} = 1;
+
         if (my $err = $sv->check($event)) {
             die $err->message . "\n";
         }
 
         my %captured = %$event;
 
-        if (my $conn = $scope->{'pagi.connection'}) {
-            $conn->_mark_response_started
-                if ($captured{type} // '') eq 'http.response.start';
-        }
+        $scope->{'pagi.connection'}->_mark_response_started
+            if ($captured{type} // '') eq 'http.response.start';
 
         if (($captured{type} // '') eq 'http.response.start') {
             # PAGI spec — this mock is H1-flavored (see http_version above):
@@ -167,18 +170,27 @@ sub _request {
 
         $response->_capture_event(\%captured);
 
-        if (my $conn = $scope->{'pagi.connection'}) {
-            $conn->_mark_response_complete if $sv->complete;
-        }
+        $scope->{'pagi.connection'}->_mark_complete if $sv->complete;
     };
 
     # Call app (with exception handling like real server)
     my $exception;
     eval {
-        $self->{app}->($scope, $receive, $send)->get;
+        my $app_future = $self->{app}->($scope, $receive, $send);
+        # Own the suspended application while delivering terminal signals,
+        # outside its send call. It may be awaiting one of those signals.
+        $scope->{'pagi.connection'}->_deliver_notifications;
+        $app_future->get;
     };
-    if ($@) {
-        $exception = $@;
+    my $app_error = $@;
+    $scope->{'pagi.connection'}->_deliver_notifications;
+    # An ended transport cannot acquire a backstop response on app return.
+    if (defined $scope->{'pagi.connection'}->disconnect_reason) {
+        die $app_error if $app_error && $self->{raise_app_exceptions};
+        return $self->_finish_response($response);
+    }
+    if ($app_error) {
+        $exception = $app_error;
         if ($self->{raise_app_exceptions}) {
             die $exception;
         }
@@ -188,18 +200,15 @@ sub _request {
             # any declared trailers) before the app threw -- mirror the
             # server: the response stands and this is a clean completion,
             # not a disconnect.
-            if (my $conn = $scope->{'pagi.connection'}) {
-                $conn->_mark_complete;
-            }
+            $scope->{'pagi.connection'}->_mark_complete;
             warn "exception after response completed: $exception";
             return $self->_finish_response($response);
         }
 
         # Mimic server behavior: return 500 response
-        if (my $conn = $scope->{'pagi.connection'}) {
-            $conn->_mark_response_started;            # the 500 IS a response
-            $conn->_mark_disconnected('server_error');# abnormal end — not on_complete
-        }
+        my $conn = $scope->{'pagi.connection'};
+        $conn->_mark_response_started;            # the 500 IS a response
+        $conn->_mark_disconnected('server_error');# abnormal end — not on_complete
         return PAGI::Test::Response->new(
             events => [
                 {
@@ -222,9 +231,7 @@ sub _request {
     # declared trailers never sent) is an abnormal disconnect, not a clean
     # completion.
     if (my $err = $sv->finalize) {
-        if (my $conn = $scope->{'pagi.connection'}) {
-            $conn->_mark_disconnected('server_error');
-        }
+        $scope->{'pagi.connection'}->_mark_disconnected('server_error');
         warn "incomplete response: $err\n";
 
         unless ($sv->started) {
@@ -250,9 +257,7 @@ sub _request {
         return $self->_finish_response($response);
     }
 
-    if (my $conn = $scope->{'pagi.connection'}) {
-        $conn->_mark_complete;
-    }
+    $scope->{'pagi.connection'}->_mark_complete;
 
     return $self->_finish_response($response);
 }
@@ -284,8 +289,8 @@ sub _build_scope {
 
     my $scope = {
         type         => 'http',
-        # source of truth: released PAGI::Server scope advertisement
-        pagi         => { version => '0.4', spec_version => '0.3' },
+        # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
+        pagi         => { version => '0.5', spec_version => '0.6' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -371,10 +376,11 @@ sub websocket {
         push @headers, ['cookie', $cookie];
     }
 
+    my $connection = PAGI::Test::ConnectionState->new(websocket => 1);
     my $scope = {
         type         => 'websocket',
-        # source of truth: released PAGI::Server scope advertisement
-        pagi         => { version => '0.4', spec_version => '0.3' },
+        # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
+        pagi         => { version => '0.5', spec_version => '0.6' },
         http_version => '1.1',
         scheme       => 'ws',
         path         => $path,
@@ -385,11 +391,18 @@ sub websocket {
         server       => ['testserver', 80],
         subprotocols => $opts{subprotocols} // [],
         extensions   => \%WEBSOCKET_EXTENSIONS,
+        'pagi.connection' => $connection,
     };
 
     $scope->{state} = $self->{state} if $self->{state};
 
-    my $ws = PAGI::Test::WebSocket->new(app => $self->{app}, scope => $scope);
+    my $ws = PAGI::Test::WebSocket->new(app => $self->{app}, scope => $scope, close_mode => $opts{close_mode});
+    my $weak_ws = $ws;
+    weaken($weak_ws);
+    $connection->_set_abort_hook(sub {
+        my ($conn, $detail) = @_;
+        $weak_ws->_transport_closed(detail => $detail) if $weak_ws;
+    });
     $ws->_start;
 
     if ($callback) {
@@ -421,6 +434,13 @@ sub sse {
     }
 
     $path //= '/';
+
+    # SSE requests use the same HTTP request-body framing as ordinary HTTP.
+    # The body itself is delivered by PAGI::Test::SSE as one terminal
+    # sse.request event, matching the real server's in-process abstraction.
+    if (defined $opts{body}) {
+        _set_header(\$opts{headers}, 'Content-Length', length($opts{body}), 0);
+    }
 
     # Parse query string from path
     my $query_string = '';
@@ -464,10 +484,11 @@ sub sse {
     # modern libraries like fetch-event-source used by htmx4, datastar, etc.)
     my $method = uc($opts{method} // 'GET');
 
+    my $connection = PAGI::Test::ConnectionState->new;
     my $scope = {
         type         => 'sse',
-        # source of truth: released PAGI::Server scope advertisement
-        pagi         => { version => '0.4', spec_version => '0.3' },
+        # Fixture contract: PAGI 0.5 with Www 0.6 universal connection state.
+        pagi         => { version => '0.5', spec_version => '0.6' },
         http_version => '1.1',
         method       => $method,
         scheme       => 'http',
@@ -478,32 +499,29 @@ sub sse {
         client       => ['127.0.0.1', 12345],
         server       => ['testserver', 80],
         extensions   => \%SSE_EXTENSIONS,
+        'pagi.connection' => $connection,
     };
 
     $scope->{state} = $self->{state} if $self->{state};
 
-    my $sse = PAGI::Test::SSE->new(app => $self->{app}, scope => $scope);
+    my $sse = PAGI::Test::SSE->new(
+        app => $self->{app}, scope => $scope,
+        request_body => $opts{body} // '',
+    );
+    my $weak_sse = $sse;
+    weaken($weak_sse);
+    $connection->_set_abort_hook(sub {
+        my ($conn, $detail) = @_;
+        $weak_sse->_transport_closed(detail => $detail) if $weak_sse;
+    });
     $sse->_start;
 
-    if ($sse->_declined) {
-        # The app declined (sse.http.response.*) instead of starting a
+    if ($sse->refused) {
+        # The app refused with http.response.* instead of starting a
         # stream -- mirror the server: hand back the real HTTP response it
         # sent, not an SSE connection object. There is no stream to hand a
         # callback either, so the callback (if any) is never invoked.
-        return PAGI::Test::Response->new(
-            events => [
-                {
-                    type    => 'http.response.start',
-                    status  => $sse->_decline_status,
-                    headers => $sse->_decline_headers,
-                },
-                {
-                    type => 'http.response.body',
-                    body => $sse->_decline_body,
-                    more => 0,
-                },
-            ],
-        );
+        return $sse->response;
     }
 
     if ($callback) {
@@ -907,6 +925,14 @@ cookies, and basic protocol flows. For behavior that depends on real socket I/O,
 HTTP framing, backpressure, or server lifecycle semantics, prefer testing
 against L<PAGI::Server>.
 
+HTTP, WebSocket, and SSE fixtures advertise Www C<spec_version 0.6> and carry
+the complete per-scope C<pagi.connection> interface. A manual WebSocket/SSE
+test-side C<close> records the peer outcome; application terminal sends record
+clean completion. The streaming test objects' C<pump> method advances queued
+application work and deferred terminal notifications when a test is holding
+the connection open. Terminal facts are readable before that notification
+delivery. These in-process facts do not model socket framing or timing.
+
 =head1 SEND STRICTNESS (http)
 
 The C<$send> coderef given to your app during an HTTP request is strict: it
@@ -989,10 +1015,8 @@ no transport to flush (every event is captured synchronously in-process), so
 there is nothing genuine to honor. Sending C<http.fullflush> through this
 mock always fails as an unadvertised extension.
 
-=item * C<websocket> -- C<{ 'websocket.http.response' =E<gt> {} }>. The
-extension denial path (C<websocket.http.response.start>/C<.body>) is
-concretely implemented by L<PAGI::Test::WebSocket> (its own C<denial> /
-C<denial_complete> states), so it is genuinely advertised.
+=item * C<websocket> -- empty (C<{}>). Ordinary C<http.response.start>
+and C<http.response.body> refusal events are core WWW 0.6 behavior.
 
 =back
 
@@ -1296,13 +1320,21 @@ portable and extension denial paths, and C<simulate_abnormal_close>.
         headers => { 'Last-Event-ID' => '42' },
     );
 
+    # POST request body (delivered to the app as sse.request)
+    my $body = '{"job":42}';
+    my $res = $client->sse('/jobs',
+        method  => 'POST',
+        body    => $body,
+        headers => { 'Content-Type' => 'application/json' },
+    );
+
     # Options with callback
     $client->sse('/events', headers => { Authorization => 'Bearer xyz' }, sub {
         my ($sse) = @_;
         # ...
     });
 
-    # A decline (sse.http.response.*) returns a PAGI::Test::Response, not
+    # A decline (http.response.*) returns a PAGI::Test::Response, not
     # an SSE connection object -- there is no stream to hand a callback,
     # so any callback given is not invoked.
     my $res = $client->sse('/nope');

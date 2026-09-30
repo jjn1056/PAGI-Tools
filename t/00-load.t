@@ -9,6 +9,12 @@ my @load_modules = qw(
     PAGI::Compose::Compiler
     PAGI::Exception::IncompleteResponse
     PAGI::Authority
+    PAGI::Auth
+    PAGI::Auth::Credentials
+    PAGI::Auth::Failure
+    PAGI::Auth::Result
+    PAGI::Auth::SimpleUser
+    PAGI::Auth::UnauthenticatedUser
     PAGI::Routing
     PAGI::Routing::Router
     PAGI::Routing::Route
@@ -20,7 +26,7 @@ my @load_modules = qw(
     PAGI::Routing::Compiler
     PAGI::Routing::HeadBoundary
     PAGI::Middleware
-    PAGI::Middleware::Helpers
+    PAGI::Middleware::Authentication
     PAGI::Middleware::Builder
     PAGI::App::File
     PAGI::App::File::Result
@@ -56,6 +62,8 @@ my @load_modules = qw(
     PAGI::SSE
     PAGI::Lifespan
     PAGI::Utils
+    PAGI::Utils::Headers
+    PAGI::Utils::Middleware
     PAGI::Utils::AppObject
     PAGI::Utils::Scope
     PAGI::Utils::_SendValidation
@@ -77,6 +85,10 @@ ok(
 );
 
 my @removed_modules = (
+    join('::', qw(PAGI Middleware Auth Basic)),
+    join('::', qw(PAGI Middleware Auth Bearer)),
+    join('::', qw(PAGI Auth Challenge)),
+    join('::', qw(PAGI Auth Outcomes)),
     join('::', qw(PAGI Routing Trace)),
     join('::', qw(PAGI Routing Trace Recorder)),
     join('::', qw(PAGI Routing Trace Snapshot)),
@@ -89,6 +101,7 @@ for my $module (@removed_modules) {
     my $file = $module;
     $file =~ s{::}{/}g;
     $file .= '.pm';
+    local @INC = ('lib');
     my $loaded = eval { require $file; 1 };
     ok(!$loaded, "$module is no longer loadable");
 }

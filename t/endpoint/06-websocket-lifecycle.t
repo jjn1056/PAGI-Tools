@@ -9,6 +9,8 @@ use Scalar::Util qw(refaddr);
 
 use lib 'lib';
 use PAGI::Endpoint::WebSocket;
+use lib 't/lib';
+use PAGITest::Connected qw(ws_scope receive_from);
 
 package EchoEndpoint {
     use parent 'PAGI::Endpoint::WebSocket';
@@ -113,14 +115,8 @@ subtest 'lifecycle via to_app' => sub {
         { type => 'websocket.receive', text => 'world' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $idx = 0;
-    my $receive = sub { Future->done($events[$idx++]) };
-
-    my $scope = {
-        type    => 'websocket',
-        path    => '/ws/echo',
-        headers => [],
-    };
+    my $scope   = ws_scope(path => '/ws/echo');
+    my $receive = receive_from($scope, @events);
 
     $app->($scope, $receive, $send)->get;
 
@@ -150,9 +146,10 @@ subtest 'configured endpoint to_app retains the exact object across connections'
     my $app = $configured->to_app;
 
     for my $connection (1, 2) {
+        my $scope = ws_scope(path => "/chat/$connection");
         $app->(
-            { type => 'websocket', path => "/chat/$connection", headers => [] },
-            sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+            $scope,
+            receive_from($scope, { type => 'websocket.disconnect', code => 1000 }),
             sub { Future->done },
         )->get;
     }
@@ -177,24 +174,18 @@ subtest 'overlapping connections retain the endpoint and isolate connection obje
 
     my $endpoint = Local::OverlappingConfiguredWebSocket->new(hub => {});
     my $app = $endpoint->to_app;
-    my $first_scope = {
-        type => 'websocket', path => '/chat/first', headers => [],
-    };
-    my $second_scope = {
-        type => 'websocket', path => '/chat/second', headers => [],
-    };
-    my $receive = sub {
-        return Future->done({
-            type => 'websocket.disconnect', code => 1000,
-        });
-    };
+    my $first_scope  = ws_scope(path => '/chat/first');
+    my $second_scope = ws_scope(path => '/chat/second');
+    my $disconnect   = { type => 'websocket.disconnect', code => 1000 };
 
-    my $first = $app->($first_scope, $receive, sub { Future->done });
+    my $first = $app->($first_scope, receive_from($first_scope, $disconnect),
+        sub { Future->done });
     ok(!$first->is_ready, 'the first connection is held inside on_connect');
     is scalar(@Local::OverlappingConfiguredWebSocket::RECEIVER_IDS), 1,
         'the first connection entered the endpoint before the second began';
 
-    my $second = $app->($second_scope, $receive, sub { Future->done });
+    my $second = $app->($second_scope, receive_from($second_scope, $disconnect),
+        sub { Future->done });
     ok(!$second->is_ready,
         'the second connection overlaps the first inside on_connect');
     is \@Local::OverlappingConfiguredWebSocket::RECEIVER_IDS,
@@ -241,10 +232,10 @@ subtest 'immediate on_connect and on_receive results are normalized' => sub {
         { type => 'websocket.receive', text => 'hello' },
         { type => 'websocket.disconnect', code => 1000 },
     );
-    my $receive = sub { Future->done(shift @events) };
+    my $scope   = ws_scope(path => '/ws');
+    my $receive = receive_from($scope, @events);
 
-    $app->({ type => 'websocket', path => '/ws', headers => [] },
-           $receive, $send)->get;
+    $app->($scope, $receive, $send)->get;
 
     is(\@ImmediateEndpoint::seen, [
         'PAGI::WebSocket',
@@ -291,12 +282,12 @@ subtest 'on_receive dispatches each declared message encoding' => sub {
         subtest "$case->{name} adapter" => sub {
             @{$case->{received}} = ();
             my @sent;
-            my @events = @{$case->{events}};
             my $app = $case->{endpoint}->to_app;
+            my $scope = ws_scope(path => '/ws');
 
             $app->(
-                { type => 'websocket', path => '/ws', headers => [] },
-                sub { Future->done(shift @events) },
+                $scope,
+                receive_from($scope, @{$case->{events}}),
                 sub { push @sent, $_[0]; Future->done },
             )->get;
 
@@ -308,9 +299,10 @@ subtest 'on_receive dispatches each declared message encoding' => sub {
 
 subtest 'no on_connect override accepts the connection automatically' => sub {
     my @sent;
+    my $scope = ws_scope(path => '/ws');
     PAGI::Endpoint::WebSocket->to_app->(
-        { type => 'websocket', path => '/ws', headers => [] },
-        sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+        $scope,
+        receive_from($scope, { type => 'websocket.disconnect', code => 1000 }),
         sub { push @sent, $_[0]; Future->done },
     )->get;
 
@@ -327,23 +319,30 @@ subtest 'failed callback Future propagates through the endpoint app' => sub {
         sub on_receive { Future->fail("receive hook failed\n") }
     }
 
+    my $scope = ws_scope(path => '/ws');
     like(dies {
         FailingReceiveEndpoint->to_app->(
-            { type => 'websocket', path => '/ws', headers => [] },
-            sub { Future->done({ type => 'websocket.receive', text => 'boom' }) },
+            $scope,
+            receive_from($scope, { type => 'websocket.receive', text => 'boom' }),
             sub { Future->done },
         )->get;
     }, qr/receive hook failed/, 'failed receive Future is not swallowed');
 };
 
-subtest 'on_disconnect remains synchronous and its return is not awaited' => sub {
+subtest 'on_disconnect Future is awaited by cleanup' => sub {
     {
         package SynchronousDisconnectEndpoint;
         use parent 'PAGI::Endpoint::WebSocket';
         our $returned = Future->new;
         our $called = 0;
+        our $later_cleanup = 0;
 
-        sub on_connect { $_[1]->accept }
+        # Registered after the endpoint's own disconnect hook, so it runs
+        # only once that hook's Future has settled.
+        sub on_connect {
+            $_[1]->on_close(sub { $later_cleanup++ });
+            return $_[1]->accept;
+        }
         sub on_disconnect {
             $called++;
             return $returned;
@@ -352,15 +351,24 @@ subtest 'on_disconnect remains synchronous and its return is not awaited' => sub
 
     $SynchronousDisconnectEndpoint::returned = Future->new;
     $SynchronousDisconnectEndpoint::called = 0;
+    $SynchronousDisconnectEndpoint::later_cleanup = 0;
+    my $scope = ws_scope(path => '/ws');
     my $running = SynchronousDisconnectEndpoint->to_app->(
-        { type => 'websocket', path => '/ws', headers => [] },
-        sub { Future->done({ type => 'websocket.disconnect', code => 1000 }) },
+        $scope,
+        receive_from($scope, { type => 'websocket.disconnect', code => 1000 }),
         sub { Future->done },
     );
-    is($running->get, undef, 'endpoint completes without disconnect return');
+    ok($running->is_ready,
+        'the endpoint returns while connection-end cleanup continues');
     is($SynchronousDisconnectEndpoint::called, 1, 'disconnect hook was called');
     ok(!$SynchronousDisconnectEndpoint::returned->is_ready,
-        'disconnect return Future was not awaited');
+        'disconnect return Future is pending');
+    is($SynchronousDisconnectEndpoint::later_cleanup, 0,
+        'cleanup awaits disconnect hook');
+    $SynchronousDisconnectEndpoint::returned->done;
+    is($SynchronousDisconnectEndpoint::later_cleanup, 1,
+        'cleanup continues after disconnect hook settles');
+    is($running->get, undef, 'endpoint completes cleanly');
 };
 
 done_testing;

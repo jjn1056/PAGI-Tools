@@ -1,6 +1,134 @@
 # Revision history for PAGI-Tools
 
-0.002003 - UNRELEASED
+0.002003 - 2026-09-30
+
+  [FormBody and JSONBody removed]
+  - BREAKING: Removed PAGI::Middleware::FormBody and
+    PAGI::Middleware::JSONBody. Body parsing belongs to PAGI::Request
+    (form_params, json), which works on the raw protocol; the middleware
+    duplicated it with different parsers (URL-encoded only, a different shape
+    for repeated keys) and nothing read the scope keys they wrote. See
+    UPGRADING.md.
+
+  [Testing against a real server]
+  - PAGI::Server is no longer a develop prerequisite. The real-server tests
+    run against a PAGI-Server checkout (prove -I <checkout>/lib) and skip
+    unless PAGI::Server 0.002014 or later is on @INC.
+
+  [Www 0.6 required for SSE and WebSocket]
+  - BREAKING: PAGI::SSE and PAGI::WebSocket require the scope's
+    pagi.connection object, which PAGI::Spec::Www 0.6 requires every server
+    to provide; the constructor dies naming the server's advertised
+    spec_version when it is missing or incomplete. PAGI::Server provides it
+    on websocket and sse scopes from 0.002014; upgrade it with this release.
+    Tests that build scopes by hand add one with PAGI::Test::ConnectionState.
+    See UPGRADING.md.
+  - A streamed response (PAGI::Response::Stream and its Writer) checks the
+    scope's pagi.connection for the methods it will call before sending
+    anything: is_connected, disconnect_reason, disconnect_detail,
+    on_disconnect, and abort. A connection missing any of them is named in
+    the error. A scope with no pagi.connection still streams.
+
+  [Error reporting]
+  - BREAKING: ErrorHandler, including Compose's built-in one, re-raises the
+    original exception after the error response for a server error (status
+    500 or above) is complete, so the server reports it (PAGI::Spec::Www,
+    "Exceptions after the terminal event"). The rendered page is unchanged.
+    Compose no longer warns "PAGI application error: ..." itself. A handled
+    exception claiming a 4xx status is rendered and not re-raised, and is no
+    longer reported as an application error. See UPGRADING.md.
+  - on_error receives the request scope as a second argument.
+  - A failure to resolve PAGI_ENV for Compose's error page is a configuration
+    warning ("PAGI ErrorHandler could not resolve development mode: ...").
+  - An exception object whose overloads throw is re-raised as a fixed safe
+    message, because a failed Future cannot carry it. This also applies to
+    the existing re-raise after response start.
+  - PAGI::WebSocket no longer warns "PAGI::WebSocket error: ..." when a
+    message callback dies with no on_error registered; run() already
+    re-raises it, so the server reported it twice. PAGI::SSE no longer warns
+    "PAGI::SSE error: ..." when a try_send* fails with no on_error
+    registered; the false return value is the signal.
+
+  [App::Loader]
+  - BREAKING: Removed PAGI::App::Loader. Its relative `file` paths failed on
+    Perl 5.26+ (`do` no longer searches `.`), and `reload` re-read only the
+    top-level file: modules it loaded stayed cached, and a reloaded
+    application never received lifespan startup. Serve an application file
+    with `pagi-server --app`, or load it with `do` as shown in UPGRADING.md.
+
+  [Test client]
+  - HTTP requests now deliver deferred connection notifications while holding
+    the application Future, before consuming its result. Applications awaiting
+    end_future after a terminal send resume normally, and subsequent application
+    errors follow raise_app_exceptions instead of being lost.
+
+  [Shared HTTP header helpers]
+  - NEW: PAGI::Utils::Headers provides independent parsers and formatters for
+    Basic/Bearer credentials, parameterized fields, token lists, Vary, entity
+    tags, and conditional tag lists. PAGI::Headers adds corresponding named
+    readers and Vary composition; Request delegates Basic/Bearer extraction.
+  - Request authentication parsing now rejects malformed Bearer/Basic syntax
+    and duplicate Authorization fields in strict mode. Its normalized
+    Content-Type reader accepts one valid media type with parameters; raw
+    header access remains available through header/header_all.
+  - Multipart boundary and disposition readers use the shared parameter
+    grammar. File download disposition uses UTF-8 extended filenames, and
+    Pages/CORS/GZip compose Vary through the shared helper. File and
+    ConditionalGet use complete entity-tag lists and weak If-None-Match
+    comparison for eligible GET/HEAD responses, including quoted commas and
+    wildcard representation matching.
+
+  [Protocol refusal applications]
+  - WebSocket `deny` and SSE `decline` now document and demonstrate concrete
+    Responses, synchronous and async Request handlers, negotiated Pages
+    applications, custom `to_app` objects, and explicitly wrapped native
+    applications. The maintained protocol-refusal example executes all twelve
+    WebSocket/SSE routes without requiring `response_for` materialization.
+  - BREAKING: `deny` and `decline` now await the selected application directly.
+    Cancelling their returned Future follows that application's normal
+    cancellation behavior; the helpers no longer retain abandoned refusal
+    work or expose temporary `denying`/`declining` states. Buffered Responses
+    keep already-submitted server sends uncancelled while stopping later
+    emission, and connection terminal notification continues to drive helper
+    cleanup independently.
+
+  [Authentication v1]
+  - BREAKING: Removed the unreleased Auth Challenge/Outcomes objects and
+    Basic/Bearer middleware. `PAGI::Auth` now exports optional `auth`,
+    `auth_result`, `unauth_result`, and `www_authenticate` helpers. A completed
+    Result holds a user, live granted scopes, and optional public failure;
+    `pagi.auth` holds the Result itself.
+  - NEW: Generic `PAGI::Middleware::Authentication` accepts a Request backend
+    coderef or object, installs its completed result for HTTP, WebSocket, and
+    SSE, and continues downstream. Applications own credential parsing,
+    verification, permission decisions, and ordinary 400/401/403 responses.
+    No named scope is granted implicitly. The Notes, JWT sandbox, and extension
+    examples exercise the API; JWT verification remains example-local and
+    optionally depends on Crypt::JWT. OAuth flows are outside Auth v1.
+
+  [Universal connection state (Www 0.6)]
+  - WebSocket, SSE, and HTTP Test::Client scopes now carry the complete
+    `pagi.connection` contract and report `spec_version` 0.6. Applications and
+    helpers may observe clean completion, abnormal reason/detail, peer Close
+    code/text, and may abort work they own through the public connection API.
+  - WebSocket denial and SSE decline now emit any concrete Response, including
+    File, as ordinary `http.response.*` events on the original scope. The old
+    protocol-response bridge, response capability, namespaced denial events,
+    and `websocket.http.response` extension are removed. `websocket.close`
+    before acceptance is invalid; use `deny` for an HTTP refusal.
+  - Connection terminal notification drives WebSocket and SSE helper cleanup
+    independently of refusal callers. Successful helper-handler return closes
+    an accepted/started protocol at Router and Endpoint boundaries; raw PAGI
+    apps still owe the protocol terminal event. Stream caller cancellation
+    aborts through `pagi.connection` while leaving server-owned send Futures
+    uncancelled.
+  - Lint uses the shared send validator for HTTP, WebSocket, and SSE and emits
+    protocol-specific incomplete-response diagnostics, while accepting clean
+    peer-first terminal connection facts.
+
+  [Middleware utilities]
+  - Renamed the unreleased PAGI::Middleware::Helpers to PAGI::Utils::Middleware.
+    The explicit clone_scope, wrap_send, and wrap_receive exports are unchanged.
 
   [NDJSON response]
   - NEW: PAGI::Response::NDJSON and the exported ndjson_response factory stream

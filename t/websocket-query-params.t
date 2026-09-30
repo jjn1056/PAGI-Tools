@@ -3,6 +3,8 @@ use warnings;
 use Test2::V0;
 
 use PAGI::WebSocket;
+use lib 't/lib';
+use PAGITest::Connected qw(ws_scope);
 
 # Mock receive/send for WebSocket constructor
 my $receive = sub { Future->done({ type => 'websocket.receive', text => '{}' }) };
@@ -11,13 +13,11 @@ my $send = sub { Future->done };
 # Helper to create WebSocket with query string
 sub make_ws {
     my ($query_string, %extra) = @_;
-    my $scope = {
-        type         => 'websocket',
+    my $scope = ws_scope(
         path         => '/ws/chat',
         query_string => $query_string // '',
-        headers      => [],
         %extra,
-    };
+    );
     return PAGI::WebSocket->new($scope, $receive, $send);
 }
 
@@ -103,12 +103,10 @@ subtest 'semicolon delimiter' => sub {
 };
 
 subtest 'caching in scope' => sub {
-    my $scope = {
-        type         => 'websocket',
+    my $scope = ws_scope(
         path         => '/ws',
         query_string => 'x=1',
-        headers      => [],
-    };
+    );
     my $ws = PAGI::WebSocket->new($scope, $receive, $send);
 
     $ws->query_params;

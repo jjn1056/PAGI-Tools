@@ -1,16 +1,9 @@
 use strict; use warnings; use Test2::V0; use Future::AsyncAwait;
-use Time::HiRes ();
 use PAGI::Test::Client;
+use PAGI::Pages;
+use PAGI::Response qw(text_response);
+use PAGI::WebSocket;
 
-# ---------------------------------------------------------------------------
-# B5: PAGI::Test::WebSocket delivers the synthesized websocket.disconnect
-# exactly once (carrying truthful code AND reason), then leaves further
-# receive() calls permanently pending -- a hang is the correct diagnosis for
-# an app that keeps calling receive() after disconnect, exactly like a real
-# transport gone silent.
-# ---------------------------------------------------------------------------
-
-# helper: await a send, trapping a failure without dying the app
 async sub try_send {
     my ($send, $event) = @_;
     my $err;
@@ -18,149 +11,257 @@ async sub try_send {
     return $err;
 }
 
-# deadline-poll (real wall-clock time, not a fixed number of turns): asserts
-# $future is still un-resolved after $seconds have actually elapsed.
-sub still_pending_after {
-    my ($future, $seconds) = @_;
-    my $deadline = Time::HiRes::time() + $seconds;
-    while (Time::HiRes::time() < $deadline) {
-        return 0 if $future->is_ready;
-        Time::HiRes::sleep(0.01);
-    }
-    return $future->is_ready ? 0 : 1;
-}
-
-subtest 'B5(a): peer(test) close delivers exactly one disconnect, then hangs' => sub {
-    my (@received, $pending_future);
+subtest 'peer close is clean, preserves Close metadata, and repeats the end event' => sub {
+    my (@order, @received, $conn);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
-        await $receive->(); # websocket.connect
+        $conn = $scope->{'pagi.connection'};
+        $conn->on_complete(sub { push @order, 'complete' });
+        $conn->on_disconnect(sub { push @order, 'disconnect' });
+        await $receive->();
         await $send->({ type => 'websocket.accept' });
-        push @received, await $receive->();     # resolves once close() runs
-        $pending_future = $receive->();          # must NOT be awaited: would hang forever
+
+        # Explicit tripwire: exercise repeated end delivery without an
+        # unbounded receive loop in case the implementation is still stale.
+        for my $attempt (1 .. 2) {
+            push @received, await $receive->();
+            push @order, 'receive:' . ($conn->response_complete ? 'complete' : 'incomplete');
+        }
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $ws = $client->websocket('/ws');
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
     $ws->close(1000, 'bye');
 
-    is scalar(@received), 1, 'exactly one disconnect delivered to the app';
-    is $received[0]{type}, 'websocket.disconnect', 'disconnect event type';
-    is $received[0]{code}, 1000, 'disconnect carries the close code';
-    is $received[0]{reason}, 'bye', 'disconnect carries the close reason';
-
-    ok defined $pending_future, 'app captured a second receive Future';
-    ok !$pending_future->is_ready, 'second receive is not ready immediately';
-    ok still_pending_after($pending_future, 0.2),
-        'second receive stays pending after a deadline-poll budget';
+    is scalar(@received), 2, 'pending and subsequent receives both resolve';
+    is $received[0], {
+        type => 'websocket.disconnect', code => 1000, reason => 'bye',
+    }, 'first receive carries peer Close metadata';
+    is $received[1], $received[0], 'subsequent receive repeats the end event';
+    is \@order, ['complete', 'receive:complete', 'receive:complete'],
+        'clean state transition and callback happen before receives wake';
+    is $conn->disconnect_reason, undef, 'peer Close is protocol metadata, not an abnormal reason';
+    is $ws->close_code, 1000, 'client object preserves peer Close code';
+    is $ws->close_reason, 'bye', 'client object preserves peer Close text';
 };
 
-subtest 'B5(b): app-initiated close echoes the app\'s own code/reason' => sub {
+subtest 'app close is complete before send returns and exposes the handshake end' => sub {
+    my ($conn, @received);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
-        await $receive->(); # websocket.connect
+        $conn = $scope->{'pagi.connection'};
+        await $receive->();
         await $send->({ type => 'websocket.accept' });
-        await $receive->(); # trigger message from the test
-        await $send->({ type => 'websocket.close', code => 4001, reason => 'app decided to close' });
+        await $send->({ type => 'websocket.close', code => 4001, reason => 'done' });
+        die 'terminal send did not complete scope' unless $conn->response_complete;
+        push @received, await $receive->();
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $ws = $client->websocket('/ws');
-    $ws->send_text('trigger');
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
 
     ok $ws->is_closed, 'connection reports closed';
-    is $ws->close_code, 4001, 'close_code echoes the app\'s own value';
-    is $ws->close_reason, 'app decided to close', 'close_reason echoes the app\'s own value';
+    is $ws->close_code, 4001, 'client sees app close code';
+    is $ws->close_reason, 'done', 'client sees app close reason';
+    is $received[0], {
+        type => 'websocket.disconnect', code => 4001, reason => 'done',
+    }, 'receive after app close reports completed handshake';
 };
 
-subtest 'B5(b): simulate_abnormal_close delivers exactly the injected code/reason, once' => sub {
-    my (@received, $pending_future);
+subtest 'abnormal transport close updates state before every receive wakes' => sub {
+    my ($conn, @order, @received);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
-        await $receive->(); # websocket.connect
+        $conn = $scope->{'pagi.connection'};
+        $conn->on_disconnect(sub { push @order, "callback:$_[0]" });
+        await $receive->();
         await $send->({ type => 'websocket.accept' });
-        push @received, await $receive->();
-        $pending_future = $receive->();
+        for my $attempt (1 .. 2) {
+            push @received, await $receive->();
+            push @order, 'receive:' . ($conn->disconnect_reason // 'none');
+        }
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $ws = $client->websocket('/ws');
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
     $ws->simulate_abnormal_close(code => 1006, reason => 'keepalive_timeout');
 
-    is scalar(@received), 1, 'exactly one disconnect delivered';
-    is $received[0]{type}, 'websocket.disconnect', 'disconnect event type';
-    is $received[0]{code}, 1006, 'injected code delivered';
-    is $received[0]{reason}, 'keepalive_timeout', 'injected reason delivered';
-    ok !$pending_future->is_ready, 'further receive stays pending';
-
-    ok $ws->is_closed, 'connection object reports closed';
-    is $ws->close_code, 1006, 'close_code reflects the injected abnormal close';
-    is $ws->close_reason, 'keepalive_timeout', 'close_reason reflects the injected abnormal close';
+    is \@order, [
+        'callback:keepalive_timeout',
+        'receive:keepalive_timeout',
+        'receive:keepalive_timeout',
+    ], 'disconnect state and callback precede receive delivery';
+    is $received[0], {
+        type => 'websocket.disconnect', code => 1006, reason => 'keepalive_timeout',
+    }, 'abnormal end event';
+    is $received[1], $received[0], 'abnormal end event repeats';
+    is $conn->response_complete, 0, 'abnormal end is incomplete';
 };
 
-# ---------------------------------------------------------------------------
-# B6: post-app-close sends fail the send Future (server-shaped) and never
-# reach the client's readable stream; a send after the PEER (test) closed is
-# a tolerated no-op instead -- both halves of the spec split.
-# ---------------------------------------------------------------------------
-
-subtest 'B6: send after app-sent close fails the Future, never reaches the client' => sub {
-    my $send_err;
+subtest 'abort tears down the transport and wakes pending and later receives' => sub {
+    my ($conn, @received);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
-        await $receive->(); # websocket.connect
+        $conn = $scope->{'pagi.connection'};
+        await $receive->();
         await $send->({ type => 'websocket.accept' });
-        await $send->({ type => 'websocket.close', code => 1000, reason => 'done' });
-        $send_err = await try_send($send, { type => 'websocket.send', text => 'too late' });
+        for my $attempt (1 .. 2) {
+            push @received, await $receive->();
+        }
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $ws = $client->websocket('/ws');
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
+    $conn->abort('quota exceeded');
 
-    ok $send_err, 'send after app-sent close failed the Future';
-    like $send_err, qr/close/i, 'error names the close';
-    is $ws->receive_text(0.1), undef, 'nothing reached the client stream';
+    ok $ws->is_closed, 'abort closes the test transport';
+    is $conn->disconnect_reason, 'app_abort', 'abort reason';
+    is $conn->disconnect_detail, 'quota exceeded', 'abort detail';
+    is $received[0], {
+        type => 'websocket.disconnect', code => 1006, reason => 'app_abort',
+    }, 'pending receive wakes with app_abort';
+    is $received[1], $received[0], 'later receive gets the same end event';
 };
 
-subtest 'B6: send after peer(test)-close is a tolerated no-op, not a Future failure' => sub {
+subtest 'send after peer close is a tolerated no-op' => sub {
     my ($sent_ok, $send_err);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
-        await $receive->(); # websocket.connect
+        await $receive->();
         await $send->({ type => 'websocket.accept' });
-        await $receive->(); # resolves with the peer's disconnect
+        await $receive->();
         $send_err = await try_send($send, { type => 'websocket.send', text => 'after peer close' });
         $sent_ok = 1 unless $send_err;
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $ws = $client->websocket('/ws');
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
     $ws->close(1000, 'peer closed');
 
-    ok $sent_ok, 'the send Future resolved (no-op), did not fail';
-    ok !$send_err, 'no error raised';
-    is $ws->receive_text(0.1), undef, 'nothing reached the client stream: the write was silently dropped';
+    ok $sent_ok, 'send Future resolved';
+    ok !$send_err, 'send did not fail';
+    is $ws->receive_text(0.1), undef, 'no message reached the closed client stream';
 };
 
-# ---------------------------------------------------------------------------
-# B8: app sends close-before-accept -- treated as a portable denial, not a
-# crash: no croak, connection object reports the denied/closed state.
-# ---------------------------------------------------------------------------
-
-subtest 'B8: close-before-accept is treated as a portable denial, not a crash' => sub {
+subtest 'ordinary HTTP refusal returns a WebSocket object with a decoded response' => sub {
+    my ($conn, @after_end);
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
-        await $receive->(); # websocket.connect
-        await $send->({ type => 'websocket.close', code => 4003, reason => 'denied' });
+        $conn = $scope->{'pagi.connection'} or die 'no connection object';
+        await $receive->();
+        await $send->({
+            type => 'http.response.start',
+            status => 401,
+            headers => [['www-authenticate', 'Bearer']],
+        });
+        await $send->({ type => 'http.response.body', body => 'nope', more => 0 });
+        die 'terminal refusal send did not complete scope' unless $conn->response_complete;
+        for my $attempt (1 .. 2) {
+            push @after_end, await $receive->();
+        }
     };
 
-    my $client = PAGI::Test::Client->new(app => $app);
-    my $ws;
-    ok lives { $ws = $client->websocket('/ws') }, 'no croak for close-before-accept denial'
-        or note $@;
-    ok $ws->is_closed, 'connection object reports the denied state';
-    is $ws->close_code, 4003, 'denial close code recorded';
-    is $ws->close_reason, 'denied', 'denial close reason recorded';
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
+
+    ok $ws->refused, 'refused';
+    isa_ok $ws->response, ['PAGI::Test::Response'];
+    is $ws->response->status, 401, 'status';
+    is $ws->response->header('www-authenticate'), 'Bearer', 'headers';
+    is $ws->response->content, 'nope', 'body';
+    is $ws->close_code, undef, 'client wire Close accessor remains unset for an HTTP refusal';
+    is \@after_end, [
+        { type => 'http.disconnect' },
+        { type => 'http.disconnect' },
+    ], 'receives after completed refusal report the HTTP end';
+};
+
+subtest 'production helper observes clean refusal completion metadata' => sub {
+    my ($conn, @closed, @complete, @ended);
+    my $disconnected = 0;
+    my $client = PAGI::Test::Client->new(app => async sub {
+        my ($scope, $receive, $send) = @_;
+        $conn = $scope->{'pagi.connection'};
+        $conn->on_complete(sub { push @complete, $conn->close_code });
+        $conn->on_end(sub { push @ended, $conn->close_code });
+        $conn->on_disconnect(sub { ++$disconnected });
+        my $ws = PAGI::WebSocket->new($scope, $receive, $send);
+        $ws->on_close(sub { push @closed, [@_]; return });
+        await $ws->deny(text_response('Access denied', status => 403));
+    });
+    my $session = $client->websocket('/ws');
+    ok $session->refused, 'handshake refused';
+    is $session->response->status, 403, 'HTTP status preserved';
+    is $session->response->content, 'Access denied', 'body preserved';
+    is \@complete, [1006], 'complete observer sees code';
+    is \@ended, [1006], 'end observer sees code';
+    is \@closed, [[1006, undef, undef]], 'production helper reads supplied metadata';
+    is $disconnected, 0, 'successful refusal is not a disconnect failure';
+    ok $conn->response_complete, 'response complete';
+    is $conn->disconnect_reason, undef, 'no abnormal outcome';
+    is $conn->end_future->get, undef, 'successful end future';
+};
+
+subtest 'direct Pages application denies a WebSocket handshake' => sub {
+    my ($seen_scope, @events, $cleanup);
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $seen_scope = $scope;
+        my $ws = PAGI::WebSocket->new($scope, $receive, async sub {
+            my ($event) = @_;
+            push @events, $event->{type};
+            return await $send->($event);
+        });
+        $ws->on_close(sub { ++$cleanup; return });
+        return await $ws->deny(PAGI::Pages->service_unavailable(
+            detail => 'Scheduled maintenance', as => 'text',
+        ));
+    };
+
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
+
+    ok $ws->refused, 'handshake refused';
+    is $ws->response->status, 503, 'Pages status';
+    like $ws->response->content, qr/Scheduled maintenance/,
+        'Pages text body';
+    is $seen_scope->{type}, 'websocket', 'original WebSocket scope remains in use';
+    is $cleanup, 1, 'terminal callback runs once';
+    is \@events, ['http.response.start', 'http.response.body'],
+        'denial emits no websocket.accept';
+};
+
+subtest 'refusal response uses the captured response decoder for fh bodies and trailers' => sub {
+    my $bytes = 'prefix-refusal-bytes-suffix';
+    open my $fh, '<', \$bytes or die "open scalar fh: $!";
+    my ($conn, @snapshots);
+
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        $conn = $scope->{'pagi.connection'};
+        await $receive->();
+        await $send->({
+            type => 'http.response.start', status => 403, headers => [], trailers => 1,
+        });
+        await $send->({
+            type => 'http.response.body', fh => $fh, offset => 7, length => 13,
+        });
+        push @snapshots, [$conn->close_code, $conn->close_reason, $conn->response_complete];
+        await $send->({
+            type => 'http.response.trailers', headers => [['x-finished', 'yes']],
+        });
+        push @snapshots, [$conn->close_code, $conn->close_reason, $conn->response_complete];
+    };
+
+    my $ws = PAGI::Test::Client->new(app => $app)->websocket('/ws');
+    is $ws->response->content, 'refusal-bytes', 'fh window decoded by Test::Response';
+    ok $ws->response->body_complete, 'captured terminal body is complete';
+    is \@snapshots, [[undef, undef, 0], [1006, undef, 1]],
+        'refusal metadata appears only on terminal trailer completion';
+};
+
+subtest 'websocket.close before accept is rejected by strict send validation' => sub {
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $receive->();
+        await $send->({ type => 'websocket.close', code => 1008 });
+    };
+
+    like dies { PAGI::Test::Client->new(app => $app)->websocket('/ws') },
+        qr/before websocket\.accept/, 'strict send rejects close before accept';
 };
 
 done_testing;

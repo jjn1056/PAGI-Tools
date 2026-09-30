@@ -6,11 +6,13 @@ use Future::AsyncAwait;
 use Future;
 
 use lib 'lib';
+use lib 't/lib';
 use PAGI::SSE;
+use PAGITest::Connected qw(sse_scope);
 
 subtest 'try_send returns true on success' => sub {
     my $send = sub { Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     my $result = $sse->try_send("Hello")->get;
@@ -18,33 +20,40 @@ subtest 'try_send returns true on success' => sub {
 };
 
 subtest 'try_send returns false when closed' => sub {
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, sub { Future->done });
-    $sse->_set_closed;
+    my $scope = sse_scope();
+    my $sse = PAGI::SSE->new($scope, sub {}, sub { Future->done });
+    $scope->{'pagi.connection'}->_mark_disconnected('client_closed');
 
     my $result = $sse->try_send("Hello")->get;
     ok(!$result, 'try_send returns false when closed');
 };
 
 subtest 'try_send returns false on send error' => sub {
-    my $send = sub { Future->fail("Connection lost") };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
-    # Mark as started to avoid auto-start
-    $sse->_set_state('started');
+    my $scope = sse_scope();
+    my $connection = $scope->{'pagi.connection'};
+    # The stream starts; the peer is then lost, which the server records on
+    # the connection before failing the send.
+    my $send = sub {
+        return Future->done if $_[0]{type} eq 'sse.start';
+        $connection->_mark_disconnected('client_closed');
+        return Future->fail("Connection lost");
+    };
+    my $sse = PAGI::SSE->new($scope, sub {}, $send);
+    $sse->start->get;
 
-    # No on_error registered; suppress expected fallback warn
     my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, $_[0] };
 
     my $result = $sse->try_send("Hello")->get;
     ok(!$result, 'try_send returns false on error');
-    ok($sse->is_closed, 'connection marked as closed after error');
-    ok scalar @warnings, 'unhandled error produced warning';
+    ok($sse->is_closed, 'connection marked as closed after the connection recorded the loss');
+    is \@warnings, [], 'with no on_error, the false return is the only signal';
 };
 
 subtest 'try_send_json works' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     my $result = $sse->try_send_json({ foo => 'bar' })->get;
@@ -55,7 +64,7 @@ subtest 'try_send_json works' => sub {
 subtest 'try_send_event works' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     my $result = $sse->try_send_event(
@@ -70,7 +79,7 @@ subtest 'try_send_event works' => sub {
 subtest 'try_send_comment succeeds with a direct comment event' => sub {
     my @sent;
     my $send = sub { push @sent, $_[0]; Future->done };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
     $sse->start->get;
 
     ok($sse->try_send_comment('alive')->get,
@@ -80,9 +89,11 @@ subtest 'try_send_comment succeeds with a direct comment event' => sub {
 };
 
 subtest 'on_error fires when try_send fails' => sub {
-    my $send = sub { Future->fail("Connection lost") };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
-    $sse->_set_state('started');
+    my $send = sub {
+        $_[0]{type} eq 'sse.start' ? Future->done : Future->fail("Connection lost");
+    };
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
+    $sse->start->get;
 
     my ($fired_sse, $fired_err);
     $sse->on_error(sub {
@@ -96,9 +107,11 @@ subtest 'on_error fires when try_send fails' => sub {
 };
 
 subtest 'exception in on_error callback does not prevent others' => sub {
-    my $send = sub { Future->fail("oops") };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
-    $sse->_set_state('started');
+    my $send = sub {
+        $_[0]{type} eq 'sse.start' ? Future->done : Future->fail("oops");
+    };
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
+    $sse->start->get;
 
     my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, $_[0] };
@@ -115,9 +128,11 @@ subtest 'exception in on_error callback does not prevent others' => sub {
 };
 
 subtest 'async on_error callback is awaited' => sub {
-    my $send = sub { Future->fail("network error") };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
-    $sse->_set_state('started');
+    my $send = sub {
+        $_[0]{type} eq 'sse.start' ? Future->done : Future->fail("network error");
+    };
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
+    $sse->start->get;
 
     my @fired;
     $sse->on_error(async sub { push @fired, 'async-ran' });
@@ -128,9 +143,11 @@ subtest 'async on_error callback is awaited' => sub {
 };
 
 subtest 'async on_error exception does not prevent other callbacks' => sub {
-    my $send = sub { Future->fail("network") };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
-    $sse->_set_state('started');
+    my $send = sub {
+        $_[0]{type} eq 'sse.start' ? Future->done : Future->fail("network");
+    };
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
+    $sse->start->get;
 
     my @fired;
     my @warnings;
@@ -146,18 +163,20 @@ subtest 'async on_error exception does not prevent other callbacks' => sub {
     like $warnings[0], qr/async error handler exploded/, 'warning contains error text';
 };
 
-subtest 'no on_error registered warns to STDERR' => sub {
-    my $send = sub { Future->fail("send failure") };
-    my $sse = PAGI::SSE->new({ type => 'sse' }, sub {}, $send);
-    $sse->_set_state('started');
+subtest 'no on_error registered prints nothing' => sub {
+    my $send = sub {
+        $_[0]{type} eq 'sse.start' ? Future->done : Future->fail("send failure");
+    };
+    my $sse = PAGI::SSE->new(sse_scope(), sub {}, $send);
+    $sse->start->get;
 
     my @warnings;
     local $SIG{__WARN__} = sub { push @warnings, $_[0] };
 
-    $sse->try_send("Hello")->get;
+    my $ok = $sse->try_send("Hello")->get;
 
-    ok scalar @warnings, 'unhandled error was warned';
-    like $warnings[0], qr/send failure/, 'warning contains error text';
+    ok !$ok, 'the failure is reported by the return value';
+    is \@warnings, [], 'a routine send failure is not warned';
 };
 
 done_testing;

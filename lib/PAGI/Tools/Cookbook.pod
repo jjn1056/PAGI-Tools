@@ -305,7 +305,7 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
   use AppleApp::Middleware qw(with_apples_api_header);
   use AppleApp::Model qw(apple_model);
   use PAGI::Compose qw(compose);
-  use PAGI::Pages qw(welcome not_found);
+  use PAGI::Pages qw(welcome not_found status);
   use PAGI::Response qw(file_response json_response ndjson_response);
   use PAGI::Routing qw(route mount middleware);
   use PAGI::Routing::URL qw(url_for path_for);
@@ -350,6 +350,14 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
               await $writer->write_item($apple);
           }
       });
+  }
+
+  async sub authentication_required($request) {
+      return status(401,
+          detail  => 'A valid access token is required.',
+          headers => ['WWW-Authenticate' => 'Bearer realm="apples"'],
+          cache_control => 'no-store',
+      );
   }
 
   async sub read_apple($request) {
@@ -433,6 +441,8 @@ This is the complete runnable shape from F<examples/starlette-apples/app.pl>:
                       methods => ['POST'], name => 'create'),
                   route('/export' => \&export_apples,
                       methods => ['GET'], name => 'export'),
+                  route('/auth-required' => \&authentication_required,
+                      methods => ['GET'], name => 'auth_required'),
                   route('/{apple_id:&Int}' => \&read_apple,
                       methods => ['GET'], name => 'read'),
                   route('/{apple_id:&Int}' => \&update_apple,
@@ -485,10 +495,10 @@ Scope rewriting and match metadata happen before the matching mount/route
 wrapper. Mount middleware can therefore read dynamic mount captures. The first
 entry in each list is outermost.
 
-Use L<PAGI::Middleware::Helpers> to keep channel ownership visible:
+Use L<PAGI::Utils::Middleware> to keep channel ownership visible:
 
   use Future::AsyncAwait;
-  use PAGI::Middleware::Helpers qw(clone_scope wrap_send wrap_receive);
+  use PAGI::Utils::Middleware qw(clone_scope wrap_send wrap_receive);
   use PAGI::Routing qw(:routes :middleware);
 
   my $factory = sub {
@@ -607,9 +617,10 @@ converts pre-start silence into its production-safe 500.
   )->to_app;
 
 For example, a database failed Future before response start is awaited by the
-author ErrorHandler, reported through C<on_error>, and rendered by
-C<server_error>. C<on_error> may return immediately or through a Future; its
-failure is contained. If the database fails after a streaming response has
+author ErrorHandler, reported through C<on_error>, rendered by
+C<server_error>, and then re-raised so the server logs it too (see
+L</Who reports an application error>). C<on_error> may return immediately or
+through a Future; its failure is contained. If the database fails after a streaming response has
 started, ErrorHandler awaits reporting, calls no renderer, emits no second
 start, and rethrows the original database exception so the server can abort.
 
@@ -636,6 +647,50 @@ applications; this custom ErrorHandler seam deliberately retains its concrete
 Response contract.
 
 A custom renderer remains authoritative for its own content and headers.
+
+=head3 Who reports an application error
+
+PAGI-Tools turns an exception into a response; it does not report it. The
+server does. Given
+
+  compose(routes => [
+      route('/boom'    => sub { die "database unreachable\n" }),
+      route('/missing' => sub { die My::NotFound->new }),  # status_code() is 404
+  ]);
+
+C</boom> gets a 500 page, and after that page is complete Compose re-raises
+the exception. PAGI::Server logs it through its own log, where C<log_level>
+governs it and a replaced C<logger> receives it:
+
+  PAGI application error (after response complete): database unreachable
+
+C</missing> gets a 404 page and nothing is logged: an exception that claims a
+4xx status is a handled outcome, not an error. The same holds for an
+ErrorHandler you install yourself. Behind a server other than PAGI::Server,
+the re-raised exception reaches whatever that server does with an application
+failure after a complete response.
+
+This keeps one place responsible for operational errors: the server, which
+the operator already configures. Add C<on_error> when you want B<more> than
+the server's log, such as an error tracker or paging:
+
+  middleware('ErrorHandler',
+      on_error => sub {
+          my ($error, $scope) = @_;
+          $tracker->capture($error,
+              path       => $scope->{path},
+              request_id => $scope->{request_id});  # with RequestId installed
+          return;
+      }),
+
+C<on_error> runs before the 500 is rendered; the server still logs the error
+afterwards. If ErrorHandlers are nested, an C<on_error> on each of them runs
+for the same error, because each one re-raises it.
+
+In tests, L<PAGI::Test::Client> plays the server's part: by default it warns
+C<exception after response completed: ...> for a re-raised error, or raises it
+with C<< raise_app_exceptions => 1 >>. A test that deliberately provokes a 500
+should capture that warning.
 
 =head2 Real Catch-All Routes
 
@@ -1237,8 +1292,8 @@ L<PAGI::Response::JSON> perform JSON encoding:
 C<new> owns the collection contract: invalid source values fail immediately,
 and every constructed instance already contains the completed envelope.
 Inherited C<render> has one job--encode that document as JSON. The inherited
-C<to_app>, status, headers, cookies, content type, buffered delivery, and
-C<body-events-v1> capability require no registration or reimplementation.
+C<to_app>, status, headers, cookies, content type, and buffered delivery
+require no registration or reimplementation.
 
 The exported factory is optional application-level shorthand with a fixed
 mapping to the company class:
@@ -1319,6 +1374,62 @@ received it. Writer checks connection state after settlement and does not count
 a discarded chunk. Stream may cancel producer-owned work, never the send
 Future, and cleanup runs once. It has no WebSocket/SSE reconnect behavior.
 
+=head2 Enforce a Per-Route Limit on an Unknown-Length Upload
+
+A server-wide body limit protects the process. A route-specific policy belongs
+to the application and must count bytes as it reads them; C<Content-Length> may
+be absent or untrusted. This raw HTTP application limits one streaming upload:
+
+  use Future::AsyncAwait;
+
+  my $limit = 10 * 1024 * 1024;
+  my $upload = async sub {
+      my ($scope, $receive, $send) = @_;
+      die 'upload app requires an http scope' unless $scope->{type} eq 'http';
+
+      my $connection = $scope->{'pagi.connection'}
+          or die 'upload app requires the Www 0.6 connection API';
+      my $seen = 0;
+
+      while (1) {
+          my $event = await $receive->();
+          return if $event->{type} eq 'http.disconnect';
+          next unless $event->{type} eq 'http.request';
+
+          $seen += length($event->{body} // '');
+          if ($seen > $limit) {
+              if ($connection->response_started) {
+                  # Use only when this response format defines such an error.
+                  await $send->({
+                      type => 'http.response.body',
+                      body => qq({"error":"upload too large"}\n),
+                      more => 1,
+                  });
+                  $connection->abort("route upload limit exceeded after $seen bytes");
+              } else {
+                  await $send->({
+                      type => 'http.response.start', status => 413,
+                      headers => [['content-type', 'text/plain']],
+                  });
+                  await $send->({
+                      type => 'http.response.body', body => 'upload too large', more => 0,
+                  });
+              }
+              return;
+          }
+
+          last unless $event->{more};
+      }
+
+      # Process the accepted upload and send its ordinary response here.
+  };
+
+After response start, status and headers are committed. If the response format
+has a client-visible error record, send it in-band and await that send before
+calling public C<abort>; otherwise abort directly. The application owns this
+abort and its diagnostic detail. This recipe is for raw C<http> scopes and does
+not imply that SSE helpers expose HTTP request-body readers.
+
 HEAD normally executes the whole producer behind the outer suppression
 boundary. Put a cheap explicit HEAD Route before an expensive GET Route:
 
@@ -1343,40 +1454,478 @@ representation; only a valid client Range produces 206. Use
 L<PAGI::App::File> instead when an untrusted URL path must be resolved beneath
 a configured root.
 
-=head2 Guard a Response Application Across Protocols
+=head2 Refusing WebSocket and SSE with applications
 
-C<to_app> creates an HTTP-only application. Non-HTTP invocation is an
-application failure, not an automatic WebSocket denial or SSE decline. A root
-that intentionally handles those handshakes can make that policy explicit:
+C<deny> and C<decline> accept the same six useful application forms. This
+complete route tree exposes each form on separate C</ws/E<lt>formE<gt>> and
+C</events/E<lt>formE<gt>> requests:
 
+  use strict;
+  use warnings;
+  use Future;
   use Future::AsyncAwait;
-  use PAGI::Response qw(text_response);
-  use PAGI::SSE;
-  use PAGI::WebSocket;
+  use PAGI::Compose qw(compose);
+  use PAGI::Pages ();
+  use PAGI::Response qw(json_response text_response);
+  use PAGI::Routing qw(sse websocket);
+  use PAGI::Utils qw(as_app_object);
 
-  my $response = text_response('Temporarily unavailable', status => 503);
-  my $http = $response->to_app;
+  {
+      package MyApp::NoticeService;
+      sub new {
+          my ($class, %args) = @_;
+          return bless { label => $args{label} }, $class;
+      }
+      sub notice_for {
+          my ($self, $request) = @_;
+          return Future->done($self->{label} . ':' . $request->path);
+      }
+  }
 
-  my $guard = async sub {
-      my ($scope, $receive, $send) = @_;
-      return await $http->($scope, $receive, $send)
-          if $scope->{type} eq 'http';
-      return await PAGI::WebSocket->new($scope, $receive, $send)
-          ->deny($response)
-          if $scope->{type} eq 'websocket';
-      return await PAGI::SSE->new($scope, $receive, $send)
-          ->decline($response)
-          if $scope->{type} eq 'sse';
-      die "unsupported scope type '$scope->{type}'";
+  {
+      package MyApp::Refusal;
+      sub new { return bless {}, $_[0] }
+      sub to_app {
+          my ($self) = @_;
+          return async sub {
+              my ($scope, $receive, $send) = @_;
+              my $body = 'Custom application: ' . $scope->{path};
+              await $send->({
+                  type => 'http.response.start', status => 503,
+                  headers => [['content-type', 'text/plain; charset=utf-8']],
+              });
+              await $send->({
+                  type => 'http.response.body', body => $body, more => 0,
+              });
+              return;
+          };
+      }
+  }
+
+  my $notices = MyApp::NoticeService->new(label => 'notice-service');
+  my $handler = sub {
+      my ($request) = @_;
+      return json_response(
+          { error => 'Unavailable', path => $request->path },
+          status => 503,
+      );
   };
+  my $async_handler = async sub {
+      my ($request) = @_;
+      my $notice = await $notices->notice_for($request);
+      return json_response(
+          { error => 'Unavailable', notice => $notice },
+          status => 503,
+      );
+  };
+  my $page = PAGI::Pages->service_unavailable(
+      detail => 'Protocol refusal example',
+  );
+  my $object = MyApp::Refusal->new;
+  my $native = as_app_object(async sub {
+      my ($scope, $receive, $send) = @_;
+      await $send->({
+          type => 'http.response.start', status => 503,
+          headers => [['content-type', 'text/plain; charset=utf-8']],
+      });
+      await $send->({
+          type => 'http.response.body', body => 'Scheduled maintenance', more => 0,
+      });
+      return;
+  });
 
-Base, finite subclasses, Empty, Redirect, Stream, and subclasses preserving
-C<body-events-v1> are eligible. File is rejected before start because PAGI Www
-denial bodies exclude C<file>/C<fh>. Mapped-start settlement commits protocol
-ownership; later cleanup follows state/disconnect watchers rather than treating
-disconnect as a failed send.
+  my $app = compose(routes => [
+      # 1. A concrete Response: text on WebSocket, JSON on SSE.
+      websocket('/ws/response' => async sub {
+          my ($ws) = @_;
+          await $ws->deny(text_response('Scheduled maintenance', status => 503));
+          return;
+      }),
+      sse('/events/response' => async sub {
+          my ($sse) = @_;
+          await $sse->decline(json_response(
+              { error => 'Unavailable', form => 'response' }, status => 503,
+          ));
+          return;
+      }),
+
+      # 2. One synchronous Request handler, reusable at either boundary.
+      websocket('/ws/handler' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($handler);
+          return;
+      }),
+      sse('/events/handler' => async sub {
+          my ($sse) = @_;
+          await $sse->decline($handler);
+          return;
+      }),
+
+      # 3. One async Request handler awaiting application-owned work.
+      websocket('/ws/async-handler' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($async_handler);
+          return;
+      }),
+      sse('/events/async-handler' => async sub {
+          my ($sse) = @_;
+          await $sse->decline($async_handler);
+          return;
+      }),
+
+      # 4. Pages directly, or returned by a Request handler.
+      websocket('/ws/pages' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($page);
+          return;
+      }),
+      sse('/events/pages' => async sub {
+          my ($sse) = @_;
+          await $sse->decline(sub { return $page });
+          return;
+      }),
+
+      # 5. Any complete application object with to_app.
+      websocket('/ws/object' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($object);
+          return;
+      }),
+      sse('/events/object' => async sub {
+          my ($sse) = @_;
+          await $sse->decline($object);
+          return;
+      }),
+
+      # 6. A native triplet application selected explicitly.
+      websocket('/ws/native' => async sub {
+          my ($ws) = @_;
+          await $ws->deny($native);
+          return;
+      }),
+      sse('/events/native' => async sub {
+          my ($sse) = @_;
+          await $sse->decline($native);
+          return;
+      }),
+  ]);
+
+These routes are alternatives for different requests. Call one refusal helper,
+await it, and return from the endpoint; do not try the forms sequentially on
+one connection. A live attempt that finishes before response start can be
+retried sequentially, but after response start or terminal completion another
+refusal fails. Overlapping refusal and acceptance/start calls are unsupported.
+
+A bare coderef in C<deny> or C<decline> position is a one-C<Request> handler.
+If that handler returns a coderef, the returned value is a native triplet
+application. C<as_app_object> selects the native triplet meaning when passing a
+coderef directly. Await the Future returned by C<deny> or C<decline>.
+Cancellation follows the invoked application's normal behavior; the helper
+does not keep abandoned application work running. Built-in Responses protect
+server-owned sends, and connection terminal notification continues to drive
+helper cleanup.
+
+Every delegated application receives the original protocol scope, remaining
+receive stream, and original send channel. The scope remains C<websocket> or
+C<sse>; the helper does not spoof C<http>. Pages therefore negotiates from the
+real request headers without a mandatory C<response_for> step.
+
+All forms require the current universal C<pagi.connection> capability, including
+buffered Responses. The sending environment requires WebSocket refusal status
+300 or greater. SSE may decline with ordinary HTTP status 200 or 204, including
+204 to stop browser C<EventSource> reconnection. Application compatibility and
+errors belong to the selected application.
+
+F<examples/protocol-refusal/app.pl> is the maintained executable version, with
+all twelve routes exercised through L<PAGI::Test::Client>.
+
+=head1 HEADER RECIPES
+
+=head2 Extract credentials and keep response policy in the application
+
+For a backend that distinguishes malformed presentation from a missing or
+unsupported scheme, raise only during extraction. Verification remains outside
+that exception handler. The backend returns a result; a protected handler maps
+its failure code to an explicit 400 or 401 response and Bearer challenge.
+
+  my $token;
+  my $parsed = eval {
+      $token = $request->bearer_token(raise_on_error => 1);
+      1;
+  };
+  return unauth_result(failure => {
+      code => 'malformed_authorization',
+      message => 'Supply one valid Bearer credential.',
+  }) unless $parsed;
+  return unauth_result() unless defined $token;
+  # Verify $token here; a rejected token has a different failure.
+
+C<< $request->basic_auth(raise_on_error =E<gt> 1) >> similarly returns
+C<(username, password)> in list context. The default read instead returns
+C<undef> for unusable Bearer input (or C<(undef, undef)> for Basic), so it
+cannot distinguish a malformed credential from an absent one. Neither helper
+verifies a credential or constructs a response. See L<PAGI::Request/AUTH HELPERS>.
+
+=head2 Read upload parameters and write download parameters
+
+The request reader separates a normalized media type from raw parameter bytes.
+An empty parameter hash is a valid field without parameters. Multipart upload
+C<filename*> remains separate from C<filename> and is not decoded as a
+download name.
+
+  my $media = $request->headers->content_type;
+  my $params = $request->headers->content_type_parameters;
+  if (defined($media) && $media eq 'multipart/form-data' && $params) {
+      my $boundary = $params->{boundary};
+      # The multipart reader also uses this boundary while parsing the body.
+  }
+
+For a download, the formatter accepts a Perl character filename and emits a
+byte header; a non-ASCII name becomes UTF-8 C<filename*>. No fallback name
+is invented. A caller may supply an explicit ASCII C<filename> fallback and
+an already-formatted C<filename*> when both are required.
+
+  use utf8;
+  use PAGI::Utils::Headers qw(content_disposition);
+  $response->headers->set('Content-Disposition',
+      content_disposition('attachment', filename => 'résumé.pdf'));
+
+=head2 Compose Vary across middleware
+
+Use the mutating Headers method when several components add cache dependencies.
+It combines repeated Vary fields, deduplicates names without regard to case,
+and retains unrelated headers. A wildcard remains a wildcard.
+
+  $response->headers->add_vary('Accept-Encoding');
+  $response->headers->add_vary('Origin');
+
+The independent C<merge_vary(\@existing_values, @names)> function returns a
+single value when no Headers container is available. Both paths reject a
+malformed Vary field instead of silently dropping an existing dependency.
+
+=head2 Compare conditional entity tags
+
+For an existing representation selected by a successful GET or HEAD, read all
+C<If-None-Match> occurrences and compare them weakly with its current ETag.
+Quoted commas are part of a tag, and malformed conditions return C<undef> by
+default. A present condition takes precedence over C<If-Modified-Since>; do
+not use a date fallback merely because this condition is unusable.
+
+  use PAGI::Utils::Headers qw(etag_matches);
+  my $condition = $request->headers->if_none_match;
+  if (defined($condition) && etag_matches($condition, $current_etag, weak => 1)) {
+      # Send the eligible representation's bodyless 304 with its validators.
+  }
+
+If the representation exists without a current ETag, inspect
+C<< $condition->{any} >> for the wildcard case instead of calling
+C<etag_matches>. The File and ConditionalGet integrations handle their own
+eligibility, response metadata, and range policy.
 
 =head1 AUTHENTICATION & SESSIONS
+
+L<PAGI::Auth> constructs authentication results, reads the installed context,
+and formats individual C<WWW-Authenticate> values. Applications explicitly
+choose ordinary Pages or Response applications for refusals. Basic credentials
+and Bearer tokens require TLS in real deployments.
+
+=head2 Basic Challenge
+
+B<Request handler:> format the field value and return an ordinary Pages app.
+
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
+
+  sub protected($request) {
+      return PAGI::Pages->status(401,
+          as      => 'text',
+          detail  => 'Authentication is required.',
+          headers => ['WWW-Authenticate' => www_authenticate(
+              'Basic', realm => 'Staff', charset => 'UTF-8',
+          )],
+      );
+  }
+
+=head2 Missing Bearer Token
+
+B<Request handler:> a missing token is a plain Bearer challenge without an
+C<error> parameter.
+
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
+
+  sub token_required($request) {
+      return PAGI::Pages->status(401,
+          detail  => 'An access token is required.',
+          headers => ['WWW-Authenticate' =>
+              www_authenticate('Bearer', realm => 'api')],
+      );
+  }
+
+=head2 Invalid Bearer Token
+
+B<Request handler:> validation happened elsewhere. The description is public
+wire text; never put the token, a password, or an internal exception in it.
+The error URI choice is explicitly absolute.
+
+  return PAGI::Pages->status(401,
+      headers => ['WWW-Authenticate' => www_authenticate('Bearer',
+          realm             => 'api',
+          error             => 'invalid_token',
+          error_description => 'The access token is no longer valid.',
+          error_uri         => 'https://example.test/errors/invalid-token',
+      )],
+  );
+
+=head2 Insufficient Bearer Scope
+
+B<Request handler:> an authenticated principal without permission receives
+403. The application chooses the status and challenge parameters.
+
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
+
+  return PAGI::Pages->status(403,
+      headers => ['WWW-Authenticate' => www_authenticate('Bearer',
+          realm => 'api', error => 'insufficient_scope', scope => 'write',
+      )],
+      detail  => 'Write access is required.',
+  );
+
+Unknown Bearer extension error names remain open protocol values; Auth does
+not guess whether they imply 401 or 403.
+
+=head2 Multiple Authentication Challenges
+
+B<Request handler:> pass repeated ordered fields. Values are never comma-joined.
+
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
+
+  return PAGI::Pages->status(401, headers => [
+      'WWW-Authenticate' => www_authenticate('Basic', realm => 'Staff'),
+      'WWW-Authenticate' => www_authenticate('Bearer', realm => 'api'),
+      'WWW-Authenticate' => 'Negotiate ' . $encoded_token,
+  ]);
+
+=head2 Explicit Login Redirect Policy
+
+B<Request handler:> interactive login is application policy, not an alternate
+Auth renderer. Redirect deliberately, and keep the 401 challenge for clients
+that need protocol authentication.
+
+  use PAGI::Pages qw(redirect);
+
+  sub browser_home($request) {
+      return redirect('/login', status => 303) unless signed_in($request);
+      return home_page($request);
+  }
+
+F<examples/auth-cookie-login> demonstrates the complete cookie and session
+flow, including login and logout methods. It requires Perl 5.40 or newer.
+
+=head2 Deliberate 404 Concealment
+
+B<Request handler:> when disclosing resource existence is itself sensitive,
+make concealment explicit policy.
+
+  use PAGI::Pages qw(not_found);
+
+  sub confidential_report($request) {
+      return not_found(detail => 'Report not found')
+          unless may_discover_report($request);
+      return report_response($request);
+  }
+
+=head2 WebSocket Authentication Denial
+
+B<WebSocket endpoint:> pass the negotiated Pages application directly and await
+C<deny>.
+
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
+
+  websocket('/chat' => async sub {
+      my ($ws) = @_;
+      unless (authorized($ws)) {
+          my $failure = PAGI::Pages->status(401,
+              as      => 'text',
+              headers => ['WWW-Authenticate' =>
+                  www_authenticate('Bearer', realm => 'chat')],
+          );
+          await $ws->deny($failure);
+          return;
+      }
+      await $ws->accept;
+      await $ws->run;
+  });
+
+The Pages application negotiates on the original WebSocket scope and emits
+an ordinary C<http.response.*> response. C<response_for> remains available for
+code that intentionally needs a concrete local Response, but refusal does not
+require that materialization step.
+
+=head2 SSE Authentication Decline
+
+B<SSE endpoint:> decline before starting the stream.
+
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
+
+  sse('/events' => async sub {
+      my ($sse) = @_;
+      unless (authorized($sse)) {
+          my $failure = PAGI::Pages->status(401,
+              as      => 'text',
+              headers => ['WWW-Authenticate' =>
+                  www_authenticate('Bearer', realm => 'events')],
+          );
+          await $sse->decline($failure);
+          return;
+      }
+      await $sse->start;
+      await $sse->run;
+  });
+
+The negotiated 401 contains the structured Bearer C<WWW-Authenticate> field.
+C<decline> invokes the Pages application on the original SSE scope. Connection
+terminal notification drives helper cleanup independently of that invocation.
+
+=head2 Invoke an Authentication Refusal from a Native Application
+
+B<Native triplet app:> use the normal application invocation helper.
+
+  use Future::AsyncAwait;
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
+  use PAGI::Utils qw(invoke_app);
+
+  my $failure = PAGI::Pages->status(401,
+      headers => ['WWW-Authenticate' =>
+          www_authenticate('Bearer', realm => 'native')],
+  );
+
+  my $app = async sub {
+      my ($scope, $receive, $send) = @_;
+      return await invoke_app($failure, $scope, $receive, $send);
+  };
+
+=head2 Custom Pages Presentation for Authentication Refusals
+
+B<Request handler setup:> reuse a configured Pages subclass. Rendering hooks
+stay synchronous.
+
+  use PAGI::Auth qw(www_authenticate);
+
+  my $pages = MyApp::Pages->new;
+
+  sub custom_token_required($request) {
+      return $pages->status(401,
+          headers => ['WWW-Authenticate' =>
+              www_authenticate('Bearer', realm => 'api')],
+          detail  => 'Sign in to continue.',
+      );
+  }
 
 =head2 Session Management
 
@@ -1438,59 +1987,111 @@ that hashref with a convenient (and typo-catching) API.
 
   use strict;
   use warnings;
+  use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
   use PAGI::Middleware::Builder;
   use PAGI::Response qw(text_response);
   use PAGI::Routing qw(route router);
 
   my $routing = router(routes => [
-
-  route('/' => sub {
-      my ($request) = @_;
-      return text_response('Protected content');
-  }),
+      route('/' => sub {
+          my ($request) = @_;
+          return text_response('Protected content')
+              if auth($request)->user->is_authenticated;
+          my $response = text_response('Credentials required', status => 401);
+          $response->headers->set('WWW-Authenticate',
+              www_authenticate('Basic', realm => 'Admin Area'));
+          return $response;
+      }),
   ]);
 
-  # Protect every route with Basic Auth
   my $app = builder {
-      enable 'Auth::Basic',
-          realm         => 'Admin Area',
-          authenticator => sub {
-              my ($username, $password) = @_;
-              return $username eq 'admin' && $password eq 'secret';
+      enable 'Authentication', backend => sub {
+          my ($request) = @_;
+          my ($username, $password);
+          my $parsed = eval {
+              ($username, $password) = $request->basic_auth(raise_on_error => 1);
+              1;
           };
+          return unauth_result(failure => {
+              code => 'malformed_authorization',
+              message => 'Supply one valid Basic credential.',
+          }) unless $parsed;
+          return unauth_result() unless defined($username) && defined($password);
+          return unauth_result(failure => { message => 'Credentials were not accepted.' })
+              unless $username eq 'admin' && $password eq 'secret';
+          return auth_result(user => MyApp::User->new($username));
+      };
       $routing;
   };
 
 =head2 Bearer Token (JWT)
 
+This example accepts HS256 tokens with a valid C<exp> and a nonempty C<sub>.
+Configure C<JWT_SECRET> with the shared signing secret used by your issuer.
+L<Crypt::JWT> recommends pinning C<accepted_alg>; C<verify_exp =E<gt> 1>
+requires expiration, whereas its default only checks C<exp> when present.
+These are this application's token rules, not policy imposed by PAGI::Auth.
+
   use strict;
   use warnings;
+  use Crypt::JWT qw(decode_jwt);
+  use PAGI::Auth qw(auth auth_result unauth_result www_authenticate);
+  use PAGI::Auth::SimpleUser;
   use PAGI::Middleware::Builder;
   use PAGI::Response qw(json_response);
   use PAGI::Routing qw(route router);
+
+  my $secret = $ENV{JWT_SECRET} // die 'Configure JWT_SECRET';
 
   my $routing = router(routes => [
 
   route('/api/me' => sub {
       my ($request) = @_;
-
-      # Claims from the validated token: the middleware stores
-      # { type => 'bearer', token => ..., claims => ... } under 'pagi.auth'
-      my $claims = $request->scope->{'pagi.auth'}{claims};
-
-      return json_response({ user => $claims });
+      my $result = auth($request);
+      return json_response({ user => $result->user->identity })
+          if $result->user->is_authenticated;
+      my $failure = $result->failure;
+      my $malformed = $failure
+          && ($failure->code // '') eq 'malformed_authorization';
+      my @challenge = (realm => 'api');
+      push @challenge, error => ($malformed ? 'invalid_request' : 'invalid_token')
+          if $failure;
+      my $response = json_response({ error => 'authentication_required' },
+          status => $malformed ? 400 : 401);
+      $response->headers->set('WWW-Authenticate',
+          www_authenticate('Bearer', @challenge));
+      return $response;
   }),
   ]);
 
-  # Verify Bearer tokens with a custom validator (returns claims or undef).
-  # When the validator returns undef the middleware sends 401 itself, so the
-  # handler above only runs for valid tokens.
+  # Parsing, JWT verification, and safe rejection messages belong to the backend.
   my $app = builder {
-      enable 'Auth::Bearer',
-          validator => sub {
-              my ($token) = @_;
-              return decode_jwt($token);  # Your JWT decode logic
+      enable 'Authentication', backend => sub {
+          my ($request) = @_;
+          my $token;
+          my $parsed = eval {
+              $token = $request->bearer_token(raise_on_error => 1);
+              1;
           };
+          return unauth_result(failure => {
+              code => 'malformed_authorization',
+              message => 'Supply one valid Bearer credential.',
+          }) unless $parsed;
+          return unauth_result() unless defined $token;
+          my $claims = eval {
+              decode_jwt(
+                  token        => $token,
+                  key          => $secret,
+                  accepted_alg => 'HS256',
+                  verify_exp   => 1,
+              );
+          };
+          return unauth_result(failure => { message => 'The token was not accepted.' })
+              unless ref($claims) eq 'HASH'
+                  && defined($claims->{sub}) && !ref($claims->{sub})
+                  && length($claims->{sub});
+          return auth_result(user => PAGI::Auth::SimpleUser->new(identity => $claims->{sub}));
+      };
       $routing;
   };
 
@@ -1683,22 +2284,31 @@ you start the stream you can B<decline> it and return a normal HTTP response
 instead -- no event stream. Use C<< $sse->decline >>, which is how most
 application code should write this:
 
+  use PAGI::Auth qw(www_authenticate);
+  use PAGI::Pages;
+
   sse('/feed' => async sub {
       my ($sse) = @_;
 
-      # Auth check before we commit to a stream.
-      unless (authorized($sse->query_param('token'))) {
-          return await $sse->decline(
-              PAGI::Response::text_response(
-                  'Unauthorized',
-                  status => 401,
-              ),
+      # Application policy has already decided whether an identity exists.
+      unless (has_authenticated_identity($sse)) {
+          my $failure = PAGI::Pages->status(401,
+              as      => 'text',
+              headers => ['WWW-Authenticate' =>
+                  www_authenticate('Bearer', realm => 'events')],
           );
+          await $sse->decline($failure);
+          return;
       }
 
       await $sse->start;
       # ... stream ...
   });
+
+This is response construction after an application-owned identity decision. It
+does not parse a query parameter, credential, or token, and PAGI::Auth does not
+provide a credential parser or identity provider. C<decline> invokes the
+Pages application and retains SSE lifecycle ownership.
 
 Three common reasons to decline:
 
@@ -1719,36 +2329,32 @@ good.
 
   # Tell EventSource to stop reconnecting: a bare 204.
   await $sse->decline(PAGI::Response::empty_response(status => 204));
+  return;
 
-A decline is not a disconnect: no C<sse.disconnect> event ever follows it,
-because the stream never started. If your code calls C<< $sse->receive >> (or
-anything that reads C<$receive> directly) after a decline expecting to
-observe that non-event, it parks forever instead -- there is nothing left to
-receive. Return right after declining, as above.
+A normally completed decline is a clean end, not an abnormal disconnect. The
+server does not deliver C<sse.disconnect> on its own because no event stream
+started. If raw application code calls its C<$receive> callback after the
+refusal, however, that receive resolves with a
+reasonless C<sse.disconnect> reporting the clean terminal scope. Return right
+after declining, as above; there is no further application work to perform.
 
 First-send-wins picks the mode: once you have sent C<sse.start> a decline
-raises, and once you have sent C<sse.http.response.start> a stream event
+raises, and once you have sent C<http.response.start> a stream event
 (C<sse.send>, C<sse.start>, ...) raises. Decide before you start.
 
 See L<PAGI::SSE/decline> for the method and
 L<PAGI::Spec::Www/"Decline SSE - C<send> event"> for the protocol events and
 the full state machine.
 
-=head3 Under the hood
+=head3 Application boundary
 
-C<decline> sends C<sse.http.response.start> followed by
-C<sse.http.response.body> on the raw C<$send> (the same one you passed to
-C<< PAGI::SSE->new >>), then marks the connection closed. This is what it is
-doing on your behalf -- shown so the underlying contract is explicit, not as
-a recommended application style:
-
-  # Equivalent to adapting text_response('Unauthorized', status => 401).
-  await $send->({
-      type    => 'sse.http.response.start',
-      status  => 401,
-      headers => [['content-type', 'text/plain']],
-  });
-  await $send->({ type => 'sse.http.response.body', body => 'Unauthorized', more => 0 });
+C<decline> converts the selected value through its public C<to_app> contract
+and invokes that application with the original SSE scope, remaining receive
+stream, and original send channel. The application emits ordinary
+C<http.response.start> and C<http.response.body> events. Every refusal target,
+including buffered Responses, requires the current public universal connection
+API so caller cancellation, transport loss, and retained cleanup have one
+authoritative terminal source.
 
 =head1 BACKGROUND WORK
 
@@ -2426,7 +3032,7 @@ See L<PAGI::Test::Client> for the full API including WebSocket and SSE testing.
 
 =item * L<PAGI::Response> - Literal low-level response construction
 
-=item * L<PAGI::Middleware::Helpers> - Functional event-channel wrappers
+=item * L<PAGI::Utils::Middleware> - Functional event-channel wrappers
 
 =item * L<PAGI::Authority> - Validated request authority
 

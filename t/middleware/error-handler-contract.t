@@ -138,7 +138,8 @@ subtest 'public defaults and options are exact and environment-independent' => s
     });
     settle($future);
 
-    ok $future->is_done, 'invalid environment does not affect handling';
+    like(($future->failure)[0], qr/^private details at /,
+        'invalid environment does not affect handling or the re-raise');
     like header_value($events->[0], 'content-type'), qr{^text/html},
         'ordinary default negotiates to Pages HTML';
     unlike $events->[1]{body}, qr/private details/,
@@ -273,7 +274,8 @@ subtest 'invalid exception status claim reaches custom handler with a safe seed'
         settle($future);
     }
 
-    ok $future->is_done, 'out-of-range claim is contained';
+    is refaddr(($future->failure)[0]), refaddr($error),
+        'out-of-range claim falls back to 500 and is re-raised';
     is refaddr($handler_error), refaddr($error),
         'custom handler receives the original exception object';
     is refaddr($reported[0]), refaddr($error),
@@ -332,7 +334,13 @@ subtest 'built-in exception status claims are guarded and Pages-valid' => sub {
             );
             settle($future);
         }
-        ok $future->is_done, "$label is contained";
+        if ($expected >= 500) {
+            is refaddr(($future->failure)[0]), refaddr($error),
+                "$label is a server error and is re-raised";
+        }
+        else {
+            ok $future->is_done, "$label is handled and not re-raised";
+        }
         is $events->[0]{status}, $expected, "$label selects safe status $expected";
         is refaddr($reported[0]), refaddr($error),
             "$label reports the original exception object";
@@ -367,7 +375,9 @@ subtest 'rejected-status diagnostics are safe and failure-contained' => sub {
         settle($future);
     }
 
-    ok $future->is_done, 'hostile rejected status is contained';
+    is(($future->failure)[0],
+        "PAGI ErrorHandler: the application raised an exception that cannot be used as a value\n",
+        'an exception Future cannot carry is re-raised as a safe substitute');
     is refaddr($reported[0]), refaddr($hostile),
         'hostile original exception reaches the reporter';
     is $events->[0]{status}, 500, 'hostile claim uses the safe response status';
@@ -393,7 +403,8 @@ subtest 'rejected-status diagnostics are safe and failure-contained' => sub {
         settle($future);
     }
 
-    ok $future->is_done, 'throwing diagnostic sink is contained';
+    is refaddr(($future->failure)[0]), refaddr($original),
+        'throwing diagnostic sink cannot replace the re-raised original';
     is refaddr($reported[0]), refaddr($original),
         'diagnostic failure cannot replace the original reporter value';
     is $events->[0]{status}, 500,
@@ -418,7 +429,9 @@ subtest 'throwing exception stringification cannot replace the safe response' =>
     );
     settle($future);
 
-    ok $future->is_done, 'throwing string overload is contained';
+    is(($future->failure)[0],
+        "PAGI ErrorHandler: the application raised an exception that cannot be used as a value\n",
+        'throwing string overload is re-raised as a safe substitute');
     is $events->[0]{status}, 500, 'throwing string overload retains safe status 500';
     is refaddr($reported[0]), refaddr($error), 'reporter receives the original object';
     unlike $events->[1]{body}, qr/stringification failed/,
@@ -438,7 +451,8 @@ subtest 'concrete Response values receive the fallback status' => sub {
     my ($future, $events) = invoke($middleware, async sub { die "concrete" });
     settle($future);
 
-    ok $future->is_done, 'concrete Response value is accepted';
+    like(($future->failure)[0], qr/^concrete at /,
+        'concrete Response value is sent, then the error is re-raised');
     is $events->[0]{status}, 500, 'concrete Response receives the fallback status';
     is header_value($events->[0], 'x-response'), 'concrete',
         'concrete Response headers pass through';
@@ -519,7 +533,8 @@ subtest 'reporting failures never prevent rendering' => sub {
             async sub { die "application failed\n" },
         );
         settle($future);
-        ok $future->is_done, "$name is contained";
+        is(($future->failure)[0], "application failed\n",
+            "$name cannot replace the re-raised application failure");
         is scalar(@$events), 2, "$name does not prevent rendering";
         like $events->[1]{body}, qr/Internal Server Error/,
             "$name does not replace the application failure path";
@@ -798,7 +813,8 @@ subtest 'Pages construction failure uses the hardcoded pre-start response' => su
         settle($future);
     }
 
-    ok $future->is_done, 'Pages construction failure is contained before start';
+    is(($future->failure)[0], "original application failure\n",
+        'after the last-resort 500 the original failure is re-raised');
     is scalar(@$events), 2, 'last resort emits exactly start and body events';
     is $events->[0]{status}, 500, 'last resort status is 500';
     is header_value($events->[0], 'content-type'), 'text/plain; charset=utf-8',
@@ -826,7 +842,8 @@ subtest 'missing scope type is HTTP without warnings' => sub {
         );
         settle($future);
     }
-    ok $future->is_done, 'missing type is handled as HTTP';
+    is(($future->failure)[0], "missing type\n",
+        'missing type is handled as HTTP, including the re-raise');
     is scalar(@$events), 2, 'missing type receives an error response';
     is \@warnings, [], 'missing type emits no warnings';
     ok !exists $scope->{type}, 'missing type remains absent from the original scope';
@@ -884,27 +901,114 @@ subtest 'Compose failsafe resolves development per handled request' => sub {
         'production resolution uses the safe built-in message';
 };
 
-subtest 'Compose resolver failure is reported and rendered safely' => sub {
-    my @reported;
+subtest 'Compose resolver failure is a diagnostic and renders safely' => sub {
+    my (@reported, @warnings);
     my $middleware = PAGI::Middleware::ErrorHandler->_new_compose_failsafe(
         _development_resolver => sub { die "invalid environment\n" },
         on_error              => sub { push @reported, $_[0]; Future->done },
     );
-    my ($future, $events) = invoke(
-        $middleware, async sub { die "database password exposed\n" },
-    );
-    settle($future);
+    my ($future, $events);
+    {
+        local $SIG{__WARN__} = sub { push @warnings, @_ };
+        ($future, $events) = invoke(
+            $middleware, async sub { die "database password exposed\n" },
+        );
+        settle($future);
+    }
 
-    ok $future->is_done, 'resolver failure cannot escape the failsafe';
-    is scalar(@reported), 2, 'application and resolver failures are reported';
-    is $reported[0], "database password exposed\n",
-        'original application failure is reported first';
-    is $reported[1], "invalid environment\n",
-        'resolver failure is separately reported';
+    is(($future->failure)[0], "database password exposed\n",
+        'resolver failure cannot replace the re-raised application failure');
+    is \@reported, ["database password exposed\n"],
+        'on_error reports only the application failure';
+    is \@warnings,
+        ["PAGI ErrorHandler could not resolve development mode: invalid environment\n"],
+        'the resolver failure is one configuration diagnostic';
     unlike $events->[1]{body}, qr/database password|invalid environment/,
         'resolver failure falls back to production-safe output';
     like $events->[1]{body}, qr/Internal Server Error/,
         'safe production response is still rendered';
+};
+
+# ErrorHandler turns an exception into a response; it does not report it. A
+# server error is re-raised once the 500 is complete, so the server logs it
+# (PAGI::Spec::Www, "Exceptions after the terminal event").
+subtest 'a server error is rendered completely, then re-raised' => sub {
+    my $original = Local::StatusError->new(500, 'database unreachable');
+    my ($future, $events) = invoke(
+        PAGI::Middleware::ErrorHandler->new,
+        async sub { die $original },
+    );
+    settle($future);
+
+    is scalar(@$events), 2, 'the 500 start and body were sent first';
+    is $events->[0]{status}, 500, 'the rendered status is 500';
+    ok !$events->[1]{more}, 'the response is complete before the re-raise';
+    ok $future->is_failed, 'the handling Future then fails';
+    is refaddr(($future->failure)[0]), refaddr($original),
+        'with the original exception object';
+};
+
+subtest 'a custom renderer does not stop a server error being re-raised' => sub {
+    my ($future, $events) = invoke(
+        PAGI::Middleware::ErrorHandler->new(
+            handler => sub { PAGI::Response::Text->new('custom page') },
+        ),
+        async sub { die "database unreachable\n" },
+    );
+    settle($future);
+
+    is $events->[0]{status}, 500, 'the custom page is sent as a 500';
+    is(($future->failure)[0], "database unreachable\n",
+        'the original exception is re-raised after it');
+};
+
+subtest 'after response start an unusable exception is re-raised safely' => sub {
+    my $middleware = PAGI::Middleware::ErrorHandler->new;
+    my @events;
+    my $future = invoke_with_send(
+        $middleware,
+        # A plain sub, so the object reaches ErrorHandler intact; an async
+        # application's own Future would already have failed to carry it.
+        sub {
+            my ($scope, $receive, $send) = @_;
+            $send->({
+                type => 'http.response.start', status => 200, headers => [],
+            })->get;
+            die Local::ThrowingStringError->new;
+        },
+        sub { push @events, $_[0]; return Future->done },
+    );
+    settle($future);
+
+    is scalar(@events), 1, 'no replacement response is attempted';
+    is(($future->failure)[0],
+        "PAGI ErrorHandler: the application raised an exception that cannot be used as a value\n",
+        'the unusable exception becomes a safe substitute');
+};
+
+subtest 'a handled 4xx exception is rendered and not re-raised' => sub {
+    my ($future, $events) = invoke(
+        PAGI::Middleware::ErrorHandler->new,
+        async sub { die Local::StatusError->new(404, 'no such thing') },
+    );
+    settle($future);
+
+    is $events->[0]{status}, 404, 'the claimed 404 is rendered';
+    ok $future->is_done, 'a handled exception is not an error for the server';
+};
+
+subtest 'on_error receives the request scope' => sub {
+    my @seen;
+    my $scope = { type => 'http', path => '/orders/7' };
+    my ($future) = invoke(
+        PAGI::Middleware::ErrorHandler->new(on_error => sub { @seen = @_; return }),
+        async sub { die "order lookup failed\n" },
+        $scope,
+    );
+    settle($future);
+
+    is $seen[0], "order lookup failed\n", 'the error comes first';
+    is refaddr($seen[1]), refaddr($scope), 'the scope comes second';
 };
 
 done_testing;

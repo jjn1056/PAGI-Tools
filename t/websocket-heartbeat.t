@@ -4,14 +4,12 @@ use Test2::V0;
 use Future::AsyncAwait;
 
 use PAGI::WebSocket;
+use lib 't/lib';
+use PAGITest::Connected qw(ws_scope);
 
 # Helper to create fresh scope for each test
 sub make_scope {
-    return {
-        type    => 'websocket',
-        path    => '/test',
-        headers => [],
-    };
+    return ws_scope(path => '/test');
 }
 
 my @sent_messages;
@@ -29,9 +27,9 @@ subtest 'keepalive method exists' => sub {
 };
 
 subtest 'keepalive sends websocket.keepalive event' => sub {
-    @sent_messages = ();
     my $ws = PAGI::WebSocket->new(make_scope(), $receive, $send);
-    $ws->_set_state('connected');
+    $ws->accept->get;
+    @sent_messages = ();
 
     $ws->keepalive(30)->get;
 
@@ -42,9 +40,9 @@ subtest 'keepalive sends websocket.keepalive event' => sub {
 };
 
 subtest 'keepalive with timeout sends both interval and timeout' => sub {
-    @sent_messages = ();
     my $ws = PAGI::WebSocket->new(make_scope(), $receive, $send);
-    $ws->_set_state('connected');
+    $ws->accept->get;
+    @sent_messages = ();
 
     $ws->keepalive(30, 20)->get;
 
@@ -56,16 +54,16 @@ subtest 'keepalive with timeout sends both interval and timeout' => sub {
 
 subtest 'keepalive returns self for chaining' => sub {
     my $ws = PAGI::WebSocket->new(make_scope(), $receive, $send);
-    $ws->_set_state('connected');
+    $ws->accept->get;
     my $result = $ws->keepalive(25)->get;
     is(ref($result), ref($ws), 'returns same type');
     ok($result == $ws, 'returns $self for chaining');
 };
 
 subtest 'keepalive with 0 interval disables keepalive' => sub {
-    @sent_messages = ();
     my $ws = PAGI::WebSocket->new(make_scope(), $receive, $send);
-    $ws->_set_state('connected');
+    $ws->accept->get;
+    @sent_messages = ();
 
     $ws->keepalive(0)->get;
 
@@ -75,12 +73,10 @@ subtest 'keepalive with 0 interval disables keepalive' => sub {
 };
 
 subtest 'param method for route parameters' => sub {
-    my $scope_with_params = {
-        type    => 'websocket',
-        path    => '/test',
-        headers => [],
+    my $scope_with_params = ws_scope(
+        path        => '/test',
         path_params => { id => '42', name => 'test' },
-    };
+    );
     my $ws = PAGI::WebSocket->new($scope_with_params, $receive, $send);
 
     is($ws->path_param('id'), '42', 'param returns route parameter');
@@ -89,12 +85,10 @@ subtest 'param method for route parameters' => sub {
 };
 
 subtest 'params method returns all route parameters' => sub {
-    my $scope_with_params = {
-        type    => 'websocket',
-        path    => '/test',
-        headers => [],
+    my $scope_with_params = ws_scope(
+        path        => '/test',
         path_params => { foo => 'bar', baz => 'qux' },
-    };
+    );
     my $ws = PAGI::WebSocket->new($scope_with_params, $receive, $send);
 
     my $params = $ws->path_params;

@@ -449,4 +449,139 @@ subtest 'a complete response is not reported as a disconnect' => sub {
         'Lint does not claim a terminal event was withheld when one was sent');
 };
 
+{
+    package LintProtocolConnection;
+    sub new {
+        my ($class, %args) = @_;
+        return bless \%args, $class;
+    }
+    sub is_connected      { exists $_[0]{connected} ? $_[0]{connected} : 1 }
+    sub response_complete { exists $_[0]{complete} ? $_[0]{complete} : 0 }
+    sub disconnect_reason { $_[0]{reason} }
+}
+
+sub protocol_scope {
+    my ($type, %connection) = @_;
+    return {
+        type              => $type,
+        extensions        => {},
+        'pagi.connection' => LintProtocolConnection->new(%connection),
+    };
+}
+
+sub lint_protocol_app {
+    my ($type, $events, %connection) = @_;
+    my @warnings;
+    my @forwarded;
+    my $app = async sub {
+        my ($scope, $receive, $send) = @_;
+        for my $event (@$events) {
+            await $send->($event);
+        }
+    };
+    my $wrapped = PAGI::Middleware::Lint->new(
+        on_warning => sub { push @warnings, shift },
+    )->wrap($app);
+    run_async {
+        $wrapped->(
+            protocol_scope($type, %connection),
+            async sub { {} },
+            async sub { push @forwarded, $_[0] },
+        )
+    };
+    return (\@warnings, \@forwarded);
+}
+
+subtest 'protocol scopes validate ordinary HTTP refusals and removed event names' => sub {
+    for my $type (qw(websocket sse)) {
+        my ($warnings, $events) = lint_protocol_app($type, [
+            { type => 'http.response.start', status => 403, headers => [] },
+            { type => 'http.response.body', body => 'no', more => 0 },
+        ]);
+        is $warnings, [], "$type refusal is complete without a warning";
+        is scalar(@$events), 2, "$type refusal events are forwarded";
+
+        my ($old_warnings) = lint_protocol_app($type, [
+            { type => "$type.http.response.start", status => 403, headers => [] },
+        ]);
+        like join('', @$old_warnings), qr/isn't a recognized PAGI event/,
+            "$type removed refusal event name is diagnosed";
+    }
+};
+
+subtest 'websocket close before accept is diagnosed by the shared validator' => sub {
+    my ($warnings, $events) = lint_protocol_app(websocket => [
+        { type => 'websocket.close', code => 1008 },
+    ]);
+    like join('', @$warnings), qr/before websocket\.accept/,
+        'sequence diagnostic names the missing accept';
+    is scalar(@$events), 1, 'non-strict Lint still forwards the event';
+
+    my @strict_events;
+    my $strict_app = async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'websocket.close', code => 1008 });
+    };
+    my $strict = PAGI::Middleware::Lint->new(strict => 1)->wrap($strict_app);
+    my $strict_error = '';
+    eval {
+        Future->wrap($strict->(
+            protocol_scope('websocket'), async sub { {} },
+            async sub { push @strict_events, $_[0] },
+        ))->get;
+    };
+    $strict_error = $@;
+    like $strict_error, qr/before websocket\.accept/,
+        'strict mode rejects the sequence violation';
+    is \@strict_events, [], 'strict mode does not forward the rejected close';
+};
+
+subtest 'completed accepted protocol apps need no HTTP completion event' => sub {
+    my @cases = (
+        [websocket => [
+            { type => 'websocket.accept' },
+            { type => 'websocket.close', code => 1000 },
+        ]],
+        [sse => [
+            { type => 'sse.start', status => 200, headers => [] },
+            { type => 'sse.close' },
+        ]],
+    );
+    for my $case (@cases) {
+        my ($type, $events) = @$case;
+        my ($warnings) = lint_protocol_app($type, $events);
+        is $warnings, [], "$type terminal event completes the scope";
+    }
+};
+
+subtest 'active protocol scopes get protocol-specific completion diagnostics' => sub {
+    my ($ws_warnings) = lint_protocol_app(websocket => [
+        { type => 'websocket.accept' },
+    ]);
+    like join('', @$ws_warnings), qr/WebSocket app completed without sending websocket\.close or receiving websocket\.disconnect/,
+        'accepted WebSocket names its two completion paths';
+    unlike join('', @$ws_warnings), qr/http\.response\.body/,
+        'accepted WebSocket does not get an HTTP-body diagnosis';
+
+    my ($sse_warnings) = lint_protocol_app(sse => [
+        { type => 'sse.start', status => 200, headers => [] },
+    ]);
+    like join('', @$sse_warnings), qr/SSE app completed without sending sse\.close/,
+        'started SSE names its terminal event';
+    unlike join('', @$sse_warnings), qr/http\.response\.body/,
+        'started SSE does not get an HTTP-body diagnosis';
+};
+
+subtest 'clean peer-first protocol terminal facts satisfy completion' => sub {
+    for my $type (qw(websocket sse)) {
+        my $start = $type eq 'websocket'
+            ? { type => 'websocket.accept' }
+            : { type => 'sse.start', status => 200, headers => [] };
+        my ($warnings) = lint_protocol_app(
+            $type, [$start], connected => 0, complete => 1,
+        );
+        is $warnings, [], "$type clean terminal connection needs no additional app close";
+    }
+};
+
 done_testing;

@@ -5,6 +5,8 @@ use warnings;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use HTTP::MultiPartParser;
+use PAGI::Headers;
+use PAGI::Request::_BodyInput ();
 
 =head1 NAME
 
@@ -29,8 +31,10 @@ PAGI::Request::MultipartStream - Pull-based streaming multipart/form-data engine
 
 =head1 DESCRIPTION
 
-A pull-based streaming parser for C<multipart/form-data> request bodies. Each
-part of the body is exposed in turn as a L<PAGI::Request::Part> via C<next>,
+A pull-based streaming parser for C<multipart/form-data> request bodies.
+Streams created by L<PAGI::Request> consume the native HTTP or SSE event family
+for the scope; direct construction defaults to HTTP events. Each part of the
+body is exposed in turn as a L<PAGI::Request::Part> via C<next>,
 and B<the application decides where each part goes>: you choose its sink (a
 file, an object store, an async transform) per part, rather than accepting the
 buffered, spool-each-upload-to-a-temp-file behaviour of C<form_params> and
@@ -45,8 +49,8 @@ Internally this drives L<HTTP::MultiPartParser> on demand, bridging its
 push-based callbacks onto an internal event queue that C<next> and the part
 methods consume.
 
-B<Mutually exclusive with the buffered body methods.> An HTTP request body can
-only be consumed once. Once you create a multipart stream you cannot also call
+B<Mutually exclusive with the buffered body methods.> A request body can only
+be consumed once. Once you create a multipart stream you cannot also call
 C<body>/C<text>/C<json>/C<form_params>/C<uploads>, and a stream cannot be
 created if the body was already read; see L<PAGI::Request/multipart_stream>.
 
@@ -113,6 +117,7 @@ sub new {
         max_field_size   => $args{max_field_size}   // $MAX_FIELD_SIZE,
         max_file_size    => $args{max_file_size}    // $MAX_FILE_SIZE,
         max_request_body => $args{max_request_body} // $MAX_REQUEST_BODY,
+        _scope_type      => $args{_scope_type} // 'http',
         _queue       => [],        # FIFO: ['part',\%meta] | ['body',$chunk]
         _file_count  => 0,
         _field_count => 0,
@@ -156,20 +161,10 @@ sub _disposition {
 
 sub _parse_content_disposition {
     my ($headers) = @_;
-    my $cd = $headers->{'content-disposition'} // '';
-
-    my %result;
-
-    # Parse name="value" pairs
-    while ($cd =~ /(\w+)="([^"]*)"/g) {
-        $result{$1} = $2;
-    }
-    # Also handle unquoted values
-    while ($cd =~ /(\w+)=([^;\s"]+)/g) {
-        $result{$1} //= $2;
-    }
-
-    return \%result;
+    my $value = $headers->{'content-disposition'};
+    return {} unless defined $value;
+    my $fields = PAGI::Headers->new([['Content-Disposition', $value]]);
+    return $fields->content_disposition_parameters // {};
 }
 
 sub _build_parser {
@@ -215,7 +210,10 @@ async sub _pump {
     my ($self) = @_;
     return 0 if $self->{_exhausted};
     my $msg = await $self->{receive}->();
-    if (!$msg || !$msg->{type} || $msg->{type} eq 'http.disconnect') {
+    my $kind = PAGI::Request::_BodyInput::event_kind(
+        $self->{_scope_type}, $msg,
+    );
+    if ($kind eq 'disconnect') {
         $self->{_exhausted} = 1;
         $self->_finish_parser if $self->{_bytes_total} > 0;   # 0 bytes => empty stream, clean EOF
         return 0;
@@ -352,7 +350,9 @@ The part's form field name, taken from its C<Content-Disposition> header.
     my $filename = $part->filename;
 
 The part's filename from C<Content-Disposition>, or C<undef> for non-file
-(field) parts.
+(field) parts. Quoted escapes are parsed, and an empty quoted C<filename>
+still identifies a file part. C<filename*> alone does not become a filename.
+If the disposition is malformed, the part has no parsed name or filename.
 
 =head2 content_type
 

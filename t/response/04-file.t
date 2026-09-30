@@ -1,5 +1,6 @@
 use strict;
 use warnings;
+use utf8;
 
 use File::Spec;
 use File::Temp qw(tempdir);
@@ -267,6 +268,12 @@ subtest 'MIME, disposition, ETag, conditionals, and range arithmetic share one p
         'attachment; filename="monthly \\"report\\".json"',
         'filename defaults to a safely quoted attachment');
 
+    my $unicode = run_response(file_response($json, filename => 'résumé.pdf'));
+    my $disposition = event_header($unicode->[0], 'content-disposition');
+    is($disposition, "attachment; filename*=UTF-8''r%C3%A9sum%C3%A9.pdf",
+        'non-ASCII download filename is emitted as UTF-8 extended value');
+    ok(!utf8::is_utf8($disposition), 'wire disposition is a byte string');
+
     my $inline = run_response(file_response($json, inline => 1));
     is(event_header($inline->[0], 'content-disposition'), 'inline',
         'inline without a filename still emits an inline disposition');
@@ -322,6 +329,68 @@ subtest 'MIME, disposition, ETag, conditionals, and range arithmetic share one p
         },
         { type => 'http.response.body', body => '', more => 0 },
     ], 'matching If-None-Match wins before range delivery and is bodyless');
+};
+
+subtest 'selected-file conditions use all fields and eligible HTTP representations' => sub {
+    my $root = tempdir(CLEANUP => 1);
+    my $path = File::Spec->catfile($root, 'conditional.txt');
+    write_file($path, 'abcdef');
+    my $response = file_response($path, etag => '"a,b"',
+        headers => ['Cache-Control' => 'private', 'Vary' => 'Accept']);
+    my $matching = [
+        ['If-None-Match', '"old"'], ['If-None-Match', 'W/"a,b"'],
+        ['Range', 'bytes=0-1'],
+    ];
+    my $events = run_response($response, http_scope(headers => $matching));
+    is($events->[0]{status}, 304, 'weak match in second field precedes range');
+    is($events->[1], {type => 'http.response.body', body => '', more => 0},
+        'matching condition is bodyless');
+    is(event_header($events->[0], 'ETag'), '"a,b"', '304 retains validator');
+    is(event_header($events->[0], 'Cache-Control'), 'private',
+        '304 retains configured cache policy');
+    is(event_header($events->[0], 'Vary'), 'Accept', '304 retains configured Vary');
+
+    my $wildcard = run_response(file_response($path, etag => 0),
+        http_scope(headers => [['If-None-Match', '*']]));
+    is($wildcard->[0]{status}, 304, 'existing selected file matches wildcard without ETag');
+    ok(!defined event_header($wildcard->[0], 'ETag'),
+        'wildcard does not invent a disabled validator');
+    is(run_response($response, http_scope(method => 'HEAD',
+        headers => $matching))->[0]{status}, 304, 'HEAD matches before range delivery');
+    is(run_response($response, http_scope(method => 'POST',
+        headers => $matching))->[0]{status}, 200, 'POST does not select 304');
+    is(run_response($response, http_scope(method => 'get',
+        headers => $matching))->[0]{status}, 200, 'method spelling must be exact');
+    is(run_response(file_response($path, status => 404, etag => '"a,b"'),
+        http_scope(headers => [['If-None-Match', '*']]))->[0]{status}, 404,
+        'file-backed error is not a cached representation');
+    is(run_response(file_response($path, status => 201, etag => '"a,b"'),
+        http_scope(headers => [['If-None-Match', '*']]))->[0]{status}, 304,
+        'successful selected representation remains conditionally eligible');
+    is(run_response(file_response($path, status => 302, etag => '"a,b"'),
+        http_scope(headers => [['If-None-Match', '*']]))->[0]{status}, 302,
+        'redirect does not select 304');
+
+    for my $condition (['"a,b", nope'], [''], ['"old"']) {
+        my $unmatched = run_response($response, http_scope(headers => [
+            ['If-None-Match', $condition->[0]], ['Range', 'bytes=0-1'],
+        ]));
+        is($unmatched->[0]{status}, 206,
+            'unusable or nonmatching condition preserves range delivery');
+    }
+    is(run_response(file_response($path, etag => '"a,b"', handle_ranges => 0),
+        http_scope(headers => [['If-None-Match', '*']]))->[0]{status}, 304,
+        'disabled range processing does not disable conditionals');
+
+    my $window = file_response($path, offset => 1, length => 3);
+    my $full_window = run_response($window);
+    my $window_tag = event_header($full_window->[0], 'ETag');
+    my $cached_window = run_response($window, http_scope(headers => [
+        ['If-None-Match', $window_tag],
+    ]));
+    is($cached_window->[0]{status}, 304, 'window condition matches its representation');
+    is(event_header($cached_window->[0], 'ETag'), $window_tag,
+        'window ETag identity survives 304');
 };
 
 subtest 'strict single ranges operate against full files and logical windows' => sub {

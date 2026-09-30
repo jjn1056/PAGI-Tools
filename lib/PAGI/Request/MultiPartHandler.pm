@@ -5,7 +5,9 @@ use warnings;
 use Future::AsyncAwait;
 use HTTP::MultiPartParser;
 use Hash::MultiValue;
+use PAGI::Headers;
 use PAGI::Request::Upload;
+use PAGI::Request::_BodyInput ();
 use File::Temp qw(tempfile);
 
 # Default limits
@@ -26,6 +28,7 @@ sub new {
     return bless {
         boundary        => $args{boundary},
         receive         => $args{receive},
+        _scope_type     => $args{_scope_type} // 'http',
         max_field_size  => $args{max_field_size}  // $MAX_FIELD_SIZE,
         max_file_size   => $args{max_file_size}   // $MAX_FILE_SIZE,
         spool_threshold => $args{spool_threshold} // $SPOOL_THRESHOLD,
@@ -53,6 +56,7 @@ async sub parse {
 
     # Current part state
     my $current_headers;
+    my $current_disposition;
     my $current_data = '';
     my $current_fh;
     my $current_temp_path;
@@ -62,7 +66,7 @@ async sub parse {
     my $finish_part = sub {
         return unless $current_headers;
 
-        my $disposition = _parse_content_disposition($current_headers);
+        my $disposition = $current_disposition;
         my $name = $disposition->{name} // '';
         my $filename = $disposition->{filename};
         my $content_type = $current_headers->{'content-type'} // 'text/plain';
@@ -103,6 +107,7 @@ async sub parse {
 
         # Reset state
         $current_headers = undef;
+        $current_disposition = undef;
         $current_data = '';
         $current_fh = undef;
         $current_temp_path = undef;
@@ -127,9 +132,8 @@ async sub parse {
                     }
                 }
 
-                # Detect if this part is a file upload (has filename in Content-Disposition)
-                my $cd = $current_headers->{'content-disposition'} // '';
-                $current_is_file = ($cd =~ /filename=/i) ? 1 : 0;
+                $current_disposition = _parse_content_disposition($current_headers);
+                $current_is_file = defined $current_disposition->{filename} ? 1 : 0;
             },
 
             on_body => sub {
@@ -182,8 +186,10 @@ async sub parse {
         my $disconnected = 0;
         while (1) {
             my $message = await $receive->();
-            last unless $message && $message->{type};
-            if ($message->{type} eq 'http.disconnect') {
+            my $kind = PAGI::Request::_BodyInput::event_kind(
+                $self->{_scope_type}, $message,
+            );
+            if ($kind eq 'disconnect') {
                 $disconnected = 1;
                 last;
             }
@@ -214,20 +220,10 @@ async sub parse {
 
 sub _parse_content_disposition {
     my ($headers) = @_;
-    my $cd = $headers->{'content-disposition'} // '';
-
-    my %result;
-
-    # Parse name="value" pairs
-    while ($cd =~ /(\w+)="([^"]*)"/g) {
-        $result{$1} = $2;
-    }
-    # Also handle unquoted values
-    while ($cd =~ /(\w+)=([^;\s"]+)/g) {
-        $result{$1} //= $2;
-    }
-
-    return \%result;
+    my $value = $headers->{'content-disposition'};
+    return {} unless defined $value;
+    my $fields = PAGI::Headers->new([['Content-Disposition', $value]]);
+    return $fields->content_disposition_parameters // {};
 }
 
 1;
@@ -251,8 +247,10 @@ PAGI::Request::MultiPartHandler - Async multipart/form-data parser
 
 =head1 DESCRIPTION
 
-Parses multipart/form-data requests asynchronously. Applies separate size
-limits to form fields (C<max_field_size>) and file uploads (C<max_file_size>).
+Parses multipart/form-data request input asynchronously. Handlers created by
+L<PAGI::Request> consume the native HTTP or SSE event family for the scope;
+direct construction defaults to HTTP events. Applies separate size limits to
+form fields (C<max_field_size>) and file uploads (C<max_file_size>).
 If the client disconnects mid-body, C<parse> dies with
 C<"Request body incomplete: client disconnected mid-body"> instead of
 parsing whatever partial data had arrived as if it were the complete
@@ -273,6 +271,8 @@ Protects against oversized text field submissions.
 Maximum size for file uploads. Default: 10MB.
 
 Applies to parts with a C<filename> in the Content-Disposition header.
+Quoted filenames (including an empty string) count as uploads; C<filename*>
+alone does not. Malformed disposition parameters provide no part metadata.
 
 =item max_files => $count
 

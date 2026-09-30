@@ -4,7 +4,7 @@ use Future::AsyncAwait;
 use PAGI::Compose qw(compose);
 use PAGI::Pages qw(not_found);
 use PAGI::Routing qw(:routes :middleware);
-use PAGI::Middleware::Helpers qw(wrap_send);
+use PAGI::Utils::Middleware qw(wrap_send);
 use MyApp::Routes::Home ();
 
 sub api_not_found {
