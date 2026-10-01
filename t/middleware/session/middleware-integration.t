@@ -40,7 +40,6 @@ subtest 'new API with explicit state and store' => sub {
     my $store = PAGI::Middleware::Session::Store::Memory->new();
 
     my $session_mw = PAGI::Middleware::Session->new(
-        secret => 'integration-secret',
         state  => $state,
         store  => $store,
     );
@@ -82,7 +81,7 @@ subtest 'new API with explicit state and store' => sub {
 subtest 'default API still works' => sub {
     PAGI::Middleware::Session->clear_sessions();
 
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'default-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     my $app = async sub {
         my ($scope, $receive, $send) = @_;
@@ -119,7 +118,6 @@ subtest 'header state does not set cookies' => sub {
     my $store = PAGI::Middleware::Session::Store::Memory->new();
 
     my $session_mw = PAGI::Middleware::Session->new(
-        secret => 'header-secret',
         state  => $state,
         store  => $store,
     );
@@ -152,7 +150,7 @@ subtest 'header state does not set cookies' => sub {
 subtest 'idempotency: skips if session already in scope' => sub {
     PAGI::Middleware::Session->clear_sessions();
 
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'idem-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     my $pre_existing_session = { user_id => 42, _id => 'pre-existing-id' };
 
@@ -192,7 +190,7 @@ subtest 'idempotency: skips if session already in scope' => sub {
 subtest 'idempotency: normal behavior when no pre-existing session' => sub {
     PAGI::Middleware::Session->clear_sessions();
 
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'idem-secret-2');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     my $captured_scope;
     my $app = async sub {
@@ -227,7 +225,7 @@ subtest 'idempotency: normal behavior when no pre-existing session' => sub {
 
 subtest 'destroy deletes session and clears cookie' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'test-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     # Create a session first
     my $session_id;
@@ -277,7 +275,7 @@ subtest 'destroy deletes session and clears cookie' => sub {
 
 subtest 'regenerate creates new session ID and deletes old' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'test-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     # Create a session
     my $old_id;
@@ -338,7 +336,7 @@ subtest 'regenerate creates new session ID and deletes old' => sub {
 
 subtest 'mutating an existing session emits a fresh Set-Cookie carrying the new data' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'dirty-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     # Request 1: create session, set counter => 1
     my $session_id;
@@ -386,7 +384,7 @@ subtest 'mutating an existing session emits a fresh Set-Cookie carrying the new 
 
 subtest 'mutating via $session->data directly is also observed' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'dirty-data-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     # Request 1: create session, set counter => 1
     my $session_id;
@@ -434,7 +432,7 @@ subtest 'mutating via $session->data directly is also observed' => sub {
 
 subtest 'pure read request emits no new Set-Cookie' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'pure-read-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     # Request 1: create session
     my $session_id;
@@ -470,7 +468,7 @@ subtest 'pure read request emits no new Set-Cookie' => sub {
 
 subtest 'regenerate after mutation emits exactly one Set-Cookie' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'regen-mutate-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     # Create a session
     my $old_id;
@@ -508,7 +506,7 @@ subtest 'regenerate after mutation emits exactly one Set-Cookie' => sub {
 
 subtest 'expired-then-reloaded session with no snapshot is treated as new for dirty purposes' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'expired-secret', expire => -1);
+    my $session_mw = PAGI::Middleware::Session->new(expire => -1);
 
     # Request 1: create a session (immediately expired due to expire => -1)
     my $session_id;
@@ -547,7 +545,7 @@ subtest 'expired-then-reloaded session with no snapshot is treated as new for di
 
 subtest 'websocket-scope upgrade with a valid session sees the same data an http request would' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'ws-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     # Establish a real session over a normal 'http' request first.
     my $session_id;
@@ -590,7 +588,7 @@ subtest 'websocket-scope upgrade with a valid session sees the same data an http
 # need to see it."
 subtest 'sse-scope request with a valid session sees the same data an http request would' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'sse-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     my $session_id;
     my $http_app = async sub {
@@ -619,7 +617,7 @@ subtest 'sse-scope request with a valid session sees the same data an http reque
 
 subtest 'sse-scope request with an absent/garbage session gets an empty, present session (no crash)' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'sse-miss-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     for my $case (
         { name => 'no cookie at all',    headers => [] },
@@ -648,7 +646,7 @@ subtest 'sse-scope request with an absent/garbage session gets an empty, present
 
 subtest 'websocket-scope upgrade with an absent/garbage session gets an empty, present session (no crash)' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'ws-miss-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     for my $case (
         { name => 'no cookie at all',    headers => [] },
@@ -688,7 +686,7 @@ subtest 'websocket-scope upgrade with an absent/garbage session gets an empty, p
 subtest 'websocket-scope upgrade with an EXPIRED session gets an empty, present session (not the stale data)' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
     my $store = PAGI::Middleware::Session::Store::Memory->new();
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'ws-expired-secret', store => $store);
+    my $session_mw = PAGI::Middleware::Session->new(store => $store);
 
     my $session_id;
     my $http_app = async sub {
@@ -722,7 +720,7 @@ subtest 'websocket-scope upgrade with an EXPIRED session gets an empty, present 
 
 subtest 'a non-http scope with no headers at all (lifespan) is skipped entirely, as before' => sub {
     PAGI::Middleware::Session::Store::Memory->clear_all;
-    my $session_mw = PAGI::Middleware::Session->new(secret => 'lifespan-secret');
+    my $session_mw = PAGI::Middleware::Session->new();
 
     my $captured_scope;
     my $lifespan_app = async sub {

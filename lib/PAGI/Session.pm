@@ -24,7 +24,7 @@ PAGI::Session - Standalone helper object for session data access
     # PAGI::Session reads the session PAGI::Middleware::Session loads, so the
     # middleware goes in front of every route that uses it.
     my $app = compose(
-        middleware => [middleware('Session', secret => $ENV{SESSION_SECRET})],
+        middleware => [middleware('Session')],
         routes     => [route('/visits' => \&visits)],
     );
 
@@ -85,7 +85,6 @@ no server-side storage:
     use PAGI::Middleware::Session::Store::Cookie;
 
     middleware('Session',
-        secret => $ENV{SESSION_SECRET},
         store  => PAGI::Middleware::Session::Store::Cookie->new(
             secret => $ENV{STORE_SECRET},
         ),

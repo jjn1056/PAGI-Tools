@@ -23,7 +23,6 @@ my $code = join "\n",
     map  { my $p = $_; $p =~ s/^    //mg; $p }
     grep { /\A[ \t]/ } split /\n{2,}/, ($section // '') =~ s/\A\n+//r;
 
-local $ENV{SESSION_SECRET} = 'a-test-secret-that-is-at-least-32-bytes';
 local $ENV{STORE_SECRET}   = 'another-test-secret-at-least-32-bytes!';
 my ($app, $production) = eval "package PAGITest::SessionSynopsis; $code; (\$app, \$production)";
 is($@, '', 'the SYNOPSIS compiles and runs as published');

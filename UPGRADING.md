@@ -41,7 +41,6 @@ enable 'Session',
 use PAGI::Middleware::Session::State::Cookie;
 
 enable 'Session',
-    secret => $secret,
     state  => PAGI::Middleware::Session::State::Cookie->new(
         cookie_name    => 'myapp_session',
         cookie_options => { secure => 1 },   # merged into the defaults
@@ -49,6 +48,24 @@ enable 'Session',
     ),
     expire => 86400;                         # the server-side idle timeout
 ```
+
+## Breaking: `PAGI::Middleware::Session` takes no `secret`
+
+The required `secret` only salted the session ID, which is already
+cryptographically secure random data, so it protected nothing. It is gone,
+and passing it dies with a message saying to remove it. Session IDs are now 32
+random bytes as 64 hex characters (the same length as before).
+
+```perl
+# Before
+enable 'Session', secret => $secret;
+
+# After
+enable 'Session';
+```
+
+A store's own secret is unaffected: `PAGI::Middleware::Session::Store::Cookie`
+still needs one, because it encrypts the cookie with it.
 
 ## Breaking: `PAGI::Middleware::Session::State::Bearer` is removed
 

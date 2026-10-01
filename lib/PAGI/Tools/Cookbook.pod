@@ -1978,7 +1978,6 @@ that hashref with a convenient (and typo-catching) API.
   # Wrap the Router with the session middleware
   my $app = builder {
       enable 'Session',
-          secret => 'your-secret-key-here',
           state  => PAGI::Middleware::Session::State::Cookie->new(
               cookie_name => 'session_id',
               expire      => 86400,   # the cookie lasts 1 day

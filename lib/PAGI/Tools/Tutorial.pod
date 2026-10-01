@@ -1096,7 +1096,6 @@ Sessions: a random session ID in a cookie, the data in a store (by default
 this process's memory):
 
   enable 'Session',
-      secret => 'your-secret-key',
       state  => PAGI::Middleware::Session::State::Cookie->new(
           cookie_name => 'session',
           expire      => 86400,

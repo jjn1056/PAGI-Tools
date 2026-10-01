@@ -28,12 +28,19 @@ sub visits {
 sub app_with {
     my (%session_config) = @_;
     return compose(
-        middleware => [middleware('Session', secret => $SECRET, %session_config)],
+        middleware => [middleware('Session', %session_config)],
         routes     => [route('/visits' => \&visits)],
     );
 }
 
 sub count { return $_[0]->get('/visits')->json->{visits} }
+
+subtest 'the middleware takes no secret: session IDs are random' => sub {
+    like(dies { PAGI::Middleware::Session->new(secret => 'x') },
+        qr/'secret' is not a Session option/, 'passing secret dies, saying so');
+    my $set = PAGI::Test::Client->new(app => app_with())->get('/visits')->header('set-cookie');
+    like($set, qr/^pagi_session=[0-9a-f]{64};/, 'and IDs are 64 hex characters');
+};
 
 subtest 'PAGI::Session reads the session the middleware loads' => sub {
     my $client = PAGI::Test::Client->new(app => app_with());
@@ -87,7 +94,7 @@ subtest 'the cookie is configured on State::Cookie, not on the middleware' => su
         'a State::Cookie passed as state sets name, attributes (merged) and lifetime');
 
     for my $moved (qw(cookie_name cookie_options)) {
-        like(dies { PAGI::Middleware::Session->new(secret => $SECRET, $moved => 'x') },
+        like(dies { PAGI::Middleware::Session->new($moved => 'x') },
             qr/'$moved' is not a Session option.*PAGI::Middleware::Session::State::Cookie/,
             "$moved on the middleware dies naming where it goes");
     }
@@ -97,7 +104,7 @@ subtest 'header state: the application hands the client its session ID' => sub {
     require PAGI::Middleware::Session::State::Header;
     my $issued;
     my $app = compose(
-        middleware => [middleware('Session', secret => $SECRET,
+        middleware => [middleware('Session',
             state => PAGI::Middleware::Session::State::Header->new(header_name => 'X-Session-ID'))],
         routes => [
             route('/visits' => sub {

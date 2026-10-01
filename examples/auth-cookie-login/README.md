@@ -25,7 +25,7 @@ operation.
 
 > **Demo boundary:** Run this example with one worker only because the default
 > session store is process-local memory. Production deployment also requires
-> TLS, a secret loaded from protected configuration, `cookie_options =>
+> TLS, `cookie_options =>
 > { secure => 1 }` on the `PAGI::Middleware::Session::State::Cookie` the app
 > passes as `state`, CSRF protection, login
 > throttling, and a store every worker shares -- for example
@@ -33,5 +33,5 @@ operation.
 > PAGI-Middleware-Session-Store-Cookie), or a server-side store if sessions
 > must be revocable.
 
-The HTML is fixed and never reflects submitted credentials. The literal secret
-and credential exist only to make the local example reproducible.
+The HTML is fixed and never reflects submitted credentials. The literal
+credentials exist only to make the local example reproducible.

@@ -83,7 +83,6 @@ compose(
     http_default => not_found(),
     middleware => [middleware(
         'Session',
-        secret => 'demo-only-secret-change-me',
         state  => PAGI::Middleware::Session::State::Cookie->new(
             cookie_name => 'hello_session',
             expire      => 3600,

@@ -4,7 +4,6 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
-use Digest::SHA qw(sha256_hex);
 use JSON::MaybeXS;
 use PAGI::Utils::Random qw(secure_random_bytes);
 
@@ -22,7 +21,7 @@ PAGI::Middleware::Session - Session management middleware with pluggable State/S
     # Default: the session ID travels in a cookie and the data lives in this
     # process's memory -- fine for development and a single process.
     my $app = compose(
-        middleware => [middleware('Session', secret => $ENV{SESSION_SECRET})],
+        middleware => [middleware('Session')],
         routes     => [route('/visits' => \&visits)],
     );
 
@@ -44,7 +43,6 @@ PAGI::Middleware::Session - Session management middleware with pluggable State/S
     my $production = compose(
         middleware => [
             middleware('Session',
-                secret => $ENV{SESSION_SECRET},
                 state  => PAGI::Middleware::Session::State::Cookie->new(
                     cookie_options => { secure => 1 },    # added to the defaults
                 ),
@@ -87,10 +85,6 @@ C<pagi.session> hashref); both need this middleware in front of them.
 
 =over 4
 
-=item * secret (required)
-
-Secret key used for session ID generation.
-
 =item * expire (default: 3600)
 
 Server-side idle timeout in seconds: a session whose last recorded access is
@@ -119,7 +113,9 @@ L<PAGI::Middleware::Session::Store::Memory> instance is created.
 
 C<cookie_name> and C<cookie_options> are not options of this middleware:
 they belong to L<PAGI::Middleware::Session::State::Cookie>, and passing them
-here dies with a message saying so.
+here dies with a message saying so. Nor is C<secret>: session IDs are 32
+bytes from a cryptographically secure random source, and a secret added
+nothing to them.
 
 =head1 STATE CLASSES
 
@@ -135,7 +131,6 @@ lifetime -- build one and pass it as C<state>:
     use PAGI::Middleware::Session::State::Cookie;
 
     middleware('Session',
-        secret => $ENV{SESSION_SECRET},
         state  => PAGI::Middleware::Session::State::Cookie->new(
             cookie_name    => 'myapp_session',
             cookie_options => { secure => 1 },    # added to the defaults
@@ -224,7 +219,6 @@ the server before it expires. Its C<secret> should be a long random value:
     use PAGI::Middleware::Session::Store::Cookie;
 
     middleware('Session',
-        secret => $ENV{SESSION_SECRET},
         store  => PAGI::Middleware::Session::Store::Cookie->new(
             secret => $ENV{STORE_SECRET},
         ),
@@ -293,7 +287,6 @@ logic instead of stacking multiple Session middleware instances:
     );
 
     enable 'Session',
-        secret => $ENV{SESSION_SECRET},
         state  => PAGI::Middleware::Session::State::Callback->new(
             extract => sub {
                 my ($scope) = @_;
@@ -354,8 +347,8 @@ before this feature existed.
 sub _init {
     my ($self, $config) = @_;
 
-    $self->{secret} = $config->{secret}
-        // die "Session middleware requires 'secret' option";
+    die "'secret' is not a Session option; session IDs are random and need "
+        . "no secret -- remove it" if exists $config->{secret};
     $self->{expire} = $config->{expire} // 3600;
     $self->{_json}  = JSON::MaybeXS->new(canonical => 1);
 
@@ -528,8 +521,13 @@ async sub _load_or_create_session {
     if (defined $session_id && length $session_id) {
         my $session = await $self->_get_session($session_id);
         if ($session && !$self->_is_expired($session)) {
+            # The client's copy of the last-access time moves only when a
+            # cookie is sent, and a read sends none. Once it is past half of
+            # expire, leave the snapshot out so the session counts as changed
+            # and the cookie goes out again: an active reader never times out.
+            my $refresh = (time() - ($session->{_last_access} // 0)) * 2 > $self->{expire};
             $session->{_last_access} = time();
-            return ($session, 0, $self->{_json}->encode($session));
+            return ($session, 0, $refresh ? undef : $self->{_json}->encode($session));
         }
     }
 
@@ -547,10 +545,8 @@ async sub _load_or_create_session {
 sub _generate_session_id {
     my ($self) = @_;
 
-    # Use cryptographically secure random bytes
-    my $random = unpack('H*', secure_random_bytes(16));
-    my $time = time();
-    return sha256_hex("$random-$time-$self->{secret}");
+    # 32 bytes from a cryptographically secure source, as 64 hex characters
+    return unpack('H*', secure_random_bytes(32));
 }
 
 async sub _get_session {
