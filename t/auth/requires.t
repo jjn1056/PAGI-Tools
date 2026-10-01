@@ -11,6 +11,7 @@ use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
 use PAGI::Response qw(json_response);
 use PAGI::Routing qw(middleware route sse websocket);
+use PAGI::Routing::URL qw(path_for);
 use PAGI::Test::Client;
 
 # requires(SCOPES, HANDLER, %options) returns a handler that calls HANDLER
@@ -43,6 +44,11 @@ my $app = compose(
         route('/elsewhere' => requires([], \&ok_response,
             redirect => sub { my ($request) = @_; return '/sign-in?from=' . $request->path })),
         route('/login'   => sub { json_response({ login => 1 }) }, name => 'login'),
+        # Nested: the target's {org} is filled from the current route's {org}.
+        route('/orgs/{org}/settings' => requires([], \&ok_response, redirect => 'org_login')),
+        route('/orgs/{org}/billing' => requires([], \&ok_response,
+            redirect => sub { my ($r) = @_; path_for($r, 'org_login', {}, { reason => 'billing' }) })),
+        route('/orgs/{org}/login' => sub { json_response({ login => 1 }) }, name => 'org_login'),
         route('/async'   => requires([], async sub { my ($r) = @_; return ok_response($r) })),
         websocket('/ws'  => requires(['notes:read'], async sub {
             my ($ws) = @_; await $ws->accept; await $ws->send_text('in'); await $ws->close;
@@ -80,6 +86,14 @@ subtest 'status changes the refusal; redirect sends the user elsewhere' => sub {
     is([$res->status, $res->header('location')], [303, '/login?next=%2Fpage%3Ftab%3D2'],
         'redirect => a route name goes there, with the original path in next');
     is($client->get('/page', headers => $as{reader})->status, 200, 'an authenticated user is not redirected');
+
+    $res = $client->get('/orgs/acme/settings', headers => $guest);
+    is($res->header('location'), '/orgs/acme/login?next=%2Forgs%2Facme%2Fsettings',
+        "a route name fills the target's parameters from the current route's");
+
+    $res = $client->get('/orgs/acme/billing', headers => $guest);
+    is($res->header('location'), '/orgs/acme/login?reason=billing',
+        'a coderef builds what the name cannot: here, its own query instead of next');
 
     $res = $client->get('/elsewhere', headers => $guest);
     is([$res->status, $res->header('location')], [303, '/sign-in?from=/elsewhere'],

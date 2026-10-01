@@ -354,10 +354,23 @@ from those without access.
 
 =item * C<redirect>
 
-Instead of refusing, redirect (303). A string is a route name: the target is
-C<path_for($request, $name)> with the original path and query as the C<next>
-query parameter, so a login page can send the user back. A coderef is called
-with the connection and returns the location to use as is.
+Instead of refusing, redirect (303).
+
+A string names a route, and covers most cases. It is resolved with
+C<path_for>, so the target route's parameters are filled from the current
+route's matching ones: on C</orgs/{org}/settings>,
+C<< redirect => 'org_login' >> goes to C</orgs/acme/login>. The original path
+and query are added as C<next>, so the login page can send the user back.
+
+A coderef is for what a route name cannot say: different parameter values,
+your own query instead of C<next>, or a URL outside the application. It is
+called with the request (or the WebSocket or SSE object) and returns the
+location, used as is:
+
+    redirect => sub ($request) {
+        path_for($request, 'org_login', {}, { reason => 'billing' });
+    },
+    redirect => sub ($request) { 'https://login.example.com/?app=notes' },
 
 =back
 

@@ -1779,9 +1779,22 @@ middleware in front of the route.
       ],
   );
 
-C<redirect> also takes a coderef, called with the request, that returns the
-location -- for a login page elsewhere, or a route with parameters:
+A route name usually suffices, even for nested routes: it is resolved with
+C<path_for>, so the target's parameters are filled from the current route's.
+On C</orgs/acme/settings>, C<< redirect => 'org_login' >> goes to
+C</orgs/acme/login?next=%2Forgs%2Facme%2Fsettings>:
 
+  route('/orgs/{org}/settings' => requires([], \&settings, redirect => 'org_login')),
+  route('/orgs/{org}/login'    => \&org_login, name => 'org_login'),
+
+C<redirect> also takes a coderef, called with the request, that returns the
+location. Use it only for what a route name cannot say -- different parameter
+values, your own query instead of C<next>, or a URL outside the application:
+
+  route('/orgs/{org}/billing' => requires([], \&billing,
+      redirect => sub ($request) {
+          path_for($request, 'org_login', {}, { reason => 'billing' });
+      })),
   route('/account' => requires([], \&account,
       redirect => sub ($request) { 'https://login.example.com/?app=notes' })),
 
