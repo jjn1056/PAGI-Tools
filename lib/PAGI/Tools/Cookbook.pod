@@ -198,7 +198,8 @@ paths are known to the parent, and its own 404/405 outcomes remain final:
 For C</tenants/acme/users/42>, child handlers and mount/route middleware see
 C<tenant_id =E<gt> 'acme'> and C<user_id =E<gt> '42'> in
 C<path_params>. The child C<path> is C</users/42>, C<root_path> contains the
-actual C</tenants/acme> prefix, and C<raw_path> remains the original wire path.
+actual C</tenants/acme> prefix, and C<raw_path> remains the full path the client
+requested.
 Reverse routing supplies both captures:
 
   use PAGI::Routing::URL qw(path_for);
@@ -292,6 +293,50 @@ A separately configured child can own local missing-route presentation:
 
 After C</api> is selected, the child's custom 404 and built-in 405 are final;
 C<unreachable> is never considered.
+
+=head2 Serving behind a proxy prefix
+
+When a reverse proxy publishes the application under C</app>, every link and
+redirect it emits must start with C</app>. The application sees C<root_path>
+C</app> and its own C<path> below it (see
+L<PAGI::Spec::Www/Paths, Mounts and Root Paths>), and C<path_for>,
+C<url_for>, L<PAGI::Request/request_uri> and C<requires>' C<next> all include
+the prefix. Test it as it will be served, requesting the browser's URL:
+
+  use v5.40;
+  use PAGI::Compose qw(compose);
+  use PAGI::Response qw(json_response);
+  use PAGI::Routing qw(route);
+  use PAGI::Routing::URL qw(path_for);
+  use PAGI::Test::Client;
+
+  my $app = compose(routes => [
+      route('/reports' => sub ($request) {
+          json_response({
+              path      => $request->path,                # /reports
+              root_path => $request->scope->{root_path},  # /app
+              here      => $request->request_uri,         # /app/reports?x=1
+              link      => path_for($request, 'reports'), # /app/reports
+          });
+      }, name => 'reports'),
+  ]);
+
+  # As a server configured with root path /app serves it, behind a proxy
+  # that removes /app before forwarding.
+  my $client = PAGI::Test::Client->new(app => $app, root_path => '/app');
+  my $report = $client->get('/app/reports?x=1')->json;
+
+The client's C<root_path> builds the scope such a server builds, with the
+application still the root, so its own lifespan runs.
+
+A proxy that forwards C</app> unchanged needs the application mounted at the
+prefix -- C<< compose(routes => [mount('/app', app => $app)]) >> -- which
+gives each request the same scope. B<A mounted application's own lifespan
+does not run> (see L<PAGI::Compose/LIFESPAN OWNERSHIP AND STATE>): lift its
+startup and shutdown into the outer C<compose>.
+
+Use C<raw_path_info> only where the encoded path below the mount matters
+(telling C<%2F> from C</>), and never use C<raw_path> to decide access.
 
 =head2 Complete Declarative Apples Application
 

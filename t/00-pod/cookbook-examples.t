@@ -231,6 +231,18 @@ subtest 'custom Request route helper recipe executes as published' => sub {
     );
 };
 
+subtest 'Serving behind a proxy prefix recipe executes as published' => sub {
+    my $recipe = first_code_block($cookbook, '=head2 Serving behind a proxy prefix');
+    perl_script_runs(
+        'proxy prefix recipe',
+        $recipe
+            . "die 'path' unless \$report->{path} eq '/reports';\n"
+            . "die 'root' unless \$report->{root_path} eq '/app';\n"
+            . "die 'here' unless \$report->{here} eq '/app/reports?x=1';\n"
+            . "die 'link' unless \$report->{link} eq '/app/reports';\n",
+    );
+};
+
 subtest 'Declaring what a route requires recipe executes as published' => sub {
     my $recipe = first_code_block($cookbook, '=head2 Declaring what a route requires');
     perl_script_runs(

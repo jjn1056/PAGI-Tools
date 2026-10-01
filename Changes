@@ -2,6 +2,32 @@
 
 0.002003 - 2026-09-30
 
+  [root_path and raw_path]
+  - raw_path is the full requested path, percent-encoded, at every mount
+    level, per PAGI::Spec::Www "Paths, Mounts and Root Paths" (PAGI
+    0.002012). Request, WebSocket and SSE gain request_uri (path and
+    query requested, encoded, safe for Location headers and logs) and
+    raw_path_info (the encoded path below the mount). Without a raw_path
+    in the scope, ->raw_path is now root_path and path encoded, not the
+    decoded mount-relative path (hand-built scopes only).
+  - PAGI::Test::Client takes root_path: it serves the app as a server
+    configured with that root path does behind a stripping proxy, the app
+    still the root so its lifespan runs; requests take the browser's URL.
+  - AccessLog logs request_uri: a client's %0D%0A can no longer forge a
+    log line, and a mounted app's lines keep the prefix.
+  - App::Proxy forwards the encoded path below its mount: a client's
+    %0D%0A can no longer inject a header into the backend request.
+  - WrapPSGI sets REQUEST_URI and passes SCRIPT_NAME and PATH_INFO as
+    bytes, as PSGI requires.
+  - HTTPSRedirect redirects to https:// + host + request_uri: the mount
+    prefix is kept, an encoded ? or # stays in the path, and a non-ASCII
+    path redirects instead of failing.
+  - PAGI::Auth requires' next is request_uri.
+  - Routing::Resolver and the new helpers share one path encoder.
+  - Cookbook: "Serving behind a proxy prefix". The auth-cookie-login
+    example lives under mount('/account'), builds every URL with
+    path_for, and is tested at the root and under /app.
+
   [Sequential sends in the protocol helpers]
   - PAGI::WebSocket and PAGI::SSE send one message at a time, as
     PAGI::Spec::Www requires ("Sends Are Sequential"). A send made while

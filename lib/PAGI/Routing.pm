@@ -739,7 +739,8 @@ filter, and a rewritten child scope.
 
 After a non-root mount prefix matches, the child scope receives the remainder
 in C<path>, the actual decoded prefix appended to C<root_path>, and merged
-captures in C<path_params>; C<raw_path> remains the original wire path. An
+captures in C<path_params>; C<raw_path> remains the full path the client
+requested. An
 exact prefix produces child path C</>. A root Mount consumes no prefix and
 leaves C<path>, C<root_path>, and C<raw_path> unchanged. An unnamed Mount adds
 no logical namespace. Its selected child owns every outcome, so a later sibling

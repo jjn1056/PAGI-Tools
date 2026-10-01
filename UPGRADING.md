@@ -11,6 +11,45 @@ Each After example uses behavior implemented on this branch for that release.
 Examples use ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## raw_path, request_uri, raw_path_info, and serving under a prefix
+
+`raw_path` is the full path the client requested, percent-encoded, at every
+mount level (`PAGI::Spec::Www`, "Paths, Mounts and Root Paths").
+
+- **Breaking (hand-built scopes only):** without a `raw_path` in the scope,
+  `->raw_path` on Request, WebSocket and SSE is now `root_path` and `path`
+  percent-encoded, not the decoded path below the mount.
+- **New:** `request_uri` (the path and query requested, encoded, safe for a
+  Location header or a log line) and `raw_path_info` (the encoded path below
+  the mount) on Request, WebSocket and SSE.
+- **New:** `PAGI::Test::Client->new(..., root_path => '/app')` serves an app
+  as a server with that root path does behind a stripping proxy; requests
+  take the browser's URL. A mounted application's own lifespan does not run,
+  so prefer this to testing through `mount`.
+- **AccessLog** logs `request_uri`: percent-encoded and with the mount prefix,
+  where it logged the decoded path. Log parsers that expected decoded paths
+  see encoded ones; a client can no longer forge a line with `%0D%0A`.
+- **HTTPSRedirect** redirects to `https://` + host + `request_uri`. Before:
+
+  ```
+  GET /search%3Fsort%3Ddate%23results?q=1  ->  https://host/search?sort=date&q=1#results
+  GET /wide%E2%98%BA                       ->  failed (Redirect location must be a URI-reference)
+  GET /secure/a inside mount('/secure')    ->  https://host/a
+  ```
+
+  After:
+
+  ```
+  -> https://host/search%3Fsort%3Ddate%23results?q=1
+  -> https://host/wide%E2%98%BA
+  -> https://host/secure/a
+  ```
+- **WrapPSGI** sets `REQUEST_URI` and passes `SCRIPT_NAME`/`PATH_INFO` as
+  bytes, as PSGI requires; `Plack::Request->uri` now works on non-Latin-1
+  paths.
+- **App::Proxy** forwards the encoded path below its mount; a client's
+  `%0D%0A` can no longer inject a header into the backend request.
+
 ## Bad request bodies answer 400 (or 413), not 500
 
 `$request->json`, `text`/`form_params` with `strict`, and multipart parsing

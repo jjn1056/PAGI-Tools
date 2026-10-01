@@ -1176,6 +1176,10 @@ string. As a server does, the client puts the path as sent in C<raw_path>
 percent-encoding, as a browser would), its decoded form in C<path>, and the
 query in C<query_string>. This applies to C<websocket> and C<sse> too.
 
+To test an application served under a prefix (behind a proxy, or a server
+root path), give the client C<root_path> and request the browser's URLs; see
+L</root_path>.
+
 =head2 get
 
     my $res = $client->get($path, %options);
