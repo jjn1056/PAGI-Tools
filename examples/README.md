@@ -79,9 +79,10 @@ Each example has its own `README.md` explaining how to run it.
 
 ## Authentication examples
 
-- [auth-cookie-login](auth-cookie-login/README.md) — explicit application login
-  policy with demo credentials, session-ID regeneration, logout destruction,
-  and redirect flow.
+- [auth-cookie-login](auth-cookie-login/README.md) — session cookie login with
+  demo credentials: `requires` redirects anonymous visitors to the login route
+  with `?next=`, plus session-ID regeneration, a local-only `next` check, and
+  logout destruction.
 - [auth-notes](auth-notes/README.md) — introductory opaque-token API with public
   notes, identity checks, explicit read/write grants, and ordinary challenge
   responses. Includes fixed in-memory services and an acceptance-test matrix.
