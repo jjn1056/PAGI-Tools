@@ -25,9 +25,9 @@ operation.
 
 > **Demo boundary:** Run this example with one worker only because the default
 > session store is process-local memory. Production deployment also requires
-> TLS, a secret loaded from protected configuration, `secure => 1` in the
-> `PAGI::Middleware::Session::State::Cookie` the app passes as `state` (restate
-> `httponly`, `path` and `samesite` alongside it), CSRF protection, login
+> TLS, a secret loaded from protected configuration, `cookie_options =>
+> { secure => 1 }` on the `PAGI::Middleware::Session::State::Cookie` the app
+> passes as `state`, CSRF protection, login
 > throttling, and a store every worker shares -- for example
 > `PAGI::Middleware::Session::Store::Cookie` (distribution
 > PAGI-Middleware-Session-Store-Cookie), or a server-side store if sessions

@@ -4,7 +4,6 @@ use warnings;
 use Test2::V0;
 
 use PAGI::Middleware::Session::State::Header;
-use PAGI::Middleware::Session::State::Bearer;
 
 # ===================
 # State::Header - constructor
@@ -96,27 +95,27 @@ subtest 'State::Header - inject is no-op' => sub {
 };
 
 # ===================
-# State::Bearer - extract
+# State::Header with a pattern: the replacement for the removed State::Bearer
 # ===================
 
-subtest 'State::Bearer - extracts opaque token from Authorization Bearer' => sub {
-    my $state = PAGI::Middleware::Session::State::Bearer->new();
+subtest 'State::Header with a Bearer pattern - extracts opaque token from Authorization Bearer' => sub {
+    my $state = PAGI::Middleware::Session::State::Header->new(header_name => 'Authorization', pattern => qr/^Bearer\s+(.+)$/i);
     my $scope = {
         headers => [['Authorization', 'Bearer my-token']],
     };
     is $state->extract($scope), 'my-token', 'extracts bearer token';
 };
 
-subtest 'State::Bearer - returns undef for non-bearer auth' => sub {
-    my $state = PAGI::Middleware::Session::State::Bearer->new();
+subtest 'State::Header with a Bearer pattern - returns undef for non-bearer auth' => sub {
+    my $state = PAGI::Middleware::Session::State::Header->new(header_name => 'Authorization', pattern => qr/^Bearer\s+(.+)$/i);
     my $scope = {
         headers => [['Authorization', 'Basic dXNlcjpwYXNz']],
     };
     is $state->extract($scope), undef, 'returns undef for Basic auth';
 };
 
-subtest 'State::Bearer - returns undef when no Authorization header' => sub {
-    my $state = PAGI::Middleware::Session::State::Bearer->new();
+subtest 'State::Header with a Bearer pattern - returns undef when no Authorization header' => sub {
+    my $state = PAGI::Middleware::Session::State::Header->new(header_name => 'Authorization', pattern => qr/^Bearer\s+(.+)$/i);
     my $scope = {
         headers => [['Content-Type', 'application/json']],
     };
@@ -124,11 +123,11 @@ subtest 'State::Bearer - returns undef when no Authorization header' => sub {
 };
 
 # ===================
-# State::Bearer - inject (no-op, inherited)
+# State::Header with a pattern - inject is still a no-op
 # ===================
 
-subtest 'State::Bearer - inject is no-op' => sub {
-    my $state = PAGI::Middleware::Session::State::Bearer->new();
+subtest 'State::Header with a Bearer pattern - inject is no-op' => sub {
+    my $state = PAGI::Middleware::Session::State::Header->new(header_name => 'Authorization', pattern => qr/^Bearer\s+(.+)$/i);
     my @headers = (['Content-Type', 'application/json']);
     $state->inject(\@headers, 'token123', {});
 

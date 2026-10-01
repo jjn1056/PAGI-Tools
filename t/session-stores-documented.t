@@ -75,16 +75,16 @@ subtest 'the cookie is configured on State::Cookie, not on the middleware' => su
 
     my $default = $set_cookie->(expire => 7200);
     like($default, qr/^pagi_session=.*HttpOnly.*SameSite=Lax/, 'the default state keeps its defaults');
-    like($default, qr/Max-Age=3600\b/,
-        "and its own lifetime: the middleware's expire (7200) is not passed to it");
+    unlike($default, qr/Max-Age/,
+        "and no Max-Age: the middleware's expire (7200) is the server clock, not the cookie's");
 
     my $configured = $set_cookie->(state => PAGI::Middleware::Session::State::Cookie->new(
         cookie_name    => 'myapp_session',
-        cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
+        cookie_options => { secure => 1 },
         expire         => 7200,
     ));
     like($configured, qr/^myapp_session=.*HttpOnly.*Secure.*SameSite=Lax.*Max-Age=7200\b/,
-        'a State::Cookie passed as state sets name, attributes and lifetime');
+        'a State::Cookie passed as state sets name, attributes (merged) and lifetime');
 
     for my $moved (qw(cookie_name cookie_options)) {
         like(dies { PAGI::Middleware::Session->new(secret => $SECRET, $moved => 'x') },

@@ -16,14 +16,18 @@ may still return a `Future` when their protocol operation is asynchronous.
 `PAGI::Middleware::Session` no longer takes `cookie_name` or
 `cookie_options`; passing either dies with a message naming the new place.
 The session cookie belongs to `PAGI::Middleware::Session::State::Cookie`:
-build one and pass it as `state`. The defaults are unchanged -- with no
-`state` you get a `pagi_session` cookie with `HttpOnly`, `Path=/`,
-`SameSite=Lax` and `Max-Age` 3600.
+build one and pass it as `state`. With no `state` you get a `pagi_session`
+cookie with `HttpOnly`, `Path=/` and `SameSite=Lax`.
 
-The middleware's `expire` is now only the server-side idle timeout. It no
-longer sets the cookie's `Max-Age`; that is `State::Cookie`'s own `expire`.
-An application that set `expire` on the middleware to change how long the
-cookie lasts must now set it on the State as well.
+Three related changes:
+
+- The middleware's `expire` is only the server-side idle timeout -- the
+  session's clock. It no longer sets the cookie's `Max-Age`.
+- `State::Cookie` no longer sets a `Max-Age` by default, so the cookie lasts
+  until the browser session ends. Give the State an `expire` if the cookie
+  should outlive the browser session.
+- `State::Cookie`'s `cookie_options` now merges into its defaults: give only
+  what you add or change, and a false value turns a default off.
 
 ```perl
 # Before
@@ -40,14 +44,31 @@ enable 'Session',
     secret => $secret,
     state  => PAGI::Middleware::Session::State::Cookie->new(
         cookie_name    => 'myapp_session',
-        cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
-        expire         => 86400,    # the cookie's Max-Age
+        cookie_options => { secure => 1 },   # merged into the defaults
+        expire         => 86400,             # only if the cookie should outlive the browser session
     ),
-    expire => 86400;                # the server-side idle timeout
+    expire => 86400;                         # the server-side idle timeout
 ```
 
-`cookie_options` replaces State::Cookie's default attributes rather than
-adding to them, so restate the ones you keep.
+## Breaking: `PAGI::Middleware::Session::State::Bearer` is removed
+
+It read a session ID from `Authorization: Bearer`, which looks like an
+authentication credential but was only a session key, and like every
+header-based state it could not hand out a regenerated ID or work with the
+cookie store. To identify users from tokens, use
+`PAGI::Middleware::Authentication`. An application that still wants a session
+ID from that header can use `State::Header` with a pattern:
+
+```perl
+# Before
+state => PAGI::Middleware::Session::State::Bearer->new,
+
+# After
+state => PAGI::Middleware::Session::State::Header->new(
+    header_name => 'Authorization',
+    pattern     => qr/^Bearer\s+(.+)$/i,
+),
+```
 
 ## Breaking: `PAGI::Middleware::FormBody` and `PAGI::Middleware::JSONBody` are removed
 

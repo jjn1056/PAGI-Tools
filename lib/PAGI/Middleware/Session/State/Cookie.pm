@@ -13,9 +13,9 @@ PAGI::Middleware::Session::State::Cookie - Cookie-based session ID transport
     use PAGI::Middleware::Session::State::Cookie;
 
     my $state = PAGI::Middleware::Session::State::Cookie->new(
-        cookie_name    => 'pagi_session',
-        cookie_options => { httponly => 1, path => '/', samesite => 'Lax' },
-        expire         => 3600,
+        cookie_name    => 'myapp_session',
+        cookie_options => { secure => 1 },    # added to the defaults
+        expire         => 8 * 3600,           # optional Max-Age
     );
 
     # Extract session ID from request
@@ -38,13 +38,19 @@ request header and set via the Set-Cookie response header.
 
 Name of the cookie used to store the session ID.
 
-=item * cookie_options (default: { httponly => 1, path => '/', samesite => 'Lax' })
+=item * cookie_options (defaults: { httponly => 1, path => '/', samesite => 'Lax' })
 
-Cookie attributes applied when setting the response cookie.
+Cookie attributes applied when setting the response cookie. The hashref is
+merged into the defaults: give only what you want to add or change
+(C<< { secure => 1 } >>, C<< { samesite => 'Strict' } >>), and a false value
+turns a default off (C<< { httponly => 0 } >>).
 
-=item * expire (default: 3600)
+=item * expire (default: none)
 
-Max-Age value for the session cookie, in seconds.
+The cookie's C<Max-Age>, in seconds. By default there is none, so the cookie
+lasts until the browser session ends and the Session middleware's C<expire>
+(a server-side idle timeout) is the only clock. Set it when the cookie should
+outlive the browser session.
 
 =back
 
@@ -54,12 +60,14 @@ sub new {
     my ($class, %options) = @_;
 
     $options{cookie_name} //= 'pagi_session';
-    $options{cookie_options} //= {
+    # Given attributes override these defaults one by one; a false value
+    # turns a default off.
+    $options{cookie_options} = {
         httponly => 1,
         path     => '/',
         samesite => 'Lax',
+        %{ $options{cookie_options} // {} },
     };
-    $options{expire} //= 3600;
 
     return $class->SUPER::new(%options);
 }

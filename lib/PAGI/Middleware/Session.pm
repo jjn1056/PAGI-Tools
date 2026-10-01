@@ -46,13 +46,12 @@ PAGI::Middleware::Session - Session management middleware with pluggable State/S
             middleware('Session',
                 secret => $ENV{SESSION_SECRET},
                 state  => PAGI::Middleware::Session::State::Cookie->new(
-                    cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
-                    expire         => 8 * 3600,    # the cookie's Max-Age
+                    cookie_options => { secure => 1 },    # added to the defaults
                 ),
                 store  => PAGI::Middleware::Session::Store::Cookie->new(
                     secret => $ENV{STORE_SECRET},
                 ),
-                expire => 8 * 3600,                # the server-side idle timeout
+                expire => 8 * 3600,    # the server-side idle timeout
             ),
         ],
         routes => [route('/visits' => \&visits)],
@@ -95,10 +94,11 @@ Secret key used for session ID generation.
 =item * expire (default: 3600)
 
 Server-side idle timeout in seconds: a session whose last recorded access is
-older than this is treated as absent and a new one is started. It does
-B<not> set the cookie's lifetime -- that is the C<expire> of the
-L<PAGI::Middleware::Session::State::Cookie> you pass as C<state> (default
-also 3600). Change one and you almost always want to change the other.
+older than this is treated as absent and a new one is started. This is the
+session's clock. It does B<not> set the cookie's lifetime: by default the
+cookie has no C<Max-Age> and lasts until the browser session ends; give the
+L<PAGI::Middleware::Session::State::Cookie> you pass as C<state> an C<expire>
+if the cookie should outlive the browser session.
 
 =item * state (optional)
 
@@ -106,8 +106,8 @@ A L<PAGI::Middleware::Session::State> object that implements C<extract($scope)>
 and C<inject(\@headers, $id, \%options)>. If not provided,
 C<< PAGI::Middleware::Session::State::Cookie->new >> is used with its own
 defaults (cookie C<pagi_session>; C<HttpOnly>, C<Path=/>, C<SameSite=Lax>;
-C<Max-Age> 3600). To change the cookie, build a State::Cookie and pass it
-here; see L</STATE CLASSES>.
+no C<Max-Age>). To change the cookie, build a State::Cookie and pass it here;
+see L</STATE CLASSES>.
 
 =item * store (optional)
 
@@ -138,15 +138,15 @@ lifetime -- build one and pass it as C<state>:
         secret => $ENV{SESSION_SECRET},
         state  => PAGI::Middleware::Session::State::Cookie->new(
             cookie_name    => 'myapp_session',
-            cookie_options => { httponly => 1, path => '/', samesite => 'Lax', secure => 1 },
-            expire         => 8 * 3600,    # the cookie's Max-Age
+            cookie_options => { secure => 1 },    # added to the defaults
         ),
-        expire => 8 * 3600,                # the server-side idle timeout
+        expire => 8 * 3600,    # the server-side idle timeout
     )
 
-C<cookie_options> B<replaces> State::Cookie's default attributes rather than
-adding to them, so restate the ones you keep: passing only
-C<< { secure => 1 } >> would drop C<HttpOnly>, C<Path> and C<SameSite>.
+C<cookie_options> merges into State::Cookie's defaults (C<HttpOnly>,
+C<Path=/>, C<SameSite=Lax>): give only what you add or change, and a false
+value turns a default off. The cookie has no C<Max-Age> unless you give the
+State an C<expire>.
 
 The other states read the ID from a request header instead, for clients that
 are not browsers. B<They never send an ID back> (their C<inject> is a no-op),
@@ -165,9 +165,9 @@ it out; the client's old ID then finds no session.
 =item * The cookie store (L</STORE CLASSES>) cannot be used with them: its
 session travels in the value the state sends back.
 
-=item * An ID in C<Authorization: Bearer> (State::Bearer) looks like an
-authentication credential but is only a session key. If what you need is to
-identify a user from a token, use L<PAGI::Middleware::Authentication> instead.
+=item * A session ID is not an authentication credential, so do not carry it
+in C<Authorization>. If what you need is to identify a user from a token, use
+L<PAGI::Middleware::Authentication> instead.
 
 =back
 
@@ -187,16 +187,6 @@ no-op (the client manages header-based transport).
     PAGI::Middleware::Session::State::Header->new(
         header_name => 'X-Session-ID',
     );
-
-=item L<PAGI::Middleware::Session::State::Bearer>
-
-Convenience subclass of State::Header that reads an opaque session identifier
-from the C<Authorization: Bearer E<lt>tokenE<gt>> header. Session restores the
-application-owned record associated with that identifier; it does not establish
-authentication context automatically. Use L<PAGI::Middleware::Authentication>
-with an application backend when the restored record should identify a user.
-
-    PAGI::Middleware::Session::State::Bearer->new();
 
 =item L<PAGI::Middleware::Session::State::Callback>
 
@@ -289,26 +279,25 @@ The middleware skips processing if C<< $scope-E<gt>{'pagi.session'} >>
 already exists. This prevents double-initialization when the middleware
 appears more than once in a stack.
 
-For mixed auth patterns (e.g. web cookies for browsers, bearer tokens for
-APIs), use L<PAGI::Middleware::Session::State::Callback> with fallback
+For mixed clients (e.g. a cookie for browsers, a session header for API
+clients), use L<PAGI::Middleware::Session::State::Callback> with fallback
 logic instead of stacking multiple Session middleware instances:
 
     use PAGI::Middleware::Session::State::Callback;
     use PAGI::Middleware::Session::State::Cookie;
-    use PAGI::Middleware::Session::State::Bearer;
+    use PAGI::Middleware::Session::State::Header;
 
-    my $cookie_state = PAGI::Middleware::Session::State::Cookie->new(
-        cookie_name => 'pagi_session',
-        expire      => 3600,
+    my $cookie_state = PAGI::Middleware::Session::State::Cookie->new;
+    my $header_state = PAGI::Middleware::Session::State::Header->new(
+        header_name => 'X-Session-ID',
     );
-    my $bearer_state = PAGI::Middleware::Session::State::Bearer->new();
 
     enable 'Session',
         secret => $ENV{SESSION_SECRET},
         state  => PAGI::Middleware::Session::State::Callback->new(
             extract => sub {
                 my ($scope) = @_;
-                return $bearer_state->extract($scope)
+                return $header_state->extract($scope)
                     // $cookie_state->extract($scope);
             },
             inject => sub {

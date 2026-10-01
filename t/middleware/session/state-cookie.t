@@ -104,7 +104,26 @@ subtest 'State::Cookie - inject adds Set-Cookie header with correct format' => s
     like $headers[0][1], qr/Path=\//, 'contains Path';
     like $headers[0][1], qr/HttpOnly/, 'contains HttpOnly';
     like $headers[0][1], qr/SameSite=Lax/, 'contains SameSite=Lax';
-    like $headers[0][1], qr/Max-Age=3600/, 'contains Max-Age';
+    unlike $headers[0][1], qr/Max-Age/,
+        'no Max-Age by default: a browser-session cookie; the server timeout is the clock';
+};
+
+subtest 'State::Cookie - cookie_options merge into the defaults' => sub {
+    my $state = PAGI::Middleware::Session::State::Cookie->new(
+        cookie_options => { secure => 1 },
+    );
+    my @headers;
+    $state->inject(\@headers, 'merged_id', {});
+    like $headers[0][1], qr/Path=\/; HttpOnly; Secure; SameSite=Lax/,
+        'adding secure keeps HttpOnly, Path and SameSite';
+
+    $state = PAGI::Middleware::Session::State::Cookie->new(
+        cookie_options => { samesite => 'Strict', httponly => 0 },
+    );
+    @headers = ();
+    $state->inject(\@headers, 'override_id', {});
+    like $headers[0][1], qr/SameSite=Strict/, 'a given attribute overrides its default';
+    unlike $headers[0][1], qr/HttpOnly/, 'and a false value turns a default off';
 };
 
 subtest 'State::Cookie - inject includes Secure flag when configured' => sub {
@@ -180,16 +199,16 @@ subtest 'State::Cookie - clear includes HttpOnly if configured' => sub {
     like $headers[0][1], qr{Path=/app}, 'uses configured path';
 };
 
-subtest 'State::Cookie - clear omits HttpOnly when not configured' => sub {
+subtest 'State::Cookie - clear omits HttpOnly when turned off' => sub {
     my $state = PAGI::Middleware::Session::State::Cookie->new(
         cookie_options => {
-            path => '/',
+            httponly => 0,
         },
     );
     my @headers;
     $state->clear(\@headers);
 
-    unlike $headers[0][1], qr/HttpOnly/, 'no HttpOnly when not configured';
+    unlike $headers[0][1], qr/HttpOnly/, 'no HttpOnly when httponly => 0';
 };
 
 subtest 'State::Cookie - clear uses correct cookie name' => sub {

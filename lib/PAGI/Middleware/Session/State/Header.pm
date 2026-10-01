@@ -118,8 +118,6 @@ __END__
 
 L<PAGI::Middleware::Session::State> - Base state interface
 
-L<PAGI::Middleware::Session::State::Bearer> - Bearer token shortcut
-
 L<PAGI::Middleware::Session> - Session management middleware
 
 =cut
