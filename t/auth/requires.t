@@ -10,7 +10,7 @@ use PAGI::Auth qw(auth auth_result unauth_result requires);
 use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
 use PAGI::Response qw(json_response);
-use PAGI::Routing qw(middleware route sse websocket);
+use PAGI::Routing qw(middleware mount route sse websocket);
 use PAGI::Test::Client;
 
 # requires(SCOPES, HANDLER, %options) returns a handler that calls HANDLER
@@ -52,6 +52,10 @@ my $app = compose(
         route('/orgs/{org}/billing' => requires([], \&ok_response,
             redirect => ['org_login', {}, { reason => 'billing' }])),
         route('/orgs/{org}/login' => sub { json_response({ login => 1 }) }, name => 'org_login'),
+        mount('/admin', routes => [
+            route('/reports' => requires([], \&ok_response, redirect => ['admin_login'])),
+            route('/login' => sub { json_response({ login => 1 }) }, name => 'admin_login'),
+        ]),
         route('/async'   => requires([], async sub { my ($r) = @_; return ok_response($r) })),
         websocket('/ws'  => requires(['notes:read'], async sub {
             my ($ws) = @_; await $ws->accept; await $ws->send_text('in'); await $ws->close;
@@ -98,6 +102,9 @@ subtest 'status changes the refusal; redirect sends the user elsewhere' => sub {
         'a query of its own is kept, next alongside it');
     is($location->('/own-next'), '/login?next=%2Fdashboard', 'a next of its own wins');
     is($location->('/named-args'), '/login?lang=en&next=%2Fnamed-args', "path_for's named argument form works too");
+
+    is($location->('/admin/reports?x=1'), '/admin/login?next=%2Fadmin%2Freports%3Fx%3D1',
+        "inside a mount, next is the whole path the client asked for, prefix included");
 
     is($location->('/elsewhere'), 'https://login.example.com/?app=notes', 'a string is the location, exactly as written');
 };

@@ -5,6 +5,7 @@ use warnings;
 use Future::AsyncAwait;
 use Carp qw(croak);
 use Scalar::Util qw(weaken);
+use Encode ();
 
 use PAGI::Utils::_SendValidation;
 use PAGI::Test::ConnectionState;
@@ -265,11 +266,7 @@ sub _request {
 sub _build_scope {
     my ($self, $method, $path, $opts) = @_;
 
-    # Parse query string from path
-    my $query_string = '';
-    if ($path =~ s/\?(.*)$//) {
-        $query_string = $1;
-    }
+    (my $raw_path, my $query_string, $path) = _request_target($path);
 
     # Add query params if provided (appended to path query string)
     if ($opts->{query}) {
@@ -295,6 +292,7 @@ sub _build_scope {
         method       => $method,
         scheme       => 'http',
         path         => $path,
+        raw_path     => $raw_path,
         query_string => $query_string,
         root_path    => '',
         headers      => $headers,
@@ -341,11 +339,7 @@ sub websocket {
 
     $path //= '/';
 
-    # Parse query string from path
-    my $query_string = '';
-    if ($path =~ s/\?(.*)$//) {
-        $query_string = $1;
-    }
+    (my $raw_path, my $query_string, $path) = _request_target($path);
 
     # Build headers
     my @headers = (['host', 'testserver']);
@@ -384,6 +378,7 @@ sub websocket {
         http_version => '1.1',
         scheme       => 'ws',
         path         => $path,
+        raw_path     => $raw_path,
         query_string => $query_string,
         root_path    => '',
         headers      => \@headers,
@@ -442,11 +437,7 @@ sub sse {
         _set_header(\$opts{headers}, 'Content-Length', length($opts{body}), 0);
     }
 
-    # Parse query string from path
-    my $query_string = '';
-    if ($path =~ s/\?(.*)$//) {
-        $query_string = $1;
-    }
+    (my $raw_path, my $query_string, $path) = _request_target($path);
 
     # Build headers (SSE requires Accept: text/event-stream)
     my @headers = (
@@ -493,6 +484,7 @@ sub sse {
         method       => $method,
         scheme       => 'http',
         path         => $path,
+        raw_path     => $raw_path,
         query_string => $query_string,
         root_path    => '',
         headers      => \@headers,
@@ -699,6 +691,28 @@ sub run {
 
     $client->stop;
     die $err if $err;
+}
+
+# Split a request target into raw_path (the path as sent, percent-encoded),
+# query_string and path, as PAGI::Server does: path is raw_path
+# percent-decoded and then UTF-8 decoded, keeping the bytes when they are
+# not UTF-8. Characters outside ASCII are percent-encoded as UTF-8 first,
+# as a browser sends them.
+sub _request_target {
+    my ($target) = @_;
+    my ($raw_path, $query_string) = split /\?/, $target, 2;
+    $raw_path = '/' unless defined $raw_path && length $raw_path;
+    $query_string //= '';
+    if ($raw_path =~ /[^\x00-\x7f]/) {
+        $raw_path = Encode::encode('UTF-8', $raw_path);
+        $raw_path =~ s/([\x80-\xff])/sprintf('%%%02X', ord $1)/eg;
+    }
+    my $path = $raw_path;
+    if ($path =~ /%/) {
+        (my $bytes = $path) =~ s/%([0-9A-Fa-f]{2})/chr hex $1/eg;
+        $path = eval { Encode::decode('UTF-8', $bytes, Encode::FB_CROAK) } // $bytes;
+    }
+    return ($raw_path, $query_string, $path);
 }
 
 sub _url_encode {
@@ -1118,6 +1132,12 @@ All HTTP methods return a L<PAGI::Test::Response> object decoded from the
 events the application sent. This remains true when C<app> is a production
 L<PAGI::Response>: the client returns captured wire data, not that production
 object or a proxy for it.
+
+C<$path> is the request target as a client sends it, with an optional query
+string. As a server does, the client puts the path as sent in C<raw_path>
+(percent-encoded; characters outside ASCII are sent as UTF-8
+percent-encoding, as a browser would), its decoded form in C<path>, and the
+query in C<query_string>. This applies to C<websocket> and C<sse> too.
 
 =head2 get
 

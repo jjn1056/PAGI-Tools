@@ -25,6 +25,16 @@
     server. Tests that relied on that must share through a value stored at
     startup (a hash or object), as the spec prescribes.
 
+  [PAGI::Test::Client sends raw_path, and decodes path, as servers do]
+  - HTTP, WebSocket and SSE scopes now carry raw_path, the path as sent, and
+    path is its percent- and UTF-8-decoded form, as PAGI::Server builds
+    them. The client used to put the given string in path and send no
+    raw_path, so code reading raw_path fell back to path -- which a mount
+    has stripped of its prefix: requires' redirect inside a mount put the
+    wrong path in next under the client, though not under the server.
+    Characters outside ASCII in a path are now sent percent-encoded, as a
+    browser would.
+
   [Documentation and examples]
   - PAGI::Session says it requires PAGI::Middleware::Session and that the
     middleware's default store is per-process memory; both it and the
