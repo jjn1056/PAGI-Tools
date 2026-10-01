@@ -19,14 +19,16 @@ ok(!$load_error, 'cookie login example loads cleanly')
     or diag($load_error);
 
 SKIP: {
-    skip 'example did not load', 21 unless $app;
+    skip 'example did not load', 26 unless $app;
 
     my $client = PAGI::Test::Client->new(app => $app);
 
     my $protected = $client->get('/');
     is($protected->status, 303, 'anonymous home request redirects');
-    is($protected->header('Location'), '/login',
-        'anonymous user is sent to the login form');
+    is($protected->header('Location'), '/login?next=%2F',
+        'anonymous user is sent to the login form, remembering where they were going');
+    like($client->get('/login?next=%2F')->text, qr{<input type="hidden" name="next" value="/">},
+        'the login form carries next along');
     my $anonymous_id = $client->cookie('hello_session');
     like($anonymous_id, qr/\A[a-f0-9]{64}\z/,
         'anonymous request receives the configured session cookie');
@@ -39,15 +41,20 @@ SKIP: {
         'invalid credentials receive a fixed error');
     is($client->cookie('hello_session'), $anonymous_id,
         'invalid credentials do not regenerate the session');
-    is($client->get('/')->header('Location'), '/login',
+    is($client->get('/')->header('Location'), '/login?next=%2F',
         'invalid credentials do not create authenticated state');
 
+    my $offsite = PAGI::Test::Client->new(app => $app)->post('/login', form => {
+        username => 'demo', password => 'secret', next => 'https://evil.example/',
+    });
+    is($offsite->header('Location'), '/', 'a next that is not a local path is ignored');
+
     my $login = $client->post('/login', form => {
-        username => 'demo', password => 'secret',
+        username => 'demo', password => 'secret', next => '/',
     });
     is($login->status, 303, 'valid credentials redirect after login');
     is($login->header('Location'), '/',
-        'successful login redirects to the protected home');
+        'successful login returns to next');
     my $authenticated_id = $client->cookie('hello_session');
     like($authenticated_id, qr/\A[a-f0-9]{64}\z/,
         'successful login retains a session cookie');
@@ -73,7 +80,7 @@ SKIP: {
     is($logout->status, 303, 'logout redirects');
     is($logout->header('Location'), '/login',
         'logout redirects to the login form');
-    is($client->get('/')->header('Location'), '/login',
+    is($client->get('/')->header('Location'), '/login?next=%2F',
         'destroyed session no longer authenticates the client');
 
     my $unknown = $client->get('/missing');

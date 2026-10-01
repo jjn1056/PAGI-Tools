@@ -12,7 +12,7 @@ use PAGI::Utils::Headers ();
 use PAGI::Utils::Scope ();
 
 our @EXPORT = ();
-our @EXPORT_OK = qw(auth auth_result unauth_result www_authenticate);
+our @EXPORT_OK = qw(auth auth_result unauth_result www_authenticate requires);
 
 sub new {
     my ($class, @args) = @_;
@@ -70,6 +70,66 @@ sub www_authenticate {
     my ($proto, @args) = _factory_invocation(@_);
     _validate_invocant($proto);
     return PAGI::Utils::Headers::www_authenticate(@args);
+}
+
+# Starlette's @requires: a handler that calls $handler only for an
+# authenticated user holding every scope, and otherwise refuses -- with
+# `status` (default 403) or a redirect to a named route (with ?next=) or to
+# what a coderef returns. HTTP routes return the refusal; WebSocket and SSE
+# routes deny or decline with it.
+sub requires {
+    my ($proto, @args) = _factory_invocation(@_);
+    _validate_invocant($proto);
+    my ($scopes, $handler, @rest) = @args;
+    $scopes = [$scopes] if defined $scopes && !ref $scopes;
+    croak 'PAGI::Auth requires scopes must be a scope string or an arrayref of them'
+        unless ref($scopes) eq 'ARRAY' && !grep { !defined || ref } @$scopes;
+    croak 'PAGI::Auth requires handler must be a coderef'
+        unless ref($handler) eq 'CODE';
+    my $opts = _options('requires', { status => 1, redirect => 1 }, @rest);
+    my $status = $opts->{status} // 403;
+    croak 'PAGI::Auth requires status must be a 4xx refusal status'
+        unless $status =~ /\A4\d\d\z/;
+    my $redirect = $opts->{redirect};
+    croak 'PAGI::Auth requires redirect must be a route name or a coderef'
+        if defined($redirect) && ref($redirect) && ref($redirect) ne 'CODE';
+
+    require PAGI::Pages;
+    my $denied = PAGI::Pages->status($status);
+    my @required = @$scopes;
+
+    return sub {
+        my ($connection) = @_;
+        my $context = $proto->auth($connection);
+        return $handler->(@_)
+            if $context->user->is_authenticated
+                && $context->credentials->has_all(@required);
+
+        my $refusal = defined($redirect)
+            ? PAGI::Pages->redirect(_redirect_target($redirect, $connection), status => 303)
+            : $denied;
+        return $connection->deny($refusal)
+            if blessed($connection) && $connection->isa('PAGI::WebSocket');
+        return $connection->decline($refusal)
+            if blessed($connection) && $connection->isa('PAGI::SSE');
+        return $refusal;
+    };
+}
+
+sub _redirect_target {
+    my ($redirect, $connection) = @_;
+    if (ref $redirect) {
+        my $target = $redirect->($connection);
+        croak 'PAGI::Auth requires redirect coderef must return a location string'
+            unless defined($target) && !ref($target) && length($target);
+        return $target;
+    }
+    require PAGI::Routing::URL;
+    my $scope = PAGI::Utils::Scope::scope_from_source('PAGI::Auth requires', $connection);
+    my $original = $scope->{raw_path} // $scope->{path};
+    my $query = $scope->{query_string} // '';
+    $original .= "?$query" if length $query;
+    return PAGI::Routing::URL::path_for($connection, $redirect, query => { next => $original });
 }
 
 sub _factory_invocation {
@@ -154,12 +214,20 @@ PAGI::Auth - authentication results, installed context, and challenge formatting
   my $context = auth($request);
   my $challenge = www_authenticate('Bearer', realm => 'api');
 
+  # Declare who may call a route, like Starlette's @requires:
+  use PAGI::Auth qw(requires);
+
+  route('/notes'  => requires(['notes:read', 'notes:write'], \&publish_note), methods => ['POST']),
+  route('/admin'  => requires(['admin'], \&admin, status => 404)),
+  route('/home'   => requires([], \&home, redirect => 'login')),
+
 =head1 DESCRIPTION
 
 C<PAGI::Auth> constructs completed authentication results and observes a result
 installed under C<pagi.auth> in a raw scope or an object exposing C<scope>.
-Applications explicitly choose their refusal responses and may use
-C<www_authenticate> to format one challenge value. C<credentials> means granted
+Applications choose their refusal responses: by declaring what a route
+requires with C<requires>, or by hand, using C<www_authenticate> to format a
+challenge value. C<credentials> means granted
 scopes; it does not hold the original token or other presented credentials.
 C<pagi.auth> contains a completed Result, not a hash of public fields. Reading a
 missing or invalid entry is a configuration error.
@@ -256,6 +324,52 @@ header value explicitly through an ordinary response or Headers API:
   my $digest = 'Digest realm="api", nonce="example-nonce", qop="auth", '
       . 'algorithm=SHA-256, stale=true';
   $response->headers->set('WWW-Authenticate', $digest);
+
+=head2 requires($scopes, $handler, status => $code, redirect => $target)
+
+    my $publish = requires(['notes:read', 'notes:write'], async sub ($request) {
+        ...
+    });
+    route('/notes' => $publish, methods => ['POST']);
+
+Returns a handler that calls C<$handler> with its arguments only when the
+connection's authentication context (see C<auth>) has an authenticated user
+holding every scope in C<$scopes> -- a scope string, or an arrayref of them;
+C<[]> requires only an authenticated user. It is the equivalent of
+Starlette's C<@requires>, as a function that returns an ordinary handler
+coderef, so it fits anywhere a handler does (a C<route>, C<websocket> or
+C<sse> handler) and can be applied by a framework, for example from a sub
+attribute. It needs the L<PAGI::Middleware::Authentication> middleware in
+front of the route.
+
+Otherwise it refuses. Options:
+
+=over 4
+
+=item * C<status> (default 403)
+
+The 4xx status of the refusal, as a negotiated L<PAGI::Pages> response
+(C<application/problem+json> or HTML). C<< status => 404 >> hides the route
+from those without access.
+
+=item * C<redirect>
+
+Instead of refusing, redirect (303). A string is a route name: the target is
+C<path_for($request, $name)> with the original path and query as the C<next>
+query parameter, so a login page can send the user back. A coderef is called
+with the connection and returns the location to use as is.
+
+=back
+
+HTTP routes return the refusal; WebSocket routes C<deny> and SSE routes
+C<decline> with it, before accepting or starting. Like Starlette's, the
+refusal is one status: it does not distinguish an unauthenticated user from a
+missing scope or send a C<WWW-Authenticate> challenge. An API that wants
+RFC 6750 challenges builds those responses itself (see the auth-notes
+example).
+
+Invalid arguments die when the route is declared: a handler that is not a
+coderef, a status outside 400-499, an unknown option.
 
 =head2 Protecting a group of endpoints
 

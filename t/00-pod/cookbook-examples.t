@@ -231,6 +231,24 @@ subtest 'custom Request route helper recipe executes as published' => sub {
     );
 };
 
+subtest 'Declaring what a route requires recipe executes as published' => sub {
+    my $recipe = first_code_block($cookbook, '=head2 Declaring what a route requires');
+    perl_script_runs(
+        'requires recipe',
+        $recipe
+            . "use PAGI::Test::Client;\n"
+            . "my \$c = PAGI::Test::Client->new(app => \$app);\n"
+            . "my %as = map { \$_ => { Authorization => \"Bearer \$_\", Accept => 'application/json' } } qw(reader editor);\n"
+            . "die 'me: reader allowed' unless \$c->get('/me', headers => \$as{reader})->json->{me} eq 'reader';\n"
+            . "die 'me: guest refused' unless \$c->get('/me', headers => { Accept => 'application/json' })->status == 403;\n"
+            . "die 'notes: reader refused' unless \$c->post('/notes', headers => \$as{reader}, json => {})->status == 403;\n"
+            . "die 'notes: editor allowed' unless \$c->post('/notes', headers => \$as{editor}, json => { t => 1 })->status == 201;\n"
+            . "die 'audit: hidden' unless \$c->get('/audit', headers => \$as{editor})->status == 404;\n"
+            . "my \$r = \$c->get('/home');\n"
+            . "die 'home: redirect' unless \$r->status == 303 && \$r->header('location') eq '/login?next=%2Fhome';\n",
+    );
+};
+
 subtest 'Bad request bodies recipe executes as published' => sub {
     my $default = code_block_containing($cookbook, '=head2 Bad request bodies', 'create_note_kindly');
     my $uniform = code_block_containing($cookbook, '=head2 Bad request bodies', 'my $uniform');

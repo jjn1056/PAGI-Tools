@@ -1725,9 +1725,70 @@ eligibility, response metadata, and range policy.
 =head1 AUTHENTICATION & SESSIONS
 
 L<PAGI::Auth> constructs authentication results, reads the installed context,
-and formats individual C<WWW-Authenticate> values. Applications explicitly
-choose ordinary Pages or Response applications for refusals. Basic credentials
-and Bearer tokens require TLS in real deployments.
+declares what a route requires with C<requires>, and formats individual
+C<WWW-Authenticate> values. Beyond C<requires>, applications choose ordinary
+Pages or Response applications for refusals. Basic credentials and Bearer
+tokens require TLS in real deployments.
+
+=head2 Declaring what a route requires
+
+C<requires(SCOPES, HANDLER, %options)> is Starlette's C<@requires>: it returns
+a handler that runs HANDLER only for an authenticated user holding every scope,
+and otherwise refuses with a 403 (a negotiated Pages response), C<status>, or a
+C<redirect>. It works for C<route>, C<websocket> and C<sse> handlers (the last
+two are denied or declined before they start), and needs the Authentication
+middleware in front of the route.
+
+  use v5.40;
+  use Future::AsyncAwait;
+  use PAGI::Auth qw(auth auth_result unauth_result requires);
+  use PAGI::Auth::SimpleUser;
+  use PAGI::Compose qw(compose);
+  use PAGI::Response qw(json_response);
+  use PAGI::Routing qw(middleware route);
+
+  my %grants = (reader => ['notes:read'], editor => ['notes:read', 'notes:write']);
+
+  my $app = compose(
+      middleware => [middleware('Authentication', backend => sub ($request) {
+          my $token = $request->bearer_token;
+          return unauth_result() unless defined $token && $grants{$token};
+          return auth_result(
+              user   => PAGI::Auth::SimpleUser->new(identity => $token),
+              scopes => $grants{$token},
+          );
+      })],
+      routes => [
+          # Any authenticated user.
+          route('/me' => requires([], sub ($request) {
+              json_response({ me => auth($request)->user->identity });
+          })),
+          # Every listed scope.
+          route('/notes' => requires(['notes:read', 'notes:write'], async sub ($request) {
+              json_response({ saved => await $request->json }, status => 201);
+          }), methods => ['POST']),
+          # Hide the route's existence from those without access.
+          route('/audit' => requires(['admin'], sub ($request) {
+              json_response({ audit => [] });
+          }, status => 404)),
+          # Browsers: go to the route named 'login', with ?next= set.
+          route('/home' => requires([], sub ($request) {
+              json_response({ home => 1 });
+          }, redirect => 'login')),
+          route('/login' => sub ($request) { json_response({ login => 1 }) }, name => 'login'),
+      ],
+  );
+
+C<redirect> also takes a coderef, called with the request, that returns the
+location -- for a login page elsewhere, or a route with parameters:
+
+  route('/account' => requires([], \&account,
+      redirect => sub ($request) { 'https://login.example.com/?app=notes' })),
+
+Like Starlette's, the refusal is one status: it does not tell an
+unauthenticated user from a missing scope or send a C<WWW-Authenticate>
+challenge. An API that wants RFC 6750 challenges builds those responses
+itself, as below.
 
 =head2 Basic Challenge
 
@@ -1810,9 +1871,10 @@ B<Request handler:> pass repeated ordered fields. Values are never comma-joined.
 
 =head2 Explicit Login Redirect Policy
 
-B<Request handler:> interactive login is application policy, not an alternate
-Auth renderer. Redirect deliberately, and keep the 401 challenge for clients
-that need protocol authentication.
+B<Request handler:> C<< requires([], \&home, redirect => 'login') >> covers
+the usual case (see L</Declaring what a route requires>). Written by hand, the
+same policy is a redirect the handler chooses; keep the 401 challenge for
+clients that need protocol authentication.
 
   use PAGI::Pages qw(redirect);
 
@@ -1827,7 +1889,8 @@ flow, including login and logout methods. It requires Perl 5.40 or newer.
 =head2 Deliberate 404 Concealment
 
 B<Request handler:> when disclosing resource existence is itself sensitive,
-make concealment explicit policy.
+make concealment explicit policy -- C<< requires([...], \&handler, status => 404) >>
+when the rule is "these scopes", or by hand when it is something else:
 
   use PAGI::Pages qw(not_found);
 

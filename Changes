@@ -50,6 +50,17 @@
     HTTP-only catch-all route, so a WebSocket or SSE request to an unknown
     path is refused instead of dying in PAGI::App::File.
 
+  [PAGI::Auth requires]
+  - PAGI::Auth exports requires(SCOPES, HANDLER, status => ..., redirect =>
+    ...), the equivalent of Starlette's @requires. It returns a handler that
+    calls HANDLER only for an authenticated user holding every scope and
+    otherwise refuses with a negotiated Pages 403 (or status), or redirects
+    (303) to a named route with ?next= set, or to what a coderef returns.
+    WebSocket and SSE handlers are denied or declined before they start.
+    The auth-cookie-login example uses it (with a session-backed
+    Authentication backend), and the Cookbook has a recipe (Declaring what
+    a route requires).
+
   [Bad request bodies are 400s]
   - PAGI::Request's buffered body helpers throw PAGI::Request::BodyError
     when the body itself is wrong: json on a body that is not JSON, text
