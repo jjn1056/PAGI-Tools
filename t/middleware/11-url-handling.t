@@ -624,6 +624,31 @@ subtest 'HTTPSRedirect encodes what a path cannot hold instead of failing' => su
     }
 };
 
+subtest 'HTTPSRedirect never redirects to a target that is not a path' => sub {
+    my $downstream = 0;
+    my $wrapped = PAGI::Middleware::HTTPSRedirect->new->wrap(async sub {
+        my ($scope, $receive, $send) = @_;
+        $downstream++;
+        await $send->({ type => 'http.response.start', status => 204, headers => [] });
+        await $send->({ type => 'http.response.body', body => '' });
+    });
+    for my $raw ('@evil.example/x', '.evil.example/x') {
+        my @events;
+        $loop->await($wrapped->(
+            make_scope(path => $raw, raw_path => $raw, headers => [['Host', 'example.com']]),
+            async sub { {} }, async sub { my ($event) = @_; push @events, $event },
+        ));
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers} // []};
+        is [$events[0]{status}, $headers{location}], [400, undef], "'$raw' is refused, not redirected";
+    }
+    my @events;
+    $loop->await($wrapped->(
+        make_scope(method => 'OPTIONS', path => '*', raw_path => '*', headers => [['Host', 'example.com']]),
+        async sub { {} }, async sub { my ($event) = @_; push @events, $event },
+    ));
+    is [$downstream, $events[0]{status}], [1, 204], 'OPTIONS * passes through: there is nothing to redirect';
+};
+
 subtest 'HTTPSRedirect keeps the mount prefix and the client encoding' => sub {
     require PAGI::Compose; require PAGI::Routing; require PAGI::Test::Client;
     my $inner = PAGI::Middleware::HTTPSRedirect->new->wrap(async sub { die "not reached\n" });

@@ -54,14 +54,14 @@ sub raw_path {
 }
 
 # The path and query the client requested, as a URI-reference safe for a
-# Location header or a log line: bytes outside printable ASCII are
-# percent-encoded, and a leading "//" (another host to a browser) becomes "/".
+# Location header or a log line: every character RFC 3986 does not allow in
+# a path or query is percent-encoded (so a backslash cannot turn "/\host"
+# into "//host"), and a leading "//" (another host to a browser) becomes "/".
 sub request_uri {
     my ($scope) = @_;
-    my $uri = raw_path($scope);
+    my $uri = _escape_path_bytes(raw_path($scope));
     my $query_string = $scope->{query_string} // '';
-    $uri .= "?$query_string" if length $query_string;
-    $uri = _escape_unsafe_bytes($uri);
+    $uri .= '?' . _escape_unsafe_bytes($query_string) if length $query_string;
     $uri =~ s{\A/{2,}}{/};
     return $uri;
 }
@@ -118,12 +118,22 @@ sub _unescape {
     return $value;
 }
 
-# Bytes a URI-reference cannot hold -- controls, space, DEL, and anything
-# above 0x7F (raw UTF-8 a client sent unencoded) -- percent-encoded.
+# Percent-encode what RFC 3986 does not allow in a query (and so in a
+# request target's path-and-query): anything but unreserved characters,
+# sub-delims, ":", "@", "/", "?" and an existing "%" escape. Characters
+# beyond a byte are encoded as UTF-8 first.
 sub _escape_unsafe_bytes {
     my ($value) = @_;
     $value = Encode::encode('UTF-8', $value) if $value =~ /[^\x00-\xFF]/;
-    $value =~ s{([\x00-\x20\x7F-\xFF])}{sprintf('%%%02X', ord $1)}ge;
+    $value =~ s{([^A-Za-z0-9\-._~!\$&'()*+,;=:\@/?%])}{sprintf('%%%02X', ord $1)}ge;
+    return $value;
+}
+
+# The same for a path, where "?" would start the query.
+sub _escape_path_bytes {
+    my ($value) = @_;
+    $value = _escape_unsafe_bytes($value);
+    $value =~ s{\?}{%3F}g;
     return $value;
 }
 

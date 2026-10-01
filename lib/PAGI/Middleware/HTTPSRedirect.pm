@@ -149,7 +149,18 @@ sub wrap {
 
         # The URI the client requested, still encoded: the mount prefix
         # stays, and a client's %3F or %23 cannot become a query or fragment.
-        my $url = "https://$authority" . PAGI::Utils::Scope::request_uri($scope);
+        # Only a path can follow the authority: anything else ("@evil/x")
+        # would name another host. OPTIONS * has nothing to redirect.
+        my $target = PAGI::Utils::Scope::request_uri($scope);
+        if ($target eq '*') {
+            await $app->($scope, $receive, $send);
+            return;
+        }
+        if (substr($target, 0, 1) ne '/') {
+            await $self->_send_error($scope, $receive, $send, 400);
+            return;
+        }
+        my $url = "https://$authority$target";
 
         await $self->_send_redirect($scope, $receive, $send, $url);
     };

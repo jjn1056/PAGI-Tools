@@ -19,6 +19,15 @@ subtest 'request_uri' => sub {
         [ 'raw UTF-8 bytes', scope(path => '/café', raw_path => "/caf\xC3\xA9"),                          '/caf%C3%A9' ],
         [ 'control bytes',   scope(path => '/x', raw_path => '/x', query_string => "a=1\x0D\x0Ab"),       '/x?a=1%0D%0Ab' ],
         [ 'leading //',      scope(path => '//evil.example/x', raw_path => '//evil.example/x'),           '/evil.example/x' ],
+        [ 'characters a URI cannot hold, in the query', scope(path => '/s', raw_path => '/s', query_string => 'q={"x":1}|a^b<c>[d]#e'),
+          '/s?q=%7B%22x%22:1%7D%7Ca%5Eb%3Cc%3E%5Bd%5D%23e' ],
+        [ 'and in the path',  scope(path => '/a^b`c', raw_path => '/a^b`c'),                                '/a%5Eb%60c' ],
+        [ 'a backslash cannot make //', scope(path => '/\\evil.example', raw_path => '/\\evil.example'), '/%5Cevil.example' ],
+        [ 'what a query may hold stays', scope(path => '/s', raw_path => '/s', query_string => "a=1&b=x:y/z?w;v=(1)!*'+,\$\@~%2F"),
+          "/s?a=1&b=x:y/z?w;v=(1)!*'+,\$\@~%2F" ],
+        [ 'a ? in a hand-built raw_path is escaped', scope(path => '/a?b', raw_path => '/a?b', query_string => 'q=1'), '/a%3Fb?q=1' ],
+        [ 'bytes and characters do not double-encode', scope(path => '/café', raw_path => "/caf\xC3\xA9", query_string => "q=\x{263A}"),
+          '/caf%C3%A9?q=%E2%98%BA' ],
     );
     for my $case (@cases) {
         my ($label, $scope, $expected) = @$case;
