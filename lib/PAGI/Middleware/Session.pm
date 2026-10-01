@@ -4,8 +4,27 @@ use strict;
 use warnings;
 use parent 'PAGI::Middleware';
 use Future::AsyncAwait;
+use Exporter 'import';
 use JSON::MaybeXS;
+use PAGI::Utils ();
 use PAGI::Utils::Random qw(secure_random_bytes);
+
+our @EXPORT_OK = qw(session_state session_store);
+
+sub session_state { return _build_named('session_state', 'State', @_) }
+sub session_store { return _build_named('session_store', 'Store', @_) }
+
+# Resolve NAME under PAGI::Middleware::Session::<kind> (or exactly, with a
+# leading '+'), load it, and return CLASS->new(@args).
+sub _build_named {
+    my ($function, $kind, $name, @args) = @_;
+    my $class = PAGI::Utils::_resolve_class(
+        "PAGI::Middleware::Session::$kind", $name, 'session ' . lc $kind);
+    (my $file = "$class.pm") =~ s{::}{/}g;
+    eval { require $file; 1 }
+        or die "$function('$name'): cannot load $class: $@";
+    return $class->new(@args);
+}
 
 =head1 NAME
 
@@ -37,16 +56,15 @@ PAGI::Middleware::Session - Session management middleware with pluggable State/S
     # session encrypted in the cookie (distribution
     # PAGI-Middleware-Session-Store-Cookie). To change the cookie itself,
     # configure the State and pass it; nothing on the middleware reaches it.
-    use PAGI::Middleware::Session::State::Cookie;
-    use PAGI::Middleware::Session::Store::Cookie;
+    use PAGI::Middleware::Session qw(session_state session_store);
 
     my $production = compose(
         middleware => [
             middleware('Session',
-                state  => PAGI::Middleware::Session::State::Cookie->new(
+                state  => session_state('Cookie',
                     cookie_options => { secure => 1 },    # added to the defaults
                 ),
-                store  => PAGI::Middleware::Session::Store::Cookie->new(
+                store  => session_store('Cookie',
                     secret => $ENV{STORE_SECRET},
                 ),
                 expire => 8 * 3600,    # the server-side idle timeout
@@ -80,6 +98,48 @@ See L</STORE CLASSES>.
 
 Handlers read and change the session through L<PAGI::Session> (or the raw
 C<pagi.session> hashref); both need this middleware in front of them.
+
+=head1 FUNCTIONS
+
+    use PAGI::Middleware::Session qw(session_state session_store);
+
+    state => session_state('Cookie', cookie_name => 'myapp_session'),
+    store => session_store('Cookie', secret => $ENV{STORE_SECRET}),
+    store => session_store('+MyApp::SessionStore', dsn => $dsn),
+
+Build the State and Store objects this middleware takes. Nothing is exported
+by default. Each resolves its first argument the way
+L<PAGI::Routing/middleware> resolves a middleware name, loads the class, and
+returns C<< CLASS->new(@rest) >>:
+
+=over 4
+
+=item * a short name is looked up under the State or Store namespace:
+C<session_state('Cookie')> is
+C<< PAGI::Middleware::Session::State::Cookie->new >>, and
+C<session_store('Memory')> is
+C<< PAGI::Middleware::Session::Store::Memory->new >> (stores from other
+distributions, like the cookie store, work the same way);
+
+=item * a name already in that namespace is used as given;
+
+=item * a leading C<+> names an exact package, for a State or Store of your
+own: C<session_store('+MyApp::SessionStore', ...)>.
+
+=back
+
+A class that cannot be loaded dies naming the class it looked for
+(C<< session_store('Redis'): cannot load PAGI::Middleware::Session::Store::Redis: ... >>).
+They are a convenience: building the objects with C<< CLASS->new >> is
+equivalent.
+
+=head2 session_state
+
+    my $state = session_state($name, %args);
+
+=head2 session_store
+
+    my $store = session_store($name, %args);
 
 =head1 CONFIGURATION
 
@@ -128,10 +188,10 @@ Most applications use the default, L<PAGI::Middleware::Session::State::Cookie>.
 To configure the cookie -- its name, attributes such as C<Secure>, its
 lifetime -- build one and pass it as C<state>:
 
-    use PAGI::Middleware::Session::State::Cookie;
+    use PAGI::Middleware::Session qw(session_state);
 
     middleware('Session',
-        state  => PAGI::Middleware::Session::State::Cookie->new(
+        state  => session_state('Cookie',
             cookie_name    => 'myapp_session',
             cookie_options => { secure => 1 },    # added to the defaults
         ),
@@ -179,7 +239,7 @@ Reads the session ID from a custom HTTP header. Requires C<header_name>;
 accepts an optional C<pattern> regex with a capture group. Injection is a
 no-op (the client manages header-based transport).
 
-    PAGI::Middleware::Session::State::Header->new(
+    session_state('Header',
         header_name => 'X-Session-ID',
     );
 
@@ -188,7 +248,7 @@ no-op (the client manages header-based transport).
 Custom session ID transport using coderefs. Requires an C<extract> coderef;
 accepts an optional C<inject> coderef (defaults to no-op).
 
-    PAGI::Middleware::Session::State::Callback->new(
+    session_state('Callback',
         extract => sub { my ($scope) = @_; ... },
         inject  => sub { my ($headers, $id, $options) = @_; ... },
     );
@@ -216,10 +276,10 @@ worker can read it, it survives restarts, and no server-side storage is
 needed. Limits: about 4KB of session data, and a session cannot be revoked on
 the server before it expires. Its C<secret> should be a long random value:
 
-    use PAGI::Middleware::Session::Store::Cookie;
+    use PAGI::Middleware::Session qw(session_store);
 
     middleware('Session',
-        store  => PAGI::Middleware::Session::Store::Cookie->new(
+        store  => session_store('Cookie',
             secret => $ENV{STORE_SECRET},
         ),
     )
@@ -277,17 +337,15 @@ For mixed clients (e.g. a cookie for browsers, a session header for API
 clients), use L<PAGI::Middleware::Session::State::Callback> with fallback
 logic instead of stacking multiple Session middleware instances:
 
-    use PAGI::Middleware::Session::State::Callback;
-    use PAGI::Middleware::Session::State::Cookie;
-    use PAGI::Middleware::Session::State::Header;
+    use PAGI::Middleware::Session qw(session_state);
 
-    my $cookie_state = PAGI::Middleware::Session::State::Cookie->new;
-    my $header_state = PAGI::Middleware::Session::State::Header->new(
+    my $cookie_state = session_state('Cookie');
+    my $header_state = session_state('Header',
         header_name => 'X-Session-ID',
     );
 
     enable 'Session',
-        state  => PAGI::Middleware::Session::State::Callback->new(
+        state  => session_state('Callback',
             extract => sub {
                 my ($scope) = @_;
                 return $header_state->extract($scope)
@@ -356,7 +414,8 @@ sub _init {
     # as `state`. Nothing on the middleware reaches the default state.
     for my $moved (qw(cookie_name cookie_options)) {
         die "'$moved' is not a Session option; configure the cookie on "
-            . "PAGI::Middleware::Session::State::Cookie->new(...) and pass it as 'state'"
+            . "PAGI::Middleware::Session::State::Cookie -- session_state('Cookie', ...) -- "
+            . "and pass it as 'state'"
             if exists $config->{$moved};
     }
 

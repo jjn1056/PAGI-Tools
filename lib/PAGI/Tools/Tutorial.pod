@@ -1095,8 +1095,10 @@ Access via C<$scope-E<gt>{'pagi.cookies'}>.
 Sessions: a random session ID in a cookie, the data in a store (by default
 this process's memory):
 
+  use PAGI::Middleware::Session qw(session_state);
+
   enable 'Session',
-      state  => PAGI::Middleware::Session::State::Cookie->new(
+      state  => session_state('Cookie',
           cookie_name => 'session',
           expire      => 86400,
       ),

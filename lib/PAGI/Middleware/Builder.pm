@@ -4,6 +4,7 @@ use strict;
 use warnings;
 use Future::AsyncAwait;
 use Carp 'croak';
+use PAGI::Utils ();
 use Scalar::Util qw(blessed);
 use PAGI::Utils ();
 
@@ -299,23 +300,10 @@ sub _resolve_middleware {
 
     croak 'enable() middleware name must be a nonempty scalar'
         if ref($name) || !defined($name) || !length($name);
-    croak "invalid middleware class name; use leading '+' for an exact package"
-        unless $name =~ /\A\+?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/;
 
-    # Prefix short names, preserve PAGI::Middleware::* names, and strip one
-    # leading + for exact package names.
-    # Examples:
-    #   'GZIP'           -> 'PAGI::Middleware::GZIP'
-    #   'SSE::Retry'     -> 'PAGI::Middleware::SSE::Retry'
-    #   '+My::Custom'    -> 'My::Custom' (prefix removed)
-    #   'PAGI::Middleware::GZIP' -> 'PAGI::Middleware::GZIP'
-    my $class = $name;
-    if (substr($class, 0, 1) eq '+') {
-        substr($class, 0, 1, '');
-    }
-    elsif ($class !~ /\APAGI::Middleware::/) {
-        $class = "PAGI::Middleware::$class";
-    }
+    # 'GZIP' -> PAGI::Middleware::GZIP, 'PAGI::Middleware::GZIP' as is,
+    # '+My::Custom' -> My::Custom.
+    my $class = PAGI::Utils::_resolve_class('PAGI::Middleware', $name, 'middleware');
 
     # Load the module
     my $file = $class;

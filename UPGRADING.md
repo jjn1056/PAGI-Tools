@@ -38,16 +38,21 @@ enable 'Session',
     expire         => 86400;
 
 # After
-use PAGI::Middleware::Session::State::Cookie;
+use PAGI::Middleware::Session qw(session_state);
 
 enable 'Session',
-    state  => PAGI::Middleware::Session::State::Cookie->new(
+    state  => session_state('Cookie',     # PAGI::Middleware::Session::State::Cookie->new(...)
         cookie_name    => 'myapp_session',
         cookie_options => { secure => 1 },   # merged into the defaults
         expire         => 86400,             # only if the cookie should outlive the browser session
     ),
     expire => 86400;                         # the server-side idle timeout
 ```
+
+`session_state(NAME, ...)` and `session_store(NAME, ...)`, exported by
+`PAGI::Middleware::Session`, build the State and Store objects from a short
+name (`'Cookie'` is `PAGI::Middleware::Session::State::Cookie`) or, with a
+leading `+`, an exact package of your own. `CLASS->new(...)` works the same.
 
 ## Breaking: `PAGI::Middleware::Session` takes no `secret`
 
@@ -81,7 +86,7 @@ ID from that header can use `State::Header` with a pattern:
 state => PAGI::Middleware::Session::State::Bearer->new,
 
 # After
-state => PAGI::Middleware::Session::State::Header->new(
+state => session_state('Header',
     header_name => 'Authorization',
     pattern     => qr/^Bearer\s+(.+)$/i,
 ),

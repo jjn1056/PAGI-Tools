@@ -350,6 +350,19 @@ async sub invoke_app {
     return await Future->wrap($returned);
 }
 
+# Resolve a short class name the way middleware() does: a leading '+' names
+# an exact package, a name already under $namespace is kept, and anything else
+# is prefixed with "$namespace::". $what names the kind of class in errors.
+sub _resolve_class {
+    my ($namespace, $name, $what) = @_;
+    croak "invalid $what class name; use leading '+' for an exact package"
+        unless defined $name && !ref $name
+            && $name =~ /\A\+?[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*\z/;
+    return substr($name, 1) if substr($name, 0, 1) eq '+';
+    return $name if index($name, "${namespace}::") == 0;
+    return "${namespace}::$name";
+}
+
 sub _validate_app_value {
     my ($value, $label, $coderef_role) = @_;
     $label = 'application' unless defined $label && length $label;

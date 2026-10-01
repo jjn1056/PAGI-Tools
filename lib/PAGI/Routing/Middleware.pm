@@ -106,10 +106,7 @@ sub _wrap_descriptors {
 
 sub _resolve_class {
     my ($name) = @_;
-
-    return substr($name, 1) if substr($name, 0, 1) eq '+';
-    return $name if $name =~ /\APAGI::Middleware::/;
-    return "PAGI::Middleware::$name";
+    return PAGI::Utils::_resolve_class('PAGI::Middleware', $name, 'middleware');
 }
 
 sub _compile_wrapped_app {

@@ -82,10 +82,10 @@ PAGI-Middleware-Session-Store-Cookie), which keeps the whole session encrypted
 in the cookie itself, so any worker can read it and it survives restarts, with
 no server-side storage:
 
-    use PAGI::Middleware::Session::Store::Cookie;
+    use PAGI::Middleware::Session qw(session_store);
 
     middleware('Session',
-        store  => PAGI::Middleware::Session::Store::Cookie->new(
+        store  => session_store('Cookie',
             secret => $ENV{STORE_SECRET},
         ),
     )

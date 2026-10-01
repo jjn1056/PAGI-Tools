@@ -61,6 +61,11 @@
     pass expire for a persistent cookie), and its cookie_options merge into
     the defaults instead of replacing them, so { secure => 1 } keeps
     HttpOnly, Path and SameSite.
+  - PAGI::Middleware::Session exports session_state(NAME, ...) and
+    session_store(NAME, ...), which build State and Store objects by name:
+    'Cookie' under PAGI::Middleware::Session::State:: or ::Store::, an
+    already-qualified name as given, '+My::Store' as an exact package --
+    the rules middleware() uses (now one shared resolver).
   - BREAKING: PAGI::Middleware::Session no longer takes secret (passing it
     dies). It only salted the session ID, which is already secure random
     data; IDs are now 32 random bytes as 64 hex characters.

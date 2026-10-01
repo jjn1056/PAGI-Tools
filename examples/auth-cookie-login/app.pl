@@ -4,7 +4,7 @@ use v5.40;
 use Future::AsyncAwait;
 
 use PAGI::Compose qw(compose);
-use PAGI::Middleware::Session::State::Cookie;
+use PAGI::Middleware::Session qw(session_state);
 use PAGI::Pages qw(redirect not_found);
 use PAGI::Response qw(html_response);
 use PAGI::Routing qw(route middleware);
@@ -83,7 +83,7 @@ compose(
     http_default => not_found(),
     middleware => [middleware(
         'Session',
-        state  => PAGI::Middleware::Session::State::Cookie->new(
+        state  => session_state('Cookie',
             cookie_name => 'hello_session',
             expire      => 3600,
         ),
