@@ -5,7 +5,9 @@ logged in, a two-line Authentication backend turns that into the request's
 authentication context, and `PAGI::Auth`'s `requires` redirects anyone not
 logged in to the login form, like Starlette's
 `@requires('authenticated', redirect='login')`. Checking credentials and the
-session lifecycle stay ordinary application code.
+session lifecycle stay ordinary application code. The account pages live
+under `mount('/account')`, and every link and redirect they emit comes from
+`path_for`, so they stay correct wherever the account area is mounted.
 
 This example requires Perl 5.40 or newer. Run it from the distribution root
 and give the runner the checkout's local library path:
@@ -14,22 +16,37 @@ and give the runner the checkout's local library path:
 pagi-server --lib lib --app examples/auth-cookie-login/app.pl --port 5000
 ```
 
-Open <http://localhost:5000/> and sign in with the demo-only credential:
+Open <http://localhost:5000/account/> and sign in with the demo-only credential:
 
 - username: `demo`
 - password: `secret`
 
-An anonymous `GET /` redirects to `GET /login?next=%2F`:
+An anonymous `GET /account/` redirects to
+`GET /account/login?next=%2Faccount%2F`:
 `requires([], \&home, redirect => ['login'])` sends it to the route named
 `login` (the arrayref holds `path_for` arguments) and records where it was
-going. The form carries `next` in a hidden
-field and submits to `POST /login`; valid credentials regenerate the
-`hello_session` identifier, store the fixed demo identity, and redirect to
-`next` -- but only when it is a local path, so the login page cannot be used to
-redirect to another site. Invalid credentials leave
-the session unauthenticated. `POST /logout` destroys the session and redirects
-to the login form. Explicit methods prevent `GET` from submitting either
-operation.
+going. The form carries `next` in a hidden field and submits to
+`POST /account/login`; valid credentials regenerate the `hello_session`
+identifier, store the fixed demo identity, and redirect to `next` -- but only
+when it is a local path, so the login page cannot be used to redirect to
+another site; otherwise they go to the `home` route. Invalid credentials leave
+the session unauthenticated. `POST /account/logout` destroys the session and
+redirects to the login form. Explicit methods prevent `GET` from submitting
+either operation.
+
+## Serving it under a prefix
+
+Behind a reverse proxy that publishes the app under `/app`, mount it there and
+let the proxy forward the path unchanged:
+
+```perl
+my $served = compose(routes => [mount('/app', app => $app)]);
+```
+
+Every link, the login redirect's `next`, and the post-login redirect then
+start with `/app/account/`, because they come from `path_for` and
+`request_uri`. `t/integration-auth-cookie-login.t` runs the whole flow both
+ways. See "Serving behind a proxy prefix" in `PAGI::Tools::Cookbook`.
 
 > **Demo boundary:** Run this example with one worker only because the default
 > session store is process-local memory. Production deployment also requires

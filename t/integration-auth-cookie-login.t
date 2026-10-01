@@ -5,6 +5,8 @@ use warnings;
 use Test2::V0;
 use FindBin qw($Bin);
 use lib "$Bin/../lib";
+use PAGI::Compose qw(compose);
+use PAGI::Routing qw(mount);
 use PAGI::Test::Client;
 
 if ($] < 5.040) {
@@ -12,79 +14,63 @@ if ($] < 5.040) {
     exit 0;
 }
 
-my $app_file = "$Bin/../examples/auth-cookie-login/app.pl";
-my $app = do $app_file;
+my $app = do "$Bin/../examples/auth-cookie-login/app.pl";
 my $load_error = $@ || $!;
-ok(!$load_error, 'cookie login example loads cleanly')
-    or diag($load_error);
+ok($app && !$load_error, 'cookie login example loads cleanly') or diag($load_error);
+plan skip_all => 'example did not load' unless $app;
 
-SKIP: {
-    skip 'example did not load', 26 unless $app;
+# The same flow at the root and served under /app (as behind a proxy, or a
+# server root path): every URL the app emits must follow.
+for my $case (['at the root', '', $app], ['under /app', '/app', compose(routes => [mount('/app', app => $app)])]) {
+    my ($label, $p, $served) = @$case;
+    subtest $label => sub {
+        (my $here = "$p/account/") =~ s{/}{%2F}g;
+        my $client = PAGI::Test::Client->new(app => $served);
 
-    my $client = PAGI::Test::Client->new(app => $app);
+        my $protected = $client->get("$p/account/");
+        is($protected->status, 303, 'anonymous home request redirects');
+        is($protected->header('Location'), "$p/account/login?next=$here",
+            'to the login route, remembering where it was going');
+        my $form = $client->get("$p/account/login?next=$here")->text;
+        like($form, qr{<form method="post" action="\Q$p\E/account/login">}, 'the form posts to the mounted login route');
+        like($form, qr{<input type="hidden" name="next" value="\Q$p\E/account/">}, 'the form carries next');
+        my $anonymous_id = $client->cookie('hello_session');
+        like($anonymous_id, qr/\A[a-f0-9]{64}\z/, 'anonymous request gets the session cookie');
 
-    my $protected = $client->get('/');
-    is($protected->status, 303, 'anonymous home request redirects');
-    is($protected->header('Location'), '/login?next=%2F',
-        'anonymous user is sent to the login form, remembering where they were going');
-    like($client->get('/login?next=%2F')->text, qr{<input type="hidden" name="next" value="/">},
-        'the login form carries next along');
-    my $anonymous_id = $client->cookie('hello_session');
-    like($anonymous_id, qr/\A[a-f0-9]{64}\z/,
-        'anonymous request receives the configured session cookie');
+        my $invalid = $client->post("$p/account/login", form => { username => 'demo', password => 'wrong' });
+        is($invalid->status, 200, 'invalid credentials redisplay the form');
+        like($invalid->text, qr/Invalid username or password/, 'with a fixed error');
+        is($client->cookie('hello_session'), $anonymous_id, 'and do not regenerate the session');
+        is($client->get("$p/account/")->header('Location'), "$p/account/login?next=$here", 'nor authenticate');
 
-    my $invalid = $client->post('/login', form => {
-        username => 'demo', password => 'wrong',
-    });
-    is($invalid->status, 200, 'invalid credentials redisplay the form');
-    like($invalid->text, qr/Invalid username or password/,
-        'invalid credentials receive a fixed error');
-    is($client->cookie('hello_session'), $anonymous_id,
-        'invalid credentials do not regenerate the session');
-    is($client->get('/')->header('Location'), '/login?next=%2F',
-        'invalid credentials do not create authenticated state');
+        my $offsite = PAGI::Test::Client->new(app => $served)->post("$p/account/login",
+            form => { username => 'demo', password => 'secret', next => 'https://evil.example/' });
+        is($offsite->header('Location'), "$p/account/", 'a next that is not a local path falls back to home');
 
-    my $offsite = PAGI::Test::Client->new(app => $app)->post('/login', form => {
-        username => 'demo', password => 'secret', next => 'https://evil.example/',
-    });
-    is($offsite->header('Location'), '/', 'a next that is not a local path is ignored');
+        my $login = $client->post("$p/account/login",
+            form => { username => 'demo', password => 'secret', next => "$p/account/" });
+        is([$login->status, $login->header('Location')], [303, "$p/account/"], 'login returns to next');
+        isnt($client->cookie('hello_session'), $anonymous_id, 'and regenerates the session');
 
-    my $login = $client->post('/login', form => {
-        username => 'demo', password => 'secret', next => '/',
-    });
-    is($login->status, 303, 'valid credentials redirect after login');
-    is($login->header('Location'), '/',
-        'successful login returns to next');
-    my $authenticated_id = $client->cookie('hello_session');
-    like($authenticated_id, qr/\A[a-f0-9]{64}\z/,
-        'successful login retains a session cookie');
-    isnt($authenticated_id, $anonymous_id,
-        'successful login regenerates the session identifier');
+        my $home = $client->get("$p/account/");
+        is($home->status, 200, 'authenticated home succeeds');
+        like($home->text, qr/Hello, demo/, 'and greets the user');
+        like($home->text, qr{<form method="post" action="\Q$p\E/account/logout">}, 'logout posts to the mounted route');
 
-    my $home = $client->get('/');
-    is($home->status, 200, 'authenticated home request succeeds');
-    like($home->text, qr/Hello, demo/,
-        'authenticated home identifies the fixed demo user');
+        my $plain = $client->get("$p/account/login");
+        is($plain->status, 200, 'GET login only shows the form');
+        unlike($plain->text, qr/Invalid username or password/, 'without an error');
 
-    my $get_login_submit = $client->get('/login');
-    is($get_login_submit->status, 200, 'GET /login only displays the form');
-    unlike($get_login_submit->text, qr/Invalid username or password/,
-        'plain login form has no failed-submission message');
+        my $get_logout = $client->get("$p/account/logout");
+        is([$get_logout->status, $get_logout->header('Allow')], [405, 'POST'], 'GET cannot log out');
 
-    my $get_logout = $client->get('/logout');
-    is($get_logout->status, 405, 'GET cannot submit logout');
-    is($get_logout->header('Allow'), 'POST',
-        'logout publishes its only allowed method');
+        my $logout = $client->post("$p/account/logout");
+        is([$logout->status, $logout->header('Location')], [303, "$p/account/login"], 'logout goes to the login route');
+        is($client->get("$p/account/")->header('Location'), "$p/account/login?next=$here",
+            'and the session no longer authenticates');
 
-    my $logout = $client->post('/logout');
-    is($logout->status, 303, 'logout redirects');
-    is($logout->header('Location'), '/login',
-        'logout redirects to the login form');
-    is($client->get('/')->header('Location'), '/login?next=%2F',
-        'destroyed session no longer authenticates the client');
-
-    my $unknown = $client->get('/missing');
-    is($unknown->status, 404, 'unknown path receives the configured default');
+        is($client->get("$p/missing")->status, 404, 'unknown paths get 404');
+    };
 }
 
 done_testing;
