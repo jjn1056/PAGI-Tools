@@ -4,6 +4,7 @@ use warnings;
 use Hash::MultiValue;
 use PAGI::Headers ();
 use PAGI::Authority ();
+use PAGI::Utils::Scope ();
 use Encode qw(decode FB_CROAK FB_DEFAULT LEAVE_SRC);
 use Cookie::Baker qw(crush_cookie);
 use Future::AsyncAwait;
@@ -36,7 +37,9 @@ sub new {
 # Basic properties from scope
 sub method       { shift->{scope}{method} }
 sub path         { shift->{scope}{path} }
-sub raw_path     { my $s = shift; $s->{scope}{raw_path} // $s->{scope}{path} }
+sub raw_path      { PAGI::Utils::Scope::raw_path(shift->{scope}) }
+sub request_uri   { PAGI::Utils::Scope::request_uri(shift->{scope}) }
+sub raw_path_info { PAGI::Utils::Scope::raw_path_info(shift->{scope}) }
 sub query_string { shift->{scope}{query_string} // '' }
 sub scheme       { my $s = shift; $s->{scope}{scheme} // ($s->{scope}{type} eq 'websocket' ? 'ws' : 'http') }
 sub http_version { shift->{scope}{http_version} // '1.1' }
@@ -701,7 +704,28 @@ Request path, UTF-8 decoded.
 
 =head2 raw_path
 
-Request path as raw bytes (percent-encoded).
+The full path the client requested, percent-encoded as sent.
+Mounts leave it unchanged, so inside a mount it still starts with the mount
+prefix (see L<PAGI::Spec::Www/Paths, Mounts and Root Paths>). Without one in
+the scope it is C<root_path> followed by C<path>, percent-encoded. Never use
+it for authorization: different encodings reach the same C<path>.
+
+=head2 request_uri
+
+    my $here = $req->request_uri;   # /app/admin/users?x=1
+
+The path and query the client requested: C<raw_path>, then C<?> and
+C<query_string> when there is one, with any byte a URI cannot hold
+percent-encoded and a leading C<//> reduced to C</>. It is the URL to
+redirect back to, at any mount depth and behind a server root path.
+
+=head2 raw_path_info
+
+    my $rest = $req->raw_path_info;  # /a%2Fb inside mount('/files')
+
+The part of C<raw_path> below C<root_path>, still encoded, for code that must
+tell an encoded C</> from a separator. Returns C<undef> when it cannot be
+found: an encoded C</> straddles the mount boundary, or C<path> was rewritten.
 
 =head2 query_string
 

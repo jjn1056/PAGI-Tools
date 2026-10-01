@@ -2,6 +2,7 @@ package PAGI::SSE;
 use strict;
 use warnings;
 use Carp qw(croak);
+use PAGI::Utils::Scope ();
 use Hash::MultiValue;
 use Future::AsyncAwait;
 use Future;
@@ -89,7 +90,9 @@ sub disconnect_detail {
 # Scope property accessors
 sub scope        { shift->{scope} }
 sub path         { shift->{scope}{path} // '/' }
-sub raw_path     { my $s = shift; $s->{scope}{raw_path} // $s->{scope}{path} // '/' }
+sub raw_path      { PAGI::Utils::Scope::raw_path(shift->{scope}) }
+sub request_uri   { PAGI::Utils::Scope::request_uri(shift->{scope}) }
+sub raw_path_info { PAGI::Utils::Scope::raw_path_info(shift->{scope}) }
 sub query_string { shift->{scope}{query_string} // '' }
 
 # URL decode helper (handles + as space per application/x-www-form-urlencoded)
@@ -944,6 +947,29 @@ connection, so this does not arise.
 
     my $path = $sse->path;              # /events
     my $qs = $sse->query_string;        # token=abc
+
+C<raw_path> is the full path the client requested, percent-encoded as sent.
+Mounts leave it unchanged, so inside a mount it still starts with the mount
+prefix (see L<PAGI::Spec::Www/Paths, Mounts and Root Paths>). Without one in
+the scope it is C<root_path> followed by C<path>, percent-encoded. Never use
+it for authorization: different encodings reach the same C<path>.
+
+=head2 request_uri
+
+    my $here = $sse->request_uri;   # /app/admin/users?x=1
+
+The path and query the client requested: C<raw_path>, then C<?> and
+C<query_string> when there is one, with any byte a URI cannot hold
+percent-encoded and a leading C<//> reduced to C</>. It is the URL to
+redirect back to, at any mount depth and behind a server root path.
+
+=head2 raw_path_info
+
+    my $rest = $sse->raw_path_info;  # /a%2Fb inside mount('/files')
+
+The part of C<raw_path> below C<root_path>, still encoded, for code that must
+tell an encoded C</> from a separator. Returns C<undef> when it cannot be
+found: an encoded C</> straddles the mount boundary, or C<path> was rewritten.
 
 =head2 header, headers, header_all
 
