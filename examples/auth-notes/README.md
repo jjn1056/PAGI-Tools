@@ -18,13 +18,7 @@ Use Perl 5.40 with PAGI::Tools and PAGI::Server available. From the repository r
 
 ```sh
 PERL5LIB=lib:examples/auth-notes/lib pagi-server --app examples/auth-notes/app.pl --port 5000
-```
-
-With the repository's Perlbrew environment:
-
-```sh
-PERL5LIB=lib:examples/auth-notes/lib perlbrew exec --with perl-5.40.0@default pagi-server --app examples/auth-notes/app.pl --port 5000
-perlbrew exec --with perl-5.40.0@default prove -lv t/integration-auth-notes.t
+prove -lv t/integration-auth-notes.t
 ```
 
 These services use memory and return Futures. Notes reset when the app restarts;
@@ -42,6 +36,7 @@ curl -i http://localhost:5000/me -H 'Authorization: Bearer unknown'
 curl -i http://localhost:5000/notes -H 'Authorization: Bearer alice-reader' -H 'Content-Type: application/json' -d '{"text":"A public note"}'
 curl -i http://localhost:5000/notes -H 'Authorization: Bearer alice-editor' -H 'Content-Type: application/json' -d '{"text":"A public note"}'
 curl -i http://localhost:5000/notes/export -H 'Authorization: Bearer export-service'
+curl -i http://localhost:5000/notes/export -H 'Authorization: Bearer alice-reader'
 curl -i http://localhost:5000/me -H 'Authorization: Bearer first second'
 ```
 
@@ -52,19 +47,19 @@ curl -i http://localhost:5000/me -H 'Authorization: Bearer first second'
 | GET `/me` | absent | 401, `Bearer realm="notes"` |
 | GET `/me` | unknown | 401, `Bearer realm="notes", error="invalid_token"` |
 | GET `/me` | `alice-reader` | 200, Alice identity |
-| POST `/notes` | `alice-reader` or `write-only` | 403, `Bearer realm="notes", error="insufficient_scope", scope="notes:read notes:write"` |
-| POST `/notes` | `alice-editor` or `read-write` | 201, Alice is the author |
-| GET `/notes/export` | `export-service` | 200 |
 | GET `/me` | `export-service` | 200, Note exporter identity |
-| GET `/notes/export` | `case-reader` or `no-scopes` | 403, `Bearer realm="notes", error="insufficient_scope", scope="notes:read"` |
+| POST `/notes` | `alice-reader` | 403, `Bearer realm="notes", error="insufficient_scope", scope="notes:read notes:write"` |
+| POST `/notes` | `alice-editor` | 201, Alice is the author |
+| GET `/notes/export` | `export-service` or `alice-reader` | 200 |
 | GET `/me` | duplicate fields or malformed Bearer | 400, `Bearer realm="notes", error="invalid_request"` |
 
-The reader and editor tokens identify the same Alice with different grants.
-`export-service` grants only `notes:read`; its user is authenticated and can use
-`/me` without a literal `authenticated` grant. `read-write` also omits that named
-grant and can publish. `write-only` proves that publishing needs both read and
-write. `case-reader` grants `Notes:Read`, which does not match `notes:read`.
-`no-scopes` supplies an authenticated user with an empty grant list.
+The three demo tokens: `alice-reader` and `alice-editor` are the same Alice
+with different grants (`notes:read`, or `notes:read` and `notes:write`), and
+`export-service` is a separate service identity with `notes:read`. Being
+authenticated comes from the user the backend returns, not from a grant, so no
+token needs an `authenticated` scope. The acceptance test adds edge cases to
+the same store (a write-only grant, a differently cased `Notes:Read`, and an
+empty grant list) and checks that exact grants are required.
 
 ## HTTP exchanges
 
@@ -108,7 +103,7 @@ Authorization: Bearer alice-reader
 HTTP/1.1 200 OK
 Content-Type: application/json
 
-{"user_id":"alice","display_name":"Alice","scopes":["authenticated","notes:read"]}
+{"user_id":"alice","display_name":"Alice","scopes":["notes:read"]}
 ```
 
 ```http

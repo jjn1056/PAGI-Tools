@@ -10,6 +10,7 @@ BEGIN {
 use FindBin qw($Bin);
 use lib "$Bin/../examples/auth-notes/lib";
 use Future;
+use PAGI::Middleware::Authentication;
 use PAGI::Test::Client;
 
 my $path = "$Bin/../examples/auth-notes/app.pl";
@@ -21,7 +22,12 @@ ok(defined $app, 'Notes example loads') or do {
 };
 isa_ok($app, 'PAGI::Compose');
 
-my $store = NotesDemo::TokenStore->new;
+# The demo's three tokens, plus edge cases this test needs.
+my $store = NotesDemo::TokenStore->new(
+    'write-only'  => { user_id => 'alice', display_name => 'Alice', scopes => ['notes:write'] },
+    'case-reader' => { user_id => 'alice', display_name => 'Alice', scopes => ['Notes:Read'] },
+    'no-scopes'   => { user_id => 'alice', display_name => 'Alice', scopes => [] },
+);
 my $notes = NotesDemo::Library->new;
 my $client = PAGI::Test::Client->new(app => build_app($store, $notes));
 sub bearer { return { Authorization => 'Bearer ' . $_[0] } }
@@ -67,21 +73,19 @@ my $publish = NotesDemo::Library->can('publish');
         is($res->status, 400, 'invalid note input is refused before publication');
     }
     is($publish_calls, 0, 'denied requests never invoke publishing service');
-    for my $token ('alice-editor', 'read-write') {
-        my $res = $client->post('/notes', headers => bearer($token),
-            json => {text => "Published by $token", author_id => 'mallory'});
-        is($res->status, 201, "$token can publish (no named authenticated grant required)");
-        is($res->json->{author_id}, 'alice', 'author comes from user, not request JSON');
-        is($res->json->{text}, "Published by $token", 'note text is stored');
-    }
-    is($publish_calls, 2, 'only permitted requests call publisher');
+    my $res = $client->post('/notes', headers => bearer('alice-editor'),
+        json => {text => 'Published by alice-editor', author_id => 'mallory'});
+    is($res->status, 201, 'alice-editor can publish');
+    is($res->json->{author_id}, 'alice', 'author comes from user, not request JSON');
+    is($res->json->{text}, 'Published by alice-editor', 'note text is stored');
+    is($publish_calls, 1, 'only the permitted request calls the publisher');
 }
-is(scalar @{$notes->all_published->get}, $count + 2, 'exactly two public notes added');
+is(scalar @{$notes->all_published->get}, $count + 1, 'exactly one public note added');
 my $public = $client->get('/notes', headers => bearer('alice-reader'));
 is($public->json->{viewer}, 'Alice', 'public endpoint can display authenticated viewer');
-is(scalar @{$public->json->{notes}}, $count + 2, 'published notes are publicly listed');
+is(scalar @{$public->json->{notes}}, $count + 1, 'published notes are publicly listed');
 
-for my $row (['export-service', 200], ['case-reader', 403], ['no-scopes', 403]) {
+for my $row (['export-service', 200], ['alice-reader', 200], ['case-reader', 403], ['no-scopes', 403]) {
     my $res = $client->get('/notes/export', headers => bearer($row->[0]));
     is($res->status, $row->[1], "$row->[0] export uses exact read grant");
     like($res->header('WWW-Authenticate'), qr/error="insufficient_scope"/, 'export denial challenges scope')
@@ -103,7 +107,7 @@ my $other = $client->get('/me', headers => { Authorization => 'Basic abc' });
 is($other->header('WWW-Authenticate'), 'Bearer realm="notes"', 'another scheme remains an ordinary guest');
 
 # Use the actual backend outside Compose to see failed Futures before its 500 boundary.
-my $authentication = build_authentication($store);
+my $authentication = PAGI::Middleware::Authentication->new(backend => token_backend($store));
 my $backend_reads = 0;
 my $bearer_token = PAGI::Request->can('bearer_token');
 my $direct = $authentication->wrap(sub { Future->done });
