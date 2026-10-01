@@ -11,13 +11,12 @@ use PAGI::Auth::SimpleUser;
 use PAGI::Compose qw(compose);
 use PAGI::Response qw(json_response);
 use PAGI::Routing qw(middleware route sse websocket);
-use PAGI::Routing::URL qw(path_for);
 use PAGI::Test::Client;
 
 # requires(SCOPES, HANDLER, %options) returns a handler that calls HANDLER
 # only for an authenticated user holding every scope -- Starlette's @requires.
-# Otherwise it refuses with `status` (default 403), or redirects to a named
-# route (adding ?next=) or to what a coderef returns.
+# Otherwise it refuses with `status` (default 403), or redirects: to a string
+# exactly as written, or to path_for(@arrayref) with ?next= added.
 
 # Tokens: 'reader' has notes:read; 'editor' has notes:read and notes:write.
 my %grants = (reader => ['notes:read'], editor => ['notes:read', 'notes:write']);
@@ -40,14 +39,18 @@ my $app = compose(
         route('/read'    => requires('notes:read', \&ok_response)),
         route('/write'   => requires(['notes:read', 'notes:write'], \&ok_response)),
         route('/hidden'  => requires(['notes:write'], \&ok_response, status => 404)),
-        route('/page'    => requires([], \&ok_response, redirect => 'login')),
+        route('/page'    => requires([], \&ok_response, redirect => ['login'])),
         route('/elsewhere' => requires([], \&ok_response,
-            redirect => sub { my ($request) = @_; return '/sign-in?from=' . $request->path })),
+            redirect => 'https://login.example.com/?app=notes')),
+        route('/own-next'  => requires([], \&ok_response,
+            redirect => ['login', {}, { next => '/dashboard' }])),
+        route('/named-args' => requires([], \&ok_response,
+            redirect => ['login', query => { lang => 'en' }])),
         route('/login'   => sub { json_response({ login => 1 }) }, name => 'login'),
         # Nested: the target's {org} is filled from the current route's {org}.
-        route('/orgs/{org}/settings' => requires([], \&ok_response, redirect => 'org_login')),
+        route('/orgs/{org}/settings' => requires([], \&ok_response, redirect => ['org_login'])),
         route('/orgs/{org}/billing' => requires([], \&ok_response,
-            redirect => sub { my ($r) = @_; path_for($r, 'org_login', {}, { reason => 'billing' }) })),
+            redirect => ['org_login', {}, { reason => 'billing' }])),
         route('/orgs/{org}/login' => sub { json_response({ login => 1 }) }, name => 'org_login'),
         route('/async'   => requires([], async sub { my ($r) = @_; return ok_response($r) })),
         websocket('/ws'  => requires(['notes:read'], async sub {
@@ -82,22 +85,21 @@ subtest 'status changes the refusal; redirect sends the user elsewhere' => sub {
     is($client->get('/hidden', headers => $as{reader})->status, 404, 'status => 404 hides the route');
     is($client->get('/hidden', headers => $as{editor})->status, 200, 'but not from those allowed');
 
+    my $location = sub { $client->get($_[0], headers => $guest)->header('location') };
+
     my $res = $client->get('/page?tab=2', headers => $guest);
     is([$res->status, $res->header('location')], [303, '/login?next=%2Fpage%3Ftab%3D2'],
-        'redirect => a route name goes there, with the original path in next');
+        'an arrayref is path_for arguments, with the original path and query added as next');
     is($client->get('/page', headers => $as{reader})->status, 200, 'an authenticated user is not redirected');
 
-    $res = $client->get('/orgs/acme/settings', headers => $guest);
-    is($res->header('location'), '/orgs/acme/login?next=%2Forgs%2Facme%2Fsettings',
-        "a route name fills the target's parameters from the current route's");
+    is($location->('/orgs/acme/settings'), '/orgs/acme/login?next=%2Forgs%2Facme%2Fsettings',
+        "the target's parameters are filled from the current route's, as path_for does");
+    is($location->('/orgs/acme/billing'), '/orgs/acme/login?next=%2Forgs%2Facme%2Fbilling&reason=billing',
+        'a query of its own is kept, next alongside it');
+    is($location->('/own-next'), '/login?next=%2Fdashboard', 'a next of its own wins');
+    is($location->('/named-args'), '/login?lang=en&next=%2Fnamed-args', "path_for's named argument form works too");
 
-    $res = $client->get('/orgs/acme/billing', headers => $guest);
-    is($res->header('location'), '/orgs/acme/login?reason=billing',
-        'a coderef builds what the name cannot: here, its own query instead of next');
-
-    $res = $client->get('/elsewhere', headers => $guest);
-    is([$res->status, $res->header('location')], [303, '/sign-in?from=/elsewhere'],
-        'redirect => a coderef goes where it says');
+    is($location->('/elsewhere'), 'https://login.example.com/?app=notes', 'a string is the location, exactly as written');
 };
 
 subtest 'WebSocket and SSE routes are refused with the same response' => sub {
@@ -118,6 +120,10 @@ subtest 'mistakes are caught when the route is declared' => sub {
     like(dies { requires(['x'], 'not code') }, qr/requires handler must be a coderef/, 'a non-code handler');
     like(dies { requires(['x'], sub {}, status => 200) }, qr/status/, 'a status that is not a refusal');
     like(dies { requires(['x'], sub {}, colour => 'red') }, qr/unknown option.*colour/i, 'an unknown option');
+    like(dies { requires(['x'], sub {}, redirect => sub { '/x' }) },
+        qr/redirect must be a location string or an arrayref of path_for arguments/, 'a coderef redirect');
+    like(dies { requires(['x'], sub {}, redirect => []) },
+        qr/redirect must be a location string or an arrayref of path_for arguments/, 'an empty arrayref');
     ok(PAGI::Auth->requires([], sub {}), 'it is also a class method, like the other PAGI::Auth functions');
 };
 

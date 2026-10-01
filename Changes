@@ -55,8 +55,11 @@
     ...), the equivalent of Starlette's @requires. It returns a handler that
     calls HANDLER only for an authenticated user holding every scope and
     otherwise refuses with a negotiated Pages 403 (or status), or redirects
-    (303) to a named route with ?next= set (its parameters filled from the
-    current route's, as path_for does), or to what a coderef returns.
+    (303): redirect => '/somewhere' goes exactly there; redirect =>
+    ['route_name', \%params, \%query] is resolved with path_for against the
+    refused request -- its parameters filled from the current route's -- and
+    gains ?next= with the original path and query, unless the query sets its
+    own.
     WebSocket and SSE handlers are denied or declined before they start.
     The auth-cookie-login example uses it (with a session-backed
     Authentication backend), and the Cookbook has a recipe (Declaring what

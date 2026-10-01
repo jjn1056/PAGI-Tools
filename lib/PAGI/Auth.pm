@@ -74,9 +74,9 @@ sub www_authenticate {
 
 # Starlette's @requires: a handler that calls $handler only for an
 # authenticated user holding every scope, and otherwise refuses -- with
-# `status` (default 403) or a redirect to a named route (with ?next=) or to
-# what a coderef returns. HTTP routes return the refusal; WebSocket and SSE
-# routes deny or decline with it.
+# `status` (default 403), or a redirect: to a string as written, or to
+# path_for(@arrayref) with ?next= added. HTTP routes return the refusal;
+# WebSocket and SSE routes deny or decline with it.
 sub requires {
     my ($proto, @args) = _factory_invocation(@_);
     _validate_invocant($proto);
@@ -91,8 +91,10 @@ sub requires {
     croak 'PAGI::Auth requires status must be a 4xx refusal status'
         unless $status =~ /\A4\d\d\z/;
     my $redirect = $opts->{redirect};
-    croak 'PAGI::Auth requires redirect must be a route name or a coderef'
-        if defined($redirect) && ref($redirect) && ref($redirect) ne 'CODE';
+    croak 'PAGI::Auth requires redirect must be a location string or an arrayref of path_for arguments'
+        if defined($redirect)
+            && (ref($redirect) ? ref($redirect) ne 'ARRAY' || !@$redirect || !defined($redirect->[0]) || ref($redirect->[0])
+                               : !length($redirect));
 
     require PAGI::Pages;
     my $denied = PAGI::Pages->status($status);
@@ -116,20 +118,31 @@ sub requires {
     };
 }
 
+# A string is the location as written. An arrayref holds path_for's
+# arguments -- compact (NAME, \%params, \%query, $fragment) or named
+# (NAME, params => ..., query => ..., fragment => ...) -- and gains a `next`
+# query value, the original path and query, unless it sets its own.
 sub _redirect_target {
     my ($redirect, $connection) = @_;
-    if (ref $redirect) {
-        my $target = $redirect->($connection);
-        croak 'PAGI::Auth requires redirect coderef must return a location string'
-            unless defined($target) && !ref($target) && length($target);
-        return $target;
-    }
-    require PAGI::Routing::URL;
+    return $redirect unless ref $redirect;
+
     my $scope = PAGI::Utils::Scope::scope_from_source('PAGI::Auth requires', $connection);
     my $original = $scope->{raw_path} // $scope->{path};
-    my $query = $scope->{query_string} // '';
-    $original .= "?$query" if length $query;
-    return PAGI::Routing::URL::path_for($connection, $redirect, query => { next => $original });
+    my $query_string = $scope->{query_string} // '';
+    $original .= "?$query_string" if length $query_string;
+
+    my ($name, @arguments) = @$redirect;
+    if (!@arguments || !defined($arguments[0]) || ref($arguments[0]) eq 'HASH') {
+        my ($params, $query, @fragment) = @arguments;
+        @arguments = ($params // {}, { next => $original, %{ $query // {} } }, @fragment);
+    }
+    else {
+        my %named = @arguments;
+        $named{query} = { next => $original, %{ $named{query} // {} } };
+        @arguments = %named;
+    }
+    require PAGI::Routing::URL;
+    return PAGI::Routing::URL::path_for($connection, $name, @arguments);
 }
 
 sub _factory_invocation {
@@ -219,7 +232,7 @@ PAGI::Auth - authentication results, installed context, and challenge formatting
 
   route('/notes'  => requires(['notes:read', 'notes:write'], \&publish_note), methods => ['POST']),
   route('/admin'  => requires(['admin'], \&admin, status => 404)),
-  route('/home'   => requires([], \&home, redirect => 'login')),
+  route('/home'   => requires([], \&home, redirect => ['login'])),
 
 =head1 DESCRIPTION
 
@@ -354,23 +367,38 @@ from those without access.
 
 =item * C<redirect>
 
-Instead of refusing, redirect (303).
+Instead of refusing, redirect (303). The value says which kind of target it
+is:
 
-A string names a route, and covers most cases. It is resolved with
-C<path_for>, so the target route's parameters are filled from the current
-route's matching ones: on C</orgs/{org}/settings>,
-C<< redirect => 'org_login' >> goes to C</orgs/acme/login>. The original path
-and query are added as C<next>, so the login page can send the user back.
+    redirect => '/login'                                # a location, as written
+    redirect => 'https://login.example.com/?app=notes'
+    redirect => ['login']                               # path_for arguments
+    redirect => ['org_login', { org => 'acme' }, { reason => 'billing' }]
 
-A coderef is for what a route name cannot say: different parameter values,
-your own query instead of C<next>, or a URL outside the application. It is
-called with the request (or the WebSocket or SSE object) and returns the
-location, used as is:
+A string is used exactly as written: a path, or a URL outside the
+application.
 
-    redirect => sub ($request) {
-        path_for($request, 'org_login', {}, { reason => 'billing' });
-    },
-    redirect => sub ($request) { 'https://login.example.com/?app=notes' },
+An arrayref holds the arguments to C<path_for> (see L<PAGI::Routing::URL>):
+the route name, then its parameters, query and fragment, in either of the
+forms C<path_for> takes. Being resolved against the request that was
+refused, it does two things a fixed string cannot:
+
+=over 4
+
+=item * The target route's parameters are filled from the current route's
+matching ones, as C<path_for> does: on C</orgs/{org}/settings>,
+C<< redirect => ['org_login'] >> goes to C</orgs/acme/login>. Parameters you
+give override them.
+
+=item * The original path and query are added to the query as C<next>, so
+the login page can send the user back after logging in. A C<next> you give
+yourself is kept instead.
+
+=back
+
+A redirect lets a login page act on C<next>; only redirect to it when it is a
+local path (it starts with C</> but not C<//>), or the login page becomes an
+open redirect. See F<examples/auth-cookie-login>.
 
 =back
 
@@ -382,7 +410,8 @@ RFC 6750 challenges builds those responses itself (see the auth-notes
 example).
 
 Invalid arguments die when the route is declared: a handler that is not a
-coderef, a status outside 400-499, an unknown option.
+coderef, a status outside 400-499, a C<redirect> that is neither a string nor
+a non-empty arrayref, an unknown option.
 
 =head2 Protecting a group of endpoints
 

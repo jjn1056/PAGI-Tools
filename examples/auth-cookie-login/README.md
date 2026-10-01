@@ -20,8 +20,9 @@ Open <http://localhost:5000/> and sign in with the demo-only credential:
 - password: `secret`
 
 An anonymous `GET /` redirects to `GET /login?next=%2F`:
-`requires([], \&home, redirect => 'login')` sends it to the route named
-`login` and records where it was going. The form carries `next` in a hidden
+`requires([], \&home, redirect => ['login'])` sends it to the route named
+`login` (the arrayref holds `path_for` arguments) and records where it was
+going. The form carries `next` in a hidden
 field and submits to `POST /login`; valid credentials regenerate the
 `hello_session` identifier, store the fixed demo identity, and redirect to
 `next` -- but only when it is a local path, so the login page cannot be used to

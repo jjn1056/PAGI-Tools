@@ -97,7 +97,7 @@ async sub logout($request) {
 compose(
     routes => [
         # Not logged in: redirect to the route named 'login', with ?next=/
-        route('/' => requires([], \&home, redirect => 'login'), methods => ['GET']),
+        route('/' => requires([], \&home, redirect => ['login']), methods => ['GET']),
         route('/login' => \&login_form, methods => ['GET'], name => 'login'),
         route('/login' => \&login_submit, methods => ['POST']),
         route('/logout' => \&logout, methods => ['POST']),

@@ -1774,29 +1774,30 @@ middleware in front of the route.
           # Browsers: go to the route named 'login', with ?next= set.
           route('/home' => requires([], sub ($request) {
               json_response({ home => 1 });
-          }, redirect => 'login')),
+          }, redirect => ['login'])),
           route('/login' => sub ($request) { json_response({ login => 1 }) }, name => 'login'),
       ],
   );
 
-A route name usually suffices, even for nested routes: it is resolved with
-C<path_for>, so the target's parameters are filled from the current route's.
-On C</orgs/acme/settings>, C<< redirect => 'org_login' >> goes to
-C</orgs/acme/login?next=%2Forgs%2Facme%2Fsettings>:
+C<redirect> takes a string, used exactly as written, or an arrayref of
+C<path_for> arguments -- a route name, then its parameters, query and
+fragment. The arrayref is resolved against the refused request, which is the
+point of it: the target's parameters are filled from the current route's,
+and the original path and query are added as C<next> so the login page can
+send the user back. On C</orgs/acme/billing>:
 
-  route('/orgs/{org}/settings' => requires([], \&settings, redirect => 'org_login')),
-  route('/orgs/{org}/login'    => \&org_login, name => 'org_login'),
-
-C<redirect> also takes a coderef, called with the request, that returns the
-location. Use it only for what a route name cannot say -- different parameter
-values, your own query instead of C<next>, or a URL outside the application:
-
+  route('/orgs/{org}/settings' => requires([], \&settings, redirect => ['org_login'])),
+      # /orgs/acme/login?next=%2Forgs%2Facme%2Fsettings
   route('/orgs/{org}/billing' => requires([], \&billing,
-      redirect => sub ($request) {
-          path_for($request, 'org_login', {}, { reason => 'billing' });
-      })),
+      redirect => ['org_login', {}, { reason => 'billing' }])),
+      # /orgs/acme/login?next=%2Forgs%2Facme%2Fbilling&reason=billing
+  route('/orgs/{org}/login' => \&org_login, name => 'org_login'),
   route('/account' => requires([], \&account,
-      redirect => sub ($request) { 'https://login.example.com/?app=notes' })),
+      redirect => 'https://login.example.com/?app=notes')),
+      # exactly that
+
+A C<next> in your own query wins over the automatic one. Act on C<next> only
+when it is a local path (F<examples/auth-cookie-login> shows the check).
 
 Like Starlette's, the refusal is one status: it does not tell an
 unauthenticated user from a missing scope or send a C<WWW-Authenticate>
@@ -1884,7 +1885,7 @@ B<Request handler:> pass repeated ordered fields. Values are never comma-joined.
 
 =head2 Explicit Login Redirect Policy
 
-B<Request handler:> C<< requires([], \&home, redirect => 'login') >> covers
+B<Request handler:> C<< requires([], \&home, redirect => ['login']) >> covers
 the usual case (see L</Declaring what a route requires>). Written by hand, the
 same policy is a redirect the handler chooses; keep the 401 challenge for
 clients that need protocol authentication.
