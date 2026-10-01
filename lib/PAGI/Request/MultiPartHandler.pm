@@ -4,6 +4,7 @@ use warnings;
 
 use Future::AsyncAwait;
 use HTTP::MultiPartParser;
+use PAGI::Request::BodyError;
 use Hash::MultiValue;
 use PAGI::Headers;
 use PAGI::Request::Upload;
@@ -74,8 +75,10 @@ async sub parse {
         if (defined $filename) {
             # File upload
             $file_count++;
-            die "Too many files (max $self->{max_files})"
-                if $file_count > $self->{max_files};
+            PAGI::Request::BodyError->throw(
+                status_code => 413, reason => 'too_large',
+                message => "Too many files (max $self->{max_files})",
+            ) if $file_count > $self->{max_files};
 
             my $upload;
             if ($current_fh) {
@@ -99,8 +102,10 @@ async sub parse {
         } else {
             # Regular form field
             $field_count++;
-            die "Too many fields (max $self->{max_fields})"
-                if $field_count > $self->{max_fields};
+            PAGI::Request::BodyError->throw(
+                status_code => 413, reason => 'too_large',
+                message => "Too many fields (max $self->{max_fields})",
+            ) if $field_count > $self->{max_fields};
 
             push @form_pairs, $name, $current_data;
         }
@@ -145,8 +150,10 @@ async sub parse {
                     ? $self->{max_file_size}
                     : $self->{max_field_size};
                 my $part_type = $current_is_file ? 'File upload' : 'Form field';
-                die "$part_type too large (max $max_size bytes)"
-                    if $current_size > $max_size;
+                PAGI::Request::BodyError->throw(
+                    status_code => 413, reason => 'too_large',
+                    message => "$part_type too large (max $max_size bytes)",
+                ) if $current_size > $max_size;
 
                 # Check if we need to spool to disk
                 if (!$current_fh && $current_size > $self->{spool_threshold}) {
@@ -172,7 +179,11 @@ async sub parse {
 
             on_error => sub {
                 my ($error) = @_;
-                die "Multipart parse error: $error";
+                PAGI::Request::BodyError->throw(
+                    reason => 'invalid_multipart',
+                    message => 'The multipart request body could not be parsed.',
+                    cause => $error,
+                );
             },
         );
 

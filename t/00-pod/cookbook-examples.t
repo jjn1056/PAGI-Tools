@@ -231,6 +231,26 @@ subtest 'custom Request route helper recipe executes as published' => sub {
     );
 };
 
+subtest 'Bad request bodies recipe executes as published' => sub {
+    my $default = code_block_containing($cookbook, '=head2 Bad request bodies', 'create_note_kindly');
+    my $uniform = code_block_containing($cookbook, '=head2 Bad request bodies', 'my $uniform');
+    perl_script_runs(
+        'bad request bodies recipe',
+        $default . $uniform
+            . "use PAGI::Test::Client;\n"
+            . "my \%bad = (body => '{not json', headers => { 'Content-Type' => 'application/json', Accept => 'application/json' });\n"
+            . "my \$client = PAGI::Test::Client->new(app => \$app);\n"
+            . "my \$res = \$client->post('/notes', \%bad);\n"
+            . "die 'default: expected a 400 problem document' unless \$res->status == 400 && \$res->header('content-type') eq 'application/problem+json';\n"
+            . "\$res = \$client->post('/notes/kindly', \%bad);\n"
+            . "die 'kindly: expected its own 400' unless \$res->status == 400 && \$res->json->{error} =~ /Send a JSON object/;\n"
+            . "\$res = \$client->post('/notes/kindly', body => '{\"text\":\"hi\"}', headers => { 'Content-Type' => 'application/json' });\n"
+            . "die 'kindly: a valid body is created' unless \$res->status == 201;\n"
+            . "\$res = PAGI::Test::Client->new(app => \$uniform)->post('/notes', \%bad);\n"
+            . "die 'uniform: expected the handler shape' unless \$res->status == 400 && \$res->json->{error} eq 'The request body is not valid JSON.';\n",
+    );
+};
+
 subtest 'Streaming Response Extension NDJSON recipe executes as published' => sub {
     my $recipe = first_code_block($cookbook,
         '=head2 Streaming Response Extension: NDJSON');

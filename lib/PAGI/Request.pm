@@ -13,6 +13,7 @@ use Scalar::Util qw(blessed);
 use PAGI::Request::MultiPartHandler;
 use PAGI::Request::Upload;
 use PAGI::Request::Negotiate;
+use PAGI::Request::BodyError;
 use PAGI::Request::BodyStream;
 use PAGI::Request::_BodyInput ();
 
@@ -59,6 +60,19 @@ sub _decode_utf8 {
     my $flag = $strict ? FB_CROAK : FB_DEFAULT;
     $flag |= LEAVE_SRC;
     return decode('UTF-8', $str, $flag);
+}
+
+# As _decode_utf8, for request body content: invalid UTF-8 under strict is the
+# client's error, a PAGI::Request::BodyError (400) rather than a croak.
+sub _decode_body_utf8 {
+    my ($str, $strict) = @_;
+    my $text = eval { _decode_utf8($str, $strict) };
+    return $text unless $@;
+    PAGI::Request::BodyError->throw(
+        reason => 'invalid_encoding',
+        message => 'The request body is not valid UTF-8.',
+        cause => $@,
+    );
 }
 
 sub host {
@@ -347,7 +361,9 @@ sub multipart_stream {
 
     my $parameters = $self->headers->content_type_parameters;
     my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
-    croak "No boundary found in Content-Type" unless defined $boundary && length $boundary;
+    PAGI::Request::BodyError->throw(
+        reason => 'invalid_multipart', message => 'No boundary found in Content-Type',
+    ) unless defined $boundary && length $boundary;
 
     $self->{scope}{'pagi.request.body.stream.created'} = 1;  # latch: lock out buffered readers
 
@@ -414,14 +430,20 @@ async sub text {
     croak("Unknown options to text: " . join(', ', keys %opts)) if %opts;
 
     my $body = await $self->body;
-    return _decode_utf8($body, $strict);
+    return _decode_body_utf8($body, $strict);
 }
 
-# Parse body as JSON (async, dies on error)
+# Parse body as JSON (async; a body that is not JSON is a BodyError, 400)
 async sub json {
     my $self = shift;
     my $body = await $self->body;
-    return decode_json($body);
+    my $data = eval { decode_json($body) };
+    PAGI::Request::BodyError->throw(
+        reason => 'invalid_json',
+        message => 'The request body is not valid JSON.',
+        cause => $@,
+    ) if $@;
+    return $data;
 }
 
 # Parse URL-encoded form body (async, returns Hash::MultiValue, cached in scope)
@@ -467,8 +489,8 @@ async sub form_params {
         my $val_decoded = _url_decode($val);
 
         # UTF-8 decode unless raw mode
-        my $key_final = $raw ? $key_decoded : _decode_utf8($key_decoded, $strict);
-        my $val_final = $raw ? $val_decoded : _decode_utf8($val_decoded, $strict);
+        my $key_final = $raw ? $key_decoded : _decode_body_utf8($key_decoded, $strict);
+        my $val_final = $raw ? $val_decoded : _decode_body_utf8($val_decoded, $strict);
 
         push @pairs, $key_final, $val_final;
     }
@@ -524,7 +546,9 @@ async sub _parse_multipart_form {
 
     my $parameters = $self->headers->content_type_parameters;
     my $boundary = defined($parameters) ? $parameters->{boundary} : undef;
-    die "No boundary found in Content-Type" unless defined($boundary) && length($boundary);
+    PAGI::Request::BodyError->throw(
+        reason => 'invalid_multipart', message => 'No boundary found in Content-Type',
+    ) unless defined($boundary) && length($boundary);
 
     my $handler = PAGI::Request::MultiPartHandler->new(
         boundary        => $boundary,
@@ -1016,19 +1040,22 @@ so they fail the same way.
 =head2 text
 
     my $text = await $req->text;
+    my $text = await $req->text(strict => 1);   # invalid UTF-8 is a 400
 
-Read body as UTF-8 decoded text.
+Read body as UTF-8 decoded text. With C<< strict => 1 >>, invalid UTF-8 throws
+a L<PAGI::Request::BodyError> (400); see L</BAD REQUEST BODIES>.
 
 =head2 json
 
     my $data = await $req->json;
 
-Parse body as JSON. Dies on parse error.
+Parse body as JSON. A body that is not JSON throws a
+L<PAGI::Request::BodyError> (400); see L</BAD REQUEST BODIES>.
 
 =head2 form_params
 
     my $form = await $req->form_params;  # Hash::MultiValue
-    my $form = await $req->form_params(strict => 1);  # Die on invalid UTF-8
+    my $form = await $req->form_params(strict => 1);  # Invalid UTF-8 is a 400
     my $form = await $req->form_params(raw => 1);     # Skip UTF-8 decoding
 
 Parse URL-encoded or multipart form data, returning a L<Hash::MultiValue>.
@@ -1043,7 +1070,8 @@ B<Options:>
 
 =over 4
 
-=item * C<strict> - If true, die on invalid UTF-8 sequences. Default: false.
+=item * C<strict> - If true, invalid UTF-8 sequences throw a
+L<PAGI::Request::BodyError> (400). Default: false.
 
 =item * C<raw> - If true, skip UTF-8 decoding entirely. Default: false.
 
@@ -1052,7 +1080,9 @@ C<max_fields>, C<temp_dir> - Per-request limits for multipart parsing, passed
 through to L<PAGI::Request::MultiPartHandler>. Each defaults to the matching
 package variable in that module (e.g.
 C<$PAGI::Request::MultiPartHandler::MAX_FILE_SIZE>); C<local>-ize those to
-change a default process-wide.
+change a default process-wide. A body over C<max_field_size>,
+C<max_file_size>, C<max_files> or C<max_fields> throws a
+L<PAGI::Request::BodyError> with status 413; a malformed multipart body, 400.
 
 =back
 
@@ -1097,6 +1127,33 @@ Get a single upload by field name.
     my @files = await $req->upload_all('photos');
 
 Get all uploads for a field name.
+
+=head1 BAD REQUEST BODIES
+
+When the body itself is wrong -- not JSON, not valid UTF-8 under C<strict>, a
+multipart body that cannot be parsed or has no boundary, or a part over a
+configured limit -- the buffered helpers (C<json>, C<text>, C<form_params>,
+C<uploads>) throw a L<PAGI::Request::BodyError>. It carries C<status_code>
+(400, or 413 for a limit), C<reason>, a client-safe C<message>, and the
+underlying C<cause>.
+
+Most applications do nothing: every L<PAGI::Compose> application answers with
+that status, as a negotiated L<PAGI::Pages> response (C<application/problem+json>
+or HTML), and treats it as handled rather than as a server error.
+
+    my $data = await $request->json;    # bad JSON: the client gets a 400
+
+A handler that wants its own response catches it:
+
+    my $data;
+    unless (eval { $data = await $request->json; 1 }) {
+        my $error = $@;
+        die $error unless ref $error && $error->isa('PAGI::Request::BodyError');
+        return json_response({ error => 'Send a JSON object.' }, status => 400);
+    }
+
+An application that wants one style for every route gives ErrorHandler a
+C<handler>; see L<PAGI::Tools::Cookbook/"Bad request bodies">.
 
 =head1 PREDICATES
 

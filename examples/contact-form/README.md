@@ -32,7 +32,10 @@ compose(
 
 `submit` validates the fields and the attachment and returns
 `json_response(...)`, with status 400 and every error named when anything is
-wrong. Only `public` uses the application-relative file constructor; writable
+wrong. An attachment over the 5MB limit never reaches those checks:
+`form_params` refuses it with a `PAGI::Request::BodyError`, which the
+application answers as 413 (Content Too Large), a problem document for API
+clients. Only `public` uses the application-relative file constructor; writable
 uploads keep an explicit path beside `app.pl`, created by the startup hook.
 
 ## Upload Limits

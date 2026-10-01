@@ -50,6 +50,18 @@
     HTTP-only catch-all route, so a WebSocket or SSE request to an unknown
     path is refused instead of dying in PAGI::App::File.
 
+  [Bad request bodies are 400s]
+  - PAGI::Request's buffered body helpers throw PAGI::Request::BodyError
+    when the body itself is wrong: json on a body that is not JSON, text
+    and form_params with strict on invalid UTF-8, a multipart body that
+    cannot be parsed or has no boundary (400), and a multipart part over
+    max_file_size / max_field_size / max_files / max_fields (413). It has
+    status_code, so every Compose application answers with that status as a
+    negotiated Pages response and treats it as handled, where these were
+    server errors (500) before. It stringifies to the same message, so code
+    matching the text keeps working. PAGI::Request documents it (BAD
+    REQUEST BODIES) and the Cookbook has a recipe (Bad request bodies).
+
   [Session cookie configured on State::Cookie]
   - BREAKING: PAGI::Middleware::Session no longer takes cookie_name or
     cookie_options (passing either dies, naming the new place); configure

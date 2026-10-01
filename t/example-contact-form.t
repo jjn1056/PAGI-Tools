@@ -61,6 +61,10 @@ my ($stderr, %res) = ('');
             name => 'Ada', email => 'ada@example.com', message => 'Hello',
             attachment => { filename => 'note.txt', type => 'text/plain', content => 'hi there' },
         ));
+        $res{too_big} = $client->post('/submit', multipart(
+            name => 'Ada', email => 'ada@example.com', message => 'Hello',
+            attachment => { filename => 'big.txt', type => 'text/plain', content => 'x' x (5 * 1024 * 1024 + 1) },
+        ));
         $res{bad_type} = $client->post('/submit', multipart(
             name => 'Ada', email => 'ada@example.com', message => 'Hello',
             attachment => { filename => 'x.svg', type => 'image/svg+xml', content => '<svg/>' },
@@ -81,6 +85,7 @@ my $saved = $res{ok}->json->{data}{attachment};
 like($saved, qr/\A\d+-\d+\.txt\z/, 'the attachment gets a safe server-side name');
 ok(-f "$uploads/$saved", 'and is saved in the upload directory');
 
+is($res{too_big}->status, 413, 'an attachment over 5MB is refused as too large');
 is($res{bad_type}->status, 400, 'a disallowed attachment type is rejected');
 like($res{bad_type}->json->{errors}[0], qr/File type not allowed: image\/svg\+xml/, 'with the type named');
 

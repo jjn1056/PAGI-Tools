@@ -11,6 +11,16 @@ Each After example uses behavior implemented on this branch for that release.
 Examples use ordinary synchronous subs where asynchronous work is not relevant; handlers
 may still return a `Future` when their protocol operation is asynchronous.
 
+## Bad request bodies answer 400 (or 413), not 500
+
+`$request->json`, `text`/`form_params` with `strict`, and multipart parsing
+used to die with plain strings, which became 500s. They now throw a
+`PAGI::Request::BodyError` with a `status_code`: 400 for a body that cannot be
+read, 413 for a multipart part over a limit. A Compose application answers
+with that status automatically. The error still stringifies to the same
+message, so code that matches the text is unaffected; code that checked
+`ref $@` sees an object now. See `PAGI::Request` (BAD REQUEST BODIES).
+
 ## Breaking: the Session cookie is configured on `State::Cookie`, not on the middleware
 
 `PAGI::Middleware::Session` no longer takes `cookie_name` or

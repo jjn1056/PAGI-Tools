@@ -72,6 +72,10 @@ my $publish = NotesDemo::Library->can('publish');
         my $res = $client->post('/notes', headers => bearer('alice-editor'), json => $data);
         is($res->status, 400, 'invalid note input is refused before publication');
     }
+    my $not_json = $client->post('/notes', body => '{not json',
+        headers => { %{ bearer('alice-editor') }, 'Content-Type' => 'application/json', Accept => 'application/json' });
+    is([$not_json->status, $not_json->header('content-type')], [400, 'application/problem+json'],
+        'a body that is not JSON is a 400 problem document, not a 500');
     is($publish_calls, 0, 'denied requests never invoke publishing service');
     my $res = $client->post('/notes', headers => bearer('alice-editor'),
         json => {text => 'Published by alice-editor', author_id => 'mallory'});

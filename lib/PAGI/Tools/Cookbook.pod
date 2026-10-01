@@ -2550,6 +2550,63 @@ See C<examples/background-tasks/> for complete working examples.
 
 See C<examples/10-forms-and-uploads/> for complete examples.
 
+=head2 Bad request bodies
+
+A body the client got wrong -- not JSON, not valid UTF-8 under C<strict>, a
+multipart body that cannot be parsed, a part over a limit -- is the client's
+error, not the application's. L<PAGI::Request>'s buffered helpers throw a
+L<PAGI::Request::BodyError> (status 400, or 413 for a limit), and every
+Compose application answers with that status. Most handlers need no code for
+it; one that wants its own response catches the error:
+
+  use v5.40;
+  use Future::AsyncAwait;
+  use PAGI::Compose qw(compose);
+  use PAGI::Response qw(json_response);
+  use PAGI::Routing qw(middleware route);
+
+  # No code: a body that is not JSON becomes a negotiated 400
+  # (application/problem+json for API clients, an HTML page for browsers).
+  async sub create_note ($request) {
+      my $data = await $request->json;
+      return json_response({ created => $data }, status => 201);
+  }
+
+  # Its own response: catch the BodyError, and rethrow anything else.
+  async sub create_note_kindly ($request) {
+      my $data;
+      unless (eval { $data = await $request->json; 1 }) {
+          my $error = $@;
+          die $error unless ref $error && $error->isa('PAGI::Request::BodyError');
+          return json_response(
+              { error => 'Send a JSON object, like {"text": "..."}.' },
+              status => 400,
+          );
+      }
+      return json_response({ created => $data }, status => 201);
+  }
+
+  my $app = compose(routes => [
+      route('/notes'        => \&create_note,        methods => ['POST']),
+      route('/notes/kindly' => \&create_note_kindly, methods => ['POST']),
+  ]);
+
+To give every route the same shape instead, give ErrorHandler a C<handler>.
+It receives the BodyError, whose C<status_code> and C<message> are safe to
+send; C<cause> holds the underlying error for logs:
+
+  my $uniform = compose(
+      middleware => [middleware('ErrorHandler', handler => sub ($request, $error) {
+          return json_response({ error => $error->message }, status => $error->status_code)
+              if ref $error && $error->isa('PAGI::Request::BodyError');
+          return json_response({ error => 'Something went wrong.' }, status => 500);
+      })],
+      routes => [route('/notes' => \&create_note, methods => ['POST'])],
+  );
+
+The limits behind the 413 are C<form_params>' C<max_file_size>,
+C<max_field_size>, C<max_files> and C<max_fields>; see L<PAGI::Request>.
+
 =head1 COMMAND-LINE RECIPES
 
 =head2 Environment Modes
