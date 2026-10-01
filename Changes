@@ -6,40 +6,6 @@
   UPGRADING.md has a table of what replaces what and a worked port;
   UPGRADING-REFERENCE.md has the details. Needs PAGI::Server 0.002014.
 
-  [Breaking -- see UPGRADING.md]
-  - PAGI::App::Router and PAGI::Endpoint::Router are removed; PAGI::Routing
-    is the routing API.
-  - The PAGI::Context family is removed: handlers receive PAGI::Request,
-    PAGI::WebSocket or PAGI::SSE and return a response value.
-  - The mutable PAGI::Response builder and $request->response are replaced
-    by complete Response classes (json_response, text_response, ...);
-    respond and is_response are gone.
-  - PAGI::App::NotFound and PAGI::App::Redirect are replaced by
-    PAGI::Pages; ErrorHandler loses content_type.
-  - PAGI::App::Loader, PAGI::Middleware::FormBody and ::JSONBody,
-    ::Auth::Basic and ::Auth::Bearer, ::Session::State::Bearer,
-    ::WebSocket::RateLimit, PAGI::App::SSE::Pubsub and
-    ::WebSocket::Broadcast/::Chat are removed.
-  - Session takes no secret, cookie_name or cookie_options: the cookie is
-    configured on State::Cookie, which sets no Max-Age by default and
-    merges its cookie_options into the defaults.
-  - ErrorHandler re-raises server errors (5xx) to the server after the
-    error page, and rethrows an exception raised after the response
-    started instead of swallowing it.
-  - PAGI::WebSocket and PAGI::SSE require pagi.connection (PAGI::Server
-    0.002014); their state is a PAGI::State object; deny takes a response.
-  - A request body cut short by a disconnect croaks instead of returning
-    the bytes that arrived.
-  - File, Directory and Static share one request-path contract: hidden
-    files forbidden by default (Directory show_hidden becomes allow_hidden),
-    configured symlinks served, Directory 404/405 where it said 403/200.
-  - Middleware Builder's exact-package prefix is + instead of ^.
-  - The test kit is as strict as PAGI::Server: illegal sends fail, a
-    missing terminal event is a server_error, an app that never responds
-    gets a 500, and each terminal disconnect is delivered once.
-  - Lint's strict mode rejects an illegal send instead of forwarding it.
-  - App::WebSocket::Echo's on_disconnect receives ($scope, $code, $reason).
-
   [New]
   - PAGI::Routing (route, websocket, sse, mount, router, path_for,
     url_for) and PAGI::Compose (application root with lifespan, error
@@ -74,6 +40,40 @@
   - The Session middleware re-sends the cookie on a read once half of
     expire has passed.
   - PAGI::WebSocket and PAGI::SSE send one message at a time.
+
+  [Breaking -- see UPGRADING.md]
+  - PAGI::App::Router and PAGI::Endpoint::Router are removed; PAGI::Routing
+    is the routing API.
+  - The PAGI::Context family is removed: handlers receive PAGI::Request,
+    PAGI::WebSocket or PAGI::SSE and return a response value.
+  - The mutable PAGI::Response builder and $request->response are replaced
+    by complete Response classes (json_response, text_response, ...);
+    respond and is_response are gone.
+  - PAGI::App::NotFound and PAGI::App::Redirect are replaced by
+    PAGI::Pages; ErrorHandler loses content_type.
+  - PAGI::App::Loader, PAGI::Middleware::FormBody and ::JSONBody,
+    ::Auth::Basic and ::Auth::Bearer, ::Session::State::Bearer,
+    ::WebSocket::RateLimit, PAGI::App::SSE::Pubsub and
+    ::WebSocket::Broadcast/::Chat are removed.
+  - Session takes no secret, cookie_name or cookie_options: the cookie is
+    configured on State::Cookie, which sets no Max-Age by default and
+    merges its cookie_options into the defaults.
+  - ErrorHandler re-raises server errors (5xx) to the server after the
+    error page, and rethrows an exception raised after the response
+    started instead of swallowing it.
+  - PAGI::WebSocket and PAGI::SSE require pagi.connection (PAGI::Server
+    0.002014); their state is a PAGI::State object; deny takes a response.
+  - A request body cut short by a disconnect croaks instead of returning
+    the bytes that arrived.
+  - File, Directory and Static share one request-path contract: hidden
+    files forbidden by default (Directory show_hidden becomes allow_hidden),
+    configured symlinks served, Directory 404/405 where it said 403/200.
+  - Middleware Builder's exact-package prefix is + instead of ^.
+  - The test kit is as strict as PAGI::Server: illegal sends fail, a
+    missing terminal event is a server_error, an app that never responds
+    gets a 500, and each terminal disconnect is delivered once.
+  - Lint's strict mode rejects an illegal send instead of forwarding it.
+  - App::WebSocket::Echo's on_disconnect receives ($scope, $code, $reason).
 
   [Fixed]
   - GZip sent every compressed response as 200, whatever its status.
