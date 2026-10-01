@@ -31,6 +31,10 @@ sub new {
     my ($class, %args) = @_;
 
     croak "app is required" unless $args{app};
+    my $root_path = $args{root_path} // '';
+    croak "PAGI::Test::Client root_path must be '' or /segment... with no trailing /, empty, . or .. segment"
+        unless $root_path eq ''
+            || ($root_path =~ m{\A(?:/[^/]+)+\z} && $root_path !~ m{/\.\.?(?:/|\z)});
 
     return bless {
         app                  => PAGI::Utils::to_app($args{app}),
@@ -38,6 +42,7 @@ sub new {
         cookies              => {},
         lifespan             => $args{lifespan} // 0,
         raise_app_exceptions => $args{raise_app_exceptions} // 0,
+        root_path            => $root_path,
         started              => 0,
     }, $class;
 }
@@ -267,6 +272,7 @@ sub _build_scope {
     my ($self, $method, $path, $opts) = @_;
 
     (my $raw_path, my $query_string, $path) = _request_target($path);
+    $path = $self->_path_below_root($path);
 
     # Add query params if provided (appended to path query string)
     if ($opts->{query}) {
@@ -294,7 +300,7 @@ sub _build_scope {
         path         => $path,
         raw_path     => $raw_path,
         query_string => $query_string,
-        root_path    => '',
+        root_path    => $self->{root_path},
         headers      => $headers,
         client          => ['127.0.0.1', 12345],
         server          => ['testserver', 80],
@@ -340,6 +346,7 @@ sub websocket {
     $path //= '/';
 
     (my $raw_path, my $query_string, $path) = _request_target($path);
+    $path = $self->_path_below_root($path);
 
     # Build headers
     my @headers = (['host', 'testserver']);
@@ -380,7 +387,7 @@ sub websocket {
         path         => $path,
         raw_path     => $raw_path,
         query_string => $query_string,
-        root_path    => '',
+        root_path    => $self->{root_path},
         headers      => \@headers,
         client       => ['127.0.0.1', 12345],
         server       => ['testserver', 80],
@@ -438,6 +445,7 @@ sub sse {
     }
 
     (my $raw_path, my $query_string, $path) = _request_target($path);
+    $path = $self->_path_below_root($path);
 
     # Build headers (SSE requires Accept: text/event-stream)
     my @headers = (
@@ -486,7 +494,7 @@ sub sse {
         path         => $path,
         raw_path     => $raw_path,
         query_string => $query_string,
-        root_path    => '',
+        root_path    => $self->{root_path},
         headers      => \@headers,
         client       => ['127.0.0.1', 12345],
         server       => ['testserver', 80],
@@ -691,6 +699,19 @@ sub run {
 
     $client->stop;
     die $err if $err;
+}
+
+# With root_path, the requested URL is the browser's: the client removes
+# root_path from path as a stripping proxy would, and raw_path stays the
+# full URL, as a server configured with that root path builds it. A URL
+# outside root_path is a mistake in the test.
+sub _path_below_root {
+    my ($self, $path) = @_;
+    my $root = $self->{root_path};
+    return $path if $root eq '';
+    return '/' if $path eq $root;
+    return substr($path, length $root) if index($path, "$root/") == 0;
+    croak "PAGI::Test::Client: '$path' is not under root_path '$root'";
 }
 
 # Split a request target into raw_path (the path as sent, percent-encoded),
@@ -1123,6 +1144,22 @@ When B<true>: Exceptions propagate to the test, useful for debugging:
     );
     # This will die with the actual exception
     my $res = $client->get('/broken');
+
+=item root_path
+
+    my $client = PAGI::Test::Client->new(
+        app => $app, lifespan => 1, root_path => '/app',
+    );
+    $client->get('/app/reports');   # the browser's URL
+
+Serve the application as a server configured with this root path does
+behind a proxy that removes it (see
+L<PAGI::Spec::Www/Paths, Mounts and Root Paths>). Requests take the URL the
+browser uses; the client removes C<root_path> from C<path> and keeps the full
+URL in C<raw_path>, so the application sees C<root_path> C</app>, C<path>
+C</reports> and C<raw_path> C</app/reports>, and C<path_for>, C<request_uri>
+and links follow. The application stays the root, so its own lifespan runs.
+A URL not under C<root_path> dies, as a mistake in the test. Default C<''>.
 
 =back
 
