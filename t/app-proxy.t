@@ -64,6 +64,7 @@ sub run_proxy_against_backend {
         path         => '/',
         query_string => '',
         headers      => $client_headers,
+        %{ $opts{scope} // {} },
     }, $receive, $send)->get;
 
     my $captured_request = do { local $/; <$from_child> };
@@ -173,6 +174,26 @@ subtest 'backend response headers are dehopped before http.response.start' => su
     ok !exists $resp_headers{'transfer-encoding'}, 'Transfer-Encoding is stripped from the response';
     ok !exists $resp_headers{'keep-alive'}, 'Keep-Alive is stripped from the response';
     is $resp_headers{'content-type'}, 'text/plain', 'ordinary response headers still pass through';
+};
+
+subtest 'the backend request line carries the encoded path below the mount' => sub {
+    my $ok = "HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n";
+    my (undef, $injected) = run_proxy_against_backend(response => $ok, scope => {
+        root_path => '/api', path => "/a\r\nX-Injected: 1", raw_path => '/api/a%0D%0AX-Injected:%201',
+    });
+    like($injected, qr{\AGET /a%0D%0AX-Injected:%201 HTTP/1\.0\r\n}, 'CR LF stays encoded: no header injection');
+    unlike($injected, qr{^X-Injected:}m, 'no injected header line');
+
+    my (undef, $slash) = run_proxy_against_backend(response => $ok, scope => {
+        root_path => '/api', path => '/a/b', raw_path => '/api/a%2Fb', query_string => 'x=1',
+    });
+    like($slash, qr{\AGET /a%2Fb\?x=1 HTTP/1\.0\r\n}, 'an encoded slash is forwarded encoded');
+
+    my (undef, $straddle) = run_proxy_against_backend(response => $ok, scope => {
+        root_path => '/files', path => "/a\r\nb", raw_path => '/files%2Fa%0D%0Ab',
+    });
+    like($straddle, qr{\AGET /a%0D%0Ab HTTP/1\.0\r\n},
+        'when raw_path_info is undef the decoded path is encoded, never sent raw');
 };
 
 done_testing;

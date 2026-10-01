@@ -8,6 +8,7 @@ use IO::Socket::INET;
 use PAGI::Headers;
 use PAGI::Pages;
 use PAGI::Utils ();
+use PAGI::Utils::Scope ();
 
 =head1 NAME
 
@@ -52,8 +53,12 @@ sub to_app {
 
         # Build request
         my $method = $scope->{method};
-        my $path = $scope->{path};
-        $path .= "?$scope->{query_string}" if $scope->{query_string};
+        # The encoded path below this app's mount, as the client sent it:
+        # the decoded path would put a client's %0D%0A on the request line.
+        my $path = PAGI::Utils::Scope::raw_path_info($scope)
+            // PAGI::Utils::Scope::_encode_path($scope->{path} // '/');
+        $path .= "?$scope->{query_string}" if length($scope->{query_string} // '');
+        $path = PAGI::Utils::Scope::_escape_unsafe_bytes($path);
 
         # Collect body
         my $body = '';
