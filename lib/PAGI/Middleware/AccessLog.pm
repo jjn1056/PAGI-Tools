@@ -7,6 +7,7 @@ use Future::AsyncAwait;
 use Time::HiRes qw(time);
 use POSIX qw(strftime);
 use PAGI::Utils qw(request_ended_abnormally);
+use PAGI::Utils::Scope ();
 
 =head1 NAME
 
@@ -116,9 +117,9 @@ sub _format_log {
     # Extract info from scope
     my $client_ip = exists $scope->{client} ? ($scope->{client}[0] // '-') : '-';
     my $method = $scope->{method} // '-';
-    my $path = $scope->{path} // '/';
-    my $query = $scope->{query_string};
-    my $full_path = defined $query && $query ne '' ? "$path?$query" : $path;
+    # The URI the client requested, encoded: the whole path at any mount
+    # depth, and no byte that could break the line apart.
+    my $full_path = PAGI::Utils::Scope::request_uri($scope);
     my $protocol = 'HTTP/' . ($scope->{http_version} // '1.1');
 
     # Get headers
@@ -167,6 +168,10 @@ sub _format_log {
 __END__
 
 =head1 LOG FORMATS
+
+The request field in every format is L<PAGI::Request/request_uri>: the path
+and query the client requested, percent-encoded, including any mount prefix.
+A client cannot forge a log line with an encoded CR LF.
 
 =head2 combined (default)
 

@@ -129,9 +129,7 @@ sub _redirect_target {
     return $redirect unless ref $redirect;
 
     my $scope = PAGI::Utils::Scope::scope_from_source('PAGI::Auth requires', $connection);
-    my $original = $scope->{raw_path} // $scope->{path};
-    my $query_string = $scope->{query_string} // '';
-    $original .= "?$query_string" if length $query_string;
+    my $original = PAGI::Utils::Scope::request_uri($scope);
 
     my ($name, @arguments) = @$redirect;
     if (!@arguments || !defined($arguments[0]) || ref($arguments[0]) eq 'HASH') {
@@ -392,8 +390,9 @@ matching ones, as C<path_for> does: on C</orgs/{org}/settings>,
 C<< redirect => ['org_login'] >> goes to C</orgs/acme/login>. Parameters you
 give override them.
 
-=item * The original path and query are added to the query as C<next>, so
-the login page can send the user back after logging in. A C<next> you give
+=item * The path and query the client requested (L<PAGI::Request/request_uri>,
+including any mount and server root path) are added to the query as
+C<next>, so the login page can send the user back after logging in. A C<next> you give
 yourself is kept instead.
 
 =back

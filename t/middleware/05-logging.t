@@ -516,4 +516,32 @@ subtest 'Runtime skips non-HTTP requests' => sub {
     ok !$has_runtime, 'no X-Runtime for websocket';
 };
 
+subtest 'AccessLog logs the requested URI, encoded' => sub {
+    my @lines;
+    my $wrapped = PAGI::Middleware::AccessLog->new(
+        logger => sub { push @lines, @_ }, format => 'tiny',
+    )->wrap(async sub {
+        my ($scope, $receive, $send) = @_;
+        await $send->({ type => 'http.response.start', status => 200, headers => [] });
+        await $send->({ type => 'http.response.body', body => '', more => 0 });
+    });
+    my $run = sub {
+        my (%scope) = @_;
+        run_async(async sub {
+            await $wrapped->({ type => 'http', method => 'GET', http_version => '1.1',
+                query_string => '', headers => [], client => ['127.0.0.1', 1], %scope },
+                async sub { { type => 'http.disconnect' } }, async sub { });
+        });
+    };
+
+    $run->(root_path => '/logged', path => "/x\r\nGET /forged 200",
+           raw_path => '/logged/x%0D%0AGET%20/forged%20200');
+    like($lines[-1], qr{\AGET /logged/x%0D%0AGET%20/forged%20200 200 \S+s\n\z},
+        'a CR LF in the path cannot start a second log line, and the mount prefix is kept');
+    is(($lines[-1] =~ tr/\n//), 1, 'exactly one line');
+
+    $run->(root_path => '', path => "/caf\x{e9}", raw_path => '/caf%C3%A9');
+    like($lines[-1], qr{\AGET /caf%C3%A9 200 }, 'non-ASCII is logged percent-encoded, not as wide characters');
+};
+
 done_testing;
