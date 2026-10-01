@@ -8,6 +8,7 @@ use Scalar::Util qw(blessed refaddr);
 use PAGI::Authority ();
 use PAGI::Routing::Mount ();
 use PAGI::Routing::Pattern ();
+use PAGI::Utils::Scope ();
 
 sub new {
     my ($class, @args) = @_;
@@ -505,7 +506,7 @@ sub _is_canonical_namespace {
 sub _join_root_path {
     my ($root_path, $path) = @_;
     $root_path = '' unless defined $root_path;
-    $root_path = _encode_path($root_path);
+    $root_path = PAGI::Utils::Scope::_encode_path($root_path);
     my $suffix = '';
     if ($path =~ /([?#])/) {
         my $boundary = index($path, $1);
@@ -515,13 +516,6 @@ sub _join_root_path {
     chop $root_path if length($root_path) && substr($root_path, -1) eq '/'
         && length($path) && substr($path, 0, 1) eq '/';
     return $root_path . $path . $suffix;
-}
-
-sub _encode_path {
-    my ($value) = @_;
-    my $bytes = encode('UTF-8', $value, FB_CROAK);
-    $bytes =~ s{([^A-Za-z0-9\-._~/])}{sprintf('%%%02X', ord($1))}ge;
-    return $bytes;
 }
 
 sub _encode_component {
