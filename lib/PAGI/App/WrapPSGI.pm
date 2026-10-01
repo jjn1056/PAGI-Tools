@@ -2,6 +2,8 @@ package PAGI::App::WrapPSGI;
 use strict;
 use warnings;
 use Future::AsyncAwait;
+use Encode ();
+use PAGI::Utils::Scope ();
 
 
 =head1 NAME
@@ -25,6 +27,12 @@ PAGI::App::WrapPSGI - PSGI-to-PAGI adapter
 PAGI::App::WrapPSGI wraps a PSGI application to make it work with
 PAGI servers. It converts PAGI scope to PSGI %env and converts
 PSGI responses to PAGI events.
+
+C<SCRIPT_NAME> is the scope's C<root_path> and C<PATH_INFO> its path below
+it, both as bytes, as PSGI requires; a client's C<%2F> and non-UTF-8 bytes
+come through exactly. C<REQUEST_URI> is L<PAGI::Request/request_uri>: the
+path and query the client requested, including any mount prefix. At an exact
+mount C<PATH_INFO> is C</>.
 
 =cut
 
@@ -77,10 +85,19 @@ sub to_app {
 sub _build_env {
     my ($self, $scope) = @_;
 
+    # PSGI's split: SCRIPT_NAME and PATH_INFO are decoded bytes, REQUEST_URI
+    # is what the client asked for. raw_path_info keeps a client's %2F and a
+    # non-UTF-8 byte exact; without it, path is encoded as UTF-8.
+    my $raw_path_info = PAGI::Utils::Scope::raw_path_info($scope);
+    my $path_info = defined $raw_path_info
+        ? PAGI::Utils::Scope::_unescape($raw_path_info)
+        : Encode::encode('UTF-8', $scope->{path} // '/');
+
     my %env = (
         REQUEST_METHOD  => $scope->{method},
-        SCRIPT_NAME     => $scope->{root_path},
-        PATH_INFO       => $scope->{path},
+        SCRIPT_NAME     => Encode::encode('UTF-8', $scope->{root_path} // ''),
+        PATH_INFO       => $path_info,
+        REQUEST_URI     => PAGI::Utils::Scope::request_uri($scope),
         QUERY_STRING    => $scope->{query_string},
         SERVER_PROTOCOL => 'HTTP/' . $scope->{http_version},
         'psgi.version'    => [1, 1],
