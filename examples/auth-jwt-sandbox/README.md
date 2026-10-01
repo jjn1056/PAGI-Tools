@@ -41,18 +41,6 @@ There is no generated challenge object or response metadata on the context.
 Backend guest results continue to application code, which decides whether to
 refuse access.
 
-## Work map
-
-| Item | Value |
-| --- | --- |
-| Repository | `/Users/jnapiorkowski/Desktop/PAGI-Project/PAGI-Tools` |
-| Task | JWT sandbox example for Auth v1 design review; no external ticket |
-| Branch | `feature/universal-connection-tools` |
-| Base commit | `f731ea9ae7580063e836540a1386ce7f84ce1ce7` |
-| Owned changes | This example and example/spec links; no library implementation |
-| Deployment boundary | Local review artifact; no deployment or release |
-| Push target | None |
-
 ## Read the application
 
 - [app2.pl](app2.pl) is the closest Python comparison: JWT backend, dummy login,
