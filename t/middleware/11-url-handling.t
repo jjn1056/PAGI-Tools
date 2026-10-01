@@ -27,6 +27,8 @@ sub make_scope {
         headers      => $opts{headers} // [],
         client       => $opts{client} // ['192.168.1.100', 12345],
         server       => $opts{server} // ['127.0.0.1', 5000],
+        (defined $opts{raw_path}  ? (raw_path  => $opts{raw_path})  : ()),
+        (defined $opts{root_path} ? (root_path => $opts{root_path}) : ()),
     };
 }
 
@@ -474,7 +476,7 @@ subtest 'HTTPSRedirect - builds redirect authority from Host or server' => sub {
     }
 };
 
-subtest 'HTTPSRedirect preserves raw query before path fragment' => sub {
+subtest 'HTTPSRedirect keeps an encoded ? and # in the path' => sub {
     my $redirect = PAGI::Middleware::HTTPSRedirect->new(
         redirect_code => 303,
     );
@@ -498,8 +500,8 @@ subtest 'HTTPSRedirect preserves raw query before path fragment' => sub {
     is $events[0]{status}, 303, 'configured redirect status is retained';
     my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers}};
     is $headers{location},
-        'https://example.com/search?sort=date&q=a%2Bb&x=%26#results',
-        'raw query is inserted before the first fragment';
+        'https://example.com/search%3Fsort%3Ddate%23results?q=a%2Bb&x=%26',
+        'a ? or # the client sent encoded stays in the path; the query follows it';
 };
 
 subtest 'HTTPSRedirect - invalid authority negotiates Pages 400' => sub {
@@ -583,20 +585,6 @@ subtest 'redirect middleware inherits Redirect target validation before sending'
             },
             sub { make_scope(path => '/old') },
         ],
-        [
-            HTTPSRedirect => sub {
-                return PAGI::Middleware::HTTPSRedirect->new->wrap(
-                    async sub { die "redirect called downstream\n" },
-                );
-            },
-            sub {
-                my ($target) = @_;
-                return make_scope(
-                    path => $target,
-                    headers => [['Host', 'example.com']],
-                );
-            },
-        ],
     );
 
     for my $case (@cases) {
@@ -616,6 +604,40 @@ subtest 'redirect middleware inherits Redirect target validation before sending'
             is \@events, [], "$name rejects target before response start";
         }
     }
+};
+
+subtest 'HTTPSRedirect encodes what a path cannot hold instead of failing' => sub {
+    my $wrapped = PAGI::Middleware::HTTPSRedirect->new->wrap(
+        async sub { die "redirect called downstream\n" },
+    );
+    for my $case (["/bad\nnext", 'https://example.com/bad%0Anext'],
+                  ["/wide\x{263a}", 'https://example.com/wide%E2%98%BA']) {
+        my ($path, $expected) = @$case;
+        my @events;
+        $loop->await($wrapped->(
+            make_scope(path => $path, headers => [['Host', 'example.com']]),
+            async sub { {} },
+            async sub { my ($event) = @_; push @events, $event },
+        ));
+        my %headers = map { lc($_->[0]) => $_->[1] } @{$events[0]{headers} // []};
+        is $headers{location}, $expected, "redirects to $expected";
+    }
+};
+
+subtest 'HTTPSRedirect keeps the mount prefix and the client encoding' => sub {
+    require PAGI::Compose; require PAGI::Routing; require PAGI::Test::Client;
+    my $inner = PAGI::Middleware::HTTPSRedirect->new->wrap(async sub { die "not reached\n" });
+    my $client = PAGI::Test::Client->new(app => PAGI::Compose::compose(
+        routes => [PAGI::Routing::mount('/secure', app => $inner)]));
+    my %location = map {
+        $_ => $client->get($_)->header('Location')
+    } '/secure/a?q=1', '/secure/caf%C3%A9', '/secure/a%3Fb?q=1', '/secure/a%23b';
+    is(\%location, {
+        '/secure/a?q=1'     => 'https://testserver/secure/a?q=1',
+        '/secure/caf%C3%A9' => 'https://testserver/secure/caf%C3%A9',
+        '/secure/a%3Fb?q=1' => 'https://testserver/secure/a%3Fb?q=1',
+        '/secure/a%23b'     => 'https://testserver/secure/a%23b',
+    }, 'prefix kept; non-ASCII redirects; %3F and %23 stay in the path');
 };
 
 subtest 'semantic Redirect awaits and propagates send failure' => sub {

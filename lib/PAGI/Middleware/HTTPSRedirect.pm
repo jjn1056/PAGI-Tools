@@ -10,6 +10,7 @@ use PAGI::Authority;
 use PAGI::Pages;
 use PAGI::Response::Redirect ();
 use PAGI::Utils ();
+use PAGI::Utils::Scope ();
 
 =head1 NAME
 
@@ -33,9 +34,10 @@ malformed Host data and unusable server fallbacks receive a generic HTTP 400
 response. Useful for enforcing secure connections in production.
 
 Redirect targets use L<PAGI::Response::Redirect>. Invalid-authority responses
-are rendered by L<PAGI::Pages> from the original request scope. Incoming raw
-query data is preserved without re-encoding and is inserted before the first
-fragment in the redirect target. Authority selection, exclusions,
+are rendered by L<PAGI::Pages> from the original request scope. The redirect
+target is C<https://>, the authority, and L<PAGI::Request/request_uri>: the
+path and query the client requested, still encoded, including any mount
+prefix. Authority selection, exclusions,
 secure-request pass-through, and HSTS remain owned by this middleware; there
 is no response-policy configuration option.
 
@@ -145,8 +147,9 @@ sub wrap {
             return;
         }
 
-        my $path = $scope->{path} // '/';
-        my $url = "https://$authority$path";
+        # The URI the client requested, still encoded: the mount prefix
+        # stays, and a client's %3F or %23 cannot become a query or fragment.
+        my $url = "https://$authority" . PAGI::Utils::Scope::request_uri($scope);
 
         await $self->_send_redirect($scope, $receive, $send, $url);
     };
@@ -168,9 +171,7 @@ sub _is_excluded {
 async sub _send_redirect {
     my ($self, $scope, $receive, $send, $location) = @_;
     my $response = PAGI::Response::Redirect->new(
-        PAGI::Response::_location_with_raw_query(
-            $location, $scope->{query_string},
-        ),
+        $location,
         status => $self->{redirect_code},
     );
     await PAGI::Utils::invoke_app($response, $scope, $receive, $send);
@@ -196,7 +197,7 @@ when behind a reverse proxy (use ReverseProxy middleware).
 Host validation and server fallback are only used when constructing an HTTP
 redirect. Existing HTTPS, excluded paths, and non-HTTP scopes retain their
 pass-through behavior. In redirect branches, this middleware constructs the
-fragment-safe final Location and Redirect validates and renders it. Invalid
+final Location and Redirect validates and renders it. Invalid
 authorities retain Pages negotiation. HSTS is still added only to responses
 from an already-secure request when enabled.
 
