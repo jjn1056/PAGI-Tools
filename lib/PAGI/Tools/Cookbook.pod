@@ -878,7 +878,7 @@ event. Configured symlinks extend administrator authority, so use a dedicated
 root that attackers cannot modify and enforce suitable filesystem ownership
 and permissions. Those are deployment best practices, not physical
 confinement enforced by the helper. See the
-L<rooted file-serving upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#rooted-file-serving-security-contract>
+L<rooted file-serving upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING-REFERENCE.md#rooted-file-serving-security-contract>
 for changed status and option behavior.
 
 =head2 Handler, Application, WebSocket, and SSE Lifecycles

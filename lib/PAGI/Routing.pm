@@ -1064,6 +1064,6 @@ L<PAGI::Tools::Cookbook>, L<PAGI::Request>, L<PAGI::WebSocket>, L<PAGI::SSE>,
 L<PAGI::Authority>, L<PAGI::Compose>, L<PAGI::Pages>, L<PAGI::Response>,
 L<PAGI::Utils::Middleware>, L<PAGI::Routing::Mount>,
 L<PAGI::Routing::Router>, L<PAGI::Routing::URL>,
-L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING-REFERENCE.md#routing-composition-redesign>
 
 =cut

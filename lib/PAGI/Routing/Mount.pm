@@ -220,6 +220,6 @@ authoritative; silence there is an application lifecycle error, not a parent
 routing miss.
 
 See L<PAGI::Routing>, L<PAGI::Routing::Router>, L<PAGI::Compose>, and the
-L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING-REFERENCE.md#routing-composition-redesign>.
 
 =cut

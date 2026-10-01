@@ -1420,7 +1420,7 @@ permissions, and treat those controls as deployment practice rather than a
 physical-confinement guarantee. See
 L<PAGI::Tools::Cookbook/Serving Large Files with X-Sendfile> for the complete
 authenticated download recipe and the
-L<upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#rooted-file-serving-security-contract>
+L<upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING-REFERENCE.md#rooted-file-serving-security-contract>
 for changed status and option behavior.
 
 =head2 7.2 PAGI::App::Healthcheck - Health Endpoints

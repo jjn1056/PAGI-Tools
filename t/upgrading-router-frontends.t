@@ -12,7 +12,7 @@ sub slurp_file {
     return $source;
 }
 
-my $upgrading = slurp_file('UPGRADING.md');
+my $upgrading = slurp_file('UPGRADING-REFERENCE.md');
 my $routing = slurp_file('lib/PAGI/Routing.pm');
 
 sub markdown_section {

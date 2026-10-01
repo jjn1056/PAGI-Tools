@@ -769,6 +769,6 @@ a Future through C<Future-E<gt>wrap>.
 This is an internal compiler. Public composition and migration contracts are
 documented by L<PAGI::Routing>, L<PAGI::Routing::Router>,
 L<PAGI::Routing::Mount>, L<PAGI::Compose>, and the
-L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>.
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING-REFERENCE.md#routing-composition-redesign>.
 
 =cut

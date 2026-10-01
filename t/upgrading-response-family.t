@@ -252,7 +252,7 @@ subtest 'WebSocket denial and SSE decline take public applications' => sub {
 };
 
 subtest 'migration refusal example runs as documented' => sub {
-    open my $handle, '<', 'UPGRADING.md' or die $!;
+    open my $handle, '<', 'UPGRADING-REFERENCE.md' or die $!;
     my $source = do { local $/; <$handle> };
     my ($snippet) = $source =~ /### Refuse WebSocket\/SSE with Request handlers or applications\n.*?```perl\n(.*?)```/s;
     die 'Missing migration refusal example' unless defined $snippet;

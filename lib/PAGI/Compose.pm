@@ -617,6 +617,6 @@ WebSocket and first-class SSE misses.
 L<PAGI::Routing>, L<PAGI::Routing::Router>, L<PAGI::Routing::Mount>,
 L<PAGI::Routing::Middleware>, L<PAGI::Pages>, L<PAGI::Lifespan>, L<PAGI::Utils>,
 L<PAGI::Tools::Tutorial>, L<PAGI::Tools::Cookbook>,
-L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING.md#routing-composition-redesign>
+L<routing composition upgrade guide|https://github.com/jjn1056/PAGI-Tools/blob/main/UPGRADING-REFERENCE.md#routing-composition-redesign>
 
 =cut
