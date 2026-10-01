@@ -68,11 +68,11 @@ subtest 'guide-wide current guidance does not preserve removed frontends' => sub
         'guide directs readers to the frontend removal';
 };
 
-subtest 'App Router migration is complete' => sub {
+subtest 'App Router migration starts from the 0.002002 API' => sub {
     for my $concept (
-        'verb methods', 'modifiers', 'middleware', 'mounts',
-        'WebSocket and SSE', 'HTTP default', 'description',
-        'nested URL',
+        'verb methods', 'not_found', 'group', 'uri_for', '->as(',
+        'Placeholders', 'middleware', 'mount', 'native PAGI',
+        'as_app_object', 'http_default',
     ) {
         like $upgrading, qr/\Q$concept\E/i, "guide covers $concept";
     }
@@ -81,10 +81,10 @@ subtest 'App Router migration is complete' => sub {
         'App Router has a labelled Before and declarative After example';
 };
 
-subtest 'Endpoint Router migration is complete' => sub {
+subtest 'Endpoint Router migration starts from the 0.002002 API' => sub {
     for my $concept (
-        'string method', 'to_router', 'middleware_as', 'app_as',
-        'new_request', 'app_path', 'routing',
+        'string method', 'routes($self, $r)', 'context_class',
+        '$self->state', 'Middleware methods', 'routing',
     ) {
         like $upgrading, qr/\Q$concept\E/i, "guide covers $concept";
     }
@@ -131,8 +131,10 @@ subtest 'Endpoint Router migration snippets own their helper imports' => sub {
         /(\*\*Before:.*?)(\*\*After:.*)\z/s;
     ok defined($removed) && defined($after),
         'labelled Endpoint Router Before and After snippets are present';
-    like $removed, qr/use PAGI::Utils qw\(as_app_object\)/,
-        'removed package imports as_app_object where its example calls it';
+    like $removed, qr/use parent 'PAGI::Endpoint::Router'/,
+        'the Before is a 0.002002 Endpoint::Router subclass';
+    like $removed, qr/=> '[a-z_]+'\)/,
+        'the Before uses 0.002002 string method targets';
     like $after, qr/use PAGI::Routing qw\([^)]*\broute\b[^)]*\)/,
         'replacement package imports route where its example calls it';
     like $after, qr/use PAGI::Utils qw\([^)]*\bas_app_object\b[^)]*\)/,
