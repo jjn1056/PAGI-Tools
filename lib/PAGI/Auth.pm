@@ -87,6 +87,8 @@ sub requires {
     croak 'PAGI::Auth requires handler must be a coderef'
         unless ref($handler) eq 'CODE';
     my $opts = _options('requires', { status => 1, redirect => 1 }, @rest);
+    croak 'PAGI::Auth requires takes status or redirect, not both: a redirect replaces the refusal'
+        if exists $opts->{status} && exists $opts->{redirect};
     my $status = $opts->{status} // 403;
     croak 'PAGI::Auth requires status must be a 4xx refusal status'
         unless $status =~ /\A4\d\d\z/;
@@ -367,8 +369,8 @@ from those without access.
 
 =item * C<redirect>
 
-Instead of refusing, redirect (303). The value says which kind of target it
-is:
+Instead of refusing, redirect (303); give this or C<status>, not both. The
+value says which kind of target it is:
 
     redirect => '/login'                                # a location, as written
     redirect => 'https://login.example.com/?app=notes'
@@ -411,7 +413,7 @@ example).
 
 Invalid arguments die when the route is declared: a handler that is not a
 coderef, a status outside 400-499, a C<redirect> that is neither a string nor
-a non-empty arrayref, an unknown option.
+a non-empty arrayref, C<status> and C<redirect> together, an unknown option.
 
 =head2 Protecting a group of endpoints
 

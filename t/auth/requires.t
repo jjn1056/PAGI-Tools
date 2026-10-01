@@ -122,6 +122,8 @@ subtest 'mistakes are caught when the route is declared' => sub {
     like(dies { requires(['x'], sub {}, colour => 'red') }, qr/unknown option.*colour/i, 'an unknown option');
     like(dies { requires(['x'], sub {}, redirect => sub { '/x' }) },
         qr/redirect must be a location string or an arrayref of path_for arguments/, 'a coderef redirect');
+    like(dies { requires(['x'], sub {}, status => 404, redirect => ['login']) },
+        qr/requires takes status or redirect, not both/, 'status and redirect together');
     like(dies { requires(['x'], sub {}, redirect => []) },
         qr/redirect must be a location string or an arrayref of path_for arguments/, 'an empty arrayref');
     ok(PAGI::Auth->requires([], sub {}), 'it is also a class method, like the other PAGI::Auth functions');
