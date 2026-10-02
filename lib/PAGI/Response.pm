@@ -76,7 +76,7 @@ another charset, encode explicitly and provide the matching Content-Type.
         headers => ['X-Request-ID' => $request_id],
     );
 
-    my $latin1 = response(
+    my $latin1 = PAGI::Response->new(
         encode('ISO-8859-1', $text),
         content_type => 'text/plain; charset=iso-8859-1',
     );
@@ -141,6 +141,28 @@ the response slot (or finishes discarding it after disconnect), not when the
 client receives bytes.
 
 =head1 METHODS
+
+=head2 response
+
+    use PAGI::Response qw(response);
+
+    my $text  = response('Text', 'Hello');
+    my $json  = response('JSON', { ok => \1 }, status => 201);
+    my $mine  = response('+MyApp::Response::XML', $document);
+
+Builds a Response by class name. A short name is resolved under
+C<PAGI::Response::> (C<'JSON'> is L<PAGI::Response::JSON>), a name already
+under that namespace is kept, and a leading C<+> names an exact package, so a
+Response class from another distribution needs no change here. The class is
+loaded, must be a C<PAGI::Response>, and is constructed with the remaining
+arguments unchanged; each class documents its own arguments.
+
+Dies with C<response('NAME'): cannot load CLASS: ...> when the class cannot
+be loaded -- including a name whose case differs from the file's, which a
+case-insensitive filesystem would otherwise load under the wrong package --
+and C<response('NAME'): CLASS is not a PAGI::Response> for a helper such as
+L<PAGI::Response::Writer>. The base byte response is
+C<< PAGI::Response->new($bytes, %options) >>.
 
 =head2 new
 
@@ -287,8 +309,24 @@ our @EXPORT_OK = qw(
 );
 our %EXPORT_TAGS = (all => \@EXPORT_OK);
 
+# Resolve NAME under PAGI::Response:: (or exactly, with a leading '+'), load
+# it, and construct it with the remaining arguments, unchanged.
 sub response {
-    return PAGI::Response->new(@_);
+    my ($name, @arguments) = @_;
+    croak 'response() requires a Response class name'
+        unless defined($name) && !ref($name) && length($name);
+    require PAGI::Utils;
+    my $class = PAGI::Utils::_resolve_class('PAGI::Response', $name, 'response');
+    (my $file = "$class.pm") =~ s{::}{/}g;
+    unless ($INC{$file}) {
+        croak "response('$name'): cannot load $class: no file named exactly $file in \@INC"
+            unless PAGI::Utils::_file_name_matches_case($file);
+        eval { require $file; 1 }
+            or croak "response('$name'): cannot load $class: $@";
+    }
+    croak "response('$name'): $class is not a PAGI::Response"
+        unless $class->isa('PAGI::Response');
+    return $class->new(@arguments);
 }
 
 sub text_response {

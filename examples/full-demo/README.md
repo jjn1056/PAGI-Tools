@@ -122,7 +122,7 @@ my @routes = (
         name => 'hello'),
     route('/echo' => async sub {
         my ($request) = @_;
-        return response(await $request->body);
+        return PAGI::Response->new(await $request->body);
     }, methods => ['POST'], name => 'echo'),
     websocket('/ws/echo' => async sub {
         my ($ws) = @_;

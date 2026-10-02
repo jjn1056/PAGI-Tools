@@ -363,6 +363,27 @@ sub _resolve_class {
     return "${namespace}::$name";
 }
 
+# On a case-insensitive filesystem, require 'Foo/json.pm' opens Foo/JSON.pm
+# and compiles it a second time under a package name it does not define.
+# True when every component of the first @INC match has exactly this case,
+# or when no directory has the file (require then reports it).
+sub _file_name_matches_case {
+    my ($relative) = @_;
+    for my $dir (grep { defined && !ref } @INC) {
+        next unless -e "$dir/$relative";
+        my $path = $dir;
+        for my $part (split m{/}, $relative) {
+            opendir(my $dh, $path) or return 1;
+            my $exact = grep { $_ eq $part } readdir $dh;
+            closedir $dh;
+            return 0 unless $exact;
+            $path .= "/$part";
+        }
+        return 1;
+    }
+    return 1;
+}
+
 sub _validate_app_value {
     my ($value, $label, $coderef_role) = @_;
     $label = 'application' unless defined $label && length $label;

@@ -566,8 +566,8 @@ values; `ref($response)` names the representation.
 | `PAGI::Response->text($s)` | `text_response($s)` |
 | `PAGI::Response->html($s)` | `html_response($s)` |
 | `PAGI::Response->json($v)` | `json_response($v)` |
-| `PAGI::Response->send($s, charset => $name)` | encode explicitly and pass bytes plus Content-Type to `response(...)` |
-| `PAGI::Response->send_raw($b)` | `response($b)` |
+| `PAGI::Response->send($s, charset => $name)` | encode explicitly and pass bytes plus Content-Type to `PAGI::Response->new(...)` |
+| `PAGI::Response->send_raw($b)` | `PAGI::Response->new($b)` |
 | `PAGI::Response->redirect($uri)` | `redirect_response($uri)` |
 | `PAGI::Response->empty(...)` | `empty_response(...)` |
 | `PAGI::Response->send_file($p)` with immediate `-f`/`-r` checks | `file_response($p)`; checks happen at request time, so check at startup yourself if you need to |
@@ -608,9 +608,9 @@ bytes explicit:
 
 ```perl
 use Encode qw(encode);
-use PAGI::Response qw(response);
+use PAGI::Response ();
 
-return response(
+return PAGI::Response->new(
     encode('ISO-8859-1', $text),
     content_type => 'text/plain; charset=iso-8859-1',
 );

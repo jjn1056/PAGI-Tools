@@ -576,12 +576,12 @@ guess whether it is finite.
   my $text = PAGI::Response::Text->new('Hello'); # class form
   my $json = json_response({ ok => \1 });          # factory form
 
-The base C<response($bytes)> accepts already encoded bytes. Text and HTML
+The base C<< PAGI::Response->new($bytes) >> accepts already encoded bytes. Text and HTML
 strictly encode Unicode as UTF-8; JSON serializes one finite Perl value and
 does not promise object member order. For another charset, encode explicitly:
 
   use Encode qw(encode);
-  my $latin1 = response(
+  my $latin1 = PAGI::Response->new(
       encode('ISO-8859-1', $text),
       content_type => 'text/plain; charset=iso-8859-1',
   );

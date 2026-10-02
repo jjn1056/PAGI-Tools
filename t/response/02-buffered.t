@@ -102,12 +102,12 @@ subtest 'text and HTML render Unicode as strict UTF-8 bytes' => sub {
 subtest 'base Response remains the explicit non-UTF-8 byte escape hatch' => sub {
     my $characters = "caf\x{e9}";
     my $latin1 = encode('iso-8859-1', $characters, FB_CROAK);
-    my $base = response($latin1, content_type => 'text/plain; charset=iso-8859-1');
+    my $base = PAGI::Response->new($latin1, content_type => 'text/plain; charset=iso-8859-1');
     is($base->body, "caf\xE9", 'base Response preserves caller-encoded bytes');
     is($base->content_type, 'text/plain; charset=iso-8859-1',
         'base Response preserves caller-selected charset');
     for my $status (100, 204, 205, 304) {
-        like(dies { response('', status => $status) }, qr/body.*\Q$status\E/i,
+        like(dies { PAGI::Response->new('', status => $status) }, qr/body.*\Q$status\E/i,
             "base Response rejects an empty body for status $status");
         like(dies { text_response('', status => $status) }, qr/body.*\Q$status\E/i,
             "Text rejects an empty body for status $status");

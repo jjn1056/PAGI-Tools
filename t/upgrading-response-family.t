@@ -108,7 +108,7 @@ subtest 'Response factories replace the mutable builder and Request bridge' => s
     }
 
     my @matrix = (
-        [response('bytes'),                  'PAGI::Response'],
+        [PAGI::Response->new('bytes'),       'PAGI::Response'],
         [text_response('text'),              'PAGI::Response::Text'],
         [html_response('<b>html</b>'),       'PAGI::Response::HTML'],
         [json_response({ ok => \1 }),         'PAGI::Response::JSON'],
@@ -122,7 +122,7 @@ subtest 'Response factories replace the mutable builder and Request bridge' => s
 };
 
 subtest 'explicit bytes replace the custom-charset finisher' => sub {
-    my $response = response(
+    my $response = PAGI::Response->new(
         encode('ISO-8859-1', "caf\x{e9}"),
         content_type => 'text/plain; charset=iso-8859-1',
     );

@@ -27,7 +27,7 @@ subtest 'facade exports are opt-in and map to fixed first-party classes' => sub 
     ok(!$unknown, 'unknown facade import fails');
     like($@, qr/not_a_response_factory/, 'unknown import names the rejected factory');
 
-    is(ref(response('bytes')), 'PAGI::Response', 'response has exact base class identity');
+    is(ref(PAGI::Response->new('bytes')), 'PAGI::Response', 'the base class constructs byte responses');
     is(ref(text_response('hello')), 'PAGI::Response::Text', 'text_response has exact class identity');
     is(ref(html_response('<b>x</b>')), 'PAGI::Response::HTML', 'html_response has exact class identity');
     is(ref(json_response({ ok => \1 })), 'PAGI::Response::JSON', 'json_response has exact class identity');

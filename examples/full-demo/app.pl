@@ -29,7 +29,7 @@ route('/echo' => async sub {
     my ($request) = @_;
     my $body = await $request->body;
 
-    return response(
+    return PAGI::Response->new(
         $body,
         content_type => $request->header('content-type')
             // 'application/octet-stream',
